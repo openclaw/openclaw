@@ -8,10 +8,20 @@ import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 
 const subscriptionRequestOptions = { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS };
 
-function createGateway(client: GatewayBrowserClient) {
+function wireCall(action: "subscribe" | "unsubscribe", params: Record<string, unknown>) {
+  return [
+    `sessions.messages.${action}`,
+    { ...params, subscriptionId: expect.any(String) },
+    subscriptionRequestOptions,
+  ];
+}
+
+function createGateway(
+  request: (method: string, params?: Record<string, unknown>) => Promise<unknown>,
+) {
   return {
     snapshot: {
-      client,
+      client: { request } as unknown as GatewayBrowserClient,
       phase: "connected" as const,
       sessionKey: "agent:main:main",
       assistantAgentId: "main",
@@ -22,14 +32,25 @@ function createGateway(client: GatewayBrowserClient) {
   };
 }
 
+function observerRequest(reply: (params?: Record<string, unknown>) => unknown) {
+  return vi.fn(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "sessions.messages.subscribe") {
+      return reply(params);
+    }
+    if (method === "sessions.messages.unsubscribe") {
+      return {};
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+}
+
 describe("createSessionCapability message subscriptions", () => {
   it("retains the requested subscription intent while admission is pending", async () => {
     const request = vi.fn(async (_method: string, params?: Record<string, unknown>) => ({
       key: params?.key,
       agentId: params?.agentId,
     }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
+    const sessions = createTestSessionCapability(createGateway(request));
     const options: NonNullable<Parameters<SessionCapability["subscribeMessages"]>[1]> = {
       agentId: " Main ",
       mode: "narration",
@@ -41,17 +62,14 @@ describe("createSessionCapability message subscriptions", () => {
     options.includeApprovals = false;
     const subscription = await pending;
 
-    expect(request).toHaveBeenCalledExactlyOnceWith(
-      "sessions.messages.subscribe",
-      {
+    expect(request.mock.calls).toEqual([
+      wireCall("subscribe", {
         key: "global",
         agentId: "main",
         mode: "narration",
         includeApprovals: true,
-        subscriptionId: expect.any(String),
-      },
-      subscriptionRequestOptions,
-    );
+      }),
+    ]);
     await sessions.unsubscribeMessages(subscription);
     sessions.dispose();
   });
@@ -67,10 +85,7 @@ describe("createSessionCapability message subscriptions", () => {
       const operations = createSessionScopedOperations({
         notifyCreated: vi.fn(),
         reportError: vi.fn(),
-        connection: {
-          capture: () => scope,
-          isCurrent: (captured) => captured === scope,
-        },
+        connection: { capture: () => scope, isCurrent: (captured) => captured === scope },
         reconcileMutation: async () => ({ status: "stale" }),
       });
       const acquisition = operations.subscribeMessages("agent:main:old");
@@ -84,11 +99,7 @@ describe("createSessionCapability message subscriptions", () => {
       expect(request).not.toHaveBeenCalled();
       if (retirement === "reconnect") {
         const current = await operations.subscribeMessages("agent:main:current");
-        expect(request).toHaveBeenCalledExactlyOnceWith(
-          "sessions.messages.subscribe",
-          { key: "agent:main:current", subscriptionId: expect.any(String) },
-          subscriptionRequestOptions,
-        );
+        expect(request.mock.calls).toEqual([wireCall("subscribe", { key: "agent:main:current" })]);
         await operations.unsubscribeMessages(current);
       }
       operations.dispose();
@@ -96,17 +107,8 @@ describe("createSessionCapability message subscriptions", () => {
   );
 
   it("shares narration and foreground observers across capabilities without retiring the full stream", async () => {
-    const request = vi.fn(async (method: string) => {
-      if (method === "sessions.messages.subscribe") {
-        return { key: "agent:main:main" };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const gateway = createGateway(client);
+    const request = observerRequest(() => ({ key: "agent:main:main" }));
+    const gateway = createGateway(request);
     const first = createTestSessionCapability(gateway);
     const second = createTestSessionCapability(gateway);
 
@@ -115,46 +117,25 @@ describe("createSessionCapability message subscriptions", () => {
       second.subscribeMessages("agent:main:main"),
     ]);
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "sessions.messages.subscribe",
-      { key: "main", mode: "narration", subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
+    expect(request.mock.calls[0]).toEqual(
+      wireCall("subscribe", { key: "main", mode: "narration" }),
     );
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.subscribe",
-      { key: "agent:main:main", subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
-    );
+    expect(request.mock.calls[1]).toEqual(wireCall("subscribe", { key: "agent:main:main" }));
     await first.unsubscribeMessages(firstLease);
     expect(request).toHaveBeenCalledTimes(2);
     await second.unsubscribeMessages(secondLease);
-    expect(request).toHaveBeenLastCalledWith(
-      "sessions.messages.unsubscribe",
-      { key: "agent:main:main", subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
-    );
+    expect(request.mock.calls.at(-1)).toEqual(wireCall("unsubscribe", { key: "agent:main:main" }));
     first.dispose();
     second.dispose();
   });
 
   it("upgrades a plain observer for approvals without downgrading existing owners", async () => {
     const replay = { approvals: [{ id: "approval-1" }] };
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "sessions.messages.subscribe") {
-        return {
-          key: params?.key,
-          ...(params?.includeApprovals ? { approvalReplay: replay } : {}),
-        };
-      }
-      if (method === "sessions.messages.unsubscribe") {
-        return {};
-      }
-      throw new Error(`Unexpected request: ${method}`);
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sessions = createTestSessionCapability(createGateway(client));
+    const request = observerRequest((params) => ({
+      key: params?.key,
+      ...(params?.includeApprovals ? { approvalReplay: replay } : {}),
+    }));
+    const sessions = createTestSessionCapability(createGateway(request));
 
     const plain = await sessions.subscribeMessages("main");
     const approval = await sessions.subscribeMessages("main", { includeApprovals: true });
@@ -166,11 +147,8 @@ describe("createSessionCapability message subscriptions", () => {
       includeApprovals: true,
       approvalReplay: replay,
     });
-    expect(request).toHaveBeenNthCalledWith(
-      2,
-      "sessions.messages.subscribe",
-      { key: "main", includeApprovals: true, subscriptionId: expect.any(String) },
-      subscriptionRequestOptions,
+    expect(request.mock.calls[1]).toEqual(
+      wireCall("subscribe", { key: "main", includeApprovals: true }),
     );
     await sessions.unsubscribeMessages(approval);
     await sessions.unsubscribeMessages(plain);
@@ -202,8 +180,7 @@ describe("createSessionCapability message subscriptions", () => {
         }
         throw new Error(`Unexpected request: ${method}`);
       });
-      const client = { request } as unknown as GatewayBrowserClient;
-      const sessions = createTestSessionCapability(createGateway(client));
+      const sessions = createTestSessionCapability(createGateway(request));
 
       const keyFor = (agentId: string) =>
         keyForm === "global" ? "global" : `agent:${agentId}:main`;
@@ -224,22 +201,14 @@ describe("createSessionCapability message subscriptions", () => {
       expect(observers.size).toBe(0);
       expect(main).toEqual({ key: "global", agentId: "main" });
       expect(work).toEqual({ key: "global", agentId: "work" });
-      expect(request).toHaveBeenNthCalledWith(
-        1,
-        "sessions.messages.subscribe",
-        { key: keyFor("main"), agentId: "main", subscriptionId: expect.any(String) },
-        subscriptionRequestOptions,
+      expect(request.mock.calls[0]).toEqual(
+        wireCall("subscribe", { key: keyFor("main"), agentId: "main" }),
       );
-      expect(request).toHaveBeenNthCalledWith(
-        2,
-        "sessions.messages.subscribe",
-        { key: keyFor("work"), agentId: "work", subscriptionId: expect.any(String) },
-        subscriptionRequestOptions,
+      expect(request.mock.calls[1]).toEqual(
+        wireCall("subscribe", { key: keyFor("work"), agentId: "work" }),
       );
-      expect(request).toHaveBeenLastCalledWith(
-        "sessions.messages.unsubscribe",
-        { key: "global", agentId: "work", subscriptionId: expect.any(String) },
-        subscriptionRequestOptions,
+      expect(request.mock.calls.at(-1)).toEqual(
+        wireCall("unsubscribe", { key: "global", agentId: "work" }),
       );
       sessions.dispose();
     },

@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { publishActiveSessionLineage } from "../../components/app-sidebar-child-session-data.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -11,6 +12,36 @@ import {
 } from "./session-capability.test-support.ts";
 
 const key = "agent:main:device-session";
+const child = {
+  key,
+  sessionId: "session-device",
+  kind: "direct" as const,
+  updatedAt: 10,
+};
+const initialChild = { ...child, label: "Initial child" };
+const query = { ownerId: "ada", agentId: "main" };
+const refreshOptions = { agentId: "main", force: true };
+
+function publishLineage(
+  sessions: ReturnType<typeof createTestSessionCapability>,
+  row: GatewaySessionRow,
+) {
+  const owner = {
+    activeSessionLineageRoot: null,
+    activeSessionLineageSelectedRow: null,
+    childSessionRowsByParent: {},
+    context: { sessions },
+    sessionsResult: sessions.state.result,
+  };
+  publishActiveSessionLineage(
+    owner,
+    row.key,
+    { rowsByParent: {}, topmostRow: row, lookupFailed: false },
+    sessions.inheritRow,
+    () => true,
+  );
+  return owner;
+}
 
 function placement(status: "available" | "offline") {
   return {
@@ -45,9 +76,7 @@ describe("supplemental session reconciliation", () => {
     async (changedIdentity) => {
       vi.useFakeTimers();
       const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
+        ...child,
         updatedAt: 20,
         archived: false,
         modelProvider: "test-provider",
@@ -139,13 +168,7 @@ describe("supplemental session reconciliation", () => {
     "keeps an earlier captured child read current after appending a %s page",
     async (page) => {
       vi.useFakeTimers();
-      const initial = {
-        key,
-        sessionId: "session-device",
-        kind: "direct" as const,
-        updatedAt: 10,
-        label: "Page one child",
-      };
+      const initial = { ...child, label: "Page one child" };
       const later =
         page === "duplicate"
           ? { ...initial, updatedAt: 30, label: "Discarded duplicate" }
@@ -168,21 +191,21 @@ describe("supplemental session reconciliation", () => {
       const sessions = createTestSessionCapability(
         createGatewayHarness(createTestGatewayClient(request)).gateway,
       );
-      const query = { ownerId: "ada", agentId: "main", limit: 1 };
-      const unsubscribe = sessions.subscribeList(query, () => {});
+      const pageQuery = { ...query, limit: 1 };
+      const unsubscribe = sessions.subscribeList(pageQuery, () => {});
       try {
-        await sessions.refresh({ force: true, agentId: "main" });
-        await sessions.refreshList(query);
+        await sessions.refresh(refreshOptions);
+        await sessions.refreshList(pageQuery);
         const reconcile = sessions.captureReconcile();
-        await sessions.refreshList({ ...query, append: true, offset: 1 });
-        const listed = sessions.listSnapshot(query).result;
+        await sessions.refreshList({ ...pageQuery, append: true, offset: 1 });
+        const listed = sessions.listSnapshot(pageQuery).result;
         expect(listed?.sessions[0]?.label).toBe(initial.label);
         expect(listed?.sessions.map((row) => row.key)).toEqual(
           page === "duplicate" ? [key] : [key, later.key],
         );
         const fresh = { ...initial, updatedAt: 20, label: "Accepted child" };
         expect(reconcile(fresh)).toBe(true);
-        expect(sessions.listSnapshot(query).result).toMatchObject({
+        expect(sessions.listSnapshot(pageQuery).result).toMatchObject({
           totalCount: 2,
           hasMore: false,
           nextOffset: null,
@@ -214,11 +237,7 @@ describe("supplemental session reconciliation", () => {
     async ({ scenario, permission, primaryPresent }) => {
       vi.useFakeTimers();
       const initial = {
-        key,
-        kind: "direct" as const,
-        sessionId: "session-device",
-        updatedAt: 10,
-        label: "Initial child",
+        ...initialChild,
         placement: placement("available"),
         permissionMode: "guarded" as const,
       };
@@ -246,11 +265,10 @@ describe("supplemental session reconciliation", () => {
       });
       const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
       const sessions = createTestSessionCapability(gateway);
-      const query = { ownerId: "ada", agentId: "main" };
       const unsubscribe = sessions.subscribeList(query, () => {});
       let refresh: Promise<void> | undefined;
       try {
-        await sessions.refresh({ force: true, agentId: "main" });
+        await sessions.refresh(refreshOptions);
         await sessions.refreshList(query);
         if (scenario === "older response") {
           holdManaged = true;
@@ -282,7 +300,7 @@ describe("supplemental session reconciliation", () => {
             );
             if (!primaryPresent) {
               omitPrimary = true;
-              await sessions.refresh({ agentId: "main", force: true });
+              await sessions.refresh(refreshOptions);
               expect(sessions.state.result?.sessions.map((row) => row.key)).toEqual([sibling.key]);
             }
           }
@@ -329,7 +347,7 @@ describe("supplemental session reconciliation", () => {
         } else {
           current = {
             ...initial,
-            sessionId: scenario === "replacement" ? "replacement-session" : initial.sessionId,
+            sessionId: "replacement-session",
             updatedAt: 5,
             label: "Newer managed child",
             placement: placement("offline"),
@@ -352,13 +370,7 @@ describe("supplemental session reconciliation", () => {
 
   it("coalesces changed-row query refreshes without refreshing ignored or unchanged rows", async () => {
     vi.useFakeTimers();
-    let current = {
-      key,
-      kind: "direct" as const,
-      sessionId: "session-device",
-      updatedAt: 10,
-      label: "Initial child",
-    };
+    let current = initialChild;
     const request = vi.fn(async (method) => {
       return method === "sessions.describe"
         ? { session: current }
@@ -373,10 +385,9 @@ describe("supplemental session reconciliation", () => {
       });
       expect(reconcile(result.session)).toBe(true);
     };
-    const query = { ownerId: "ada", agentId: "main" };
     const unsubscribe = sessions.subscribeList(query, () => {});
     try {
-      await sessions.refresh({ force: true, agentId: "main" });
+      await sessions.refresh(refreshOptions);
       await sessions.refreshList(query);
       request.mockClear();
       current = { ...current, updatedAt: 20, label: "Updated child" };
@@ -412,12 +423,7 @@ describe("supplemental session reconciliation", () => {
   });
 
   it("publishes an owner change but not unchanged lineage rows and defaults", async () => {
-    const canonical = {
-      key,
-      kind: "direct" as const,
-      sessionId: "session-device",
-      updatedAt: 10,
-    };
+    const canonical = child;
     const sessions = capabilityWithList(sessionsResult([canonical], 10));
     try {
       await sessions.refresh({ force: true });
@@ -429,22 +435,7 @@ describe("supplemental session reconciliation", () => {
       expect(sessions.state.agentId).toBe("main");
       expect(published).toHaveBeenCalledOnce();
       published.mockClear();
-      const owner = {
-        activeSessionLineageRoot: null,
-        activeSessionLineageSelectedRow: null,
-        childSessionRowsByParent: {},
-        context: { sessions },
-        sessionsResult: sessions.state.result,
-      };
-
-      publishActiveSessionLineage(
-        owner,
-        key,
-        { rowsByParent: {}, topmostRow: canonical, lookupFailed: false },
-        sessions.inheritRow,
-        () => true,
-      );
-
+      const owner = publishLineage(sessions, canonical);
       expect(owner.activeSessionLineageSelectedRow).toEqual(canonical);
       expect(sessions.state.result?.sessions).toEqual([canonical]);
       expect(published).not.toHaveBeenCalled();
@@ -457,28 +448,12 @@ describe("supplemental session reconciliation", () => {
     const sessions = capabilityWithList(sessionsResult([], 10));
     await sessions.refresh({ force: true });
     const archived = {
+      ...child,
       key: "agent:main:archived-routed",
-      kind: "direct" as const,
       sessionId: "session-routed",
-      updatedAt: 10,
       archived: true,
     };
-    const owner = {
-      activeSessionLineageRoot: null,
-      activeSessionLineageSelectedRow: null,
-      childSessionRowsByParent: {},
-      context: { sessions },
-      sessionsResult: sessions.state.result,
-    };
-
-    publishActiveSessionLineage(
-      owner,
-      archived.key,
-      { rowsByParent: {}, topmostRow: archived, lookupFailed: false },
-      sessions.inheritRow,
-      () => true,
-    );
-
+    publishLineage(sessions, archived);
     expect(sessions.state.result?.sessions).toEqual([archived]);
     sessions.dispose();
   });

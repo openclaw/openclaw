@@ -461,7 +461,6 @@ describe("session list requests", () => {
     expect(request.mock.calls[1]?.[1]).not.toHaveProperty("activeMinutes");
     expect(request.mock.calls[2]?.[1]).toMatchObject({ archived: "all" });
     expect(request.mock.calls[2]?.[1]).not.toHaveProperty("activeMinutes");
-    sessions.dispose();
   });
 
   it("discards a list rejection from a retired same-client connection", async () => {
@@ -472,7 +471,6 @@ describe("session list requests", () => {
     reconnect();
     rejectStale(new Error("retired connection"));
     await expect(retiredRequest).resolves.toBeNull();
-    sessions.dispose();
   });
 
   it("keeps filtered pages scoped without replacing the canonical active roster", async () => {
@@ -503,7 +501,6 @@ describe("session list requests", () => {
     expect(sessions.canonicalListRevision).toBe(1);
     expect(observeSnapshot).toHaveBeenCalledWith(expect.objectContaining({ loading: true }));
     unsubscribe();
-    sessions.dispose();
   });
 
   it.each(["before", "after"] as const)(
@@ -683,7 +680,6 @@ describe("session list requests", () => {
       limit: 50,
     });
     unsubscribe();
-    sessions.dispose();
   });
 
   it("retires stale filtered snapshots across same-client reconnects without losing subscribers", async () => {
@@ -715,7 +711,6 @@ describe("session list requests", () => {
     expect(observed).toContain("agent:main:current");
     expect(observed).not.toContain("agent:main:stale");
     unsubscribe();
-    sessions.dispose();
   });
 
   it.each([
