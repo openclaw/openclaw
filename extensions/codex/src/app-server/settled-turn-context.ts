@@ -30,6 +30,7 @@ export async function captureCodexSettledTurnFinalizationContext(
   params: CodexMirroredSessionHistoryTarget &
     SettledTurnMessages &
     Partial<CodexSettledTurnSelection> & {
+      runId?: string;
       signal?: AbortSignal;
       assertActive?: () => void;
       withCurrent?: CodexBindingWithCurrent;
@@ -61,6 +62,10 @@ export async function captureCodexSettledTurnFinalizationContext(
     reason = params.signal?.aborted ? "cancelled" : codexHistoryRejectionReason(error);
   }
   // Capture follows settled side effects; a rejected read must preserve the incomplete turn.
-  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", { reason });
+  embeddedAgentLog.warn("codex settled-turn finalization context capture failed", {
+    ...(params.runId ? { runId: params.runId } : {}),
+    turnId: params.turnId,
+    reason,
+  });
   return undefined;
 }

@@ -134,6 +134,7 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         sessionId: "session-1",
         mirroredMessages: messages,
         settledMessages: messages,
+        runId: "run-1",
         turnId: "turn-2",
         model: "gpt-5.6-luna",
         signal: controller.signal,
@@ -154,7 +155,11 @@ describe("captureCodexSettledTurnFinalizationContext", () => {
         await expect(pending).resolves.toBeUndefined();
         expect(warn).toHaveBeenCalledWith(
           "codex settled-turn finalization context capture failed",
-          { reason: ending === "abort" ? "cancelled" : "history_read_failed" },
+          {
+            runId: "run-1",
+            turnId: "turn-2",
+            reason: ending === "abort" ? "cancelled" : "history_read_failed",
+          },
         );
       } finally {
         warn.mockRestore();
