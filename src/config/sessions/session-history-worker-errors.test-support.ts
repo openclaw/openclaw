@@ -17,7 +17,7 @@ type Request = {
   taskContext: WorkerTaskContext;
 };
 type Resource = { close: () => Promise<void>; agentId?: string; revoke: () => void };
-export const observed = vi.hoisted(() => ({
+const observed = vi.hoisted(() => ({
   receive: undefined as ((message: Request) => void) | undefined,
   post: vi.fn<(message: unknown) => void>(),
   read: vi.fn<() => unknown>(),
@@ -53,43 +53,62 @@ vi.mock("../../infra/runtime-worker-url.js", () => ({
   resolveRuntimeWorkerArgv: () => [],
   resolveRuntimeWorkerThreadExecArgv: () => [],
 }));
-vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/worker-task-pool.js")>()),
-  createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
-    let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
-    let activeTasks = 0;
-    return {
-      async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
-        const prepareInput = () => {
-          const input = prepare();
-          worker ??= poolOptions.prepareWorker?.();
-          return input;
-        };
-        activeTasks++;
-        try {
-          return await (observed.deferredRun
-            ? observed.deferredRun(prepareInput, options)
-            : observed.run(prepareInput(), options));
-        } finally {
-          activeTasks--;
-        }
-      },
-      getSnapshot: () => ({ activeTasks }),
-      async rotate() {
-        const previous = worker;
-        worker = undefined;
-        await observed.rotate();
-        await previous?.releaseResources?.();
-      },
-      closeResources: observed.closeResources,
-    };
-  },
-  WorkerTaskPool: class {
-    run = (prepare: () => unknown, options: WorkerTaskOptions<unknown>) =>
-      observed.run(prepare(), options);
-    rotate = observed.rotate;
-  },
-}));
+vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/worker-task-pool.js")>();
+  return {
+    ...actual,
+    createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
+      let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+      const retiring = new Set<NonNullable<typeof worker>>();
+      let activeTasks = 0;
+      return {
+        async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+          const prepareInput = () => {
+            const input = prepare();
+            worker ??= poolOptions.prepareWorker?.();
+            return input;
+          };
+          activeTasks++;
+          try {
+            return await (observed.deferredRun
+              ? observed.deferredRun(prepareInput, options)
+              : observed.run(prepareInput(), options));
+          } finally {
+            activeTasks--;
+          }
+        },
+        getSnapshot: () => ({ activeTasks }),
+        async rotate() {
+          if (worker) {
+            retiring.add(worker);
+          }
+          worker = undefined;
+          const previous = [...retiring];
+          try {
+            await observed.rotate();
+            for (const prepared of previous) {
+              if (retiring.delete(prepared)) {
+                await prepared.releaseResources?.();
+              }
+            }
+          } catch (error) {
+            void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
+            throw error;
+          }
+        },
+        closeResources: observed.closeResources,
+      };
+    },
+    WorkerTaskPool: class {
+      run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
+        return observed.run(prepare(), options);
+      }
+      rotate() {
+        return observed.rotate();
+      }
+    },
+  };
+});
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
@@ -202,3 +221,5 @@ export function createVisibilityFailureDelta(
     ),
   };
 }
+
+export { observed };

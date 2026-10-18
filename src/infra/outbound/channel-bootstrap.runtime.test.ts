@@ -59,7 +59,7 @@ const admittedOwner = {
   agentId: "ops",
 } as const;
 
-function discordRegistry<T extends object>(fields: T, source = "runtime") {
+function discordRegistry(fields: object, source = "runtime") {
   const handle = createEmptyPluginRegistry();
   handle.channels = [
     { pluginId: "discord", plugin: { id: "discord", meta: {}, ...fields }, source },

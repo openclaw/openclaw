@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -18,12 +18,9 @@ import {
   readSqliteSessionArchivePruning,
   withSqliteSessionPageReclamation,
 } from "./session-accessor.sqlite-page-reclamation.js";
-import type { SessionActorStorage } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import type { SessionActorStorageCommand } from "./session-actor-storage-contract.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";
-import { createSessionTranscriptHeader } from "./transcript-header.js";
 
 const external = vi.hoisted(() => ({
   findWorkspaces: vi.fn(async () => []),
@@ -67,11 +64,8 @@ const env = { OPENCLAW_STATE_DIR: "/synthetic/memory-lifecycle" };
 const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
 const scope = { agentId: "main", storePath, env, sessionKey };
 const authority = { assertCurrent() {}, authorize() {} };
-const admission = { assertCurrent() {}, assertReadable() {} };
 const target = { canonicalKey: sessionKey, storeKeys: [sessionKey] };
 const registries: ReturnType<typeof createEmptyPluginRegistry>[] = [];
-const mutate = async (storage: SessionActorStorage, command: SessionActorStorageCommand) =>
-  readSessionActorStorageResult(await storage.mutate(command, authority));
 beforeEach(() => {
   external.prepareReceipt.mockResolvedValue(external.settleReceipt);
 });
@@ -84,66 +78,48 @@ afterEach(() => {
 
 async function fixture() {
   const owner = memorySessionActorOwners.get({ agentId: "main", path: storePath });
-  const actor = await owner.acquire({ database: owner.identity, sessionKey }, admission);
-  await mutate(actor.storage!, {
-    type: "session.entry.create",
-    input: {
-      entry: { sessionId: "session-1", lifecycleRevision: "revision-1", updatedAt: 1 },
-      transcriptEvents: [
-        createSessionTranscriptHeader({
-          sessionId: "session-1",
-          cwd: "/synthetic",
-          version: 3,
-          timestamp: "2026-10-11T00:00:00.000Z",
-        }),
-        ...[
-          { id: "user", parentId: null, role: "user", content: "Question" },
-          {
-            id: "answer",
-            parentId: "user",
-            role: "assistant",
-            content: "Answer",
-            stopReason: "stop",
-          },
-        ].map(({ id, parentId, ...message }) => ({ type: "message", id, parentId, message })),
-      ],
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    {
+      assertCurrent() {},
+      assertReadable() {},
     },
-  });
+  );
+  readSessionActorStorageResult(
+    await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: {
+          entry: { sessionId: "session-1", lifecycleRevision: "revision-1", updatedAt: 1 },
+          transcriptEvents: [
+            {
+              type: "session",
+              id: "session-1",
+              version: 3,
+              cwd: "/synthetic",
+              timestamp: "2026-10-11T00:00:00.000Z",
+            },
+            {
+              type: "message",
+              id: "user",
+              parentId: null,
+              message: { role: "user", content: "Question" },
+            },
+            {
+              type: "message",
+              id: "answer",
+              parentId: "user",
+              message: { role: "assistant", content: "Answer", stopReason: "stop" },
+            },
+          ],
+        },
+      },
+      authority,
+    ),
+  );
   await actor.release();
   return owner;
 }
-
-async function patch(
-  owner: Awaited<ReturnType<typeof fixture>>,
-  fields: { label: string; updatedAt?: number },
-) {
-  const writer = await owner.acquireExisting(sessionKey, admission);
-  try {
-    await mutate(writer!.storage!, {
-      type: "session.entry.patch",
-      input: { operation: { kind: "fields", patch: fields } },
-    });
-  } finally {
-    await writer!.release();
-  }
-}
-
-const reset = (
-  options: Omit<
-    Parameters<typeof resetSessionEntryLifecycle>[0],
-    "agentId" | "storePath" | "target"
-  >,
-) => resetSessionEntryLifecycle({ agentId: "main", storePath, target, ...options });
-const cleanup = (nowMs: number, sessionKeySegmentPrefix = "dashboard:incognito-") =>
-  cleanupSessionLifecycleArtifactsCore({
-    ...scope,
-    sessionKeySegmentPrefix,
-    transcriptContentMarker: "Question",
-    orphanTranscriptMinAgeMs: 30_000,
-    nowMs,
-  });
-const remove = (expectedSessionId: string | null = "session-1") =>
-  deleteSessionEntryLifecycle({ ...scope, target, archiveTranscript: false, expectedSessionId });
 
 function harness(failCommit = false) {
   const registry = createEmptyPluginRegistry();
@@ -188,70 +164,110 @@ function harness(failCommit = false) {
   };
 }
 
-it("keeps async reset builders from overwriting intervening actor writes", async () => {
-  const owner = await fixture();
-  await expect(
-    reset({
-      buildNextEntry: async ({ currentEntry }) => {
-        await patch(owner, { label: "Concurrent" });
-        return { ...currentEntry!, sessionId: "session-2", updatedAt: 2 };
-      },
-    }),
-  ).rejects.toThrow(SqliteSessionMutationConflictError);
-  expect(owner.readSession(sessionKey, authority)?.entry).toMatchObject({
-    sessionId: "session-1",
-    label: "Concurrent",
-  });
-  const result = await reset({
-    buildNextEntry: ({ currentEntry }) => {
-      currentEntry!.sessionId = "session-2";
-      return currentEntry!;
-    },
-    afterEntryMutation: (mutation, context) => {
-      context.assertCurrent();
-      expect(mutation.nextEntry).toMatchObject({ sessionId: "session-2", label: "Concurrent" });
-    },
-  });
-  expect(result.previousSessionId).toBe("session-1");
-  expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-2");
-});
-
-it.each([false, true])(
-  "settles deletion companions with the memory commit (failure=%s)",
-  async (failCommit) => {
+describe("memory lifecycle production acquisition", () => {
+  it("keeps async reset builders from overwriting intervening actor writes", async () => {
     const owner = await fixture();
-    const externalOwner = harness(failCommit);
-    await expect(externalOwner.run(() => remove(null))).resolves.toMatchObject({
-      deleted: false,
-      expectedEntryMismatch: true,
+    await expect(
+      resetSessionEntryLifecycle({
+        agentId: "main",
+        storePath,
+        target,
+        buildNextEntry: async ({ currentEntry }) => {
+          const writer = await owner.acquireExisting(sessionKey, {
+            assertCurrent() {},
+            assertReadable() {},
+          });
+          try {
+            readSessionActorStorageResult(
+              await writer!.storage!.mutate(
+                {
+                  type: "session.entry.patch",
+                  input: { operation: { kind: "fields", patch: { label: "Concurrent" } } },
+                },
+                authority,
+              ),
+            );
+          } finally {
+            await writer!.release();
+          }
+          return { ...currentEntry!, sessionId: "session-2", updatedAt: 2 };
+        },
+      }),
+    ).rejects.toThrow(SqliteSessionMutationConflictError);
+    expect(owner.readSession(sessionKey, authority)?.entry).toMatchObject({
+      sessionId: "session-1",
+      label: "Concurrent",
     });
-    expect(externalOwner.mutation.commit).not.toHaveBeenCalled();
-    if (failCommit) {
-      await expect(externalOwner.run(() => remove())).rejects.toThrow("Companion commit refused");
-      expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-1");
-    } else {
-      await expect(externalOwner.run(() => remove())).resolves.toMatchObject({
-        deleted: true,
-        deletedSessionId: "session-1",
-      });
-      expect(owner.readSession(sessionKey, authority)).toBeUndefined();
-    }
-    expect(externalOwner.companion.present).toBe(failCommit);
-    expect(externalOwner.mutation.rollback).toHaveBeenCalledTimes(Number(failCommit));
-    expect(external.settleReceipt).toHaveBeenCalledTimes(Number(!failCommit));
-  },
-);
+    const result = await resetSessionEntryLifecycle({
+      agentId: "main",
+      storePath,
+      target,
+      buildNextEntry: ({ currentEntry }) => {
+        currentEntry!.sessionId = "session-2";
+        return currentEntry!;
+      },
+      afterEntryMutation: (mutation, context) => {
+        context.assertCurrent();
+        expect(mutation.nextEntry).toMatchObject({ sessionId: "session-2", label: "Concurrent" });
+      },
+    });
+    expect(result.previousSessionId).toBe("session-1");
+    expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-2");
+  });
 
-it("rewinds through prepared context companions without native session state", async () => {
-  const owner = await fixture();
-  const externalOwner = harness();
-  await expect(
-    externalOwner.run(() => rewindSessionToMessage({ ...scope, entryId: "user" })),
-  ).resolves.toMatchObject({ status: "created", editorText: "Question" });
-  expect(externalOwner.companion.present).toBe(false);
-  expect(externalOwner.mutation.commit).toHaveBeenCalledOnce();
-  expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).not.toBe("session-1");
-  expect(external.prepareReceipt).not.toHaveBeenCalled();
+  it.each([false, true])(
+    "settles deletion companions with the memory commit (failure=%s)",
+    async (failCommit) => {
+      const owner = await fixture();
+      const externalOwner = harness(failCommit);
+      const remove = () =>
+        deleteSessionEntryLifecycle({
+          ...scope,
+          target,
+          archiveTranscript: false,
+          expectedSessionId: "session-1",
+        });
+      await expect(
+        externalOwner.run(() =>
+          deleteSessionEntryLifecycle({
+            ...scope,
+            target,
+            archiveTranscript: false,
+            expectedSessionId: null,
+          }),
+        ),
+      ).resolves.toMatchObject({ deleted: false, expectedEntryMismatch: true });
+      expect(externalOwner.mutation.commit).not.toHaveBeenCalled();
+      if (failCommit) {
+        await expect(externalOwner.run(remove)).rejects.toThrow("Companion commit refused");
+        expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-1");
+        expect(externalOwner.companion.present).toBe(true);
+        expect(externalOwner.mutation.rollback).toHaveBeenCalledOnce();
+        expect(external.settleReceipt).not.toHaveBeenCalled();
+      } else {
+        await expect(externalOwner.run(remove)).resolves.toMatchObject({
+          deleted: true,
+          deletedSessionId: "session-1",
+        });
+        expect(owner.readSession(sessionKey, authority)).toBeUndefined();
+        expect(externalOwner.companion.present).toBe(false);
+        expect(externalOwner.mutation.rollback).not.toHaveBeenCalled();
+        expect(external.settleReceipt).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("rewinds through prepared context companions without native session state", async () => {
+    const owner = await fixture();
+    const externalOwner = harness();
+    await expect(
+      externalOwner.run(() => rewindSessionToMessage({ ...scope, entryId: "user" })),
+    ).resolves.toMatchObject({ status: "created", editorText: "Question" });
+    expect(externalOwner.companion.present).toBe(false);
+    expect(externalOwner.mutation.commit).toHaveBeenCalledOnce();
+    expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).not.toBe("session-1");
+    expect(external.prepareReceipt).not.toHaveBeenCalled();
+  });
 });
 
 it.each([false, true])(
@@ -263,11 +279,39 @@ it.each([false, true])(
     vi.spyOn(Date, "now").mockReturnValue(nowMs);
     if (renewed) {
       external.findWorkspaces.mockImplementationOnce(async () => {
-        await patch(owner, { updatedAt: nowMs, label: "Still active" });
+        const writer = await owner.acquireExisting(sessionKey, {
+          assertCurrent() {},
+          assertReadable() {},
+        });
+        try {
+          readSessionActorStorageResult(
+            await writer!.storage!.mutate(
+              {
+                type: "session.entry.patch",
+                input: {
+                  operation: { kind: "fields", patch: { updatedAt: nowMs, label: "Still active" } },
+                },
+              },
+              authority,
+            ),
+          );
+        } finally {
+          await writer!.release();
+        }
         return [];
       });
     }
-    const result = await externalOwner.run(() => cleanup(nowMs));
+    const result = await externalOwner.run(() =>
+      cleanupSessionLifecycleArtifactsCore({
+        agentId: "main",
+        storePath,
+        env,
+        sessionKeySegmentPrefix: "dashboard:incognito-",
+        transcriptContentMarker: "Question",
+        orphanTranscriptMinAgeMs: 30_000,
+        nowMs,
+      }),
+    );
     expect(result).toEqual({ removedEntries: renewed ? 0 : 1, archivedTranscriptArtifacts: 0 });
     if (renewed) {
       expect(owner.readSession(sessionKey, authority)?.entry).toMatchObject({
@@ -297,14 +341,24 @@ it("excludes absent and resident memory stores from SQLite page reclamation", as
 it("prunes an unreferenced memory transcript while retaining its current session", async () => {
   const owner = await fixture();
   const nowMs = Date.now() + 60_000;
-  await reset({
+  await resetSessionEntryLifecycle({
+    agentId: "main",
+    storePath,
+    target,
     buildNextEntry: () => ({ sessionId: "session-2", updatedAt: nowMs }),
   });
   expect(owner.readSessionById("session-1", authority)).toBeDefined();
-  await expect(cleanup(nowMs, "unrelated-prefix")).resolves.toEqual({
-    removedEntries: 0,
-    archivedTranscriptArtifacts: 0,
-  });
+  await expect(
+    cleanupSessionLifecycleArtifactsCore({
+      agentId: "main",
+      storePath,
+      env,
+      sessionKeySegmentPrefix: "unrelated-prefix",
+      transcriptContentMarker: "Question",
+      orphanTranscriptMinAgeMs: 30_000,
+      nowMs,
+    }),
+  ).resolves.toEqual({ removedEntries: 0, archivedTranscriptArtifacts: 0 });
   expect(owner.readSessionById("session-1", authority)).toBeUndefined();
   expect(owner.readSession(sessionKey, authority)?.entry?.sessionId).toBe("session-2");
 });

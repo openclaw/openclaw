@@ -20,6 +20,7 @@ import {
   resolveOpenClawAgentSqlitePath,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../state/openclaw-agent-execution.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import {
@@ -53,55 +54,64 @@ function storedScope(storePath: string, scope: Partial<SessionAccessScope> = {})
   return { agentId: "ops", env: state.env, storePath, sessionKey: "global", ...scope };
 }
 
-function agentScope(agentId: string, suffix: string) {
-  return storedScope(path.join(state.sessionsDir(agentId), "sessions.json"), {
-    agentId,
-    sessionKey: `agent:${agentId}:${suffix}`,
-  });
-}
-
-function heartbeat(scope: ReturnType<typeof storedScope>) {
-  return resolveHeartbeatSession(
-    { session: { store: scope.storePath } },
-    scope.agentId,
-    undefined,
-    undefined,
-    state.env,
-  );
-}
-
-function holdAdmission(agentId: string) {
+function holdExecution(
+  stage: "before-open" | "reply",
+  shouldHold: (execution: OpenClawAgentDatabaseExecution) => boolean = () => true,
+  once = stage === "reply",
+) {
   const gate = {
     entered: createDeferredCore(),
     release: createDeferredCore(),
-    armed: true,
+    armed: stage !== "reply",
     restore: () => intercept.mockRestore(),
+  };
+  const hold = async (execution: OpenClawAgentDatabaseExecution) => {
+    if (gate.armed && shouldHold(execution)) {
+      gate.armed = !once;
+      gate.entered.resolve();
+      await gate.release.promise;
+    }
   };
   const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
   const intercept = vi
     .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
     .mockImplementation((...args) => {
       const execution = capture(...args);
-      return {
-        ...execution,
-        prepare: async (source: Parameters<typeof execution.prepare>[0]) => {
-          if (gate.armed && execution.agentId === agentId) {
-            gate.armed = false;
-            gate.entered.resolve();
-            await gate.release.promise;
-          }
+      const overrides: Partial<OpenClawAgentDatabaseExecution> = {};
+      if (stage === "before-open") {
+        overrides.prepare = async (source) => {
+          await hold(execution);
           await execution.prepare(source);
-        },
-      };
+        };
+      } else if (stage === "reply") {
+        overrides.runExisting = (source, operation, options) =>
+          execution.runExisting(
+            source,
+            async (worker) => {
+              const execute: typeof worker.execute = async (command, requestOptions) => {
+                const result = await worker.execute(command, requestOptions);
+                await hold(execution);
+                return result;
+              };
+              return operation({ execute });
+            },
+            options,
+          );
+      }
+      return { ...execution, ...overrides };
     });
   return gate;
 }
 
-async function readFirstSession(kind: "read" | "admission", scope: SessionAccessScope) {
+async function readFirstSession(
+  kind: "read" | "admission",
+  scope: SessionAccessScope,
+  assertCurrent?: () => void,
+) {
   if (kind === "read") {
-    return readSessionEntryInWorker(scope);
+    return readSessionEntryInWorker(scope, assertCurrent);
   }
-  const loaded = await loadSessionEntryForAdmission(scope);
+  const loaded = await loadSessionEntryForAdmission(scope, { assertCurrent });
   try {
     loaded.databaseClaim.assertCurrent();
     return loaded.entry;
@@ -111,28 +121,45 @@ async function readFirstSession(kind: "read" | "admission", scope: SessionAccess
 }
 
 it("shares cold database admission with an immediate heartbeat", async () => {
-  const scope = agentScope("heartbeat-admission", "hook");
-  const gate = holdAdmission(scope.agentId);
+  const agentId = "heartbeat-admission";
+  const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
+    agentId,
+    sessionKey: `agent:${agentId}:hook`,
+  });
+  const gate = holdExecution("before-open", (execution) => execution.agentId === agentId, true);
   const first = readSessionEntryInWorker(scope);
-  let beating: ReturnType<typeof heartbeat> | undefined;
+  let heartbeat: Promise<Awaited<ReturnType<typeof resolveHeartbeatSession>>> | undefined;
   try {
     await awaitGateBeforeSettlement(gate.entered.promise, first, "Hook admission was not held");
-    beating = heartbeat(scope);
-    void beating.catch(() => {});
+    heartbeat = Promise.resolve(
+      resolveHeartbeatSession(
+        { session: { store: scope.storePath } },
+        agentId,
+        undefined,
+        undefined,
+        state.env,
+      ),
+    );
+    void heartbeat.catch(() => {});
     gate.release.resolve();
     await expect(first).resolves.toBeUndefined();
-    await expect(beating).resolves.toMatchObject({ entry: undefined });
+    await expect(heartbeat).resolves.toMatchObject({ entry: undefined });
   } finally {
     gate.release.resolve();
-    await Promise.allSettled([first, beating]);
+    await Promise.allSettled([first, heartbeat]);
     gate.restore();
   }
 });
 
 it("preserves heartbeat entries and SQLite creation without materializing the JSON locator", async () => {
   for (const reader of ["native", "worker"] as const) {
-    const scope = agentScope(`heartbeat-${reader}`, "main");
+    const agentId = `heartbeat-${reader}`;
+    const scope = storedScope(state.sessionsDir(agentId) + "/sessions.json", {
+      agentId,
+      sessionKey: `agent:${agentId}:main`,
+    });
     const databasePath = resolveOpenClawAgentSqlitePath(scope);
+    const cfg = { session: { store: scope.storePath } };
     const expected = {
       sessionKey: scope.sessionKey,
       storePath: scope.storePath,
@@ -142,7 +169,9 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     if (reader === "native") {
       expect(loadSessionEntry(scope)).toBeUndefined();
     } else {
-      await expect(heartbeat(scope)).resolves.toEqual({ ...expected, entry: undefined });
+      await expect(
+        resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
+      ).resolves.toEqual({ ...expected, entry: undefined });
     }
     expect(fs.existsSync(databasePath)).toBe(true);
     expect(fs.existsSync(scope.storePath)).toBe(false);
@@ -157,7 +186,9 @@ it("preserves heartbeat entries and SQLite creation without materializing the JS
     replaceSessionEntrySync(scope, entry);
     const native = loadSessionEntry(scope);
     expect(native).toMatchObject(entry);
-    await expect(heartbeat(scope)).resolves.toEqual({ ...expected, entry: native });
+    await expect(
+      resolveHeartbeatSession(cfg, agentId, undefined, undefined, state.env),
+    ).resolves.toEqual({ ...expected, entry: native });
     expect(fs.existsSync(scope.storePath)).toBe(false);
   }
 });
@@ -275,10 +306,14 @@ it.each(["before-consume", "after-consume"])(
         }
         return "consumed";
       },
+    ).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
     );
     try {
-      expect(await reading).toBe("consumed");
+      const result = await reading;
       expect(consumed).toBe(1);
+      expect(result).toEqual({ value: "consumed", error: undefined });
     } finally {
       await registryChange;
     }
@@ -357,8 +392,10 @@ it.for([
       if (!callerCurrent) {
         throw new Error("Captured caller was revoked");
       }
-    });
-    void reading.catch(() => {});
+    }).then(
+      (value) => ({ value, error: undefined }),
+      (error: unknown) => ({ value: undefined, error }),
+    );
     try {
       await withinTest(
         awaitGateBeforeSettlement(
@@ -384,7 +421,9 @@ it.for([
       }
       releaseWriter.resolve();
       await priorWriter;
-      await expect(reading).rejects.toBeInstanceOf(Error);
+      const result = await reading;
+      expect(result.value).toBeUndefined();
+      expect(result.error).toBeInstanceOf(Error);
     } finally {
       releaseWriter.resolve();
       intercept.mockRestore();

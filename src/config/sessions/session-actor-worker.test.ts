@@ -16,7 +16,7 @@ import { withActor, type Fixture, type Mutation } from "./session-actor-worker.t
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
 import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry } from "./types.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -27,7 +27,7 @@ vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMa
 
 type Events = readonly TranscriptEvent[];
 
-function seedEntry(f: Fixture, overrides: Partial<SessionEntry>, events: Events = []) {
+function seedEntry(f: Fixture, overrides: Partial<InternalSessionEntry>, events: Events = []) {
   runSqliteImmediateTransactionSync(f.database.db, () => {
     writeSessionEntry(f.database, f.target.sessionKey, { ...f.nativeEntry()!, ...overrides });
     if (events.length) {
@@ -48,7 +48,7 @@ function userEvent(id: string, content: string, message = {}, parentId: string |
 
 function seedConversation(
   f: Fixture,
-  entry: Partial<SessionEntry>,
+  entry: Partial<InternalSessionEntry>,
   event: ReturnType<typeof userEvent>,
 ) {
   seedEntry(f, entry, [
