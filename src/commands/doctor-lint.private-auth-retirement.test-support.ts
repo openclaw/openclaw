@@ -159,7 +159,10 @@ export async function verifyDoctorLintPrivateAuthRetirement(
         expect(report.checksRun).toBeGreaterThan(0);
       } else {
         expect(report.findings).toEqual([failure]);
-        expect(report.findings[0]).toMatchObject({ checkId });
+        expect(report.findings[0]).toMatchObject({
+          checkId: cleanupFailure ? checkId : "core/doctor/lint-state-inspection",
+        });
+        expect(report.checksRun).toBe(1);
       }
       expect(privateState).toBeDefined();
       const snapshotRoot = path.dirname(resolveOpenClawStateDirForDatabasePath(privateState!.path));

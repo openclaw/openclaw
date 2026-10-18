@@ -16,7 +16,7 @@ export type SessionCapabilities = {
   error?: string;
 };
 
-export function summarizeSessionCapabilities(
+function summarizeSessionCapabilities(
   inventory: EffectiveToolInventoryResult,
 ): SessionCapabilities {
   const access = inventory.toolAccess;

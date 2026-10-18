@@ -8,6 +8,7 @@ import { normalizeMessageClientSources } from "../../chat/message-client-source.
 import { bindUserTurnInputActor } from "../../config/sessions/session-input-actor.js";
 import {
   composeSessionSourceAssertion,
+  prepareSessionSourceAuthority,
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
@@ -23,6 +24,7 @@ import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import type { MentionInbox } from "../mention-inbox.types.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
+import { captureWorkerTurnInputSource } from "../worker-environments/worker-turn-transcript-target.js";
 import { formatForLog } from "../ws-log.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
@@ -70,6 +72,7 @@ export function createGatewayChatUserTurnController(params: {
   mentionInbox?: MentionInbox;
   goalCommitGuard?: ReturnType<typeof createChatSendGoalCommitGuard>;
   assertOriginalInputCommit?: SessionSourceAssertion;
+  onMessagePersisted?: () => void;
 }): GatewayChatUserTurnController {
   const { admission, request, session } = params;
   const progressRefresh = isProgressCardRefreshInputProvenance(request.systemInputProvenance);
@@ -135,7 +138,25 @@ export function createGatewayChatUserTurnController(params: {
   let mentionCommit: Promise<void> | undefined;
   const onPersistenceError = (error: unknown) =>
     params.warn(`gateway user transcript persistence failed: ${formatForLog(error)}`);
+  const captureWorkerGoalSource = () =>
+    captureWorkerTurnInputSource({
+      agentId: session.agentId,
+      sessionId: admission.sessionBinding.sessionId,
+      sessionKey: session.sessionKey,
+    });
+  const prepareWorkerGoalSource = async () =>
+    prepareSessionSourceAuthority(captureWorkerGoalSource());
+  const workerGoalSource: SessionSourceAssertion | undefined = admission.workerGoalAdmission
+    ? Object.assign(() => captureWorkerGoalSource()(), {
+        prepareSessionSource: prepareWorkerGoalSource,
+        prepareSessionSourceScope: prepareWorkerGoalSource,
+      })
+    : undefined;
   const recorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+    onMessagePersisted: params.onMessagePersisted,
+    ...(request.goalOperation
+      ? { pendingInputRequestFingerprint: request.goalOperation.requestFingerprint }
+      : {}),
     ...(sender?.id && !request.goalOperation
       ? {
           // Attribution and submitted bytes survive reconnect; display names, leaf
@@ -160,6 +181,12 @@ export function createGatewayChatUserTurnController(params: {
             operation: request.goalOperation,
             runId: session.clientRunId,
             ...params.goalCommitGuard,
+            assertCurrent: admission.workerGoalAdmission
+              ? composeSessionSourceAssertion([
+                  params.goalCommitGuard?.assertCurrent,
+                  workerGoalSource,
+                ])
+              : params.goalCommitGuard?.assertCurrent,
           },
         }
       : {}),
@@ -277,6 +304,11 @@ export function createGatewayChatUserTurnController(params: {
     if (options?.contextFreeCommand === true && !recorder.hasPersisted()) {
       contextFreeCommand = true;
     }
+    // A setup/error fallback must not activate a Goal before placement admission.
+    // The selected native harness promotes staged input through persistApproved.
+    if (admission.workerGoalAdmission && !recorder.hasPersisted()) {
+      return undefined;
+    }
     const persisted = await measureDiagnosticsTimelineSpan(
       "gateway.chat_send.persist_user_transcript",
       () => recorder.persistFallback(),
@@ -301,7 +333,7 @@ export function createGatewayChatUserTurnController(params: {
       requestedSessionId: session.requestedSessionId,
       resumeRequestedSession: request.reconnectResumeRequested || Boolean(request.restartResume),
       ...(request.restartResume ? { pinExpectedExistingSession: true } : {}),
-      ...(admission.restartSafeAdmission
+      ...(admission.restartSafeAdmission || admission.workerGoalAdmission
         ? {
             expectedExistingSessionId: admission.admittedSessionId,
             pinExpectedExistingSession: true,

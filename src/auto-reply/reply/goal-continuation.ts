@@ -1,8 +1,10 @@
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import { accountSessionGoalUsage } from "../../config/sessions/goals-transitions.js";
 import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { getInProcessGatewayRequestContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { SkillLibraryError } from "../../skills/skill-library-error.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -11,7 +13,40 @@ import { runAfterReplyOperationClear, type ReplyOperation } from "./reply-run-re
 
 export type GoalContinuation = Pick<SessionEntry, "sessionId" | "lifecycleRevision"> & {
   goalId: string;
+  workerGoal?: true;
 };
+
+/** Selects supported placement facts; execution still acquires a fresh turn claim. */
+export async function isSupportedWorkerGoalPlacement(params: {
+  agentId?: string;
+  sessionKey: string;
+  sessionId: string;
+}): Promise<boolean> {
+  if (getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode !== "remote-exec") {
+    return false;
+  }
+  const service = getInProcessGatewayRequestContext()?.workerSessionPlacementService;
+  const prepared = await service?.prepareSessionPlacement?.(params.sessionId);
+  if (!prepared) {
+    return false;
+  }
+  try {
+    const pending = prepared.prepareRead();
+    if (pending) {
+      await pending;
+    }
+    const placement = prepared.current();
+    return Boolean(
+      placement &&
+      placement.executionMode === "remote-exec" &&
+      placement.state !== "local" &&
+      placement.agentId === params.agentId &&
+      placement.sessionKey === params.sessionKey,
+    );
+  } finally {
+    prepared.release();
+  }
+}
 
 export function isGoalContinuationCurrent(
   continuation: GoalContinuation,
@@ -25,7 +60,9 @@ export function isGoalContinuationCurrent(
     goal?.id === continuation.goalId &&
     goal.status === "active" &&
     !entry.abortedLastRun &&
-    (entry.agentHarnessId === undefined || entry.agentHarnessId === "openclaw"),
+    (entry.agentHarnessId === undefined ||
+      entry.agentHarnessId === "openclaw" ||
+      (entry.agentHarnessId === "codex" && continuation.workerGoal === true)),
   );
 }
 
@@ -87,9 +124,22 @@ export async function enqueueGoalContinuation(params: {
   if (!eligible() || !entry?.goal) {
     return false;
   }
+  const workerGoal =
+    entry.agentHarnessId === "codex" &&
+    Boolean(params.base.operatorAuthority) &&
+    (await isSupportedWorkerGoalPlacement({
+      agentId: params.base.run.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.expectedSession.sessionId,
+    }));
+  params.base.operatorAuthority?.assertCurrent();
+  if (!eligible()) {
+    return false;
+  }
   const continuation: GoalContinuation = {
     ...params.expectedSession,
     goalId: params.initialGoalId ?? entry.goal.id,
+    ...(workerGoal ? { workerGoal: true as const } : {}),
   };
   if (!isGoalContinuationCurrent(continuation, entry)) {
     return false;

@@ -37,7 +37,9 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
   await withArtifactPreservingStateReads(() =>
     withPluginSourceCaptureStorage({ stateDir: root, placement: "temporary" }, async () => {
       const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
+      const capturesBeforeRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const recovery = prepared.artifact.captureRecoverySource();
+      const capturesWithRecovery = fs.readdirSync(path.dirname(prepared.artifact.boundaryRoot));
       const nativeSource = captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
       expect(nativeSource.hasActiveWorkers).toBe(true);
       expect(fs.readFileSync(prepared.artifact.resolve(entry), "utf8")).toContain("42");
@@ -50,6 +52,8 @@ it("joins retained capture workers before terminal native-source shutdown", asyn
       expect(() => prepared.artifact.prepareModule(entry)).toThrow(
         "Plugin preparation worker has closed",
       );
+      expect(capturesBeforeRecovery).toEqual([path.basename(prepared.artifact.boundaryRoot)]);
+      expect(capturesWithRecovery).toHaveLength(2);
     }),
   );
 });
@@ -173,8 +177,20 @@ it.each(["capture", "custody", "fork"] as const)(
         const prepared = await preparePluginGenerationArtifact({ rootDir: source, source: entry });
         prepared.attachModuleSource((filename) => filename);
         const artifact = prepared.artifact;
+        let moduleFactCallbacks: WeakRef<object>[] | undefined;
         expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
         if (operation === "capture") {
+          moduleFactCallbacks = (() => {
+            const capturedEntry = artifact.resolve(entry);
+            artifact.prepareModule(capturedEntry);
+            const facts = artifact.moduleFacts(capturedEntry)!;
+            expect(facts.isRequireReference("./missing.js")).toBe(false);
+            return [
+              new WeakRef(facts.isRequireReference),
+              new WeakRef(facts.prepareDependency),
+              new WeakRef(facts.capture),
+            ];
+          })();
           const replies = Array.from(
             { length: 100 },
             () => new WeakRef(artifact.prepareModule(entry)),
@@ -219,6 +235,9 @@ it.each(["capture", "custody", "fork"] as const)(
         }
         expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
         await artifact.disposeAsync();
+        await nextTurn();
+        queryObjects(WeakRef);
+        const moduleFactsReleased = moduleFactCallbacks?.every((callback) => !callback.deref());
         expect(fs.readFileSync(recovery.resolve(entry), "utf8")).toContain("42");
         const recoveredEntry = recovery.resolve(entry);
         await recovery.disposeAsync();
@@ -227,6 +246,9 @@ it.each(["capture", "custody", "fork"] as const)(
         expect(() => recovery.resolve(path.join(root, "outside.js"))).toThrow(
           "Plugin recovery entry is outside its captured source package",
         );
+        if (moduleFactCallbacks) {
+          expect(moduleFactsReleased).toBe(true);
+        }
       }),
     );
   },

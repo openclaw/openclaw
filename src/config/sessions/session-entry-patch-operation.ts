@@ -39,6 +39,7 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 export type SessionEntryBookkeepingReducer =
   | { kind: "activity"; updatedAt: number }
   | { kind: "usage"; update: SessionEntryUsageUpdate; updatedAt: number }
+  | { kind: "goal-continuation"; goalId: string }
   | { kind: "group-intro"; needsSystemIntro: boolean }
   | { kind: "fallback-notice"; notice: SessionEntry["fallbackNotice"] }
   | {
@@ -196,6 +197,11 @@ export function reduceSessionBookkeeping(
         : { updatedAt: Math.max(entry.updatedAt, reducer.updatedAt) };
     case "usage":
       return projectSessionEntryUsageUpdate(entry, reducer.update, reducer.updatedAt);
+    case "goal-continuation":
+      // Completion may already have changed status; only the admitted Goal identity matters.
+      return entry.goal?.id === reducer.goalId
+        ? { goal: { ...entry.goal, continuationTurns: entry.goal.continuationTurns + 1 } }
+        : null;
     case "group-intro":
       return { groupActivationNeedsSystemIntro: reducer.needsSystemIntro };
     case "fallback-notice":

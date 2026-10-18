@@ -233,16 +233,15 @@ it("survives heartbeat errors and warns once across steps", async () => {
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
 });
 
-it("requires explicit recovery for a recent run whose driver exited", () => {
+it("terminalizes activating work as soon as every recorded driver is dead", () => {
   const run = create({ origin: { driver: exitedDriver() } });
-  vi.advanceTimersByTime(ABANDONED_UPDATE_RUN_MS - 1);
+  recordUpdateRunPhase(run.runId, "activating", {}, options);
 
-  expect(inspectUpdateRunAbandonment(run)).toBeUndefined();
-  expect(reconcile()).toEqual([]);
-  expect(read(run)).toEqual(run);
-  expect(reconcile({ explicit: true })).toMatchObject([
+  expect(inspectUpdateRunAbandonment(read(run)!)).toBe("inactive-driver-dead");
+  expect(reconcile()).toMatchObject([
     { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
   ]);
+  expect(read(run)?.origin.nextAction).toBeTruthy();
 });
 
 it("explicit admission supersedes one stale identityless staging run", () => {

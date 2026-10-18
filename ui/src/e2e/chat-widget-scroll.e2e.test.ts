@@ -52,12 +52,19 @@ async function swipe(
         ),
       );
     }
+    // Observe the drag while the finger is still down, before inertia can start.
+    let released = before;
+    await expect
+      .poll(async () => {
+        released = await thread.evaluate((element) => element.scrollTop);
+        return direction * (before - released);
+      })
+      .toBeGreaterThan(120);
     await cdp.send("Input.dispatchTouchEvent", {
       type: "touchEnd",
       touchPoints: [],
       timestamp: timestamp + 0.13,
     });
-    const released = await thread.evaluate((element) => element.scrollTop);
     // A quiet timer window can occur during native inertia; wait for its actual end.
     const completed = await page.waitForFunction(
       async ({ done }) => {

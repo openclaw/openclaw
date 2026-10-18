@@ -132,7 +132,7 @@ function createSelectedAgentHarnessMock(params: {
     runAttempt: vi.fn(),
   };
 }
-export const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
+const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
 export const selectAgentHarnessForPreparedModelProvidersMock = vi.fn(
   createSelectedAgentHarnessMock,
 );

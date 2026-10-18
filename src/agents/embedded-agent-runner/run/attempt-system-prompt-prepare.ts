@@ -1,5 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
 import { getReplyOperationSessionReader } from "../../../auto-reply/reply/reply-run-registry.state.js";
+import { resolveControlUiLinkLocation } from "../../../config/control-ui-link-base.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../../plugins/command-registry-state.js";
 import {
   resolveProviderSystemPromptContribution,
@@ -171,11 +172,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
 
   const toolSchemaDirectoryPrompt = resolveToolSchemaDirectoryPrompt();
 
+  // Only externally publishable origins need the admitted session's sharing facts.
+  const preparedSessionEntry = resolveControlUiLinkLocation(attempt.config)?.origin.startsWith(
+    "https://",
+  )
+    ? (await policyPreparation.reader?.readEntry(assertPreparationCurrent))?.entry
+    : undefined;
   const { runtimeChannel, runtimeCapabilities, ...runtimePrompt } = await resolveAgentRuntimePrompt(
     {
       remoteWorkspace: params.remoteWorkspace,
       config: attempt.config,
       preparedGitCoauthorPrompt: attempt.gitCoauthorPrompt,
+      preparedSessionEntry,
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       cwd: params.setup.effectiveCwd,

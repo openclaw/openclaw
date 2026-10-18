@@ -35,11 +35,13 @@ function describeGitHubPublishTool(
     ? `Publish or edit the current session's PR through Gateway-held credentials, for local or cloud repository workspaces.
 - Omitted action: publish accepted workspace changes as a draft PR; title/body are used only when creating a PR. Finish the turn so changes can be saved. Busy/recovering workspaces wait; the receipt arrives in this conversation without resuming the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it.
 - edit: omit title/body to read current metadata. To change either field, send requestId, expectedHeadCommit, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
+- ready: mark the current session's own draft ready for review, using the requestId and expectedHeadCommit observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
+- request_review: after an explicit re-review request, read the current PR with edit, then send requestId and expectedHeadCommit to post only "@clawsweeper re-review". No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
 - refresh_base: integrate the selected base into this local managed sandbox before tests and Auto Review. Resolve returned conflicts, then acknowledge with conflictsResolved: true and the returned baseCommit, including unchanged binary choices. Tests and Auto Review use the returned exact review base (mode local). Refresh stages source but preserves guest HEAD/branches/commits and never publishes.
-Edit and refresh accept no other repository, PR, ref or publishing session.`
+Edit, request_review, refresh and own-draft readiness accept no other repository, PR, ref or publishing session.`
     : "This conversation cannot publish its own workspace. It can act on an explicitly selected publishing child's PR.";
   return actionsAvailable
-    ? `${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Guest requests cannot use these privileged actions. Actions do not change session sandboxing.`
+    ? `${publication} For an explicit landing request from a person with full operator write access, use inspect, then ready and merge after review and required checks. For an explicit closure request, use close to close the PR without merging or deleting saved work. ready, merge and close require the inspected requestId and expectedHeadCommit; merge also requires mergeMethod. For delegated work, explicitly select its publishingSessionKey from this conversation's children; never guess a PR. Actions return the observed GitHub state and never enable auto-merge. Inspect after an uncertain response before retrying. Guests may only mark their own draft ready; inspection, merge, close and child selection require full operator write access. Actions do not change session sandboxing.`
     : publication;
 }
 
@@ -74,10 +76,18 @@ export function createGitHubPublishTool(
                     Type.Literal("publish"),
                     Type.Literal("refresh_base"),
                     Type.Literal("edit"),
+                    Type.Literal("request_review"),
                     ...GitHubPublicationActionSchema.properties.action.anyOf,
                   ]),
                 )
-              : Type.Optional(Type.Union([Type.Literal("refresh_base"), Type.Literal("edit")])),
+              : Type.Optional(
+                  Type.Union([
+                    Type.Literal("refresh_base"),
+                    Type.Literal("edit"),
+                    Type.Literal("ready"),
+                    Type.Literal("request_review"),
+                  ]),
+                ),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
           },
@@ -89,13 +99,38 @@ export function createGitHubPublishTool(
       const input = rawArgs as Omit<SessionGitHubPublishParams, "idempotencyKey" | "sessionKey"> &
         Omit<GitHubPublicationAction, "action"> &
         Omit<GitHubPublicationEdit, "action"> & {
-          action?: "publish" | "refresh_base" | "edit" | GitHubPublicationAction["action"];
+          action?:
+            | "publish"
+            | "refresh_base"
+            | "edit"
+            | "request_review"
+            | GitHubPublicationAction["action"];
           conflictsResolved?: boolean;
           baseCommit?: string;
         };
       const caller = getGatewayToolCallerIdentity();
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
+      }
+      if (input.action === "request_review") {
+        if (
+          !publicationAvailable ||
+          Object.keys(input).some(
+            (key) => !["action", "requestId", "expectedHeadCommit"].includes(key),
+          )
+        ) {
+          throw new Error(
+            "request_review only posts the fixed ClawSweeper command on the current session PR.",
+          );
+        }
+        return jsonResult(
+          await callGateway<SessionGitHubActionResult>("sessions.github.action", {
+            sessionKey: caller.sessionKey,
+            action: "request_review",
+            requestId: input.requestId,
+            expectedHeadCommit: input.expectedHeadCommit,
+          }),
+        );
       }
       if (input.action === "edit") {
         if (

@@ -41,6 +41,19 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+If native service inspection becomes unavailable after admission, the updater
+refuses activation before stopping the Gateway or replacing its package. When
+inspection is unavailable initially, a live or unverified Gateway state owner
+also blocks package replacement, even if the process title no longer contains
+its installation path. The refusal leaves the installation unchanged and names
+the service inspection and stop commands to use before retrying.
+
+`openclaw update status` reports confirmed driver loss without changing the
+recorded run, and names `openclaw update repair` as the next action. Repair or the
+next update's admission can record the failed outcome without waiting for the
+inactivity grace period. Live or unverifiable drivers and retained recovery
+continue to preserve their ownership.
+
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity
 can verify activation instead, with an RPC authentication warning recorded in
