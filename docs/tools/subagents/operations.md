@@ -134,6 +134,8 @@ next activation or restart. Recovery does not keep a separate retry timer.
 Requester recovery selects each retained turn's children without repeatedly
 scanning unrelated run history. Completed children remain in saved batches when
 their delivery receipts are needed to prevent replaying an already delivered result.
+Binding restored runs to the new Gateway does not emit session activity updates
+for unchanged records. Recovery and cleanup still publish their actual changes.
 Durably completed cleanup does not replay interrupted child-session effects on restart.
 The saved interruption still rejects late child results, and pending requester wakes
 continue through their existing settlement owner.
