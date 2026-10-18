@@ -279,9 +279,7 @@ independent queries:
 }
 ```
 
-Single-query calls continue to return the compact candidate array directly,
-unless a returned MCP server publishes instructions (see
-[MCP server instructions](#mcp-server-instructions)).
+Single-query calls continue to return the compact candidate array directly.
 When both shapes contain searches, the non-empty `query` runs first, with the
 top-level `limit` scoped to it. Batch entries follow in request order, including
 repeated query text; each occurrence keeps its own limit and counts toward the
@@ -318,12 +316,12 @@ with no matches returns an empty `candidates` array.
 MCP servers can publish usage guidance in their `initialize` result. For tools
 deferred behind Tool Search, OpenClaw keeps that remote text out of the system
 prompt and the directory. `tool_search` and `tool_describe` responses carry it
-instead, under the same untrusted-content wrapper as the rest of the response:
+instead, wrapped as untrusted content like the rest of the response:
 
-- `tool_search`, single or batch: `mcpServerInstructions`, an object keyed by
-  server name, follows the candidates. Each server returned in the response
-  appears once, however many of its tools matched; a single search then returns
-  `{ results, mcpServerInstructions }` instead of a bare array.
+- `tool_search`: `mcpServerInstructions`, an object keyed by server name,
+  follows the candidates. Each server returned in the response appears once,
+  however many of its tools matched. A single search keeps its candidate array
+  and adds the object as a second text block; a batch adds it to its object.
 - `tool_describe`: the described tool's server, after its schema.
 
 Instructions are never truncated. Candidates and schemas keep priority, so

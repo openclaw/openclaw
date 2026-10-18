@@ -323,17 +323,16 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
             limit: request.search.limit,
             parentToolCallId: toolCallId,
           });
+          // Measured with the list as one response, so both blocks stay within the protected bound.
           const { instructions: mcpServerInstructions } = runtime.mcpServerInstructionsFor(
             { results },
             results.map((candidate) => candidate.id),
             { parentToolCallId: toolCallId },
           );
-          // Results stay a plain list unless a server publishes guidance for them.
-          return formatToolSearchControlResult(
-            mcpServerInstructions ? { results, mcpServerInstructions } : results,
-            runtime,
-            { parentToolCallId: toolCallId },
-          );
+          return formatToolSearchControlResult(results, runtime, {
+            parentToolCallId: toolCallId,
+            mcpServerInstructions,
+          });
         }
         const results = await Promise.all(
           request.searches.map(async (search) => ({

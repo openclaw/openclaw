@@ -85,28 +85,26 @@ describe("Tool Search MCP server instructions", () => {
       query: "court decisions",
       limit: 4,
     });
-    const details = result.details as {
-      results: Array<{ id: string; mcp?: Record<string, unknown> }>;
-      mcpServerInstructions: Record<string, string>;
-    };
-    const text = modelText(result);
+    const [list = "", guidance = ""] = result.content.map((part) =>
+      part.type === "text" ? part.text : "",
+    );
+    const details = result.details as Array<{ id: string }>;
 
-    expect(details.results.map((candidate) => candidate.id).toSorted()).toEqual([
+    // The result list keeps its shape; guidance follows as its own wrapped block.
+    expect(result.content).toHaveLength(2);
+    expect(details.map((candidate) => candidate.id).toSorted()).toEqual([
       "mcp:calc:calc__run",
       "mcp:plain:plain__ping",
       "mcp:research:research__fetch",
       "mcp:research:research__search",
     ]);
+    expect(list).not.toContain("GUIDANCE");
     // One copy per server, keyed by server, never repeated per candidate.
-    expect(details.mcpServerInstructions).toEqual({
-      research: researchGuidance,
-      calc: calcGuidance,
-    });
-    expect(JSON.stringify(details.results)).not.toContain("GUIDANCE");
-    expect(occurrences(text, "RESEARCH_GUIDANCE")).toBe(1);
-    expect(occurrences(text, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
-    expect(occurrences(text, calcGuidance)).toBe(1);
-    expect(text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(occurrences(guidance, "RESEARCH_GUIDANCE")).toBe(1);
+    expect(occurrences(guidance, "RESEARCH_TAIL: on monthly_quota_exceeded, never retry.")).toBe(1);
+    expect(occurrences(guidance, calcGuidance)).toBe(1);
+    expect(guidance).toContain('"mcpServerInstructions"');
+    expect(guidance).toContain("EXTERNAL_UNTRUSTED_CONTENT");
 
     // Discovery owns delivery; calling a tool returns only its invocation result.
     const dispatched = await tool(TOOL_CALL_RAW_TOOL_NAME).execute("guidance-dispatch", {
@@ -116,13 +114,14 @@ describe("Tool Search MCP server instructions", () => {
     expect(modelText(dispatched)).not.toContain("mcpServerInstructions");
   });
 
-  it("keeps the plain result list when no returned server publishes guidance", async () => {
+  it("adds no guidance block when no returned server publishes guidance", async () => {
     const { tool } = setup();
     const result = await tool(TOOL_SEARCH_RAW_TOOL_NAME).execute("plain-search", {
       query: "plain__ping",
       limit: 1,
     });
     expect(result.details).toEqual([expect.objectContaining({ id: "mcp:plain:plain__ping" })]);
+    expect(result.content).toHaveLength(1);
   });
 
   it("keeps a batch within its budget and points to tool_describe for guidance that fits there", async () => {
@@ -215,9 +214,7 @@ describe("Tool Search MCP server instructions", () => {
 
     for (const result of [search, batch, described]) {
       const text = modelText(result);
-      expect(result.details).toMatchObject({
-        mcpServerInstructions: { research: MCP_SERVER_INSTRUCTIONS_TOO_LARGE },
-      });
+      expect(text).toContain(JSON.stringify(MCP_SERVER_INSTRUCTIONS_TOO_LARGE));
       expect(text).not.toContain("OVERSIZED_GUIDANCE");
       expect(text).not.toContain("returns the whole text");
       expect(text).not.toContain("[truncated]");

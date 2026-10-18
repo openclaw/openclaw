@@ -678,6 +678,7 @@ export function formatToolSearchControlResult<T>(
     terminalBatchStatus?: "waiting" | "completed" | "failed";
     compact?: boolean;
     images?: Extract<AgentToolResult<unknown>["content"][number], { type: "image" }>[];
+    mcpServerInstructions?: ToolSearchMcpServerInstructions;
   } = {},
 ): AgentToolResult<T> {
   const serialized = serializeToolSearchControlResult(payload, options.compact);
@@ -687,6 +688,17 @@ export function formatToolSearchControlResult<T>(
   if (networkContent) {
     // The control tool has no static source; finalization reads this per-call fact.
     attachInternalToolResultContentSource(result, "network");
+  }
+  if (options.mcpServerInstructions) {
+    // Guidance follows as its own block, wrapped like the payload, so the payload keeps its shape.
+    const guidance = serializeToolSearchControlResult(
+      { mcpServerInstructions: options.mcpServerInstructions },
+      options.compact,
+    );
+    result.content.push({
+      type: "text",
+      text: renderToolSearchControlText(guidance, networkContent).text,
+    });
   }
   if (options.images?.length) {
     result.content.push(...options.images);
