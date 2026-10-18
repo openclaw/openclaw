@@ -406,6 +406,10 @@ function selectionIntersectsElement(selection: Selection | null, element: Elemen
 }
 
 export function handleTranscriptContextMenu(event: MouseEvent, props: TranscriptInteractionProps) {
+  // Phone long-press needs the browser's native text selection callout.
+  if (window.matchMedia("(hover: none) and (pointer: coarse)").matches) {
+    return;
+  }
   if (event.defaultPrevented || usesNativeContextMenu(event.composedPath())) {
     return;
   }
