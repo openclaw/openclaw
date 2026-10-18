@@ -137,6 +137,14 @@ test("capable and legacy sockets produce identical session payloads and consumer
   ];
   const rosterWire: string[] = [];
   const rosterFrames = collectSessionRowFrames(roster.ws, rosterWire);
+  const firstToolBatchesReceived = createDeferred();
+  const observeFirstToolBatches = () => {
+    if (rosterFrames.filter((frame) => frame.event === "session.message").length >= 13) {
+      firstToolBatchesReceived.resolve();
+    }
+  };
+  roster.ws.on("message", observeFirstToolBatches);
+  onTestFinished(() => roster.ws.off("message", observeFirstToolBatches));
   let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
@@ -166,7 +174,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
       });
       for (const [depth, childKey] of keys.entries()) {
         if (depth === 2) {
-          // Observe the first two committed tool batches before changing delivery.
+          // Transcript dispatch can still be loading before the row publication drain sees it.
+          await firstToolBatchesReceived.promise;
+          roster.ws.off("message", observeFirstToolBatches);
           await drain();
           expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
             13,
