@@ -1,14 +1,18 @@
+// Covers OpenRouter-specific extra-params payload and header behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
+  isProxyReasoningUnsupported,
 } from "../llm/providers/stream-wrappers/proxy.js";
 import { runExtraParamsPayloadCase } from "./embedded-agent-runner-extraparams.test-support.js";
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 beforeEach(() => {
+  // OpenRouter behavior is supplied through the provider-runtime seam so tests
+  // exercise the same wrapper boundary as production.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -17,9 +21,30 @@ beforeEach(() => {
         return params.context.streamFn;
       }
 
-      // This fixture only exercises auto routing, which does not inject reasoning.
+      const providerRouting =
+        params.context.extraParams?.provider != null &&
+        typeof params.context.extraParams.provider === "object"
+          ? (params.context.extraParams.provider as Record<string, unknown>)
+          : undefined;
+      let streamFn = params.context.streamFn;
+      if (providerRouting) {
+        const underlying = streamFn;
+        streamFn = (model, context, options) =>
+          (underlying as StreamFn)(
+            {
+              ...model,
+              compat: { ...model.compat, openRouterRouting: providerRouting },
+            },
+            context,
+            options,
+          );
+      }
+
+      const skipReasoningInjection =
+        params.context.modelId === "auto" || isProxyReasoningUnsupported(params.context.modelId);
+      const thinkingLevel = skipReasoningInjection ? undefined : params.context.thinkingLevel;
       return createOpenRouterSystemCacheWrapper(
-        createOpenRouterWrapper(params.context.streamFn, undefined, params.context.extraParams),
+        createOpenRouterWrapper(streamFn, thinkingLevel, params.context.extraParams),
         params.context.extraParams,
       );
     },
@@ -30,46 +55,57 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
-  const calls: Array<Parameters<StreamFn>[2]> = [];
-  const baseStreamFn: StreamFn = (_model, _context, options) => {
-    calls.push(options);
-    return {} as ReturnType<StreamFn>;
-  };
-  const agent = { streamFn: baseStreamFn };
+describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
+  it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+    // Model-level camelCase config is narrower than broad defaults and should
+    // override snake_case aliases from defaults.
+    const calls: Array<{ headers?: Record<string, string> }> = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      calls.push({ headers: options?.headers });
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
 
-  const config = {
-    agents: {
-      defaults: {
-        params: {
-          response_cache: false,
-          response_cache_ttl_seconds: 60,
-          response_cache_clear: false,
-        },
-        models: {
-          "openrouter/auto": {
+    applyExtraParamsToAgent(
+      agent,
+      {
+        agents: {
+          defaults: {
             params: {
-              responseCache: true,
-              responseCacheTtlSeconds: 600,
-              responseCacheClear: true,
+              response_cache: false,
+              response_cache_ttl_seconds: 60,
+              response_cache_clear: false,
+            },
+            models: {
+              "openrouter/auto": {
+                params: {
+                  responseCache: true,
+                  responseCacheTtlSeconds: 600,
+                  responseCacheClear: true,
+                },
+              },
             },
           },
         },
       },
-    },
-  };
-  applyExtraParamsToAgent(agent, config, "openrouter", "auto");
+      "openrouter",
+      "auto",
+    );
 
-  void agent.streamFn?.(
-    { api: "openai-completions", provider: "openrouter", id: "auto" } as never,
-    { messages: [] } as never,
-    {},
-  );
+    void agent.streamFn?.(
+      {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "auto",
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
 
-  expect(calls[0]?.headers).toMatchObject({
-    "X-OpenRouter-Cache": "true",
-    "X-OpenRouter-Cache-Clear": "true",
-    "X-OpenRouter-Cache-TTL": "600",
+    const headers = calls[0]?.headers;
+    expect(headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
+    expect(headers?.["X-OpenRouter-Cache-TTL"]).toBe("600");
   });
 
   it("forwards Fusion plugin config through extraBody", () => {

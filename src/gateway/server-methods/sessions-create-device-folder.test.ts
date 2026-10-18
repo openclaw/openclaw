@@ -39,7 +39,9 @@ const validationResponse = (workspaceDir = canonicalFolder.path) => ({
 });
 const create = (
   params: Record<string, unknown> = { deviceFolder: folder },
-  options: Parameters<typeof directSessionReq>[2] = controlUiClient,
+  options: Parameters<
+    typeof directSessionReq<{ entry: InternalSessionEntry }>
+  >[2] = controlUiClient,
 ) =>
   directSessionReq<{ entry: InternalSessionEntry }>("sessions.create", { key, ...params }, options);
 beforeEach(async () => {

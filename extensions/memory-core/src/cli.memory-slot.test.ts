@@ -112,8 +112,8 @@ it.each(["text", "json", "unresolved"] as const)(
       });
     }
     const { open, health, close } = registerSelectedProvider();
-    const outputSpy =
-      mode === "text" ? spyRuntimeLogs(defaultRuntime) : spyRuntimeJson(defaultRuntime);
+    const outputSpy = spyRuntimeLogs(defaultRuntime);
+    const jsonSpy = spyRuntimeJson(defaultRuntime);
     await runMemoryCli(["status", "--agent", "main", ...(mode === "text" ? [] : ["--json"])]);
     expect(getMemorySearchManager).not.toHaveBeenCalled();
     if (available) {
@@ -140,7 +140,7 @@ it.each(["text", "json", "unresolved"] as const)(
       expect(text).not.toContain("Memory Search");
       expect(text).not.toContain("Indexed:");
     } else {
-      expect(firstWrittenJsonArg(outputSpy)).toEqual([
+      expect(firstWrittenJsonArg(jsonSpy)).toEqual([
         available
           ? {
               agentId: "main",

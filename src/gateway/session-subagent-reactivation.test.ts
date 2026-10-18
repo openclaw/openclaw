@@ -7,7 +7,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const latestRun = vi.fn();
 const liveRun = vi.fn();
-const replaceRun = vi.fn();
+const replaceSubagentRunAfterSteerMock = vi.fn();
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -28,7 +28,8 @@ vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
 });
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  replaceSubagentRunAfterSteerCore: (...args: unknown[]) => replaceRun(...args),
+  replaceSubagentRunAfterSteerCore: (...args: unknown[]) =>
+    replaceSubagentRunAfterSteerMock(...args),
 }));
 
 import { reactivateCompletedSubagentSession } from "./session-subagent-reactivation.js";
@@ -56,7 +57,7 @@ function endedRun({ runId = "run-prev-ended", task = "previous task" } = {}) {
 function mockEndedRun(run: ReturnType<typeof endedRun>) {
   latestRun.mockResolvedValue(run);
   liveRun.mockReturnValue(run);
-  replaceRun.mockReturnValue(true);
+  replaceSubagentRunAfterSteerMock.mockReturnValue(true);
 }
 
 function reactivate(
@@ -70,7 +71,7 @@ function reactivate(
 }
 
 function expectReplacement(overrides: Record<string, unknown>) {
-  expect(replaceRun).toHaveBeenCalledWith({
+  expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
     previousRunId: "run-prev-ended",
     nextRunId: "run-next",
     preserveCompletedRun: true,
@@ -85,7 +86,7 @@ afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
   latestRun.mockReset();
   liveRun.mockReset();
-  replaceRun.mockReset();
+  replaceSubagentRunAfterSteerMock.mockReset();
 });
 
 it("skips ACP reads without an ended run and observes newly written ACP metadata", async () => {
@@ -113,7 +114,7 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
 
       mockEndedRun(endedRun());
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
-      expect(replaceRun).toHaveBeenCalledOnce();
+      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
 
       entry = await upsertAcpSessionMeta({
         ...scope,
@@ -130,7 +131,7 @@ it("skips ACP reads without an ended run and observes newly written ACP metadata
       expect(entry).not.toBeNull();
       params.acpSession.sessionEntry = entry ?? undefined;
       await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
-      expect(replaceRun).toHaveBeenCalledOnce();
+      expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
     },
   );
 });
@@ -154,7 +155,7 @@ it("does not replace an ended row after its Gateway owner retires", async () => 
   await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(false);
 
   expect(resolveGatewayContext).toHaveBeenCalledOnce();
-  expect(replaceRun).not.toHaveBeenCalled();
+  expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
 });
 
 it("preserves the exact follow-up task for restart redispatch (#77539)", async () => {
@@ -166,7 +167,7 @@ it("preserves the exact follow-up task for restart redispatch (#77539)", async (
 
 it.each([false, true])("accepts a replacement only when it owns the child (%s)", async (owns) => {
   mockEndedRun(endedRun());
-  replaceRun.mockImplementationOnce(() => {
+  replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
     liveRun.mockReturnValue(endedRun({ runId: owns ? "run-next" : "run-other-successor" }));
     return false;
   });

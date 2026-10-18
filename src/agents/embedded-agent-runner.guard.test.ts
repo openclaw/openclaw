@@ -323,13 +323,14 @@ describe("guardSessionManager integration", () => {
       } satisfies OpenClawConfig,
       skipBeforeMessageWriteHooks: true,
     });
+    const assistantContent = [
+      { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
+      { type: "text", text: "contact peter@dc.io" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
+    ];
     const assistant = {
       role: "assistant",
-      content: [
-        { type: "thinking", thinking: "the email is peter@dc.io", thinkingSignature: "sig" },
-        { type: "text", text: "contact peter@dc.io" },
-        { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
-      ],
+      content: assistantContent,
       stopReason: "toolUse",
     } as AgentMessage;
     appendMessage(structuredClone(assistant));
@@ -340,7 +341,7 @@ describe("guardSessionManager integration", () => {
     const messages = getMessages(sm);
 
     expect(messages).toMatchObject([
-      { role: "assistant", content: assistant.content },
+      { role: "assistant", content: assistantContent },
       { role: "toolResult", content: text("peter@dc.io\n") },
     ]);
     expect(JSON.stringify(messages)).not.toContain("changed by hook");

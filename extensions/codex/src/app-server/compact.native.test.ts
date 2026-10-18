@@ -258,10 +258,23 @@ it(
       });
       assert(typeof harness.compact === "function");
       const compactParams: AgentHarnessCompactParams<2> = {
-        ...params,
         runId: compactionHostParams.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        sessionTarget: params.sessionTarget,
+        agentId: params.agentId,
+        workspaceDir: params.workspaceDir,
+        agentDir: params.agentDir,
+        config: params.config,
+        provider: params.provider,
         model: params.modelId,
         runtimeModel: params.model,
+        runtimePlan: params.runtimePlan,
+        contextTokenBudget: params.contextTokenBudget,
+        permissionMode: params.permissionMode,
+        thinkLevel: params.thinkLevel,
+        abortSignal: params.abortSignal,
         hostCapabilities: {
           kind: compactionHost.kind,
           version: compactionHost.version,

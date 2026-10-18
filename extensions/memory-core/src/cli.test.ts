@@ -1117,7 +1117,6 @@ it("fails index --force when the memory index has orphaned provenance", async ()
     cache: { enabled: false },
     query: { hybrid: { enabled: true } },
   });
-  cfg.memory = { ...cfg.memory, backend: "builtin" };
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   getRuntimeConfig.mockReturnValue(cfg);
   await useRealManager();

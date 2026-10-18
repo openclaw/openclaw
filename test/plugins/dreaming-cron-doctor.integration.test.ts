@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import memoryCore from "../../extensions/memory-core/index.js";
 import {
   inspectCronJobsForDoctor,
@@ -57,103 +57,14 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
-function authoredJob(id: string, message: string, fields: Partial<CronStoredJob> = {}) {
-  return makeJob(id, {
-    description: `${managedTag} operator note`,
-    sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message },
-    delivery: { mode: "none" },
-    ...fields,
-  });
-}
-
 function readRows(db: EngineConnection) {
-  const rows = (table: string) =>
-    db.prepare(`SELECT * FROM ${table} ORDER BY store_key, job_id`).all();
   return {
-    jobs: rows("cron_jobs"),
-    scratch: rows("cron_job_scratch"),
-    authority: rows("cron_job_runtime_authorities"),
+    jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
+    scratch: db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key, job_id").all(),
+    authority: db
+      .prepare("SELECT * FROM cron_job_runtime_authorities ORDER BY store_key, job_id")
+      .all(),
   };
-}
-
-type Rows = ReturnType<typeof readRows>;
-type Row = Record<string, unknown>;
-const inStore =
-  (store: string, ...ids: string[]) =>
-  (row: Row) =>
-    row.store_key === store && (!ids.length || ids.includes(String(row.job_id)));
-const tables = ["jobs", "scratch", "authority"] as const;
-const declarationKey = "memory-core:memory-dreaming-promotion";
-const marker = "__openclaw_memory_core_short_term_promotion_dream__";
-const managedTag = "[managed-by=memory-core.short-term-promotion]";
-const legacyPayloadOptions = { timeoutSeconds: 90, toolsAllow: ["read"] };
-const authoredPayloadOptions = { model: "openai/gpt-4.1-mini", timeoutSeconds: 90 };
-const anchoredSchedule = { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 } as const;
-const dreamingPayload = {
-  kind: "agentTurn",
-  message: marker,
-  lightContext: true,
-};
-const migratedDefinition = {
-  declarationKey,
-  sessionTarget: "isolated",
-  payload: { kind: "agentTurn", lightContext: true },
-  delivery: { mode: "none" },
-};
-const dreamingConfig = (enabled: boolean): OpenClawConfig => ({
-  plugins: {
-    entries: {
-      "memory-core": {
-        config: { dreaming: { enabled, frequency: "15 4 * * *", timezone: "UTC" } },
-      },
-    },
-  },
-});
-const rowAt = (rows: Rows, store: string, id: string) => rows.jobs.find(inStore(store, id));
-const definitionOf = (row: Row | undefined) => JSON.parse(String(row?.job_json));
-
-function expectPreservedRows(before: Rows, after: Rows, keep: (row: Row) => boolean) {
-  for (const table of tables) {
-    expect(after[table].filter(keep)).toEqual(before[table].filter(keep));
-  }
-}
-
-function expectFilteredRows(
-  before: Rows,
-  after: Rows,
-  keep: (row: Row) => boolean,
-  selected: readonly (keyof Rows)[] = tables,
-) {
-  for (const table of selected) {
-    expect(after[table]).toEqual(before[table].filter(keep));
-  }
-}
-
-function expectPreservedRuntime(row: Row | undefined, original: Row | undefined, id: string) {
-  expect(row).toMatchObject({
-    job_id: id,
-    sort_order: original?.sort_order,
-    state_json: original?.state_json,
-    runtime_updated_at_ms: original?.runtime_updated_at_ms,
-  });
-}
-
-async function snapshot(fixture: Fixture) {
-  return {
-    rows: readRows(fixture.db()),
-    revisions: revisions(fixture),
-    backups: await listBackups(fixture.databasePath),
-  };
-}
-
-function expectBackup(backupPath: string, before: Rows) {
-  const backup = new DatabaseSync(backupPath, { readOnly: true });
-  try {
-    expect(readRows(backup)).toEqual(before);
-  } finally {
-    backup.close();
-  }
 }
 
 type Fixture = {
@@ -168,11 +79,7 @@ type Fixture = {
 
 async function withCronFixture(
   run: (fixture: Fixture) => Promise<void>,
-  options: {
-    activeDreaming?: boolean;
-    additionalActiveJobs?: CronStoredJob[];
-    legacyFields?: (id: string) => Partial<CronStoredJob>;
-  } = {},
+  options: { activeDreaming?: boolean; additionalActiveJobs?: CronStoredJob[] } = {},
 ) {
   await withOpenClawTestState({ label: "cron-doctor" }, async (state) => {
     const activeStore = state.statePath("cron", "jobs.json");
@@ -180,66 +87,51 @@ async function withCronFixture(
     const untouchedStore = state.statePath("operator", "jobs.json");
     const legacyFields: Partial<CronStoredJob> = {
       name: "Memory Dreaming Promotion",
-      description: `${managedTag} legacy`,
-      payload: { kind: "systemEvent", text: marker },
+      description: "[managed-by=memory-core.short-term-promotion] legacy",
+      payload: {
+        kind: "systemEvent",
+        text: "__openclaw_memory_core_short_term_promotion_dream__",
+      },
     };
-    const legacyJob = (id: string, fields: Partial<CronStoredJob> = {}) =>
-      makeJob(id, { ...legacyFields, ...fields });
     for (const [storePath, jobs] of [
       [
         activeStore,
         [
           ...(options.activeDreaming === false
             ? []
-            : [legacyJob("survivor"), legacyJob("duplicate", { createdAtMs: 1_800_000_000_100 })]),
-          makeJob("operator", { schedule: anchoredSchedule }),
+            : [
+                makeJob("survivor", legacyFields),
+                makeJob("duplicate", { ...legacyFields, createdAtMs: 1_800_000_000_100 }),
+              ]),
+          makeJob("operator", {
+            schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
+          }),
           ...(options.additionalActiveJobs ?? []),
         ],
       ],
-      [retiredStore, [legacyJob("retired"), makeJob("malformed")]],
+      [retiredStore, [makeJob("retired", legacyFields), makeJob("malformed")]],
       [untouchedStore, [makeJob("survivor")]],
     ] as const) {
       seedCronStoreInCurrentDatabase(storePath, { version: 1, jobs: [...jobs] });
     }
     runOpenClawStateWriteTransaction(({ db }) => {
-      const readDefinition = db.prepare(
-        "SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?",
-      );
-      const writeDefinition = db.prepare(
-        "UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?",
-      );
-      // Seed normalization removes legacy-only fields, so install raw definitions afterward.
-      for (const [store, id] of [
-        [activeStore, "survivor"],
-        [activeStore, "duplicate"],
-        [retiredStore, "retired"],
-      ]) {
-        const fields = options.legacyFields?.(id);
-        const row = readDefinition.get(store, id);
-        if (!fields || !row) {
-          continue;
-        }
-        const job = { ...definitionOf(row), ...fields };
-        db.prepare(`UPDATE cron_jobs SET job_json = ?, name = ?, description = ?, payload_kind = ?
-          WHERE store_key = ? AND job_id = ?`).run(
-          JSON.stringify(job),
-          job.name,
-          job.description,
-          job.payload.kind,
-          store,
-          id,
-        );
-      }
       db.prepare("UPDATE cron_jobs SET sort_order = 17 WHERE store_key = ? AND job_id = ?").run(
         activeStore,
         "survivor",
       );
-      writeDefinition.run(
-        ` \n${String(readDefinition.get(activeStore, "operator")?.job_json)}\n `,
+      const operator = db
+        .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?")
+        .get(activeStore, "operator");
+      db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+        ` \n${String(operator?.job_json)}\n `,
         activeStore,
         "operator",
       );
-      writeDefinition.run("{ malformed legacy definition", retiredStore, "malformed");
+      db.prepare("UPDATE cron_jobs SET job_json = ? WHERE store_key = ? AND job_id = ?").run(
+        "{ malformed legacy definition",
+        retiredStore,
+        "malformed",
+      );
       db.exec(`INSERT INTO cron_job_scratch (store_key, job_id, content, revision, updated_at_ms)
         SELECT store_key, job_id, 'scratch:' || job_id, 3, 1800000000000 FROM cron_jobs`);
     });
@@ -279,7 +171,7 @@ function makeAuthority(): PluginDoctorRepairAuthority {
   };
 }
 
-function getDreamingMigration({ state, scope }: Fixture) {
+function getDreamingMigration({ scope }: Fixture) {
   const entry = listPluginDoctorStateMigrationEntries({
     ...scope,
     pluginIds: ["memory-core"],
@@ -287,7 +179,11 @@ function getDreamingMigration({ state, scope }: Fixture) {
   if (!entry) {
     throw new Error("Missing registered memory-core dreaming cron migration");
   }
-  const input = {
+  return entry.migration;
+}
+
+function migrationInput({ state, scope }: Fixture) {
+  return {
     ...scope,
     stateDir: state.stateDir,
     oauthDir: state.statePath("credentials"),
@@ -298,21 +194,9 @@ function getDreamingMigration({ state, scope }: Fixture) {
       repairAuthority: makeAuthority(),
     }),
   };
-  return {
-    detectLegacyState: () => entry.migration.detectLegacyState(input),
-    migrateLegacyState: () => entry.migration.migrateLegacyState(input),
-  };
 }
 
-async function withRuntime(
-  fixture: Fixture,
-  run: (runtime: {
-    cron: CronService;
-    logger: ReturnType<typeof createNoopLogger>;
-    mutations: Array<Pick<CronEvent, "jobId" | "action">>;
-    reconcile: (config: OpenClawConfig) => Promise<void>;
-  }) => Promise<void>,
-) {
+function createPausedCronService(fixture: Fixture) {
   const logger = createNoopLogger();
   const mutations: Array<Pick<CronEvent, "jobId" | "action">> = [];
   const scheduler = createTestGatewayScheduler();
@@ -334,65 +218,66 @@ async function withRuntime(
   });
   // CRUD can arm an unstarted service; suspend automatic ticks during convergence proof.
   cron.pauseScheduling();
-  async function reconcile(config: OpenClawConfig) {
-    const registry = createEmptyPluginRegistry();
-    const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
-    const backgroundTasks: Promise<unknown>[] = [];
-    const api = createTestPluginApi({
-      id: "memory-core",
+  return { cron, logger, mutations, scheduler };
+}
+
+async function runRegisteredDreamingService(
+  config: OpenClawConfig,
+  cron: CronService,
+  logger: ReturnType<typeof createNoopLogger>,
+  scheduler: ReturnType<typeof createTestGatewayScheduler>,
+) {
+  const registry = createEmptyPluginRegistry();
+  const starts: Array<{ mock: { results: Array<{ value: unknown }> } }> = [];
+  const backgroundTasks: Promise<unknown>[] = [];
+  const api = createTestPluginApi({
+    id: "memory-core",
+    config,
+    logger,
+    runtime: createPluginRuntimeMock({ config: { current: () => config } }),
+    registerService(service) {
+      // Boot-path starts log failures instead of rejecting; observe them here.
+      starts.push(vi.spyOn(service, "start"));
+      registry.services.push({
+        pluginId: "memory-core",
+        origin: "bundled",
+        source: "memory-core/index.ts",
+        id: service.id,
+        service,
+      });
+    },
+  });
+  api.lifecycle.runInBackgroundContext = (run) => {
+    const result = run();
+    if (result instanceof Promise) {
+      backgroundTasks.push(result);
+    }
+    return result;
+  };
+  memoryCore.register(api);
+  if (!registry.services.some(({ id }) => id === "memory-core-dreaming")) {
+    throw new Error("Memory Core did not register its dreaming service");
+  }
+  let services: PluginServicesHandle | undefined;
+  try {
+    // Gateway boot starts services without the hot-reload candidate deadline.
+    services = await startPluginServices({
+      scheduler,
+      registry,
       config,
-      logger,
-      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
-      registerService(service) {
-        // Boot-path starts log failures instead of rejecting; observe them here.
-        starts.push(vi.spyOn(service, "start"));
-        registry.services.push({
-          pluginId: "memory-core",
-          origin: "bundled",
-          source: "memory-core/index.ts",
-          id: service.id,
-          service,
-        });
+      getCronService: () => cron,
+      onHandle(handle) {
+        services = handle;
       },
     });
-    api.lifecycle.runInBackgroundContext = (background) => {
-      const result = background();
-      if (result instanceof Promise) {
-        backgroundTasks.push(result);
-      }
-      return result;
-    };
-    memoryCore.register(api);
-    if (!registry.services.some(({ id }) => id === "memory-core-dreaming")) {
-      throw new Error("Memory Core did not register its dreaming service");
-    }
-    let services: PluginServicesHandle | undefined;
-    try {
-      // Gateway boot starts services without the hot-reload candidate deadline.
-      services = await startPluginServices({
-        scheduler,
-        registry,
-        config,
-        getCronService: () => cron,
-        onHandle(handle) {
-          services = handle;
-        },
-      });
-      const settled = await Promise.allSettled(
-        starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
-      );
-      expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
-      await Promise.all(backgroundTasks);
-      expect(logger.error).not.toHaveBeenCalled();
-    } finally {
-      await services?.stop({ strict: true });
-    }
-  }
-  try {
-    await run({ cron, logger, mutations, reconcile });
+    const settled = await Promise.allSettled(
+      starts.flatMap(({ mock }) => mock.results.map(({ value }) => value)),
+    );
+    expect(settled.filter(({ status }) => status === "rejected")).toEqual([]);
+    await Promise.all(backgroundTasks);
+    expect(logger.error).not.toHaveBeenCalled();
   } finally {
-    cron.stop();
-    await scheduler.stop();
+    await services?.stop({ strict: true });
   }
 }
 
@@ -423,421 +308,617 @@ function revisions(fixture: Fixture) {
   };
 }
 
-it("inspects absent and pre-cron databases without creating or migrating state", async () => {
-  await withOpenClawTestState({ label: "cron-doctor-absent" }, async (state) => {
-    const scope = { config: {}, env: state.env };
-    const databasePath = resolveOpenClawStateSqlitePath(state.env);
-    const before = await fs.readdir(state.stateDir);
-    await expect(inspectCronJobsForDoctor(scope)).resolves.toEqual({
-      jobs: [],
-    });
-    expect(await fs.readdir(state.stateDir)).toEqual(before);
-    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-
-    await fs.mkdir(path.dirname(databasePath), { recursive: true });
-    const legacy = new DatabaseSync(databasePath);
-    legacy.exec("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1");
-    legacy.close();
-    const bytes = await fs.readFile(databasePath);
-    expect((await inspectCronJobsForDoctor(scope)).jobs).toEqual([]);
-    expect(await fs.readFile(databasePath)).toEqual(bytes);
-  });
-});
-
-it("includes inactive partitions and malformed definitions without repairing any row", async () => {
-  await withCronFixture(async (fixture) => {
-    const before = readRows(fixture.db());
-    await closeOpenClawStateDatabaseAsync();
-    const bytes = await fs.readFile(fixture.databasePath);
-    const databaseDir = path.dirname(fixture.databasePath);
-    const entries = (await fs.readdir(databaseDir)).toSorted();
-    const inventory = await inspectCronJobsForDoctor(fixture.scope);
-    expect(inventory.jobs).toHaveLength(6);
-    expect(findJob(inventory, fixture.activeStore, "survivor").sortOrder).toBe(17);
-    expect(findJob(inventory, fixture.untouchedStore, "survivor").definition).toMatchObject({
-      name: "Operator survivor",
-    });
-    expect(findJob(inventory, fixture.retiredStore, "malformed")).toMatchObject({
-      definitionJson: "{ malformed legacy definition",
-      definition: null,
-    });
-    expect(await fs.readFile(fixture.databasePath)).toEqual(bytes);
-    expect((await fs.readdir(databaseDir)).toSorted()).toEqual(entries);
-    expect(readRows(fixture.db())).toEqual(before);
-  });
-});
-
-it("runs the registered memory-core migration with recoverable backup and an idempotent second pass", async () => {
-  await withCronFixture(async (fixture) => {
-    const { state, activeStore, retiredStore, databasePath } = fixture;
-    const migration = getDreamingMigration(fixture);
-    seedCronStoreInCurrentDatabase(fixture.untouchedStore, {
-      version: 1,
-      jobs: [
-        makeJob("survivor"),
-        authoredJob("authored-phase", "Summarize workspace activity.", {
-          name: "Operator-authored workflow",
-          description: `[managed-by=memory-core.dreaming.light] ${managedTag} operator note`,
-        }),
-        authoredJob("authored-unified", "Review the project notes.", {
-          name: "Operator-authored review",
-        }),
-      ],
-    });
-    const before = readRows(fixture.db());
-    const previousRevisions = revisions(fixture);
-    expect(await migration.detectLegacyState()).not.toBeNull();
-    expect(readRows(fixture.db())).toEqual(before);
-    const runtimeJson = '{ "nextRunAtMs": 1800000999999, "lastRunStatus": "error" }';
-    afterBackup(() => {
-      runOpenClawStateWriteTransaction(({ db }) => {
-        db.prepare(`UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = 1800000000999
-            WHERE store_key = ? AND job_id = 'survivor'`).run(runtimeJson, activeStore);
+describe("host Cron Doctor repair", () => {
+  it("inspects absent and pre-cron databases without creating or migrating state", async () => {
+    await withOpenClawTestState({ label: "cron-doctor-absent" }, async (state) => {
+      const scope = { config: {}, env: state.env };
+      const databasePath = resolveOpenClawStateSqlitePath(state.env);
+      const before = await fs.readdir(state.stateDir);
+      await expect(inspectCronJobsForDoctor(scope)).resolves.toEqual({
+        jobs: [],
       });
-    });
-    const result = await migration.migrateLegacyState();
-    expect(result.changes.length).toBeGreaterThan(0);
-    const backups = await listBackups(databasePath);
-    expect(backups).toHaveLength(1);
-    const backupPath = backups[0]!;
-    expect(result.changes.join("\n")).toContain(backupPath);
-    const after = readRows(fixture.db());
-    const survivor = rowAt(after, activeStore, "survivor");
-    expect(survivor).toMatchObject({
-      job_id: "survivor",
-      sort_order: 17,
-      state_json: runtimeJson,
-      runtime_updated_at_ms: 1_800_000_000_999,
-    });
-    expect(definitionOf(survivor)).toMatchObject({
-      ...migratedDefinition,
-      id: "survivor",
-    });
-    const inactiveSurvivor = rowAt(after, retiredStore, "retired");
-    expectPreservedRuntime(inactiveSurvivor, rowAt(before, retiredStore, "retired"), "retired");
-    expect(inactiveSurvivor).toMatchObject({ store_key: retiredStore });
-    expect(definitionOf(inactiveSurvivor)).toMatchObject(migratedDefinition);
-    const unaffected = (row: Row) =>
-      !inStore(activeStore, "survivor", "duplicate")(row) && !inStore(retiredStore, "retired")(row);
-    expectPreservedRows(before, after, unaffected);
-    const isDuplicate = inStore(activeStore, "duplicate");
-    for (const table of tables) {
-      expect(after[table].some(isDuplicate)).toBe(false);
-    }
-    expectFilteredRows(before, after, (row) => !isDuplicate(row), ["scratch"]);
-    const committedRevisions = revisions(fixture);
-    expect(committedRevisions.active).toBeGreaterThan(previousRevisions.active);
-    expect(committedRevisions.retired).toBeGreaterThan(previousRevisions.retired);
-    expect(committedRevisions.untouched).toBe(previousRevisions.untouched);
+      expect(await fs.readdir(state.stateDir)).toEqual(before);
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
 
-    const recoveredPath = state.path("recovered.sqlite");
-    await fs.copyFile(backupPath, recoveredPath);
-    expectBackup(recoveredPath, before);
-    const remaining = await migration.detectLegacyState();
-    expect(remaining?.preview).toHaveLength(3);
-    expect(remaining?.preview).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("malformed"),
-        expect.stringMatching(/authored-phase.*review.*manually/),
-        expect.stringMatching(/authored-unified.*review.*manually/),
-      ]),
-    );
-    expect(await migration.migrateLegacyState()).toMatchObject({
-      changes: [],
-      warnings: remaining?.preview,
-    });
-    expect(await snapshot(fixture)).toEqual({
-      rows: after,
-      backups,
-      revisions: committedRevisions,
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      const legacy = new DatabaseSync(databasePath);
+      legacy.exec("CREATE TABLE legacy_marker(value TEXT); PRAGMA user_version = 1");
+      legacy.close();
+      const bytes = await fs.readFile(databasePath);
+      expect((await inspectCronJobsForDoctor(scope)).jobs).toEqual([]);
+      expect(await fs.readFile(databasePath)).toEqual(bytes);
     });
   });
-});
 
-it.each([true, false])("persists phase-only repairs with dreaming enabled=%s", async (enabled) => {
-  await withCronFixture(
-    async (fixture) => {
-      fixture.scope.config = {
-        plugins: { entries: { "memory-core": { config: { dreaming: { enabled } } } } },
-      };
+  it("includes inactive partitions and malformed definitions without repairing any row", async () => {
+    await withCronFixture(async (fixture) => {
+      const before = readRows(fixture.db());
+      await closeOpenClawStateDatabaseAsync();
+      const bytes = await fs.readFile(fixture.databasePath);
+      const databaseDir = path.dirname(fixture.databasePath);
+      const entries = (await fs.readdir(databaseDir)).toSorted();
+      const inventory = await inspectCronJobsForDoctor(fixture.scope);
+      expect(inventory.jobs).toHaveLength(6);
+      expect(findJob(inventory, fixture.activeStore, "survivor").sortOrder).toBe(17);
+      expect(findJob(inventory, fixture.untouchedStore, "survivor").definition).toMatchObject({
+        name: "Operator survivor",
+      });
+      expect(findJob(inventory, fixture.retiredStore, "malformed")).toMatchObject({
+        definitionJson: "{ malformed legacy definition",
+        definition: null,
+      });
+      expect(await fs.readFile(fixture.databasePath)).toEqual(bytes);
+      expect((await fs.readdir(databaseDir)).toSorted()).toEqual(entries);
+      expect(readRows(fixture.db())).toEqual(before);
+    });
+  });
+
+  it("runs the registered memory-core migration with recoverable backup and an idempotent second pass", async () => {
+    await withCronFixture(async (fixture) => {
+      const { state, activeStore, retiredStore, databasePath } = fixture;
       const migration = getDreamingMigration(fixture);
-      const phaseRows = [
-        { store: fixture.activeStore, id: "survivor" },
-        { store: fixture.activeStore, id: "duplicate" },
-        { store: fixture.retiredStore, id: "retired" },
-      ] as const;
-      await migration.migrateLegacyState();
-      const after = readRows(fixture.db());
-      for (const { store, id } of phaseRows) {
-        const survivor = rowAt(after, store, id);
-        if (enabled && id !== "duplicate") {
-          const definition = definitionOf(survivor);
-          expect(definition).toMatchObject({
-            ...migratedDefinition,
-            name: "Memory Dreaming Promotion",
-            description: "[managed-by=memory-core.short-term-promotion] keep operator note",
-            payload: { ...dreamingPayload, ...legacyPayloadOptions },
-            delivery: { mode: "none", bestEffort: true },
-          });
-          expect(definition.payload).not.toHaveProperty("text");
-        } else {
-          for (const table of tables) {
-            expect(after[table].filter(inStore(store, id))).toEqual([]);
-          }
-        }
-      }
-    },
-    {
-      legacyFields: (id) => {
-        const phase = id === "survivor" ? "light" : "rem";
-        return {
-          name: phase === "light" ? "Memory Light Dreaming" : "Memory REM Dreaming",
-          description: `[managed-by=memory-core.dreaming.${phase}] keep operator note`,
-          payload: {
-            kind: "systemEvent",
-            text: `__openclaw_memory_core_${phase}_sleep__`,
-            ...legacyPayloadOptions,
-          },
-          delivery: { mode: "none", bestEffort: true },
-        };
-      },
-    },
-  );
-});
-
-it.each([
-  { layout: "inactive only", activeDreaming: false, enabled: true },
-  { layout: "active and inactive", activeDreaming: true, enabled: true },
-  { layout: "active and inactive", activeDreaming: true, enabled: false },
-])(
-  "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
-  async ({ activeDreaming, enabled }) => {
-    await withCronFixture(
-      async (fixture) => {
-        const { activeStore, retiredStore } = fixture;
-        const migration = getDreamingMigration(fixture);
-        const taggedBeforeDoctor = rowAt(readRows(fixture.db()), activeStore, "authored-lookalike");
-        expect(taggedBeforeDoctor).toBeDefined();
-        const migrated = await migration.migrateLegacyState();
-        expect(migrated.changes.length).toBeGreaterThan(0);
-        expect(migrated.warnings).toEqual(
-          expect.arrayContaining([expect.stringMatching(/authored-lookalike.*review.*manually/)]),
-        );
-        const beforeRuntime = readRows(fixture.db());
-        expect(beforeRuntime.jobs.filter(inStore(activeStore, "authored-lookalike"))).toEqual([
-          taggedBeforeDoctor,
-        ]);
-        expect(
-          beforeRuntime.jobs.filter(
-            (row) =>
-              inStore(activeStore)(row) && definitionOf(row).declarationKey === declarationKey,
-          ),
-        ).toHaveLength(activeDreaming ? 1 : 0);
-        const migratedSurvivors = beforeRuntime.jobs.filter(
-          (row) => inStore(activeStore, "survivor")(row) || inStore(retiredStore, "retired")(row),
-        );
-        expect(migratedSurvivors).toHaveLength(activeDreaming ? 2 : 1);
-        for (const row of migratedSurvivors) {
-          expect(definitionOf(row).payload).toMatchObject({
-            ...dreamingPayload,
-            ...authoredPayloadOptions,
-          });
-        }
-        const retiredRevision = getCronJobsStoreRevision(retiredStore);
-        const inactive = (row: Row) => !inStore(activeStore)(row);
-        const authoredBefore = rowAt(beforeRuntime, activeStore, "operator");
-        await withRuntime(fixture, async ({ cron, logger, mutations, reconcile }) => {
-          const config = dreamingConfig(enabled);
-          await reconcile(config);
-          expect(mutations).toEqual(
-            enabled
-              ? [
-                  {
-                    jobId: activeDreaming ? "survivor" : expect.any(String),
-                    action: activeDreaming ? "updated" : "added",
-                  },
-                ]
-              : [{ jobId: "survivor", action: "removed" }],
-          );
-          expect(logger.warn).toHaveBeenCalledWith(
-            expect.stringContaining("cron jobs authored-lookalike retain historical dreaming tags"),
-          );
-          const jobs = await cron.list({ includeDisabled: true });
-          const managed = jobs.filter((job) => job.declarationKey === declarationKey);
-          expect(managed).toHaveLength(enabled ? 1 : 0);
-          if (enabled) {
-            expect(managed[0]).toMatchObject({
-              enabled: true,
-              ...migratedDefinition,
-              schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
-            });
-            if (activeDreaming) {
-              expect(managed[0]?.id).toBe("survivor");
-              expect(managed[0]?.payload).toMatchObject(authoredPayloadOptions);
-            } else {
-              expect(managed[0]?.id).not.toBe("retired");
-            }
-          }
-          expect(jobs.some((job) => job.id === "operator")).toBe(true);
-          const afterRuntime = readRows(fixture.db());
-          for (const [id, original] of [
-            ["operator", authoredBefore],
-            ["authored-lookalike", taggedBeforeDoctor],
-          ] as const) {
-            expect(definitionOf(rowAt(afterRuntime, activeStore, id))).toEqual(
-              definitionOf(original),
-            );
-          }
-          expectPreservedRows(beforeRuntime, afterRuntime, inactive);
-          expect(getCronJobsStoreRevision(retiredStore)).toBe(retiredRevision);
-          mutations.length = 0;
-          await reconcile(config);
-          expect(mutations).toEqual([]);
-          expect(readRows(fixture.db())).toEqual(afterRuntime);
-        });
-      },
-      {
-        activeDreaming,
-        legacyFields: (id) =>
-          id === "duplicate"
-            ? {}
-            : {
-                sessionTarget: "isolated",
-                payload: { kind: "agentTurn", message: marker, ...authoredPayloadOptions },
-              },
-        additionalActiveJobs: [
-          authoredJob("authored-lookalike", "Summarize my authored project notes.", {
-            schedule: anchoredSchedule,
+      seedCronStoreInCurrentDatabase(fixture.untouchedStore, {
+        version: 1,
+        jobs: [
+          makeJob("survivor"),
+          makeJob("authored-phase", {
+            name: "Operator-authored workflow",
+            description:
+              "[managed-by=memory-core.dreaming.light] [managed-by=memory-core.short-term-promotion] operator note",
+            sessionTarget: "isolated",
+            payload: {
+              kind: "agentTurn",
+              message: "Summarize workspace activity and draft tomorrow's priorities.",
+            },
+            delivery: { mode: "none" },
+          }),
+          makeJob("authored-unified", {
+            name: "Operator-authored review",
+            description: "[managed-by=memory-core.short-term-promotion] operator note",
+            sessionTarget: "isolated",
+            payload: {
+              kind: "agentTurn",
+              message: "Review the project notes and prepare questions for tomorrow's meeting.",
+            },
+            delivery: { mode: "none" },
           }),
         ],
-      },
-    );
-  },
-);
-
-it("requires Doctor for a declared legacy payload before runtime converges the same job", async () => {
-  await withCronFixture(async (fixture) => {
-    const migration = getDreamingMigration(fixture);
-    runOpenClawStateWriteTransaction(({ db }) => {
-      db.prepare(`UPDATE cron_jobs
-          SET declaration_key = ?, job_json = json_set(job_json, '$.declarationKey', ?)
-          WHERE store_key = ? AND job_id = 'survivor'`).run(
-        declarationKey,
-        declarationKey,
-        fixture.activeStore,
-      );
-    });
-    await withRuntime(fixture, async ({ cron, logger, mutations, reconcile }) => {
-      // Admit existing schedules before isolating the dreaming reconciliation's mutations.
-      await cron.list({ includeDisabled: true });
-      const before = await snapshot(fixture);
-      const original = rowAt(before.rows, fixture.activeStore, "survivor");
-      const config = dreamingConfig(true);
-      await reconcile(config);
-      expect(mutations).toEqual([]);
-      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
-      expect(before.backups).toEqual([]);
-      expect(await snapshot(fixture)).toEqual(before);
-
-      const repaired = await migration.migrateLegacyState();
-      const backups = await listBackups(fixture.databasePath);
+      });
+      const input = migrationInput(fixture);
+      const before = readRows(fixture.db());
+      const previousRevisions = revisions(fixture);
+      expect(await migration.detectLegacyState(input)).not.toBeNull();
+      expect(readRows(fixture.db())).toEqual(before);
+      const runtimeJson = '{ "nextRunAtMs": 1800000999999, "lastRunStatus": "error" }';
+      afterBackup(() => {
+        runOpenClawStateWriteTransaction(({ db }) => {
+          db.prepare(`UPDATE cron_jobs SET state_json = ?, runtime_updated_at_ms = 1800000000999
+            WHERE store_key = ? AND job_id = 'survivor'`).run(runtimeJson, activeStore);
+        });
+      });
+      const result = await migration.migrateLegacyState(input);
+      expect(result.changes.length).toBeGreaterThan(0);
+      const backups = await listBackups(databasePath);
       expect(backups).toHaveLength(1);
-      expect(repaired.changes.join("\n")).toContain(backups[0]);
-      const migrated = rowAt(readRows(fixture.db()), fixture.activeStore, "survivor");
-      expectPreservedRuntime(migrated, original, "survivor");
-      expect(definitionOf(migrated)).toMatchObject({
-        declarationKey,
+      const backupPath = backups[0];
+      if (!backupPath) {
+        throw new Error("Migration did not retain its backup");
+      }
+      expect(result.changes.join("\n")).toContain(backupPath);
+      const after = readRows(fixture.db());
+      const survivor = after.jobs.find(
+        (row) => row.store_key === activeStore && row.job_id === "survivor",
+      );
+      expect(survivor).toMatchObject({
+        job_id: "survivor",
+        sort_order: 17,
+        state_json: runtimeJson,
+        runtime_updated_at_ms: 1_800_000_000_999,
+      });
+      expect(JSON.parse(String(survivor?.job_json))).toMatchObject({
+        id: "survivor",
+        declarationKey: "memory-core:memory-dreaming-promotion",
         sessionTarget: "isolated",
         payload: { kind: "agentTurn", lightContext: true },
+        delivery: { mode: "none" },
       });
-      await reconcile(config);
-      expect(mutations).toEqual([{ jobId: "survivor", action: "updated" }]);
-      const managed = (await cron.list({ includeDisabled: true })).filter(
-        (job) => job.declarationKey === declarationKey,
+      const inactiveSurvivor = after.jobs.find(
+        (row) => row.store_key === retiredStore && row.job_id === "retired",
       );
-      expect(managed).toMatchObject([
-        { id: "survivor", enabled: true, payload: { kind: "agentTurn" } },
-      ]);
+      const previousInactiveSurvivor = before.jobs.find(
+        (row) => row.store_key === retiredStore && row.job_id === "retired",
+      );
+      expect(inactiveSurvivor).toMatchObject({
+        store_key: retiredStore,
+        job_id: "retired",
+        sort_order: previousInactiveSurvivor?.sort_order,
+        state_json: previousInactiveSurvivor?.state_json,
+        runtime_updated_at_ms: previousInactiveSurvivor?.runtime_updated_at_ms,
+      });
+      expect(JSON.parse(String(inactiveSurvivor?.job_json))).toMatchObject({
+        declarationKey: "memory-core:memory-dreaming-promotion",
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", lightContext: true },
+        delivery: { mode: "none" },
+      });
+      const unaffected = (row: Record<string, unknown>) =>
+        !(
+          row.store_key === activeStore && ["survivor", "duplicate"].includes(String(row.job_id))
+        ) && !(row.store_key === retiredStore && row.job_id === "retired");
+      for (const table of ["jobs", "scratch", "authority"] as const) {
+        expect(after[table].filter(unaffected)).toEqual(before[table].filter(unaffected));
+        expect(
+          after[table].some((row) => row.store_key === activeStore && row.job_id === "duplicate"),
+        ).toBe(false);
+      }
+      expect(after.scratch.filter((row) => row.store_key === activeStore)).toEqual(
+        before.scratch.filter((row) => row.store_key === activeStore && row.job_id !== "duplicate"),
+      );
+      expect(after.scratch.filter((row) => row.store_key === retiredStore)).toEqual(
+        before.scratch.filter((row) => row.store_key === retiredStore),
+      );
+      const committedRevisions = revisions(fixture);
+      expect(committedRevisions.active).toBeGreaterThan(previousRevisions.active);
+      expect(committedRevisions.retired).toBeGreaterThan(previousRevisions.retired);
+      expect(committedRevisions.untouched).toBe(previousRevisions.untouched);
+
+      const recoveredPath = state.path("recovered.sqlite");
+      await fs.copyFile(backupPath, recoveredPath);
+      const recovered = new DatabaseSync(recoveredPath, { readOnly: true });
+      try {
+        expect(readRows(recovered)).toEqual(before);
+      } finally {
+        recovered.close();
+      }
+      const remaining = await migration.detectLegacyState(input);
+      expect(remaining?.preview).toHaveLength(3);
+      expect(remaining?.preview).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining("malformed"),
+          expect.stringMatching(/authored-phase.*review.*manually/),
+          expect.stringMatching(/authored-unified.*review.*manually/),
+        ]),
+      );
+      const second = await migration.migrateLegacyState(input);
+      expect(second.changes).toEqual([]);
+      expect(second.warnings).toEqual(remaining?.preview);
+      expect(readRows(fixture.db())).toEqual(after);
+      expect(await listBackups(databasePath)).toEqual(backups);
+      expect(revisions(fixture)).toEqual(committedRevisions);
     });
   });
-});
 
-it("does not back up or publish unchanged definitions", async () => {
-  await withCronFixture(async (fixture) => {
-    const inventory = await inspectCronJobsForDoctor(fixture.scope);
-    const job = findJob(inventory, fixture.activeStore, "survivor");
-    const before = await snapshot(fixture);
-    await expect(
-      repairCronJobsForDoctor(fixture.scope, makeAuthority(), inventory, [
-        { job, definition: structuredClone(job.definition) },
-      ]),
-    ).resolves.toEqual({ changed: 0 });
-    expect(before.backups).toEqual([]);
-    expect(await snapshot(fixture)).toEqual(before);
+  it.each([true, false])(
+    "repairs phase-only partitions with dreaming enabled=%s and retains their original backup",
+    async (enabled) => {
+      await withCronFixture(async (fixture) => {
+        fixture.scope.config = {
+          plugins: { entries: { "memory-core": { config: { dreaming: { enabled } } } } },
+        };
+        const migration = getDreamingMigration(fixture);
+        const phaseRows = [
+          { store: fixture.activeStore, id: "survivor", phase: "light" },
+          { store: fixture.activeStore, id: "duplicate", phase: "rem" },
+          { store: fixture.retiredStore, id: "retired", phase: "rem" },
+        ] as const;
+        runOpenClawStateWriteTransaction(({ db }) => {
+          const seedPhase = db.prepare(`UPDATE cron_jobs SET name = ?, description = ?,
+            job_json = json_set(job_json, '$.name', ?, '$.description', ?,
+              '$.payload', json(?), '$.delivery', json(?))
+            WHERE store_key = ? AND job_id = ?`);
+          for (const { store, id, phase } of phaseRows) {
+            const name = phase === "light" ? "Memory Light Dreaming" : "Memory REM Dreaming";
+            const description = `[managed-by=memory-core.dreaming.${phase}] keep operator note`;
+            seedPhase.run(
+              name,
+              description,
+              name,
+              description,
+              JSON.stringify({
+                kind: "systemEvent",
+                text: `__openclaw_memory_core_${phase === "light" ? "light" : "rem"}_sleep__`,
+                timeoutSeconds: 90,
+                toolsAllow: ["read"],
+              }),
+              JSON.stringify({ mode: "none", bestEffort: true }),
+              store,
+              id,
+            );
+          }
+        });
+        const before = readRows(fixture.db());
+        const input = migrationInput(fixture);
+        await migration.migrateLegacyState(input);
+        const after = readRows(fixture.db());
+        const selected = (row: Record<string, unknown>) =>
+          phaseRows.some(({ store, id }) => row.store_key === store && row.job_id === id);
+        const removed = (row: Record<string, unknown>) =>
+          selected(row) && (!enabled || row.job_id === "duplicate");
+        for (const table of ["jobs", "scratch", "authority"] as const) {
+          expect(after[table].filter((row) => !selected(row))).toEqual(
+            before[table].filter((row) => !selected(row)),
+          );
+          expect(after[table].some(removed)).toBe(false);
+        }
+        if (enabled) {
+          for (const { store, id } of phaseRows.filter((row) => row.id !== "duplicate")) {
+            const original = before.jobs.find(
+              (row) => row.store_key === store && row.job_id === id,
+            );
+            const survivor = after.jobs.find((row) => row.store_key === store && row.job_id === id);
+            expect(survivor).toMatchObject({
+              store_key: store,
+              job_id: id,
+              sort_order: original?.sort_order,
+              state_json: original?.state_json,
+              runtime_updated_at_ms: original?.runtime_updated_at_ms,
+            });
+            const originalDefinition = JSON.parse(String(original?.job_json));
+            const definition = JSON.parse(String(survivor?.job_json));
+            expect(definition).toMatchObject({
+              declarationKey: "memory-core:memory-dreaming-promotion",
+              name: "Memory Dreaming Promotion",
+              description: "[managed-by=memory-core.short-term-promotion] keep operator note",
+              enabled: originalDefinition.enabled,
+              createdAtMs: originalDefinition.createdAtMs,
+              schedule: originalDefinition.schedule,
+              wakeMode: originalDefinition.wakeMode,
+              sessionTarget: "isolated",
+              payload: {
+                kind: "agentTurn",
+                message: "__openclaw_memory_core_short_term_promotion_dream__",
+                lightContext: true,
+                timeoutSeconds: 90,
+                toolsAllow: ["read"],
+              },
+              delivery: { mode: "none", bestEffort: true },
+            });
+            expect(definition.payload).not.toHaveProperty("text");
+          }
+          for (const table of ["scratch", "authority"] as const) {
+            expect(after[table]).toEqual(before[table].filter((row) => !removed(row)));
+          }
+        } else {
+          for (const table of ["jobs", "scratch", "authority"] as const) {
+            expect(after[table]).toEqual(before[table].filter((row) => !selected(row)));
+          }
+        }
+        const backups = await listBackups(fixture.databasePath);
+        expect(backups).toHaveLength(1);
+        const backupPath = backups[0];
+        if (!backupPath) {
+          throw new Error("Phase migration did not retain its backup");
+        }
+        const backup = new DatabaseSync(backupPath, { readOnly: true });
+        try {
+          expect(readRows(backup)).toEqual(before);
+        } finally {
+          backup.close();
+        }
+        expect((await migration.migrateLegacyState(input)).changes).toEqual([]);
+        expect(readRows(fixture.db())).toEqual(after);
+        expect(await listBackups(fixture.databasePath)).toEqual(backups);
+      });
+    },
+  );
+
+  it.each([
+    { layout: "inactive only", activeDreaming: false, enabled: true },
+    { layout: "active and inactive", activeDreaming: true, enabled: true },
+    { layout: "active and inactive", activeDreaming: true, enabled: false },
+  ])(
+    "keeps $layout history and authored lookalikes after Doctor and runtime dreaming enabled=$enabled",
+    async ({ activeDreaming, enabled }) => {
+      await withCronFixture(
+        async (fixture) => {
+          const { activeStore, retiredStore } = fixture;
+          const migration = getDreamingMigration(fixture);
+          const authoredPayloadOptions = { model: "openai/gpt-4.1-mini", timeoutSeconds: 90 };
+          runOpenClawStateWriteTransaction(({ db }) => {
+            db.prepare(`UPDATE cron_jobs SET payload_kind = 'agentTurn',
+              job_json = json_set(job_json, '$.sessionTarget', 'isolated', '$.payload', json(?))
+              WHERE (store_key = ? AND job_id = 'survivor')
+                 OR (store_key = ? AND job_id = 'retired')`).run(
+              JSON.stringify({
+                kind: "agentTurn",
+                message: "__openclaw_memory_core_short_term_promotion_dream__",
+                ...authoredPayloadOptions,
+              }),
+              activeStore,
+              retiredStore,
+            );
+          });
+          const taggedBeforeDoctor = readRows(fixture.db()).jobs.find(
+            (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+          );
+          expect(taggedBeforeDoctor).toBeDefined();
+          const migrated = await migration.migrateLegacyState(migrationInput(fixture));
+          expect(migrated.changes.length).toBeGreaterThan(0);
+          expect(migrated.warnings).toEqual(
+            expect.arrayContaining([expect.stringMatching(/authored-lookalike.*review.*manually/)]),
+          );
+          const beforeRuntime = readRows(fixture.db());
+          expect(
+            beforeRuntime.jobs.filter(
+              (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+            ),
+          ).toEqual([taggedBeforeDoctor]);
+          expect(
+            beforeRuntime.jobs.filter(
+              (row) =>
+                row.store_key === activeStore &&
+                JSON.parse(String(row.job_json)).declarationKey ===
+                  "memory-core:memory-dreaming-promotion",
+            ),
+          ).toHaveLength(activeDreaming ? 1 : 0);
+          const migratedSurvivors = beforeRuntime.jobs.filter(
+            (row) =>
+              (row.store_key === activeStore && row.job_id === "survivor") ||
+              (row.store_key === retiredStore && row.job_id === "retired"),
+          );
+          expect(migratedSurvivors).toHaveLength(activeDreaming ? 2 : 1);
+          for (const row of migratedSurvivors) {
+            expect(JSON.parse(String(row.job_json)).payload).toMatchObject({
+              kind: "agentTurn",
+              message: "__openclaw_memory_core_short_term_promotion_dream__",
+              lightContext: true,
+              ...authoredPayloadOptions,
+            });
+          }
+          const retiredRevision = getCronJobsStoreRevision(retiredStore);
+          const inactive = (row: Record<string, unknown>) => row.store_key !== activeStore;
+          const authoredBefore = beforeRuntime.jobs.find(
+            (row) => row.store_key === activeStore && row.job_id === "operator",
+          );
+          const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
+          try {
+            const config: OpenClawConfig = {
+              plugins: {
+                entries: {
+                  "memory-core": {
+                    config: { dreaming: { enabled, frequency: "15 4 * * *", timezone: "UTC" } },
+                  },
+                },
+              },
+            };
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
+            expect(mutations).toEqual(
+              enabled
+                ? [
+                    {
+                      jobId: activeDreaming ? "survivor" : expect.any(String),
+                      action: activeDreaming ? "updated" : "added",
+                    },
+                  ]
+                : [{ jobId: "survivor", action: "removed" }],
+            );
+            expect(logger.warn).toHaveBeenCalledWith(
+              expect.stringContaining(
+                "cron jobs authored-lookalike retain historical dreaming tags",
+              ),
+            );
+            const jobs = await cron.list({ includeDisabled: true });
+            const managed = jobs.filter(
+              (job) => job.declarationKey === "memory-core:memory-dreaming-promotion",
+            );
+            expect(managed).toHaveLength(enabled ? 1 : 0);
+            if (enabled) {
+              expect(managed[0]).toMatchObject({
+                enabled: true,
+                sessionTarget: "isolated",
+                schedule: { kind: "cron", expr: "15 4 * * *", tz: "UTC" },
+                payload: { kind: "agentTurn", lightContext: true },
+                delivery: { mode: "none" },
+              });
+              if (activeDreaming) {
+                expect(managed[0]?.id).toBe("survivor");
+                expect(managed[0]?.payload).toMatchObject(authoredPayloadOptions);
+              } else {
+                expect(managed[0]?.id).not.toBe("retired");
+              }
+            }
+            expect(jobs.some((job) => job.id === "operator")).toBe(true);
+            const afterRuntime = readRows(fixture.db());
+            const authoredAfter = afterRuntime.jobs.find(
+              (row) => row.store_key === activeStore && row.job_id === "operator",
+            );
+            expect(JSON.parse(String(authoredAfter?.job_json))).toEqual(
+              JSON.parse(String(authoredBefore?.job_json)),
+            );
+            const taggedAfter = afterRuntime.jobs.find(
+              (row) => row.store_key === activeStore && row.job_id === "authored-lookalike",
+            );
+            expect(JSON.parse(String(taggedAfter?.job_json))).toEqual(
+              JSON.parse(String(taggedBeforeDoctor?.job_json)),
+            );
+            for (const table of ["jobs", "scratch", "authority"] as const) {
+              expect(afterRuntime[table].filter(inactive)).toEqual(
+                beforeRuntime[table].filter(inactive),
+              );
+            }
+            expect(getCronJobsStoreRevision(retiredStore)).toBe(retiredRevision);
+            mutations.length = 0;
+            await runRegisteredDreamingService(config, cron, logger, scheduler);
+            expect(mutations).toEqual([]);
+            expect(readRows(fixture.db())).toEqual(afterRuntime);
+          } finally {
+            cron.stop();
+            await scheduler.stop();
+          }
+        },
+        {
+          activeDreaming,
+          additionalActiveJobs: [
+            makeJob("authored-lookalike", {
+              description: "[managed-by=memory-core.short-term-promotion] operator note",
+              schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_800_000_000_000 },
+              sessionTarget: "isolated",
+              payload: { kind: "agentTurn", message: "Summarize my authored project notes." },
+              delivery: { mode: "none" },
+            }),
+          ],
+        },
+      );
+    },
+  );
+
+  it("requires Doctor for a declared legacy payload before runtime converges the same job", async () => {
+    await withCronFixture(async (fixture) => {
+      const migration = getDreamingMigration(fixture);
+      const declarationKey = "memory-core:memory-dreaming-promotion";
+      runOpenClawStateWriteTransaction(({ db }) => {
+        db.prepare(`UPDATE cron_jobs
+          SET declaration_key = ?, job_json = json_set(job_json, '$.declarationKey', ?)
+          WHERE store_key = ? AND job_id = 'survivor'`).run(
+          declarationKey,
+          declarationKey,
+          fixture.activeStore,
+        );
+      });
+      const { cron, logger, mutations, scheduler } = createPausedCronService(fixture);
+      try {
+        // Admit existing schedules before isolating the dreaming reconciliation's mutations.
+        await cron.list({ includeDisabled: true });
+        const before = readRows(fixture.db());
+        const previousRevisions = revisions(fixture);
+        const original = before.jobs.find(
+          (row) => row.store_key === fixture.activeStore && row.job_id === "survivor",
+        );
+        const config: OpenClawConfig = {
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: { dreaming: { enabled: true, frequency: "15 4 * * *", timezone: "UTC" } },
+              },
+            },
+          },
+        };
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
+        expect(mutations).toEqual([]);
+        expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+        expect(readRows(fixture.db())).toEqual(before);
+        expect(revisions(fixture)).toEqual(previousRevisions);
+        expect(await listBackups(fixture.databasePath)).toEqual([]);
+
+        const repaired = await migration.migrateLegacyState(migrationInput(fixture));
+        const backups = await listBackups(fixture.databasePath);
+        expect(backups).toHaveLength(1);
+        expect(repaired.changes.join("\n")).toContain(backups[0]);
+        const migrated = readRows(fixture.db()).jobs.find(
+          (row) => row.store_key === fixture.activeStore && row.job_id === "survivor",
+        );
+        expect(migrated).toMatchObject({
+          job_id: "survivor",
+          sort_order: original?.sort_order,
+          state_json: original?.state_json,
+          runtime_updated_at_ms: original?.runtime_updated_at_ms,
+        });
+        expect(JSON.parse(String(migrated?.job_json))).toMatchObject({
+          declarationKey,
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", lightContext: true },
+        });
+        await runRegisteredDreamingService(config, cron, logger, scheduler);
+        expect(mutations).toEqual([{ jobId: "survivor", action: "updated" }]);
+        const managed = (await cron.list({ includeDisabled: true })).filter(
+          (job) => job.declarationKey === declarationKey,
+        );
+        expect(managed).toMatchObject([
+          { id: "survivor", enabled: true, payload: { kind: "agentTurn" } },
+        ]);
+      } finally {
+        cron.stop();
+        await scheduler.stop();
+      }
+    });
   });
-});
 
-it.each([
-  ["after backup", "Doctor repair owner expired"],
-  ["inside transaction", "Doctor repair owner expired"],
-  ["concurrent definition", "Cron definitions changed during Doctor repair"],
-  ["retirement", "fixture refuses retirement"],
-] as const)("rejects repair at %s without partial changes or publication", async (phase, error) => {
-  await withCronFixture(async (fixture) => {
-    const inventory = await inspectCronJobsForDoctor(fixture.scope);
-    let expectedRows = readRows(fixture.db());
-    const previousRevisions = revisions(fixture);
-    let active = true;
-    const authority = makeAuthority();
-    authority.assertCurrent = () => {
-      if (!active) {
-        throw new Error("Doctor repair owner expired");
-      }
-    };
-    authority.assertOwnedInTransaction = (db) => {
-      expect(db.isTransaction).toBe(true);
-      if (phase === "inside transaction") {
-        throw new Error("Doctor repair owner expired");
-      }
-      if (phase === "retirement") {
-        db.exec(`CREATE TEMP TRIGGER refuse_doctor_delete BEFORE DELETE ON main.cron_jobs
+  it("does not back up or publish unchanged definitions", async () => {
+    await withCronFixture(async (fixture) => {
+      const inventory = await inspectCronJobsForDoctor(fixture.scope);
+      const job = findJob(inventory, fixture.activeStore, "survivor");
+      const before = readRows(fixture.db());
+      const previousRevisions = revisions(fixture);
+      await expect(
+        repairCronJobsForDoctor(fixture.scope, makeAuthority(), inventory, [
+          { job, definition: structuredClone(job.definition) },
+        ]),
+      ).resolves.toEqual({ changed: 0 });
+      expect(readRows(fixture.db())).toEqual(before);
+      expect(await listBackups(fixture.databasePath)).toEqual([]);
+      expect(revisions(fixture)).toEqual(previousRevisions);
+    });
+  });
+
+  it.each([
+    ["after backup", "Doctor repair owner expired"],
+    ["inside transaction", "Doctor repair owner expired"],
+    ["concurrent definition", "Cron definitions changed during Doctor repair"],
+    ["retirement", "fixture refuses retirement"],
+  ] as const)(
+    "rejects repair at %s without partial changes or publication",
+    async (phase, error) => {
+      await withCronFixture(async (fixture) => {
+        const inventory = await inspectCronJobsForDoctor(fixture.scope);
+        let expectedRows = readRows(fixture.db());
+        const previousRevisions = revisions(fixture);
+        let active = true;
+        const authority = makeAuthority();
+        authority.assertCurrent = () => {
+          if (!active) {
+            throw new Error("Doctor repair owner expired");
+          }
+        };
+        authority.assertOwnedInTransaction = (db) => {
+          expect(db.isTransaction).toBe(true);
+          if (phase === "inside transaction") {
+            throw new Error("Doctor repair owner expired");
+          }
+          if (phase === "retirement") {
+            db.exec(`CREATE TEMP TRIGGER refuse_doctor_delete BEFORE DELETE ON main.cron_jobs
             WHEN OLD.job_id = 'duplicate'
             BEGIN SELECT RAISE(ABORT, 'fixture refuses retirement'); END`);
-      }
-    };
-    afterBackup(() => {
-      if (phase === "after backup") {
-        active = false;
-      }
-      if (phase === "concurrent definition") {
-        runOpenClawStateWriteTransaction(({ db }) => {
-          db.prepare(
-            "UPDATE cron_jobs SET job_json = job_json || ' ' WHERE job_id = 'operator'",
-          ).run();
+          }
+        };
+        afterBackup(() => {
+          if (phase === "after backup") {
+            active = false;
+          }
+          if (phase === "concurrent definition") {
+            runOpenClawStateWriteTransaction(({ db }) => {
+              db.prepare(
+                "UPDATE cron_jobs SET job_json = job_json || ' ' WHERE job_id = 'operator'",
+              ).run();
+            });
+            expectedRows = readRows(fixture.db());
+          }
         });
-        expectedRows = readRows(fixture.db());
-      }
-    });
-    const retiredJob =
-      phase === "retirement"
-        ? findJob(inventory, fixture.activeStore, "duplicate")
-        : phase === "concurrent definition"
-          ? findJob(inventory, fixture.retiredStore, "retired")
-          : undefined;
-    try {
-      await expect(
-        repairCronJobsForDoctor(fixture.scope, authority, inventory, [
-          changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
-          ...(retiredJob ? [{ job: retiredJob, definition: null }] : []),
-        ]),
-      ).rejects.toThrow(error);
-    } finally {
-      if (phase === "retirement") {
-        fixture.db().exec("DROP TRIGGER IF EXISTS temp.refuse_doctor_delete");
-      }
-    }
-    expect(readRows(fixture.db())).toEqual(expectedRows);
-    expect(revisions(fixture)).toEqual(previousRevisions);
-    expect(await listBackups(fixture.databasePath)).toHaveLength(1);
-  });
+        try {
+          await expect(
+            repairCronJobsForDoctor(fixture.scope, authority, inventory, [
+              changeDescription(findJob(inventory, fixture.activeStore, "survivor")),
+              ...(phase === "retirement" || phase === "concurrent definition"
+                ? [
+                    {
+                      job:
+                        phase === "retirement"
+                          ? findJob(inventory, fixture.activeStore, "duplicate")
+                          : findJob(inventory, fixture.retiredStore, "retired"),
+                      definition: null,
+                    },
+                  ]
+                : []),
+            ]),
+          ).rejects.toThrow(error);
+        } finally {
+          if (phase === "retirement") {
+            fixture.db().exec("DROP TRIGGER IF EXISTS temp.refuse_doctor_delete");
+          }
+        }
+        expect(readRows(fixture.db())).toEqual(expectedRows);
+        expect(revisions(fixture)).toEqual(previousRevisions);
+        expect(await listBackups(fixture.databasePath)).toHaveLength(1);
+      });
+    },
+  );
 });

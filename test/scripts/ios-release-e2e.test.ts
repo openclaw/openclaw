@@ -37,7 +37,8 @@ const commandsWith = (argument: string) =>
   nativeMocks.command.mock.calls
     .map(([options]) => options)
     .filter(({ args }) => args.includes(argument));
-const { objectContaining: matching, arrayContaining: containing } = expect;
+const matching = (value: Record<string, unknown>) => expect.objectContaining(value);
+const containing = (value: unknown[]) => expect.arrayContaining(value);
 function expectBefore(events: string[], pairs: [string, string][]) {
   for (const [before, after] of pairs) {
     expect(events.indexOf(before)).toBeLessThan(events.indexOf(after));

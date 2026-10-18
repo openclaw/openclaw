@@ -169,7 +169,7 @@ async function runCommenter(
   const github = {
     rest: {
       actions: {
-        listJobsForWorkflowRun(params: Record<string, unknown>) {
+        listJobsForWorkflowRun(this: void, params: Record<string, unknown>) {
           apiCalls.push("listJobs");
           expect(params).toMatchObject({ run_id: run.id, filter: "latest" });
           return [
@@ -183,7 +183,7 @@ async function runCommenter(
             },
           ];
         },
-        listWorkflowRunArtifacts(params: Record<string, unknown>) {
+        listWorkflowRunArtifacts(this: void, params: Record<string, unknown>) {
           apiCalls.push("listArtifacts");
           expect(params.run_id).toBe(run.id);
           return [
@@ -195,7 +195,7 @@ async function runCommenter(
             },
           ];
         },
-        listWorkflowRuns(params: Record<string, unknown>) {
+        listWorkflowRuns(this: void, params: Record<string, unknown>) {
           apiCalls.push("listRuns");
           expect(params).toMatchObject({
             workflow_id: run.workflow_id,
@@ -210,7 +210,7 @@ async function runCommenter(
         },
       },
       issues: {
-        listComments(params: Record<string, unknown>) {
+        listComments(this: void, params: Record<string, unknown>) {
           expect(params.issue_number).toBe(123);
           apiCalls.push("listComments");
           return options.existingComments ?? [];

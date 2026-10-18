@@ -90,11 +90,11 @@ function settlementFixture() {
     controller,
     outcomes,
     client,
-    async changed(payload: unknown) {
+    async changed(this: void, payload: unknown) {
       settlement.onEvent({ event: "sessions.changed", payload });
       await vi.advanceTimersByTimeAsync(0);
     },
-    observe(key: string) {
+    observe(this: void, key: string) {
       waits.push(
         settlement.wait(client, key, controller.signal).then(
           () => outcomes.set(key, "settled"),
@@ -108,7 +108,15 @@ function settlementFixture() {
 it("gates inventory on current hello, propagates failures, and retires removed nodes", async () => {
   const operator = new GatewayClient({});
   transport.clients.at(-1)!.request.mockResolvedValue({
-    nodes: [{ nodeId: "paired-fixture-node", approvalState: "approved" }],
+    nodes: [
+      {
+        nodeId: "paired-fixture-node",
+        approvalState: "approved",
+        connected: true,
+        paired: true,
+        sessionHost: true,
+      },
+    ],
   });
   const root = tempDirs.make("openclaw-paired-node-readiness-");
   const host = await createPairedNodeWorkerHost({

@@ -40,7 +40,7 @@ async function requestOk<T>(...args: Parameters<typeof directSessionReq<T>>) {
 }
 const createRun = (
   params: Record<string, unknown>,
-  options: Parameters<typeof directSessionReq>[2],
+  options: Parameters<typeof directSessionReq<{ key: string; runId: string }>>[2],
 ) =>
   requestOk<{ key: string; runId: string }>(
     "sessions.create",

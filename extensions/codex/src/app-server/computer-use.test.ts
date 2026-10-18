@@ -97,6 +97,13 @@ describe("Codex Computer Use setup", () => {
     ]) {
       mock.mockReset();
     }
+    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
+    managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
+      async (params) => params.candidates?.[0],
+    );
+    managedProvisioningMocks.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
+      async (params) => params.sourceAppCandidates?.[0],
+    );
   });
 
   it("stays disabled before runtime resolution by default", async () => {
