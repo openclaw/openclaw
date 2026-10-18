@@ -286,7 +286,9 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
       // for the plugin-owned indexed Memory search presentation.
       // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
-      3805,
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      3808,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(

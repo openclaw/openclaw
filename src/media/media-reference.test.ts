@@ -35,7 +35,6 @@ function expectClassification(
   allowDataUrl = true,
 ) {
   expect(classifyMediaReferenceSource(source, { allowDataUrl })).toStrictEqual({
-    hasScheme: true,
     hasUnsupportedScheme: false,
     isDataUrl: false,
     isFileUrl: false,
@@ -70,9 +69,7 @@ describe("media reference helpers", () => {
     try {
       await expect(resolveInbound(`media://inbound/${id}`)).resolves.toStrictEqual({
         id,
-        normalizedSource: `media://inbound/${id}`,
         physicalPath: realFilePath,
-        sourceType: "uri",
       });
     } finally {
       await fs.rm(filePath, { force: true });
@@ -127,9 +124,7 @@ describe("media reference helpers", () => {
         const filePath = inboundPath(id);
         await expect(resolveInbound(filePath)).resolves.toStrictEqual({
           id,
-          normalizedSource: filePath,
           physicalPath: await fs.realpath(filePath),
-          sourceType: "path",
         });
       }
       await expect(resolveInbound(inboundPath(path.join("nested", ids[0])))).resolves.toBeNull();

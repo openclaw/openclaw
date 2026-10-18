@@ -597,12 +597,21 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       failCapture("camera is off");
       return;
     }
+    const video = this.camera.video;
     try {
       const frame = await captureRealtimeTalkVideoFrame(
-        this.camera.video,
+        video,
         realtimeTalkDataChannelMaxMessageSize(this.peer),
         realtimeTalkImageEvent,
       );
+      if (this.closed) {
+        return;
+      }
+      // Camera consent and identity can change while the preview becomes ready.
+      if (this.camera.video !== video || !this.camera.hasUsableTrack()) {
+        failCapture("camera is off");
+        return;
+      }
       this.send(realtimeTalkImageEvent(frame));
       this.submitToolResult(callId, { ok: true, frameAttached: true });
       this.emitTalkEvent({
@@ -613,7 +622,9 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         payload: { name: REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME, frameAttached: true },
       });
     } catch (error) {
-      failCapture(formatUiError(error));
+      if (!this.closed) {
+        failCapture(formatUiError(error));
+      }
     }
   }
 

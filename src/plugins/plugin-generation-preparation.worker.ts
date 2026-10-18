@@ -3,7 +3,7 @@ import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { withPluginInstallRoots } from "./install-root-context.js";
 import { getPluginCache } from "./plugin-cache.js";
-import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
 import {
   createPluginGenerationSourceCustody,
   markPluginSourceCaptureOperation,
@@ -22,7 +22,7 @@ import {
 } from "./plugin-native-admission-state.js";
 import { retainPluginNativeRoot } from "./plugin-native-root-lease.js";
 import { withPluginSourceCaptureDirectory } from "./plugin-package-metadata-capture.js";
-import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import type { PluginSourceAdmissionPublication } from "./plugin-source-admission.types.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { recordPluginNativeLoad } from "./plugin-source-capture-native-loads.js";
@@ -62,16 +62,19 @@ function own<T extends Resource>(resource: T): T {
     return resource;
   }
   owned.add(resource);
+  codec.retainResource(resource);
   resources.add(resource);
   const dispose = resource.dispose.bind(resource);
   const disposeAsync = resource.disposeAsync.bind(resource);
   resource.dispose = () => {
     dispose();
+    codec.releaseResource(resource);
     resources.delete(resource);
     orphaned.delete(resource);
   };
   resource.disposeAsync = async () => {
     await disposeAsync();
+    codec.releaseResource(resource);
     resources.delete(resource);
     orphaned.delete(resource);
   };
@@ -231,7 +234,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
             sentReceipts.set(key, receipt);
           }
           const artifact = own(
-            capturePluginGenerationArtifact(
+            capturePluginGenerationArtifactInScope(
               command.rootDir,
               command.entryFile,
               (run) => run(),
@@ -263,7 +266,12 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         }
         const value = codec.encode(result);
         const admission = admissionChanges();
-        return { value, admission, resources: resources.size - orphaned.size };
+        return {
+          value,
+          admission,
+          resources: resources.size - orphaned.size,
+          released: codec.takeReleasedHandles(),
+        };
       } catch (error) {
         let failure = error;
         if (failedCapture) {
@@ -281,6 +289,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         return {
           error: { message: exception.message, name: exception.name, stack: exception.stack },
           resources: resources.size - orphaned.size,
+          released: codec.takeReleasedHandles(),
         };
       }
     });

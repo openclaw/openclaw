@@ -10,10 +10,10 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../components/modal-dialog.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { ChannelSettingsSlot } from "./channel-settings-presentation.tsx";
 import { channelDetailPresentations } from "./detail-presentation.ts";
 import { channelDocsUrl } from "./hub-meta.ts";
 import { ChannelConfig } from "./view.config.tsx";
-import { NostrCard } from "./view.nostr.tsx";
 import { renderChannelPairingDetail } from "./view.pairing.tsx";
 import {
   boolStatusKind,
@@ -241,8 +241,11 @@ export function renderChannelDetail(params: {
           {renderChannelPairingDetail(params.channelId, params.props)}{" "}
           {params.channelId === "whatsapp" ? (
             <WhatsAppCard {...params.props} />
-          ) : params.channelId === "nostr" ? (
-            <NostrCard {...params.props} />
+          ) : params.props.presentation.details.has(params.channelId) ? (
+            <ChannelSettingsSlot
+              channelId={params.channelId}
+              presentation={params.props.presentation.details}
+            />
           ) : (
             <ChannelStatusBody
               channelId={params.channelId}

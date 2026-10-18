@@ -19,7 +19,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
-import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
@@ -184,6 +184,20 @@ it.each(["capture", "custody", "fork"] as const)(
           queryObjects(WeakRef);
           expect(control.deref()).toBeUndefined();
           expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
+          expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+          const releaseRecovery = async () => {
+            const recovery = artifact.captureRecoverySource();
+            const references = [
+              new WeakRef(recovery.fork),
+              new WeakRef(recovery.sourceCapture.capture),
+            ];
+            await recovery.disposeAsync();
+            return references;
+          };
+          const released = await releaseRecovery();
+          await nextTurn();
+          queryObjects(WeakRef);
+          expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
           expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance

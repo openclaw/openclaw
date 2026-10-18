@@ -58,6 +58,7 @@ type McpAppViewPayload = {
 
 type McpAppResources = {
   bridge: OpenClawAppBridge | null;
+  requestAbort: AbortController;
   cleanups: Set<() => void>;
   frameHeight: number;
   iframe: HTMLIFrameElement;
@@ -276,6 +277,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
           () => undefined,
         );
       }
+      resources.requestAbort.abort();
       await resources.transport?.close().catch(() => undefined);
       resources.iframe.remove();
     })();
@@ -393,6 +395,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       mount.appendChild(iframe);
       const createdResources: McpAppResources = {
         bridge: null,
+        requestAbort: new AbortController(),
         cleanups: new Set(),
         frameHeight: host.height,
         iframe,
@@ -479,8 +482,9 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
         { hostContext: buildHostContext() },
       );
       createdResources.bridge = bridge;
+      // Keep saves live through graceful teardown, then retire all frame RPCs.
       const request = <T = unknown>(method: string, params: Record<string, unknown>) =>
-        requestOwner<T>(binding, method, params, signal);
+        requestOwner<T>(binding, method, params, createdResources.requestAbort.signal);
       const isCurrent = () => isCurrentBinding(binding, createdResources, signal);
       const confirm = (text: string, kind: "message" | "file") =>
         confirmation.request({

@@ -1,9 +1,15 @@
-import type { ChannelsPairingRequest, NostrProfile } from "../../api/types.ts";
+import type { ChannelsPairingRequest } from "../../api/types.ts";
 import type { ChannelsState } from "../../lib/channels/index.ts";
 import type { RuntimeConfigState } from "../../lib/config/config-state-model.ts";
-import type { ChannelPluginPresentation } from "./plugin-presentation-loader.ts";
-import type { NostrProfileFormState } from "./view.nostr-profile-form.tsx";
+import type { PluginListResult } from "../../lib/plugins/index.ts";
 import type { ChannelSetup } from "./wizard-setup.ts";
+
+export type ChannelSettingsPresentation = {
+  has: (channelId: string) => boolean;
+  sync: () => void;
+  reset: () => void;
+  attach: (channelId: string, container: HTMLElement) => () => void;
+};
 
 export type ChannelPairingPrompt = {
   kind: "approve" | "dismiss";
@@ -15,7 +21,11 @@ export type ChannelPairingPrompt = {
 export type ChannelsProps = {
   channels: ChannelsState;
   config: RuntimeConfigState;
-  presentation: Pick<ChannelPluginPresentation, "pluginCatalog" | "pluginIconUrls">;
+  presentation: {
+    readonly pluginCatalog: PluginListResult | null;
+    readonly pluginIconUrls: Record<string, string>;
+    readonly details: ChannelSettingsPresentation;
+  };
   wizardHost: ChannelSetup;
   pairingChannelFilter: string | null;
   pairingAccountFilter: string | null;
@@ -24,8 +34,6 @@ export type ChannelsProps = {
   canManagePairing: boolean;
   canAdmin: boolean;
   showAdvancedSettings: boolean;
-  nostrProfileFormState: NostrProfileFormState | null;
-  nostrProfileAccountId: string | null;
   selectedChannel: string | null;
   onShowDetail: (channelId: string) => void;
   onCloseDetail: () => void;
@@ -49,10 +57,4 @@ export type ChannelsProps = {
   onConfigPatch: (path: Array<string | number>, value: unknown) => void;
   onConfigSave: () => void;
   onConfigReload: () => void;
-  onNostrProfileEdit: (accountId: string, profile: NostrProfile | null) => void;
-  onNostrProfileCancel: () => void;
-  onNostrProfileFieldChange: (field: keyof NostrProfile, value: string) => void;
-  onNostrProfileSave: () => void;
-  onNostrProfileImport: () => void;
-  onNostrProfileToggleAdvanced: () => void;
 };

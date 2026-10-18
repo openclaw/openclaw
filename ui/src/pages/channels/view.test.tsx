@@ -6,7 +6,6 @@ import { i18n } from "../../i18n/lib/translate.ts";
 import { channelSnapshotEntryIsActive } from "../../lib/channels/index.ts";
 import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.tsx";
-import { createNostrProfileFormState } from "./view.nostr-profile-form.tsx";
 import { resolveChannelDisplayState } from "./view.shared.tsx";
 import {
   renderChannelView,
@@ -909,46 +908,6 @@ describe("WhatsApp card actions", () => {
     });
 
     expect(labels).toEqual(["Save", "Reload", "Show QR", "Wait for scan", "Logout", "Refresh"]);
-  });
-});
-
-describe("channel draft editing", () => {
-  it("keeps the Nostr editor mounted while the owner replaces its draft", () => {
-    const props = createProps({
-      ts: Date.now(),
-      channelOrder: ["nostr"],
-      channelLabels: { nostr: "Nostr" },
-      channels: { nostr: { configured: true, running: true } },
-      channelAccounts: { nostr: [{ accountId: "default", configured: true }] },
-      channelDefaultAccountId: { nostr: "default" },
-    });
-    props.selectedChannel = "nostr";
-    props.nostrProfileAccountId = "default";
-    props.nostrProfileFormState = createNostrProfileFormState({ name: "before" });
-    const container = document.createElement("div");
-    props.onNostrProfileFieldChange = (field, value) => {
-      const draft = props.nostrProfileFormState!;
-      props.nostrProfileFormState = { ...draft, values: { ...draft.values, [field]: value } };
-      renderChannelView(ChannelsView, props, container);
-    };
-    renderChannelView(ChannelsView, props, container);
-    const input = container.querySelector<HTMLInputElement>("#nostr-profile-name");
-    expect(input?.value).toBe("before");
-    input!.value = "after";
-    input!.dispatchEvent(new Event("input", { bubbles: true }));
-    expect(props.nostrProfileFormState.values.name).toBe("after");
-    expect(container.querySelector("#nostr-profile-name")).toBe(input);
-    expect(input?.value).toBe("after");
-    expect(container.textContent).toContain("You have unsaved changes");
-
-    const save = vi.fn();
-    props.onNostrProfileSave = save;
-    renderChannelView(ChannelsView, props, container);
-    const publish = Array.from(container.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "Save & Publish",
-    );
-    publish?.click();
-    expect(save).toHaveBeenCalledOnce();
   });
 });
 

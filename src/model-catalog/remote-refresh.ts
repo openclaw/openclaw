@@ -81,16 +81,13 @@ export async function refreshRemoteModelCatalog(params: {
   config: OpenClawConfig;
   force?: boolean;
   signal?: AbortSignal;
-  fetchImpl?: typeof fetch;
   databaseOptions?: Pick<OpenClawStateDatabaseOptions, "path" | "env" | "initializationAgentPaths">;
-  now?: () => number;
-  bundledGeneratedAt?: () => number | undefined;
 }): Promise<RemoteModelCatalogRefreshResult> {
   if (!isRemoteModelCatalogRefreshEnabled(params.config)) {
     return { status: "disabled", providers: 0, models: 0 };
   }
   const databaseOptions = params.databaseOptions ?? {};
-  const now = (params.now ?? Date.now)();
+  const now = Date.now();
   try {
     const context = captureOpenClawStateWorkerContext(databaseOptions);
     const url = resolveRemoteCatalogUrl(params.config);
@@ -121,7 +118,6 @@ export async function refreshRemoteModelCatalog(params: {
       init: { headers },
       timeoutMs: REMOTE_MODEL_CATALOG_TIMEOUT_MS,
       signal: params.signal,
-      fetchImpl: params.fetchImpl,
       auditContext: "remote-model-catalog",
     } as const;
     const explicitOverride = Boolean(params.config.models?.catalogRefresh?.url);
@@ -189,7 +185,7 @@ export async function refreshRemoteModelCatalog(params: {
       if (writeResult.status === "retained-newer") {
         return { status: "unchanged", ...storedCounts(writeResult.row.bundle_json) };
       }
-      const bundledGeneratedAt = (params.bundledGeneratedAt ?? bundledCatalogGeneratedAt)();
+      const bundledGeneratedAt = bundledCatalogGeneratedAt();
       return {
         status:
           unchanged || bundledGeneratedAt === undefined || bundle.generatedAt <= bundledGeneratedAt

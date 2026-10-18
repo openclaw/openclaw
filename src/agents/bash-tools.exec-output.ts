@@ -55,14 +55,13 @@ export function normalizeNotifyOutput(value: string) {
   return value.replace(/\s+/g, " ").trim();
 }
 
-export function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
+export function compactNotifyOutput(value: string) {
   const normalized = normalizeNotifyOutput(value);
   if (!normalized) {
     return "";
   }
-  if (normalized.length <= maxChars) {
+  if (normalized.length <= DEFAULT_NOTIFY_SNIPPET_CHARS) {
     return normalized;
   }
-  const safe = Math.max(1, maxChars - 1);
-  return `${truncateUtf16Safe(normalized, safe)}…`;
+  return `${truncateUtf16Safe(normalized, DEFAULT_NOTIFY_SNIPPET_CHARS - 1)}…`;
 }
