@@ -61,6 +61,13 @@ function unmountStrip(container: HTMLDivElement) {
   strips.delete(container);
 }
 
+function measureEdges(element: Element, edges: () => [number, number]) {
+  return vi.spyOn(element, "getBoundingClientRect").mockImplementation(() => {
+    const [left, right] = edges();
+    return new DOMRect(left, 0, right - left, 0);
+  });
+}
+
 function tabStrip(container: ParentNode) {
   return container.querySelector<HTMLElement>(".tabstrip");
 }
@@ -327,16 +334,11 @@ describe("PanelTabStrip", () => {
       await settleTabStrip(container);
       let group = tabStrip(container)!;
       let scroller = tabViewport(container);
-      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
-        left: 0,
-        right: 100,
-      } as DOMRect);
+      measureEdges(scroller, () => [0, 100]);
       let contentLeft = 0;
       let contentRight = 200;
       const reads = [...group.children].map((child) =>
-        vi
-          .spyOn(child, "getBoundingClientRect")
-          .mockImplementation(() => ({ left: contentLeft, right: contentRight }) as DOMRect),
+        measureEdges(child, () => [contentLeft, contentRight]),
       );
       clock.flush();
       expect(group.classList.contains("has-scroll-left")).toBe(false);
@@ -367,14 +369,9 @@ describe("PanelTabStrip", () => {
       await settleTabStrip(container);
       group = tabStrip(container)!;
       scroller = tabViewport(container);
-      vi.spyOn(scroller, "getBoundingClientRect").mockReturnValue({
-        left: 0,
-        right: 100,
-      } as DOMRect);
+      measureEdges(scroller, () => [0, 100]);
       for (const child of group.children) {
-        vi.spyOn(child, "getBoundingClientRect").mockImplementation(
-          () => ({ left: contentLeft, right: contentRight }) as DOMRect,
-        );
+        measureEdges(child, () => [contentLeft, contentRight]);
       }
       clock.flush();
       expect(clock.observed(scroller)).toBe(true);
@@ -383,7 +380,6 @@ describe("PanelTabStrip", () => {
     },
   );
 
-  // Repeated prop updates retain one native measurement owner.
   it("keeps one live scroll-edge listener no matter how many renders race", async () => {
     const clock = tabMeasurementClock();
     const added = vi.spyOn(HTMLElement.prototype, "addEventListener");
@@ -409,58 +405,50 @@ describe("PanelTabStrip", () => {
     expect(clock.observed(scroller)).toBe(true);
   });
 
-  it.each([{ dir: "ltr", placement: "before", reorderIds: ["files", "browser"] }])(
-    "reorders draggable tabs at the requested edge ($dir, $reorderIds)",
-    async ({ dir, placement, reorderIds }) => {
-      document.documentElement.setAttribute("dir", dir);
-      const onReorder = vi.fn();
-      // Direction is inherited, so the strip has to be in the document for
-      // getComputedStyle to report the writing direction under test.
-      const host = document.createElement("div");
-      document.body.append(host);
-      const container = await renderStrip({
-        tabs: [
-          { ...TAB, reorderId: reorderIds?.[0] },
-          {
-            ...TAB,
-            id: "tab-2",
-            domId: "test-tab-2",
-            label: "Second tab",
-            reorderId: reorderIds?.[1],
-            draggable: reorderIds ? false : undefined,
-          },
-        ],
-        onReorder,
-        container: host,
-      });
-      const [source, target] = renderedTabs(container);
-      const dataTransfer = createDataTransferStub();
-      const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
-        const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
-        Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-        element.dispatchEvent(event);
-      };
-      vi.spyOn(target!, "getBoundingClientRect").mockReturnValue({
-        left: 100,
-        width: 80,
-      } as DOMRect);
+  it("reorders draggable tabs at the requested edge", async () => {
+    document.documentElement.setAttribute("dir", "ltr");
+    const onReorder = vi.fn();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const container = await renderStrip({
+      tabs: [
+        { ...TAB, reorderId: "files" },
+        {
+          ...TAB,
+          id: "tab-2",
+          domId: "test-tab-2",
+          label: "Second tab",
+          reorderId: "browser",
+          draggable: false,
+        },
+      ],
+      onReorder,
+      container: host,
+    });
+    const [source, target] = renderedTabs(container);
+    const dataTransfer = createDataTransferStub();
+    const dispatchDrag = (element: HTMLElement, type: string, clientX: number) => {
+      const event = new MouseEvent(type, { bubbles: true, clientX, cancelable: true });
+      Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+      element.dispatchEvent(event);
+    };
+    measureEdges(target!, () => [100, 180]);
 
-      dispatchDrag(source!, "dragstart", 0);
-      const sourceId = reorderIds?.[0] ?? "tab-1";
-      expect(tabStrip(container)?.dataset.draggedPanelTab).toBe(sourceId);
-      expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
-      dispatchDrag(target!, "dragover", 110);
-      flush();
-      // The indicator must preview the same edge the drop will use; `drop` clears
-      // it, so the class is read while the drag is still over the target.
-      const previewed = target?.classList.contains(`is-drop-${placement}`);
-      dispatchDrag(target!, "drop", 110);
+    dispatchDrag(source!, "dragstart", 0);
+    const sourceId = "files";
+    expect(tabStrip(container)?.dataset.draggedPanelTab).toBe(sourceId);
+    expect(dataTransfer.getData("application/x-openclaw-panel-tab")).toBe(sourceId);
+    dispatchDrag(target!, "dragover", 110);
+    flush();
+    // The indicator must preview the same edge the drop will use; `drop` clears
+    // it, so the class is read while the drag is still over the target.
+    const previewed = target?.classList.contains("is-drop-before");
+    dispatchDrag(target!, "drop", 110);
 
-      expect(source?.draggable).toBe(true);
-      expect(previewed).toBe(true);
-      expect(onReorder).toHaveBeenCalledWith(sourceId, reorderIds?.[1] ?? "tab-2", placement);
-    },
-  );
+    expect(source?.draggable).toBe(true);
+    expect(previewed).toBe(true);
+    expect(onReorder).toHaveBeenCalledWith(sourceId, "browser", "before");
+  });
 
   it("omits dragging and ignores dragstart for a tab with draggable false", async () => {
     const onReorder = vi.fn();

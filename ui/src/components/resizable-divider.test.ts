@@ -8,10 +8,6 @@ import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
 
-function nextFrame() {
-  vi.advanceTimersToNextFrame();
-}
-
 async function renderDivider() {
   const root = document.createElement("div");
   root.id = "split-root";
@@ -22,27 +18,36 @@ async function renderDivider() {
   divider.label = "Resize sidebar";
   root.append(divider);
   mountSolid(() => root, { container });
-  expect(root?.id).toBe("split-root");
-  expect(divider?.tagName.toLowerCase()).toBe("resizable-divider");
-  if (!root || !divider) {
-    throw new Error("expected resizable divider fixture");
-  }
-
-  root.getBoundingClientRect = vi.fn(() => ({
-    bottom: 0,
-    height: 0,
-    left: 0,
-    right: 400,
-    top: 0,
-    width: 400,
-    x: 0,
-    y: 0,
-    toJSON: () => ({}),
-  }));
+  root.getBoundingClientRect = vi.fn(() => new DOMRect(0, 0, 400, 0));
 
   await divider.updateComplete;
-  nextFrame();
+  vi.advanceTimersToNextFrame();
   return divider;
+}
+
+function key(target: EventTarget, name: string, shiftKey = false) {
+  const event = new KeyboardEvent("keydown", {
+    key: name,
+    shiftKey,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+async function dragFixture() {
+  const divider = await renderDivider();
+  const resized = vi.fn();
+  const resizeStarted = vi.fn();
+  const resizeEnded = vi.fn();
+  divider.setPointerCapture = vi.fn();
+  divider.releasePointerCapture = vi.fn();
+  divider.hasPointerCapture = vi.fn(() => true);
+  container.addEventListener("resize-start", resizeStarted);
+  divider.addEventListener("resize", resized);
+  divider.addEventListener("resize-end", resizeEnded);
+  return { divider, resized, resizeStarted, resizeEnded };
 }
 
 function dispatchPointer(target: EventTarget, type: string, clientX: number, pointerId = 7) {
@@ -102,9 +107,9 @@ describe("resizable-divider", () => {
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
     expect(measureRatio).not.toHaveBeenCalled();
 
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+    key(divider, "Tab");
     expect(measureRatio).not.toHaveBeenCalled();
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    key(divider, "ArrowLeft");
     expect(measureRatio).toHaveBeenCalledOnce();
     expect(divider.getAttribute("aria-valuenow")).toBe("53");
   });
@@ -137,29 +142,16 @@ describe("resizable-divider", () => {
     divider.addEventListener("resize", resized);
     divider.addEventListener("resize-start", resizeStarted);
 
-    const arrowLeft = new KeyboardEvent("keydown", {
-      key: "ArrowLeft",
-      bubbles: true,
-      cancelable: true,
-    });
-    divider.dispatchEvent(arrowLeft);
-    expect(arrowLeft.defaultPrevented).toBe(true);
+    expect(key(divider, "ArrowLeft").defaultPrevented).toBe(true);
     expectLastResizeRatio(resized, 0.58);
 
-    const arrowRight = new KeyboardEvent("keydown", {
-      key: "ArrowRight",
-      shiftKey: true,
-      bubbles: true,
-      cancelable: true,
-    });
-    divider.dispatchEvent(arrowRight);
-    expect(arrowRight.defaultPrevented).toBe(true);
+    expect(key(divider, "ArrowRight", true).defaultPrevented).toBe(true);
     expectLastResizeRatio(resized, 0.65);
 
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    key(divider, "Home");
     expectLastResizeRatio(resized, 0.4);
 
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true }));
+    key(divider, "End");
     expectLastResizeRatio(resized, 0.7);
     expect(resizeStarted).not.toHaveBeenCalled();
   });
@@ -174,34 +166,20 @@ describe("resizable-divider", () => {
     await divider.updateComplete;
 
     expect(divider.getAttribute("aria-orientation")).toBe("horizontal");
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+    key(divider, "ArrowUp");
     expectLastResizeRatio(resized, 0.58);
-    divider.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ArrowDown", shiftKey: true, bubbles: true }),
-    );
+    key(divider, "ArrowDown", true);
     expectLastResizeRatio(resized, 0.65);
     expect(resizeStarted).not.toHaveBeenCalled();
   });
 
   it("keeps dragging owned by the initiating pointer", async () => {
-    const divider = await renderDivider();
-    const resized = vi.fn();
-    const resizeStarted = vi.fn();
-    const resizeEnded = vi.fn();
-    const setPointerCapture = vi.fn();
-    const releasePointerCapture = vi.fn();
-    const hasPointerCapture = vi.fn(() => true);
-    divider.setPointerCapture = setPointerCapture;
-    divider.releasePointerCapture = releasePointerCapture;
-    divider.hasPointerCapture = hasPointerCapture;
-    container.addEventListener("resize-start", resizeStarted);
-    divider.addEventListener("resize", resized);
-    divider.addEventListener("resize-end", resizeEnded);
+    const { divider, resized, resizeStarted, resizeEnded } = await dragFixture();
 
     dispatchPointer(divider, "pointerdown", 100);
     expect(document.activeElement).not.toBe(divider);
     expect([...divider.classList]).toEqual(["dragging"]);
-    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    expect(divider.setPointerCapture).toHaveBeenCalledWith(7);
     expect(resizeStarted).toHaveBeenCalledOnce();
     expect(resizeStarted.mock.calls[0]?.[0]).toMatchObject({
       target: divider,
@@ -215,7 +193,7 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointercancel", 220, 8);
     dispatchPointer(document, "pointerup", 220, 8);
 
-    expect(setPointerCapture).toHaveBeenCalledTimes(1);
+    expect(divider.setPointerCapture).toHaveBeenCalledTimes(1);
     expect(resizeStarted).toHaveBeenCalledOnce();
     expect(resized).not.toHaveBeenCalled();
     expect(resizeEnded).not.toHaveBeenCalled();
@@ -224,7 +202,7 @@ describe("resizable-divider", () => {
     dispatchPointer(document, "pointermove", 220, 7);
     dispatchPointer(document, "pointermove", 120, 7);
     expect(resized).not.toHaveBeenCalled();
-    nextFrame();
+    vi.advanceTimersToNextFrame();
     expectLastResizeRatio(resized, 0.65);
     expect(resized).toHaveBeenCalledTimes(1);
     expect(resizeEnded).not.toHaveBeenCalled();
@@ -236,27 +214,18 @@ describe("resizable-divider", () => {
     expect(endEvent?.detail).toEqual({ splitRatio: 0.65 });
     expect(resizeEnded).toHaveBeenCalledTimes(1);
     expect([...divider.classList]).toEqual([]);
-    expect(releasePointerCapture).toHaveBeenCalledWith(7);
-    expect(releasePointerCapture).toHaveBeenCalledTimes(1);
+    expect(divider.releasePointerCapture).toHaveBeenCalledExactlyOnceWith(7);
     expect(resizeStarted).toHaveBeenCalledOnce();
   });
 
   it("stops dragging when the window loses focus", async () => {
-    const divider = await renderDivider();
-    const resized = vi.fn();
-    const resizeEnded = vi.fn();
-    const releasePointerCapture = vi.fn();
-    divider.setPointerCapture = vi.fn();
-    divider.releasePointerCapture = releasePointerCapture;
-    divider.hasPointerCapture = vi.fn(() => true);
-    divider.addEventListener("resize", resized);
-    divider.addEventListener("resize-end", resizeEnded);
+    const { divider, resized, resizeEnded } = await dragFixture();
 
     dispatchPointer(divider, "pointerdown", 100);
     window.dispatchEvent(new Event("blur"));
 
     expect([...divider.classList]).toEqual([]);
-    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(divider.releasePointerCapture).toHaveBeenCalledWith(7);
     expectLastResizeRatio(resizeEnded, 0.6);
     expect(resizeEnded).toHaveBeenCalledOnce();
     dispatchPointer(document, "pointermove", 220);
@@ -266,15 +235,11 @@ describe("resizable-divider", () => {
   });
 
   it("ends only the owner gesture when pointer capture is lost", async () => {
-    const divider = await renderDivider();
-    const resized = vi.fn();
-    const resizeEnded = vi.fn();
+    const { divider, resized, resizeEnded } = await dragFixture();
     const capturedPointers = new Set<number>();
     divider.setPointerCapture = vi.fn((pointerId) => capturedPointers.add(pointerId));
     divider.releasePointerCapture = vi.fn((pointerId) => capturedPointers.delete(pointerId));
     divider.hasPointerCapture = vi.fn((pointerId) => capturedPointers.has(pointerId));
-    divider.addEventListener("resize", resized);
-    divider.addEventListener("resize-end", resizeEnded);
 
     dispatchPointer(divider, "pointerdown", 100, 7);
     dispatchPointer(document, "pointermove", 120, 7);
@@ -299,14 +264,7 @@ describe("resizable-divider", () => {
   });
 
   it("commits the final pointer position when disconnected", async () => {
-    const divider = await renderDivider();
-    const resized = vi.fn();
-    const resizeEnded = vi.fn();
-    divider.setPointerCapture = vi.fn();
-    divider.releasePointerCapture = vi.fn();
-    divider.hasPointerCapture = vi.fn(() => true);
-    divider.addEventListener("resize", resized);
-    divider.addEventListener("resize-end", resizeEnded);
+    const { divider, resized, resizeEnded } = await dragFixture();
 
     dispatchPointer(divider, "pointerdown", 100);
     dispatchPointer(document, "pointermove", 120);
@@ -319,7 +277,7 @@ describe("resizable-divider", () => {
     expect(resizeEnded).toHaveBeenCalledOnce();
     dispatchPointer(document, "pointerup", 120);
     expect(resizeEnded).toHaveBeenCalledOnce();
-    divider.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    key(divider, "ArrowRight");
     dispatchPointer(divider, "pointerdown", 100);
     expect(resized).toHaveBeenCalledOnce();
     expect(resizeEnded).toHaveBeenCalledOnce();
