@@ -40,20 +40,16 @@ async function setup(childCount: number, active = false) {
   const serverRows = structuredClone(rows);
   const failed = rows[1]!;
   const failureMessage = "Child placement changed after confirmation";
+  const error = { code: "INVALID_REQUEST" as const, message: failureMessage };
   const pending = createDeferred<SessionsPatchManyResult>();
   const dispatched = createDeferred<SessionsPatchManyParams>();
   const restored = createDeferred<SessionsPatchManyParams>();
   const batches: SessionsPatchManyParams[] = [];
   const batchResult = (params: SessionsPatchManyParams): SessionsPatchManyResult => ({
-    outcomes: params.targets.map((target) =>
-      params.patch.archived === true && target.key === failed.key
-        ? {
-            ok: false,
-            key: target.key,
-            agentId: target.agentId,
-            error: { code: "INVALID_REQUEST", message: failureMessage },
-          }
-        : { ok: true, key: target.key, agentId: target.agentId },
+    outcomes: params.targets.map(({ key, agentId }) =>
+      params.patch.archived === true && key === failed.key
+        ? { ok: false, key, agentId, error }
+        : { ok: true, key, agentId },
     ),
   });
   const request = vi.fn(async (method: string, raw?: unknown) => {

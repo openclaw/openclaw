@@ -144,106 +144,85 @@ describe("Sessions archive outcome lifetime", () => {
     },
   );
 
-  it.each(["before confirmation", "after confirmation"])(
-    "restores the captured pinned session after leaving %s",
-    async (navigation) => {
-      const { page, pending, patches, undo, gateway } = await setup();
-      const archived = page.archive(row);
-      await vi.waitFor(() => expect(patches()).toHaveLength(1));
-      if (navigation === "before confirmation") {
-        page.remove();
-      }
-      pending.resolve(result);
-      await archived;
-      await waitForSolid(() => expect(undo()).not.toBeNull());
-      page.remove();
-      undo()!.click();
-      await vi.waitFor(() => expect(patches()).toHaveLength(2));
-      expect(patches()[1]![1]).toMatchObject({
-        key: row.key,
-        expectedSessionId: row.sessionId,
-        archived: false,
-        pinned: true,
-      });
-      expect(gateway.setSessionKey).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
-    { reconnect: "before confirmation", sameClient: true },
-    { reconnect: "after confirmation", sameClient: true },
-    { reconnect: "before confirmation", sameClient: false },
-  ])(
-    "retires Undo on reconnect $reconnect (same client=$sameClient)",
-    async ({ reconnect, sameClient }) => {
-      const fixture = await setup();
-      const archived = fixture.page.archive(row);
-      await vi.waitFor(() => expect(fixture.patches()).toHaveLength(1));
-      const transition = () => {
+    ["navigation", "before"],
+    ["navigation", "after"],
+    ["reconnect", "before"],
+    ["reconnect", "after"],
+    ["new-client", "before"],
+    ["replacement", "after"],
+    ["failure", "attached"],
+    ["failure", "detached"],
+  ] as const)("settles archive and captured Undo across %s (%s)", async (event, timing) => {
+    const fixture = await setup();
+    const { page, pending, patches, undo } = fixture;
+    const reconnect = event === "reconnect" || event === "new-client";
+    const transition = () => {
+      if (reconnect) {
         fixture.gateway.emit({ phase: "reconnecting", client: null });
         fixture.gateway.emit({
           phase: "connected",
-          client: sameClient
-            ? fixture.client
-            : ({ request: fixture.request } as unknown as GatewayBrowserClient),
+          client:
+            event === "new-client"
+              ? ({ request: fixture.request } as unknown as GatewayBrowserClient)
+              : fixture.client,
         });
-      };
-      if (reconnect === "before confirmation") {
-        transition();
-      }
-      fixture.pending.resolve(result);
-      await archived;
-      if (reconnect === "after confirmation") {
-        await waitForSolid(() => expect(fixture.undo()).not.toBeNull());
-        transition();
-        fixture.undo()!.click();
       } else {
-        await fixture.toast.updateComplete;
-        expect(fixture.undo()).toBeNull();
-      }
-      expect(fixture.patches()).toHaveLength(1);
-    },
-  );
-
-  it("keeps the original durable identity when the row is replaced before Undo", async () => {
-    const fixture = await setup();
-    const { page, request, patches, undo } = fixture;
-    const archived = page.archive(row);
-    fixture.pending.resolve(result);
-    await archived;
-    await waitForSolid(() => expect(undo()).not.toBeNull());
-    request.mockImplementation(async (method) => {
-      if (method === "sessions.list") {
-        return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
-      }
-      throw new Error("Session changed; reload before retrying.");
-    });
-    await page.context.sessions.refresh({ force: true });
-    page.remove();
-    undo()!.click();
-    await vi.waitFor(() => expect(patches()).toHaveLength(2));
-    expect(patches()[1]![1]).toMatchObject({ expectedSessionId: row.sessionId });
-    await vi.waitFor(() =>
-      expect(fixture.toast.textContent).toContain("Session changed; reload before retrying."),
-    );
-    expect(page.context.sessions.state.result?.sessions[0]?.sessionId).toBe("replacement-session");
-  });
-
-  it.each([false, true])(
-    "does not report success for a failed archive (left page=%s)",
-    async (left) => {
-      const { page, pending, toast, undo, patches } = await setup();
-      const archived = page.archive(row);
-      await vi.waitFor(() => expect(patches()).toHaveLength(1));
-      if (left) {
         page.remove();
       }
+    };
+    const archived = page.archive(row);
+    if (event !== "replacement") {
+      await vi.waitFor(() => expect(patches()).toHaveLength(1));
+    }
+    if (timing === "before" || timing === "detached") {
+      transition();
+    }
+    if (event === "failure") {
       pending.reject(new Error("Archive unavailable"));
-      await archived;
-      await toast.updateComplete;
+    } else {
+      pending.resolve(result);
+    }
+    await archived;
+    if (event === "failure" || (reconnect && timing === "before")) {
+      await fixture.toast.updateComplete;
       expect(undo()).toBeNull();
-      expect(page.error).toBe(left ? null : "Archive unavailable");
+      if (event === "failure") {
+        expect(page.error).toBe(timing === "detached" ? null : "Archive unavailable");
+      }
       expect(patches()).toHaveLength(1);
-    },
-  );
+      return;
+    }
+    await waitForSolid(() => expect(undo()).not.toBeNull());
+    if (event === "replacement") {
+      fixture.request.mockImplementation(async (method) => {
+        if (method === "sessions.list") {
+          return sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
+        }
+        throw new Error("Session changed; reload before retrying.");
+      });
+      await page.context.sessions.refresh({ force: true });
+    }
+    transition();
+    undo()!.click();
+    if (reconnect) {
+      expect(patches()).toHaveLength(1);
+      return;
+    }
+    await vi.waitFor(() => expect(patches()).toHaveLength(2));
+    expect(patches()[1]![1]).toMatchObject({
+      expectedSessionId: row.sessionId,
+      ...(event === "navigation" ? { key: row.key, archived: false, pinned: true } : {}),
+    });
+    if (event === "replacement") {
+      await vi.waitFor(() =>
+        expect(fixture.toast.textContent).toContain("Session changed; reload before retrying."),
+      );
+      expect(page.context.sessions.state.result?.sessions[0]?.sessionId).toBe(
+        "replacement-session",
+      );
+    } else {
+      expect(fixture.gateway.setSessionKey).not.toHaveBeenCalled();
+    }
+  });
 });

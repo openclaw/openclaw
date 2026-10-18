@@ -38,7 +38,8 @@ afterEach(() => {
 
 function withNotifyingAgentSelection(context: ApplicationContext, initialScopeId: string | null) {
   const listeners = new Set<() => void>();
-  const state = { ...context.agentSelection.state, scopeId: initialScopeId };
+  const state = context.agentSelection.state;
+  state.scopeId = initialScopeId;
   const changeScope = (scopeId: string | null) => {
     if (state.scopeId === scopeId) {
       return;
@@ -46,19 +47,14 @@ function withNotifyingAgentSelection(context: ApplicationContext, initialScopeId
     state.scopeId = scopeId;
     listeners.forEach((listener) => listener());
   };
-  const scoped = {
-    ...context,
-    agentSelection: {
-      ...context.agentSelection,
-      state,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      setScope: changeScope,
+  Object.assign(context.agentSelection, {
+    subscribe: (listener: () => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
-  } as ApplicationContext;
-  return { context: scoped, changeScope };
+    setScope: changeScope,
+  });
+  return { context, changeScope };
 }
 
 async function setupArchivedPageWithSelection(
@@ -71,7 +67,7 @@ async function setupArchivedPageWithSelection(
   const { context, changeScope } = withNotifyingAgentSelection(baseContext, scopeId);
   const page = await createRenderedPage(
     context,
-    sessionsResult([{ key: "agent:writer:old-1", kind: "direct", archived: true }], 1),
+    sessionsResult([archivedRow("agent:writer:old-1")], 1),
     "archived",
     expandedSessionKey,
   );
@@ -107,8 +103,7 @@ describe("sessions page agent-scope retirement", () => {
       );
       let operation = fixture.track(page.deleteAllArchived());
       let actions = await waitForConfirmDialogActions();
-      const { dialog } = await getRenderedModalDialog(document.body);
-      expect(dialog.open).toBe(true);
+      expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
 
       changeScope(retire ? "main" : "writer");
       if (retire) {
@@ -121,8 +116,7 @@ describe("sessions page agent-scope retirement", () => {
         await vi.waitFor(() => expect(page.loading).toBe(false));
         operation = fixture.track(page.deleteAllArchived());
         actions = await waitForConfirmDialogActions();
-        const replacement = await getRenderedModalDialog(document.body);
-        expect(replacement.dialog.open).toBe(true);
+        expect((await getRenderedModalDialog(document.body)).dialog.open).toBe(true);
       } else {
         expect(actions.isConnected).toBe(true);
         expect(deleteMany).not.toHaveBeenCalled();
@@ -145,12 +139,12 @@ describe("sessions page agent-scope retirement", () => {
   });
 
   it.each([
-    { retired: false, fails: true },
-    { retired: true, fails: true },
-    { retired: true, fails: false },
+    [false, true],
+    [true, true],
+    [true, false],
   ])(
-    "keeps placement outcomes in their captured agent scope (retired=$retired, fails=$fails)",
-    async ({ retired, fails }) => {
+    "keeps placement outcomes in their captured agent scope (retired=%s, fails=%s)",
+    async (retired, fails) => {
       const row: GatewaySessionRow = {
         key: "global",
         agentId: "writer",
@@ -188,9 +182,9 @@ describe("sessions page agent-scope retirement", () => {
       connection.emit({
         hello: gatewayHelloForMethods(["sessions.move"], ["operator.read", "operator.write"]),
       });
-      const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
-        status: "refreshed",
-      }));
+      const reconcileMutation = vi
+        .fn<SessionCapability["reconcileMutation"]>()
+        .mockResolvedValue({ status: "refreshed" });
       const sessions = createSessions({ reconcileMutation });
       const { context, changeScope } = withNotifyingAgentSelection(
         createContext(connection.gateway, sessions),
@@ -210,10 +204,10 @@ describe("sessions page agent-scope retirement", () => {
           ...row.placementMove!.retry,
         }),
       );
-      const result =
-        clientRequest.mock.results[
-          clientRequest.mock.calls.findIndex(([method]) => method === "sessions.move")
-        ]!.value;
+      const moveIndex = clientRequest.mock.calls.findIndex(
+        ([method]) => method === "sessions.move",
+      );
+      const result = clientRequest.mock.results[moveIndex]!.value;
       if (retired) {
         changeScope("main");
         changeScope("writer");
@@ -286,7 +280,7 @@ describe("sessions page agent-scope retirement", () => {
     const query = vi.mocked(sessions.subscribeList).mock.calls.at(-1)?.[0];
     expect(query).toMatchObject({ search: key, agentId: "writer" });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const oldRequest = page.deleteSessionFromMenu({ key, kind: "direct", archived: true });
+    const oldRequest = page.deleteSessionFromMenu(archivedRow(key));
     let newRequest: Promise<void> | undefined;
     try {
       await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
@@ -303,9 +297,8 @@ describe("sessions page agent-scope retirement", () => {
       ]);
 
       oldDelete.resolve({
-        deleted: [],
+        ...deleted(),
         errors: [{ target: { key }, error: new Error("retired delete error") }],
-        preservedWorktrees: [],
       });
       await oldRequest;
       expect(page.error).toBeNull();
@@ -417,10 +410,8 @@ describe("session selection across roster refresh", () => {
         }
         confirmation.resolve(true);
         await deletedStable.promise;
-        expect(await deletion.mock.results[0]!.value).toMatchObject({
-          errors: [],
-          deleted: [stable.key],
-        });
+        const { errors, deleted: removed } = await deletion.mock.results[0]!.value;
+        expect([errors, removed]).toEqual([[], [stable.key]]);
         expect(serverRows.some((row) => row.key === stable.key)).toBe(false);
         if (change !== "removed") {
           expect(serverRows.find((row) => row.key === original.key)?.label).toBe(
@@ -428,9 +419,9 @@ describe("session selection across roster refresh", () => {
           );
         }
 
-        expect(
-          deletedTargets.map(({ key, expectedSessionId }) => ({ key, expectedSessionId })),
-        ).toEqual([{ key: stable.key, expectedSessionId: stable.sessionId }]);
+        expect(deletedTargets).toMatchObject([
+          { key: stable.key, expectedSessionId: stable.sessionId },
+        ]);
       } finally {
         page.remove();
         sessions.dispose();

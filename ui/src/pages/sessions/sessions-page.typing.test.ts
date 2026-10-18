@@ -182,8 +182,7 @@ describe("sessions page managed roster", () => {
     page.selectedSessions = new Map([[deepLink, { key: deepLink }]]);
     await search("older");
     await vi.waitFor(() => expect(pending.has("older")).toBe(true));
-    expect(page.result).toBeNull();
-    expect(page.selectedSessions.size).toBe(0);
+    expect([page.result, page.selectedSessions.size]).toEqual([null, 0]);
     expect(page.textContent).not.toContain("No sessions match your filters.");
     await search("latest");
     pending.get("older")!.resolve(result("agent:main:older"));
@@ -239,7 +238,7 @@ describe("sessions page managed roster", () => {
   });
 });
 
-describe("Sessions page typing ownership", () => {
+describe("Sessions page typing and detail ownership", () => {
   beforeEach(() => vi.useFakeTimers());
   it.each(["click", "Escape"])(
     "retires selected rows and stale requests when clearing via %s",
@@ -266,10 +265,8 @@ describe("Sessions page typing ownership", () => {
         );
       }
       await page.updateComplete;
-      expect(input().value).toBe("");
       expect(document.activeElement).toBe(input());
-      expect(page.selectedSessions.size).toBe(0);
-      expect(page.result).toBeNull();
+      expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);
       expect(requests).toHaveLength(count);
@@ -435,9 +432,7 @@ describe("Sessions page typing ownership", () => {
     expect(pageRequests).toBe(2);
     finishPatch();
     await advance();
-    expect(mutationRefreshes).toBe(1);
-    expect(pageRequests).toBe(2);
-    expect(page.loading).toBe(true);
+    expect([mutationRefreshes, pageRequests, page.loading]).toEqual([1, 2, true]);
     const search = searchInput(page);
     for (const value of ["n", "ne", "new"]) {
       editInput(search, value);
@@ -454,8 +449,7 @@ describe("Sessions page typing ownership", () => {
       expect.objectContaining({ includeUnknown: false, search: "new" }),
     ]);
     expect(page.textContent).toContain("After rename");
-    expect(page.result?.sessions[0]?.label).toBe("After rename");
-    expect(page.loading).toBe(false);
+    expect([page.result?.sessions[0]?.label, page.loading]).toEqual(["After rename", false]);
   });
   it.each(["detach", "reconnect", "client"])(
     "retires pending work on %s and starts the new owner's query without the old response",
@@ -474,8 +468,7 @@ describe("Sessions page typing ownership", () => {
       expect(requests).toHaveLength(2);
       if (retirement === "detach") {
         await resolveResult(pending[0]!, "agent:main:retired");
-        expect(requests).toHaveLength(2);
-        expect(page.isConnected).toBe(false);
+        expect([requests.length, page.isConnected]).toEqual([2, false]);
         return;
       }
       connection.emit({
@@ -491,8 +484,7 @@ describe("Sessions page typing ownership", () => {
       expect(requests.at(-1)).toMatchObject({ search: "latest" });
       expect(input().value).toBe("latest");
       await resolveResult(pending[0]!, "agent:main:retired");
-      expect(page.result).toBeNull();
-      expect(page.loading).toBe(true);
+      expect([page.result, page.loading]).toEqual([null, true]);
       expect(page.textContent).not.toContain("agent:main:retired");
       await edit("newest");
       await advance(200);
@@ -518,14 +510,11 @@ describe("Sessions page typing ownership", () => {
     namedButton(page, "Load more sessions")!.click();
     await advance();
     await page.updateComplete;
-    expect(requests).toHaveLength(2);
-    expect(page.result?.sessions).toHaveLength(50);
-    expect(page.loading).toBe(true);
+    expect([requests.length, page.result?.sessions.length, page.loading]).toEqual([2, 50, true]);
     expect(requests.at(-1)).toMatchObject({ offset: 50 });
     await edit("latest");
     await advance(200);
-    expect(requests).toHaveLength(2);
-    expect(page.result).toBeNull();
+    expect([requests.length, page.result]).toEqual([2, null]);
     await resolveResult(pending[0]!, "agent:main:retired");
     expect(requests).toHaveLength(3);
     expect(requests.at(-1)).toMatchObject({ search: "latest" });
@@ -546,8 +535,7 @@ describe("Sessions page typing ownership", () => {
     await page.updateComplete;
     statusGroup.querySelector<HTMLInputElement>('input[value="all"]')!.click();
     await page.updateComplete;
-    expect(requests).toHaveLength(2);
-    expect(page.result).toBeNull();
+    expect([requests.length, page.result]).toEqual([2, null]);
     await resolveResult(pending[0]!, "agent:main:retired");
     expect(requests).toHaveLength(3);
     expect(requests.at(-1)).toMatchObject({ search: "latest", archived: "all" });
@@ -564,11 +552,6 @@ describe("Sessions page typing ownership", () => {
       archived: "all",
     });
   });
-});
-
-describe("Sessions page details", () => {
-  beforeEach(() => vi.useFakeTimers());
-
   it.each([
     { entry: "interactive", closeBeforeReply: false },
     { entry: "deep-link", closeBeforeReply: false },
@@ -618,10 +601,7 @@ describe("Sessions page details", () => {
         ...row,
         rowMode: undefined,
         agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
-        thinkingLevels: [
-          { id: "off", label: "off" },
-          { id: "high", label: "high" },
-        ],
+        thinkingLevels: ["off", "high"].map((id) => ({ id, label: id })),
         thinkingDefault: "high",
       };
       descriptor.resolve({ session: full });

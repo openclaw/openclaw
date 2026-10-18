@@ -49,7 +49,8 @@ const sessionRow = (key: string, extra: Partial<GatewaySessionRow> = {}): Gatewa
   updatedAt: 1,
   ...extra,
 });
-async function mountMutation(sessions = createSessions()) {
+async function mountMutation(overrides: Partial<SessionCapability> = {}) {
+  const sessions = createSessions(overrides);
   const connection = createGateway();
   const context = createContext(connection.gateway, sessions);
   return {
@@ -296,7 +297,7 @@ describe("sessions page lifecycle", () => {
   );
 
   it("reports a connection error instead of silently dropping a patch", async () => {
-    const { page, connection, sessions } = await mountMutation(createSessions({ patch: vi.fn() }));
+    const { page, connection, sessions } = await mountMutation({ patch: vi.fn() });
     connection.emit({ phase: "reconnecting", client: null });
     expect(await page.patchSession("agent:main:main", { label: "renamed" })).toBe("failed");
     expect(sessions.patch).not.toHaveBeenCalled();
@@ -447,9 +448,7 @@ describe("sessions page lifecycle", () => {
   it("does not delete after the Gateway changes during confirmation", async () => {
     const confirmation = createDeferred<boolean>();
     vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-    const { page, sessions, connection } = await mountMutation(
-      createSessions({ deleteMany: vi.fn() }),
-    );
+    const { page, sessions, connection } = await mountMutation({ deleteMany: vi.fn() });
     const target = sessionRow("old");
     page.result = sessionsResult([target], 1);
     selectRows(page, target);
@@ -540,14 +539,12 @@ describe("sessions page lifecycle", () => {
     const patched = createDeferred<Awaited<ReturnType<SessionCapability["patch"]>>>();
     const forked = createDeferred<string | null>();
     const groups = createDeferred<Awaited<ReturnType<SessionCapability["groupsPut"]>>>();
-    const { page, sessions, connection, context } = await mountMutation(
-      createSessions({
-        deleteMany: vi.fn(() => deleted.promise),
-        patch: vi.fn(() => patched.promise),
-        create: vi.fn(() => forked.promise),
-        groupsPut: vi.fn(() => groups.promise),
-      }),
-    );
+    const { page, sessions, connection, context } = await mountMutation({
+      deleteMany: vi.fn(() => deleted.promise),
+      patch: vi.fn(() => patched.promise),
+      create: vi.fn(() => forked.promise),
+      groupsPut: vi.fn(() => groups.promise),
+    });
     const target = sessionRow("main", { key: "main" });
     page.result = sessionsResult([target], 1);
     selectRows(page, target);
@@ -572,16 +569,13 @@ describe("sessions page lifecycle", () => {
     await Promise.all(requests);
     expect(page.result?.sessions.map(({ key }) => key)).toEqual(["main"]);
     expect([...page.selectedSessions.keys()]).toEqual(["main"]);
-    expect(page.error).toBeNull();
-    expect(page.sessionMenu).toBeNull();
+    expect([page.error, page.sessionMenu]).toEqual([null, null]);
     expect(connection.setSessionKey).not.toHaveBeenCalled();
     expect(context.navigate).not.toHaveBeenCalled();
   });
 
   it("forks an active session from its last completed message", async () => {
-    const { page, sessions } = await mountMutation(
-      createSessions({ create: vi.fn(async () => "active-fork") }),
-    );
+    const { page, sessions } = await mountMutation({ create: vi.fn(async () => "active-fork") });
     await page.forkSession("main", true);
     expect(sessions.create).toHaveBeenCalledWith({
       parentSessionKey: "main",
@@ -594,12 +588,10 @@ describe("sessions page lifecycle", () => {
 describe("sessions page new group", () => {
   const key = "agent:main:move-me";
   const sessionId = "original-session";
+  const group = "Client work";
   const row = { key, sessionId, kind: "direct" as const, archived: false };
-  const assignment = [
-    key,
-    { category: "Client work" },
-    { agentId: undefined, expectedSessionId: sessionId },
-  ];
+  const identity = { agentId: undefined, expectedSessionId: sessionId };
+  const assignment = [key, { category: group }, identity];
   async function mount(groupsPut: () => Promise<SessionGroupMutationResult>) {
     const sessions = createSessions({
       groupsPut: vi.fn(groupsPut),
@@ -618,8 +610,8 @@ describe("sessions page new group", () => {
     );
     const messages: Array<string | null | undefined> = [];
     vi.mocked(showInputDialog).mockImplementation(async (options) => {
-      messages.push(await options.submit?.("Client work"));
-      return "Client work";
+      messages.push(await options.submit?.(group));
+      return group;
     });
     return { page, sessions, connection, messages };
   }
@@ -678,7 +670,7 @@ describe("sessions page new group", () => {
     });
     const created = page.requestNewCategory(key);
     page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]));
+    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledWith([group]));
     expect(sessions.patch).not.toHaveBeenCalled();
     pending.resolve("completed");
     await created;
@@ -692,7 +684,7 @@ describe("sessions page new group", () => {
   it("creates an empty group without assigning a row", async () => {
     const { page, sessions, messages } = await mount(async () => "completed");
     await page.requestNewCategory();
-    expect(sessions.groupsPut).toHaveBeenCalledWith(["Client work"]);
+    expect(sessions.groupsPut).toHaveBeenCalledWith([group]);
     expect(sessions.patch).not.toHaveBeenCalled();
     expect(messages).toEqual([null]);
   });
