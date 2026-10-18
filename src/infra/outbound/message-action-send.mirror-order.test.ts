@@ -9,6 +9,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
@@ -187,21 +188,29 @@ describe("outbound mirror route ordering", () => {
     });
 
     it("mirrors a send to another conversation into the destination session", async () => {
-      const result = await sendViaGateway(MAIN_SESSION_KEY);
+      // A running turn fences transcript writes to its own session.
+      const result = await withSessionTranscriptWriteAssertion(
+        transcriptScope(),
+        () => {},
+        () => sendViaGateway(MAIN_SESSION_KEY),
+      );
 
       expect(result.handledBy).toBe("plugin");
       expect(gatewayRequest).toHaveBeenCalledOnce();
       expect(handleAction).not.toHaveBeenCalled();
-      const messages = transcriptEvents(OTHER_SESSION_KEY).filter((event) =>
-        expect.objectContaining({ type: "message" }).asymmetricMatch(event),
-      );
-      expect(messages).toEqual([
-        expect.objectContaining({
-          message: expect.objectContaining({
-            content: [{ type: "text", text: "card details" }],
+      await vi.waitFor(() =>
+        expect(
+          transcriptEvents(OTHER_SESSION_KEY).filter((event) =>
+            expect.objectContaining({ type: "message" }).asymmetricMatch(event),
+          ),
+        ).toEqual([
+          expect.objectContaining({
+            message: expect.objectContaining({
+              content: [{ type: "text", text: "card details" }],
+            }),
           }),
-        }),
-      ]);
+        ]),
+      );
     });
 
     it("leaves a send into the requester's own session to the Gateway's source-reply mirror", async () => {

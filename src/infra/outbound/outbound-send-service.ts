@@ -9,7 +9,6 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import { getOwnedSessionTranscriptWriterFence } from "../../config/sessions/transcript-write-context.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeMessagePresentation,
   renderMessagePresentationFallbackText,
@@ -48,40 +47,6 @@ type PluginHandledResult = {
   payload: unknown;
   toolResult: AgentToolResult<unknown>;
 };
-
-/** Best-effort transcript copy of a send a channel plugin already delivered. */
-export async function mirrorPluginHandledDelivery(params: {
-  cfg: OpenClawConfig;
-  mirror: OutboundMirror;
-}): Promise<void> {
-  const { mirror } = params;
-  try {
-    const writerFence = getOwnedSessionTranscriptWriterFence({ sessionKey: mirror.sessionKey });
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      agentId: mirror.agentId,
-      sessionKey: mirror.sessionKey,
-      expectedSessionId: mirror.expectedSessionId,
-      ...(writerFence?.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
-        : {}),
-      ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-      text: mirror.text,
-      mediaUrls: mirror.mediaUrls,
-      idempotencyKey: mirror.idempotencyKey,
-      deliveryMirror: mirror.deliveryMirror,
-      config: params.cfg,
-    });
-    if (!mirrorResult.ok) {
-      log.warn(
-        `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
-      );
-    }
-  } catch (error) {
-    log.warn(
-      `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
-    );
-  }
-}
 
 export function materializeMessagePresentationFallback(params: {
   payload: Pick<ReplyPayload, "presentation" | "text">;
@@ -243,17 +208,38 @@ export async function executeSendAction(params: SendActionParams): Promise<{
             pluginMessage !== params.message
               ? pluginMessage
               : params.ctx.mirror.text?.trim() || pluginMessage;
-          await mirrorPluginHandledDelivery({
-            cfg: params.ctx.cfg,
-            mirror: {
-              ...params.ctx.mirror,
+          const mirrorMediaUrls =
+            params.ctx.mirror.mediaUrls ??
+            params.mediaUrls ??
+            (params.mediaUrl ? [params.mediaUrl] : undefined);
+          try {
+            const writerFence = getOwnedSessionTranscriptWriterFence({
+              sessionKey: params.ctx.mirror.sessionKey,
+            });
+            const mirrorResult = await appendAssistantMessageToSessionTranscript({
+              agentId: params.ctx.mirror.agentId,
+              sessionKey: params.ctx.mirror.sessionKey,
+              expectedSessionId: params.ctx.mirror.expectedSessionId,
+              ...(writerFence?.expectedLifecycleRevision !== undefined
+                ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
+                : {}),
+              ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
               text: mirrorText,
-              mediaUrls:
-                params.ctx.mirror.mediaUrls ??
-                params.mediaUrls ??
-                (params.mediaUrl ? [params.mediaUrl] : undefined),
-            },
-          });
+              mediaUrls: mirrorMediaUrls,
+              idempotencyKey: params.ctx.mirror.idempotencyKey,
+              deliveryMirror: params.ctx.mirror.deliveryMirror,
+              config: params.ctx.cfg,
+            });
+            if (!mirrorResult.ok) {
+              log.warn(
+                `failed to mirror plugin-handled delivery; channel send already succeeded: ${mirrorResult.reason}`,
+              );
+            }
+          } catch (error) {
+            log.warn(
+              `failed to mirror plugin-handled delivery; channel send already succeeded: ${formatErrorMessage(error)}`,
+            );
+          }
         },
       });
     } catch (error) {

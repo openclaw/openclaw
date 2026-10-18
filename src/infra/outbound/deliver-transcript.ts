@@ -4,6 +4,7 @@ import {
   getOwnedSessionTranscriptWriterFence,
   runWithoutOwnedSessionTranscriptWrites,
 } from "../../config/sessions/transcript-write-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { retainGatewayRootWorkAdmissionContinuation } from "../../process/gateway-work-admission.js";
@@ -11,6 +12,7 @@ import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { formatErrorMessage } from "../errors.js";
 import type { DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
+import type { OutboundMirror } from "./mirror.js";
 import { resolveOutboundPayloadMirrorText, type NormalizedOutboundPayload } from "./payloads.js";
 
 const log = createSubsystemLogger("outbound/deliver");
@@ -36,10 +38,24 @@ export async function mirrorDeliveredPayloads(params: {
   if (!mirrorContent.text && mirrorContent.mediaUrls.length === 0) {
     return;
   }
+  await appendOutboundMirror({
+    cfg: params.delivery.cfg,
+    mirror: { ...mirror, ...mirrorContent },
+    logContext: { channel: params.delivery.channel, to: params.delivery.to },
+  });
+}
+
+/** Appends an accepted send's transcript copy; deferred copies run in the destination lane. */
+export async function appendOutboundMirror(params: {
+  cfg: OpenClawConfig;
+  mirror: OutboundMirror;
+  logContext?: Record<string, unknown>;
+}): Promise<void> {
+  const { mirror } = params;
   const warnFailure = (reason: string) =>
     log.warn(
       `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${reason}`,
-      { channel: params.delivery.channel, to: params.delivery.to, sessionKey: mirror.sessionKey },
+      { ...params.logContext, sessionKey: mirror.sessionKey },
     );
   // Transcript mirroring is best-effort bookkeeping after platform send.
   // Keep mirror failures non-fatal so callers do not retry an already-sent payload.
@@ -57,10 +73,11 @@ export async function mirrorDeliveredPayloads(params: {
           ? { expectedLifecycleRevision: writerFence.expectedLifecycleRevision }
           : {}),
         ...(writerFence ? { expectedWriterRunId: writerFence.expectedWriterRunId } : {}),
-        ...mirrorContent,
+        text: mirror.text,
+        mediaUrls: mirror.mediaUrls,
         idempotencyKey: mirror.idempotencyKey,
         deliveryMirror: mirror.deliveryMirror,
-        config: params.delivery.cfg,
+        config: params.cfg,
       });
       if (!mirrorResult.ok) {
         warnFailure(mirrorResult.reason);

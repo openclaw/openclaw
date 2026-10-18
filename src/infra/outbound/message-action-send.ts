@@ -31,6 +31,7 @@ import { findCodeRegions } from "../../shared/text/code-regions.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import { throwIfAborted } from "./abort.js";
+import { appendOutboundMirror } from "./deliver-transcript.js";
 import {
   messageActionRequesterMediaContext,
   type MessageActionInput,
@@ -61,7 +62,6 @@ import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
-  mirrorPluginHandledDelivery,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
 
@@ -551,12 +551,13 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
-      // The Gateway RPC mirrors only replies into the requester's source session;
-      // a send to another conversation is mirrored here, like local plugin sends.
+      // The Gateway RPC mirrors only replies into the requester's source session. A send
+      // to another conversation is recorded in that session's lane, outside this run's
+      // transcript fence.
       const mirror = resolveTranscriptMirror();
       const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
       if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== sourceSessionKey) {
-        await mirrorPluginHandledDelivery({ cfg, mirror });
+        await appendOutboundMirror({ cfg, mirror: { ...mirror, deferToSessionLane: true } });
       }
     }
     return await annotateSourceDelivery(
