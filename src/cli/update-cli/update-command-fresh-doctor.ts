@@ -25,6 +25,7 @@ import { readUpdateStateDatabaseSizes } from "../../infra/update-candidate-state
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { resolveRemainingDoctorServiceInspectionTimeoutMs } from "../../infra/update-doctor-deadline.js";
 import {
   collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
@@ -105,6 +106,7 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   json: boolean;
   workspaceSuggestions?: boolean;
   timeoutMs?: number;
+  serviceInspectionDeadlineAtMs?: number;
   nodeRunner?: string;
   entryPath?: string;
   onWarnings?: (warnings: string[]) => void;
@@ -112,6 +114,14 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   /** Propagate a refused child authority to the finalization owner without retrying it. */
   onAuthorityRefused?: () => void;
 }): Promise<PluginUpdateWarning | void> {
+  const requestedTimeoutMs = parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs;
+  const serviceInspectionDeadlineAtMs =
+    params.serviceInspectionDeadlineAtMs ??
+    (requestedTimeoutMs === undefined ? undefined : Date.now() + requestedTimeoutMs);
+  const timeoutMs =
+    params.serviceInspectionDeadlineAtMs !== undefined
+      ? resolveRemainingDoctorServiceInspectionTimeoutMs(params.serviceInspectionDeadlineAtMs)
+      : requestedTimeoutMs;
   const {
     run,
     executorFence,
@@ -151,7 +161,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
   try {
     const commandOptions: CommandOptions = {
       cwd: params.root,
-      timeoutMs: parseUpdateTimeoutMs(params.opts?.timeout) ?? params.timeoutMs,
+      // An operator timeout takes priority; otherwise finalization may supply
+      // the remaining allowance for this Doctor invocation.
+      timeoutMs,
       maxOutputBytes: 4 * 1024 * 1024,
       terminateOnOutputLimit: true,
       onOutputChunk: captureUpdateFinalizationDoctorOutput(params.phase),
@@ -256,6 +268,9 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
             databaseGenerations:
               params.databaseBackup?.migration?.to ?? params.databaseBackup?.sourceGenerations,
             databasePluginOwners: params.databaseBackup?.pluginOwners,
+            ...(serviceInspectionDeadlineAtMs !== undefined
+              ? { serviceInspectionDeadlineAtMs }
+              : {}),
             yes: params.yes,
             workspaceSuggestions: params.workspaceSuggestions === true,
             ...(params.phase === "post-plugin" && process.env[POST_CORE_UPDATE_ENV] === "1"

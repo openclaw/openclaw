@@ -69,6 +69,7 @@ type Outcome = "completed" | "failed" | "warning" | "skipped" | "deferred";
 export type UpdateFinalizationPhase = {
   signal: AbortSignal;
   assertCurrent: () => void;
+  deadlineAtMs?: number;
 };
 
 export class UpdateFinalizationLifecycle {
@@ -261,7 +262,10 @@ export class UpdateFinalizationLifecycle {
     phase: Phase,
     run: (phase: UpdateFinalizationPhase) => Promise<T>,
     outcome?: (result: T) => Outcome | { outcome: Outcome; failureFacts?: UpdateFailureFact[] },
-    custody?: { enter?: () => Promise<void>; restore?: (result: T) => Promise<void> },
+    custody?: {
+      enter?: (deadlineAtMs: number | undefined) => Promise<void>;
+      restore?: (result: T) => Promise<void>;
+    },
   ): Promise<T> {
     // Keep unresponsive source metadata inside the existing bounded worker.
     this.stateBudgetMs ??=
@@ -282,6 +286,7 @@ export class UpdateFinalizationLifecycle {
     const active = { step: `finalize:${phase}`, startedAtMs };
     this.active = active;
     this.record(active.step, "in_progress", startedAtMs);
+    const deadlineAtMs = budgetMs === undefined ? undefined : startedAtMs + budgetMs;
     const output = new UpdateFinalizationOutput();
     // Doctor holds the state-lifecycle coordinator while repairing shared state.
     // Keep its parent out of that database; recorded driver liveness still
@@ -369,6 +374,7 @@ export class UpdateFinalizationLifecycle {
       },
     );
     const scope: UpdateFinalizationPhase = {
+      deadlineAtMs,
       signal: resolveCommandProcessSignal(deadline.signal) ?? deadline.signal,
       assertCurrent: () => {
         this.handoff?.assertCurrent();
@@ -380,7 +386,7 @@ export class UpdateFinalizationLifecycle {
       // Service custody must be acquired before cancellation, and restored outside it.
       await withCommandProcessScope(async () => {
         this.handoff?.assertCurrent();
-        await custody?.enter?.();
+        await custody?.enter?.(deadlineAtMs);
       });
       // Borrowed invocations do not take over their host's lifetime.
       if (budgetMs !== undefined && hasCliProcessScope()) {
@@ -393,7 +399,7 @@ export class UpdateFinalizationLifecycle {
           durationMs: Math.round(performance.now() - this.startedAt),
         });
         failure.message = `Update finalization timed out in ${phase} after ${budgetMs}ms`;
-        deadline.start(failure, budgetMs);
+        deadline.start(failure, budgetMs, deadlineAtMs);
       }
       const result = await deadline.run(
         () =>

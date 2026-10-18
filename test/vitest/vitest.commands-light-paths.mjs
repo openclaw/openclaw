@@ -2,6 +2,10 @@
 const normalizeRepoPath = (value) => value.replaceAll("\\", "/");
 
 const commandsLightEntries = [
+  {
+    source: "src/commands/doctor-service-inspection-budget.ts",
+    test: "src/commands/doctor-service-inspection-budget.test.ts",
+  },
   { source: "src/commands/cleanup-utils.ts", test: "src/commands/cleanup-utils.test.ts" },
   { test: "src/commands/auth-choice.test.ts" },
   {
