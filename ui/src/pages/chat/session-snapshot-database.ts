@@ -38,7 +38,7 @@ function indexedDbFactory(): IDBFactory | null {
 function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
-    request.addEventListener("upgradeneeded", (event) => {
+    request.onupgradeneeded = (event) => {
       const database = request.result;
       // Unscoped derived transcripts have no provable account owner. Never adopt them.
       if (event.oldVersion < 4) {
@@ -60,16 +60,13 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
       }
       // The unified projection replaces this disposable cache; retirement never gates startup.
       try {
-        factory
-          .deleteDatabase("openclaw-session-roster")
-          .addEventListener("error", (error) => error.preventDefault());
+        factory.deleteDatabase("openclaw-session-roster").onerror = (error) =>
+          error.preventDefault();
       } catch {}
-    });
-    request.addEventListener("success", () => resolve(request.result));
-    request.addEventListener("error", () =>
-      reject(request.error ?? new Error("IndexedDB open failed")),
-    );
-    request.addEventListener("blocked", () => reject(new Error("IndexedDB open was blocked")));
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error ?? new Error("IndexedDB open failed"));
+    request.onblocked = () => reject(new Error("IndexedDB open was blocked"));
   });
 }
 
@@ -77,9 +74,9 @@ function deleteIndexedDb(factory: IDBFactory): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       const request = factory.deleteDatabase(CHAT_SNAPSHOT_DB_NAME);
-      request.addEventListener("success", () => resolve(true));
-      request.addEventListener("error", () => resolve(false));
-      request.addEventListener("blocked", () => resolve(false));
+      request.onsuccess = () => resolve(true);
+      request.onerror = () => resolve(false);
+      request.onblocked = () => resolve(false);
     } catch {
       resolve(false);
     }
@@ -93,7 +90,7 @@ export async function openSessionSnapshotDatabase(): Promise<IDBDatabase | null>
   }
   try {
     const database = await openIndexedDb(factory);
-    database.addEventListener("versionchange", () => database.close());
+    database.onversionchange = () => database.close();
     return database;
   } catch (error) {
     debugSnapshotStore("IndexedDB cache is unavailable", error);

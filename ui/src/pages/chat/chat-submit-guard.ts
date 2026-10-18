@@ -31,15 +31,12 @@ function yieldChatSubmitToInput(): Promise<void> {
   // The supported browser floor supplies MessageChannel for this input yield.
   return new Promise<void>((resolve) => {
     const channel = new MessageChannel();
-    channel.port1.addEventListener(
-      "message",
-      () => {
-        channel.port1.close();
-        channel.port2.close();
-        resolve();
-      },
-      { once: true },
-    );
+    channel.port1.onmessage = () => {
+      channel.port1.onmessage = null;
+      channel.port1.close();
+      channel.port2.close();
+      resolve();
+    };
     channel.port1.start();
     channel.port2.postMessage(undefined);
   });
