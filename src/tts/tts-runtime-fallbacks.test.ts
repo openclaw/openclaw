@@ -229,13 +229,13 @@ describe("TTS runtime provider fallback and delivery behavior", () => {
       primary: "openai/gpt-realtime-2",
       fallbacks: ["elevenlabs/eleven_multilingual_v2"],
     };
-    const result = await speak({
-      agents: { defaults: { voiceModel } },
-      tts: {
-        enabled: true,
-        prefsPath: "/tmp/openclaw-speech-core-supported-voice-model-provider-test.json",
+    const result = await speak(
+      {
+        agents: { defaults: { voiceModel } },
+        tts: { enabled: true },
       },
-    });
+      { prefsPath: "/tmp/openclaw-speech-core-supported-voice-model-provider-test.json" },
+    );
 
     expect(result.success).toBe(true);
     expect(result.provider).toBe("elevenlabs");
@@ -530,12 +530,9 @@ describe("TTS runtime voice model and streaming behavior", () => {
     const result = await speak(
       modelConfig(
         { primary: id + "/" + model, ...(explicit ? {} : { timeoutMs: 12_345 }) },
-        {
-          prefsPath: "/tmp/openclaw-speech-model-" + id + ".json",
-          ...(explicit ? { provider: id, providers: { [id]: { modelId: explicit } } } : {}),
-        },
+        explicit ? { provider: id, providers: { [id]: { modelId: explicit } } } : {},
       ),
-      { disableFallback: true },
+      { disableFallback: true, prefsPath: "/tmp/openclaw-speech-model-" + id + ".json" },
     );
     expect(result.success).toBe(true);
     const request = requireFirstSynthesisRequest("model selection");
@@ -590,10 +587,11 @@ describe("TTS runtime voice model and streaming behavior", () => {
             ],
       );
       const result = await speak(
-        modelConfig(
-          { primary: "openai/" + primary, fallbacks: [fallbackId + "/" + fallbackModel] },
-          { prefsPath: "/tmp/openclaw-speech-model-fallback-" + same + ".json" },
-        ),
+        modelConfig({
+          primary: "openai/" + primary,
+          fallbacks: [fallbackId + "/" + fallbackModel],
+        }),
+        { prefsPath: "/tmp/openclaw-speech-model-fallback-" + same + ".json" },
       );
       expect(result).toMatchObject({
         success: true,
@@ -638,9 +636,9 @@ describe("TTS runtime voice model and streaming behavior", () => {
           tts: {
             enabled: true,
             provider: primary,
-            prefsPath: "/tmp/openclaw-speech-stream-" + timeout + ".json",
           },
         },
+        prefsPath: "/tmp/openclaw-speech-stream-" + timeout + ".json",
       });
       expect(result).toMatchObject({ success: true, provider: fallbackId, fallbackFrom: primary });
       expect(requireAttempt(result.attempts, 0)).toMatchObject(

@@ -29,7 +29,7 @@ const portal: PortalSummary = {
 function recorder(summary: PortalSummary = portal) {
   const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
-  async function callGateway<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  async function callGateway<T>(method: string, params: unknown): Promise<T> {
     calls.push([method, params]);
     return (
       ["portal.list", "portal.session.list"].includes(method)

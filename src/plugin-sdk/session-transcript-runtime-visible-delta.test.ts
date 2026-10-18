@@ -39,7 +39,7 @@ const decodeCursor = (cursor: string) =>
   JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>;
 const rewriteCursor = (cursor: string, patch: Record<string, unknown>) =>
   Buffer.from(JSON.stringify({ ...decodeCursor(cursor), ...patch }), "utf8").toString("base64url");
-async function offThread<T>(read: () => Promise<T>) {
+async function offThread<T>(read: () => T) {
   const sql = observeHostDataSql();
   try {
     const result = await read();

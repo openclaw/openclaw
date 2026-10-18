@@ -167,6 +167,7 @@ it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async
     });
     const model: Model = {
       ...resolved.model,
+      input: ["text"],
       api: websocket ? "openai-chatgpt-responses" : "openai-responses",
       provider: websocket ? "openai" : "loopback-provider",
     };

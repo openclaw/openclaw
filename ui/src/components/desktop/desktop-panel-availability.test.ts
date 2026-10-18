@@ -64,7 +64,7 @@ async function mount(
 
 describe("Desktop native availability", () => {
   it("refreshes the same node after a DOM reconnect without accepting its old availability", async () => {
-    let statusReply = Promise.resolve(unlocked);
+    let statusReply: Promise<EnvironmentSummary> = Promise.resolve(unlocked);
     const request = statusRequest(() => statusReply);
     const { gateway, connect, panel } = await mount(request, { documentMode: true });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());

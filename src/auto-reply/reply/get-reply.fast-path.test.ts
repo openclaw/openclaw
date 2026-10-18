@@ -31,6 +31,7 @@ import {
   registerGetReplyRuntimeOverrides,
 } from "./get-reply.test-fixtures.js";
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -205,9 +206,10 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       new ModelSelectionLockedError(MODEL_SELECTION_LOCKED_RESET_MESSAGE),
     );
     const runState: ReplyOperationRunState = {};
+    const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
     const result = await getReplyFromConfig(
       commandCtx("/reset openai/gpt-5.5 continue", { CommandAuthorized: true }),
-      { [REPLY_OPERATION_RUN_STATE]: runState },
+      opts,
       {},
     );
     expect(result).toEqual({ text: MODEL_SELECTION_LOCKED_RESET_MESSAGE });
@@ -339,10 +341,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       };
     });
     const onSessionMetadataChanges = vi.fn();
+    const opts: InternalGetReplyOptions = { onSessionMetadataChanges };
     await expect(
       getReplyFromConfig(
         nativeCtx("/goal start /status"),
-        { onSessionMetadataChanges },
+        opts,
         config("anthropic/claude-opus-4-6"),
       ),
     ).resolves.toEqual({ text: "ok" });

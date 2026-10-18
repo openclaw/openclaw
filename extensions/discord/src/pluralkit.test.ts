@@ -19,7 +19,12 @@ function lookup(
 const rejection = (pending: Promise<unknown>) =>
   pending.then(
     () => undefined,
-    (error: Error) => error,
+    (error: unknown) => {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return error;
+    },
   );
 
 afterEach(() => vi.useRealTimers());
@@ -121,13 +126,16 @@ describe("fetchPluralKitMessageInfo", () => {
       const url = new URL(input instanceof Request ? input.url : input);
       return fetch(new URL(`${url.pathname}${url.search}`, origin), init);
     };
-    const caught = await rejection(
-      lookup(fetcher, { messageId: "boom", config: { enabled: true, token } }),
-    ).finally(async () => {
+    let caught: Error | undefined;
+    try {
+      caught = await rejection(
+        lookup(fetcher, { messageId: "boom", config: { enabled: true, token } }),
+      );
+    } finally {
       await new Promise<void>((resolve, reject) => {
         server.close((closeError) => (closeError ? reject(closeError) : resolve()));
       });
-    });
+    }
     expect(requestUrl).toBe("/v2/messages/boom");
     expect(authorization).toBe(token);
     expect(caught?.message).toContain("PluralKit API failed (502)");

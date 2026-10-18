@@ -19,6 +19,7 @@ import {
 const observation = {
   transport: "rfb",
   wsPath: "/desktop/observe?token=synthetic",
+  expiresAtMs: Date.now() + 60_000,
   control: false,
 } satisfies DesktopObserveResult;
 function rpcCalls<T extends unknown[]>(request: { mock: { calls: T[] } }, method: string) {
@@ -95,7 +96,7 @@ describe("session desktop connection", () => {
     { phase: "connected", explicit: true },
     { phase: "opening", explicit: true },
   ])("preserves the $phase source on show (explicit=$explicit)", async ({ phase, explicit }) => {
-    const observed = createDeferred<{ transport: "rfb"; wsPath: string; control: boolean }>();
+    const observed = createDeferred<DesktopObserveResult>();
     let first = true;
     const request = requests({
       "environments.status": (params) => ({

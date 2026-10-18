@@ -78,7 +78,7 @@ function sourceFixture(
 function runEngine(
   operation: "bootstrap" | "assemble" | "prompt",
   params: Parameters<typeof prepareHarnessContextEnginePrompt>[0] &
-    Pick<Parameters<typeof bootstrapHarnessContextEngine>[0], "runMaintenance">,
+    Pick<Parameters<typeof bootstrapHarnessContextEngine>[0], "runMaintenance" | "sessionFile">,
 ) {
   return operation === "bootstrap"
     ? bootstrapHarnessContextEngine({ ...params, hadSessionFile: true })

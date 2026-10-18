@@ -20,20 +20,23 @@ vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
 // mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 
+function makeWorker() {
+  return Object.assign(new EventEmitter(), {
+    unref: vi.fn(),
+    terminate: vi.fn(async () => 0),
+  });
+}
+
 function runtimeFixture(
   overrides: Partial<Parameters<typeof createSqliteWorkerLifecycle>[0]> = {},
 ) {
   createCpuTrackedWorker.mockReset();
   const workers: ReturnType<typeof makeWorker>[] = [];
-  function makeWorker() {
-    const worker = Object.assign(new EventEmitter(), {
-      unref: vi.fn(),
-      terminate: vi.fn(async () => 0),
-    });
+  createCpuTrackedWorker.mockImplementation(() => {
+    const worker = makeWorker();
     workers.push(worker);
     return worker;
-  }
-  createCpuTrackedWorker.mockImplementation(makeWorker);
+  });
   const slots = new Set<Slot>();
   const lifecycle = createSqliteWorkerLifecycle({
     explicitSqliteCloseReleasesNativeResources: true,

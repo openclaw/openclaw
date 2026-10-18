@@ -24,6 +24,7 @@ import { AudioContextMock } from "./desktop-pcm-queue.test-support.ts";
 const observation: DesktopObserveResult = {
   transport: "rfb",
   wsPath: "/desktop/observe",
+  expiresAtMs: Date.now() + 60_000,
   control: false,
   audio: desktopAudioStream,
 };

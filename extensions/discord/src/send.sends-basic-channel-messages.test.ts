@@ -734,13 +734,28 @@ const mutations = [
   [
     "edit",
     "patchMock",
-    Routes.channelMessage,
+    (channel: string, id: string) => Routes.channelMessage(channel, id),
     (channel: string, id: string, opts: ReturnType<typeof clientOptions>) =>
       editMessageDiscord(channel, id, { content: "hello" }, opts),
   ],
-  ["delete", "deleteMock", Routes.channelMessage, deleteMessageDiscord],
-  ["pin", "putMock", Routes.channelPin, pinMessageDiscord],
-  ["unpin", "deleteMock", Routes.channelPin, unpinMessageDiscord],
+  [
+    "delete",
+    "deleteMock",
+    (channel: string, id: string) => Routes.channelMessage(channel, id),
+    deleteMessageDiscord,
+  ],
+  [
+    "pin",
+    "putMock",
+    (channel: string, id: string) => Routes.channelPin(channel, id),
+    pinMessageDiscord,
+  ],
+  [
+    "unpin",
+    "deleteMock",
+    (channel: string, id: string) => Routes.channelPin(channel, id),
+    unpinMessageDiscord,
+  ],
 ] as const;
 
 it.each(mutations)("retries a transient %s failure", async (_name, mock, route, run) => {
