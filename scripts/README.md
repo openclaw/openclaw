@@ -45,12 +45,12 @@ new directory taxonomy.
 
 ## Formatting and lint selection
 
-`lib/dev-tool.mts` selects the pinned Bun fork for local formatting and oxlint for
-linting. Override with `OPENCLAW_FORMAT_TOOL=oxfmt|bun` or
-`OPENCLAW_LINT_TOOL=oxlint|bun`. `DEFAULT_LINT_TOOL` is the single future default
-switch, pending upstream commit `b39aa848` and parity validation. Bun receives
-the repository's existing configuration; no separate formatter configuration is
-maintained.
+`lib/dev-tool.mts` selects oxfmt for formatting and oxlint for linting. See the
+[local development tools reference](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork)
+for pinned Bun opt-in, overrides, and staging. `DEFAULT_FORMAT_TOOL` waits for
+faster write and check timings; `DEFAULT_LINT_TOOL` waits for upstream commit
+`b39aa848` and diagnostic parity. Bun receives the repository's existing
+configuration; no separate formatter configuration is maintained.
 
 | Caller                                                                                                                                | Selection and reason                                                                                                              |
 | ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |

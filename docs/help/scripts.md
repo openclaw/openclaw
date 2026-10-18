@@ -16,23 +16,13 @@ title: "Scripts"
 
 ## Formatting and linting
 
-`pnpm format` writes formatting and `pnpm format:check` checks it. Local runs use
-the pinned OpenClaw Bun fork (`bun fmt`), automatically staged and cached by the
-same resolver as tests. Both use `.oxfmtrc.jsonc`, including its 100-column print
-width and ignore patterns. Windows, unsupported platforms, or an unavailable fork
-fall back to oxfmt with one notice. Force oxfmt with
-`OPENCLAW_FORMAT_TOOL=oxfmt pnpm format`; `OPENCLAW_FORMAT_TOOL=bun` requires Bun
-and fails if it is unavailable.
-
-CI uses oxfmt and checks Bun's changed-file list on the same paths. A disagreement
-fails the existing formatting check; overrides cannot bypass either CI check.
-`pnpm format:docs:check` and generated-artifact
-formatters retain oxfmt so their output matches their dedicated CI gates.
-
-`pnpm lint` continues to use oxlint by default. Try the pinned fork with
-`OPENCLAW_LINT_TOOL=bun pnpm lint`; force oxlint with `OPENCLAW_LINT_TOOL=oxlint`.
-The existing lint shards, type-aware checks, and resource policy still apply.
-The default stays on oxlint until the upstream lint fix and parity are verified.
+`pnpm format` writes formatting, `pnpm format:check` checks it, and `pnpm lint`
+runs the lint pipeline. The [local development tool selector](/reference/test/local#openclaw-bun-fork)
+reference explains the pinned OpenClaw Bun fork, installation cache, supported
+platforms, overrides, fallbacks, and CI parity. Use
+`OPENCLAW_FORMAT_TOOL=oxfmt pnpm format` to force oxfmt. The
+[formatter caller inventory](https://github.com/openclaw/openclaw/blob/main/scripts/README.md#formatting-and-lint-selection)
+lists dedicated formatters that retain oxfmt.
 
 ## Auth monitoring scripts
 

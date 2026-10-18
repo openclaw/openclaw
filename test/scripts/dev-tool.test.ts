@@ -11,18 +11,22 @@ const { createTempDir } = createScriptTestHarness();
 
 describe("development tool selection", () => {
   it.each([
-    ["format", {}, true],
+    ["format", {}, false],
     ["format", { CI: "true" }, false],
-    ["format", { CI: "false" }, true],
+    ["format", { CI: "false" }, false],
     ["format", { OPENCLAW_FORMAT_TOOL: "oxfmt" }, false],
+    ["format", { OPENCLAW_FORMAT_TOOL: "bun" }, true],
     ["format", { CI: "true", OPENCLAW_FORMAT_TOOL: "bun" }, true],
     ["lint", {}, false],
+    ["lint", { CI: "true" }, false],
     ["lint", { OPENCLAW_LINT_TOOL: "bun" }, true],
   ] as const)("selects %s for %j", (kind, env, bun) => {
     const resolvePinnedBun = vi.fn(() => ({ command: "/pinned/bin/bun" }));
-    const tool = resolveDevTool(kind, env, { resolvePinnedBun, notice: vi.fn() });
+    const notice = vi.fn();
+    const tool = resolveDevTool(kind, env, { resolvePinnedBun, notice });
     expect(tool.command === "/pinned/bin/bun").toBe(bun);
     expect(resolvePinnedBun).toHaveBeenCalledTimes(bun ? 1 : 0);
+    expect(notice).not.toHaveBeenCalled();
   });
 
   it("runs the built-in lint command with the pinned runtime on PATH", () => {
@@ -38,23 +42,6 @@ describe("development tool selection", () => {
     expect(tool.env.PATH?.split(/[:;]/u)[0]).toBe("/pinned/bin");
     expect(tool.env.npm_lifecycle_event).toBe("lint");
   });
-
-  it.each(["unsupported platform win32-x64", "could not stage the pinned fork"])(
-    "falls back visibly when %s",
-    (reason) => {
-      const notice = vi.fn();
-      const tool = resolveDevTool(
-        "format",
-        {},
-        {
-          resolvePinnedBun: () => ({ reason }),
-          notice,
-        },
-      );
-      expect(tool.args[0]).toMatch(/oxfmt[/\\]bin[/\\]oxfmt$/u);
-      expect(notice).toHaveBeenCalledExactlyOnceWith(`[openclaw] ${reason}; using oxfmt.`);
-    },
-  );
 
   it("fails an unavailable explicit Bun request instead of silently changing tools", () => {
     const notice = vi.fn();

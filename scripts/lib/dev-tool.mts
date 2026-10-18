@@ -2,6 +2,8 @@ import path from "node:path";
 import { resolveRepoToolBinPath } from "./local-check-runtime.mts";
 import { isCiEnvironment, pinnedBunEnv, resolvePinnedBun } from "./pinned-bun.mts";
 
+// Keep oxfmt until the pinned fork is faster for both writing and checking.
+const DEFAULT_FORMAT_TOOL: "oxfmt" | "bun" = "oxfmt";
 // Flip only after the pinned fork includes b39aa848 and lint parity passes.
 const DEFAULT_LINT_TOOL: "oxlint" | "bun" = "oxlint";
 
@@ -17,7 +19,8 @@ export function resolveDevTool(
     throw new Error(`${name} must be bun or ${fallback}`);
   }
   const selected =
-    override || (isCiEnvironment(env) ? fallback : kind === "format" ? "bun" : DEFAULT_LINT_TOOL);
+    override ||
+    (isCiEnvironment(env) ? fallback : kind === "format" ? DEFAULT_FORMAT_TOOL : DEFAULT_LINT_TOOL);
   if (selected === "bun") {
     const result = deps.resolvePinnedBun(env);
     if (result.command) {
