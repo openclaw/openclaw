@@ -2136,6 +2136,9 @@ export const en: TranslationMap & {
     cloudWorkerFailed: "Runner failed: {error}",
     errorDetails: "Error details",
     errorReplySummary: "Couldn't finish this reply. Check the conversation before trying again.",
+    errorReplyTitle: "Couldn’t finish this reply",
+    historyUnavailableTitle: "Couldn’t load this conversation",
+    historyUnavailableBody: "Try again to load its messages.",
     recovery: {
       retrying: "Retrying…",
       retryingIn: "Retrying in {seconds}s",

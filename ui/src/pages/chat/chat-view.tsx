@@ -34,6 +34,7 @@ import type { ComposerQuestions } from "./components/chat-composer-questions.ts"
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { getChatComposerState, hasTerminalRunStatus } from "./components/chat-composer-state.ts";
 import { ChatComposer } from "./components/chat-composer.tsx";
+import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
@@ -355,24 +356,27 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
     const state = frame().historyLoadState;
     return state?.phase === "failed" ? state.message : "";
   };
+  const retryHistory = () => {
+    const state = input.props.historyState;
+    if (state && getChatHistoryLoadState(state).phase === "failed") {
+      input.props.onRefresh();
+    }
+  };
   const historyFailure = (inline: boolean) => (
     <div
       class={["chat-history-error", { "chat-history-error--inline": inline }]}
       role={inline ? "status" : "alert"}
     >
-      <span>{historyMessage()}</span>
-      <button
-        class="btn btn--sm"
-        type="button"
-        onClick={() => {
-          const state = input.props.historyState;
-          if (state && getChatHistoryLoadState(state).phase === "failed") {
-            input.props.onRefresh();
-          }
-        }}
-      >
-        {t("common.retry")}
-      </button>
+      {inline ? (
+        <>
+          <span>{historyMessage()}</span>
+          <button class="btn btn--sm" type="button" onClick={retryHistory}>
+            {t("common.retry")}
+          </button>
+        </>
+      ) : (
+        <ChatConversationHistoryError message={historyMessage()} onRetry={retryHistory} />
+      )}
     </div>
   );
   return (
