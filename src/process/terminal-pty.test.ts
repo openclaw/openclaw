@@ -9,6 +9,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -44,7 +45,7 @@ vi.mock("./terminal-pty-node.js", () => ({
 
 const { prepareTerminalPty, spawnTerminalPty } = await import("./terminal-pty.js");
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function replaceValue(target: object, key: string, value: unknown) {
   const original = Object.getOwnPropertyDescriptor(target, key);
@@ -66,9 +67,6 @@ function replaceValue(target: object, key: string, value: unknown) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  for (const tempDir of tempDirs.splice(0)) {
-    fs.rmSync(tempDir, { force: true, recursive: true });
-  }
 });
 
 async function spawnDirectTerminalPty(
@@ -82,8 +80,7 @@ async function spawnDirectTerminalPty(
 }
 
 function createWindowsNpmShim(command: string) {
-  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-shim-"));
-  tempDirs.push(binDir);
+  const binDir = tempDirs.make("openclaw-terminal-pty-shim-");
   const entrypoint = path.join(binDir, "node_modules", "@openai", command, "bin", `${command}.js`);
   fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
   fs.writeFileSync(entrypoint, "", "utf8");
@@ -331,74 +328,55 @@ describe("terminal PTY invocation", () => {
     );
   });
 
-  it.runIf(process.platform === "win32")(
-    "passes arbitrary Codex initial-message text literally through an npm shim",
-    async () => {
+  it.runIf(process.platform === "win32").each(["node", "packaged", "missing"] as const)(
+    "resolves npm shims from a %s host without shell expansion",
+    async (host) => {
       const { entrypoint, shimPath } = createWindowsNpmShim("codex");
-      const nodePath = resolveTestNodeExecPath();
-      await spawnDirectTerminalPty({
+      let nodePath = host === "node" ? resolveTestNodeExecPath() : "";
+      let nodeDir = path.dirname(nodePath);
+      if (host !== "node") {
+        nodeDir =
+          host === "missing"
+            ? path.dirname(shimPath)
+            : tempDirs.make("openclaw-terminal-pty-node-");
+        nodePath = path.join(nodeDir, "node.exe");
+        if (host === "packaged") {
+          fs.copyFileSync(resolveTestNodeExecPath(), nodePath);
+        }
+        vi.spyOn(process, "execPath", "get").mockReturnValue(
+          "C:\\Program Files\\OpenClaw\\openclaw.exe",
+        );
+      }
+      const args = host === "node" ? ["exec", "--", "Fix A&B and 100%"] : ["--", "literal"];
+      const launch = spawnDirectTerminalPty({
         file: shimPath,
-        args: ["exec", "--", "Fix A&B and 100%"],
-        env: { PATH: path.dirname(nodePath), PATHEXT: ".EXE;.CMD" },
-      });
-
-      expect(mocks.spawn).toHaveBeenCalledOnce();
-      const [command, argv, options] = mocks.spawn.mock.calls[0] ?? [];
-      expect(fs.realpathSync.native(String(command)).toLowerCase()).toBe(
-        fs.realpathSync.native(nodePath).toLowerCase(),
-      );
-      expect(argv).toEqual([entrypoint, "exec", "--", "Fix A&B and 100%"]);
-      expect(options).toMatchObject({ cols: 80, rows: 24 });
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "uses PATH node.exe instead of a packaged non-Node host for an npm shim",
-    async () => {
-      const { entrypoint, shimPath } = createWindowsNpmShim("codex");
-      const nodeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-node-"));
-      tempDirs.push(nodeDir);
-      const nodePath = path.join(nodeDir, "node.exe");
-      fs.copyFileSync(resolveTestNodeExecPath(), nodePath);
-      vi.spyOn(process, "execPath", "get").mockReturnValue(
-        "C:\\Program Files\\OpenClaw\\openclaw.exe",
-      );
-      await spawnDirectTerminalPty({
-        file: shimPath,
-        args: ["--", "literal"],
+        args,
         env: { PATH: nodeDir, PATHEXT: ".EXE;.CMD" },
       });
-
-      const [command, argv] = mocks.spawn.mock.calls[0] ?? [];
-      expect(String(command).toLowerCase()).toBe(nodePath.toLowerCase());
-      expect(argv).toEqual([entrypoint, "--", "literal"]);
-    },
-  );
-
-  it.runIf(process.platform === "win32")(
-    "fails closed when an npm shim has no Node executable",
-    async () => {
-      const { shimPath } = createWindowsNpmShim("codex");
-      vi.spyOn(process, "execPath", "get").mockReturnValue(
-        "C:\\Program Files\\OpenClaw\\openclaw.exe",
-      );
-
-      await expect(
-        spawnDirectTerminalPty({
-          file: shimPath,
-          args: ["--", "literal"],
-          env: { PATH: path.dirname(shimPath), PATHEXT: ".EXE;.CMD" },
-        }),
-      ).rejects.toThrow(/Node executable/);
-      expect(mocks.spawn).not.toHaveBeenCalled();
+      if (host === "missing") {
+        await expect(launch).rejects.toThrow(/Node executable/);
+        expect(mocks.spawn).not.toHaveBeenCalled();
+        return;
+      }
+      await launch;
+      expect(mocks.spawn).toHaveBeenCalledOnce();
+      const [command, argv, options] = mocks.spawn.mock.calls[0] ?? [];
+      if (host === "node") {
+        expect(fs.realpathSync.native(String(command)).toLowerCase()).toBe(
+          fs.realpathSync.native(nodePath).toLowerCase(),
+        );
+      } else {
+        expect(String(command).toLowerCase()).toBe(nodePath.toLowerCase());
+      }
+      expect(argv).toEqual([entrypoint, ...args]);
+      expect(options).toMatchObject({ cols: 80, rows: 24 });
     },
   );
 
   it.runIf(process.platform === "win32")(
     "keeps unknown batch wrappers on the guarded cmd path",
     async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-custom-"));
-      tempDirs.push(tempDir);
+      const tempDir = tempDirs.make("openclaw-terminal-pty-custom-");
       const wrapperPath = path.join(tempDir, "custom.cmd");
       fs.writeFileSync(wrapperPath, "@ECHO off\r\necho custom\r\n", "utf8");
 
@@ -416,8 +394,7 @@ describe("terminal PTY invocation", () => {
   it.runIf(process.platform === "win32")(
     "passes a bare-only native host directly to the PTY spawn owner",
     async () => {
-      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-terminal-pty-bare-"));
-      tempDirs.push(tempDir);
+      const tempDir = tempDirs.make("openclaw-terminal-pty-bare-");
       const barePath = path.join(tempDir, "bare-host");
       fs.copyFileSync(process.execPath, barePath);
       await spawnDirectTerminalPty({

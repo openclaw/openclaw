@@ -22,16 +22,8 @@ import { reapOrphanedProcesses } from "./orphaned-process.js";
 
 const command = "/state/llama-cpp/build/llama-server";
 const rootArgs = [command, "--models-preset", "/state/llama-cpp/models.ini", "--port", "19321"];
-type KernelProcess = {
-  pid: number;
-  parentPid: number;
-  uid: number;
-  command: string;
-  executable: string;
-  argv: string[];
-  startedAt: number | null;
-  cwd: string;
-};
+const defaults = { parentPid: 1, uid: 501, command, executable: command, cwd: "/state" };
+type KernelProcess = typeof defaults & { pid: number; argv: string[]; startedAt: number | null };
 const processes = new Map<number, KernelProcess>();
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const uidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
@@ -41,14 +33,10 @@ let onSignal: ((...args: Parameters<typeof process.kill>) => void) | undefined;
 
 function add(pid: number, overrides: Partial<KernelProcess> = {}) {
   const entry: KernelProcess = {
+    ...defaults,
     pid,
-    parentPid: 1,
-    uid: 501,
-    command,
-    executable: command,
     argv: [...rootArgs],
-    startedAt: pid * 100,
-    cwd: "/state",
+    startedAt: pid,
     ...overrides,
   };
   processes.set(pid, entry);
@@ -150,46 +138,65 @@ it("reaps only the captured managed macOS tree", async () => {
   expect([...processes.keys()]).toEqual([103, 104]);
 });
 
-it.each([
+type UntouchedCase = {
+  name: string;
+  change?: Partial<KernelProcess>;
+  prepare?: () => void;
+  options?: Parameters<typeof reap>[0];
+  unread?: typeof mocks.ps;
+};
+it.each<UntouchedCase>([
   { name: "live parent", change: { parentPid: 50 } },
   { name: "foreign user", change: { uid: 502 } },
   { name: "foreign executable with spoofed argv", change: { executable: "/other/llama-server" } },
   { name: "different argv zero", change: { argv: ["llama-server", ...rootArgs.slice(1)] } },
   { name: "different port", change: { argv: [...rootArgs.slice(0, -1), "19322"] } },
-])("leaves $name untouched", async ({ change }) => {
+  {
+    name: "host without birth identity",
+    prepare: () => {
+      mocks.identity.mockReturnValueOnce(null);
+    },
+    unread: mocks.ps,
+  },
+  {
+    name: "different working directory",
+    change: { cwd: "/other" },
+    prepare: () => {
+      mocks.realpath.mockReturnValue("/state");
+    },
+    options: { cwd: "/state-alias" },
+  },
+  {
+    name: "unreadable foreign installation",
+    change: { command: "/other/llama-server" },
+    prepare: () => {
+      mocks.command.mockImplementation(() => {
+        throw new Error("unreadable");
+      });
+    },
+    unread: mocks.command,
+  },
+  {
+    name: "Linux PID 1 child",
+    prepare: () => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+    },
+    unread: mocks.ps,
+  },
+])("leaves $name untouched", async ({ change, prepare, options, unread }) => {
   add(100, change);
-  await expectUntouched();
+  prepare?.();
+  await expectUntouched(options);
   expect(processes.has(100)).toBe(true);
+  if (unread) {
+    expect(unread).not.toHaveBeenCalled();
+  }
 });
 
 it("reports unavailable precise identity only for a matching process", async () => {
   add(100, { startedAt: null });
   await expect(reap()).rejects.toThrow("Cannot verify orphaned process 100");
   expect(killSpy).not.toHaveBeenCalled();
-});
-
-it("leaves hosts without native birth identity support unchanged", async () => {
-  add(100);
-  mocks.identity.mockImplementation((pid: number) =>
-    pid === process.pid ? null : (processes.get(pid)?.startedAt ?? null),
-  );
-  await expectUntouched();
-  expect(mocks.ps).not.toHaveBeenCalled();
-});
-
-it("requires the configured working directory", async () => {
-  add(100, { cwd: "/other" });
-  mocks.realpath.mockReturnValue("/state");
-  await expectUntouched({ cwd: "/state-alias" });
-});
-
-it("does not inspect an unreadable server from another installation", async () => {
-  add(100, { command: "/other/llama-server" });
-  mocks.command.mockImplementation(() => {
-    throw new Error("foreign process arguments are unavailable");
-  });
-  await expectUntouched();
-  expect(mocks.command).not.toHaveBeenCalled();
 });
 
 it("refuses a root that acquires a live parent before signaling its tree", async () => {
@@ -282,34 +289,19 @@ it.each(["before TERM", "after TERM"])(
   },
 );
 
-it.each(["arguments", "executable", "user", "working directory"])(
-  "refuses changed %s before escalation",
-  async (change) => {
-    const root = add(100);
-    onSignal = () => {
-      if (change === "arguments") {
-        root.argv = [command, "--other"];
-      } else if (change === "executable") {
-        root.executable = "/other/llama-server";
-      } else if (change === "user") {
-        root.uid = 502;
-      } else {
-        root.cwd = "/other";
-      }
-    };
-    const result = reap({ cwd: "/state" });
-    const rejected = expect(result).rejects.toThrow(
-      "Could not safely stop orphaned process tree 100",
-    );
-    await vi.advanceTimersByTimeAsync(10_000);
-    await rejected;
-    expect(killSpy).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
-  },
-);
-
-it("does not infer orphanhood from PID 1 on Linux", async () => {
-  Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
-  add(100);
-  await expectUntouched();
-  expect(mocks.ps).not.toHaveBeenCalled();
+it.each<[string, Partial<KernelProcess>]>([
+  ["arguments", { argv: [command, "--other"] }],
+  ["executable", { executable: "/other/llama-server" }],
+  ["user", { uid: 502 }],
+  ["working directory", { cwd: "/other" }],
+])("refuses changed %s before escalation", async (...[, change]) => {
+  const root = add(100);
+  onSignal = () => Object.assign(root, change);
+  const result = reap({ cwd: "/state" });
+  const rejected = expect(result).rejects.toThrow(
+    "Could not safely stop orphaned process tree 100",
+  );
+  await vi.advanceTimersByTimeAsync(10_000);
+  await rejected;
+  expect(killSpy).toHaveBeenCalledExactlyOnceWith(100, "SIGTERM");
 });

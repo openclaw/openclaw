@@ -27,12 +27,14 @@ import {
 import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
 function sample(family: string, operation: string, count = 1, intervalMs?: number) {
-  return expect.objectContaining({
-    family,
-    operation,
-    count,
-    ...(intervalMs === undefined ? {} : { intervalMs }),
-  });
+  const fields = { family, operation, count };
+  return expect.objectContaining(intervalMs === undefined ? fields : { ...fields, intervalMs });
+}
+
+function emitSpawn(command: string, args: readonly string[] = []) {
+  const child = new EventEmitter() as ChildProcess;
+  recordChildProcessSpawn(command, child, undefined, args);
+  child.emit("spawn");
 }
 
 describe("spawnAndWait", () => {
@@ -86,6 +88,13 @@ describe("child-process spawn diagnostics", () => {
 
   async function checkSuccessfulSpawns() {
     const outputRoot = tempDirs.make("openclaw-spawn-counts-");
+    const inventory = (name: string) =>
+      runWorkspaceInventoryCommandToFile({
+        argv: ["git", "--version"],
+        outputPath: path.join(outputRoot, name),
+        signal: new AbortController().signal,
+        timeoutMs: 10_000,
+      });
     const missing = path.join(outputRoot, "missing");
     const child = spawnProcess(process.execPath, ["-e", ""], { stdio: "ignore" });
     expect((await once(child, "close"))[0]).toBe(0);
@@ -107,20 +116,8 @@ describe("child-process spawn diagnostics", () => {
       withGitProcessOperation("workspace.result-cleanup", () =>
         requireWorkspaceResultGit(process.cwd(), ["--version"]),
       ),
-      runWorkspaceInventoryCommandToFile({
-        argv: ["git", "--version"],
-        outputPath: path.join(outputRoot, "inventory"),
-        signal: new AbortController().signal,
-        timeoutMs: 10_000,
-      }),
-      withGitProcessOperation("workspace.sync", () =>
-        runWorkspaceInventoryCommandToFile({
-          argv: ["git", "--version"],
-          outputPath: path.join(outputRoot, "sync-inventory"),
-          signal: new AbortController().signal,
-          timeoutMs: 10_000,
-        }),
-      ),
+      inventory("inventory"),
+      withGitProcessOperation("workspace.sync", () => inventory("sync-inventory")),
     ]);
     now = 59_999;
     emitChildProcessSpawnSample();
@@ -170,9 +167,7 @@ describe("child-process spawn diagnostics", () => {
       "C:\\private\\Git.EXE",
       "/usr/local/bin/bun",
     ]) {
-      const child = new EventEmitter() as ChildProcess;
-      recordChildProcessSpawn(command, child);
-      child.emit("spawn");
+      emitSpawn(command);
     }
     expectSample([
       sample("other", "unscoped.command"),
@@ -275,9 +270,7 @@ describe("child-process spawn diagnostics", () => {
     ["pwsh", ["/C", "private command"], "pwsh", "unscoped.shell-command"],
     ["pwsh", ["-File", "/private/script", "-Command", "private arg"], "pwsh", "unscoped.shell"],
   ])("bounds unscoped %s launch classification", (command, args, family, operation) => {
-    const child = new EventEmitter() as ChildProcess;
-    recordChildProcessSpawn(command, child, undefined, args);
-    child.emit("spawn");
+    emitSpawn(command, args);
     expectSample([sample(family, operation)]);
   });
 
@@ -291,9 +284,7 @@ describe("child-process spawn diagnostics", () => {
         env: {},
         shellAvailable: () => true,
       });
-      const child = new EventEmitter() as ChildProcess;
-      recordChildProcessSpawn(prepared.command, child, undefined, prepared.args);
-      child.emit("spawn");
+      emitSpawn(prepared.command, prepared.args);
     }
     expectSample([sample("git", "unscoped.status"), sample("node", "unscoped.runtime")]);
   });
@@ -318,9 +309,7 @@ describe("child-process spawn diagnostics", () => {
     [["reflog", "expire", "--all"], "unscoped.reflog"],
     [["--attr-source=private-ref", "checkout-index", "-a"], "unscoped.checkout-index"],
   ])("classifies unscoped Git argv %j without exporting its values", (args, operation) => {
-    const child = new EventEmitter() as ChildProcess;
-    recordChildProcessSpawn("git", child, undefined, args);
-    child.emit("spawn");
+    emitSpawn("git", args);
     expectSample([sample("git", operation)], /private|secret|PRIVATE_VALUE/);
   });
 });

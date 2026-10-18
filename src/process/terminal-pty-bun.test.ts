@@ -22,6 +22,7 @@ const handles: TerminalPtyHandle[] = [];
 const descendants: number[] = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const deadline = { timeout: 2_000, interval: 10 };
+const ptyDefaults = { file: "/bin/sh", args: [], cols: 80, rows: 24 };
 type TerminalCallbacks = {
   data(terminal: unknown, data: Uint8Array): void;
   exit(terminal: unknown): void;
@@ -51,22 +52,18 @@ afterEach(() => {
 
 async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> = {}) {
   const handle = await spawnTerminalPty({
-    file: "/bin/sh",
+    ...ptyDefaults,
     args,
     env: { PATH: "/usr/bin:/bin", TERM: "dumb" },
-    cols: 80,
-    rows: 24,
     ...overrides,
   });
   handles.push(handle);
   const observed: { output: string; exit?: { exitCode: number; signal?: number } } = { output: "" };
   const exited = createDeferredCore<{ exitCode: number; signal?: number }>();
-  const outputWaiters = new Set<() => void>();
+  let checkOutput: (() => void) | undefined;
   handle.onData((chunk) => {
     observed.output += chunk;
-    for (const check of outputWaiters) {
-      check();
-    }
+    checkOutput?.();
   });
   handle.onExit((event) => {
     observed.exit = event;
@@ -74,20 +71,19 @@ async function start(args: string[], overrides: Partial<TerminalPtySpawnParams> 
   });
   const waitForOutput = async (text: string | RegExp, signal: AbortSignal) => {
     const ready = createDeferredCore();
-    const check = () => {
+    checkOutput = () => {
       if (typeof text === "string" ? observed.output.includes(text) : text.test(observed.output)) {
         ready.resolve();
       }
     };
-    outputWaiters.add(check);
-    check();
+    checkOutput();
     try {
       await withinTest(
         awaitGateBeforeSettlement(ready.promise, exited.promise, `PTY exited before ${text}`),
         signal,
       );
     } finally {
-      outputWaiters.delete(check);
+      checkOutput = undefined;
     }
   };
   return { handle, observed, exited: exited.promise, waitForOutput };
@@ -135,9 +131,7 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       expect(observed.output).toBe(`|screen-256color|${process.cwd()}`);
     });
 
-    it("Ctrl-C interrupts the foreground job while the interactive shell survives", async ({
-      signal,
-    }) => {
+    it("Ctrl-C kills the foreground job, not its shell", async ({ signal }) => {
       const { handle, observed, exited, waitForOutput } = await start(
         ["--noprofile", "--norc", "-i"],
         {
@@ -178,9 +172,7 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
       );
     });
 
-    it("reports shell exit promptly with a slave-holding descendant and still kills that descendant", async ({
-      signal,
-    }) => {
+    it("reports root exit before slave EOF, then kills the descendant", async ({ signal }) => {
       const { handle, observed } = await shell(
         'trap \'\' HUP; sleep 30 & printf "CHILD:%s\\n" "$!"; exit 3',
       );
@@ -244,9 +236,7 @@ describe.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && 
         expect(observed.output).toBe("READY\r\ntail 🦞\r\n");
       });
 
-      it("reports exit after kill while the consumer keeps re-pausing output", async ({
-        signal,
-      }) => {
+      it("drains on kill despite consumer re-pauses", async ({ signal }) => {
         const cwd = tempDirs.make("openclaw-bun-pty-kill-");
         const payload = path.join(cwd, "payload");
         fs.writeFileSync(payload, "x".repeat(4 * 1024 * 1024));
@@ -304,12 +294,9 @@ function spawnControlledBunPty() {
     },
   );
   const handle = bunAdapter.spawnBunTerminalPty({
-    file: "/bin/sh",
-    args: [],
+    ...ptyDefaults,
     env: {},
     name: "xterm-256color",
-    cols: 80,
-    rows: 24,
   });
   if (!callbacks) {
     throw new Error("Bun.spawn did not receive terminal callbacks");
@@ -382,14 +369,7 @@ it.each([false, true])("routes Bun PTYs with Terminal.pause=%s", async (flowCont
     const native = vi.spyOn(bunAdapter, "spawnBunTerminalPty").mockReturnValue(handle);
     const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty").mockResolvedValue(handle);
     const assertCurrent = vi.fn();
-    const params = {
-      file: "/bin/sh",
-      args: [],
-      env: { TERM: "dumb", PWD: "/original" },
-      cwd: "/workspace",
-      cols: 80,
-      rows: 24,
-    };
+    const params = { ...ptyDefaults, env: { TERM: "dumb", PWD: "/original" }, cwd: "/workspace" };
     expect(await spawnTerminalPty(params, { assertCurrent })).toBe(handle);
     expect(assertCurrent).toHaveBeenCalledOnce();
     if (flowControl) {
@@ -420,10 +400,8 @@ it.runIf(Boolean(process.versions.bun) && process.platform !== "win32" && !hasFl
   "runs stock Bun terminals through the real Node helper",
   async () => {
     const helper = vi.spyOn(nodeAdapter, "spawnNodeTerminalPty");
-    const done = createDeferredCore<number>();
-    const { handle, observed } = await shell('printf "helper-output"; exit 7');
-    handle.onExit(({ exitCode }) => done.resolve(exitCode));
-    expect(await done.promise).toBe(7);
+    const { exited, observed } = await shell('printf "helper-output"; exit 7');
+    expect((await exited).exitCode).toBe(7);
     expect(helper).toHaveBeenCalledOnce();
     expect(observed.output).toBe("helper-output");
   },

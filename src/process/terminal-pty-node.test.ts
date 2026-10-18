@@ -62,6 +62,11 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
       const nativeAdmission = createDeferredCore();
       let launchGrants = 0;
       let allowed = true;
+      const assertAllowed = () => {
+        if (!allowed) {
+          throw new Error("PTY policy revoked");
+        }
+      };
       const starting = spawnNodeTerminalPty(
         {
           ...defaults,
@@ -69,19 +74,13 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
           args: ["-c", "touch started; IFS= read -r input; printf 'completed\\n'"],
           cwd: directory,
         },
-        () => {
-          if (!allowed) {
-            throw new Error("PTY policy revoked");
-          }
-        },
+        assertAllowed,
         (launch, settlement) => {
           launchGrants++;
           if (timing === "prepared") {
             allowed = false;
           }
-          if (!allowed) {
-            throw new Error("PTY policy revoked");
-          }
+          assertAllowed();
           if (!settlement) {
             throw new Error("PTY launch did not retain native admission");
           }
@@ -142,11 +141,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     const payload = "x".repeat(2 * 1024 * 1024);
     const file = path.join(directory, "output.txt");
     fs.writeFileSync(file, payload);
-    const handle = await start({
-      file: "/bin/cat",
-      args: [file],
-      cwd: directory,
-    });
+    const handle = await start({ file: "/bin/cat", args: [file], cwd: directory });
     handle.pause();
     const { state, done } = observe(handle);
     await delay(50);
@@ -156,9 +151,7 @@ describe.runIf(process.platform !== "win32")("Node-owned terminal PTY", () => {
     expect(state.output).toBe(payload);
   });
 
-  it("reaps the PTY and its background process when the owning host disconnects", async ({
-    signal,
-  }) => {
+  it("reaps the PTY and background job on host disconnect", async ({ signal }) => {
     const worker = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.terminalPty);
     const node = resolveTestNodeExecPath();
     const child = spawn(node, resolveRuntimeWorkerArgv(worker, node), {

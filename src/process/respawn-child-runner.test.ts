@@ -24,7 +24,7 @@ function start(
 ) {
   const child = Object.assign(new ChildProcess(), { pid: options.pid });
   const kill = vi.spyOn(child, "kill").mockReturnValue(true);
-  const spawn = vi.spyOn(childProcess, "spawn").mockReturnValue(child);
+  vi.spyOn(childProcess, "spawn").mockReturnValue(child);
   const detach = vi.fn();
   let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
   const onError = vi.fn(options.onError ?? (() => {}));
@@ -43,13 +43,15 @@ function start(
     onError,
   });
   runs.push({ child, completion });
+  const settled = vi.fn();
+  void completion.then(settled);
   return {
     child,
     kill,
-    spawn,
     detach,
     onError,
     completion,
+    settled,
     signal: (value: NodeJS.Signals) => onSignal?.(value),
   };
 }
@@ -86,17 +88,13 @@ describe("runRespawnChildWithSignalBridge", () => {
     "settles actual %s status only after close (first=%s, later=%s)",
     async (signal, firstSignal, laterSignal, windowsCode, posixCode) => {
       const run = start({ pid: 2345 });
-      let settled = false;
-      void run.completion.then(() => {
-        settled = true;
-      });
       run.signal(firstSignal);
       if (laterSignal) {
         run.signal(laterSignal);
       }
       run.child.emit("exit", null, signal);
       await Promise.resolve();
-      expect(settled).toBe(false);
+      expect(run.settled).not.toHaveBeenCalled();
       expect(run.detach).not.toHaveBeenCalled();
       expect(killProcess).not.toHaveBeenCalled();
       run.child.emit("close", null, signal);
@@ -113,26 +111,32 @@ describe("runRespawnChildWithSignalBridge", () => {
     },
   );
 
-  it("reaps only the detached child group after its signal grace, then waits for close", async () => {
+  it.each([false, true])("escalates detached=%s after grace and joins close", async (detached) => {
     vi.useFakeTimers();
-    const run = start({ pid: 2468, detached: true });
+    const run = start({ pid: 2468, detached });
     run.signal("SIGTERM");
-    vi.advanceTimersByTime(1_000);
-    if (process.platform === "win32") {
-      expect(signalProcessTreeMock).not.toHaveBeenCalled();
-      expect(run.kill).toHaveBeenCalledWith("SIGTERM");
-    } else {
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(2468, "SIGTERM", { detached: true });
-      expect(run.kill).not.toHaveBeenCalled();
+    if (!detached) {
+      run.child.emit("error", new Error("first signal delivery failed"));
+      run.child.emit("error", new Error("second signal delivery failed"));
     }
+    const tree = detached && process.platform !== "win32";
     vi.advanceTimersByTime(1_000);
-    if (process.platform === "win32") {
-      expect(run.kill).toHaveBeenCalledTimes(2);
-    } else {
+    expect(signalProcessTreeMock.mock.calls).toEqual(
+      tree ? [[2468, "SIGTERM", { detached: true }]] : [],
+    );
+    expect(run.kill.mock.calls).toEqual(tree ? [] : [["SIGTERM"]]);
+    vi.advanceTimersByTime(1_000);
+    if (tree) {
       expect(signalProcessTreeMock).toHaveBeenCalledWith(2468, "SIGKILL", { detached: true });
+    } else {
+      expect(run.kill.mock.calls).toEqual([
+        ["SIGTERM"],
+        [process.platform === "win32" ? "SIGTERM" : "SIGKILL"],
+      ]);
     }
     vi.advanceTimersByTime(1_000);
     expect(killProcess).not.toHaveBeenCalled();
+    expect(run.onError).not.toHaveBeenCalled();
     run.child.emit("exit", null, "SIGKILL");
     expect(run.detach).not.toHaveBeenCalled();
     run.child.emit("close", null, "SIGKILL");
@@ -171,19 +175,15 @@ describe("runRespawnChildWithSignalBridge", () => {
           return reporting.promise;
         },
       });
-      let settled = false;
-      void run.completion.then(() => {
-        settled = true;
-      });
       const error = new Error("spawn failed");
       try {
         run.child.emit("error", error);
         expect(run.onError).toHaveBeenCalledExactlyOnceWith(error);
-        expect(settled).toBe(false);
+        expect(run.settled).not.toHaveBeenCalled();
         run.child.emit("close", -2, null);
         await Promise.resolve();
         if (settlement !== "throw") {
-          expect(settled).toBe(false);
+          expect(run.settled).not.toHaveBeenCalled();
         }
         if (settlement === "reject") {
           reporting.reject(new Error("formatter unavailable"));
@@ -197,7 +197,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     },
   );
 
-  it("preserves synchronous spawn exceptions without starting diagnostics", () => {
+  it("preserves synchronous spawn errors without diagnostics", () => {
     const error = new Error("invalid spawn options");
     const onError = vi.fn();
     vi.spyOn(childProcess, "spawn").mockImplementation(() => {
@@ -216,23 +216,5 @@ describe("runRespawnChildWithSignalBridge", () => {
       }),
     ).toThrow(error);
     expect(onError).not.toHaveBeenCalled();
-  });
-
-  it("keeps escalation active across repeated operational errors", async () => {
-    vi.useFakeTimers();
-    const run = start({ pid: 5678 });
-    run.signal("SIGTERM");
-    run.child.emit("error", new Error("first signal delivery failed"));
-    run.child.emit("error", new Error("second signal delivery failed"));
-    vi.advanceTimersByTime(2_000);
-    expect(run.onError).not.toHaveBeenCalled();
-    expect(run.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
-    expect(run.kill).toHaveBeenNthCalledWith(
-      2,
-      process.platform === "win32" ? "SIGTERM" : "SIGKILL",
-    );
-    run.child.emit("exit", null, "SIGKILL");
-    run.child.emit("close", null, "SIGKILL");
-    await expect(run.completion).resolves.toBe(process.platform === "win32" ? 1 : 137);
   });
 });

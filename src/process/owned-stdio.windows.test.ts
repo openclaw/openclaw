@@ -21,11 +21,7 @@ vi.mock("@openclaw/proc-safe/windows-job", () => ({
   WindowsJob: {
     create: () => {
       native.create();
-      return {
-        terminate: native.terminate,
-        close: native.close,
-        processIds: native.inspect,
-      };
+      return { terminate: native.terminate, close: native.close, processIds: native.inspect };
     },
   },
 }));
@@ -89,6 +85,29 @@ function finishRoot() {
   stub.emitClose(0);
 }
 
+type JobPhase = "binding" | "launcher" | "create" | "admission";
+function failJob(phase: JobPhase, cause: Error, abort?: AbortController) {
+  if (phase === "binding" || phase === "launcher") {
+    native[`${phase}Available`] = false;
+  } else if (phase === "create") {
+    native.create.mockImplementationOnce(() => {
+      abort?.abort();
+      throw cause;
+    });
+  } else {
+    rejectJobAdmission(cause, abort);
+  }
+}
+
+function observeJob(cause?: Error) {
+  native.inspect.mockImplementation(() => {
+    if (cause) {
+      throw cause;
+    }
+    return [];
+  });
+}
+
 const fixture = { argv: [process.execPath, "fixture"], exactEnv: true };
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 let createOwnedStdioProcess: typeof import("./owned-stdio.js").createOwnedStdioProcess;
@@ -120,7 +139,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("joins the retained Windows Job after the root exits with descendants still holding stdio", async () => {
+it("joins the Job after root exit with descendants holding stdio", async () => {
   const child = await createOwnedStdioProcess(fixture);
   child.onStdout(() => {});
   child.onStderr(() => {});
@@ -153,12 +172,7 @@ it.each([false, true])(
   async (fails) => {
     const cause = new Error("Job accounting unavailable");
     const child = await createOwnedStdioProcess(fixture);
-    native.inspect.mockImplementation(() => {
-      if (fails) {
-        throw cause;
-      }
-      return [];
-    });
+    observeJob(fails ? cause : undefined);
     let observed = false;
     const extinction = child.waitForExtinction!().then((result) => {
       observed = true;
@@ -187,17 +201,7 @@ it.each(["binding", "launcher", "create", "admission"] as const)(
   async (phase) => {
     const unavailable = phase === "binding" || phase === "launcher";
     const cause = new Error(`Job ${phase} failed`);
-    if (phase === "binding") {
-      native.bindingAvailable = false;
-    } else if (phase === "launcher") {
-      native.launcherAvailable = false;
-    } else if (phase === "create") {
-      native.create.mockImplementationOnce(() => {
-        throw cause;
-      });
-    } else {
-      rejectJobAdmission(cause);
-    }
+    failJob(phase, cause);
     const child = await createOwnedStdioProcess(fixture);
     expect(native.spawn.mock.calls.filter(([, args]) => args[0] === "fixture")).toHaveLength(1);
     if (unavailable) {
@@ -240,19 +244,9 @@ it.each(["create", "admission"] as const)(
   "does not fall back when cancelled during Job %s failure",
   async (phase) => {
     const abort = new AbortController();
-    if (phase === "create") {
-      native.create.mockImplementationOnce(() => {
-        abort.abort();
-        throw new Error("Job creation failed");
-      });
-    } else {
-      rejectJobAdmission(new Error("Job admission failed"), abort);
-    }
+    failJob(phase, new Error(`Job ${phase} failed`), abort);
     await expect(
-      createOwnedStdioProcess({
-        ...fixture,
-        abortSignal: abort.signal,
-      }),
+      createOwnedStdioProcess({ ...fixture, abortSignal: abort.signal }),
     ).rejects.toThrow("child construction aborted");
     expect(native.spawn).toHaveBeenCalledTimes(phase === "create" ? 0 : 1);
     expect(stub.sendMock).not.toHaveBeenCalled();
@@ -293,13 +287,11 @@ it.each([
       stub.child.stdout?.emit("data", Buffer.from("command succeeded"));
       stub.child.stdout?.emit("end");
       stub.child.stderr?.emit("end");
-      if (certification === "job-observation-failed") {
-        native.inspect.mockImplementation(() => {
-          throw new Error("Job accounting unavailable");
-        });
-      } else {
-        native.inspect.mockReturnValue([]);
-      }
+      observeJob(
+        certification === "job-observation-failed"
+          ? new Error("Job accounting unavailable")
+          : undefined,
+      );
       finishRoot();
       await expect(run.wait()).resolves.toMatchObject({
         exitCode: 0,
