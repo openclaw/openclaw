@@ -35,6 +35,7 @@ vi.mock("../../agents/sandbox.js", async () => {
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
+    prepareSandboxWorkspaceForSession: async () => null,
   };
 });
 
@@ -64,8 +65,8 @@ vi.mock("../../media/outbound-attachment.js", () => ({
     resolveOutboundAttachmentFromUrlMock(...args),
 }));
 
-vi.mock("./agent-runner-failure-reply.js", () => ({
-  buildEmptyInteractiveReplyPayload: vi.fn(() => undefined),
+vi.mock("./agent-runner-failure-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./agent-runner-failure-reply.js")>()),
   buildKnownAgentRunFailureReplyPayload: vi.fn(() => undefined),
   markPostCompactionModelFailurePayload: (_failure: true | undefined, payload: unknown) => payload,
 }));
@@ -106,11 +107,7 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: async () => undefined,
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: async () => undefined,
-}));
-
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 type AgentTurnExecutionResult = Awaited<
   ReturnType<typeof import("./agent-runner-execution.js").executeAgentTurn>
@@ -169,70 +166,46 @@ describe("runReplyAgent final MEDIA replies", () => {
     refreshQueuedFollowupSessionMock.mockReset();
     scheduleFollowupDrainMock.mockReset();
 
-    executeAgentTurnMock.mockImplementation(async (params: unknown) => {
-      const { buildReplyPayloads } = await vi.importActual<
-        typeof import("./agent-runner-payloads.js")
-      >("./agent-runner-payloads.js");
-      const runnerParams = params as {
-        replyMediaContext?: {
-          normalizePayload?: (payload: {
-            text?: string;
-            mediaUrl?: string;
-            mediaUrls?: string[];
-          }) => Promise<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>;
-        };
-      };
-      const normalizeMediaPaths = runnerParams.replyMediaContext?.normalizePayload;
-      if (!normalizeMediaPaths) {
-        throw new Error("runReplyAgent did not pass replyMediaContext to the agent turn");
-      }
-      const { replyPayloads } = await buildReplyPayloads({
-        payloads: [{ text: "here is the chart\nMEDIA:./out/generated.png" }],
-        isHeartbeat: false,
-        didLogHeartbeatStrip: false,
-        blockStreamingEnabled: false,
-        blockReplyPipeline: null,
-        replyToMode: "all",
-        replyToChannel: "telegram",
-        currentMessageId: "msg-1",
-        messageProvider: "telegram",
-        originatingChannel: "telegram",
-        originatingTo: "chat-1",
-        accountId: "default",
-        normalizeMediaPaths,
-      });
-      const payload = replyPayloads[0];
-      if (!payload) {
-        throw new Error("expected parsed reply payload");
-      }
-      return {
-        runId: "media-test",
-        outcome: { kind: "rejected", payload },
-      } satisfies AgentTurnExecutionResult;
-    });
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => ({
       path: path.join("/tmp/outbound-media", path.basename(mediaUrl)),
     }));
   });
 
-  it("normalizes final MEDIA directives through runReplyAgent", async () => {
-    const result = await runReplyAgent(makeRunReplyAgentParams());
+  it.each([
+    { mediaUrl: "https://example.invalid/pending.png", audioAsVoice: false },
+    { mediaUrl: "https://example.invalid/pending.opus", audioAsVoice: true },
+  ])("keeps pending tool media after NO_REPLY: $mediaUrl", async ({ mediaUrl, audioAsVoice }) => {
+    executeAgentTurnMock.mockResolvedValueOnce({
+      runId: "silent-media-test",
+      outcome: {
+        kind: "settled",
+        status: "ok",
+        result: {
+          payloads: [
+            { text: "Unsent confirmation" },
+            { text: "Unsent media caption", mediaUrl, audioAsVoice },
+          ],
+          meta: {
+            durationMs: 0,
+            finalAssistantRawText: "NO_REPLY",
+            terminalReply: { disposition: "silent" },
+          },
+        },
+        resolved: { provider: "anthropic", model: "claude" },
+        fallback: { exhausted: false, attempts: [] },
+        autoCompactionCount: 0,
+      },
+    } satisfies AgentTurnExecutionResult);
 
-    expect(Array.isArray(result)).toBe(false);
-    if (!result || Array.isArray(result)) {
-      throw new Error("expected single reply payload");
-    }
-    expect(result).toMatchObject({
-      text: "here is the chart",
-      mediaUrl: "/tmp/outbound-media/generated.png",
-      mediaUrls: ["/tmp/outbound-media/generated.png"],
+    const result = await runReplyAgent(makeRunReplyAgentParams());
+    const payloads = Array.isArray(result) ? result : result ? [result] : [];
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]).toMatchObject({
+      mediaUrl,
+      audioAsVoice,
     });
-    expect(executeAgentTurnMock).toHaveBeenCalledOnce();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledWith(
-      path.join("/tmp/workspace", "out", "generated.png"),
-      5 * 1024 * 1024,
-      { mediaAccess: expect.objectContaining({ workspaceDir: "/tmp/workspace" }) },
-    );
+    expect(payloads[0]?.text).toBeUndefined();
+    expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
   });
 
   it("uses one runReplyAgent media context for block and final MEDIA replies", async () => {
@@ -262,7 +235,6 @@ describe("runReplyAgent final MEDIA replies", () => {
       }
       const commonParams = {
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: "all" as const,

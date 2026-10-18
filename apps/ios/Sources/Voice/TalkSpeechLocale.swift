@@ -44,15 +44,11 @@ enum TalkSpeechLocale {
         localeID: String?)
     {
         let supportedIDs = Set(supportedLocales.map(\.identifier))
-        guard let localeID = self.resolvedLocaleID(
+        if let localeID = self.resolvedLocaleID(
             gatewaySelection: gatewaySelection,
-            supportedLocaleIDs: supportedIDs)
-        else {
-            let recognizer = SFSpeechRecognizer()
-            return (recognizer, recognizer?.locale.identifier)
-        }
-
-        if let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID)) {
+            supportedLocaleIDs: supportedIDs),
+            let recognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID))
+        {
             return (recognizer, localeID)
         }
 

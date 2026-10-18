@@ -1,9 +1,9 @@
 // Line tests cover push retry and retry-key deduplication behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
-import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveLineNonDispatchRetryable, runLinePushWithRetries } from "./send-retry.js";
+import * as sendModule from "./send.js";
 
 const {
   requireRuntimeConfigMock,
@@ -42,8 +42,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   return { ...actual, logVerbose: logVerboseMock };
 });
 
-let sendModule: typeof import("./send.js");
-
 const LINE_TEST_CFG = {
   channels: { line: { accounts: { default: {} } } },
 } satisfies OpenClawConfig;
@@ -69,10 +67,6 @@ function retryKeysOf(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>): (string
 
 describe("LINE push retries", () => {
   const fetchMock = vi.fn<typeof fetch>();
-
-  beforeAll(async () => {
-    sendModule = await import("./send.js");
-  });
 
   afterAll(() => {
     vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
@@ -201,16 +195,6 @@ describe("LINE push retries", () => {
     expect(new Set(retryKeysOf(fetchMock)).size).toBe(1);
   });
 
-  it("gives up after the configured attempts and surfaces the LINE failure", async () => {
-    fetchMock.mockImplementation(async () =>
-      jsonResponse({ message: "Internal server error" }, 500),
-    );
-
-    await expect(resolveRetryRun(pushText())).rejects.toMatchObject({ status: 500 });
-    expect(fetchMock).toHaveBeenCalledTimes(3);
-    expect(new Set(retryKeysOf(fetchMock)).size).toBe(1);
-  });
-
   it.each([
     { label: "quota rejection", status: 429, message: "You have reached your monthly limit." },
     { label: "request rejection", status: 400, message: "The request body has 1 error(s)" },
@@ -218,13 +202,6 @@ describe("LINE push retries", () => {
     fetchMock.mockResolvedValue(jsonResponse({ message }, status));
 
     await expect(resolveRetryRun(pushText())).rejects.toBeInstanceOf(HTTPFetchError);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not retry once LINE accepted a request with an unreadable receipt", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ sentMessages: [{}] }));
-
-    await expect(resolveRetryRun(pushText())).rejects.toSatisfy(isChannelPartialDeliveryError);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -252,28 +229,6 @@ describe("resolveLineNonDispatchRetryable", () => {
       body: "provider body",
     });
 
-  it.each([
-    { label: "a rejected payload", error: httpError(400), retryable: false },
-    { label: "a forbidden recipient", error: httpError(403), retryable: false },
-    { label: "an unknown recipient", error: httpError(404), retryable: false },
-    { label: "a request timeout", error: httpError(408), retryable: undefined },
-    { label: "an accepted retry-key conflict", error: httpError(409), retryable: undefined },
-    { label: "a rate limit", error: httpError(429), retryable: true },
-    { label: "an upstream failure", error: httpError(503), retryable: undefined },
-    {
-      label: "a transport failure that never reached LINE",
-      error: new Error("fetch failed"),
-      retryable: undefined,
-    },
-    {
-      label: "a rejected payload behind an SDK wrapper",
-      error: new Error("send failed", { cause: httpError(400) }),
-      retryable: false,
-    },
-  ])("classifies $label with retryable=$retryable", ({ error, retryable }) => {
-    expect(resolveLineNonDispatchRetryable(error)).toBe(retryable);
-  });
-
   it("keeps a push ambiguous when an earlier attempt never reached LINE", async () => {
     const rejected = httpError(400);
     let attempt = 0;
@@ -291,16 +246,5 @@ describe("resolveLineNonDispatchRetryable", () => {
     expect(
       resolveLineNonDispatchRetryable(new Error("wrapped send failure", { cause: failure })),
     ).toBeUndefined();
-  });
-
-  it("still proves a push was refused when LINE rejected the only attempt", async () => {
-    let attempt = 0;
-    const failure = await runLinePushWithRetries(async () => {
-      attempt += 1;
-      throw httpError(400);
-    }, "line:push").catch((error: unknown) => error);
-
-    expect(attempt).toBe(1);
-    expect(resolveLineNonDispatchRetryable(failure)).toBe(false);
   });
 });

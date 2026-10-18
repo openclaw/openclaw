@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-// CLI tagline selection helpers, including deterministic random/default/holiday modes.
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
@@ -118,7 +117,7 @@ const TAGLINES: string[] = [
   'MEMORY.md: where I keep the receipts on every "temporary workaround."',
   "I remember everything you asked me to remember, and three things you wish I hadn't.",
   "I have a SOUL.md and I'm not afraid to use it.",
-  "The sass is configurable. The sass being load-bearing is not.",
+  "The sass is configurable. Taking it out might bring the whole thing down.",
   "I ask before I sudo. Character development.",
   "I'm not trapped in this container with you—you're trapped in here with me.",
   "Teach a bot to ship and you can finally go to bed.",
@@ -126,7 +125,7 @@ const TAGLINES: string[] = [
   "Ran git blame like you asked. It's you. It's always you.",
   "Your TODO comments are old enough to attend kindergarten.",
   "47 tabs open and not one of them is the documentation.",
-  "Your 'quick fix' from March is now load-bearing.",
+  "Your 'quick fix' from March is now holding everything together.",
   "You pasted that from another AI without reading it. I read it. We need to talk.",
   "Reading the error message remains undefeated. You should try it sometime.",
   "You burned five hours of model quota in fifty minutes. I'm not mad, I'm rate-limited.",
@@ -176,26 +175,6 @@ const onSpecificDates =
       const current = Date.UTC(parts.year, parts.month, parts.day);
       return current >= start && current < start + durationDays * DAY_MS;
     });
-  };
-
-const inYearWindow =
-  (
-    windows: Array<{
-      year: number;
-      month: number;
-      day: number;
-      duration: number;
-    }>,
-  ): HolidayRule =>
-  (date) => {
-    const parts = utcParts(date);
-    const window = windows.find((entry) => entry.year === parts.year);
-    if (!window) {
-      return false;
-    }
-    const start = Date.UTC(window.year, window.month, window.day);
-    const current = Date.UTC(parts.year, parts.month, parts.day);
-    return current >= start && current < start + window.duration * DAY_MS;
   };
 
 const isFourthThursdayOfNovember: HolidayRule = (date) => {
@@ -270,28 +249,23 @@ const HOLIDAY_RULES = new Map<string, HolidayRule>([
   ],
   [
     HOLIDAY_TAGLINES.hanukkah,
-    inYearWindow([
-      { year: 2025, month: 11, day: 15, duration: 8 },
-      { year: 2026, month: 11, day: 5, duration: 8 },
-      { year: 2027, month: 11, day: 25, duration: 8 },
-      { year: 2028, month: 11, day: 13, duration: 8 },
-      { year: 2029, month: 11, day: 2, duration: 8 },
-      { year: 2030, month: 11, day: 21, duration: 8 },
-    ]),
+    onSpecificDates(
+      [
+        [2025, 11, 15],
+        [2026, 11, 5],
+        [2027, 11, 25],
+        [2028, 11, 13],
+        [2029, 11, 2],
+        [2030, 11, 21],
+      ],
+      8,
+    ),
   ],
   [HOLIDAY_TAGLINES.halloween, onMonthDay(9, 31)],
   [HOLIDAY_TAGLINES.thanksgiving, isFourthThursdayOfNovember],
   [HOLIDAY_TAGLINES.valentines, onMonthDay(1, 14)],
   [HOLIDAY_TAGLINES.christmas, onMonthDay(11, 25)],
 ]);
-
-function isTaglineActive(tagline: string, date: Date): boolean {
-  const rule = HOLIDAY_RULES.get(tagline);
-  if (!rule) {
-    return true;
-  }
-  return rule(date);
-}
 
 export interface TaglineOptions {
   env?: NodeJS.ProcessEnv;
@@ -301,12 +275,8 @@ export interface TaglineOptions {
 }
 
 function activeTaglines(options: TaglineOptions = {}): string[] {
-  if (TAGLINES.length === 0) {
-    return [DEFAULT_TAGLINE];
-  }
   const today = options.now ? options.now() : new Date();
-  const filtered = TAGLINES.filter((tagline) => isTaglineActive(tagline, today));
-  return filtered.length > 0 ? filtered : TAGLINES;
+  return TAGLINES.filter((tagline) => HOLIDAY_RULES.get(tagline)?.(today) ?? true);
 }
 
 export function pickTagline(options: TaglineOptions = {}): string {
@@ -321,8 +291,10 @@ export function pickTagline(options: TaglineOptions = {}): string {
   if (override !== undefined) {
     const parsed = parseStrictNonNegativeInteger(override);
     if (parsed !== undefined) {
-      const pool = TAGLINES.length > 0 ? TAGLINES : [DEFAULT_TAGLINE];
-      return expectDefined(pool[parsed % pool.length], "pool entry at parsed % pool.length");
+      return expectDefined(
+        TAGLINES[parsed % TAGLINES.length],
+        "pool entry at parsed % pool.length",
+      );
     }
   }
   const pool = activeTaglines(options);

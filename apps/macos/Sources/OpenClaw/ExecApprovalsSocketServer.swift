@@ -126,33 +126,26 @@ final class ExecApprovalsSocketServer: @unchecked Sendable {
     }
 
     private func handleExecRequest(_ request: ExecHostSocketRequest) async -> ExecHostResponse {
-        let nowMs = Int(Date().timeIntervalSince1970 * 1000)
-        if !execHostTimestampIsFresh(nowMs: nowMs, requestMs: request.ts) {
-            return ExecHostResponse(
+        func invalidRequest(_ message: String, reason: String) -> ExecHostResponse {
+            ExecHostResponse(
                 type: "exec-res",
                 id: request.id,
                 ok: false,
                 payload: nil,
-                error: ExecHostError(code: "INVALID_REQUEST", message: "expired request", reason: "ttl"))
+                error: ExecHostError(code: "INVALID_REQUEST", message: message, reason: reason))
+        }
+        let nowMs = Int(Date().timeIntervalSince1970 * 1000)
+        if !execHostTimestampIsFresh(nowMs: nowMs, requestMs: request.ts) {
+            return invalidRequest("expired request", reason: "ttl")
         }
         let expected = self.hmacHex(nonce: request.nonce, ts: request.ts, requestJson: request.requestJson)
         if !timingSafeHexStringEquals(expected, request.hmac) {
-            return ExecHostResponse(
-                type: "exec-res",
-                id: request.id,
-                ok: false,
-                payload: nil,
-                error: ExecHostError(code: "INVALID_REQUEST", message: "invalid auth", reason: "hmac"))
+            return invalidRequest("invalid auth", reason: "hmac")
         }
         guard let requestData = request.requestJson.data(using: .utf8),
               let payload = try? JSONDecoder().decode(ExecHostRequest.self, from: requestData)
         else {
-            return ExecHostResponse(
-                type: "exec-res",
-                id: request.id,
-                ok: false,
-                payload: nil,
-                error: ExecHostError(code: "INVALID_REQUEST", message: "invalid payload", reason: "json"))
+            return invalidRequest("invalid payload", reason: "json")
         }
         let response = await self.onExec(payload)
         return ExecHostResponse(

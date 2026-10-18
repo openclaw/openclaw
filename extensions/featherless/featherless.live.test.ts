@@ -8,8 +8,7 @@ import {
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
-import { FEATHERLESS_DEFAULT_MODEL_ID } from "./models.js";
-import { buildFeatherlessProvider } from "./provider-catalog.js";
+import { buildFeatherlessProvider, FEATHERLESS_DEFAULT_MODEL_ID } from "./models.js";
 
 const FEATHERLESS_API_KEY = process.env.FEATHERLESS_API_KEY?.trim() ?? "";
 const LIVE = isLiveTestEnabled(["FEATHERLESS_LIVE_TEST"]) && FEATHERLESS_API_KEY.length > 0;

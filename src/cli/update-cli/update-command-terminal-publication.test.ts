@@ -1,6 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { publishSettledUpdateCommandResult } from "./update-command-terminal-publication.js";
 
 const terminal = vi.hoisted(() => ({ settle: vi.fn(), publish: vi.fn() }));

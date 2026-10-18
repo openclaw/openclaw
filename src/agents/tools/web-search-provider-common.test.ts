@@ -1,6 +1,6 @@
 // Shared web-search tests cover HTTP error ownership and module-local cache isolation.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { redactToolPayloadText } from "../../logging/redact.js";
+import { redactLogRecordForTransport, redactToolPayloadText } from "../../logging/redact.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { postTrustedWebToolsJson, throwWebSearchApiError } from "./web-search-provider-common.js";
 
@@ -29,7 +29,7 @@ describe("web provider HTTP errors", () => {
   it.each([
     ["short body credential", "s7Key", "rejected $key", "", undefined, "rejected ***"],
     ["short reason credential", "s7Key", "", "rejected $key", undefined, "rejected ***"],
-    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "Bearer ***"],
+    ["bearer reflection", "synthetic-web-key-long", "Bearer $key", "", undefined, "***"],
     ["truncated credential", "synthetic-web-key-long", "rejected $key", "", 15, "rejected ***"],
     ["ordinary detail", "s7Key", "quota exceeded", "", undefined, "quota exceeded"],
   ] as const)(
@@ -52,7 +52,16 @@ describe("web provider HTTP errors", () => {
             (cause: unknown) => cause,
           );
           expect(authorization).toBe(`Bearer ${apiKey}`);
-          expect(error).toEqual(new Error(`Search API error (401): ${expected}`));
+          expect(error).toMatchObject({
+            message: `Search API error (401): ${expected}`,
+            status: 401,
+            statusCode: 401,
+          });
+          const diagnostic = redactLogRecordForTransport({ error: String(error) });
+          expect(diagnostic).toEqual({
+            error: `ProviderHttpError: Search API error (401): ${expected}`,
+          });
+          expect(String(diagnostic.error)).not.toContain(apiKey);
         },
       );
     },

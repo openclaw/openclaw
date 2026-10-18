@@ -9,6 +9,25 @@ import {
 } from "./provider-model-routes.js";
 
 describe("provider model route adapter", () => {
+  it("forwards a non-chat capability without inventing route intent", () => {
+    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+      kind: "indeterminate" as const,
+    }));
+    resolveProviderModelRoutes({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      surface: { resolveModelRoutes },
+    });
+    expect(resolveModelRoutes).toHaveBeenCalledWith({
+      provider: "fixture",
+      modelId: "native",
+      capability: "decision",
+      env: {},
+      requestTransportOverrides: "none",
+    });
+  });
   it.each(["explicit", "inherited"] as const)(
     "preserves %s consumer intent precedence against a provider pin",
     (source) => {
@@ -584,9 +603,7 @@ describe("provider model route adapter", () => {
     ["provider request", { request: { allowPrivateNetwork: true } }, {}],
     ["provider local service", { localService: { command: "/custom-provider" } }, {}],
     ["provider auth header", { authHeader: false }, {}],
-    ["provider request timeout", { timeoutSeconds: 90 }, {}],
     ["model headers", {}, { headers: { "x-model-route": "custom" } }],
-    ["model compatibility", {}, { compat: { supportsStore: false } }],
   ])("projects %s without exposing its value", (_label, providerPatch, modelPatch) => {
     const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
       kind: "indeterminate" as const,

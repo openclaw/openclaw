@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { acquireBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   preparePluginCapabilityProviderLookup,
@@ -11,19 +12,30 @@ import {
   isPluginRegistryLoadInFlight,
   resolvePluginRegistryLoadCacheKey,
 } from "./loader.js";
-import type { PluginInvocationScope } from "./plugin-invocation-scope.js";
+import { getPluginValueInstance } from "./plugin-instance-scope.js";
+import {
+  collectRegistryInvocationInstances,
+  PluginInvocationScope,
+} from "./plugin-invocation-scope.js";
 import { getPluginRegistryInspectionResources } from "./registry-inspection-resources.js";
-import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
+import {
+  capturePluginLifecycleAuthority,
+  getPluginRegistryLifetime,
+} from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 
-/** Acquires only fresh registrations; existing raw hosts keep their own custody. */
+/** Retains owned registrations while external hosts keep their own custody. */
 export async function acquirePluginCapabilityProviders<
   K extends Parameters<typeof preparePluginCapabilityProviderResolution>[0]["key"],
->(params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0]) {
+>(
+  params: Parameters<typeof preparePluginCapabilityProviderResolution<K>>[0] & {
+    providerId?: string;
+  },
+) {
   const work = new AsyncWorkScope();
-  const releases: Array<() => Promise<void>> = [];
+  const releases: Array<() => void | Promise<void>> = [];
   const loads = new Map<string, Promise<PluginRegistry>>();
-  const retained = new Map<PluginRegistry, PluginInvocationScope | undefined>();
+  const retained = new Map<PluginRegistry, Map<object, PluginInvocationScope> | undefined>();
   const authorities = new Map<PluginRegistry, (() => boolean) | undefined>();
   const captureAuthority = (registry: PluginRegistry) => {
     if (!authorities.has(registry)) {
@@ -35,8 +47,8 @@ export async function acquirePluginCapabilityProviders<
   };
   const dispose = () => {
     // Close executable views before releasing the physical claims awaiting their consumers.
-    for (const invocation of retained.values()) {
-      invocation?.release();
+    for (const invocations of retained.values()) {
+      invocations?.forEach((invocation) => invocation.release());
     }
     return Promise.allSettled(releases.map(async (releaseClaim) => await releaseClaim())).then(
       (results) => {
@@ -49,22 +61,42 @@ export async function acquirePluginCapabilityProviders<
       },
     );
   };
-  const retain = (registry: PluginRegistry | undefined) => {
+  const retain = (registry: PluginRegistry | undefined, providerId?: string) => {
     if (!registry) {
       return undefined;
     }
+    const resources = getPluginRegistryInspectionResources(registry);
     if (!retained.has(registry)) {
       captureAuthority(registry);
-      const resources = getPluginRegistryInspectionResources(registry);
-      let invocation: PluginInvocationScope | undefined;
-      if (resources) {
-        releases.push(resources.retain().release);
-        invocation = resources.createInvocationScope(registry);
+      const release = resources?.retain().release ?? getPluginRegistryLifetime(registry)?.retain();
+      if (release) {
+        releases.push(release);
       }
-      retained.set(registry, invocation);
+      retained.set(registry, release ? new Map() : undefined);
     }
-    const invocation = retained.get(registry);
-    return invocation ? <T>(provider: T) => invocation.wrap(provider) : undefined;
+    const invocations = retained.get(registry);
+    if (!invocations) {
+      return undefined;
+    }
+    return (provider: CapabilityProviderFor<K>) => {
+      const instance = providerId === undefined ? undefined : getPluginValueInstance(provider);
+      if (providerId !== undefined && !instance) {
+        return provider;
+      }
+      const key = instance ?? registry;
+      let invocation = invocations.get(key);
+      if (!invocation) {
+        invocation = resources
+          ? resources.createInvocationScope(registry, instance && [instance])
+          : new PluginInvocationScope(
+              registry,
+              instance ? [instance] : collectRegistryInvocationInstances(registry),
+              { retained: true },
+            );
+        invocations.set(key, invocation);
+      }
+      return invocation.wrap(provider);
+    };
   };
   let releaseCompletion: Promise<void> | undefined;
   const release = () =>
@@ -99,16 +131,13 @@ export async function acquirePluginCapabilityProviders<
         const loadOptions = load.resolveLoadOptions();
         if (!isPluginRegistryLoadInFlight(loadOptions)) {
           const key = resolvePluginRegistryLoadCacheKey(loadOptions);
-          let pending = loads.get(key);
-          if (!pending) {
-            pending = acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
+          registry = await getOrCreatePromise(loads, key, () =>
+            acquirePluginRegistryForInspection(loadOptions).then((acquired) => {
               releases.push(acquired.release);
               captureAuthority(acquired.registry);
               return acquired.registry;
-            });
-            loads.set(key, pending);
-          }
-          registry = await pending;
+            }),
+          );
         }
       }
       const fallback = load.fallback(registry);
@@ -138,11 +167,18 @@ export async function acquirePluginCapabilityProviders<
   ) =>
     run(() =>
       execute<CapabilityProviderFor<K> | undefined>(
-        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, retain),
+        preparePluginCapabilityProviderLookup({ ...query, key: params.key }, (registry) =>
+          retain(registry, query.providerId),
+        ),
       ),
     );
   try {
-    const providers = await resolveProviders(params);
+    const providers =
+      params.providerId === undefined
+        ? await resolveProviders(params)
+        : [await resolveProvider({ providerId: params.providerId, cfg: params.cfg })].filter(
+            (provider) => provider !== undefined,
+          );
     return {
       providers,
       run,
@@ -166,25 +202,21 @@ export async function finishCapabilityOperation<T>(
   outcome: Result<T, unknown>,
   release: () => Promise<void>,
 ): Promise<T> {
-  let result = outcome;
   try {
     await release();
   } catch (cleanupError) {
-    result = {
-      ok: false,
-      error: outcome.ok
-        ? cleanupError
-        : new AggregateError(
-            [outcome.error, cleanupError],
-            "Capability operation and registration cleanup failed",
-            { cause: outcome.error },
-          ),
-    };
+    throw outcome.ok
+      ? cleanupError
+      : new AggregateError(
+          [outcome.error, cleanupError],
+          "Capability operation and registration cleanup failed",
+          { cause: outcome.error },
+        );
   }
-  if (!result.ok) {
-    throw result.error;
+  if (!outcome.ok) {
+    throw outcome.error;
   }
-  return result.value;
+  return outcome.value;
 }
 
 /** Keeps callback-shaped operations on the same acquisition and actual-work owner. */

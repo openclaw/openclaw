@@ -1,29 +1,80 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
+import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
-  controlUiSessionPath,
-  controlUiSessionUrl,
-  installMockGateway,
-  pauseVirtualClock,
-  type MockGatewayRequest,
-} from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 
+export { expectDefined, installMockGateway };
+export { SESSION_DRAG_MIME } from "../lib/sessions/drag.ts";
 export {
-  expectDefined,
-  SESSION_DRAG_MIME,
   controlUiSessionPath,
   controlUiSessionUrl,
-  installMockGateway,
   pauseVirtualClock,
-};
+} from "../test-helpers/control-ui-e2e.ts";
 
 export const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+// These suites track contexts and close them in their existing afterEach hook.
+export async function newChatPage(
+  suite: ReturnType<typeof createControlUiE2eSuite>,
+  options = createControlUiE2eContextOptions(),
+): Promise<Page> {
+  return (await suite.newBrowserContext(options)).newPage();
+}
+
+export function textContent(text: string) {
+  return [{ type: "text", text }];
+}
+
+export function exactButton(root: Page | Locator, name: string) {
+  return root.getByRole("button", { name, exact: true });
+}
+
+export function chatMessage(role: string, text: string, extra?: Record<string, unknown>) {
+  return { role, content: textContent(text), ...extra };
+}
+
+export function thinkingLevels(...ids: string[]) {
+  return ids.map((id) => ({ id, label: id }));
+}
+
+export const QUEUED = [
+  "review the migration",
+  "then update the docs",
+  "finally run the smoke",
+] as const;
+
+export async function queueMessages(page: Page, messages: readonly string[] = QUEUED) {
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  for (const message of messages) {
+    await composer.fill(message);
+    await composer.press("Enter");
+    await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
+  }
+}
+
+export async function confirmIme(locator: Locator, text: string) {
+  return locator.evaluate((textarea, data) => {
+    textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const end = new CompositionEvent("compositionend", { bubbles: true, data });
+    textarea.dispatchEvent(end);
+    const confirm = new KeyboardEvent("keydown", {
+      key: "Enter",
+      keyCode: 13,
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(confirm, "timeStamp", { value: end.timeStamp - 1 });
+    textarea.dispatchEvent(confirm);
+    return confirm.defaultPrevented;
+  }, text);
+}
 
 export async function captureUiProof(
   owner: { readonly artifactDir: string },
@@ -118,15 +169,14 @@ export async function expectRequestCountStable(
 export async function installPlainHttpClipboardCapture(page: Page): Promise<void> {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
-    (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec = [];
+    const capture = globalThis as unknown as { copiedViaExec: string[] };
+    capture.copiedViaExec = [];
     document.execCommand = ((command: string) => {
       if (command !== "copy") {
         return false;
       }
       const active = document.activeElement as HTMLTextAreaElement | null;
-      (globalThis as unknown as { copiedViaExec: string[] }).copiedViaExec.push(
-        active?.value ?? "",
-      );
+      capture.copiedViaExec.push(active?.value ?? "");
       return true;
     }) as typeof document.execCommand;
   });
@@ -149,11 +199,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
       () =>
         page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate(async (element) => {
           const thread = element as HTMLElement;
-          const readGeometry = () => ({
-            clientHeight: thread.clientHeight,
-            scrollHeight: thread.scrollHeight,
-            scrollTop: Math.round(thread.scrollTop),
-          });
+          const readGeometry = () => [
+            thread.clientHeight,
+            thread.scrollHeight,
+            Math.round(thread.scrollTop),
+          ];
           // Returning to the same offset can still leave a virtualizer idle callback pending.
           let scrolled = false;
           const onScroll = () => {
@@ -165,18 +215,10 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
             await new Promise<void>((resolve) => {
               globalThis.setTimeout(resolve, 180);
             });
-            await new Promise<void>((resolve) => {
-              requestAnimationFrame(() => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
+            await new Promise(requestAnimationFrame);
+            await new Promise(requestAnimationFrame);
             const after = readGeometry();
-            return (
-              !scrolled &&
-              before.clientHeight === after.clientHeight &&
-              before.scrollHeight === after.scrollHeight &&
-              before.scrollTop === after.scrollTop
-            );
+            return !scrolled && before.every((value, index) => value === after[index]);
           } finally {
             thread.removeEventListener("scroll", onScroll);
           }
@@ -187,11 +229,11 @@ export async function waitForChatScrollIdle(page: Page): Promise<void> {
 }
 
 export async function scrollChatThreadToTop(page: Page): Promise<void> {
-  await page.locator(".chat-pane-cache__pane--active .chat-thread").evaluate((element) => {
-    const thread = element as HTMLElement;
-    thread.scrollTop = 0;
-    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
-  });
+  const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+  // Reader input retires pending end-follow; a raw offset write can be maintenance.
+  await thread.hover();
+  await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+  await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
 }
 
 export async function captureSessionAccessibilityProof(
@@ -202,17 +244,13 @@ export async function captureSessionAccessibilityProof(
   if (!captureUiProofEnabled) {
     return;
   }
-  const sessionAccessibilityProofDir = path.join(owner.artifactDir, "session-accessibility");
+  const proofPath = path.join(owner.artifactDir, "session-accessibility", name);
   const sidebar = page.locator("openclaw-app-sidebar");
   await page.screenshot({
     fullPage: true,
-    path: path.join(sessionAccessibilityProofDir, `${name}.png`),
+    path: `${proofPath}.png`,
   });
-  await writeFile(
-    path.join(sessionAccessibilityProofDir, `${name}.yml`),
-    await sidebar.ariaSnapshot(),
-    "utf8",
-  );
+  await writeFile(`${proofPath}.yml`, await sidebar.ariaSnapshot(), "utf8");
 }
 
 export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
@@ -221,13 +259,8 @@ export async function visibleChatBubbleTexts(page: Page): Promise<string[]> {
     const viewport = thread.getBoundingClientRect();
     return Array.from(thread.querySelectorAll(".chat-bubble"))
       .filter((candidate) => {
-        const rect = candidate.getBoundingClientRect();
-        return (
-          rect.height > 0 &&
-          rect.width > 0 &&
-          rect.bottom > viewport.top &&
-          rect.top < viewport.bottom
-        );
+        const { height, width, bottom, top } = candidate.getBoundingClientRect();
+        return height > 0 && width > 0 && bottom > viewport.top && top < viewport.bottom;
       })
       .map((candidate) => candidate.textContent?.trim() ?? "")
       .filter(Boolean);
@@ -272,32 +305,19 @@ export async function readOutboxPayloadAttachments(page: Page, key: string) {
     type StoredPayload = {
       attachments: Array<{ blob: Blob; fileName?: string; mimeType: string }>;
     };
-    const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("openclaw-control-ui");
-      request.addEventListener("success", () => resolve(request.result), { once: true });
-      request.addEventListener(
-        "error",
-        () => reject(request.error ?? new Error("IDB open failed")),
-        { once: true },
-      );
-    });
-    try {
-      const payload = await new Promise<StoredPayload | undefined>((resolve, reject) => {
-        const request = database
-          .transaction("outboxPayloads")
-          .objectStore("outboxPayloads")
-          .get(payloadKey);
-        request.addEventListener(
-          "success",
-          () => resolve(request.result as StoredPayload | undefined),
-          { once: true },
-        );
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("IDB read failed")),
-          { once: true },
-        );
+    const result = <T>(request: IDBRequest<T>, message: string) =>
+      new Promise<T>((resolve, reject) => {
+        request.addEventListener("success", () => resolve(request.result), { once: true });
+        request.addEventListener("error", () => reject(request.error ?? new Error(message)), {
+          once: true,
+        });
       });
+    const database = await result(indexedDB.open("openclaw-control-ui"), "IDB open failed");
+    try {
+      const payload = await result<StoredPayload | undefined>(
+        database.transaction("outboxPayloads").objectStore("outboxPayloads").get(payloadKey),
+        "IDB read failed",
+      );
       return payload
         ? Promise.all(
             payload.attachments.map(async ({ blob, fileName, mimeType }) => {

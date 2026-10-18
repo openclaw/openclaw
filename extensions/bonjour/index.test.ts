@@ -37,14 +37,7 @@ describe("bonjour plugin entry", () => {
     let discoveryService:
       | Parameters<ReturnType<typeof createTestPluginApi>["registerGatewayDiscoveryService"]>[0]
       | undefined;
-    const logger = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      debug: vi.fn(),
-    };
     const api = createTestPluginApi({
-      logger,
       registerGatewayDiscoveryService(service) {
         discoveryService = service;
       },
@@ -66,36 +59,26 @@ describe("bonjour plugin entry", () => {
     const stop = vi.fn();
     mocks.startGatewayBonjourAdvertiser.mockResolvedValueOnce({ stop });
 
+    const advertisedOptions = {
+      gatewayPort: 3210,
+      gatewayTlsEnabled: true,
+      gatewayTlsFingerprintSha256: "abc123",
+      gatewayDirectReachable: true,
+      sshPort: 22,
+      tailnetDns: "dev.tailnet.ts.net",
+      cliPath: "/usr/local/bin/openclaw",
+      minimal: false,
+    };
     await expect(
-      discoveryService.advertise({
-        machineDisplayName: "Dev Box",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      }),
+      discoveryService.advertise({ ...advertisedOptions, machineDisplayName: "Dev Box" }),
     ).resolves.toEqual({ stop });
 
     expect(mocks.advertiserModuleLoaded).toHaveBeenCalledTimes(1);
     expect(mocks.runtimeModuleLoaded).toHaveBeenCalledTimes(1);
     expect(mocks.startGatewayBonjourAdvertiser).toHaveBeenCalledWith(
+      { ...advertisedOptions, instanceName: "Dev Box (OpenClaw)" },
       {
-        instanceName: "Dev Box (OpenClaw)",
-        gatewayPort: 3210,
-        gatewayTlsEnabled: true,
-        gatewayTlsFingerprintSha256: "abc123",
-        gatewayDirectReachable: true,
-        sshPort: 22,
-        tailnetDns: "dev.tailnet.ts.net",
-        cliPath: "/usr/local/bin/openclaw",
-        minimal: false,
-      },
-      {
-        logger,
+        logger: api.logger,
         registerUncaughtExceptionHandler: mocks.registerUncaughtExceptionHandler,
         registerUnhandledRejectionHandler: mocks.registerUnhandledRejectionHandler,
       },

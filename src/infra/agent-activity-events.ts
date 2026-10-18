@@ -2,14 +2,19 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { isSyntheticMissingToolResult } from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { projectAgentActivityItem } from "../agents/agent-activity-presentation.js";
+import {
+  projectAgentActivityItem,
+  resolveCompletedActivityWrappers,
+} from "../agents/agent-activity-presentation.js";
 import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
+import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import {
   inferToolMetaFromArgsCore,
   isCommandBearingToolCall,
   resolveToolDisplay,
 } from "../agents/tool-display.js";
 import { isToolResultError } from "../agents/tool-result-error.js";
+import type { ToolCallIdentity } from "../chat/tool-call-grouping.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -45,7 +50,7 @@ export type AgentCommandOutputEventFields = {
 export type AgentCommandOutputEventData = Record<string, unknown> & AgentCommandOutputEventFields;
 
 /** Patch summary payload emitted after an agent applies file changes. */
-export type AgentPatchSummaryEventData = Record<string, unknown> & {
+type AgentPatchSummaryEventData = Record<string, unknown> & {
   itemId: string;
   phase: "end";
   title: string;
@@ -67,6 +72,7 @@ type AgentActivityEventDataByStream = {
 type ToolActivityInput = {
   toolCallId: string;
   name: string;
+  presentationName?: string;
   phase: "start" | "update" | "result";
   args?: unknown;
   result?: unknown;
@@ -82,8 +88,15 @@ export function projectAgentToolActivity(
 ): AgentItemEventData;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem {
-  const meta = tool.meta ?? inferToolMetaFromArgsCore(tool.name, tool.args);
-  const label = resolveToolDisplay({ name: tool.name }).label;
+  const input = { name: tool.name, args: tool.args };
+  const unwrapped = unwrapToolCallForDisplay(input);
+  // History may omit executed args; its presentation name is then a name-only fallback.
+  const call =
+    unwrapped === input && tool.presentationName
+      ? { name: tool.presentationName, args: tool.args }
+      : unwrapped;
+  const meta = tool.meta ?? inferToolMetaFromArgsCore(call.name, call.args);
+  const label = resolveToolDisplay(call).label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
   const approval =
     tool.phase === "result" &&
@@ -92,13 +105,19 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   const status =
     tool.phase !== "result"
       ? "running"
-      : approval || skipped
-        ? "blocked"
-        : tool.status === "unknown"
-          ? undefined
-          : (tool.status ??
-            (tool.isError === true ? "failed" : tool.isError === false ? "completed" : undefined));
-  return projectAgentActivityItem(
+      : skipped && details.deniedReason === "steering"
+        ? "skipped"
+        : approval || skipped
+          ? "blocked"
+          : tool.status === "unknown"
+            ? undefined
+            : (tool.status ??
+              (tool.isError === true
+                ? "failed"
+                : tool.isError === false
+                  ? "completed"
+                  : undefined));
+  const activity: AgentActivityItem = projectAgentActivityItem(
     {
       itemId: `tool:${tool.toolCallId}`,
       toolCallId: tool.toolCallId,
@@ -121,11 +140,13 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
         : {}),
       ...(skipped ? { summary: "Skipped" } : {}),
       ...(meta ? { meta } : {}),
-      commandBearing: isCommandBearingToolCall(tool.name, tool.args),
+      commandBearing: isCommandBearingToolCall(call.name, call.args),
       ...(tool.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
     { args: tool.args, result: tool.result, nativeOperation: tool.nativeOperation },
   );
+  // Outcome and visibility still belong to the original execution facts.
+  return { ...activity, name: call.name };
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };
@@ -133,7 +154,7 @@ export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem
 export function projectAgentHistoryActivity(
   messages: ReadonlyArray<{ messageId: string; message: unknown }>,
 ): AgentHistoryActivity[] {
-  const facts = new Map<string, Parameters<typeof projectAgentToolActivity>[0]>();
+  const facts = new Map<string, ToolActivityInput & ToolCallIdentity>();
   let turn = 0;
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);
@@ -176,8 +197,18 @@ export function projectAgentHistoryActivity(
           normalizeOptionalString(block.toolUseId) ??
           normalizeOptionalString(block.tool_use_id) ??
           (block === record ? undefined : resolveToolUseId(block));
+        const recordedRunId =
+          normalizeOptionalString(block.runId) ??
+          nested?.runId ??
+          readSessionTranscriptRunId(message) ??
+          normalizeOptionalString(record?.runId);
         return {
           block,
+          runId: recordedRunId ? JSON.stringify([turn, recordedRunId]) : undefined,
+          parentToolCallId:
+            nested && nested.toolCallId === toolCallId
+              ? nested.parentToolCallId
+              : normalizeOptionalString(block.parentToolCallId),
           key: toolCallId
             ? JSON.stringify([
                 turn,
@@ -187,6 +218,7 @@ export function projectAgentHistoryActivity(
               ])
             : "history:" + messageId + ":" + index,
           toolCallId: toolCallId ?? "history:" + messageId + ":" + index,
+          callId: toolCallId,
           executedArgs: nested && nested.toolCallId === toolCallId ? nested.input : undefined,
           isError:
             readToolErrorFlag(block) ??
@@ -226,18 +258,47 @@ export function projectAgentHistoryActivity(
     }
   }
   for (const { blocks } of entries) {
-    for (const { block, key, toolCallId, executedArgs } of blocks) {
+    for (const {
+      block,
+      key,
+      toolCallId,
+      callId,
+      executedArgs,
+      runId,
+      parentToolCallId,
+    } of blocks) {
       if (isToolCallContentType(block.type)) {
         const name =
           normalizeOptionalString(block.name) ?? normalizeOptionalString(block.toolName) ?? "Tool";
         // A transcript call is not live authority. Its result may be absent or
         // outside this page; only live events can establish running activity.
-        facts.set(key, { toolCallId, name, phase: "result", args: executedArgs });
+        facts.set(key, {
+          toolCallId,
+          callId,
+          runId,
+          parentToolCallId,
+          name,
+          presentationName: unwrapToolCallForDisplay({
+            name,
+            args: executedArgs ?? block.arguments ?? block.args ?? block.input,
+          }).name,
+          phase: "result",
+          args: executedArgs,
+        });
       }
     }
   }
   for (const { blocks } of entries) {
-    for (const { block, key, toolCallId, executedArgs, isError } of blocks) {
+    for (const {
+      block,
+      key,
+      toolCallId,
+      callId,
+      executedArgs,
+      isError,
+      runId,
+      parentToolCallId,
+    } of blocks) {
       if (isToolCallContentType(block.type)) {
         continue;
       }
@@ -263,6 +324,9 @@ export function projectAgentHistoryActivity(
       facts.set(key, {
         ...call,
         toolCallId,
+        callId,
+        runId: call?.runId ?? runId,
+        parentToolCallId: call?.parentToolCallId ?? parentToolCallId,
         name,
         phase: "result",
         args: executedArgs ?? call?.args,
@@ -275,20 +339,35 @@ export function projectAgentHistoryActivity(
       });
     }
   }
+  const prepared = [...facts].map(([key, fact]) => {
+    const activity = projectAgentToolActivity({
+      ...fact,
+      ...(fact.name === "collab.wait" ? { nativeOperation: "wait" as const } : {}),
+    });
+    if (fact.result === undefined) {
+      activity.unpairedCall = true;
+    }
+    return {
+      key,
+      callId: fact.callId,
+      runId: fact.runId,
+      parentToolCallId: fact.parentToolCallId,
+      activity,
+    };
+  });
+  const wrappers = resolveCompletedActivityWrappers(prepared);
+  const preparedByKey = new Map(prepared.map((call) => [call.key, call]));
   return entries.flatMap(({ messageId, blocks, hasTools }) => {
     if (!hasTools) {
       return [];
     }
     const items = new Map<string, AgentActivityItem>();
     for (const { key } of blocks) {
-      const fact = facts.get(key);
-      if (!fact) {
+      const call = preparedByKey.get(key);
+      if (!call || wrappers.has(call)) {
         continue;
       }
-      const item = projectAgentToolActivity({
-        ...fact,
-        ...(fact.name === "collab.wait" ? { nativeOperation: "wait" } : {}),
-      });
+      const item = call.activity;
       if (!item.hideFromChannelProgress && !item.suppressChannelProgress) {
         items.set(item.itemId, item);
       }

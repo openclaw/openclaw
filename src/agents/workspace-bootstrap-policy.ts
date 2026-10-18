@@ -3,6 +3,7 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { Minimatch } from "minimatch";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveHookConfig } from "../hooks/policy.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { CANONICAL_ROOT_MEMORY_FILENAME } from "../memory/root-memory-files.js";
 
@@ -33,6 +34,25 @@ export const WORKSPACE_BOOTSTRAP_FILENAMES = [
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
 ] as const;
+
+export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
+
+export type WorkspaceBootstrapFile = {
+  name: WorkspaceBootstrapFileName;
+  path: string;
+  content?: string;
+  missing: boolean;
+  /** Set only by the authenticated personal USER loader, never inferred from a path. */
+  personalUser?: true;
+};
+
+export function resolveWorkspaceBootstrapPath(workspaceRoot: string, filePath: string): string {
+  return path.isAbsolute(filePath)
+    ? path.resolve(filePath)
+    : filePath.startsWith("~")
+      ? resolveUserPath(filePath)
+      : path.resolve(workspaceRoot, filePath);
+}
 
 export function hasGlobPattern(pattern: string): boolean {
   // Keep square brackets literal here; workspace paths commonly contain them.

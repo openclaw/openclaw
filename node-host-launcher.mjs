@@ -17,6 +17,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveOpenClawCliInvocation } from "./cli-invocation.mjs";
 
 const CHILD_ARGUMENT = "--openclaw-node-host-child";
 const MANAGED_CHILD_ARGUMENT = "--openclaw-node-host-managed-child";
@@ -311,6 +312,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
     resolveNodeHostLauncherStateDir,
     compareOpenClawReleaseVersions,
     resolveOpenClawStateSqlitePath,
+    watchNodeHostParentStdin,
   } = await import(
     pathToFileURL(path.join(packageRoot, "dist", "node-host-launcher-bootstrap.js")).href
   );
@@ -386,6 +388,9 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
     process.on(signal, listener);
     listeners.set(signal, listener);
   }
+  const stopWatchingParent = process.argv.includes("--parent-stdin")
+    ? watchNodeHostParentStdin(() => listeners.get("SIGTERM")())
+    : () => {};
   try {
     while (!stoppingSignal) {
       let candidate;
@@ -418,14 +423,15 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
       let readyTimer;
       let readyKillTimer;
       const result = await new Promise((resolve, reject) => {
-        child = spawn(
-          process.execPath,
-          [...childExecArgv, selected.entryPath, ...childArguments, ...restartArgs],
-          {
-            env: childEnv,
-            stdio: ["inherit", "inherit", "inherit", "ipc"],
-          },
-        );
+        const childInvocation = resolveOpenClawCliInvocation({
+          entryPath: selected.entryPath,
+          execArgv: childExecArgv,
+          args: [...childArguments, ...restartArgs],
+        });
+        child = spawn(childInvocation.command, childInvocation.args, {
+          env: childEnv,
+          stdio: ["inherit", "inherit", "inherit", "ipc"],
+        });
         if (candidate) {
           readyTimer = setTimeout(() => {
             candidateFailed = true;
@@ -573,6 +579,7 @@ export async function runNodeHostLauncher({ entryPath, packageRoot }) {
       break;
     }
   } finally {
+    stopWatchingParent();
     clearTimeout(shutdownTimer);
     releaseActivation?.();
     for (const [signal, listener] of listeners) {

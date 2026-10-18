@@ -78,16 +78,18 @@ export function createImapTestRuntime() {
 
 type AuthenticationStatus = Exclude<AuthenticateResult["dmarc"], false>["status"]["result"];
 
-export function createImapAuthResult(
-  dmarc: AuthenticationStatus,
-  spf: AuthenticationStatus = "none",
-): AuthenticateResult {
+export function createImapAuthResult(dmarc: AuthenticationStatus): AuthenticateResult {
   return {
-    dkim: { headerFrom: ["example.com"], envelopeFrom: false, results: [] },
+    dkim: {
+      headerFrom: ["trusted@example.com"],
+      fromFields: 1,
+      envelopeFrom: false,
+      results: [],
+    },
     spf: {
       domain: "example.com",
       "client-ip": "127.0.0.1",
-      status: { result: spf },
+      status: { result: "none" },
       header: "",
       info: "",
     },
@@ -96,6 +98,7 @@ export function createImapAuthResult(
       policy: "none",
       p: "none",
       sp: "none",
+      testMode: false,
       status: { result: dmarc },
       alignment: { spf: { strict: false }, dkim: { strict: false } },
       info: "",

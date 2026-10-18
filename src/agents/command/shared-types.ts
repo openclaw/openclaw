@@ -11,11 +11,13 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
+import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -32,13 +34,11 @@ import type { SessionManager } from "../sessions/index.js";
 
 /** Best-effort provider stream parameter overrides for an agent command. */
 export type AgentStreamParams = {
-  /** Provider stream params override (best-effort). */
   temperature?: number;
   topP?: number;
   maxTokens?: number;
   /** Stop sequences forwarded to the provider (best-effort). */
   stop?: string[];
-  /** Provider fast-mode override (best-effort). */
   fastMode?: boolean;
   responseFormat?: Record<string, unknown>;
   frequencyPenalty?: number;
@@ -59,6 +59,8 @@ export type ClientToolDefinition = {
 };
 
 export type AgentRunClientContext = {
+  /** Profile selected from the session's assigned human owner or authenticated human creator, never its latest sender. */
+  bootstrapUserProfileId?: string;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   gatewayUiCommandTarget?: import("../../gateway/ui-command-target.types.js").GatewayUiCommandTarget;
@@ -76,18 +78,25 @@ export type AgentRunMessageContext = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Authentication-derived provenance for MCP conversation fields. */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
-  /** True when the current inbound turn carried audio media. */
   currentInboundAudio?: boolean;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   /** Visible source replies must use the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Action sink available for model-proposed follow-up tasks. */
   taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** Require explicit message tool targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
+  /**
+   * Whether a delivered source send that omits `final` ends the turn. Absent means yes:
+   * a send answers the inbound message. Runs that only deliver to a configured target
+   * set false, so post-send work still runs.
+   */
+  messageToolFinalByDefault?: boolean;
 };
 
 export type AgentRunChannelContext = {
@@ -122,6 +131,8 @@ export type AgentRunModelOptions = {
   /** Outer model-fallback owner facts for this admitted attempt. */
   modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   thinkLevel?: ThinkLevel;
+  /** Run-scoped selection intent for declared chat-template effort. */
+  thinkingExplicit?: boolean;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
   fastModeStartedAtMs?: number;
@@ -129,7 +140,6 @@ export type AgentRunModelOptions = {
   fastModeAutoOnSeconds?: number;
   /** Shared notification state for nested harnesses that can observe the same tool boundary. */
   fastModeAutoProgressState?: FastModeAutoProgressState;
-  /** True when the outer model fallback loop has reached its final candidate. */
   isFinalFallbackAttempt?: boolean;
   authProfileId?: string;
 };
@@ -154,6 +164,7 @@ export type AgentRunInputContext = {
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
   inputProvenance?: InputProvenance;
+  heartbeatEventQueueSessionKey?: string;
   extraSystemPrompt?: string;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -163,13 +174,13 @@ export type AgentRunInputContext = {
   ownerNumbers?: string[];
   /** Seen bootstrap truncation warning signatures for this session (once mode dedupe). */
   bootstrapPromptWarningSignaturesSeen?: string[];
-  /** Last shown bootstrap truncation warning signature for this session. */
   bootstrapPromptWarningSignature?: string;
-  /** Run kind hint for context mode behavior. */
   bootstrapContextRunKind?: BootstrapContextRunKind;
 };
 
 export type AgentRunTranscriptContext = {
+  /** Host-admitted private completion; retain its transcript without user-facing projection. */
+  privateCompletion?: true;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;
@@ -185,6 +196,7 @@ export type AgentRunTranscriptContext = {
 };
 
 export type AgentRunLifecycle = {
+  providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
   /** Already-admitted internal execution; mutually exclusive with preparedRunAdmission. */
   admittedRunContext?: AdmittedRunContext;
   /** Host-only post-prepare continuation, removed before plugin invocation. */
@@ -199,6 +211,7 @@ export type AgentRunLifecycle = {
   /** Immutable gateway lifecycle ownership captured when this execution was admitted. */
   lifecycleGeneration?: string;
   lane?: string;
+  swarmExecutionLane?: CommandLaneConfiguration;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
   /** Trusted server-stamped authority for an explicitly capped scheduled run. */

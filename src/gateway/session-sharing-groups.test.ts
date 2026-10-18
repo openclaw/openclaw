@@ -1,23 +1,35 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { AgentSelectionRequiredError } from "../agents/agent-scope.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import {
   closeOpenClawAgentDatabasesForTest,
-  getOpenClawAgentDatabaseIfOpen,
+  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionGroupHandlers } from "./server-methods/sessions-groups.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
-import {
-  listSessionGroupDefaults,
-  listSessionGroups,
-  putSessionGroups,
-  updateSessionGroupDefaults,
-} from "./session-groups.js";
+import { readSessionGroupCatalog } from "./session-group-catalog.js";
+import { readSessionGroupMembership } from "./session-group-membership.read.js";
+import { putSessionGroups, updateSessionGroupDefaults } from "./session-groups.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
-import { resolveSessionMutationAuthorization } from "./session-sharing.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
+import {
+  authorizeResolvedSessionMutationAsync,
+  resolveSessionMutationAuthorization,
+  resolveSessionSharingTargetAsync,
+} from "./session-sharing.js";
 import {
   sharingPolicyClient as client,
   roleClient,
@@ -29,25 +41,156 @@ afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
 });
 
+const subscriberContext = (cfg: OpenClawConfig) =>
+  ({
+    getRuntimeConfig: () => cfg,
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+  }) as unknown as GatewayRequestContext;
+async function prepareMembership(context: GatewayRequestContext) {
+  await initializeSessionReadContext(context);
+  const projection = expectDefined(getSessionRowProjection(context), "prepared group projection");
+  await projection.prepareMembership();
+  return projection;
+}
+const restrictedMember = (
+  key: string,
+  category: string,
+  sessionId = `session-${key}`,
+  updatedAt = 1,
+) =>
+  upsertSessionEntryCore(
+    { agentId: "main", sessionKey: `agent:main:${key}` },
+    {
+      sessionId,
+      updatedAt,
+      visibility: "read-only",
+      category,
+      createdActor: { type: "human", source: "profile", id: "owner@example.com" },
+    },
+  );
+function groupAuthorization(
+  context: GatewayRequestContext,
+  viewer: Parameters<typeof resolveSessionMutationAuthorization>[0]["client"],
+  action: "put" | "update",
+  requestParams: Record<string, unknown>,
+) {
+  return resolveSessionMutationAuthorization({
+    client: viewer,
+    context,
+    method: `sessions.groups.${action}`,
+    requestParams,
+  });
+}
+
 describe("session sharing group mutations", () => {
+  it.each([
+    { retiredOwner: false, logicalAgent: "research", discoveryAgent: "main", archived: true },
+    { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: false },
+    { retiredOwner: true, logicalAgent: "ops", discoveryAgent: "ops", archived: true },
+  ])(
+    "preserves shared-store group selection and defaults access (retired physical owner=$retiredOwner, archived=$archived)",
+    async ({ retiredOwner, logicalAgent, discoveryAgent, archived }) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const storePath = state.statePath("shared.sqlite");
+        const cfg: OpenClawConfig = {
+          session: { store: storePath },
+          agents: {
+            defaults: { sessionStore: { agentId: discoveryAgent } },
+            entries: retiredOwner ? { ops: {}, other: {} } : { main: {}, research: {} },
+          },
+        };
+        setRuntimeConfigSnapshot(cfg);
+        openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+        const sessionKey = `agent:${logicalAgent}:group-member`;
+        const scope = { agentId: logicalAgent, storePath, sessionKey };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "research-group-member",
+          updatedAt: 1,
+          category: "Research",
+          ...(archived ? { archivedAt: 1 } : {}),
+        });
+        await putSessionGroups({ cfg, names: ["Research"] });
+        const viewer = client({ user: "viewer" });
+        const refs = new Map(readSessionGroupMembership(cfg, process.env).groups).get("Research");
+        expect(refs).toEqual([{ sessionKey, agentId: discoveryAgent }]);
+        const ref = expectDefined(refs?.[0], "shared-store group member");
+        const resolveTarget = () => resolveSessionSharingTargetAsync({ cfg, ...ref });
+        if (retiredOwner) {
+          expectDefined(await resolveTarget(), "shared-store sharing target");
+          expect(
+            await authorizeResolvedSessionMutationAsync({ cfg, client: viewer, ...ref }),
+          ).toBeNull();
+        } else {
+          await expect(resolveTarget()).rejects.toThrow(AgentSelectionRequiredError);
+        }
+        const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
+        const projection = await prepareMembership(context);
+        expect(projection.sessionGroupTargets().get("Research")).toEqual(refs);
+        const query = { agentId: logicalAgent, key: sessionKey };
+        const row = expectDefined(projection.capture(query), "shared-store projected row");
+        expect(row.storeTarget).toMatchObject({ agentId: "main", storePath });
+        expect(row.entry?.archivedAt).toBe(archived ? 1 : undefined);
+        expect(row.materialized).toBeUndefined();
+        const readDefaults = async (visible = true) => {
+          const respond = vi.fn();
+          const defaults = sessionGroupHandlers["sessions.groups.defaults"]!({
+            params: {},
+            client: viewer,
+            context,
+            respond,
+          } as never);
+          if (retiredOwner) {
+            await defaults;
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              { defaults: visible ? [{ name: "Research" }] : [] },
+              undefined,
+            );
+          } else {
+            await expect(defaults).rejects.toThrow(AgentSelectionRequiredError);
+            expect(respond).not.toHaveBeenCalled();
+          }
+          if (archived) {
+            expect(projection.capture(query)?.materialized).toBeUndefined();
+            expect(projection.materializedCount).toBe(0);
+          }
+        };
+        await readDefaults();
+        const sql = observeHostDataSql();
+        try {
+          await readDefaults();
+          expect(sql.queries).toEqual([]);
+        } finally {
+          sql.restore();
+        }
+        if (retiredOwner) {
+          await upsertSessionEntryCore(scope, { visibility: "read-only" });
+          await readDefaults(false);
+          addSessionMember(scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+          await readDefaults();
+          removeSessionMember(scope, "viewer");
+          await readDefaults(false);
+        }
+      });
+    },
+  );
+
   it("reuses group membership metadata and immediately observes changed member permissions", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {};
-      putSessionGroups({ cfg, names: ["Projects", "Personal"] });
+      setRuntimeConfigSnapshot(cfg);
+      await putSessionGroups({ cfg, names: ["Projects", "Personal"] });
       const scope = { agentId: "main", sessionKey: "agent:main:restricted-group-member" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "restricted-group-member",
-        updatedAt: Date.now(),
-        category: "Projects",
-        visibility: "read-only",
-        createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-      });
+      await restrictedMember(
+        "restricted-group-member",
+        "Projects",
+        "restricted-group-member",
+        Date.now(),
+      );
       const viewer = client({ user: "viewer@example.com" });
-      const context = {
-        getRuntimeConfig: () => cfg,
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext;
+      const context = subscriberContext(cfg);
       const readDefaults = async () => {
+        await prepareMembership(context);
         const responses: Parameters<RespondFn>[] = [];
         await sessionGroupHandlers["sessions.groups.defaults"]!({
           req: { type: "req", id: "group-defaults-test", method: "sessions.groups.defaults" },
@@ -61,34 +204,23 @@ describe("session sharing group mutations", () => {
         expect(responses[0]?.[0]).toBe(true);
         return responses[0]?.[1];
       };
-      const database = expectDefined(
-        getOpenClawAgentDatabaseIfOpen(scope),
-        "seeded agent database",
-      );
-      const queries = trackSqliteStatementExecutions(database.db, ["entries"], (sql) =>
-        /\bselect\b/i.test(sql) && /\bsession_nodes\b/.test(sql) && /\bentry_json\b/.test(sql)
-          ? "entries"
-          : null,
-      );
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
+      const sql = observeHostDataSql();
       try {
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
-        queries.counts.entries = 0;
-        queries.rowCounts.entries = 0;
         for (let index = 0; index < 3; index++) {
           expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
         }
-        expect(queries.counts.entries).toBe(0);
-        expect(queries.rowCounts.entries).toBe(0);
-
-        await upsertSessionEntryCore(scope, { category: "Personal" });
-        expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
-        await upsertSessionEntryCore(scope, { visibility: "shared" });
-        expect(await readDefaults()).toEqual({
-          defaults: [{ name: "Projects" }, { name: "Personal" }],
-        });
+        expect(sql.queries).toEqual([]);
       } finally {
-        queries.restore();
+        sql.restore();
       }
+
+      await upsertSessionEntryCore(scope, { category: "Personal" });
+      expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
+      await upsertSessionEntryCore(scope, { visibility: "shared" });
+      expect(await readDefaults()).toEqual({
+        defaults: [{ name: "Projects" }, { name: "Personal" }],
+      });
     });
   });
 
@@ -96,7 +228,8 @@ describe("session sharing group mutations", () => {
     "refreshes groups after %s rejects changed member authority",
     async (action) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        putSessionGroups({ cfg: {}, names: ["Old"] });
+        setRuntimeConfigSnapshot({});
+        await putSessionGroups({ cfg: {}, names: ["Old"] });
         const sessionKey = "agent:main:changed-group-authority";
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
@@ -140,7 +273,7 @@ describe("session sharing group mutations", () => {
         });
         expect(respond).not.toHaveBeenCalled();
         expect(loadSessionEntry({ agentId: "main", sessionKey })?.category).toBe("Old");
-        expect(listSessionGroups()).toContainEqual({ name: "Old", position: 0 });
+        expect(readSessionGroupCatalog().groups).toContainEqual({ name: "Old", position: 0 });
         expect(broadcastToConnIds).toHaveBeenCalledWith(
           "sessions.changed",
           expect.objectContaining({ reason: "groups" }),
@@ -152,65 +285,33 @@ describe("session sharing group mutations", () => {
   );
   it("refuses restricted group drops at put admission while allowing retained groups", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Projects"] });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:restricted-put-member" },
-        {
-          sessionId: "session-restricted-put-member",
-          updatedAt: 1,
-          visibility: "read-only",
-          category: "Projects",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-        },
-      );
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      await putSessionGroups({ cfg: {}, names: ["Projects"] });
+      await restrictedMember("restricted-put-member", "Projects");
       const viewer = roleClient("none", "put-viewer");
-      const context = { getRuntimeConfig: () => rolePolicyConfig() } as GatewayRequestContext;
+      const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
 
+      await prepareMembership(context);
+      expect(groupAuthorization(context, viewer, "put", { names: [] }).error).not.toBeNull();
       expect(
-        resolveSessionMutationAuthorization({
-          client: viewer,
-          method: "sessions.groups.put",
-          requestParams: { names: [] },
-          context,
-        }).error,
-      ).not.toBeNull();
-      expect(
-        resolveSessionMutationAuthorization({
-          client: viewer,
-          method: "sessions.groups.put",
-          requestParams: { names: [" Projects "] },
-          context,
-        }).error,
+        groupAuthorization(context, viewer, "put", { names: [" Projects "] }).error,
       ).toBeNull();
     });
   });
 
   it("rechecks late group members before committing a put drop", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const groups = putSessionGroups({ cfg: {}, names: ["Race"] });
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      const groups = await putSessionGroups({ cfg: {}, names: ["Race"] });
       const viewer = roleClient("none", "put-viewer");
-      const context = {
-        getRuntimeConfig: () => rolePolicyConfig(),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext;
-      const authorization = resolveSessionMutationAuthorization({
-        client: viewer,
-        method: "sessions.groups.put",
-        requestParams: { names: [] },
-        context,
-      });
+      const context = subscriberContext(cfg);
+      await prepareMembership(context);
+      const authorization = groupAuthorization(context, viewer, "put", { names: [] });
       expect(authorization).toMatchObject({ error: null, authorization: expect.any(Object) });
 
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:late-put-member" },
-        {
-          sessionId: "session-late-put-member",
-          updatedAt: 1,
-          visibility: "read-only",
-          category: "Race",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-        },
-      );
+      await restrictedMember("late-put-member", "Race");
 
       await expect(
         sessionGroupHandlers["sessions.groups.put"]?.({
@@ -221,84 +322,106 @@ describe("session sharing group mutations", () => {
           respond: () => undefined,
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(listSessionGroups()).toEqual(groups);
+      expect(readSessionGroupCatalog().groups).toEqual(groups);
     });
   });
 
-  it("rechecks group members before committing a defaults update", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Race"] });
-      updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
-      const viewer = client({ user: "viewer@example.com" });
-      const context = {
-        getRuntimeConfig: () => ({}),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext;
-      const authorization = resolveSessionMutationAuthorization({
-        client: viewer,
-        method: "sessions.groups.update",
-        requestParams: { name: " Race ", cwd: null, worktree: false },
-        context,
+  it.each(["transaction", "commit"] as const)(
+    "rechecks group members at %s admission for a defaults update",
+    async (stage) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg);
+        await putSessionGroups({ cfg: {}, names: ["Race"] });
+        await updateSessionGroupDefaults("Race", { cwd: "/repos/race", worktree: true });
+        const writeRole = expectDefined(cfg.gateway?.roles?.definitions.write, "write role");
+        const viewer = roleClient("write", "defaults-viewer");
+        const addMember = () => restrictedMember("late-restricted-member", "Race");
+        if (stage === "commit") {
+          await addMember();
+        }
+        const context = subscriberContext(cfg);
+        await prepareMembership(context);
+        const authorization = groupAuthorization(context, viewer, "update", {
+          name: " Race ",
+          cwd: null,
+          worktree: false,
+        });
+        expect(authorization.error).toBeNull();
+
+        if (stage === "transaction") {
+          await addMember();
+        }
+
+        let commitRequested = false;
+        let targetTransactionObserved = false;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const admissionSpy = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) => {
+            let isTargetCatalogAdmission = false;
+            return createAdmission((request, grant) => {
+              // Deferred session maintenance uses this factory too.
+              if (
+                request.stage === "transaction" &&
+                isRecord(request.facts) &&
+                Array.isArray(request.facts.groups) &&
+                request.facts.groups.some((group) => Array.isArray(group) && group[0] === "Race")
+              ) {
+                isTargetCatalogAdmission = true;
+                targetTransactionObserved = true;
+              }
+              if (isTargetCatalogAdmission && request.stage === "commit") {
+                commitRequested = true;
+                writeRole.sessions.others = "none";
+              }
+              admit(request, grant);
+            }, attachment);
+          });
+        try {
+          await expect(
+            sessionGroupHandlers["sessions.groups.update"]?.({
+              params: { name: " Race ", cwd: null, worktree: false },
+              client: viewer,
+              context,
+              sessionMutationAuthorization: authorization.authorization,
+              respond: () => undefined,
+            } as never),
+          ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
+          expect(targetTransactionObserved).toBe(true);
+          expect(commitRequested).toBe(stage === "commit");
+        } finally {
+          admissionSpy.mockRestore();
+        }
+        expect(readSessionGroupCatalog().defaults).toEqual([
+          { name: "Race", cwd: "/repos/race", worktree: true },
+        ]);
       });
-      expect(authorization.error).toBeNull();
-
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:late-restricted-member" },
-        {
-          sessionId: "session-late-restricted-member",
-          updatedAt: 1,
-          visibility: "read-only",
-          category: "Race",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-        },
-      );
-
-      await expect(
-        sessionGroupHandlers["sessions.groups.update"]?.({
-          params: { name: " Race ", cwd: null, worktree: false },
-          client: viewer,
-          context,
-          sessionMutationAuthorization: authorization.authorization,
-          respond: () => undefined,
-        } as never),
-      ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
-      expect(listSessionGroupDefaults()).toEqual([
-        { name: "Race", cwd: "/repos/race", worktree: true },
-      ]);
-    });
-  });
+    },
+  );
 
   it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
-      updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
-      updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:restricted-project" },
-        {
-          sessionId: "session-restricted-project",
-          updatedAt: 1,
-          visibility: "read-only",
-          category: "Projects",
-          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
-        },
-      );
+      const cfg = {};
+      setRuntimeConfigSnapshot(cfg);
+      await putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
+      await updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
+      await updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
+      await restrictedMember("restricted-project", "Projects");
       const viewer = client({ user: "viewer@example.com" });
-      const context = {
-        getRuntimeConfig: () => ({}),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-      } as unknown as GatewayRequestContext;
+      const context = subscriberContext(cfg);
 
+      await prepareMembership(context);
       expect(
-        resolveSessionMutationAuthorization({
-          client: viewer,
-          method: "sessions.groups.update",
-          requestParams: { name: "Projects", cwd: null, worktree: false },
-          context,
+        groupAuthorization(context, viewer, "update", {
+          name: "Projects",
+          cwd: null,
+          worktree: false,
         }).error,
       ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
 
       const responses: Parameters<RespondFn>[] = [];
+      await prepareMembership(context);
       await sessionGroupHandlers["sessions.groups.defaults"]?.({
         params: {},
         client: viewer,
@@ -313,11 +436,10 @@ describe("session sharing group mutations", () => {
         ],
       ]);
 
-      const personalAuthorization = resolveSessionMutationAuthorization({
-        client: viewer,
-        method: "sessions.groups.update",
-        requestParams: { name: "Personal", cwd: null, worktree: false },
-        context,
+      const personalAuthorization = groupAuthorization(context, viewer, "update", {
+        name: "Personal",
+        cwd: null,
+        worktree: false,
       });
       expect(personalAuthorization.error).toBeNull();
       const updateResponses: Parameters<RespondFn>[] = [];

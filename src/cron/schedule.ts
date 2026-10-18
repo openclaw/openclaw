@@ -93,7 +93,7 @@ function resolveCronWallTimeMs(instantMs: number, timezone: string): number {
 function resolveFirstCronOccurrenceMs(instantMs: number, timezone: string): number | undefined {
   const wallTime = new Date(resolveCronWallTimeMs(instantMs, timezone)).toISOString().slice(0, -1);
   const resolved = parseOffsetlessIsoDateTimeInTimeZone(wallTime, timezone);
-  return resolved === null ? undefined : Date.parse(resolved);
+  return resolved.ok ? Date.parse(resolved.iso) : undefined;
 }
 
 function matchesCronOccurrence(cron: Cron, instant: Date): boolean {
@@ -244,7 +244,7 @@ export function computeNextRunAtMs(schedule: CronSchedule, nowMs: number): numbe
     return asDateTimestampMs(anchor + steps * everyMs);
   }
 
-  if (schedule.kind === "on-exit" || schedule.kind === "stream") {
+  if (schedule.kind === "on-exit" || schedule.kind === "stream" || schedule.kind === "event") {
     // Event-driven trigger: never time-due. The gateway watcher calls
     // enqueueRun when the watched command exits or a stream batch closes.
     return undefined;
@@ -347,4 +347,21 @@ export function computePreviousRunAtMs(schedule: CronSchedule, nowMs: number): n
   return normalizedPreviousMs !== undefined && normalizedPreviousMs < nowMs
     ? normalizedPreviousMs
     : undefined;
+}
+
+/**
+ * Checks whether a cron expression parses under the same croner rules the scheduler
+ * applies, so callers can reject expressions the scheduler would throw on later.
+ */
+export function isValidCronExpression(expr: string, timezone?: string): boolean {
+  const trimmed = expr.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    void new Cron(trimmed, { timezone: resolveCronTimezone(timezone), catch: false });
+    return true;
+  } catch {
+    return false;
+  }
 }

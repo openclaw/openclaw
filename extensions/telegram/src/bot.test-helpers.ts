@@ -31,18 +31,25 @@ type BufferedReplyDispatcher =
   typeof import("openclaw/plugin-sdk/reply-dispatch-runtime").dispatchReplyWithBufferedBlockDispatcher;
 
 export function makeTelegramKeyedStoreTestMock<Value>(
-  overrides: Partial<PluginStateKeyedStore<Value>> = {},
-): PluginStateKeyedStore<Value> {
+  overrides: Partial<PluginStateKeyedStore<Value, 2>> = {},
+): PluginStateKeyedStore<Value, 2> {
   const unexpectedCall = async (operation: string): Promise<never> => {
     throw new Error(`unexpected Telegram keyed-store ${operation} call`);
   };
   return {
+    observe: () => unexpectedCall("observe"),
+    compareAndApply: () => unexpectedCall("compareAndApply"),
     register: () => unexpectedCall("register"),
     registerIfAbsent: () => unexpectedCall("registerIfAbsent"),
     lookup: () => unexpectedCall("lookup"),
+    lookupMany: () => unexpectedCall("lookupMany"),
     consume: () => unexpectedCall("consume"),
     delete: () => unexpectedCall("delete"),
+    deleteIfEqual: () => unexpectedCall("deleteIfEqual"),
     entries: () => unexpectedCall("entries"),
+    entriesInKeyRange: () => unexpectedCall("entriesInKeyRange"),
+    moveEntriesFrom: () => unexpectedCall("moveEntriesFrom"),
+    count: () => unexpectedCall("count"),
     clear: () => unexpectedCall("clear"),
     ...overrides,
   };
@@ -124,24 +131,6 @@ export function createTelegramCallbackContext(params: {
     callbackQuery,
     me: { username: "openclaw_bot" },
     getFile: async () => ({ download: async () => new Uint8Array() }),
-  };
-}
-
-export function createTelegramReactionContext(params: {
-  updateId: number;
-  reaction?: Record<string, unknown>;
-}): TelegramTestContext {
-  return {
-    update: { update_id: params.updateId },
-    messageReaction: {
-      chat: { id: 1234, type: "private" },
-      message_id: 42,
-      user: { id: 9, first_name: "Ada" },
-      date: 1_736_380_800,
-      old_reaction: [],
-      new_reaction: [{ type: "emoji", emoji: "👍" }],
-      ...params.reaction,
-    },
   };
 }
 

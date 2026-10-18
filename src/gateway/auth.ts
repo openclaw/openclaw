@@ -1,4 +1,3 @@
-// Gateway authorization checks.
 import type { IncomingMessage } from "node:http";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -7,14 +6,12 @@ import {
 import { isRedactedSecretValue } from "../config/redact-sentinel.js";
 import type { GatewayAuthConfig, GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
-import {
-  AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
-  type AuthRateLimiter,
-  type RateLimitCheckResult,
-} from "./auth-rate-limit.js";
+import { AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth-resolve.js";
+import { getHeader } from "./http-header-value.js";
 import {
   prepareGatewayIngressAttribution,
+  readGatewayIngressTransport,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
   type GatewayIngressAttribution,
   type VerifiedTailscaleIngressIdentity,
@@ -30,13 +27,12 @@ import {
   resolveRequestClientIpFromHeaders,
   isTrustedProxyAddress,
 } from "./net.js";
-import { checkBrowserOrigin } from "./origin-check.js";
+import { checkBrowserOrigin, type BrowserOriginPolicy } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
 export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 
-/** Normalized outcome for gateway shared-secret, Tailscale, device, and proxy auth. */
 export type GatewayAuthResult = {
   ok: boolean;
   method?:
@@ -46,12 +42,12 @@ export type GatewayAuthResult = {
     | "tailscale"
     | "device-token"
     | "bootstrap-token"
-    | "trusted-proxy";
+    | "trusted-proxy"
+    | "remote-ingress";
   user?: string;
   /** Full verified Tailscale identity; present only after header + WhoIs agreement. */
-  tailscaleIdentity?: VerifiedTailscaleIdentity;
+  tailscaleIdentity?: VerifiedTailscaleIngressIdentity;
   reason?: string;
-  /** Present when the request was blocked by the rate limiter. */
   rateLimited?: boolean;
   /** Milliseconds the client should wait before retrying (when rate-limited). */
   retryAfterMs?: number;
@@ -64,7 +60,6 @@ type ConnectAuth = {
 
 type GatewayAuthSurface = "http" | "http-control-ui-read" | "ws-control-ui";
 
-/** Inputs needed to authorize one HTTP or websocket gateway connection. */
 type AuthorizeGatewayConnectParams = {
   auth: ResolvedGatewayAuth;
   connectAuth?: ConnectAuth | null;
@@ -88,30 +83,10 @@ type AuthorizeGatewayConnectParams = {
   /** Trust X-Real-IP only when explicitly enabled. */
   allowRealIpFallback?: boolean;
   /** Optional browser-origin policy for HTTP requests that require Origin checks. */
-  browserOriginPolicy?: {
-    requestHost?: string;
-    origin?: string;
-    fetchSite?: string;
-    allowedOrigins?: string[];
-    allowHostHeaderOriginFallback?: boolean;
-  };
+  browserOriginPolicy?: BrowserOriginPolicy;
 };
 
-type VerifiedTailscaleIdentity = VerifiedTailscaleIngressIdentity;
-
-type GatewayAuthRequestContext = {
-  authSurface: GatewayAuthSurface;
-  limiter?: AuthRateLimiter;
-  subject?: string;
-  rateLimitScope: string;
-  localDirect: boolean;
-  resetOnSuccess: boolean;
-  ingressAttribution?: GatewayIngressAttribution;
-};
-
-function resolveGatewayAuthRequestContext(
-  params: AuthorizeGatewayConnectParams,
-): GatewayAuthRequestContext {
+function resolveGatewayAuthRequestContext(params: AuthorizeGatewayConnectParams) {
   const { req, trustedProxies } = params;
   const authSurface = params.authSurface ?? "http";
   const attributed =
@@ -122,9 +97,7 @@ function resolveGatewayAuthRequestContext(
     attributed?.clientIp ??
     resolveRequestClientIpFromHeaders(req, trustedProxies, params.allowRealIpFallback === true) ??
     req?.socket?.remoteAddress;
-  const localDirect = attributed
-    ? attributed.kind === "direct-local"
-    : isLocalDirectRequest(req, trustedProxies, params.allowRealIpFallback === true);
+  const localDirect = attributed ? attributed.kind === "direct-local" : isLocalDirectRequest(req);
 
   return {
     authSurface,
@@ -154,11 +127,6 @@ function resolveConnectSecret(
   return connectAuth?.[mode] ?? connectAuth?.[mode === "token" ? "password" : "token"];
 }
 
-function headerValue(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value;
-}
-
-/** Validate that the selected gateway auth mode has the required resolved credentials/config. */
 export function assertGatewayAuthConfigured(
   auth: ResolvedGatewayAuth,
   rawAuthConfig?: GatewayAuthConfig | null,
@@ -214,10 +182,6 @@ export function assertGatewayAuthConfigured(
   }
 }
 
-/**
- * Check if the request came from a trusted proxy and extract user identity.
- * Returns the user identity if valid, or null with a reason if not.
- */
 function authorizeTrustedProxy(params: {
   req?: IncomingMessage;
   trustedProxies?: string[];
@@ -249,15 +213,13 @@ function authorizeTrustedProxy(params: {
 
   const requiredHeaders = trustedProxyConfig.requiredHeaders ?? [];
   for (const header of requiredHeaders) {
-    const value = headerValue(req.headers[normalizeLowercaseStringOrEmpty(header)]);
+    const value = getHeader(req, header);
     if (!value || value.trim() === "") {
       return { reason: `trusted_proxy_missing_header_${header}` };
     }
   }
 
-  const userHeaderValue = headerValue(
-    req.headers[normalizeLowercaseStringOrEmpty(trustedProxyConfig.userHeader)],
-  );
+  const userHeaderValue = getHeader(req, trustedProxyConfig.userHeader);
   if (!userHeaderValue || userHeaderValue.trim() === "") {
     return { reason: "trusted_proxy_user_missing" };
   }
@@ -308,10 +270,7 @@ function authorizeHttpBrowserOrigin(params: {
     allowHostHeaderOriginFallback: params.browserOriginPolicy?.allowHostHeaderOriginFallback,
     isLocalClient: params.isLocalClient,
   });
-  if (originCheck.ok) {
-    return null;
-  }
-  return { ok: false, reason: params.reason };
+  return originCheck.ok ? null : { ok: false, reason: params.reason };
 }
 
 function authorizeTrustedProxyBrowserOrigin(params: {
@@ -325,65 +284,39 @@ function authorizeTrustedProxyBrowserOrigin(params: {
   });
 }
 
-async function authorizeTokenAuth(params: {
-  authToken?: string;
-  connectToken?: string;
+async function authorizeSharedSecretAuth(params: {
+  method: "token" | "password";
+  configuredSecret?: string;
+  providedSecret?: string;
   limiter?: AuthRateLimiter;
   ip?: string;
   rateLimitScope: string;
   deferRateLimitFailure?: boolean;
   resetOnSuccess?: boolean;
 }): Promise<GatewayAuthResult> {
-  if (!params.authToken || isInvalidGatewaySecret(params.authToken)) {
-    return { ok: false, reason: "token_missing_config" };
-  }
-  if (!params.connectToken) {
-    // Don't burn rate-limit slots for missing credentials — the client
-    // simply hasn't provided a token yet (e.g. bare browser open).
-    // Only actual *wrong* credentials should count as failures.
-    return { ok: false, reason: "token_missing" };
-  }
-  if (!safeEqualSecret(params.connectToken, params.authToken)) {
-    if (!params.deferRateLimitFailure) {
-      await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
-    }
-    return { ok: false, reason: "token_mismatch" };
-  }
-  if (params.resetOnSuccess !== false) {
-    params.limiter?.reset(params.ip, params.rateLimitScope);
-  }
-  return { ok: true, method: "token" };
-}
-
-async function authorizePasswordAuth(params: {
-  authPassword?: string;
-  connectPassword?: string;
-  limiter?: AuthRateLimiter;
-  ip?: string;
-  rateLimitScope: string;
-  deferRateLimitFailure?: boolean;
-  resetOnSuccess?: boolean;
-}): Promise<GatewayAuthResult> {
-  if (isRedactedSecretValue(params.authPassword)) {
+  if (params.method === "password" && isRedactedSecretValue(params.configuredSecret)) {
     return { ok: false, reason: "password_redacted_config" };
   }
-  if (!params.authPassword) {
-    return { ok: false, reason: "password_missing_config" };
+  if (
+    !params.configuredSecret ||
+    (params.method === "token" && isInvalidGatewaySecret(params.configuredSecret))
+  ) {
+    return { ok: false, reason: `${params.method}_missing_config` };
   }
-  if (!params.connectPassword) {
-    // Same as token_missing — don't penalize absent credentials.
-    return { ok: false, reason: "password_missing" };
+  if (!params.providedSecret) {
+    // Missing credentials do not consume the wrong-credential rate limit.
+    return { ok: false, reason: `${params.method}_missing` };
   }
-  if (!safeEqualSecret(params.connectPassword, params.authPassword)) {
+  if (!safeEqualSecret(params.providedSecret, params.configuredSecret)) {
     if (!params.deferRateLimitFailure) {
       await params.limiter?.recordFailureAndDelay(params.ip, params.rateLimitScope);
     }
-    return { ok: false, reason: "password_mismatch" };
+    return { ok: false, reason: `${params.method}_mismatch` };
   }
   if (params.resetOnSuccess !== false) {
     params.limiter?.reset(params.ip, params.rateLimitScope);
   }
-  return { ok: true, method: "password" };
+  return { ok: true, method: params.method };
 }
 
 function rejectIfRateLimited(params: {
@@ -394,7 +327,7 @@ function rejectIfRateLimited(params: {
   if (!params.limiter) {
     return undefined;
   }
-  const rlCheck: RateLimitCheckResult = params.limiter.check(params.ip, params.rateLimitScope);
+  const rlCheck = params.limiter.check(params.ip, params.rateLimitScope);
   if (rlCheck.allowed) {
     return undefined;
   }
@@ -406,7 +339,6 @@ function rejectIfRateLimited(params: {
   };
 }
 
-/** Authorize a gateway connection, including rate-limit handling around shared-secret failures. */
 async function authorizeGatewayConnect(
   params: AuthorizeGatewayConnectParams,
 ): Promise<GatewayAuthResult> {
@@ -416,6 +348,13 @@ async function authorizeGatewayConnect(
     isRedactedSecretValue(auth[auth.mode])
   ) {
     return { ok: false, reason: `${auth.mode}_redacted_config` };
+  }
+  const remoteForwarded =
+    params.ingressAttribution?.kind === "remote-forwarded" ||
+    (params.req && readGatewayIngressTransport(params.req)?.kind === "remote-forwarded");
+  if (remoteForwarded) {
+    // Device credentials are verified by the HTTP/WS device owner, never as shared auth.
+    return { ok: false, reason: "remote_control_ui_device_auth_required" };
   }
   if (auth.mode === "trusted-proxy") {
     if (!auth.trustedProxy) {
@@ -525,9 +464,10 @@ async function authorizeGatewayConnectCore(
       if (rateLimitResult) {
         return rateLimitResult;
       }
-      return await authorizePasswordAuth({
-        authPassword: auth.password,
-        connectPassword: connectAuth.password,
+      return await authorizeSharedSecretAuth({
+        method: "password",
+        configuredSecret: auth.password,
+        providedSecret: connectAuth.password,
         limiter,
         ip: subject,
         rateLimitScope,
@@ -582,22 +522,11 @@ async function authorizeGatewayConnectCore(
     return rateLimitResult;
   }
 
-  if (auth.mode === "token") {
-    return await authorizeTokenAuth({
-      authToken: auth.token,
-      connectToken: resolveConnectSecret(auth.mode, connectAuth),
-      limiter,
-      ip: subject,
-      rateLimitScope,
-      deferRateLimitFailure: params.deferRateLimitFailure,
-      resetOnSuccess,
-    });
-  }
-
-  if (auth.mode === "password") {
-    return await authorizePasswordAuth({
-      authPassword: auth.password,
-      connectPassword: resolveConnectSecret(auth.mode, connectAuth),
+  if (auth.mode === "token" || auth.mode === "password") {
+    return await authorizeSharedSecretAuth({
+      method: auth.mode,
+      configuredSecret: auth[auth.mode],
+      providedSecret: resolveConnectSecret(auth.mode, connectAuth),
       limiter,
       ip: subject,
       rateLimitScope,

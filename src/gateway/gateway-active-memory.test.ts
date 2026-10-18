@@ -4,6 +4,7 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { describe, expect, it, onTestFailed } from "vitest";
 import { GatewayClient } from "../../packages/gateway-client/src/index.js";
+import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
@@ -13,7 +14,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
@@ -85,6 +86,7 @@ describe("Gateway Active Memory", () => {
           }
           signal.throwIfAborted();
           const home = createTempDir("openclaw-active-memory-gateway-");
+          const timelinePath = path.join(home, "gateway-timeline.jsonl");
           const workspace = path.join(home, "workspace");
           const memoryFact = "The user's usual lunch is ginger ramen.";
           const mainReply = "ACTIVE_MEMORY_RUNTIME_PROOF_OK";
@@ -99,7 +101,7 @@ describe("Gateway Active Memory", () => {
           } = {};
           let sessionFound = false;
           let modelSelectionLocked = false;
-          onTestFailed(() => {
+          onTestFailed(async () => {
             const gatewayLogs = instance?.logs() ?? "";
             console.info({
               phase,
@@ -123,6 +125,9 @@ describe("Gateway Active Memory", () => {
                 "active-memory: recall skipped because this prompt has no turn tool authority",
               ),
             });
+            console.info("Active Memory Gateway log tail", gatewayLogs.slice(-12_000));
+            const timeline = await fs.readFile(timelinePath, "utf8").catch(() => "unavailable");
+            console.info("Active Memory request timeline tail", timeline.slice(-24_000));
           });
           const server = createServer((request, response) => {
             const handler = (async () => {
@@ -154,8 +159,9 @@ describe("Gateway Active Memory", () => {
                     type: "function_call",
                     id: "fc_memory_get",
                     call_id: "call_memory_get",
-                    name: "memory_get",
-                    arguments: JSON.stringify({ path: "MEMORY.md" }),
+                    // The default recall surface dispatches the configured memory tool through discovery.
+                    name: "dispatch_action",
+                    arguments: JSON.stringify({ id: "memory_get", args: { path: "MEMORY.md" } }),
                     status: "completed",
                   });
                 } else {
@@ -237,7 +243,11 @@ describe("Gateway Active Memory", () => {
             },
             gateway: { auth: { mode: "token", token } },
             hooks: { enabled: false },
-            models: { mode: "replace", providers: { [provider.providerId]: provider.config } },
+            models: {
+              mode: "replace",
+              catalogRefresh: { enabled: false },
+              providers: { [provider.providerId]: provider.config },
+            },
             memory: { search: { rememberAcrossConversations: false } },
             plugins: {
               allow: ["active-memory", "memory-core", "openai"],
@@ -271,6 +281,8 @@ describe("Gateway Active Memory", () => {
               OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
               OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
               OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+              OPENCLAW_DIAGNOSTICS: "1",
+              OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
             },
           });
           signal.throwIfAborted();
@@ -292,8 +304,12 @@ describe("Gateway Active Memory", () => {
           signal.throwIfAborted();
           await instance.startGateway();
           signal.throwIfAborted();
+          const sessionKey = "agent:main:main";
+          const runId = randomUUID();
           const connected = createDeferred();
+          const terminal = createDeferred<ChatEvent>();
           void connected.promise.catch(() => undefined);
+          void terminal.promise.catch(() => undefined);
           client = new GatewayClient({
             url: instance.url,
             token: instance.gatewayToken,
@@ -309,8 +325,24 @@ describe("Gateway Active Memory", () => {
             },
             onHelloOk: () => connected.resolve(),
             onConnectError: connected.reject,
-            onClose: (code, reason) =>
-              connected.reject(new Error(`Gateway closed during connect (${code}): ${reason}`)),
+            onClose: (code, reason) => {
+              const error = new Error(`Gateway closed during proof (${code}): ${reason}`);
+              connected.reject(error);
+              terminal.reject(error);
+            },
+            onEvent: (event) => {
+              if (event.event !== "chat") {
+                return;
+              }
+              const payload = event.payload as ChatEvent | undefined;
+              if (
+                payload?.runId === runId &&
+                payload.sessionKey === sessionKey &&
+                ["final", "error", "aborted"].includes(payload.state)
+              ) {
+                terminal.resolve(payload);
+              }
+            },
           });
           const abortConnect = () => connected.reject(signal.reason);
           signal.addEventListener("abort", abortConnect, { once: true });
@@ -322,7 +354,6 @@ describe("Gateway Active Memory", () => {
             signal.removeEventListener("abort", abortConnect);
           }
           signal.throwIfAborted();
-          const sessionKey = "agent:main:main";
           phase = "starting main turn";
           // Interactive chat supplies the finalized turn tool authority that recall requires.
           const accepted = await client.request<{ runId: string; status: string }>(
@@ -331,13 +362,18 @@ describe("Gateway Active Memory", () => {
               sessionKey,
               message: "What do I usually have for lunch?",
               deliver: false,
-              idempotencyKey: randomUUID(),
+              idempotencyKey: runId,
             },
             { signal },
           );
           signal.throwIfAborted();
           expect(accepted.status).toBe("started");
+          expect(accepted.runId).toBe(runId);
           phase = "waiting for main reply";
+          // Recall and the main turn use the test budget; agent.wait only checks final settlement.
+          const reply = await withinTest(terminal.promise, signal);
+          expect(reply.state, JSON.stringify(reply)).toBe("final");
+          phase = "waiting for main run settlement";
           const completed = await client.request<{ status: string }>(
             "agent.wait",
             { runId: accepted.runId, timeoutMs: 30_000 },

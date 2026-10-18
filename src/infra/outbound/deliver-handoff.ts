@@ -30,6 +30,10 @@ export function assertOutboundHandoffCurrent(assertCurrent: (() => void) | undef
   try {
     assertCurrent?.();
   } catch (error) {
+    // Keep proven-unsent retry custody; permanent fences still reject the whole batch.
+    if (error instanceof PlatformMessageNotDispatchedError && error.retryable) {
+      throw error;
+    }
     throw new OutboundHandoffRejectedError(error);
   }
 }

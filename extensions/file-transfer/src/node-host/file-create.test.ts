@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FILE_CREATE_CHUNK_BYTES } from "../shared/file-create-protocol.js";
@@ -17,16 +18,13 @@ const digest = (data: Buffer) => crypto.createHash("sha256").update(data).digest
 
 function receiver(controller = new AbortController()) {
   let listener: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  let ready!: () => void;
-  const subscribed = new Promise<void>((resolve) => {
-    ready = resolve;
-  });
+  const subscribed = createDeferred<void>();
   const ack = vi.fn(async (message: Uint8Array) => {
     expect(Buffer.from(message).toString()).toBe("ack");
   });
   const onMessage = vi.fn((callback: NonNullable<typeof listener>) => {
     listener = callback;
-    ready();
+    subscribed.resolve();
     return () => {
       listener = undefined;
     };
@@ -40,7 +38,7 @@ function receiver(controller = new AbortController()) {
   return {
     controller,
     io,
-    subscribed,
+    subscribed: subscribed.promise,
     ack,
     onMessage,
     send: async (bytes: Uint8Array) => {
@@ -52,16 +50,18 @@ function receiver(controller = new AbortController()) {
   };
 }
 
-async function authorized(filePath: string, data: Buffer, extras: Record<string, unknown> = {}) {
+async function authorized(filePath: string, data: Buffer) {
   const params = {
     path: filePath,
     sizeBytes: data.length,
     expectedSha256: digest(data),
     createParents: true,
     followSymlinks: false,
-    ...extras,
   };
-  const preflight = await handleFileCreate({ ...params, preflightOnly: true });
+  const peer = receiver();
+  const preflight = await handleFileCreate({ ...params, preflightOnly: true }, peer.io);
+  expect(preflight).toMatchObject({ ok: true, binding: { kind: "write" } });
+  expect(peer.onMessage).not.toHaveBeenCalled();
   if (!preflight.ok) {
     throw new Error(JSON.stringify(preflight));
   }
@@ -77,62 +77,45 @@ async function upload(params: Record<string, unknown>, data: Buffer) {
       throw new Error(`closed before ready: ${JSON.stringify(result)}`);
     }),
   ]);
-  for (let offset = 0; offset < data.length; offset += FILE_CREATE_CHUNK_BYTES) {
-    await peer.send(data.subarray(offset, offset + FILE_CREATE_CHUNK_BYTES));
+  let offset = 0;
+  const sendNext = async () => {
+    const chunk = data.subarray(offset, offset + FILE_CREATE_CHUNK_BYTES);
+    offset += chunk.length;
+    await peer.send(chunk);
+  };
+  // The next chunk may arrive before the previous ACK send settles.
+  peer.ack.mockImplementationOnce(async (message) => {
+    expect(Buffer.from(message).toString()).toBe("ack");
+    await sendNext();
+  });
+  while (offset < data.length) {
+    await sendNext();
   }
   await peer.send(Buffer.alloc(0));
   return { result: await outcome, peer };
 }
 
 describe("file.create duplex command", () => {
-  it.each([17, 50])(
-    "creates %i MiB with bounded chunks and preserves replay edits",
-    async (mebibytes) => {
-      const data = Buffer.alloc(mebibytes * 1024 * 1024, 0x6a);
-      const target = path.join(directory, "inputs", "large.bin");
-      const created = await upload(await authorized(target, data), data);
-      expect(created.result).toMatchObject({
-        ok: true,
-        status: "created",
-        path: target,
-        size: data.length,
-        sha256: digest(data),
-      });
-      expect(created.peer.ack).toHaveBeenCalledTimes(mebibytes);
-      expect(digest(await fs.readFile(target))).toBe(digest(data));
-      await fs.writeFile(target, "user edit");
-      const replay = await upload(await authorized(target, data), data);
-      expect(replay.result).toMatchObject({ ok: true, status: "exists", path: target });
-      expect(replay.result).not.toHaveProperty("sha256");
-      expect(await fs.readFile(target, "utf8")).toBe("user edit");
-    },
-  );
-
-  it("creates empty files without a data chunk", async () => {
-    const data = Buffer.alloc(0);
-    const target = path.join(directory, "empty");
-    const { result, peer } = await upload(await authorized(target, data, { maxBytes: 0 }), data);
-    expect(result).toMatchObject({ ok: true, status: "created", size: 0 });
-    expect(peer.ack).not.toHaveBeenCalled();
-    expect((await fs.stat(target)).size).toBe(0);
-  });
-
-  it("does not subscribe or create parents during preflight", async () => {
-    const peer = receiver();
-    const target = path.join(directory, "missing", "file");
-    const result = await handleFileCreate(
-      {
-        path: target,
-        sizeBytes: 1,
-        expectedSha256: digest(Buffer.from("x")),
-        createParents: true,
-        preflightOnly: true,
-      },
-      peer.io,
-    );
-    expect(result).toMatchObject({ ok: true, binding: { kind: "write" } });
-    expect(peer.onMessage).not.toHaveBeenCalled();
+  it("creates 50 MiB with bounded chunks and preserves replay edits", async () => {
+    const data = Buffer.alloc(50 * 1024 * 1024, 0x6a);
+    const target = path.join(directory, "inputs", "large.bin");
+    const params = await authorized(target, data);
     expect(await fs.readdir(directory)).toEqual([]);
+    const created = await upload(params, data);
+    expect(created.result).toMatchObject({
+      ok: true,
+      status: "created",
+      path: target,
+      size: data.length,
+      sha256: digest(data),
+    });
+    expect(created.peer.ack).toHaveBeenCalledTimes(50);
+    expect(digest(await fs.readFile(target))).toBe(digest(data));
+    await fs.writeFile(target, "user edit");
+    const replay = await upload(await authorized(target, data), data);
+    expect(replay.result).toMatchObject({ ok: true, status: "exists", path: target });
+    expect(replay.result).not.toHaveProperty("sha256");
+    expect(await fs.readFile(target, "utf8")).toBe("user edit");
   });
 
   it("rejects a replaced canonical parent before subscribing", async () => {
@@ -171,49 +154,35 @@ describe("file.create duplex command", () => {
     expect(await fs.readdir(`${parent}-old`)).toEqual([]);
   });
 
-  it.each(["root", "leaf"])("rejects an existing %s symlink before subscribing", async (kind) => {
-    const actual = path.join(directory, "actual");
-    await fs.mkdir(actual);
-    await fs.writeFile(path.join(actual, "file"), "untouched");
-    const alias = path.join(directory, "alias");
-    await fs.symlink(kind === "root" ? actual : path.join(actual, "file"), alias);
-    const target = kind === "root" ? path.join(alias, "new") : alias;
-    const peer = receiver();
-    const result = await handleFileCreate(
-      {
-        path: target,
-        sizeBytes: 1,
-        expectedSha256: digest(Buffer.from("x")),
-        preflightOnly: true,
-        followSymlinks: false,
-      },
-      peer.io,
-    );
-    expect(result.ok).toBe(false);
-    expect(peer.onMessage).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(actual, "file"), "utf8")).toBe("untouched");
-  });
-
-  it("never accepts a symlink leaf as an existing file even when parents may follow aliases", async () => {
-    const target = path.join(directory, "target");
-    const alias = path.join(directory, "alias");
-    await fs.writeFile(target, "original");
-    await fs.symlink(target, alias);
-    const peer = receiver();
-    const result = await handleFileCreate(
-      {
-        path: alias,
-        sizeBytes: 1,
-        expectedSha256: digest(Buffer.from("x")),
-        followSymlinks: true,
-        preflightOnly: true,
-      },
-      peer.io,
-    );
-    expect(result.ok).toBe(false);
-    expect(peer.onMessage).not.toHaveBeenCalled();
-    expect(await fs.readFile(target, "utf8")).toBe("original");
-  });
+  it.each([
+    { kind: "root", followSymlinks: false },
+    { kind: "leaf", followSymlinks: false },
+    { kind: "leaf", followSymlinks: true },
+  ])(
+    "rejects a $kind symlink with followSymlinks=$followSymlinks before subscribing",
+    async ({ kind, followSymlinks }) => {
+      const actual = path.join(directory, "actual");
+      await fs.mkdir(actual);
+      await fs.writeFile(path.join(actual, "file"), "untouched");
+      const alias = path.join(directory, "alias");
+      await fs.symlink(kind === "root" ? actual : path.join(actual, "file"), alias);
+      const target = kind === "root" ? path.join(alias, "new") : alias;
+      const peer = receiver();
+      const result = await handleFileCreate(
+        {
+          path: target,
+          sizeBytes: 1,
+          expectedSha256: digest(Buffer.from("x")),
+          preflightOnly: true,
+          followSymlinks,
+        },
+        peer.io,
+      );
+      expect(result.ok).toBe(false);
+      expect(peer.onMessage).not.toHaveBeenCalled();
+      expect(await fs.readFile(path.join(actual, "file"), "utf8")).toBe("untouched");
+    },
+  );
 
   it.each(["cancel", "digest", "size", "chunk"])(
     "leaves no published file after %s failure",
@@ -238,21 +207,6 @@ describe("file.create duplex command", () => {
       expect(await fs.readdir(directory)).toEqual([]);
     },
   );
-
-  it("accepts the next chunk delivered before the prior ACK send promise settles", async () => {
-    const data = Buffer.from("ab");
-    const target = path.join(directory, "ack-race");
-    const peer = receiver();
-    const outcome = handleFileCreate(await authorized(target, data), peer.io);
-    await peer.subscribed;
-    peer.ack.mockImplementationOnce(async () => {
-      await peer.send(data.subarray(1));
-    });
-    await peer.send(data.subarray(0, 1));
-    await peer.send(Buffer.alloc(0));
-    expect(await outcome).toMatchObject({ ok: true, status: "created" });
-    expect(await fs.readFile(target)).toEqual(data);
-  });
 
   it("cleans an unpublished fs-safe stage when cancelled during file writing", async () => {
     const data = Buffer.alloc(2 * FILE_CREATE_CHUNK_BYTES, 0x42);

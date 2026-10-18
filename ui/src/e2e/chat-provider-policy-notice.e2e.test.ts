@@ -41,6 +41,29 @@ suite.define(() => {
       await emitNotice(1, "buffering");
       await expect.poll(() => notice.textContent()).toContain("Cyber safety review");
       expect(await notice.getAttribute("role")).toBe("status");
+      await expect
+        .poll(async () => {
+          const box = await notice.boundingBox();
+          if (box) {
+            return [];
+          }
+          return notice.evaluate((element) => {
+            const hiddenAncestors = [];
+            for (let node: Element | null = element; node; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              if (style.display === "none" || style.visibility !== "visible") {
+                hiddenAncestors.push({
+                  tag: node.tagName,
+                  className: node.className,
+                  display: style.display,
+                  visibility: style.visibility,
+                });
+              }
+            }
+            return hiddenAncestors.length ? hiddenAncestors : ["notice has no layout box"];
+          });
+        })
+        .toEqual([]);
       const noticeBox = await notice.boundingBox();
       const composerBox = await composer.boundingBox();
       expect(noticeBox).not.toBeNull();

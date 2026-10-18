@@ -6,6 +6,7 @@ export {
   asDateTimestampMs,
   asNonNegativeFiniteNumber,
   asPositiveFiniteNumber,
+  floorPositiveFiniteNumber,
   asFiniteNumberInRange,
   asSafeIntegerInRange,
   isFutureDateTimestampMs,
@@ -39,3 +40,6 @@ export {
   resolveExpiresAtMsFromEpochSeconds,
 } from "../../packages/normalization-core/src/number-coercion.js";
 export { MAX_TCP_PORT, parseTcpPort } from "../infra/tcp-port.js";
+
+// Private observed-message policy shared by official channel implementations.
+export { resolvePromptHistoryLimit } from "../auto-reply/reply/history-limit.js";

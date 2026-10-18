@@ -32,8 +32,8 @@ suite.define(() => {
       const composer = page.locator(".new-session-page__composer");
       await composer.getByRole("button", { name: "Add attachment" }).click();
       await composer
-        .locator("wa-dropdown.agent-chat__capability-menu")
-        .getByRole("menuitem", { name: "Draft" })
+        .locator(".agent-chat__capability-menu")
+        .getByRole("menuitemcheckbox", { name: "Draft" })
         .click();
 
       await expect
@@ -98,21 +98,25 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__composer");
-      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const menu = composer.locator(".agent-chat__capability-menu");
       await composer.getByRole("button", { name: "Add attachment" }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("root");
 
-      await menu.getByRole("menuitem", { name: "Draft" }).click();
+      const draft = menu.getByRole("menuitemcheckbox", { name: "Draft" });
+      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("false");
+      await draft.focus();
+      await page.keyboard.press("Space");
+      await expect.poll(() => draft.getAttribute("aria-checked")).toBe("true");
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
-      const release = menu.getByRole("menuitem", { name: "Release" });
+      const release = menu.getByRole("menuitemcheckbox", { name: "Release" });
       await expect.poll(() => release.isEnabled()).toBe(true);
       await release.click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
 
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("connectors");
-      await menu.getByRole("menuitem", { name: /^github/ }).click();
+      await menu.getByRole("menuitemcheckbox", { name: /^github/ }).click();
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitemcheckbox", { name: "Web search" }).click();
 

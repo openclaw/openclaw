@@ -72,21 +72,6 @@ describe("Google Chat approval card action registry", () => {
     ).toBe(true);
   });
 
-  it("suppresses manual exec approval follow-up text after native delivery before token binding", () => {
-    registerGoogleChatManualApprovalFollowupSuppression({
-      approvalId,
-      approvalKind: "exec",
-      allowedDecisions: ["allow-once", "deny"],
-      expiresAtMs: Date.now() + 60_000,
-    });
-
-    expect(
-      shouldSuppressGoogleChatManualExecApprovalFollowupText(
-        `Please reply with:\n/approve ${approvalId.slice(0, 8)} allow-once`,
-      ),
-    ).toBe(true);
-  });
-
   it("keeps unrelated, expired, and non-sendable approval text visible", () => {
     registerExecApprovalCard({ expiresAtMs: Date.now() - 1 });
     expect(

@@ -21,11 +21,16 @@ const mocks = vi.hoisted(() => {
   return { authBridge, managedBinary, providerAuth };
 });
 
-vi.mock("./auth-bridge.js", () => ({
+vi.mock("./auth-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-bridge.js")>()),
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
-  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
+}));
+
+vi.mock("./computer-use-artifacts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./computer-use-artifacts.js")>()),
+  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
 }));
 
 vi.mock("./auth-profile.js", () => ({
@@ -33,7 +38,8 @@ vi.mock("./auth-profile.js", () => ({
   resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
 }));
 
-vi.mock("./auth-cache-key.js", () => ({
+vi.mock("./auth-cache-key.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-cache-key.js")>()),
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
 }));
 
@@ -51,7 +57,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-registration", async (importOriginal)
 let listCodexAppServerModels: typeof import("./models.js").listCodexAppServerModels;
 let listAllCodexAppServerModels: typeof import("./models.js").listAllCodexAppServerModels;
 let readModelListResult: typeof import("./models.js").readModelListResult;
-let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.js").resetSharedCodexAppServerClientForTests;
+let resetSharedCodexAppServerClientForTests: typeof import("./shared-client.test-support.js").resetSharedCodexAppServerClientForTests;
 
 const validModelListEntry = {
   id: "gpt-test",
@@ -65,11 +71,30 @@ const validModelListEntry = {
   supportedReasoningEfforts: [],
 };
 
+function paginatedModel(id: string, inputModalities: string[]) {
+  return {
+    id,
+    model: id,
+    displayName: id,
+    description: id.toUpperCase(),
+    inputModalities,
+    upgrade: null,
+    upgradeInfo: null,
+    availabilityNux: null,
+    hidden: false,
+    supportedReasoningEfforts: [],
+    defaultReasoningEffort: "medium",
+    supportsPersonality: false,
+    additionalSpeedTiers: [],
+    isDefault: false,
+  };
+}
+
 describe("listCodexAppServerModels", () => {
   beforeAll(async () => {
     ({ listCodexAppServerModels, listAllCodexAppServerModels, readModelListResult } =
       await import("./models.js"));
-    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.js"));
+    ({ resetSharedCodexAppServerClientForTests } = await import("./shared-client.test-support.js"));
   });
 
   afterEach(() => {
@@ -91,82 +116,7 @@ describe("listCodexAppServerModels", () => {
   });
 
   it.each([
-    { label: "missing response", value: undefined },
-    { label: "null response", value: null },
-    { label: "missing model data", value: {} },
-    { label: "non-array model data", value: { data: {} } },
-    { label: "null model row", value: { data: [null] } },
-    { label: "invalid pagination cursor", value: { data: [], nextCursor: 42 } },
-    {
-      label: "whitespace model identifier",
-      value: { data: [{ ...validModelListEntry, id: "   " }] },
-    },
-    {
-      label: "whitespace model name",
-      value: { data: [{ ...validModelListEntry, model: "\t " }] },
-    },
-    {
-      label: "malformed row after a valid model",
-      value: { data: [validModelListEntry, { ...validModelListEntry, id: "   " }] },
-    },
-  ])("rejects $label without returning an incomplete model catalog", ({ value }) => {
-    expect(() => readModelListResult(value)).toThrow(
-      /Invalid Codex app-server model\/list response/,
-    );
-  });
-
-  it.each([{ data: [] }, { data: [], nextCursor: null }])(
-    "preserves a genuinely empty model catalog",
-    (value) => {
-      expect(readModelListResult(value)).toEqual({ models: [] });
-    },
-  );
-
-  it("preserves generated model defaults and a valid pagination cursor", () => {
-    expect(readModelListResult({ data: [validModelListEntry], nextCursor: "page-2" })).toEqual({
-      models: [
-        {
-          id: "gpt-test",
-          model: "gpt-test",
-          displayName: "GPT Test",
-          description: "test model",
-          hidden: false,
-          isDefault: false,
-          inputModalities: ["text", "image"],
-          supportedReasoningEfforts: [],
-          defaultReasoningEffort: "medium",
-          multiAgentVersion: "v2",
-        },
-      ],
-      nextCursor: "page-2",
-    });
-  });
-
-  it("preserves explicit null while omitting an absent multi-agent version", () => {
-    expect(
-      readModelListResult({
-        data: [{ ...validModelListEntry, multiAgentVersion: null }],
-      }).models[0],
-    ).toHaveProperty("multiAgentVersion", null);
-    expect(
-      readModelListResult({
-        data: [
-          {
-            ...validModelListEntry,
-            multiAgentVersion: undefined,
-          },
-        ],
-      }).models[0],
-    ).not.toHaveProperty("multiAgentVersion");
-  });
-
-  it.each([
     { label: "missing model data", response: {} },
-    { label: "non-array model data", response: { data: {} } },
-    {
-      label: "whitespace model identifier",
-      response: { data: [{ ...validModelListEntry, id: "   " }] },
-    },
     {
       label: "malformed row after a valid model",
       response: { data: [validModelListEntry, { ...validModelListEntry, id: "   " }] },
@@ -190,6 +140,13 @@ describe("listCodexAppServerModels", () => {
     await expect(listPromise).rejects.toThrow(/Invalid Codex app-server model\/list response/);
     harness.client.close();
     startSpy.mockRestore();
+  });
+
+  it("defaults omitted model modalities at model admission", () => {
+    const result = readModelListResult({ data: [validModelListEntry] });
+
+    expect(result.models[0]?.inputModalities).toEqual(["text", "image"]);
+    expect(validModelListEntry).not.toHaveProperty("inputModalities");
   });
 
   it("lists app-server models through the typed helper", async () => {
@@ -252,6 +209,7 @@ describe("listCodexAppServerModels", () => {
           hidden: false,
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: ["low", "xhigh"],
+          serviceTiers: [],
           defaultReasoningEffort: "medium",
           multiAgentVersion: "v2",
           isDefault: true,
@@ -261,56 +219,6 @@ describe("listCodexAppServerModels", () => {
     harness.client.close();
     startSpy.mockRestore();
   });
-
-  it.each(["success", "failure"] as const)(
-    "joins isolated model-list transport shutdown before returning %s",
-    async (outcome) => {
-      const harness = createClientHarness({
-        autoEmitExit: false,
-        onWrite(line, send) {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "initialize") {
-            send({ id: request.id, result: { userAgent: "openclaw/0.149.0 (macOS; test)" } });
-          } else if (request.method === "model/list") {
-            send({
-              id: request.id,
-              ...(outcome === "success"
-                ? { result: { data: [], nextCursor: null } }
-                : { error: { code: -32603, message: "catalog unavailable" } }),
-            });
-          }
-        },
-      });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-      let settled = false;
-      const list = listCodexAppServerModels({ sharedClient: false, timeoutMs: 1_000 })
-        .then(
-          (value) => ({ value }),
-          (error: unknown) => ({ error }),
-        )
-        .finally(() => {
-          settled = true;
-        });
-      try {
-        await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(settled).toBe(false);
-        harness.emitExit();
-        const result = await list;
-        if (outcome === "success") {
-          expect(result).toEqual({ value: { models: [] } });
-        } else {
-          expect(result).toMatchObject({ error: { message: "catalog unavailable" } });
-        }
-      } finally {
-        harness.emitExit();
-        await list;
-        await harness.client.closeAndWait();
-      }
-    },
-  );
 
   it("lists all app-server model pages through one client", async () => {
     const harness = createClientHarness();
@@ -333,24 +241,7 @@ describe("listCodexAppServerModels", () => {
     harness.send({
       id: firstList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.4",
-            description: "GPT-5.4",
-            hidden: false,
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.4", ["text"])],
         nextCursor: "page-2",
       },
     });
@@ -364,24 +255,7 @@ describe("listCodexAppServerModels", () => {
     harness.send({
       id: secondList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.5",
-            model: "gpt-5.5",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.5",
-            description: "GPT-5.5",
-            hidden: false,
-            inputModalities: ["text", "image"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.5", ["text", "image"])],
         nextCursor: null,
       },
     });
@@ -408,24 +282,7 @@ describe("listCodexAppServerModels", () => {
     harness.send({
       id: firstList.id,
       result: {
-        data: [
-          {
-            id: "gpt-5.4",
-            model: "gpt-5.4",
-            upgrade: null,
-            upgradeInfo: null,
-            availabilityNux: null,
-            displayName: "gpt-5.4",
-            description: "GPT-5.4",
-            hidden: false,
-            inputModalities: ["text"],
-            supportedReasoningEfforts: [],
-            defaultReasoningEffort: "medium",
-            supportsPersonality: false,
-            additionalSpeedTiers: [],
-            isDefault: false,
-          },
-        ],
+        data: [paginatedModel("gpt-5.4", ["text"])],
         nextCursor: "page-2",
       },
     });

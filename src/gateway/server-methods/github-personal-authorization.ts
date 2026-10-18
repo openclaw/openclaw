@@ -1,25 +1,36 @@
-import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
-import { resolvePersonalGitHubOwner } from "../../state/user-github-connections.js";
-import type { PersonalGitHubAction } from "../github-personal-oauth.js";
+import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import {
+  intersectOperatorScopes,
+  operatorScopeSatisfied,
+  roleScopesAllow,
+} from "../../shared/operator-scope-compat.js";
+import { prepareUserProfileRolePolicyAuthority } from "../../state/user-channel-identity-operations.js";
+import { captureResidentUserProfileAccess } from "../../state/user-profile-list.js";
+import type { PersonalGitHubAction, PersonalGitHubActionV2 } from "../github-personal-oauth.js";
+import type { PersonalGitHubSessionActionV2 } from "../github-personal-publication.js";
+import {
+  currentGitHubPublicationConfig,
+  prepareGitHubPublicationSession,
+} from "../github-publication-availability.js";
 import { GitHubPublicationSessionChangedError } from "../github-publication-failure.js";
+import { prepareGitHubPublicationRequesterV2 } from "../github-publication-requester.js";
+import { hasCurrentGatewayOperatorAccess } from "../operator-access-policy.js";
 import {
   resolveOperatorRolePolicy,
   resolveOperatorRolePolicyForProfile,
+  resolveOperatorRolePolicyForAssignment,
 } from "../operator-role-policy.js";
 import type { SessionMutationTarget } from "../session-mutation-authorization-error.js";
-import {
-  createSessionListEntryFilter,
-  resolveSessionMutationAuthorization,
-} from "../session-sharing.js";
-import {
-  type GatewaySessionStoreDiscoveryCache,
-  loadGatewaySessionEntryReadOnly,
-} from "../session-utils.js";
+import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
+import { createSessionListEntryFilter } from "../session-sharing.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import {
-  isIneligiblePersonalGatewayCaller,
+  hasCurrentPersonalGatewaySource,
   isSyntheticGatewayCaller,
 } from "./gateway-personal-caller.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
@@ -27,12 +38,17 @@ type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal
 /** Intersect the live role ceiling with the socket grant, preserving scope implications. */
 function currentGitHubClient(
   options: Request,
-  scope: "operator.read" | "operator.write",
-  owner?: string,
+  scope: "operator.read" | "operator.write" | "operator.sessions.read",
+  owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
   if (
     options.signal?.aborted ||
+    client?.invalidated ||
+    client?.connectionSignal?.aborted ||
+    !hasCurrentGatewayOperatorAccess(client?.internal?.operatorAccessAuthority) ||
+    (client?.internal?.remoteIngressPrincipal &&
+      !hasCurrentPersonalGatewaySource(client, context)) ||
     (client?.connId &&
       !isSyntheticGatewayCaller(client) &&
       !context.getClientConnIds?.((current) => current === client).has(client.connId))
@@ -46,21 +62,20 @@ function currentGitHubClient(
     throw new Error("Authenticated profile verification is unavailable; retry the request.");
   }
   const cfg = context.getRuntimeConfig();
-  const policy = owner
-    ? resolveOperatorRolePolicyForProfile(owner, cfg)
-    : resolveOperatorRolePolicy(client, cfg);
+  const profileId = typeof owner === "string" ? owner : owner?.profileId;
+  const policy =
+    typeof owner === "object"
+      ? resolveOperatorRolePolicyForAssignment(
+          owner.profileId,
+          owner.role,
+          cfg,
+          owner.githubLogin ?? null,
+        )
+      : profileId
+        ? resolveOperatorRolePolicyForProfile(profileId, cfg)
+        : resolveOperatorRolePolicy(client, cfg);
   const granted = client.connect.scopes ?? [];
-  const scopes = policy
-    ? [...new Set([...granted, ...policy.scopes])].filter((candidate) =>
-        [granted, policy.scopes].every((allowedScopes) =>
-          roleScopesAllow({
-            role: "operator",
-            requestedScopes: [candidate],
-            allowedScopes,
-          }),
-        ),
-      )
-    : granted;
+  const scopes = policy ? intersectOperatorScopes(granted, policy.scopes) : granted;
   if (
     client.connect.role !== "operator" ||
     !roleScopesAllow({
@@ -74,8 +89,8 @@ function currentGitHubClient(
   return {
     ...client,
     connect: { ...client.connect, scopes },
-    ...(owner && client.authenticatedUserProfile
-      ? { authenticatedUserProfile: { ...client.authenticatedUserProfile, profileId: owner } }
+    ...(profileId && client.authenticatedUserProfile
+      ? { authenticatedUserProfile: { ...client.authenticatedUserProfile, profileId } }
       : {}),
   };
 }
@@ -84,65 +99,152 @@ type PersonalEligibility =
   | { kind: "eligible"; action: PersonalGitHubAction }
   | { kind: "absent" | "ineligible" };
 
-/** Shared reads do not require a person; absence never substitutes for failed authentication. */
-export function prepareGitHubPublicationOptionsRead(
-  options: Request,
-  { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+type OptionsSessionFlight = {
+  pending: ReturnType<typeof prepareGitHubPublicationSession>;
+  readers: number;
+};
+const optionsSessionFlights = new WeakMap<OpenClawConfig, Map<string, OptionsSessionFlight>>();
+
+/** Share only pending durable preparation; every caller retains its own live authority. */
+async function prepareOptionsSession(
+  sessionKey: string,
+  agentId: string | undefined,
+  assertCurrent: () => void,
 ) {
-  // Store discovery is stable within this request; session rows remain live reads.
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const resolveEligibility = (): PersonalEligibility => {
-    currentGitHubClient(options, "operator.read");
-    const client = options.client;
-    if (!client?.connId || isIneligiblePersonalGatewayCaller(client)) {
-      return { kind: "ineligible" };
+  assertCurrent();
+  const cfg = currentGitHubPublicationConfig();
+  // Memory actors belong to the caller's storage context.
+  if (isIncognitoSessionKey(sessionKey)) {
+    return prepareGitHubPublicationSession(sessionKey, { agentId, cfg, assertCurrent });
+  }
+  let flights = optionsSessionFlights.get(cfg);
+  if (!flights) {
+    flights = new Map();
+    optionsSessionFlights.set(cfg, flights);
+  }
+  const key = JSON.stringify([getRuntimeConfigSnapshotMetadata()?.revision, agentId, sessionKey]);
+  let flight = flights.get(key);
+  if (!flight) {
+    flight = {
+      pending: prepareGitHubPublicationSession(sessionKey, { agentId, cfg }).finally(() => {
+        flights.delete(key);
+      }),
+      readers: 0,
+    };
+    flights.set(key, flight);
+  }
+  const selected = flight;
+  selected.readers++;
+  const session = await selected.pending;
+  let active = true;
+  const release = () => {
+    if (!active) {
+      return;
     }
-    if (!client.authenticatedUserProfile) {
-      return { kind: "absent" };
+    active = false;
+    if (--selected.readers === 0) {
+      session.release();
     }
-    return { kind: "eligible", action: preparePersonalGitHubAction(options) };
   };
-  const personal = resolveEligibility();
-  const currentClient = () => {
-    const current = resolveEligibility();
+  try {
+    assertCurrent();
+    return {
+      readCurrent: () => {
+        assertCurrent();
+        if (!active) {
+          throw new GitHubPublicationSessionChangedError();
+        }
+        return session.readCurrent();
+      },
+      release,
+    };
+  } catch (error) {
+    release();
+    throw error;
+  }
+}
+
+/** Shared reads do not require a person; absence never substitutes for failed authentication. */
+export async function prepareGitHubPublicationOptionsRead(
+  options: Request &
+    Pick<
+      GatewayRequestHandlerOptions,
+      "req" | "hasCurrentClientAuthority" | "sessionMutationCommitGuard"
+    >,
+  { sessionKey, agentId: requestedAgentId }: SessionMutationTarget,
+  signal?: AbortSignal,
+) {
+  const authority = readGatewayRequestMutationAuthority(options);
+  const client = options.client;
+  const profileReference = client?.authenticatedUserProfile?.profileId;
+  const userId = client?.authenticatedUserId;
+  const access = client?.internal?.operatorAccessAuthority;
+  const assertConnection = () => {
+    signal?.throwIfAborted();
+    authority.assertCurrent();
     if (
-      current.kind !== personal.kind ||
-      (current.kind === "eligible" &&
-        personal.kind === "eligible" &&
-        current.action.owner !== personal.action.owner)
+      client?.authenticatedUserProfile?.profileId !== profileReference ||
+      client?.authenticatedUserId !== userId ||
+      client?.internal?.operatorAccessAuthority !== access
     ) {
       throw new Error("GitHub profile changed; retry publication options.");
     }
-    return currentGitHubClient(
-      options,
-      "operator.read",
-      current.kind === "eligible" ? current.action.owner : undefined,
-    );
   };
-  const readSession = (key: string, agentId?: string) => {
-    const loaded = loadGatewaySessionEntryReadOnly(key, { agentId, targetDiscoveryCache });
-    const filter = createSessionListEntryFilter({
-      cfg: options.context.getRuntimeConfig(),
-      client: currentClient(),
-    });
-    return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
-      ? {
-          sessionId: loaded.entry.sessionId,
-          sessionKey: loaded.canonicalKey,
-          agentId: loaded.agentId,
-          lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
-        }
-      : null;
-  };
-  const session = readSession(sessionKey, requestedAgentId);
-  if (!session) {
-    throw new Error("GitHub publication session was not found.");
+  assertConnection();
+  currentGitHubClient(options, "operator.sessions.read");
+  const profile = profileReference
+    ? await prepareUserProfileRolePolicyAuthority(profileReference)
+    : undefined;
+  assertConnection();
+  if (profileReference && !profile) {
+    throw new Error("Authenticated profile verification is unavailable; retry the request.");
   }
-  return {
-    personal,
-    session,
-    currentSession: () => {
-      const current = readSession(session.sessionKey, session.agentId);
+  const currentClient = () => {
+    assertConnection();
+    if (profile && !profile.isCurrent()) {
+      throw new Error("GitHub profile changed; retry publication options.");
+    }
+    return currentGitHubClient(options, "operator.sessions.read", profile);
+  };
+  const eligibleClient = currentClient();
+  const personal: PersonalEligibility =
+    !eligibleClient ||
+    !hasCurrentPersonalGatewaySource(options.client, options.context) ||
+    !operatorScopeSatisfied("operator.read", eligibleClient.connect.scopes ?? [])
+      ? { kind: "ineligible" }
+      : !profile
+        ? { kind: "absent" }
+        : {
+            kind: "eligible",
+            action: preparePersonalGitHubAction(options, "operator.read", signal),
+          };
+  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, () => {
+    currentClient();
+  });
+  try {
+    const readSession = () => {
+      const loaded = preparedSession.readCurrent();
+      const filter = createSessionListEntryFilter({
+        cfg: options.context.getRuntimeConfig(),
+        client: currentClient(),
+      });
+      return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
+        ? {
+            sessionId: loaded.entry.sessionId,
+            sessionKey: loaded.canonicalKey,
+            agentId: loaded.agentId,
+            lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+            archivedAt: loaded.entry.archivedAt ?? null,
+          }
+        : null;
+    };
+    const session = readSession();
+    if (!session) {
+      throw new Error("GitHub publication session was not found.");
+    }
+    // Archive and access changes invalidate the prepared response through write receipts.
+    const readCurrent = () => {
+      const current = readSession();
       if (
         !current ||
         current.sessionId !== session.sessionId ||
@@ -150,34 +252,102 @@ export function prepareGitHubPublicationOptionsRead(
       ) {
         throw new Error("GitHub publication session access changed; select the session again.");
       }
-      return session;
-    },
+      return current;
+    };
+    return {
+      personal,
+      session,
+      release: () => preparedSession.release(),
+      [Symbol.dispose]: () => preparedSession.release(),
+      sessionScoped: authority.sessionScope === "operator.sessions.read",
+      currentSession: readCurrent,
+      currentSessionRead: preparedSession.readCurrent,
+      // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
+      assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
+        const current = readCurrent();
+        if (current.archivedAt !== snapshot.archivedAt) {
+          throw new Error("GitHub publication session access changed; select the session again.");
+        }
+      },
+    };
+  } catch (error) {
+    preparedSession.release();
+    throw error;
+  }
+}
+
+/** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
+export async function preparePersonalGitHubActionV2(
+  options: Request,
+  scope: "operator.read" | "operator.write" = "operator.read",
+  callerSignal?: AbortSignal,
+): Promise<PersonalGitHubActionV2> {
+  const { client, context } = options;
+  const profileReference = client?.authenticatedUserProfile?.profileId;
+  const userId = client?.authenticatedUserId;
+  const access = client?.internal?.operatorAccessAuthority;
+  const signals = [options.signal, callerSignal, client?.connectionSignal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
+  const signal = AbortSignal.any(signals);
+  const assertConnection = () => {
+    signal.throwIfAborted();
+    if (!hasCurrentPersonalGatewaySource(client, context)) {
+      throw new Error("My GitHub requires a current authenticated human Gateway connection.");
+    }
+    if (
+      client.authenticatedUserProfile?.profileId !== profileReference ||
+      client.authenticatedUserId !== userId ||
+      client.internal?.operatorAccessAuthority !== access
+    ) {
+      throw new Error("My GitHub owner changed; retry from your current profile.");
+    }
   };
+  assertConnection();
+  const profile = profileReference
+    ? await prepareUserProfileRolePolicyAuthority(profileReference)
+    : undefined;
+  assertConnection();
+  if (!profile) {
+    throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
+  }
+  const assertCurrent = () => {
+    assertConnection();
+    if (!profile.isCurrent()) {
+      throw new Error("My GitHub owner changed; retry from your current profile.");
+    }
+    currentGitHubClient(options, scope, profile);
+  };
+  assertCurrent();
+  return { owner: profile.profileId, signal, assertCurrent };
 }
 
 /** Authority stays in this direct connection closure; a profile or request id alone grants nothing. */
-export function preparePersonalGitHubAction(
+function preparePersonalGitHubAction(
   options: Request,
   scope: "operator.read" | "operator.write" = "operator.read",
+  signal?: AbortSignal,
 ): PersonalGitHubAction {
   const { client, context } = options;
   const resolveOwner = () => {
-    if (
-      !client?.connId ||
-      client.connect?.role !== "operator" ||
-      isIneligiblePersonalGatewayCaller(client) ||
-      options.signal?.aborted ||
-      !context.getClientConnIds?.((current) => current === client).has(client.connId)
-    ) {
+    signal?.throwIfAborted();
+    if (!hasCurrentPersonalGatewaySource(client, context) || options.signal?.aborted) {
       throw new Error("My GitHub requires a current authenticated human Gateway connection.");
     }
     const profile = client.authenticatedUserProfile?.profileId;
-    const owner = profile ? resolvePersonalGitHubOwner(profile) : undefined;
-    if (!owner) {
+    if (!profile) {
       throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
     }
-    currentGitHubClient(options, scope, owner);
-    return owner;
+    const current = captureResidentUserProfileAccess(profile).assertCurrent();
+    if (current.merged_into) {
+      throw new Error("My GitHub requires a verified durable user profile; sign in and try again.");
+    }
+    currentGitHubClient(options, scope, {
+      profileId: current.id,
+      role: current.role ?? null,
+      githubLogin: current.githubLogin,
+    });
+    return current.id;
   };
   const owner = resolveOwner();
   return {
@@ -190,56 +360,108 @@ export function preparePersonalGitHubAction(
   };
 }
 
-export function preparePersonalGitHubSessionAction(
+async function bindPersonalGitHubSessionAction(
   options: Request,
-  { sessionKey, agentId }: SessionMutationTarget,
-): PersonalGitHubAction & {
-  sessionId: string;
-  sessionKey: string;
-  agentId: string;
-  lifecycleRevision: string | null;
-} {
-  const action = preparePersonalGitHubAction(options, "operator.write");
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const initial = loadGatewaySessionEntryReadOnly(sessionKey, { agentId, targetDiscoveryCache });
-  if (!initial.entry?.sessionId) {
-    throw new Error("GitHub publication session was not found.");
-  }
-  const sessionId = initial.entry.sessionId;
-  const lifecycleRevision = initial.entry.lifecycleRevision ?? null;
-  const assertCurrent = () => {
-    action.assertCurrent();
-    const current = loadGatewaySessionEntryReadOnly(initial.canonicalKey, {
-      agentId: initial.agentId,
-      targetDiscoveryCache,
-    });
-    if (
-      current.entry?.sessionId !== sessionId ||
-      (current.entry.lifecycleRevision ?? null) !== lifecycleRevision ||
-      current.entry.archivedAt !== undefined ||
-      current.canonicalKey !== initial.canonicalKey
-    ) {
-      throw new GitHubPublicationSessionChangedError();
+  action: PersonalGitHubAction,
+  target: SessionMutationTarget,
+) {
+  const prepared = await prepareGitHubPublicationSession(target.sessionKey, {
+    agentId: target.agentId,
+    assertCurrent: action.assertCurrent,
+    fields: [
+      "sessionId",
+      "lifecycleRevision",
+      "archivedAt",
+      "owner",
+      "createdActor",
+      "visibility",
+      "incognito",
+    ],
+  });
+  let releaseAuthorization = () => {};
+  try {
+    const initial = prepared.readCurrent();
+    if (!initial.entry?.sessionId) {
+      throw new Error("GitHub publication session was not found.");
     }
-    // This is a session mutation, not a run start. Preserve current admin rights without
-    // retaining an admin grant that the person's live role no longer permits.
-    const { error } = resolveSessionMutationAuthorization({
+    const { authorization, error } = await resolveSessionMutationAuthorizationAsync({
       client: currentGitHubClient(options, "operator.write", action.owner),
       method: "sessions.github.publish",
       requestParams: { sessionKey: initial.canonicalKey, agentId: initial.agentId },
       context: options.context,
+      assertInvocationCurrent: action.assertCurrent,
     });
+    releaseAuthorization = () => authorization?.release?.();
     if (error) {
       throw new Error(error.message);
     }
-  };
-  assertCurrent();
-  return {
-    ...action,
-    assertCurrent,
-    sessionId,
-    lifecycleRevision,
-    sessionKey: initial.canonicalKey,
-    agentId: initial.agentId,
-  };
+    const assertCurrent = () => {
+      action.assertCurrent();
+      currentGitHubClient(options, "operator.write", action.owner);
+      const current = prepared.readCurrent();
+      if (current.entry?.archivedAt !== undefined) {
+        throw new GitHubPublicationSessionChangedError();
+      }
+      authorization?.assertCurrent();
+    };
+    assertCurrent();
+    return {
+      action: {
+        ...action,
+        assertCurrent,
+        sessionId: initial.entry.sessionId,
+        lifecycleRevision: initial.entry.lifecycleRevision ?? null,
+        sessionKey: initial.canonicalKey,
+        agentId: initial.agentId,
+      },
+      release: () => {
+        releaseAuthorization();
+        prepared.release();
+      },
+    };
+  } catch (error) {
+    releaseAuthorization();
+    prepared.release();
+    throw error;
+  }
+}
+
+/** Retain the authenticated policy owner for worker commits as well as immediate effects. */
+export async function preparePersonalGitHubSessionActionV2(
+  options: Request & Parameters<typeof prepareGitHubPublicationRequesterV2>[0],
+  target: SessionMutationTarget,
+): Promise<{ action: PersonalGitHubSessionActionV2; release: () => void }> {
+  const personal = await preparePersonalGitHubActionV2(options, "operator.write");
+  const bound = await bindPersonalGitHubSessionAction(options, personal, target);
+  const { action } = bound;
+  try {
+    const admitted = await prepareGitHubPublicationRequesterV2(options, action);
+    try {
+      action.assertCurrent();
+      return {
+        action: {
+          ...action,
+          version: 2,
+          signal: admitted.requester.signal,
+          prepareSource: (selector) => {
+            action.assertCurrent();
+            return admitted.requester.prepareSource({
+              ...selector,
+              personalOwnerProfileId: action.owner,
+            });
+          },
+        },
+        release: () => {
+          admitted.release();
+          bound.release();
+        },
+      };
+    } catch (error) {
+      admitted.release();
+      throw error;
+    }
+  } catch (error) {
+    bound.release();
+    throw error;
+  }
 }

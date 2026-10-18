@@ -1,79 +1,51 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   assistantVisibleTextFilters,
+  minimaxToolCallTextFilter,
   sanitizeAssistantVisibleTextWithProfile,
-  stripMinimaxToolCallXml,
 } from "./assistant-visible-text.js";
 import { createTextProjection } from "./text-projection.js";
 
 describe("encoded MiniMax tool envelopes", () => {
-  it.each(["delivery", "final-answer-delivery", "history"] as const)(
-    "removes the internal envelope and retains surrounding prose in %s",
-    (profile) => {
-      const input = [
-        "Before",
-        "]<]minimax[>[<tool_call>",
-        ']<]minimax[>[<invoke name="exec">]<]minimax[>[<command>printf PRIVATE_PAYLOAD]<]minimax[>[</command>',
-        "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>",
-        "After",
-      ].join("\n");
-
-      expect(sanitizeAssistantVisibleTextWithProfile(input, profile)).toBe("Before\n\nAfter");
-    },
-  );
-
-  it.each([
-    {
-      name: "inline code",
-      input:
-        'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`.',
-      expected:
-        'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`.',
-    },
-    {
-      name: "fenced code",
-      input:
-        '```xml\n]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>\n```',
-      expected:
-        '```xml\n]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>\n```',
-    },
-    {
-      name: "a standalone delimiter",
-      input: "The literal ]<]minimax[>[ delimiter is not a tool call.",
-      expected: "The literal ]<]minimax[>[ delimiter is not a tool call.",
-    },
-  ])("preserves $name", ({ input, expected }) => {
-    expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery")).toBe(expected);
+  it("removes the internal envelope and retains surrounding prose in final answers", () => {
+    const input = [
+      "Before",
+      "]<]minimax[>[<tool_call>",
+      ']<]minimax[>[<invoke name="exec">]<]minimax[>[<command>printf PRIVATE_PAYLOAD]<]minimax[>[</command>',
+      "]<]minimax[>[</invoke>]<]minimax[>[</tool_call>",
+      "After",
+    ].join("\n");
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "final-answer-delivery")).toBe(
+      "Before\n\nAfter",
+    );
   });
 
   it.each([
-    { name: "inline code", example: "Example: `]<]minimax[>[</tool_call>`" },
-    { name: "fenced code", example: "```xml\n]<]minimax[>[</tool_call>\n```" },
-  ])(
-    "ignores a false closer in $name and removes the complete internal envelope",
-    ({ example }) => {
-      const input = [
-        "Before",
-        "]<]minimax[>[<tool_call>",
-        example,
-        ']<]minimax[>[<invoke name="exec">PRIVATE_PAYLOAD</invoke>',
-        "]<]minimax[>[</tool_call>",
-        "After",
-      ].join("\n");
+    [
+      "fenced code",
+      '```xml\n]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>\n```',
+    ],
+    ["a standalone delimiter", "The literal ]<]minimax[>[ delimiter is not a tool call."],
+  ])("preserves %s", (_name, input) => {
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery")).toBe(input);
+  });
 
-      expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery")).toBe("Before\n\nAfter");
-    },
-  );
+  it("ignores a false closer in code and removes the complete internal envelope", () => {
+    const input = [
+      "Before",
+      "]<]minimax[>[<tool_call>",
+      "Example: `]<]minimax[>[</tool_call>`",
+      ']<]minimax[>[<invoke name="exec">PRIVATE_PAYLOAD</invoke>',
+      "]<]minimax[>[</tool_call>",
+      "After",
+    ].join("\n");
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "delivery")).toBe("Before\n\nAfter");
+  });
 
   it("preserves encoded text in the internal-scaffolding profile", () => {
-    expect(
-      sanitizeAssistantVisibleTextWithProfile(
-        'Before ]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">payload</invoke>]<]minimax[>[</tool_call> After',
-        "internal-scaffolding",
-      ),
-    ).toBe(
-      'Before ]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">payload</invoke>]<]minimax[>[</tool_call> After',
-    );
+    const input =
+      'Before ]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">payload</invoke>]<]minimax[>[</tool_call> After';
+    expect(sanitizeAssistantVisibleTextWithProfile(input, "internal-scaffolding")).toBe(input);
   });
 
   it("stops searching after no closer exists for repeated incomplete openings", () => {
@@ -84,7 +56,7 @@ describe("encoded MiniMax tool envelopes", () => {
     let output: string;
     let closeSearches: number;
     try {
-      output = stripMinimaxToolCallXml(input);
+      output = minimaxToolCallTextFilter.transform(input);
       closeSearches = exec.mock.contexts.filter(
         (context) => context instanceof RegExp && context.source === closeSource,
       ).length;
@@ -98,20 +70,12 @@ describe("encoded MiniMax tool envelopes", () => {
   it("replaces already projected text when a split encoded envelope closes", () => {
     const projection = createTextProjection(assistantVisibleTextFilters("delivery", true));
 
-    expect(projection.append("Before ]<]mini")).toEqual({
-      text: "Before ]<]mini",
-      delta: "Before ]<]mini",
-    });
-    expect(
-      projection.append('max[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>'),
-    ).toEqual({
-      text: 'Before ]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>',
-      delta: 'max[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>',
-    });
-    expect(projection.append("]<]minimax[>[</tool_call>After")).toEqual({
-      text: "Before After",
-      delta: null,
-    });
+    const prefix = "Before ]<]mini";
+    const payload = 'max[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>';
+    const closing = "]<]minimax[>[</tool_call>After";
+    expect(projection.append(prefix)).toEqual({ text: prefix, delta: prefix });
+    expect(projection.append(payload)).toEqual({ text: prefix + payload, delta: payload });
+    expect(projection.append(closing)).toEqual({ text: "Before After", delta: null });
     expect(projection.append(".")).toEqual({ text: "Before After.", delta: "." });
   });
 
@@ -121,17 +85,9 @@ describe("encoded MiniMax tool envelopes", () => {
       'Before ]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">secret</invoke>]<]minimax[>[</tool_call>After',
     );
 
-    expect(
-      projection.replace(
-        'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`.',
-      ),
-    ).toEqual({
-      text: 'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`.',
-      delta: null,
-    });
-    expect(projection.append(" Kept.")).toEqual({
-      text: 'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`. Kept.',
-      delta: " Kept.",
-    });
+    const example =
+      'Use `]<]minimax[>[<tool_call>]<]minimax[>[<invoke name="exec">example</invoke>]<]minimax[>[</tool_call>`.';
+    expect(projection.replace(example)).toEqual({ text: example, delta: null });
+    expect(projection.append(" Kept.")).toEqual({ text: `${example} Kept.`, delta: " Kept." });
   });
 });

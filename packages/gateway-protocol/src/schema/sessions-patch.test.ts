@@ -1,21 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { validateSessionsPatchParams } from "../index.js";
+import { validateSessionsPatchParams, validateSessionsPatchManyParams } from "../index.js";
 
 describe("session patch schema", () => {
-  it("accepts explicit runtime selections and clearing the runtime pin", () => {
+  it.each([[null, true]] as const)(
+    "validates snoozedUntil %j for single and batch patches",
+    (snoozedUntil, valid) => {
+      expect(validateSessionsPatchParams({ key: "agent:main:chat", snoozedUntil })).toBe(valid);
+      expect(
+        validateSessionsPatchManyParams({
+          targets: [{ key: "agent:main:chat" }],
+          patch: { snoozedUntil },
+        }),
+      ).toBe(valid);
+    },
+  );
+
+  it.each(["off"] as const)("accepts sandbox mode %s with single and batch CAS", (sandboxMode) => {
     expect(
       validateSessionsPatchParams({
-        key: "agent:main:runtime",
-        model: "openai/gpt-5.6-sol",
-        agentRuntime: "codex",
+        key: "agent:main:chat",
+        sandboxMode,
+        expectedSandboxMode: null,
       }),
     ).toBe(true);
-    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: null })).toBe(
-      true,
-    );
-    expect(validateSessionsPatchParams({ key: "agent:main:runtime", agentRuntime: "" })).toBe(
-      false,
-    );
+    expect(
+      validateSessionsPatchManyParams({
+        targets: [{ key: "agent:main:chat", expectedSandboxMode: "off" }],
+        patch: { sandboxMode },
+      }),
+    ).toBe(true);
+  });
+
+  it.each(["all"])("rejects unsupported sandbox mode %s", (sandboxMode) => {
+    expect(validateSessionsPatchParams({ key: "agent:main:chat", sandboxMode })).toBe(false);
+    expect(
+      validateSessionsPatchParams({
+        key: "agent:main:chat",
+        sandboxMode: "off",
+        expectedSandboxMode: sandboxMode,
+      }),
+    ).toBe(false);
   });
   it("validates session settings compare-and-set fields", () => {
     expect(

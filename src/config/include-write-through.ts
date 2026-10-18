@@ -32,7 +32,7 @@ import { createConfigIncludeOwnershipError } from "./io.write-errors.js";
 import {
   assertBaseSnapshotStillCurrent,
   captureConfigFileWritePathProof,
-  createGuardedConfigFileSystem,
+  createConfigFileWriteGuard,
   rollbackConfigFileWriteIfUnchanged,
   type ConfigFileWriteRollbackProof,
 } from "./io.write-safety.js";
@@ -114,7 +114,7 @@ function includeConfigPathsEqual(left: readonly string[], right: readonly string
 // Canonical immutable path get/set, moved from io.write-prepare.ts (which
 // re-imports them) so there is exactly one copy. Config paths can traverse
 // array indices (roster entries), hence parseConfigPathArrayIndex.
-export function getPathValue(value: unknown, keyPath: string[]): unknown {
+export function getPathValue(value: unknown, keyPath: readonly string[]): unknown {
   let current = value;
   for (const segment of keyPath) {
     if (Array.isArray(current)) {
@@ -133,33 +133,37 @@ export function getPathValue(value: unknown, keyPath: string[]): unknown {
   return current;
 }
 
-export function setPathValue(value: unknown, keyPath: string[], nextValue: unknown): unknown {
+export function setPathValue(
+  value: unknown,
+  keyPath: readonly string[],
+  nextValue: unknown,
+  createParents = false,
+): unknown {
   if (keyPath.length === 0) {
     return structuredClone(nextValue);
   }
   const head = expectDefined(keyPath[0], "config path head");
   const tail = keyPath.slice(1);
-  if (Array.isArray(value)) {
-    const index = parseConfigPathArrayIndex(head);
-    if (index === undefined || index >= value.length) {
+  const index = parseConfigPathArrayIndex(head);
+  if (Array.isArray(value) || (createParents && !isRecord(value) && index !== undefined)) {
+    if (index === undefined || (!createParents && Array.isArray(value) && index >= value.length)) {
       return value;
     }
-    const next = [...value];
-    next[index] = setPathValue(value[index], tail, nextValue);
+    const next = Array.isArray(value) ? [...value] : [];
+    next[index] = setPathValue(next[index], tail, nextValue, createParents);
     return next;
   }
-  if (!isRecord(value)) {
+  if (!createParents && !isRecord(value)) {
     return value;
   }
+  const record = isRecord(value) ? value : {};
   return {
-    ...value,
-    [head]: setPathValue(value[head], tail, nextValue),
+    ...record,
+    [head]: setPathValue(record[head], tail, nextValue, createParents),
   };
 }
 
-/** Diff-and-capture pass: pulls keyed include-owned values out of nextConfig
- * into pendingIncludeWrites and restores the root-authored value in their
- * place, so the root persist candidate never carries include-owned content. */
+// Capture include-owned changes before restoring their root-authored directives.
 export function captureIncludeWriteThrough(params: {
   includeWriteThroughPaths: readonly (readonly string[])[];
   nextConfig: unknown;
@@ -285,7 +289,7 @@ async function rollbackJsonFileWriteIfUnchanged(params: {
       raw: params.previousRaw,
     },
     // rollbackConfigFileWriteIfUnchanged compares the CURRENT file via
-    // hashConfigRaw (io.write-safety.ts:343), not hashConfigIncludeRaw --
+    // hashConfigRaw, not hashConfigIncludeRaw --
     // the two hash different byte layouts for the same non-null input.
     committedHash: hashConfigRaw(params.committedRaw),
     fsModule: fsNode,
@@ -317,7 +321,7 @@ export type IncludeLoadGraph = { hashes: Record<string, string>; targets: Record
 /** Pure staging: no disk writes. Resolves ownership/target from provenance,
  * refuses external targets, reads the current raw + hash fence, and projects
  * the pending delta onto the AUTHORED include value so ${VAR} placeholders
- * survive (finding 3) instead of ever serializing the resolved config. */
+ * survive instead of ever serializing the resolved config. */
 // Both windows are fenced: snapshot-to-stage via the caller's load-time
 // include graph and stage-to-publish via previousHash re-hashed under the
 // publish lock.
@@ -553,30 +557,29 @@ export async function publishStagedIncludeWrites(params: {
           },
           captureRollbackProof: (assertOwner) => guardedFs.captureRollbackProof(assertOwner),
         };
-        const guardedFs = createGuardedConfigFileSystem(
-          target.absolutePath,
-          fsNode,
-          assertCurrent,
-          {
-            snapshot: { path: target.absolutePath, exists: currentRaw !== null, raw: currentRaw },
-            includeGraph: leafIncludeGraph(),
-            targetPathProof: pathProof,
-            preserveDirectoryMode: true,
-            onRootRemoved: () => {
-              publication.phase = "removed";
-            },
-            onRootPublished: () => {
-              publication.phase = "published";
-              registerRestorer(entry.bytes, publicationProof);
-            },
+        const guardedFs = createConfigFileWriteGuard(target.absolutePath, fsNode, assertCurrent, {
+          snapshot: { path: target.absolutePath, exists: currentRaw !== null, raw: currentRaw },
+          includeGraph: leafIncludeGraph(),
+          targetPathProof: pathProof,
+          preserveDirectoryMode: true,
+          onRootRemoved: () => {
+            publication.phase = "removed";
           },
-        );
+          onRootPublished: () => {
+            if (publication.phase !== "published") {
+              registerRestorer(entry.bytes, publicationProof);
+            }
+            publication.phase = "published";
+          },
+        });
         await using preparedFile = await prepareConfigFileWrite({
           configPath: target.absolutePath,
           previousRaw: currentRaw,
           content: entry.bytes,
           fsModule: guardedFs.fileSystem,
           assertCurrent: guardedFs.assertCurrent,
+          assertBeforeMutation: guardedFs.assertBeforeMutation,
+          onDestinationState: guardedFs.onDestinationState,
           destinationHardlinks: "reject",
           durable: true,
         });

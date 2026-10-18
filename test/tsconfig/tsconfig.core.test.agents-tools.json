@@ -12,8 +12,6 @@
     "../../src/agents/sandbox/**/*.test.tsx",
     "../../src/agents/worktrees/**/*.test.ts",
     "../../src/agents/worktrees/**/*.test.tsx",
-    "../../src/agents/sessions/**/*.test.ts",
-    "../../src/agents/sessions/**/*.test.tsx",
     "../../src/security/**/*.test.ts",
     "../../src/security/**/*.test.tsx",
     "../../src/secrets/**/*.test.ts",
@@ -22,7 +20,6 @@
     "../../src/agents/bash-tools*.test.tsx",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",
-    "../../src/agents/model-catalog-view.test.ts",
     "../../src/agents/tool-*.test.ts",
     "../../src/agents/tool-*.test.tsx"
   ]

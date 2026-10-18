@@ -1,5 +1,6 @@
 import { isAbortError } from "../../infra/abort-signal.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ResolvedCliBackend } from "../cli-backends.js";
 import { extractCliErrorMessage } from "../cli-output.js";
 import {
   coerceToFailoverError,
@@ -13,10 +14,9 @@ type CliExitFailoverErrorParams = {
   // Spawn supplies stderr/stdout windows; live stdout is already structured, so it supplies stderr.
   candidates: readonly string[];
   fallbackMessage: string;
-  // Only a clean premature live exit is protocol-level empty_response; other empty exits are unknown.
-  emptyReason?: FailoverError["reason"];
   retryEmptyFailure: boolean;
   resumeAtArg?: string;
+  classifyErrorCode?: ResolvedCliBackend["classifyErrorCode"];
 };
 
 export function createCliFailoverError(
@@ -74,13 +74,12 @@ export function createCliExitFailoverError(params: CliExitFailoverErrorParams): 
     .flatMap((candidate) => (candidate ? [coerceToFailoverError(candidate, params.context)] : []))
     .find((error) => error !== null);
   const message = structuredError || classified?.message || candidates[0] || params.fallbackMessage;
-  const reason =
-    classified?.reason ?? (candidates.length === 0 ? params.emptyReason : undefined) ?? "unknown";
+  const reason = classified?.reason ?? "unknown";
   const code =
     reason === "context_overflow"
       ? "cli_context_overflow"
       : candidates.length === 0 && params.retryEmptyFailure
         ? "cli_unknown_empty_failure"
-        : undefined;
+        : params.classifyErrorCode?.(message);
   return createCliFailoverError(message, reason, params.context, { code });
 }

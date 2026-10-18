@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WizardStartResult } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { collectChangedPaths } from "../config/config-change-paths.js";
 import {
   clearConfigCache,
@@ -33,9 +34,9 @@ import {
   connectDeviceAuthReq,
   disconnectGatewayClient,
   connectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 import { installOpenAiResponsesMock } from "./test-helpers.openai-mock.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -43,14 +44,16 @@ let createConfigIO: typeof import("../config/config.js").createConfigIO;
 const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 
 async function startLoopbackTokenGateway(token: string) {
-  const port = await getGatewayE2ePortBlock();
-  const server = await startGatewayServer(port, {
-    bind: "loopback",
-    auth: { mode: "token", token },
-    controlUiEnabled: false,
-    sidecarStartup: "defer",
-  });
-  return { port, server };
+  const claim = await acquireGatewayE2ePortBlock();
+  const server = await startClaimedGateway(claim, () =>
+    startGatewayServer(claim.port, {
+      bind: "loopback",
+      auth: { mode: "token", token },
+      controlUiEnabled: false,
+      sidecarStartup: "defer",
+    }),
+  );
+  return { port: claim.port, server };
 }
 
 async function writeWorkspacePlugin(params: {
@@ -77,40 +80,20 @@ async function writeWorkspacePlugin(params: {
   await fs.writeFile(path.join(pluginDir, "index.cjs"), params.body, "utf8");
 }
 
-async function readCounterWithRetry(filePath: string): Promise<number> {
-  let counter: number | undefined;
-  try {
-    await expect
-      .poll(
-        async () => {
-          try {
-            const raw = await fs.readFile(filePath, "utf8");
-            const parsed = Number.parseInt(raw.trim(), 10);
-            if (Number.isFinite(parsed)) {
-              counter = parsed;
-              return true;
-            }
-          } catch {
-            // Wait briefly for gateway startup to finish plugin registration.
-          }
-          return false;
-        },
-        { timeout: 1_000, interval: 50 },
-      )
-      .toBe(true);
-  } catch {
-    throw new Error(`timed out waiting for counter file: ${filePath}`);
-  }
-  if (counter === undefined) {
-    throw new Error(`timed out waiting for counter file: ${filePath}`);
-  }
-  return counter;
-}
-
 describe("gateway e2e", () => {
+  let workspacePluginCleanup: Promise<void> | undefined;
+
   beforeEach(resetGatewayTestState);
 
-  afterEach(resetGatewayTestState);
+  afterEach(async () => {
+    try {
+      // Vitest starts hooks on timeout without joining the body's async finally.
+      await workspacePluginCleanup;
+    } finally {
+      workspacePluginCleanup = undefined;
+      resetGatewayTestState();
+    }
+  });
 
   beforeAll(async () => {
     ({ createConfigIO } = await import("../config/config.js"));
@@ -131,17 +114,19 @@ describe("gateway e2e", () => {
         logging: { level: "info" },
       };
       await createConfigIO({ configPath }).writeConfigFile(initialConfig);
-      const port = await getGatewayE2ePortBlock();
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      const claim = await acquireGatewayE2ePortBlock();
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      );
 
       await expect(
         callGateway({
           config: initialConfig,
-          localPortOverride: port,
+          localPortOverride: claim.port,
           method: "health",
           timeoutMs: 5_000,
         }),
@@ -246,18 +231,20 @@ describe("gateway e2e", () => {
           authSource === "explicit-override"
             ? { mode: "off" as const, preserveFunnel: true }
             : undefined;
-        const port = await getGatewayE2ePortBlock();
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
-          ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
-          controlUiEnabled: false,
-        });
+        const claim = await acquireGatewayE2ePortBlock();
+        server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            bind: "loopback",
+            ...(callerAuthOverride ? { auth: callerAuthOverride } : {}),
+            ...(callerTailscaleOverride ? { tailscale: callerTailscaleOverride } : {}),
+            controlUiEnabled: false,
+          }),
+        );
         const expectedToken =
           authSource === "generated" ? getRuntimeConfig().gateway?.auth?.token : overrideToken;
         expect(typeof expectedToken).toBe("string");
         client = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: expectedToken as string,
           clientDisplayName: "vitest-direct-reload",
         });
@@ -327,7 +314,7 @@ describe("gateway e2e", () => {
         }
 
         const reconnected = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: expectedToken as string,
           clientDisplayName: "vitest-direct-reload-reconnect",
         });
@@ -369,19 +356,21 @@ describe("gateway e2e", () => {
       await createConfigIO({ configPath }).writeConfigFile(initialConfig, {
         allowedAgentRosterRemovals: ["main"],
       });
-      const port = await getGatewayE2ePortBlock();
+      const claim = await acquireGatewayE2ePortBlock();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        controlUiEnabled: false,
-        hotReloadRecovery,
-      });
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+          hotReloadRecovery,
+        }),
+      );
       await expect
         .poll(
           async () => {
             const health = await callGateway({
               config: initialConfig,
-              localPortOverride: port,
+              localPortOverride: claim.port,
               method: "health",
               timeoutMs: 5_000,
             });
@@ -398,7 +387,7 @@ describe("gateway e2e", () => {
       };
 
       const postAgentHook = async (agentId: string) => {
-        const response = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
+        const response = await fetch(`http://127.0.0.1:${claim.port}/hooks/agent`, {
           method: "POST",
           headers: {
             authorization: `Bearer ${hookToken}`,
@@ -479,21 +468,23 @@ describe("gateway e2e", () => {
           logging: { level: "info" },
         });
         setTestEnvValue("OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN", oldToken);
-        const port = await getGatewayE2ePortBlock();
-        server = await startGatewayServer(port, {
-          bind: "loopback",
-          auth: {
-            mode: "token",
-            token: {
-              source: "env",
-              provider: "default",
-              id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+        const claim = await acquireGatewayE2ePortBlock();
+        server = await startClaimedGateway(claim, () =>
+          startGatewayServer(claim.port, {
+            bind: "loopback",
+            auth: {
+              mode: "token",
+              token: {
+                source: "env",
+                provider: "default",
+                id: "OPENCLAW_TEST_GATEWAY_OVERRIDE_TOKEN",
+              },
             },
-          },
-          controlUiEnabled: false,
-        });
+            controlUiEnabled: false,
+          }),
+        );
         oldClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: oldToken,
           clientDisplayName: "vitest-startup-auth-ref-old",
         });
@@ -506,7 +497,7 @@ describe("gateway e2e", () => {
           expect(reload.ok).toBe(true);
         }
         const newClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
+          url: `ws://127.0.0.1:${claim.port}`,
           token: newToken,
           clientDisplayName: "vitest-startup-auth-ref-new",
         });
@@ -547,11 +538,13 @@ describe("gateway e2e", () => {
       logging: { level: "info" },
     };
     await configIO.writeConfigFile(initialConfig);
-    const port = await getGatewayE2ePortBlock();
-    const server = await startGatewayServer(port, {
-      bind: "lan",
-      controlUiEnabled: false,
-    });
+    const claim = await acquireGatewayE2ePortBlock();
+    const server = await startClaimedGateway(claim, () =>
+      startGatewayServer(claim.port, {
+        bind: "lan",
+        controlUiEnabled: false,
+      }),
+    );
 
     try {
       const seededOrigins = getRuntimeConfig().gateway?.controlUi?.allowedOrigins;
@@ -628,7 +621,7 @@ describe("gateway e2e", () => {
             },
             // The request below runs sessionKey "agent:dev:mock-openai"; the
             // gateway rejects session keys whose agent id is not declared.
-            entries: { dev: { default: true } },
+            entries: { dev: {} },
           },
           models: {
             mode: "replace",
@@ -693,7 +686,7 @@ describe("gateway e2e", () => {
   it(
     "does not reload workspace plugins when POST /tools/invoke rebuilds tools for the same workspace",
     { timeout: GATEWAY_E2E_TIMEOUT_MS },
-    async () => {
+    async ({ signal }) => {
       const { envSnapshot, tempHome, workspaceDir } = await setupGatewayTempHome({
         prefix: "openclaw-gw-http-tools-home-",
       });
@@ -724,7 +717,7 @@ module.exports = {
       const cfg = {
         agents: {
           defaults: { workspace: workspaceDir },
-          entries: { main: { default: true, tools: { allow: ["agents_list"] } } },
+          entries: { main: { tools: { allow: ["agents_list"] } } },
         },
         plugins: {
           allow: ["http-probe"],
@@ -735,9 +728,14 @@ module.exports = {
       setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
 
       const { port, server } = await startLoopbackTokenGateway(token);
+      const cleanupSettled = createDeferred();
+      workspacePluginCleanup = cleanupSettled.promise;
+      void workspacePluginCleanup.catch(() => {});
 
       try {
-        const beforeCount = await readCounterWithRetry(registerCountPath);
+        // Startup settles after the fixture's synchronous registration write.
+        await withinTest(server.startupSettled, signal);
+        const beforeCount = Number.parseInt(await fs.readFile(registerCountPath, "utf8"), 10);
         expect(beforeCount).toBeGreaterThan(0);
 
         const res = await fetch(`http://127.0.0.1:${port}/tools/invoke`, {
@@ -759,12 +757,16 @@ module.exports = {
         const body = await res.json();
         expect(body.ok).toBe(true);
 
-        const afterCount = await readCounterWithRetry(registerCountPath);
+        const afterCount = Number.parseInt(await fs.readFile(registerCountPath, "utf8"), 10);
         expect(afterCount).toBe(beforeCount);
       } finally {
-        await server.close({ reason: "http tools workspace test complete" });
-        await removeGatewayTempHome(tempHome);
-        envSnapshot.restore();
+        const cleanup = (async () => {
+          await server.close({ reason: "http tools workspace test complete" });
+          await removeGatewayTempHome(tempHome);
+          envSnapshot.restore();
+        })();
+        cleanupSettled.resolve(cleanup);
+        await cleanup;
       }
     },
   );
@@ -785,24 +787,26 @@ module.exports = {
       clearConfigCache();
 
       const wizardToken = nextGatewayId("wiz-token");
-      const port = await getGatewayE2ePortBlock();
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token: wizardToken },
-        controlUiEnabled: false,
-        wizardRunner: async (_opts, _runtime, prompter) => {
-          await prompter.intro("Wizard E2E");
-          await prompter.note("write token");
-          const token = await prompter.text({ message: "token" });
-          await createConfigIO({ configPath }).writeConfigFile({
-            gateway: { auth: { mode: "token", token } },
-          });
-          await prompter.outro("ok");
-        },
-      });
+      const claim = await acquireGatewayE2ePortBlock();
+      const server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token: wizardToken },
+          controlUiEnabled: false,
+          wizardRunner: async (_opts, _runtime, prompter) => {
+            await prompter.intro("Wizard E2E");
+            await prompter.note("write token");
+            const token = await prompter.text({ message: "token" });
+            await createConfigIO({ configPath }).writeConfigFile({
+              gateway: { auth: { mode: "token", token } },
+            });
+            await prompter.outro("ok");
+          },
+        }),
+      );
 
       const client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token: wizardToken,
         clientDisplayName: "vitest-wizard",
       });
@@ -849,37 +853,30 @@ module.exports = {
         );
         expect(next.status).toBe("done");
 
-        await expect
-          .poll(
-            async () => {
-              const parsed = JSON.parse(await fs.readFile(configPath, "utf8"));
-              const token = (parsed as Record<string, unknown>)?.gateway as
-                | Record<string, unknown>
-                | undefined;
-              return (token?.auth as { token?: string } | undefined)?.token;
-            },
-            { timeout: 5_000 },
-          )
-          .toBe(wizardToken);
+        // The wizard writes config before its outro and terminal done response.
+        const persisted = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+        expect(persisted.gateway?.auth?.token).toBe(wizardToken);
       } finally {
         await disconnectGatewayClient(client);
         await server.close({ reason: "wizard e2e complete" });
       }
 
-      const port2 = await getGatewayE2ePortBlock();
-      const server2 = await startGatewayServer(port2, {
-        bind: "loopback",
-        controlUiEnabled: false,
-      });
+      const claim2 = await acquireGatewayE2ePortBlock();
+      const server2 = await startClaimedGateway(claim2, () =>
+        startGatewayServer(claim2.port, {
+          bind: "loopback",
+          controlUiEnabled: false,
+        }),
+      );
       try {
         const resNoToken = await connectDeviceAuthReq({
-          url: `ws://127.0.0.1:${port2}`,
+          url: `ws://127.0.0.1:${claim2.port}`,
         });
         expect(resNoToken.ok).toBe(false);
         expect(resNoToken.error?.message ?? "").toContain("unauthorized");
 
         const resToken = await connectDeviceAuthReq({
-          url: `ws://127.0.0.1:${port2}`,
+          url: `ws://127.0.0.1:${claim2.port}`,
           token: wizardToken,
         });
         expect(resToken.ok).toBe(true);

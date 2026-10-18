@@ -30,7 +30,7 @@ export function writeFeaturePluginScaffold(params: {
         files: ["dist", "openclaw.plugin.json", "README.md"],
         peerDependencies: { openclaw: `>=${VERSION}` },
         dependencies: { typebox: "^1.3.17" },
-        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "^5.9.0" },
+        devDependencies: { openclaw: "latest", esbuild: "0.28.2", typescript: "7.0.2" },
         openclaw: {
           extensions: ["./dist/index.js"],
           controlUi: "./src/control-ui.ts",
@@ -176,7 +176,7 @@ export default defineControlUiPlugin({
     ),
     "README.md": `# ${params.name}
 
-This OpenClaw feature plugin includes a typed draft-analysis operation, a model tool, a native page, and a composer replacement. The browser entry owns its DOM and uses the host's canonical draft and send operations.
+This OpenClaw feature plugin includes a typed draft-analysis operation, a model tool, a native page, and a composer replacement. The browser entry owns its DOM and uses the host's standard draft and send operations.
 
 ## Build and install
 

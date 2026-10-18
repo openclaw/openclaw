@@ -14,6 +14,7 @@ concurrency:
 
 jobs:
   audit:
+    if: github.event_name != 'schedule' || github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:

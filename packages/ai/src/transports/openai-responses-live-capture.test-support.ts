@@ -13,10 +13,7 @@ export async function captureOpenAIResponses<T>(run: () => Promise<T>): Promise<
     if (url.origin !== "https://api.openai.com" || url.pathname !== "/v1/responses") {
       return realFetch(input, init);
     }
-    if (typeof init?.body !== "string") {
-      throw new Error("Expected a JSON Responses request body");
-    }
-    requests.push(JSON.parse(init.body) as Record<string, unknown>);
+    requests.push((await new Request(input, init).json()) as Record<string, unknown>);
     const response = await realFetch(input, init);
     // Await the clone before assertions; preserve the SDK's original response and stream.
     captures.push(

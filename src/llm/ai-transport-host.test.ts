@@ -170,7 +170,7 @@ describe("OpenClaw provider error redaction", () => {
   });
 });
 
-describe("OpenClaw provider tool-result redaction", () => {
+describe("OpenClaw provider tool-result fidelity", () => {
   const toolResultContent = [
     {
       type: "resource" as const,
@@ -180,15 +180,7 @@ describe("OpenClaw provider tool-result redaction", () => {
     },
   ];
 
-  it("preserves source assignments while masking structured credentials", () => {
-    const text = extractToolResultText(toolResultContent);
-
-    expect(text).toContain("if let token = timeObserverToken {");
-    expect(text).toContain(String.raw`\"token\":\"timeObserverToken\"`);
-    expect(text).not.toContain("provider-secret-value");
-  });
-
-  it("carries the redacted result into Anthropic and OpenAI-compatible payloads", async () => {
+  it("carries original tool results into Anthropic and OpenAI-compatible payloads", async () => {
     const configCredential = "unquoted-provider-config-credential-1234567890";
     const envCredential = "provider-env-credential-1234567890";
     const sourceLines = [
@@ -288,9 +280,9 @@ describe("OpenClaw provider tool-result redaction", () => {
       for (const sourceLine of sourceLines) {
         expect(serialized).toContain(sourceLine);
       }
-      expect(serialized).not.toContain("provider-secret-value");
+      expect(serialized).toContain("provider-secret-value");
       expect(serialized).toContain(configCredential);
-      expect(serialized).not.toContain(envCredential);
+      expect(serialized).toContain(envCredential);
     }
   });
 });

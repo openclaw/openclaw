@@ -1,44 +1,41 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { ChatLog } from "./components/chat-log.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
+import { makeTuiState } from "./tui-event-test-support.js";
 import { extractTextFromMessage, extractTuiAbortedText } from "./tui-formatters.js";
 import { getTuiSessionProjection, reduceTuiSessionProjection } from "./tui-session-projection.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
-import type { TuiStateAccess } from "./tui-types.js";
 
 const audioFailure = {
   type: "attachment_error",
   attachment: { code: "delivery-failed", kind: "audio", label: "Generated audio 1" },
 };
 const audioReceipt = "⚠️ audio attachment: Delivery failed. Try sending this file again.";
+const recordingReceipt = `Your recording\n${audioReceipt}`;
 const caption = { type: "text", text: "Your recording" };
 const image = { type: "image", url: "file:///private/image.png" };
-const assistant = (content: unknown[]) => ({ role: "assistant", content });
+const assistant = (content: readonly unknown[]) => ({ role: "assistant", content });
+const privateMetadata = {
+  label: "\x1b]52;c;private-clipboard\x07file:///private/name",
+  url: "https://private.invalid/file?ticket=private",
+  mimeType: "private/type",
+};
+const missingImage = "⚠️ image attachment: File not found. Check the path and try again.";
+const blockedVideo =
+  "⚠️ video attachment: Rejected by the local attachment allowlist. Send a supported file type.";
+const failedFile = "⚠️ file attachment: Delivery failed. Try sending this file again.";
+function privateAttachment(kind: string, code: string) {
+  const attachment = { kind, code, ...privateMetadata };
+  return assistant([{ type: "attachment_error", attachment }]);
+}
 
 function createDisplayHarness() {
-  const state: TuiStateAccess = {
-    agentDefaultId: "main",
+  const state = makeTuiState({
     sessionMainKey: "main",
     sessionScope: "per-sender",
-    agents: [],
-    currentAgentId: "main",
-    currentSessionKey: "agent:main:main",
-    currentSessionId: "session-1",
-    activeChatRunId: null,
-    pendingSubmit: null,
-    historyLoaded: true,
     sessionInfo: {},
-    initialSessionApplied: true,
-    isConnected: true,
-    autoMessageSent: false,
-    toolsExpanded: false,
-    showThinking: false,
-    connectionStatus: "connected",
-    activityStatus: "idle",
-    statusTimeout: null,
-    lastCtrlCAt: 0,
-  };
+  });
   const chatLog = new ChatLog();
   const handlers = createEventHandlers({
     state,
@@ -52,6 +49,7 @@ function createDisplayHarness() {
     loadHistory: async () => ({ loaded: false }),
     streamingWatchdogMs: 0,
   });
+  onTestFinished(handlers.dispose);
   return {
     state,
     chatLog,
@@ -67,65 +65,15 @@ function createDisplayHarness() {
 
 describe("TUI attachment failure presentation", () => {
   it.each([
-    { name: "failure only", content: [audioFailure], expected: audioReceipt },
-    {
-      name: "caption and failure",
-      content: [caption, audioFailure],
-      expected: `Your recording\n${audioReceipt}`,
-    },
-    {
-      name: "success and failure",
-      content: [image, audioFailure],
-      expected: `Attached image\n${audioReceipt}`,
-    },
-    {
-      name: "caption, success and failure",
-      content: [caption, image, audioFailure],
-      expected: `Your recording\n${audioReceipt}`,
-    },
-    {
-      name: "multiple failures",
-      content: [audioFailure, audioFailure],
-      expected: `${audioReceipt}\n${audioReceipt}`,
-    },
-  ])("keeps $name in history and final output", ({ content, expected }) => {
-    const message = assistant(content);
-    expect(extractTextFromMessage(message)).toBe(expected);
-    expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(expected);
-  });
-
-  it.each([
-    {
-      kind: "image",
-      code: "file-not-found",
-      expected: "⚠️ image attachment: File not found. Check the path and try again.",
-    },
-    {
-      kind: "video",
-      code: "unsupported-format",
-      expected:
-        "⚠️ video attachment: Rejected by the local attachment allowlist. Send a supported file type.",
-    },
-    {
-      kind: "document",
-      code: "delivery-failed",
-      expected: "⚠️ file attachment: Delivery failed. Try sending this file again.",
-    },
-  ])(
-    "renders actionable $kind/$code receipts without source metadata",
-    ({ kind, code, expected }) => {
-      const message = assistant([
-        {
-          type: "attachment_error",
-          attachment: {
-            kind,
-            code,
-            label: "\x1b]52;c;private-clipboard\x07file:///private/name",
-            url: "https://private.invalid/file?ticket=private",
-            mimeType: "private/type",
-          },
-        },
-      ]);
+    ["caption and failure", assistant([caption, audioFailure]), recordingReceipt],
+    ["caption, success and failure", assistant([caption, image, audioFailure]), recordingReceipt],
+    ["two failures", assistant([audioFailure, audioFailure]), `${audioReceipt}\n${audioReceipt}`],
+    ["private missing image", privateAttachment("image", "file-not-found"), missingImage],
+    ["private blocked video", privateAttachment("video", "unsupported-format"), blockedVideo],
+    ["private failed file", privateAttachment("document", "delivery-failed"), failedFile],
+  ] as const)(
+    "renders %s in history and final output without source metadata",
+    (_name, message, expected) => {
       expect(extractTextFromMessage(message)).toBe(expected);
       expect(new TuiStreamAssembler().finalize("run-1", message, false)).toBe(expected);
     },
@@ -164,56 +112,41 @@ describe("TUI attachment failure presentation", () => {
   });
 
   it.each([
-    { name: "failure only", content: [audioFailure], streamed: false, expected: audioReceipt },
-    {
-      name: "mixed attachments",
-      content: [image, audioFailure],
-      streamed: false,
-      expected: `Attached image\n${audioReceipt}`,
-    },
-    {
-      name: "streamed caption",
-      content: [image, audioFailure],
-      streamed: true,
-      expected: `Your recording\n${audioReceipt}`,
-    },
-  ])(
-    "renders one receipt through optimistic and authoritative history: $name",
-    ({ content, streamed, expected }) => {
+    ["failure only", [audioFailure], false, audioReceipt],
+    ["mixed attachments", [image, audioFailure], false, `Attached image\n${audioReceipt}`],
+    ["streamed caption", [image, audioFailure], true, recordingReceipt],
+  ] as const)(
+    "renders one receipt through optimistic and authoritative history: %s",
+    (_name, content, streamed, expected) => {
       const harness = createDisplayHarness();
       const event = { runId: "run-1", sessionKey: harness.state.currentSessionKey };
-      try {
-        if (streamed) {
-          harness.handleChatEvent({ ...event, state: "delta", message: assistant([caption]) });
-          expect(harness.visible()).toBe("Your recording");
+      if (streamed) {
+        harness.handleChatEvent({ ...event, state: "delta", message: assistant([caption]) });
+        expect(harness.visible()).toBe("Your recording");
+      }
+      const message = assistant(content);
+      harness.handleChatEvent({ ...event, state: "final", message });
+      expect(harness.visible()).toBe(expected);
+      expect(harness.state.activityStatus).toBe("idle");
+      for (const messages of [
+        [],
+        [
+          {
+            ...assistant(streamed ? [caption, ...content] : content),
+            __openclaw: { id: "assistant-1", seq: 1, runId: event.runId },
+          },
+        ],
+      ]) {
+        const projection = reduceTuiSessionProjection(harness.state, {
+          type: "snapshotLoaded",
+          messages,
+        });
+        expect(projection.messages).toHaveLength(1);
+        harness.chatLog.clearAll();
+        for (const row of projection.messages) {
+          harness.chatLog.finalizeAssistant(extractTextFromMessage(row));
         }
-        const message = assistant(content);
-        harness.handleChatEvent({ ...event, state: "final", message });
         expect(harness.visible()).toBe(expected);
-        expect(harness.state.activityStatus).toBe("idle");
-
-        for (const messages of [
-          [],
-          [
-            {
-              ...assistant(streamed ? [caption, ...content] : content),
-              __openclaw: { id: "assistant-1", seq: 1, runId: event.runId },
-            },
-          ],
-        ]) {
-          const projection = reduceTuiSessionProjection(harness.state, {
-            type: "snapshotLoaded",
-            messages,
-          });
-          expect(projection.messages).toHaveLength(1);
-          harness.chatLog.clearAll();
-          for (const row of projection.messages) {
-            harness.chatLog.finalizeAssistant(extractTextFromMessage(row));
-          }
-          expect(harness.visible()).toBe(expected);
-        }
-      } finally {
-        harness.dispose();
       }
     },
   );
@@ -225,15 +158,11 @@ describe("TUI attachment failure presentation", () => {
       sessionKey: harness.state.currentSessionKey,
       message: assistant([audioFailure]),
     };
-    try {
-      expect(extractTuiAbortedText(event.message, false)).toBe("");
-      harness.handleChatEvent({ ...event, state: "aborted" });
-      harness.handleChatEvent({ ...event, state: "final" });
-      expect(harness.visible()).toBe("run aborted");
-      expect(getTuiSessionProjection(harness.state).messages).toHaveLength(0);
-    } finally {
-      harness.dispose();
-    }
+    expect(extractTuiAbortedText(event.message, false)).toBe("");
+    harness.handleChatEvent({ ...event, state: "aborted" });
+    harness.handleChatEvent({ ...event, state: "final" });
+    expect(harness.visible()).toBe("run aborted");
+    expect(getTuiSessionProjection(harness.state).messages).toHaveLength(0);
   });
 
   it("does not invent failure output for empty or unsupported blocks", () => {

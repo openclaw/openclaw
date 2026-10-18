@@ -14,7 +14,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { readUpdateRunStatus } from "../../infra/update-run-status.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
@@ -178,10 +178,12 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           });
           expect(getUpdateRun(parent.runId)?.status).toBe("running");
           if (!recordsWarning) {
+            const reason =
+              command === "resume-unowned"
+                ? "Cannot verify a live parent for the inherited update history."
+                : "synthetic update history is busy";
             expect(errors).toHaveBeenCalledWith(
-              expect.stringContaining(
-                "Post-core update evidence could not be saved to update history",
-              ),
+              `Post-core update evidence could not be saved: ${reason} Update completion may require Doctor verification.`,
             );
           }
           // Published parents close their run without projecting plugin warning rows.
@@ -208,7 +210,7 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
         } else {
           expect(latest.steps).not.toContainEqual(expectedStep);
         }
-        const runStatus = readUpdateRunStatus();
+        const runStatus = await readUpdateRunStatus();
         if (runStatus.runStatusError !== undefined) {
           throw new Error(runStatus.runStatusError);
         }
@@ -218,7 +220,7 @@ it.each(["finalize", "repair", "resume", "resume-unowned", "resume-write-failure
           expect(renderUpdateRunReport(latest).markdown).toContain("verify it against 2026.9.4");
         }
         expect(getUpdateRun(original.runId)).toEqual(retained);
-        expect(readPersistedInstalledPluginIndexInstallRecords()).toEqual(records);
+        expect(await readPersistedInstalledPluginIndexInstallRecordsAsync()).toEqual(records);
         expect(await fs.readFile(state.configPath, "utf8")).toBe(configBytes);
         expect(await fs.readFile(`${localDir}/index.js`, "utf8")).toBe(payload);
         expect(await fs.readFile(`${managedDir}/index.js`, "utf8")).toBe(payload);

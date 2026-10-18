@@ -5,10 +5,6 @@ import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { parseModelRef } from "./model-selection-normalize.js";
 
-function normalizePersistedDefaultProvider(value: unknown): string {
-  return normalizeOptionalString(value) ?? DEFAULT_PROVIDER;
-}
-
 export function resolvePersistedOverrideModelRef(
   params: {
     defaultProvider?: unknown;
@@ -19,7 +15,7 @@ export function resolvePersistedOverrideModelRef(
     allowPluginNormalization?: boolean;
   } & ModelManifestNormalizationContext,
 ): ModelRef | null {
-  const defaultProvider = normalizePersistedDefaultProvider(params.defaultProvider);
+  const defaultProvider = normalizeOptionalString(params.defaultProvider) ?? DEFAULT_PROVIDER;
   const overrideProvider = normalizeOptionalString(params.overrideProvider);
   const overrideModel = normalizeOptionalString(params.overrideModel);
   if (!overrideModel) {

@@ -1,10 +1,15 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { workerBackgroundExecEntrypoints } from "../worker/worker-runtime-background-exec-entrypoints.test-support.js";
+import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
+import { NodeWorkerLaunchStore, type NodeWorkerLaunchClaim } from "./node-worker-launch-store.js";
 import * as workerLaunchTransport from "./node-worker-launch-transport.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -14,17 +19,30 @@ import {
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
   testWorkerLaunchInput,
+  testNodeWorkerLaunchIdentity,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
-function writeSupervisorOwnerScript(root: string): string {
-  const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
-  const scriptPath = path.join(root, "supervisor-owner.mts");
+const supervisorUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.supervisor);
+const turnsUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.turnStore);
+const journalUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.journalWorker);
+
+function spawnOwner(url: URL, script: string, args: string[], env?: NodeJS.ProcessEnv) {
+  return spawn(process.execPath, [...resolveRuntimeWorkerArgv(url).slice(0, -1), script, ...args], {
+    ...(env ? { env: { ...process.env, ...env } } : {}),
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function writeSupervisorOwnerScript(root: string, waitForCompletedTurn: boolean): string {
+  const scriptPath = path.join(root, "supervisor-owner.mjs");
   fs.writeFileSync(
     scriptPath,
     `
       import fs from "node:fs";
-      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
+      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl.href)};
+      import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
       const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
       const supervisor = createNodeWorkerSupervisor({
         bundleRoot,
@@ -36,7 +54,21 @@ function writeSupervisorOwnerScript(root: string): string {
       };
       process.once("SIGTERM", () => void shutdown());
       const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+      const completed = Promise.withResolvers();
+      void completed.promise.catch(() => undefined);
+      if (${waitForCompletedTurn}) {
+        const execute = NodeWorkerJournalWorker.prototype.execute;
+        NodeWorkerJournalWorker.prototype.execute = function (command, authority) {
+          const finishing = execute.call(this, command, authority);
+          if (command.type === "nodeWorker.turn.finish" && command.input[0].expected.launchId === input.launchId) {
+            NodeWorkerJournalWorker.prototype.execute = execute;
+            void finishing.then(completed.resolve, completed.reject);
+          }
+          return finishing;
+        };
+      }
       const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
+      if (${waitForCompletedTurn}) await completed.promise;
       process.stdout.write(JSON.stringify(receipt) + "\\n");
       setInterval(() => {}, 1000);
     `,
@@ -44,27 +76,60 @@ function writeSupervisorOwnerScript(root: string): string {
   return scriptPath;
 }
 
+export function spawnPendingSupervisorOwner({
+  root,
+  env,
+  claim,
+}: {
+  root: string;
+  env: NodeJS.ProcessEnv;
+  claim: NodeWorkerLaunchClaim;
+}): ChildProcess {
+  const storeUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.launchStore);
+  const identityUrl = resolveRuntimeWorkerUrl(workerBackgroundExecEntrypoints.processIdentity);
+  const claimPath = path.join(root, "claim.json");
+  const scriptPath = path.join(root, "pending-owner.mjs");
+  fs.writeFileSync(claimPath, JSON.stringify(claim));
+  fs.writeFileSync(
+    scriptPath,
+    `
+        import fs from "node:fs";
+        import { NodeWorkerJournalWorker } from ${JSON.stringify(journalUrl.href)};
+        import { NodeWorkerLaunchStore } from ${JSON.stringify(storeUrl.href)};
+        import { NodeWorkerTurnStore } from ${JSON.stringify(turnsUrl.href)};
+        import { requireNodeWorkerProcessIdentity } from ${JSON.stringify(identityUrl.href)};
+        const [stateDir, claimPath] = process.argv.slice(2);
+        const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+        const journal = new NodeWorkerJournalWorker({ env });
+        const store = new NodeWorkerLaunchStore(journal);
+        const claim = JSON.parse(fs.readFileSync(claimPath, "utf8"));
+        const supervisor = requireNodeWorkerProcessIdentity(process.pid);
+        const result = await store.claim(claim, supervisor, 2);
+        const turn = await new NodeWorkerTurnStore(journal).claim({
+          claim, ownerLaunchId: result.receipt.launchId, supervisor,
+        });
+        process.stdout.write(JSON.stringify(turn.receipt) + "\\n");
+        setInterval(() => {}, 1000);
+      `,
+  );
+  return spawnOwner(storeUrl, scriptPath, [env.OPENCLAW_STATE_DIR!, claimPath]);
+}
+
 export function spawnSupervisorOwner(params: {
   bundleRoot: string;
   env: NodeJS.ProcessEnv;
   input: ReturnType<typeof testWorkerLaunchInput>;
   root: string;
+  waitForCompletedTurn?: boolean;
 }): ChildProcess {
   const inputPath = path.join(params.root, `${params.input.launchId}.json`);
   fs.writeFileSync(inputPath, JSON.stringify(params.input));
-  const child = spawn(
-    process.execPath,
-    [
-      "--import",
-      "tsx",
-      writeSupervisorOwnerScript(params.root),
-      params.bundleRoot,
-      params.env.OPENCLAW_STATE_DIR!,
-      inputPath,
-    ],
-    { env: { ...process.env, ...params.env }, stdio: ["ignore", "pipe", "pipe"] },
+  return spawnOwner(
+    supervisorUrl,
+    writeSupervisorOwnerScript(params.root, params.waitForCompletedTurn ?? false),
+    [params.bundleRoot, params.env.OPENCLAW_STATE_DIR!, inputPath],
+    params.env,
   );
-  return child;
 }
 
 export async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
@@ -78,14 +143,13 @@ export function waitForChildLine(child: ChildProcess): Promise<string> {
   return new Promise((resolve, reject) => {
     let stdout = "";
     let stderr = "";
-    const onData = (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString("utf8");
       const newline = stdout.indexOf("\n");
       if (newline >= 0) {
         resolve(stdout.slice(0, newline));
       }
-    };
-    child.stdout?.on("data", onData);
+    });
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString("utf8");
     });
@@ -96,14 +160,10 @@ export function waitForChildLine(child: ChildProcess): Promise<string> {
   });
 }
 
-export function waitForChildExit(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
+export async function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode === null && child.signalCode === null) {
+    await once(child, "close");
   }
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
 }
 
 export function holdNodeWorkerReadiness(launchId: string) {
@@ -208,4 +268,64 @@ export async function waitForNodeWorkerTerminal(
     throw new Error(`missing launch receipt ${launchId}`);
   }
   return receipt;
+}
+
+export async function insertNodeWorkerRecoveryLaunch(params: {
+  env: NodeJS.ProcessEnv;
+  input: ReturnType<typeof testWorkerLaunchInput>;
+  state: "pending" | "running";
+  supervisor: NodeWorkerProcessIdentity;
+  worker?: NodeWorkerProcessIdentity;
+  turn?: true;
+}) {
+  const database = openOpenClawStateDatabase({ env: params.env }).db;
+  const identity = testNodeWorkerLaunchIdentity(params.input);
+  const state = params.turn ? "pending" : params.state;
+  database
+    .prepare(
+      `INSERT INTO node_worker_launches (
+        launch_id, plan_hash, gateway_namespace, environment_id, session_id,
+        owner_epoch, placement_generation, run_id, state,
+        supervisor_pid, supervisor_start_time, worker_pid, worker_start_time,
+        result_json, error_text, completed_at_ms, created_at_ms, updated_at_ms
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 1, 1)`,
+    )
+    .run(
+      params.input.launchId,
+      identity.planHash,
+      params.input.gatewayNamespace,
+      params.input.descriptor.admission.environmentId,
+      params.input.descriptor.admission.sessionId,
+      params.input.descriptor.admission.ownerEpoch,
+      params.input.placementGeneration,
+      params.input.descriptor.assignment.runId,
+      state,
+      params.supervisor.pid,
+      params.supervisor.startTime,
+      state === "running" ? (params.worker?.pid ?? null) : null,
+      state === "running" ? (params.worker?.startTime ?? null) : null,
+    );
+  if (params.turn) {
+    const journal = new NodeWorkerJournalWorker({ env: params.env });
+    await new NodeWorkerTurnStore(journal).claim({
+      claim: {
+        ...identity,
+        gatewayNamespace: params.input.gatewayNamespace,
+      },
+      ownerLaunchId: params.input.launchId,
+      supervisor: params.supervisor,
+    });
+    if (params.state === "running") {
+      await new NodeWorkerLaunchStore(journal).markRunning({
+        launchId: params.input.launchId,
+        planHash: identity.planHash,
+        supervisor: params.supervisor,
+        worker: params.worker!,
+        cleanupMode: "process-group",
+      });
+      database
+        .prepare("DELETE FROM node_worker_launch_cleanup WHERE launch_id = ?")
+        .run(params.input.launchId);
+    }
+  }
 }

@@ -1,21 +1,38 @@
 // Android Version script supports OpenClaw repository automation.
-import { resolveAndroidVersion } from "./lib/android-version.ts";
+import {
+  resolveAndroidVersion,
+  resolveAndroidBuildVersion,
+  resolveGatewayVersionForAndroidRelease,
+} from "./lib/android-version.ts";
 import { parseVersionQueryArgs } from "./lib/version-script-args.ts";
 
 function printUsage(): void {
   process.stdout.write(
-    "Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--root dir]\n\n",
+    "Usage: node --import tsx scripts/android-version.ts [--json|--shell] [--field name] [--from-gateway|--for-build] [--root dir]\n\n",
   );
 }
 
 function main(argv = process.argv.slice(2)): number {
-  const options = parseVersionQueryArgs(argv);
+  const fromGateway = argv.includes("--from-gateway");
+  const forBuild = argv.includes("--for-build");
+  const options = parseVersionQueryArgs(
+    argv.filter((arg) => !["--from-gateway", "--for-build"].includes(arg)),
+  );
   if (options.help) {
     printUsage();
     return 0;
   }
 
-  const version = resolveAndroidVersion(options.rootDir);
+  if (fromGateway) {
+    process.stdout.write(
+      `${JSON.stringify(resolveGatewayVersionForAndroidRelease(options.rootDir), null, 2)}\n`,
+    );
+    return 0;
+  }
+
+  const version = forBuild
+    ? resolveAndroidBuildVersion(options.rootDir)
+    : resolveAndroidVersion(options.rootDir);
 
   if (options.field) {
     const value = version[options.field as keyof typeof version];
@@ -31,6 +48,7 @@ function main(argv = process.argv.slice(2)): number {
       [
         `OPENCLAW_ANDROID_VERSION_NAME=${version.canonicalVersion}`,
         `OPENCLAW_ANDROID_VERSION_CODE=${version.versionCode}`,
+        `OPENCLAW_ANDROID_WEAR_VERSION_CODE=${version.wearVersionCode}`,
       ].join("\n") + "\n",
     );
   } else {

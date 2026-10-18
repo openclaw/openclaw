@@ -1,28 +1,15 @@
-// Comfy provider module implements model/runtime integration.
 import type {
-  GeneratedMusicAsset,
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "openclaw/plugin-sdk/music-generation";
 import {
   DEFAULT_COMFY_MODEL,
   isComfyCapabilityConfigured,
+  isComfyCapabilityConfiguredAsync,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
 const COMFY_MAX_INPUT_IMAGES = 1;
-
-function toGeneratedTrack(asset: {
-  buffer: Buffer;
-  mimeType: string;
-  fileName: string;
-}): GeneratedMusicAsset {
-  return {
-    buffer: asset.buffer,
-    mimeType: asset.mimeType,
-    fileName: asset.fileName,
-  };
-}
 
 function resolveInputImage(inputImage: MusicGenerationSourceImage | undefined) {
   if (!inputImage) {
@@ -44,12 +31,11 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
     label: "ComfyUI",
     defaultModel: DEFAULT_COMFY_MODEL,
     models: [DEFAULT_COMFY_MODEL],
+    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, agentDir }) =>
-      isComfyCapabilityConfigured({
-        cfg,
-        agentDir,
-        capability: "music",
-      }),
+      isComfyCapabilityConfigured({ cfg, agentDir, capability: "music" }),
+    isConfiguredAsync: ({ cfg, agentDir }) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "music" }),
     capabilities: {
       generate: {},
       edit: {
@@ -65,23 +51,20 @@ export function buildComfyMusicGenerationProvider(): MusicGenerationProvider {
       }
 
       const result = await runComfyWorkflow({
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        authStore: req.authStore,
-        prompt: req.prompt,
-        model: req.model,
-        timeoutMs: req.timeoutMs,
+        ...req,
         capability: "music",
-        outputKinds: ["audio"],
         inputImage: resolveInputImage(req.inputImages?.[0]),
       });
 
       return {
-        tracks: result.assets.map(toGeneratedTrack),
+        tracks: result.assets.map(({ buffer, mimeType, fileName }) => ({
+          buffer,
+          mimeType,
+          fileName,
+        })),
         model: result.model,
         metadata: {
-          promptId: result.promptId,
-          outputNodeIds: result.outputNodeIds,
+          ...result.metadata,
           inputImageCount: req.inputImages?.length ?? 0,
         },
       };

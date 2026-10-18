@@ -21,7 +21,6 @@ async function execute(action: "device_status" | "invoke", input: Record<string,
     action,
     input: { node: "macbook", ...input },
     gatewayOpts: {},
-    mediaInvokeActions: {},
   });
 }
 

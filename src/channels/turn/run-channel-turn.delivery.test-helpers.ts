@@ -34,16 +34,6 @@ export type DurableSupportRequest = {
   requirements?: Record<string, boolean>;
 };
 
-export type DeliveryResult = {
-  messageIds?: string[];
-  receipt?: { platformMessageIds?: string[] };
-  visibleReplySent?: boolean;
-};
-
-function deliveryResult(value: unknown): DeliveryResult {
-  return value as DeliveryResult;
-}
-
 export function createCtx(overrides: Partial<FinalizedMsgContext> = {}): FinalizedMsgContext {
   return {
     Body: "hello",
@@ -115,7 +105,7 @@ export function createDeliveryResultCapture() {
     dispatch: createDispatch([], undefined, (delivery) => {
       result = delivery;
     }),
-    getResult: () => deliveryResult(result),
+    getResult: () => result,
   };
 }
 

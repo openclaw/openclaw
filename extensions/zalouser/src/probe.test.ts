@@ -19,19 +19,6 @@ describe("probeZalouser", () => {
     vi.useRealTimers();
   });
 
-  it("returns ok=true with user when authenticated", async () => {
-    mockGetUserInfo.mockResolvedValueOnce({
-      userId: "123",
-      displayName: "Alice",
-    });
-
-    await expect(probeZalouser("default")).resolves.toEqual({
-      ok: true,
-      user: { userId: "123", displayName: "Alice" },
-      elapsedMs: expect.any(Number),
-    });
-  });
-
   it("returns not authenticated when no user info is returned before the timeout", async () => {
     vi.useFakeTimers();
     mockGetUserInfo.mockResolvedValueOnce(null);

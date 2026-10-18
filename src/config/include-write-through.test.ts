@@ -1,6 +1,3 @@
-// Relocated from io.write-prepare.test.ts (base b45488b243b03defb97422338166d9d1b3ba6b6c):
-// collectIncludeOwnedPaths-driven include write-through path collection and
-// flatten-rejection cases for resolvePersistCandidateForWrite.
 import { describe, expect, it } from "vitest";
 import { resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 

@@ -1,6 +1,3 @@
-// Fixture scaffold (mocks, suite temp roots, itWithHome/createFastConfigIO)
-// duplicated from include-write-through.publish.test.ts -- it is local,
-// unexported test infra, not a shared module.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";

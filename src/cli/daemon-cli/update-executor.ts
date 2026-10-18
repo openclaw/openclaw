@@ -3,6 +3,7 @@ import { withGatewayServiceRebindCapture } from "../../daemon/service-rebind.js"
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { ExitError } from "../../runtime.js";
 import {
   withDelegatedUpdateCommandExecutor,
   type UpdateCommandChildGrant,
@@ -97,10 +98,17 @@ export async function runGatewayServiceUpdateCommand(
             await operation();
           }
         },
-        grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+        {
+          originalRoot: grant.retainedParent?.key ?? grant.originalParent?.key ?? grant.parent.key,
+        },
       ),
     );
   } catch (cause) {
+    // The action already reported its outcome. Authority loss is converted by
+    // withGatewayServiceUpdateAuthority before a bare ExitError can reach here.
+    if (cause instanceof ExitError) {
+      throw cause;
+    }
     throw new Error(
       "UPDATE_NATIVE_AUTHORITY: " + (cause instanceof Error ? cause.message : String(cause)),
       { cause },

@@ -1,8 +1,5 @@
 import { runInNewContext } from "node:vm";
-import {
-  teamsMeetingLeaveScript,
-  teamsMeetingStatusScript,
-} from "./teams-meetings-page-scripts.js";
+import { teamsMeetingPageScripts } from "./teams-meetings-page-scripts.js";
 import { TEAMS_MEETINGS_PLATFORM_ADAPTER } from "./teams-meetings-platform-adapter.js";
 
 export const URL =
@@ -225,9 +222,6 @@ export async function runStatusScript(params: StatusScriptParams) {
       return bridge;
     },
     title: "Teams",
-    getElementById() {
-      return undefined;
-    },
     querySelector(selector: string) {
       if (selector.includes("toggle-mute")) {
         return params.microphone;
@@ -313,7 +307,7 @@ export async function runStatusScript(params: StatusScriptParams) {
   if (params.priorCaptions) {
     window["__openclawTeamsCaptions"] = params.priorCaptions;
   }
-  const script = teamsMeetingStatusScript({
+  const script = teamsMeetingPageScripts.status({
     allowMicrophone: params.allowMicrophone ?? false,
     allowSessionAdoption: params.allowSessionAdoption ?? true,
     autoJoin: params.autoJoin ?? true,
@@ -325,8 +319,6 @@ export async function runStatusScript(params: StatusScriptParams) {
     waitForInCallMs: params.waitForInCallMs ?? 60_000,
   });
   const run = runInNewContext(`(${script})`, {
-    Event: globalThis.Event,
-    HTMLInputElement: function HTMLInputElement() {},
     MutationObserver: class MutationObserver {
       constructor(callback: (records?: Array<{ removedNodes: PageControl[] }>) => void) {
         captionObserverCallback = callback;
@@ -462,7 +454,7 @@ export function runLeaveScript(params: {
     window["__openclawTeamsAudioOutputs"] = params.priorAudioOutputs;
   }
   const run = runInNewContext(
-    `(${teamsMeetingLeaveScript({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
+    `(${teamsMeetingPageScripts.leave({ leaveInitiated: params.leaveInitiated ?? false, meetingSessionId: params.meetingSessionId ?? "session-1", meetingUrl: URL })})`,
     {
       URL: globalThis.URL,
       document,

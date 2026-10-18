@@ -4,6 +4,29 @@ import { validateJsonSchemaValue } from "openclaw/plugin-sdk/json-schema-runtime
 import { expect, it } from "vitest";
 import { resolveImapConfig } from "./config.js";
 
+it("rejects invalid passwords while deferring unresolved secret references", () => {
+  const account = {
+    host: "imap.example.com",
+    user: "reader@example.com",
+    agentId: "mail_reader",
+  };
+  for (const password of [undefined, null, 123, false, []]) {
+    expect(() => resolveImapConfig({ accounts: { inbox: { ...account, password } } })).toThrow(
+      "IMAP account inbox requires a resolved password",
+    );
+  }
+  expect(
+    resolveImapConfig({
+      accounts: {
+        inbox: {
+          ...account,
+          password: { source: "env", provider: "default", id: "IMAP_PASSWORD" },
+        },
+      },
+    }),
+  ).toEqual({ accounts: {} });
+});
+
 it("accepts all SDK authentication strengths and rejects an unknown config minimum", () => {
   const manifest = JSON.parse(
     fs.readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),

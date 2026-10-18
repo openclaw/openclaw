@@ -5,8 +5,12 @@ import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ContextEngine, SubagentSpawnPreparation } from "../../../context-engine/types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
-import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
-import { resolveGatewaySessionStoreTarget } from "./subagent-spawn.runtime.js";
+import {
+  ensureContextEnginesInitialized,
+  forkSessionEntryFromParent,
+  resolveContextEngine,
+  resolveGatewaySessionStoreTargetInWorker,
+} from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentContextMode } from "./subagent-spawn.types.js";
 
 type PreparedSpawnContext =
@@ -39,32 +43,34 @@ export async function prepareSubagentSessionContext(params: {
   if (params.contextMode === "isolated") {
     return { status: "ok", mode: "isolated" };
   }
-  const childTarget = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.childSessionKey,
-    agentId: params.targetAgentId,
-  });
-  const parentTarget = resolveGatewaySessionStoreTarget({
-    cfg: params.cfg,
-    key: params.requesterInternalKey,
-    agentId: params.requesterAgentId,
-  });
-
   try {
+    const childTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.childSessionKey,
+      agentId: params.targetAgentId,
+      assertActive: params.assertActive,
+    });
+    const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
+      assertActive: params.assertActive,
+    });
+
     if (params.targetAgentId !== params.requesterAgentId) {
       throw new Error(
         'context="fork" currently requires the same target agent as the requester; use context="isolated" for cross-agent spawns.',
       );
     }
 
-    const forkedResult = await getSubagentSpawnDeps().forkSessionEntryFromParent({
+    params.assertActive?.();
+    const forkedResult = await forkSessionEntryFromParent({
       commitGuard: params.assertActive,
-      storePath: childTarget.storePath,
+      storePath: childTarget.readSource?.path ?? childTarget.storePath,
       parentSessionKey: parentTarget.canonicalKey,
       parentStoreKeys: parentTarget.storeKeys,
       sessionKey: childTarget.canonicalKey,
       sessionStoreKeys: childTarget.storeKeys,
-      fallbackEntry: { sessionId: "", updatedAt: Date.now() },
       agentId: params.requesterAgentId,
     });
     if (forkedResult.status === "missing-parent") {
@@ -114,10 +120,7 @@ export async function prepareContextEngineSubagentSpawn(params: {
   requesterInternalKey: string;
   childSessionKey: string;
   runTimeoutSeconds: number;
-}): Promise<
-  | { status: "ok"; preparation: PreparedContextEngineSubagentSpawn }
-  | { status: "error"; error: string }
-> {
+}): Promise<PreparedContextEngineSubagentSpawn> {
   let engine: ContextEngine | undefined;
   let disposal: Promise<void> | undefined;
   const dispose = () =>
@@ -132,9 +135,9 @@ export async function prepareContextEngineSubagentSpawn(params: {
       }
     })());
   try {
-    const deps = getSubagentSpawnDeps();
-    deps.ensureContextEnginesInitialized();
-    engine = await deps.resolveContextEngine(params.cfg);
+    engine = await resolveContextEngine(params.cfg, {
+      initialize: ensureContextEnginesInitialized,
+    });
     // Resolution may outlive the caller. Returned preparation must still reach
     // the pipeline rollback owner before its next authority check.
     params.assertActive?.();
@@ -153,29 +156,25 @@ export async function prepareContextEngineSubagentSpawn(params: {
     });
     let rollback: Promise<void> | undefined;
     return {
-      status: "ok",
-      preparation: {
-        rollback: () =>
-          (rollback ??= (async () => {
-            try {
-              await preparation?.rollback();
-            } finally {
-              await dispose();
-            }
-          })()),
-        async dispose() {
-          // Cancellation may already be rolling back while its caller unwinds.
-          await rollback?.catch(() => {});
-          await dispose();
-        },
+      rollback: () =>
+        (rollback ??= (async () => {
+          try {
+            await preparation?.rollback();
+          } finally {
+            await dispose();
+          }
+        })()),
+      async dispose() {
+        // Cancellation may already be rolling back while its caller unwinds.
+        await rollback?.catch(() => {});
+        await dispose();
       },
     };
   } catch (err) {
     await dispose().catch(() => {});
-    return {
-      status: "error",
-      error: `Context engine subagent preparation failed: ${summarizeSpawnError(err)}`,
-    };
+    throw new Error(`Context engine subagent preparation failed: ${summarizeSpawnError(err)}`, {
+      cause: err,
+    });
   }
 }
 

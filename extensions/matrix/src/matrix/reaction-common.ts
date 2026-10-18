@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const MATRIX_ANNOTATION_RELATION_TYPE = "m.annotation";
 export const MATRIX_REACTION_EVENT_TYPE = "m.reaction";
@@ -64,19 +67,8 @@ export function buildMatrixReactionRelationsPath(roomId: string, messageId: stri
 export function extractMatrixReactionAnnotation(
   content: unknown,
 ): MatrixReactionAnnotation | undefined {
-  if (!content || typeof content !== "object") {
-    return undefined;
-  }
-  const relatesTo = (
-    content as {
-      "m.relates_to"?: {
-        rel_type?: unknown;
-        event_id?: unknown;
-        key?: unknown;
-      };
-    }
-  )["m.relates_to"];
-  if (!relatesTo || typeof relatesTo !== "object") {
+  const relatesTo = asOptionalObjectRecord(asOptionalObjectRecord(content)?.["m.relates_to"]);
+  if (!relatesTo) {
     return undefined;
   }
   if (
@@ -96,16 +88,12 @@ export function extractMatrixReactionAnnotation(
   };
 }
 
-function extractMatrixReactionKey(content: unknown): string | undefined {
-  return extractMatrixReactionAnnotation(content)?.key;
-}
-
 export function summarizeMatrixReactionEvents(
   events: Iterable<Pick<MatrixReactionEventLike, "content" | "sender">>,
 ): MatrixReactionSummary[] {
   const summaries = new Map<string, MatrixReactionSummary>();
   for (const event of events) {
-    const key = extractMatrixReactionKey(event.content);
+    const key = extractMatrixReactionAnnotation(event.content)?.key;
     if (!key) {
       continue;
     }
@@ -135,7 +123,7 @@ export function selectOwnMatrixReactionEventIds(
     if ((normalizeOptionalString(event.sender) ?? "") !== senderId) {
       continue;
     }
-    if (targetEmoji && extractMatrixReactionKey(event.content) !== targetEmoji) {
+    if (targetEmoji && extractMatrixReactionAnnotation(event.content)?.key !== targetEmoji) {
       continue;
     }
     const eventId = normalizeOptionalString(event.event_id);

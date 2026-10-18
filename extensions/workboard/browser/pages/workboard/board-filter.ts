@@ -11,6 +11,9 @@ import type { WorkboardSelectOption } from "./workboard-select.ts";
 export { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER };
 
 function boardDescription(board: WorkboardBoardSummary): string {
+  if (board.kind === "sessions") {
+    return t("workboard.sessionsBoard.kind");
+  }
   const params = { active: String(board.active), total: String(board.total) };
   return board.archivedAt
     ? t("workboard.boardFilterArchivedSummary", params)

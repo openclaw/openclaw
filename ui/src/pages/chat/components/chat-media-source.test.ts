@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ChatMediaSourceController } from "./chat-media-source.ts";
+import { ChatMediaSourceOwner } from "./chat-media-source.ts";
 
 function mockMediaState(
   media: HTMLMediaElement,
@@ -49,10 +49,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ChatMediaSourceController", () => {
+describe("ChatMediaSourceOwner", () => {
   it("normalizes and applies native playback immediately", () => {
     const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     expect(controller.sync(media, "  /media/native.mp3  ", "  media:native  ", "native")).toBe(
       null,
@@ -62,33 +62,6 @@ describe("ChatMediaSourceController", () => {
     expect(controller.readySource).toBe("/media/native.mp3");
     expect(controller.currentIdentity).toBe("media:native");
     expect(media.getAttribute("src")).toBe("/media/native.mp3");
-  });
-
-  it("keeps preparation pending across a 202 and applies the ready rendition", async () => {
-    vi.useFakeTimers();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(new Response(null, { status: 202 }))
-      .mockResolvedValueOnce(new Response(null, { status: 200 }));
-    vi.stubGlobal("fetch", fetchMock);
-    const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
-
-    const pending = controller.sync(
-      media,
-      "/media/clip.avi?mediaTicket=ticket",
-      "media:clip",
-      "transcode",
-    );
-    expect(controller.readiness).toBe("preparing");
-    expect(media.hasAttribute("src")).toBe(false);
-
-    await vi.advanceTimersByTimeAsync(2_000);
-    await pending;
-
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(controller.readiness).toBe("ready");
-    expect(media.getAttribute("src")).toContain("mediaTicket=ticket&playback=1");
   });
 
   it("aborts preparation and starts it again after reconnect", async () => {
@@ -109,7 +82,7 @@ describe("ChatMediaSourceController", () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
     const source = "/media/voice.caf?mediaTicket=ticket";
 
     const first = controller.sync(media, source, "media:voice", "transcode");
@@ -138,7 +111,7 @@ describe("ChatMediaSourceController", () => {
       .mockResolvedValueOnce(new Response(null, { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
     const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     const oldRequest = controller.sync(
       media,
@@ -168,7 +141,7 @@ describe("ChatMediaSourceController", () => {
       vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
     );
     const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
     void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
     void controller.sync(media, "/media/voice.mp3?mediaTicket=old", "media:voice", "native");
@@ -193,7 +166,7 @@ describe("ChatMediaSourceController", () => {
       vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
     );
     const media = document.createElement("audio");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
     void controller.sync(media, "/media/voice.caf?mediaTicket=old", "media:voice", "native");
     expect(controller.handleError(media)).toBe(false);
 
@@ -228,7 +201,7 @@ describe("ChatMediaSourceController", () => {
       vi.fn<typeof fetch>(async () => new Response(null, { status: 500 })),
     );
     const media = document.createElement("video");
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
     void controller.sync(
       media,
       "/media/protected.mp4?mediaTicket=old",
@@ -250,7 +223,7 @@ describe("ChatMediaSourceController", () => {
     const state = { currentTime: 0, duration: 120, paused: true };
     const clock = mockMediaState(media, state);
     const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=old");
@@ -275,7 +248,7 @@ describe("ChatMediaSourceController", () => {
     const state = { currentTime: 10, duration: 90, paused: false };
     const clock = mockMediaState(media, state);
     const play = vi.spyOn(media, "play").mockResolvedValue(undefined);
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     controller.updateSource(media, "/media?mediaTicket=old", "/tmp/video.mp4");
     controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/video.mp4");
@@ -295,7 +268,7 @@ describe("ChatMediaSourceController", () => {
     const media = document.createElement("audio");
     const state = { currentTime: 80, duration: 80, paused: true, ended: false };
     mockMediaState(media, state);
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
     controller.updateSource(media, "/media?mediaTicket=fresh", "/tmp/audio.mp3");
@@ -305,41 +278,12 @@ describe("ChatMediaSourceController", () => {
     expect(media.getAttribute("src")).toBe("/media?mediaTicket=fresh");
   });
 
-  it("applies a queued Blob before a paused player resumes", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 18, duration: 80, paused: false };
-    mockMediaState(media, state);
-    const controller = new ChatMediaSourceController();
-    controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
-    controller.updateSource(media, "blob:waveform", "/tmp/audio.mp3");
-    state.paused = true;
-
-    expect(controller.applyPendingSource(media)).toBe(true);
-    expect(media.getAttribute("src")).toBe("blob:waveform");
-    expect(controller.currentIdentity).toBe("/tmp/audio.mp3");
-  });
-
-  it("resets an applied source across an authentication boundary", () => {
-    const media = document.createElement("audio");
-    const state = { currentTime: 18, duration: 80, paused: true };
-    mockMediaState(media, state);
-    const load = vi.spyOn(media, "load").mockImplementation(() => undefined);
-    const controller = new ChatMediaSourceController();
-    controller.updateSource(media, "blob:protected-audio", "/tmp/audio.mp3");
-
-    controller.reset(media);
-
-    expect(media.hasAttribute("src")).toBe(false);
-    expect(load).toHaveBeenCalledOnce();
-    expect(controller.currentIdentity).toBe("");
-  });
-
   it("applies a fresh ticket that arrives after the old source has already failed", () => {
     const media = document.createElement("audio");
     const state = { currentTime: 0, duration: 80, paused: true, error: null as MediaError | null };
     const clock = mockMediaState(media, state);
     Object.defineProperty(media, "error", { configurable: true, get: () => state.error });
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     controller.updateSource(media, "/media?mediaTicket=old", "/tmp/audio.mp3");
     media.currentTime = 30;
@@ -360,7 +304,7 @@ describe("ChatMediaSourceController", () => {
     const pause = vi.spyOn(media, "pause").mockImplementation(() => {
       state.paused = true;
     });
-    const controller = new ChatMediaSourceController();
+    const controller = new ChatMediaSourceOwner();
 
     controller.updateSource(media, "/media?mediaTicket=first", "/tmp/first.mp3");
     controller.updateSource(media, "/media?mediaTicket=second", "/tmp/second.mp3");

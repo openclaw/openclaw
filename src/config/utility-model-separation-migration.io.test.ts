@@ -44,7 +44,48 @@ function legacyConfig(workspace: string): OpenClawConfig {
   };
 }
 
+function configIO(home: string, env: NodeJS.ProcessEnv = {}) {
+  return createConfigIO({
+    configPath: path.join(home, "openclaw.json"),
+    env: {
+      HOME: home,
+      OPENCLAW_STATE_DIR: path.join(home, "state"),
+      NODE_ENV: "test",
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      ...env,
+    },
+    homedir: () => home,
+    observe: false,
+    pluginValidation: "core-only",
+  });
+}
+
 describe("utility model separation persistence", () => {
+  it("round-trips existing string utility settings beside per-agent fallback objects", async () => {
+    const home = tempDirs.make("openclaw-utility-fallback-roundtrip-");
+    const io = configIO(home);
+    const agents = {
+      ownership: "explicit" as const,
+      defaults: { model: "local-fixture/chat", utilityModel: "local-fixture/small" },
+      entries: {
+        inherited: {},
+        worker: { utilityModel: { primary: "helper", fallbacks: ["local-fixture/backup"] } },
+        disabled: { utilityModel: "" },
+      },
+    };
+    await fs.writeFile(
+      path.join(home, "openclaw.json"),
+      JSON.stringify({ agents, plugins: { enabled: false } }),
+    );
+    const first = await io.readConfigFileSnapshot();
+    expect(first.valid).toBe(true);
+    expect(first.sourceConfig.agents).toEqual(agents);
+    await io.writeConfigFile({ ...first.sourceConfig, gateway: { mode: "local" } });
+    const second = await io.readConfigFileSnapshot();
+    expect(second.valid).toBe(true);
+    expect(second.sourceConfig.agents).toEqual(agents);
+  });
+
   it.each(["fresh", "existing", "included-models"] as const)(
     "preserves previous source intent for a %s config write",
     async (kind) => {
@@ -61,18 +102,7 @@ describe("utility model separation persistence", () => {
         }
         await fs.writeFile(configPath, JSON.stringify(authored));
       }
-      const io = createConfigIO({
-        configPath,
-        env: {
-          HOME: home,
-          OPENCLAW_STATE_DIR: path.join(home, "state"),
-          NODE_ENV: "test",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-        homedir: () => home,
-        observe: false,
-        pluginValidation: "core-only",
-      });
+      const io = configIO(home);
       const before = await io.readConfigFileSnapshot();
       expect(before.exists).toBe(kind !== "fresh");
       expect(before.sourceConfigBeforeMigrations?.agents?.defaults?.model).toBeUndefined();
@@ -106,6 +136,8 @@ describe("utility model separation persistence", () => {
       const home = tempDirs.make("openclaw-utility-route-removal-");
       const configPath = path.join(home, "openclaw.json");
       const previous = legacyConfig(path.join(home, "workspace"));
+      const fallbacks = ["backup/model@backup:account"];
+      expectDefined(previous.agents?.defaults, "defaults").model = { fallbacks };
       const provider = expectDefined(previous.models?.providers?.["local-fixture"], "provider");
       const second = { ...expectDefined(provider.models[0], "first model"), id: "second" };
       if (change === "selected-row") {
@@ -122,18 +154,7 @@ describe("utility model separation persistence", () => {
         };
       }
       await fs.writeFile(configPath, JSON.stringify(previous));
-      const io = createConfigIO({
-        configPath,
-        env: {
-          HOME: home,
-          OPENCLAW_STATE_DIR: path.join(home, "state"),
-          NODE_ENV: "test",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
-        homedir: () => home,
-        observe: false,
-        pluginValidation: "core-only",
-      });
+      const io = configIO(home);
       const candidate: OpenClawConfig = {
         ...previous,
         models: {
@@ -155,8 +176,9 @@ describe("utility model separation persistence", () => {
       await io.writeConfigFile(candidate);
       const after = await io.readConfigFileSnapshot();
       expect(after.valid).toBe(true);
-      expect(after.sourceConfig.agents?.defaults?.model).toEqual({ primary: expected });
+      expect(after.sourceConfig.agents?.defaults?.model).toEqual({ primary: expected, fallbacks });
       expect(after.sourceConfig.models).toEqual(candidate.models);
+      expect(provider.models[0]?.id).toBe("small");
       expect(after.sourceConfig.meta?.migrations?.utilityModelSeparation).toBe(true);
     },
   );
@@ -170,20 +192,7 @@ describe("utility model separation persistence", () => {
       expectDefined(config.models?.providers?.["local-fixture"]?.models[0], "model").id = template;
       expectDefined(config.agents?.defaults, "defaults").utilityModel = `local-fixture/${template}`;
       await fs.writeFile(configPath, JSON.stringify(config));
-      const ioForModel = (model: string) =>
-        createConfigIO({
-          configPath,
-          env: {
-            HOME: home,
-            OPENCLAW_STATE_DIR: path.join(home, "state"),
-            NODE_ENV: "test",
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            LOCAL_MODEL: model,
-          },
-          homedir: () => home,
-          observe: false,
-          pluginValidation: "core-only",
-        });
+      const ioForModel = (model: string) => configIO(home, { LOCAL_MODEL: model });
       const io = ioForModel("first");
       const before = await io.readConfigFileSnapshot();
       const first = template.replace("${LOCAL_MODEL}", "first");

@@ -1,4 +1,3 @@
-// Formats CLI command examples with active container/profile hints when they apply.
 import { normalizeProfileName } from "./profile-utils.js";
 
 const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+openclaw\b|^openclaw\b/;
@@ -8,10 +7,9 @@ const DEV_FLAG_RE = /(?:^|\s)--dev(?:\s|$)/;
 const UPDATE_RE = /^(?:\s+--(?:dev|no-color|(?:profile|log-level)[=\s]+\S+))*\s+update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
-/** Add active root options to a displayed command without duplicating explicit flags. */
 export function formatCliCommand(
   command: string,
-  env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
+  env: Record<string, string | undefined> = process.env,
 ): string {
   const rawContainer = env.OPENCLAW_CONTAINER_HINT?.trim();
   const container = rawContainer && CONTAINER_HINT_RE.test(rawContainer) ? rawContainer : undefined;
@@ -22,19 +20,16 @@ export function formatCliCommand(
   if (!CLI_PREFIX_RE.test(command)) {
     return command;
   }
-  const additions: string[] = [];
+  let addition: string | undefined;
   if (
     container &&
     !CONTAINER_FLAG_RE.test(command) &&
     !UPDATE_RE.test(command.replace(CLI_PREFIX_RE, ""))
   ) {
-    additions.push(`--container ${container}`);
+    addition = `--container ${container}`;
   }
   if (!container && profile && !PROFILE_FLAG_RE.test(command) && !DEV_FLAG_RE.test(command)) {
-    additions.push(`--profile ${profile}`);
+    addition = `--profile ${profile}`;
   }
-  if (additions.length === 0) {
-    return command;
-  }
-  return command.replace(CLI_PREFIX_RE, (match) => `${match} ${additions.join(" ")}`);
+  return addition ? command.replace(CLI_PREFIX_RE, (match) => `${match} ${addition}`) : command;
 }

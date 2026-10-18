@@ -1,7 +1,7 @@
 import { vi } from "vitest";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { ApplySessionModelSelectionParams } from "./apply-session-model-selection.js";
+import type { InternalApplySessionModelSelectionParams } from "./apply-session-model-selection.js";
 
 export function createModelSelectionMocks() {
   const effects = {
@@ -14,6 +14,7 @@ export function createModelSelectionMocks() {
   };
   const placementMocks = {
     getMany: vi.fn(),
+    prepareRuntimeRefresh: vi.fn(),
     resolveWorkerPlacementSessionRuntimeCapabilities: vi.fn(),
   };
   const factories = {
@@ -47,12 +48,17 @@ export function createModelSelectionMocks() {
       resolveSessionWorkerPlacementContext: () => ({
         workerSessionPlacementService: {
           getMany: placementMocks.getMany,
+          getManyAsync: async (sessionIds: readonly string[]) => placementMocks.getMany(sessionIds),
+          prepareRuntimeRefresh: placementMocks.prepareRuntimeRefresh,
         },
       }),
     }),
     placementRuntime: () => ({
-      resolveWorkerPlacementSessionRuntimeCapabilities:
-        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities,
+      resolveWorkerPlacementCapabilities: (...args: unknown[]) =>
+        placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities(...args),
+    }),
+    placementRuntimePreparation: () => ({
+      prepareWorkerPlacementSessionRuntime: async () => () => "fixture",
     }),
   };
   const resetMocks = () => {
@@ -66,6 +72,20 @@ export function createModelSelectionMocks() {
     effects.refreshQueuedFollowupSession.mockReset();
     effects.triggerSessionPatchHook.mockReset();
     placementMocks.getMany.mockReset().mockReturnValue(new Map());
+    placementMocks.prepareRuntimeRefresh
+      .mockReset()
+      .mockImplementation(async (sessionId: string) => {
+        const placement = placementMocks.getMany([sessionId]).get(sessionId);
+        return {
+          placement,
+          assertCurrent: () => {
+            if (placementMocks.getMany([sessionId]).get(sessionId) !== placement) {
+              throw new Error("Session placement changed");
+            }
+          },
+          release: () => {},
+        };
+      });
     placementMocks.resolveWorkerPlacementSessionRuntimeCapabilities.mockReset();
   };
   return { effects, placementMocks, factories, resetMocks };
@@ -91,7 +111,7 @@ export function createModelSelectionInputs() {
     };
   }
 
-  function createParams(overrides: Partial<ApplySessionModelSelectionParams> = {}) {
+  function createParams(overrides: Partial<InternalApplySessionModelSelectionParams> = {}) {
     const sessionEntry = overrides.sessionEntry ?? createEntry();
     const sessionKey = overrides.sessionKey ?? "agent:main:dm:1";
     return {
@@ -115,7 +135,7 @@ export function createModelSelectionInputs() {
       },
       markLiveSwitchPending: true,
       ...overrides,
-    } satisfies ApplySessionModelSelectionParams;
+    } satisfies InternalApplySessionModelSelectionParams;
   }
 
   return { catalog, createEntry, createParams };

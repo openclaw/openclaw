@@ -29,7 +29,7 @@ import { runSetupMemoryImportStep } from "./setup.memory-import.js";
 const config: OpenClawConfig = {
   agents: {
     defaults: { workspace: "/tmp/openclaw-memory-step" },
-    list: [{ id: "main", default: true }],
+    entries: { main: {} },
   },
 };
 
@@ -140,7 +140,7 @@ describe("runSetupMemoryImportStep", () => {
     mocks.providers = [codex];
     mocks.planProviderMemoryImport.mockResolvedValue({
       detection: { found: true, source: "/source/codex" },
-      plan: planFor("codex"),
+      plan: planFor("codex", { conflicts: ["memory:old-one", "memory:old-two"] }),
     });
     const prompter = createWizardPrompter({ confirm: vi.fn(async () => false) });
 
@@ -154,6 +154,7 @@ describe("runSetupMemoryImportStep", () => {
     // the full provider migration, not a memory-only retry.
     expect(notes).toContain("Memory import page");
     expect(notes).not.toContain("openclaw migrate");
+    expect(notes).toContain("2 already imported");
   });
 
   it("applies only the selected providers with exact planned item ids", async () => {
@@ -194,66 +195,6 @@ describe("runSetupMemoryImportStep", () => {
       status: "completed",
       providers: [{ providerId: "codex", label: "Codex", migrated: 2, skipped: 0 }],
     });
-  });
-
-  it("runs the host authority guard immediately before every provider apply", async () => {
-    const codex = provider("codex", "Codex");
-    const claude = provider("claude", "Claude");
-    mocks.providers = [codex, claude];
-    mocks.planProviderMemoryImport.mockImplementation(async ({ provider: selectedProvider }) => {
-      const plan = planFor(selectedProvider.id);
-      return { detection: { found: true, source: plan.source }, plan };
-    });
-    const order: string[] = [];
-    const beforeApply = vi.fn(async () => {
-      order.push("guard");
-    });
-    mocks.applyProviderMemoryImport.mockImplementation(async ({ preflightPlan }) => {
-      order.push(`apply:${preflightPlan.providerId}`);
-      return applied(preflightPlan);
-    });
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => true),
-      multiselect: vi.fn(async () => ["codex", "claude"]) as WizardPrompter["multiselect"],
-    });
-
-    await runSetupMemoryImportStep({
-      config,
-      prompter,
-      runtime: runtime(),
-      beforeApply,
-    });
-
-    expect(beforeApply).toHaveBeenCalledTimes(2);
-    expect(order).toEqual(["guard", "apply:codex", "guard", "apply:claude"]);
-  });
-
-  it("stops before copying when the host authority recheck fails", async () => {
-    const codex = provider("codex", "Codex");
-    mocks.providers = [codex];
-    mocks.planProviderMemoryImport.mockResolvedValue({
-      detection: { found: true, source: "/source/codex" },
-      plan: planFor("codex"),
-    });
-    const stop = vi.fn();
-    const prompter = createWizardPrompter({
-      confirm: vi.fn(async () => true),
-      progress: vi.fn(() => ({ update: vi.fn(), stop })),
-    });
-
-    await expect(
-      runSetupMemoryImportStep({
-        config,
-        prompter,
-        runtime: runtime(),
-        beforeApply: async () => {
-          throw new Error("inference authority changed");
-        },
-      }),
-    ).rejects.toThrow("inference authority changed");
-
-    expect(mocks.applyProviderMemoryImport).not.toHaveBeenCalled();
-    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("preserves a confirmed outcome when later rendering fails", async () => {
@@ -302,17 +243,31 @@ describe("runSetupMemoryImportStep", () => {
       const plan = planFor(selectedProvider.id);
       return { detection: { found: true, source: plan.source }, plan };
     });
-    mocks.applyProviderMemoryImport
-      .mockRejectedValueOnce(new Error("copy unavailable"))
-      .mockImplementationOnce(async ({ preflightPlan }) => applied(preflightPlan));
+    const order: string[] = [];
+    const beforeApply = vi.fn(async () => {
+      order.push("guard");
+    });
+    mocks.applyProviderMemoryImport.mockImplementation(async ({ preflightPlan }) => {
+      order.push(`apply:${preflightPlan.providerId}`);
+      if (preflightPlan.providerId === "codex") {
+        throw new Error("copy unavailable");
+      }
+      return applied(preflightPlan);
+    });
     const prompter = createWizardPrompter({
       confirm: vi.fn(async () => true),
       multiselect: vi.fn(async () => ["codex", "claude"]) as WizardPrompter["multiselect"],
     });
 
-    const outcome = await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
+    const outcome = await runSetupMemoryImportStep({
+      config,
+      prompter,
+      runtime: runtime(),
+      beforeApply,
+    });
 
     expect(mocks.applyProviderMemoryImport).toHaveBeenCalledTimes(2);
+    expect(order).toEqual(["guard", "apply:codex", "guard", "apply:claude"]);
     expect(outcome.providers).toEqual([
       {
         providerId: "codex",
@@ -325,25 +280,5 @@ describe("runSetupMemoryImportStep", () => {
     const notes = JSON.stringify((prompter.note as ReturnType<typeof vi.fn>).mock.calls);
     expect(notes).toContain("copy unavailable");
     expect(notes).toContain("Claude: 1 migrated");
-  });
-
-  it("surfaces conflict counts in the offer", async () => {
-    const hermes = provider("hermes", "Hermes");
-    mocks.providers = [hermes];
-    mocks.planProviderMemoryImport.mockResolvedValue({
-      detection: { found: true, source: "/source/hermes" },
-      plan: planFor("hermes", {
-        planned: ["memory:new"],
-        conflicts: ["memory:old-one", "memory:old-two"],
-      }),
-    });
-    const prompter = createWizardPrompter({ confirm: vi.fn(async () => false) });
-
-    await runSetupMemoryImportStep({ config, prompter, runtime: runtime() });
-
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("2 already imported"),
-      "Memories found",
-    );
   });
 });

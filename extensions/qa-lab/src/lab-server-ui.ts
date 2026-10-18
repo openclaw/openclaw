@@ -7,23 +7,63 @@ import path from "node:path";
 import type { Duplex } from "node:stream";
 import tls from "node:tls";
 import { fileURLToPath, format as formatUrl } from "node:url";
+import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { writeError } from "./bus-server.js";
 
+const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
+  "access_token",
+  "api_key",
+  "apikey",
+  "auth",
+  "devicetoken",
+  "id_token",
+  "password",
+  "refresh_token",
+  "token",
+]);
+const CONTROL_UI_CREDENTIAL_QUERY_PATTERN =
+  /([?&])(?:access_token|api_?key|auth|deviceToken|id_token|password|refresh_token|token)=[^&#\s]*&?/gi;
+
+export function sanitizeControlUiPublicUrl(rawUrl: string | null): string | null {
+  if (!rawUrl) {
+    return null;
+  }
+  const fragmentIndex = rawUrl.indexOf("#");
+  let sanitized = fragmentIndex === -1 ? rawUrl : rawUrl.slice(0, fragmentIndex);
+  try {
+    const url = new URL(sanitized);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    for (;;) {
+      const next = sanitized
+        .replace(CONTROL_UI_CREDENTIAL_QUERY_PATTERN, (match: string, separator: string) =>
+          match.endsWith("&") ? separator : "",
+        )
+        .replace(/[?&]$/, "")
+        .replace("?&", "?");
+      if (next === sanitized) {
+        return next;
+      }
+      sanitized = next;
+    }
+  }
+}
+
+const UI_CONTENT_TYPES: Record<string, string> = {
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+};
+
 export function detectContentType(filePath: string): string {
-  if (filePath.endsWith(".css")) {
-    return "text/css; charset=utf-8";
-  }
-  if (filePath.endsWith(".js")) {
-    return "text/javascript; charset=utf-8";
-  }
-  if (filePath.endsWith(".json")) {
-    return "application/json; charset=utf-8";
-  }
-  if (filePath.endsWith(".svg")) {
-    return "image/svg+xml";
-  }
-  return "text/html; charset=utf-8";
+  return UI_CONTENT_TYPES[filePath.slice(filePath.lastIndexOf("."))] ?? "text/html; charset=utf-8";
 }
 
 export function missingUiHtml() {
@@ -71,23 +111,15 @@ function resolveUiDistDir(overrideDir?: string | null, repoRoot = process.cwd())
   );
 }
 
-function listUiAssetFiles(rootDir: string, currentDir = rootDir): string[] {
-  const entries = fs
-    .readdirSync(currentDir, { withFileTypes: true })
-    .toSorted((left, right) => left.name.localeCompare(right.name));
-  const files: string[] = [];
-  for (const entry of entries) {
-    const resolved = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...listUiAssetFiles(rootDir, resolved));
-      continue;
-    }
-    if (!entry.isFile()) {
-      continue;
-    }
-    files.push(path.relative(rootDir, resolved));
+function listUiAssetFiles(rootDir: string): string[] {
+  const scan = walkDirectorySync(rootDir, {
+    symlinks: "skip",
+    include: (entry) => entry.kind === "file",
+  });
+  if (scan.failedDirs.length > 0) {
+    throw scan.failedDirs[0]!.error;
   }
-  return files;
+  return scan.entries.map((entry) => entry.relativePath).toSorted();
 }
 
 export function resolveUiAssetVersion(

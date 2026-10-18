@@ -4,11 +4,11 @@ import {
   type ComputerUseV2ActionName,
 } from "openclaw/plugin-sdk/computer-use";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
 import {
   adoptGeneration,
-  clearDialogRef,
   invalidateBrowserReferences,
   issueBrowserElementRef,
   issueBrowserObservation,
@@ -258,32 +258,38 @@ export async function callWindowTool(
 }
 
 function structuredRefusalCode(result: CuaToolResult): string | undefined {
-  if (!result.structuredJson) {
+  if (!result.structuredContent && !result.structuredJson) {
     return undefined;
   }
   try {
-    const value = JSON.parse(result.structuredJson) as {
-      status?: unknown;
-      refusal?: { code?: unknown };
-    };
-    return value.status === "refused" && typeof value.refusal?.code === "string"
-      ? value.refusal.code
+    const value: unknown =
+      result.structuredContent ??
+      (result.structuredJson ? JSON.parse(result.structuredJson) : undefined);
+    const refusal = isRecord(value) ? asOptionalRecord(value.refusal) : undefined;
+    return isRecord(value) && value.status === "refused" && typeof refusal?.code === "string"
+      ? refusal.code
       : undefined;
   } catch {
+    // Malformed optional refusal metadata cannot supply a refusal code.
     return undefined;
   }
 }
 
 export function projectedToolDetails(result: CuaToolResult, tool: string): Record<string, unknown> {
+  if (result.structuredContent) {
+    return result.structuredContent;
+  }
   if (!result.structuredJson) {
     throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
   }
   try {
     const value: unknown = JSON.parse(result.structuredJson);
-    if (value && typeof value === "object" && !Array.isArray(value)) {
-      return value as Record<string, unknown>;
+    if (isRecord(value)) {
+      return value;
     }
-  } catch {}
+  } catch {
+    // Malformed JSON is reported by the driver error below.
+  }
   throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`);
 }
 
@@ -535,10 +541,7 @@ export function browserObservation(
     }
   }
   const boundedElements = elements.slice(0, MAX_BROWSER_ELEMENTS);
-  const page =
-    structured.page && typeof structured.page === "object" && !Array.isArray(structured.page)
-      ? (structured.page as Record<string, unknown>)
-      : undefined;
+  const page = asOptionalRecord(structured.page);
   return {
     ok: true,
     observation: {
@@ -555,13 +558,9 @@ export function browserObservation(
         : {}),
       ...(typeof structured.snapshot_id === "string"
         ? { snapshot: { format: "dom_refs_v1" } }
-        : structured.snapshot &&
-            typeof structured.snapshot === "object" &&
-            !Array.isArray(structured.snapshot)
+        : isRecord(structured.snapshot)
           ? {
-              snapshot: projectSemanticBrowserSnapshot(
-                structured.snapshot as Record<string, unknown>,
-              ),
+              snapshot: projectSemanticBrowserSnapshot(structured.snapshot),
             }
           : {}),
       ...(typeof structured.url === "string" ? { url: structured.url } : {}),
@@ -606,15 +605,8 @@ export function browserToolEnvelope(
       }
     }
     const endpointOwnership = structured.endpoint_ownership;
-    if (
-      endpointOwnership &&
-      typeof endpointOwnership === "object" &&
-      !Array.isArray(endpointOwnership) &&
-      typeof (endpointOwnership as Record<string, unknown>).method === "string"
-    ) {
-      details.endpointOwnership = {
-        method: (endpointOwnership as Record<string, unknown>).method,
-      };
+    if (isRecord(endpointOwnership) && typeof endpointOwnership.method === "string") {
+      details.endpointOwnership = { method: endpointOwnership.method };
     }
   } else if (tool === "browser_navigate") {
     if (typeof structured.url === "string") {
@@ -649,9 +641,7 @@ function projectSemanticBrowserSnapshot(snapshot: Record<string, unknown>) {
       ? { selectedNodes: snapshot.selected_nodes }
       : {}),
     ...(typeof snapshot.total_nodes === "number" ? { totalNodes: snapshot.total_nodes } : {}),
-    ...(snapshot.omitted && typeof snapshot.omitted === "object" && !Array.isArray(snapshot.omitted)
-      ? { omitted: snapshot.omitted }
-      : {}),
+    ...(isRecord(snapshot.omitted) ? { omitted: snapshot.omitted } : {}),
     ...(typeof snapshot.continuation === "string" ? { continuation: snapshot.continuation } : {}),
   };
 }
@@ -664,7 +654,7 @@ export function browserDialogEnvelope(
   const structured = projectedToolDetails(result, "browser_dialog");
   const present = structured.present === true;
   if (!present) {
-    clearDialogRef(state);
+    state.dialog = undefined;
   }
   const details: Record<string, unknown> = { present };
   if (typeof structured.kind === "string") {

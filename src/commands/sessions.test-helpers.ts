@@ -10,7 +10,7 @@ import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/sess
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 
@@ -28,9 +28,11 @@ const sessionsConfigState = vi.hoisted<{ loadConfig: () => Record<string, unknow
 
 const defaultSessionsConfigLoader = sessionsConfigState.loadConfig;
 
+// mock-isolation: Session CLI fixtures select their own stores instead of the host session config.
 vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => sessionsConfigState.loadConfig(),
   loadConfig: () => sessionsConfigState.loadConfig(),
+  captureRuntimeConfigAsyncReader: () => async () => sessionsConfigState.loadConfig(),
 }));
 
 export function mockSessionsConfig() {
@@ -91,7 +93,7 @@ export async function writeStore(
   }
   // Disk-budget scans inspect suffixed database owners; join them before handing off the fixture.
   await drainSessionDiskBudgetWorkers();
-  closeOpenClawAgentDatabaseByPath(databasePath);
+  await closeOpenClawAgentDatabaseByPathAsync(databasePath);
   return databasePath;
 }
 
@@ -124,6 +126,9 @@ export async function runSessionsJson<T>(
       runtime,
     );
   } finally {
+    await closeOpenClawAgentDatabaseByPathAsync(
+      resolveSqliteTargetFromSessionStorePath(store).path,
+    );
     cleanupStore(store);
   }
   return JSON.parse(logs[0] ?? "{}") as T;

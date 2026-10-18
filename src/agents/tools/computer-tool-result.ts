@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { readImageMetadataFromHeader } from "../../media/image-ops.js";
 import type { ComputerActResult } from "../../plugins/computer-use-contract.js";
 import { DEFAULT_IMAGE_MAX_DIMENSION_PX } from "../image-sanitization.js";
@@ -23,25 +24,19 @@ type ModelObservationProjection = NonNullable<ComputerActResult["observation"]> 
 };
 
 function projectComputerActResultMetadata(result: ComputerActResult) {
-  let observation: ModelObservationProjection | undefined = result.observation
+  const observation: ModelObservationProjection | undefined = result.observation
     ? { ...result.observation, ...(result.observation.base64 ? { base64: "[image]" } : {}) }
     : undefined;
-  if (observation?.elements && observation.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS) {
-    observation = {
-      ...observation,
-      elements: observation.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS),
-      truncatedElements: observation.elements.length - MODEL_OBSERVATION_MAX_ELEMENTS,
-    };
-  }
   const details = result.details ? { ...result.details } : undefined;
-  if (
-    details &&
-    Array.isArray(details.elements) &&
-    details.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
-  ) {
-    const originalLength = details.elements.length;
-    details.elements = details.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
-    details.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+  for (const projection of [observation, details]) {
+    if (
+      Array.isArray(projection?.elements) &&
+      projection.elements.length > MODEL_OBSERVATION_MAX_ELEMENTS
+    ) {
+      const originalLength = projection.elements.length;
+      projection.elements = projection.elements.slice(0, MODEL_OBSERVATION_MAX_ELEMENTS);
+      projection.truncatedElements = originalLength - MODEL_OBSERVATION_MAX_ELEMENTS;
+    }
   }
   return {
     ...result,
@@ -64,10 +59,7 @@ function computerFrameImageIdentity(
   if (!image || duplicate) {
     return undefined;
   }
-  return crypto
-    .createHash("sha256")
-    .update(JSON.stringify([image.mimeType, image.data]))
-    .digest("hex");
+  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
 }
 
 function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
@@ -94,19 +86,15 @@ export function invalidateComputerFrameIfMissing(params: {
     return invalidateComputerFrame(params.contextEpoch);
   }
 
-  let frameImageIdentity: string | undefined;
-  for (let index = params.messages.length - 1; index >= 0; index -= 1) {
-    const message = params.messages[index];
-    if (
-      message?.role !== "toolResult" ||
-      message.toolName !== "computer" ||
-      message.toolCallId !== frameToolCallId
-    ) {
-      continue;
-    }
-    frameImageIdentity = computerFrameImageIdentity(message.content);
-    break;
-  }
+  const frameMessage = params.messages.findLast(
+    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
+      message?.role === "toolResult" &&
+      message.toolName === "computer" &&
+      message.toolCallId === frameToolCallId,
+  );
+  const frameImageIdentity = frameMessage
+    ? computerFrameImageIdentity(frameMessage.content)
+    : undefined;
 
   if (
     frameImageIdentity !== undefined &&
@@ -132,12 +120,11 @@ async function projectComputerImage(params: {
   image?: { base64: string; mimeType: string };
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }) {
   // Keep the delivered pixels within the replay cap so later turns cannot
   // resize the image underneath the coordinates bound to it.
   const content = await sanitizeContentBlocksImages(
-    params.image && params.modelHasVision !== false
+    params.image
       ? [{ type: "image", data: params.image.base64, mimeType: params.image.mimeType }]
       : [],
     `computer:${params.action}`,
@@ -154,7 +141,6 @@ export async function projectScreenshotResult(params: {
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }): Promise<{
   result: AgentToolResult<unknown>;
   frameId: string;
@@ -168,12 +154,6 @@ export async function projectScreenshotResult(params: {
     ...params.noteLines,
     `screenshot ${dims} (screen ${target.screenIndex}, frameId ${frameId})`,
   ].join("\n");
-  if (params.modelHasVision === false) {
-    content.push({
-      type: "text",
-      text: "[model has no vision; screenshot omitted — use a vision-capable model for computer use]",
-    });
-  }
   const result = {
     content: [{ type: "text" as const, text }, ...content],
     details: {
@@ -196,7 +176,6 @@ export async function projectComputerActResult(params: {
   target: ComputerTarget;
   action: ComputerToolAction;
   referenceWidth: number;
-  modelHasVision?: boolean;
 }): Promise<{
   result: AgentToolResult<unknown>;
   imageCoordinates?: ComputerObservationState["imageCoordinates"];

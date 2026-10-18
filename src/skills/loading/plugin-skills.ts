@@ -1,4 +1,3 @@
-// Plugin skill loaders discover and normalize skills exposed by plugin packages.
 import fs from "node:fs";
 import path from "node:path";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
@@ -28,7 +27,11 @@ export type { PluginSkillRoot } from "./plugin-skill-root.js";
 
 const log = createSubsystemLogger("skills");
 
-type PluginSkillLinkType = "dir" | "junction";
+/** Serializable active contributions; filesystem validation remains with the skill owner. */
+export type PluginSkillContribution = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "rootDir" | "bundleFormat"
+> & { roots: string[] };
 
 // This tracks the generated SDK links we last published, not plugin metadata.
 // Config and ACP availability can change the desired links without changing package files.
@@ -46,12 +49,11 @@ export function resolvePluginSkillRoots(params: {
   config?: OpenClawConfig;
   /** Override the plugin skills directory for testing. */
   pluginSkillsDir?: string;
+  acpRuntimeAvailable?: boolean;
 }): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir || params.config?.plugins?.enabled === false) {
-    publishPluginSkills([], {
-      pluginSkillsDir: params.pluginSkillsDir,
-    });
+    publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
   const metadataSnapshot = resolvePluginMetadataSnapshot({
@@ -67,6 +69,7 @@ export function resolvePluginSkillRootsFromMetadata(params: {
   config?: OpenClawConfig;
   pluginSkillsDir?: string;
   metadataSnapshot: PluginMetadataSnapshot;
+  acpRuntimeAvailable?: boolean;
 }): PluginSkillRoot[] {
   return withPluginCache(getPluginMetadataSnapshotCache(params.metadataSnapshot), () =>
     resolvePluginSkillRootsInOwner(params),
@@ -78,34 +81,53 @@ function resolvePluginSkillRootsInOwner(
 ): PluginSkillRoot[] {
   const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
-    publishPluginSkills([], { pluginSkillsDir: params.pluginSkillsDir });
+    publishPluginSkills([], params.pluginSkillsDir);
     return [];
   }
+  return resolvePluginSkillRootsFromContributions({
+    contributions: capturePluginSkillContributions(params),
+    pluginSkillsDir: params.pluginSkillsDir,
+  });
+}
+
+/** Select activation and ACP policy without reading plugin directories. */
+export function capturePluginSkillContributions(params: {
+  config?: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  acpRuntimeAvailable?: boolean;
+}): PluginSkillContribution[] {
   const config = params.config ?? {};
-  const metadataSnapshot = params.metadataSnapshot;
-  const registry = metadataSnapshot.manifestRegistry;
-  if (registry.plugins.length === 0) {
-    publishPluginSkills([], {
-      pluginSkillsDir: params.pluginSkillsDir,
-    });
-    return [];
-  }
-  const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config });
+  const acpRuntimeAvailable = params.acpRuntimeAvailable ?? isAcpRuntimeSpawnAvailable({ config });
+  return [
+    ...iteratePluginRootContributions({
+      metadataSnapshot: params.metadataSnapshot,
+      config,
+      contribution: "skills",
+      isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
+    }),
+  ].map(({ record, roots }) => ({
+    id: record.id,
+    origin: record.origin,
+    rootDir: record.rootDir,
+    bundleFormat: record.bundleFormat,
+    roots,
+  }));
+}
+
+/** Validate and publish selected roots on the filesystem-owning thread. */
+export function resolvePluginSkillRootsFromContributions(params: {
+  contributions: readonly PluginSkillContribution[];
+  pluginSkillsDir?: string;
+}): PluginSkillRoot[] {
   const seen = new Set<string>();
   const resolved: PluginSkillRoot[] = [];
 
-  for (const { record, roots } of iteratePluginRootContributions({
-    metadataSnapshot,
-    config,
-    contribution: "skills",
-    // ACP router skills should not be attached unless ACP can actually spawn.
-    isAvailable: (candidate) => acpRuntimeAvailable || candidate.id !== "acpx",
-  })) {
+  for (const record of params.contributions) {
     const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
       origin: record.origin,
       rootDir: record.rootDir,
     });
-    for (const raw of roots) {
+    for (const raw of record.roots) {
       const trimmed = raw.trim();
       if (!trimmed) {
         continue;
@@ -133,9 +155,7 @@ function resolvePluginSkillRootsInOwner(
 
   publishPluginSkills(
     resolved.map((root) => root.dir),
-    {
-      pluginSkillsDir: params.pluginSkillsDir,
-    },
+    params.pluginSkillsDir,
   );
 
   return resolved;
@@ -201,7 +221,11 @@ export function resolvePluginSkillDetails(
 export async function readPluginSkill(
   record: Pick<PluginManifestRecord, "id" | "origin" | "rootDir" | "skills" | "version">,
   name: string,
+  selection?: { path?: string; version?: string },
 ) {
+  if (selection?.version !== undefined && selection.version !== record.version) {
+    throw new Error("Installed plugin version changed. Reopen the skill preview.");
+  }
   const matches = resolvePluginSkillRecords(record).filter(({ skill }) => skill.name === name);
   if (matches.length !== 1) {
     throw new Error(matches.length ? "Plugin skill name is ambiguous." : "Plugin skill not found.");
@@ -216,6 +240,7 @@ export async function readPluginSkill(
     rootPath: path.relative(pluginRoot, matches[0]!.skill.baseDir).split(path.sep).join("/") || ".",
     name,
     rejectHardlinks: shouldRejectHardlinkedPluginFiles(record),
+    path: selection?.path,
   });
   return { ...result, ...(record.version ? { version: record.version } : {}) };
 }
@@ -242,47 +267,22 @@ function collectAgentSkillTargets(skillsRoot: string): string[] {
   return targets;
 }
 
-function resolvePluginSkillLinkType(
-  platform: NodeJS.Platform = process.platform,
-): PluginSkillLinkType {
-  return platform === "win32" ? "junction" : "dir";
-}
-
-/**
- * Collect skill dir targets from a resolved directory.
- * If the directory contains a direct SKILL.md it is published as-is.
- * Otherwise child subdirectories that contain SKILL.md are expanded.
- */
 function collectSkillTargets(dir: string, targets: Map<string, string>): void {
-  if (hasPublishableSkillFile({ skillDir: dir, rootDir: dir })) {
-    const basename = path.basename(dir);
-    const existing = targets.get(basename);
-    if (existing) {
-      log.warn(
-        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${dir}; ` +
-          `only the first will be published`,
+  const candidates = hasPublishableSkillFile({ skillDir: dir, rootDir: dir })
+    ? [{ name: path.basename(dir), path: dir }]
+    : listSkillChildDirectories(dir).filter((entry) =>
+        hasPublishableSkillFile({ skillDir: entry.path, rootDir: dir }),
       );
-      return;
-    }
-    targets.set(basename, dir);
-    return;
-  }
-
-  for (const entry of listSkillChildDirectories(dir)) {
-    const childPath = entry.path;
-    if (!hasPublishableSkillFile({ skillDir: childPath, rootDir: dir })) {
-      continue;
-    }
-    const basename = entry.name;
-    const existing = targets.get(basename);
+  for (const entry of candidates) {
+    const existing = targets.get(entry.name);
     if (existing) {
       log.warn(
-        `plugin skill name collision: "${basename}" resolves to both ${existing} and ${childPath}; ` +
+        `plugin skill name collision: "${entry.name}" resolves to both ${existing} and ${entry.path}; ` +
           `only the first will be published`,
       );
       continue;
     }
-    targets.set(basename, childPath);
+    targets.set(entry.name, entry.path);
   }
 }
 
@@ -311,20 +311,16 @@ function hasPublishableSkillFile(params: { skillDir: string; rootDir: string }):
  * The plugin-skills directory is fully owned by OpenClaw — every entry is
  * a generated symlink. Cleanup of stale links is therefore safe.
  */
-function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: string }): void {
-  const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
+function publishPluginSkills(skillDirs: string[], directory?: string): void {
+  const pluginSkillsDir = directory ?? resolvePluginSkillsDir();
   const managedTargets = new Map<string, string>();
 
-  // Collect basename → target mappings, reporting collisions.
-  // Directories that contain SKILL.md are published as-is.
-  // Parent containers (e.g. ./skills/) are expanded to their child
-  // directories that each contain a SKILL.md.
   for (const dir of skillDirs) {
     collectSkillTargets(dir, managedTargets);
   }
 
   if (
-    opts?.pluginSkillsDir === undefined &&
+    directory === undefined &&
     lastDefaultPluginSkillsPublication?.directory === pluginSkillsDir &&
     lastDefaultPluginSkillsPublication.targets.size === managedTargets.size &&
     [...managedTargets].every(
@@ -364,15 +360,12 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       }
     }
     try {
-      fs.symlinkSync(target, linkPath, resolvePluginSkillLinkType());
+      fs.symlinkSync(target, linkPath, process.platform === "win32" ? "junction" : "dir");
     } catch (err) {
       log.warn(`failed to create plugin skill symlink "${linkPath}" → "${target}": ${String(err)}`);
     }
   }
 
-  // Clean up stale symlinks for plugin skills that are no longer active.
-  // The plugin-skills directory is fully owned by OpenClaw: every entry is a
-  // generated symlink, so stale-link removal is safe without extra proof.
   let existingEntries: fs.Dirent[];
   try {
     existingEntries = fs.readdirSync(pluginSkillsDir, { withFileTypes: true });
@@ -389,7 +382,7 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
     const linkPath = path.join(pluginSkillsDir, entry.name);
     removeGeneratedPluginSkillEntry(linkPath);
   }
-  if (opts?.pluginSkillsDir === undefined) {
+  if (directory === undefined) {
     lastDefaultPluginSkillsPublication = { directory: pluginSkillsDir, targets: managedTargets };
   }
 }

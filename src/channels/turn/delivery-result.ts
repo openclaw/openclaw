@@ -1,4 +1,3 @@
-// Delivery-result adapters for channel turn receipts.
 import {
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
@@ -9,9 +8,53 @@ import type {
   ChannelDeliveryIntent,
   ChannelDeliveryOutcome,
   ChannelDeliveryResult,
-} from "./types.js";
+} from "./delivery-outcome.js";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "./partial-delivery-error.js";
 
 type ReceiptParams = Parameters<typeof createMessageReceiptFromOutboundResults>[0];
+
+/** Accumulates accepted sends without recording text or identity from failed attempts. */
+export function createChannelDeliveryAccumulator(
+  params: Pick<ReceiptParams, "kind" | "replyToId"> = {},
+) {
+  const results: ReceiptParams["results"][number][] = [];
+  const contents: string[] = [];
+  const acceptedResult = (partial?: ChannelDeliveryOutcome) =>
+    createAcceptedChannelDeliveryResult({
+      ...params,
+      results: [...results],
+      ...(partial ? { deliveryResults: [partial] } : {}),
+      content: [...contents, partial?.content].filter(Boolean).join("\n"),
+    });
+  return {
+    get size() {
+      return results.length;
+    },
+    add(result: ReceiptParams["results"][number], content?: string) {
+      results.push(result);
+      if (content) {
+        contents.push(content);
+      }
+    },
+    result() {
+      return results.length > 0
+        ? acceptedResult()
+        : {
+            visibleReplySent: false as const,
+            suppression: { reason: "no_visible_result" as const },
+          };
+    },
+    partialError(error: unknown): unknown {
+      const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+      return results.length > 0 || partial
+        ? createChannelPartialDeliveryError(error, acceptedResult(partial))
+        : error;
+    },
+  };
+}
 
 /** Aggregates caller-confirmed sends, preserving nested receipts before legacy message IDs. */
 export function createAcceptedChannelDeliveryResult(

@@ -34,12 +34,14 @@ export function isMoonshotK3NativeVideoRoute(route: {
 }
 
 export function isMoonshotAlwaysThinkingModelId(modelId: string): boolean {
-  return modelId.trim().toLowerCase() in ALWAYS_THINKING_PROFILES;
+  return Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId.trim().toLowerCase());
 }
 
 export function resolveThinkingProfile(context: ProviderDefaultThinkingPolicyContext) {
   const modelId = context.modelId.trim().toLowerCase();
-  const profile = ALWAYS_THINKING_PROFILES[modelId as keyof typeof ALWAYS_THINKING_PROFILES];
+  const profile = Object.hasOwn(ALWAYS_THINKING_PROFILES, modelId)
+    ? ALWAYS_THINKING_PROFILES[modelId as keyof typeof ALWAYS_THINKING_PROFILES]
+    : undefined;
   if (profile) {
     return {
       levels: [profile],

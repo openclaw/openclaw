@@ -54,6 +54,7 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import org.robolectric.annotation.Config
 import org.robolectric.annotation.GraphicsMode
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowTextToSpeech
 
 @RunWith(RobolectricTestRunner::class)
@@ -408,11 +409,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.emit("delta", eventRunId = null, text = "Anonymous reply")
           val activeRun = if (run == "pending") flow.runId else run
-          flow.historyRun =
-            buildJsonObject {
-              activeRun?.let { put("runId", it) }
-              put("text", text)
-            }
+          flow.historyRun = inFlightHistory(activeRun, text)
           flow.emit("error")
           assertEquals(activeRun, flow.state.activeRunId)
           assertEquals(text, flow.state.streamText)
@@ -745,11 +742,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.observeReplyCompletion()
           flow.historyMessages = """[{"id":"owned-event","role":"assistant","content":"Original event reply"}]"""
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-live")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-live", "Foreign live text")
           flow.emit(
             terminalState,
             message =
@@ -923,11 +916,7 @@ class WearChatEventFlowTest {
             flow.observeReplyCompletion()
             flow.historyMessages = """[{"id":"owned-fallback","role":"assistant","content":"Owned fallback","idempotencyKey":"${flow.runId}:$suffix"}]"""
             val activeRun = if (run == "pending") flow.runId else run
-            flow.historyRun =
-              buildJsonObject {
-                activeRun?.let { put("runId", it) }
-                put("text", text)
-              }
+            flow.historyRun = inFlightHistory(activeRun, text)
             flow.vm.refresh()
             flow.idle()
             assertEquals(activeRun, flow.state.activeRunId)
@@ -964,6 +953,15 @@ class WearChatEventFlowTest {
       }
     }
   }
+
+  private fun inFlightHistory(
+    runId: String?,
+    text: String,
+  ): JsonObject =
+    buildJsonObject {
+      runId?.let { put("runId", it) }
+      put("text", text)
+    }
 
   private fun withFlow(block: (Flow) -> Unit) {
     val flow = Flow()
@@ -1011,11 +1009,7 @@ class WearChatEventFlowTest {
         flow.send()
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-run")
-            put("text", "Foreign live text")
-          }
+        flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
         flow.vm.refresh()
         flow.idle()
         assertEquals("Canonical foreign live state does not own the Watch send", flow.runId, flow.state.pendingReply?.runId)
@@ -1041,11 +1035,7 @@ class WearChatEventFlowTest {
         flow.send()
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-run")
-            put("text", "Foreign live text")
-          }
+        flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
         flow.emit(terminal)
         assertEquals(flow.runId, flow.state.pendingReply?.runId)
         assertEquals("foreign-run", flow.state.activeRunId)
@@ -1069,11 +1059,7 @@ class WearChatEventFlowTest {
           flow.send()
           flow.observeReplyCompletion()
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-run")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
           flow.historyMessages = """[{"id":"own-message","role":"assistant","content":"Own reply","idempotencyKey":"${flow.runId}"}]"""
           flow.emit(ownTerminal)
           assertTrue(flow.completedReplies.isEmpty())
@@ -1210,11 +1196,7 @@ class WearChatEventFlowTest {
       flow.vm.abort()
       flow.idle()
       assertEquals(controlRun, flow.state.pendingAbortRunId)
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
       flow.sendGate?.complete(Unit)
       flow.idle()
@@ -1520,11 +1502,7 @@ class WearChatEventFlowTest {
           val firstRun = flow.runId
           flow.observeReplyCompletion()
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live text")
-          flow.historyRun =
-            buildJsonObject {
-              put("runId", "foreign-run")
-              put("text", "Foreign live text")
-            }
+          flow.historyRun = inFlightHistory("foreign-run", "Foreign live text")
           flow.emit(ownTerminal, eventRunId = firstRun)
           flow.emit("delta", eventRunId = "foreign-run", text = "Foreign continued")
           assertEquals("foreign-run", flow.state.activeRunId)
@@ -1772,11 +1750,7 @@ class WearChatEventFlowTest {
       val ownRun = flow.runId
       flow.observeReplyCompletion()
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       assertTrue(flow.completedReplies.isEmpty())
@@ -1839,11 +1813,7 @@ class WearChatEventFlowTest {
       flow.send()
       val ownRun = flow.runId
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       flow.observeApp()
@@ -1866,11 +1836,7 @@ class WearChatEventFlowTest {
       val ownRun = flow.runId
       flow.observeReplyCompletion()
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Owned reply","idempotencyKey":"$ownRun"}]"""
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.vm.refresh()
       flow.idle()
       flow.historyMessages = "[]"
@@ -1895,19 +1861,12 @@ class WearChatEventFlowTest {
               flow.observeReplyCompletion()
               val liveRun = "foreign-run".takeUnless { anonymous }
               flow.emit("delta", eventRunId = liveRun, text = "Other live reply")
-              flow.historyRun =
-                buildJsonObject {
-                  liveRun?.let { put("runId", it) }
-                  put("text", "Other live reply")
-                }
+              flow.historyRun = inFlightHistory(liveRun, "Other live reply")
               flow.emit(terminal, eventRunId = ownRun)
               assertTrue(flow.completedReplies.isEmpty())
               flow.historyRun =
                 if (stillActive) {
-                  buildJsonObject {
-                    put("runId", "newer-run")
-                    put("text", "Newer live reply")
-                  }
+                  inFlightHistory("newer-run", "Newer live reply")
                 } else {
                   null
                 }
@@ -1942,7 +1901,7 @@ class WearChatEventFlowTest {
         val ownRun = flow.runId
         flow.observeReplyCompletion()
         flow.emit("delta", eventRunId = null, text = "Anonymous live reply")
-        flow.historyRun = buildJsonObject { put("text", "Anonymous live reply") }
+        flow.historyRun = inFlightHistory(null, "Anonymous live reply")
         flow.emit("error", eventRunId = ownRun)
         flow.emit("delta", eventRunId = if (laterRun == "own") ownRun else laterRun, text = "New live projection")
         assertTrue(flow.completedReplies.isEmpty())
@@ -1964,11 +1923,7 @@ class WearChatEventFlowTest {
       flow.send()
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
-      flow.historyRun =
-        buildJsonObject {
-          put("runId", "foreign-run")
-          put("text", "Foreign live")
-        }
+      flow.historyRun = inFlightHistory("foreign-run", "Foreign live")
       flow.emit("error", eventRunId = ownRun)
       assertEquals(ownRun, flow.state.replyCompletion?.runId)
       flow.historyRun = null
@@ -2012,7 +1967,8 @@ class WearChatEventFlowTest {
         flow.abortFails = mode == "failed"
         flow.abortGate = CompletableDeferred()
         flow.clickAppAction("Abort run")
-        assertTrue("The explicit action still stops current playback immediately", speech.isStopped)
+        flow.idle()
+        assertTrue("The explicit action stops current playback before the RPC outcome", speech.isStopped)
         assertEquals(ownRun, flow.state.pendingReply?.runId)
         if (mode == "confirmed-foreign") flow.emit("delta", eventRunId = "foreign-run", text = "Foreign live")
         flow.abortGate?.complete(Unit)
@@ -2408,11 +2364,7 @@ class WearChatEventFlowTest {
         val ownRun = flow.runId
         flow.emit("delta", eventRunId = null, text = "Anonymous live")
         flow.historyMessages = """[{"id":"other-aborted","role":"assistant","content":"Other canceled reply","idempotencyKey":"other-run:assistant"}]"""
-        flow.historyRun =
-          buildJsonObject {
-            put("runId", "foreign-live")
-            put("text", "Foreign still live")
-          }
+        flow.historyRun = inFlightHistory("foreign-live", "Foreign still live")
         flow.clickAppAction("Abort run")
         flow.idle()
         assertEquals(listOf<String?>(null), flow.abortRuns)
@@ -2493,7 +2445,7 @@ class WearChatEventFlowTest {
       flow.submitFromApp("Hello")
       val ownRun = flow.runId
       flow.emit("delta", eventRunId = null, text = "Anonymous other run")
-      flow.historyRun = buildJsonObject { put("text", "Anonymous other run") }
+      flow.historyRun = inFlightHistory(null, "Anonymous other run")
       flow.historyMessages = """[{"id":"own","role":"assistant","content":"Already completed own reply","idempotencyKey":"$ownRun:assistant"}]"""
       flow.emit("aborted", eventRunId = ownRun)
       assertEquals(WearReplyOutcome.Aborted, flow.state.replyCompletion?.outcome)
@@ -2691,13 +2643,15 @@ class WearChatEventFlowTest {
     }
     flow.settleApp()
     flow.captureApp(if (dictate) "dictate-error" else "type-reply")
-    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     if (failure) {
       flow.scrollAppTo(0)
       assertTrue(flow.hasAppText("Error"))
     } else {
       assertTrue("The ordinary reply must be visible", flow.hasAppText("Hello from Chat"))
     }
+    // Following the reply can scroll the page heading out of the round viewport.
+    flow.scrollAppTo(0)
+    assertTrue("Accepted ordinary input must open Chat, not leave its outcome hidden on Voice", flow.hasAppText("CHAT"))
     assertTrue(
       flow.state.realtimeTalk.conversation
         .isEmpty(),
@@ -2794,7 +2748,7 @@ class WearChatEventFlowTest {
     val abortRuns = mutableListOf<String?>()
     private var replyObserver: ActivityController<out ComponentActivity>? = null
     private val client =
-      WearProxyClient.createForTests(
+      WearProxyClient(
         nodeResolver = WearNodeResolver { "phone-a" },
         transport = WearMessageTransport { _, _, bytes -> respond(bytes) },
       )
@@ -2815,10 +2769,20 @@ class WearChatEventFlowTest {
       idle()
     }
 
-    fun idle() = shadowOf(Looper.getMainLooper()).idle()
+    fun idle() {
+      // UI actions enqueue speech; speech callbacks publish state back to Compose.
+      // Drain both directions before asserting the resulting UI or playback state.
+      repeat(2) {
+        shadowOf(Looper.getMainLooper()).idle()
+        ShadowLooper
+          .getAllLoopers()
+          .filter { it != Looper.getMainLooper() && it.thread.isAlive }
+          .forEach { shadowOf(it).idle() }
+      }
+    }
 
     fun observeReplyCompletion() {
-      val sessionKey = state.selectedSession?.key
+      val sessionKey = checkNotNull(state.selectedSession).key
       val expectedRunId = state.pendingReply?.runId ?: state.replyTerminal?.runId
       val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup()
       replyObserver = controller
@@ -2828,8 +2792,7 @@ class WearChatEventFlowTest {
         WearReplyCompletionEffect(
           state = current,
           snapshot = current.toConversationSnapshot(),
-          awaitingReply = awaiting,
-          awaitingReplySessionId = sessionKey,
+          awaitingReplySessionId = sessionKey.takeIf { awaiting },
           expectedAssistantKey = null,
           awaitingReplyRunId = expectedRunId,
         ) { reply ->
@@ -3159,9 +3122,12 @@ class WearChatEventFlowTest {
     }
 
     fun close() {
+      idle()
       replyObserver?.pause()?.stop()?.destroy()
       owner.viewModelStore.clear()
-      idle()
+      // Disposal shuts down the speech Looper before its thread necessarily exits.
+      // Drain remaining UI cleanup without sending control tasks to that Looper.
+      shadowOf(Looper.getMainLooper()).idle()
       clientField.set(app, previousClient)
       repositoryField.set(app, previousRepository)
       originalScale?.let { Settings.Global.putFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, it) }

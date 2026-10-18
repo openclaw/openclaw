@@ -4,10 +4,16 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import android.content.Context
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -23,6 +29,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.util.ReflectionHelpers
 import java.util.UUID
+import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.suspendCoroutineUninterceptedOrReturn
@@ -165,10 +172,8 @@ class SessionCatalogRuntimeTest {
                   hosts =
                     listOf(
                       SessionCatalogHost(
-                        catalogId = "codex",
                         hostId = "desktop",
                         label = "Desktop",
-                        kind = "node",
                         connected = true,
                         sessions = emptyList(),
                         nextCursor = "cursor-2",
@@ -253,8 +258,10 @@ class SessionCatalogRuntimeTest {
           Context.MODE_PRIVATE,
         )
       val runtime = NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
-      val paginationFinished = CompletableDeferred<Unit>()
-      var paginationThread: Thread? = null
+      val paginationDispatcher = Executors.newSingleThreadExecutor().asCoroutineDispatcher()
+      val paginationMutex = ReflectionHelpers.getField<Mutex>(runtime, "sessionCatalogListMutex")
+      val admissionOwner = Any()
+      var pagination: Deferred<Unit>? = null
       try {
         ReflectionHelpers.setField(runtime, "connectedEndpoint", GatewayEndpoint.manual("127.0.0.1", 18789))
         ReflectionHelpers.setField(runtime, "operatorConnected", true)
@@ -270,24 +277,23 @@ class SessionCatalogRuntimeTest {
         assertEquals("main", runtime.sessionCatalogState.value.agentId)
         assertFalse(runtime.sessionCatalogState.value.loading)
 
+        val paginationThread = withContext(paginationDispatcher) { Thread.currentThread() }
+        paginationMutex.lock(admissionOwner)
         val delayedPagination =
-          Thread {
-            try {
-              runBlocking { invokeLoadMoreSessionCatalogFromGateway(runtime, "codex") }
-              paginationFinished.complete(Unit)
-            } catch (err: Throwable) {
-              paginationFinished.completeExceptionally(err)
-            }
+          async(paginationDispatcher, start = CoroutineStart.UNDISPATCHED) {
+            invokeLoadMoreSessionCatalogFromGateway(runtime, "codex")
           }
-        paginationThread = delayedPagination
+        pagination = delayedPagination
+        assertFalse("Pagination must be waiting for admission", delayedPagination.isCompleted)
         val dataLock = ReflectionHelpers.getField<Any>(runtime, "gatewayDataScopeLock")
         synchronized(dataLock) {
-          delayedPagination.start()
+          // Reach coroutine admission before the bounded monitor wait, excluding cold worker startup.
+          paginationMutex.unlock(admissionOwner)
           val deadline = System.nanoTime() + 2_000_000_000L
-          while (delayedPagination.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+          while (paginationThread.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
             Thread.yield()
           }
-          assertEquals("Pagination must wait at the held data lock", Thread.State.BLOCKED, delayedPagination.state)
+          assertEquals("Pagination must wait at the held data lock", Thread.State.BLOCKED, paginationThread.state)
           val replacement =
             async(start = CoroutineStart.UNDISPATCHED) {
               invokeRefreshSessionCatalogFromGateway(runtime, "work")
@@ -296,7 +302,7 @@ class SessionCatalogRuntimeTest {
           assertEquals("work", runtime.sessionCatalogState.value.agentId)
           assertFalse(runtime.sessionCatalogState.value.loading)
         }
-        withTimeout(2_000) { paginationFinished.await() }
+        withTimeout(2_000) { delayedPagination.await() }
 
         val state = runtime.sessionCatalogState.value
         assertEquals("work", state.agentId)
@@ -313,7 +319,9 @@ class SessionCatalogRuntimeTest {
             .all { it.agentId == "work" },
         )
       } finally {
-        paginationThread?.join(2_000)
+        if (paginationMutex.holdsLock(admissionOwner)) paginationMutex.unlock(admissionOwner)
+        withContext(NonCancellable) { pagination?.cancelAndJoin() }
+        paginationDispatcher.close()
         closeNodeRuntimeTestFixture(runtime)
       }
     }

@@ -1,175 +1,185 @@
-import { html, nothing } from "lit";
-import { AsyncDirective } from "lit/async-directive.js";
-import { directive, type ElementPart } from "lit/directive.js";
+import { createEffect, onCleanup } from "solid-js";
+import { cancelLayout, scheduleLayout } from "./layout-frame.ts";
+import { listen } from "./reactive/listener.ts";
 
 const MARQUEE_SPEED_PX_PER_SEC = 40;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const MARQUEE_LOOP_TRAVEL_FRACTION = 0.4;
 
-type MarqueeOptions = { delay?: number; speed?: number; loop?: boolean };
+export type MarqueeOptions = { delay?: number; speed?: number; loop?: boolean };
 
-class HoverMarqueeDirective extends AsyncDirective {
-  private label?: HTMLElement;
-  private text?: HTMLElement;
-  private host?: HTMLElement;
-  private observer?: ResizeObserver;
-  private visibilityObserver?: IntersectionObserver;
-  private visible = true;
-  private motion?: MediaQueryList;
-  private frame?: number;
-  private timer?: number;
-  private options: MarqueeOptions = {};
-  private shift = 0;
+/** Geometry and animation stay in one ref-owned DOM island, outside reactive state. */
+export function createHoverMarquee(input: () => MarqueeOptions & { className: string }) {
+  const layoutOwner = {};
+  let label: HTMLElement;
+  let text: HTMLElement;
+  let host: HTMLElement | undefined;
+  let observer: ResizeObserver | undefined;
+  let contentObserver: MutationObserver | undefined;
+  let visibilityObserver: IntersectionObserver | undefined;
+  let visible = false;
+  let motion: MediaQueryList | undefined;
+  let timer: number | undefined;
+  let readyToScroll = false;
+  let options: MarqueeOptions & { className?: string } = {};
+  let shift = 0;
+  let disposed = false;
+  const stopListeners: Array<() => void> = [];
 
-  render(_options: MarqueeOptions) {
-    return nothing;
-  }
-
-  override update(part: ElementPart, [options]: [MarqueeOptions]) {
-    this.label = part.element instanceof HTMLElement ? part.element : undefined;
-    this.options = options;
-    this.schedule();
-    return nothing;
-  }
-
-  protected override reconnected() {
-    this.schedule();
-  }
-
-  protected override disconnected() {
-    if (this.frame !== undefined) {
-      cancelAnimationFrame(this.frame);
-      this.frame = undefined;
+  const schedule = () => {
+    if (!disposed) {
+      scheduleLayout(layoutOwner, measure);
     }
-    this.stop();
-    this.observer?.disconnect();
-    this.observer = undefined;
-    this.visibilityObserver?.disconnect();
-    this.visibilityObserver = undefined;
-    this.visible = true;
-    this.motion?.removeEventListener("change", this.schedule);
-    for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-      this.host?.removeEventListener(event, this.schedule);
-    }
-    this.host = undefined;
-  }
-
-  private readonly schedule = () => {
-    if (this.frame !== undefined || !this.isConnected) {
-      return;
-    }
-    // Lit commits children after this directive; hover controls also need to
-    // reserve their space before the title's viewport is measured.
-    this.frame = requestAnimationFrame(() => {
-      this.frame = undefined;
-      this.measure();
-    });
   };
-
-  private measure() {
-    const label = this.label;
-    if (!this.isConnected || !label?.isConnected) {
-      return;
+  const stop = () => {
+    window.clearTimeout(timer);
+    timer = undefined;
+    readyToScroll = false;
+    label?.classList.remove("hover-marquee--scrolling");
+  };
+  const clearOverflow = () => {
+    label.classList.toggle("hover-marquee--overflowing", false);
+    stop();
+    label.style.removeProperty("--hover-marquee-shift");
+    label.style.removeProperty("--hover-marquee-duration");
+    shift = 0;
+  };
+  const measure = () => {
+    if (disposed || !label?.isConnected) {
+      return undefined;
     }
-    if (!this.host) {
-      this.text = label.querySelector<HTMLElement>(".hover-marquee__text") ?? undefined;
-      this.host =
+    if ((!host || options.loop) && !visibilityObserver) {
+      // Defer geometry and resize/content observers until first visibility.
+      // Looping names keep this observer to stop when a drawer moves offscreen.
+      visibilityObserver = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          visible = entry.isIntersecting;
+        }
+        schedule();
+      });
+      visibilityObserver.observe(label);
+    }
+    if (!host && !visible) {
+      return undefined;
+    }
+    if (!host) {
+      host =
         label.closest<HTMLElement>(
           ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card, .sidebar-agent-card__main, .sidebar-workspace-header__main",
         ) ?? undefined;
-      if (!this.host || !this.text) {
-        return;
+      if (!host) {
+        return undefined;
       }
       for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-        this.host.addEventListener(event, this.schedule);
+        stopListeners.push(listen(host, event, schedule));
       }
-      this.motion = matchMedia("(prefers-reduced-motion: reduce)");
-      this.motion.addEventListener("change", this.schedule);
-      // Observe each node once per connected lifetime. Transforms do not resize
-      // the text, so scrolling cannot invalidate its own measurement.
-      this.observer = new ResizeObserver(this.schedule);
-      this.observer.observe(label);
-      this.observer.observe(this.text);
-      if (this.options.loop) {
-        // Mobile drawers move offscreen without resizing their names or
-        // reliably clearing touch hover. Stop their loops while hidden.
-        this.visibilityObserver = new IntersectionObserver((entries) => {
-          for (const entry of entries) {
-            this.visible = entry.isIntersecting;
-          }
-          this.schedule();
-        });
-        this.visibilityObserver.observe(label);
-      }
+      motion = matchMedia("(prefers-reduced-motion: reduce)");
+      stopListeners.push(listen(motion, "change", schedule));
+      // Transforms do not resize text, so scrolling cannot invalidate its measurement.
+      observer = new ResizeObserver(schedule);
+      observer.observe(label);
+      observer.observe(text);
+      contentObserver = new MutationObserver(schedule);
+      contentObserver.observe(label, {
+        childList: true,
+        characterData: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ["dir"],
+      });
+      contentObserver.observe(host, {
+        attributes: true,
+        attributeFilter: ["aria-expanded", "dir"],
+      });
+      contentObserver.observe(label.ownerDocument.documentElement, {
+        attributes: true,
+        attributeFilter: ["dir"],
+      });
     }
-    const text = this.text!;
+    if (!options.loop && visibilityObserver) {
+      visibilityObserver.disconnect();
+      visibilityObserver = undefined;
+      visible = true;
+    }
+    const width = label.clientWidth;
+    if (width <= 0) {
+      return clearOverflow;
+    }
     const style = getComputedStyle(label);
     const padding = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-    const overflow =
-      style.whiteSpace === "nowrap" && label.clientWidth > 0
-        ? text.scrollWidth + padding - label.clientWidth
-        : 0;
-    const clipped = overflow > (this.options.loop ? 0 : 1);
-    label.classList.toggle("hover-marquee--overflowing", clipped);
+    const overflow = style.whiteSpace === "nowrap" ? text.scrollWidth + padding - width : 0;
+    const clipped = overflow > (options.loop ? 0 : 1);
+    if (!clipped) {
+      return clearOverflow;
+    }
     const active =
-      this.host.matches(":hover, :focus-visible") ||
-      Boolean(this.host.querySelector(":focus-visible")) ||
-      // Touch opens the existing identity menu; its trigger keeps revealing
-      // the name while focus moves into the portaled menu.
-      (this.options.loop && this.host.getAttribute("aria-expanded") === "true");
-    if (!clipped || !active || !this.visible || this.motion?.matches) {
-      this.stop();
-      if (!clipped) {
-        label.style.removeProperty("--hover-marquee-shift");
-        label.style.removeProperty("--hover-marquee-duration");
-        this.shift = 0;
-      }
-      return;
+      host.matches(":hover, :focus-visible") ||
+      Boolean(host.querySelector(":focus-visible")) ||
+      // Touch menus keep revealing their trigger while focus moves into the portal.
+      (options.loop && host.getAttribute("aria-expanded") === "true");
+    if (!active || !visible || motion?.matches) {
+      return () => {
+        label.classList.toggle("hover-marquee--overflowing", clipped);
+        stop();
+      };
     }
     const fade = Number.parseFloat(style.getPropertyValue("--hover-marquee-fade-width"));
-    const shift =
-      (overflow + (this.options.loop ? 0 : fade)) * (style.direction === "rtl" ? 1 : -1);
-    if (shift !== this.shift || !label.classList.contains("hover-marquee--scrolling")) {
+    const nextShift = (overflow + (options.loop ? 0 : fade)) * (style.direction === "rtl" ? 1 : -1);
+    const scrolling = label.classList.contains("hover-marquee--scrolling");
+    let duration: number | undefined;
+    if (nextShift !== shift || !scrolling) {
       const transform = getComputedStyle(text).transform;
       const offset = transform === "none" ? 0 : new DOMMatrixReadOnly(transform).m41;
       // Each leg occupies 40% of the loop; the rest pauses at either end.
-      const distance = this.options.loop
-        ? Math.abs(shift) / MARQUEE_LOOP_TRAVEL_FRACTION
-        : Math.abs(shift - offset);
-      const duration = (distance / (this.options.speed ?? MARQUEE_SPEED_PX_PER_SEC)) * 1000;
-      label.style.setProperty("--hover-marquee-shift", `${shift}px`);
-      label.style.setProperty("--hover-marquee-duration", `${duration}ms`);
-      this.shift = shift;
+      const distance = options.loop
+        ? Math.abs(nextShift) / MARQUEE_LOOP_TRAVEL_FRACTION
+        : Math.abs(nextShift - offset);
+      duration = (distance / (options.speed ?? MARQUEE_SPEED_PX_PER_SEC)) * 1000;
     }
-    if (this.timer === undefined && !label.classList.contains("hover-marquee--scrolling")) {
-      this.timer = window.setTimeout(() => {
-        this.measure();
-        if (this.timer !== undefined) {
-          this.timer = undefined;
-          label.classList.add("hover-marquee--scrolling");
-        }
-      }, this.options.delay ?? MARQUEE_HOVER_DELAY_MS);
+    return () => {
+      label.classList.toggle("hover-marquee--overflowing", clipped);
+      if (duration !== undefined) {
+        label.style.setProperty("--hover-marquee-shift", `${nextShift}px`);
+        label.style.setProperty("--hover-marquee-duration", `${duration}ms`);
+        shift = nextShift;
+      }
+      if (readyToScroll) {
+        readyToScroll = false;
+        label.classList.add("hover-marquee--scrolling");
+      } else if (timer === undefined && !scrolling) {
+        timer = window.setTimeout(() => {
+          timer = undefined;
+          readyToScroll = true;
+          schedule();
+        }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+      }
+    };
+  };
+
+  // Synchronize the measured DOM animation with its reactive options.
+  createEffect(input, (next) => {
+    if (
+      !host ||
+      next.className !== options.className ||
+      next.delay !== options.delay ||
+      next.speed !== options.speed ||
+      next.loop !== options.loop
+    ) {
+      schedule();
     }
-  }
-
-  private stop() {
-    window.clearTimeout(this.timer);
-    this.timer = undefined;
-    this.label?.classList.remove("hover-marquee--scrolling");
-  }
-}
-
-const hoverMarquee = directive(HoverMarqueeDirective);
-
-export function renderHoverMarquee(
-  content: unknown,
-  className: string,
-  options: MarqueeOptions = {},
-) {
-  return html`<span
-    class="${className} hover-marquee ${options.loop ? "hover-marquee--loop" : ""}"
-    dir=${options.loop ? "auto" : nothing}
-    ${hoverMarquee(options)}
-    ><span class="hover-marquee__text">${content}</span></span
-  >`;
+    options = next;
+  });
+  onCleanup(() => {
+    disposed = true;
+    cancelLayout(layoutOwner);
+    stop();
+    observer?.disconnect();
+    contentObserver?.disconnect();
+    visibilityObserver?.disconnect();
+    stopListeners.forEach((release) => release());
+  });
+  return {
+    labelRef: (element: HTMLElement) => (label = element),
+    textRef: (element: HTMLElement) => (text = element),
+  };
 }

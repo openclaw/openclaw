@@ -1,4 +1,5 @@
 import { parseAgentSessionKey } from "../../routing/session-key.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 import { parseSqliteSessionEntryRecord } from "./session-entry-json.js";
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import {
@@ -18,13 +19,7 @@ export type CanonicalSessionValidationRow = {
   retained_window_id: string | null;
 };
 
-class SessionCanonicalKeyMigrationRequiredError extends Error {
-  readonly code = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
-  constructor(detail: string) {
-    super(`${detail}; stop the Gateway and run openclaw doctor --fix`);
-    this.name = "SessionCanonicalKeyMigrationRequiredError";
-  }
-}
+export { SessionCanonicalKeyMigrationRequiredError } from "./session-canonical-key-error.js";
 
 export function canonicalSessionKeyMigrationRequiredError(
   detail: string,
@@ -32,10 +27,30 @@ export function canonicalSessionKeyMigrationRequiredError(
   return new SessionCanonicalKeyMigrationRequiredError(detail);
 }
 
-/** One validator serves full Doctor scans, pending rows, and final writer certification. */
+/** One validator serves full Doctor scans, pending rows, and canonical writer inputs. */
 export function validateCanonicalSessionRow(
   row: CanonicalSessionValidationRow,
-  canonicalMainKey: string,
+  mode: "admission" | "read" = "admission",
+): SessionEntry | undefined {
+  const record =
+    row.entry_valid === 1 || (mode === "read" && row.entry_valid === 0)
+      ? parseSqliteSessionEntryRecord({
+          entry_json: row.entry_json,
+          current_session_id: row.current_session_id,
+        })
+      : null;
+  return validateCanonicalSessionRowEntry(
+    row,
+    record ? projectCanonicalSessionEntryShape(record) : null,
+    mode,
+  );
+}
+
+/** Exact readers validate the entry decoded from the same selected row. */
+export function validateCanonicalSessionRowEntry(
+  row: CanonicalSessionValidationRow,
+  entry: SessionEntry | null,
+  mode: "admission" | "read" = "admission",
 ): SessionEntry | undefined {
   if (
     row.entry_json === "{}" &&
@@ -44,19 +59,12 @@ export function validateCanonicalSessionRow(
   ) {
     return undefined;
   }
-  const record =
-    row.entry_valid === 1
-      ? parseSqliteSessionEntryRecord({
-          entry_json: row.entry_json,
-          current_session_id: row.current_session_id,
-        })
-      : null;
-  if (!record) {
+  // Uncertified imported rows still validate their selected source bytes on reads.
+  if (!entry || (row.entry_valid !== 1 && (mode !== "read" || row.entry_valid !== 0))) {
     throw canonicalSessionKeyMigrationRequiredError(
       `invalid persisted session row requires repair for ${row.session_key}`,
     );
   }
-  const entry = projectCanonicalSessionEntryShape(record);
   if (
     (row.parent_session_key ?? undefined) !==
       (entry.parentSessionKey ?? entry.spawnedBy ?? undefined) ||
@@ -78,8 +86,7 @@ export function validateCanonicalSessionRow(
   if (
     row.session_key !== trimmed ||
     normalizeStoreSessionKey(trimmed) !== trimmed ||
-    (!parsed && trimmed !== "global" && trimmed !== "unknown") ||
-    (parsed && parsed.rest === "main" && canonicalMainKey !== "main")
+    (!parsed && trimmed !== "global" && trimmed !== "unknown")
   ) {
     throw canonicalSessionKeyMigrationRequiredError(
       `non-canonical persisted row resolves to session key ${trimmed || row.session_key}`,
@@ -93,8 +100,7 @@ export function validateCanonicalSessionRow(
     const lineageParsed = parseAgentSessionKey(normalized);
     if (
       normalized !== lineageKey ||
-      (!lineageParsed && normalized !== "global" && normalized !== "unknown") ||
-      (lineageParsed?.rest === "main" && canonicalMainKey !== "main")
+      (!lineageParsed && normalized !== "global" && normalized !== "unknown")
     ) {
       throw canonicalSessionKeyMigrationRequiredError(
         `non-canonical persisted row resolves to session key ${normalized || lineageKey}`,

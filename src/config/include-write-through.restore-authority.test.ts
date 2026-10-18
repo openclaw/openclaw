@@ -1,8 +1,3 @@
-// Split from include-write-through.publish.test.ts (line-cap ratchet, base
-// bc2fb1a63a67ee06c6c6b8a05af61ed9a2ed7cab): post-publish restoration-authority
-// and forced-compensation cases. Fixture scaffold (mocks, suite temp roots,
-// itWithHome/createFastConfigIO) duplicated from that file -- it is local,
-// unexported test infra, not a shared module.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

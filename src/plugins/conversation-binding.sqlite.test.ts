@@ -159,6 +159,12 @@ describe("plugin conversation bindings through SQLite", () => {
       });
 
       await expect(
+        getCurrentPluginConversationBinding({
+          pluginRoot: "/plugins/other-runtime",
+          conversation,
+        }),
+      ).resolves.toBeNull();
+      await expect(
         detachPluginConversationBinding({ pluginRoot: "/plugins/other-runtime", conversation }),
       ).resolves.toEqual({ removed: false });
       expect(service.listBySession(record.targetSessionKey)).toHaveLength(1);

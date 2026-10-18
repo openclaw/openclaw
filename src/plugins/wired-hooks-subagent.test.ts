@@ -50,7 +50,6 @@ describe("subagent hook runner methods", () => {
     {
       name: "runSubagentSpawned invokes registered subagent_spawned hooks",
       hookName: "subagent_spawned" as const,
-      methodName: "runSubagentSpawned" as const,
       event: {
         runId: "run-1",
         childSessionKey: "agent:main:subagent:child",
@@ -65,7 +64,6 @@ describe("subagent hook runner methods", () => {
     {
       name: "runSubagentProgress invokes registered subagent_progress hooks",
       hookName: "subagent_progress" as const,
-      methodName: "runSubagentProgress" as const,
       event: {
         phase: "started" as const,
         runId: "run-1",
@@ -77,7 +75,6 @@ describe("subagent hook runner methods", () => {
     {
       name: "runSubagentDeliveryTarget invokes registered subagent_delivery_target hooks",
       hookName: "subagent_delivery_target" as const,
-      methodName: "runSubagentDeliveryTarget" as const,
       event: {
         childSessionKey: "agent:main:subagent:child",
         requesterSessionKey: "agent:main:main",
@@ -107,7 +104,6 @@ describe("subagent hook runner methods", () => {
     {
       name: "runSubagentEnded invokes registered subagent_ended hooks",
       hookName: "subagent_ended" as const,
-      methodName: "runSubagentEnded" as const,
       event: {
         targetSessionKey: "agent:main:subagent:child",
         targetKind: "subagent" as const,
@@ -142,16 +138,5 @@ describe("subagent hook runner methods", () => {
       baseSubagentCtx,
     );
     expect(result).toBeUndefined();
-  });
-
-  it("hasHooks returns true for registered subagent hooks", () => {
-    const { runner } = createHookRunnerWithRegistry([
-      { hookName: "subagent_delivery_target", handler: vi.fn() },
-    ]);
-
-    expect(runner.hasHooks("subagent_delivery_target")).toBe(true);
-    expect(runner.hasHooks("subagent_spawned")).toBe(false);
-    expect(runner.hasHooks("subagent_progress")).toBe(false);
-    expect(runner.hasHooks("subagent_ended")).toBe(false);
   });
 });

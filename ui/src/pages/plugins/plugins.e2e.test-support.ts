@@ -1,6 +1,12 @@
 // Control UI tests cover plugin catalog browsing and lifecycle mutations.
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type Page,
+} from "playwright";
 import { describe } from "vitest";
 import type { PluginsSearchResult } from "../../../../packages/gateway-protocol/src/schema/plugins.ts";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
@@ -446,12 +452,6 @@ const localCalendarDisabled = {
   removable: false,
 } satisfies PluginCatalogItem;
 
-const localCalendarEnabled = {
-  ...localCalendarDisabled,
-  enabled: true,
-  state: "enabled",
-} satisfies PluginCatalogItem;
-
 let browser: Browser;
 let server: ControlUiE2eServer;
 
@@ -543,11 +543,15 @@ async function captureScreenshot(
   });
 }
 
-async function newContext(viewport = desktopViewport): Promise<BrowserContext> {
+async function newContext(
+  viewport = desktopViewport,
+  options: Pick<BrowserContextOptions, "hasTouch" | "recordVideo"> = {},
+): Promise<BrowserContext> {
   return browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
     viewport,
+    ...options,
   });
 }
 
@@ -561,6 +565,22 @@ function pluginMethodResponses() {
         { match: { pluginId: "workboard" }, response: workboardInspection },
         { match: { pluginId: "lobster" }, response: lobsterInspection },
         { match: { pluginId: "calendar-plus" }, response: calendarInspection },
+        {
+          match: { pluginId: "local-calendar" },
+          response: {
+            ...workboardInspection,
+            plugin: localCalendarDisabled,
+            source: { kind: "npm", packageName: localCalendarDisabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
+        {
+          match: { pluginId: "matrix" },
+          response: {
+            ...workboardInspection,
+            plugin: matrixEnabled,
+            source: { kind: "npm", packageName: matrixEnabled.packageName },
+          } satisfies PluginsInspectResult,
+        },
       ],
     },
     "plugins.search": {
@@ -671,7 +691,6 @@ export {
   installMockGateway,
   inventory,
   localCalendarDisabled,
-  localCalendarEnabled,
   localOnlyDiscoveryPlugin,
   matrixConfigSchema,
   matrixDiscoveryPlugin,

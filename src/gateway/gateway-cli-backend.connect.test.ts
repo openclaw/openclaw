@@ -5,10 +5,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { prepareGatewayClientDeviceAuth } from "./client.js";
 import { connectTestGatewayClient } from "./gateway-cli-backend.live-helpers.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -18,9 +18,8 @@ import {
   sendMinimalGatewayResponse,
 } from "./minimal-gateway.test-helpers.js";
 
-// This runs in a 2,000+ test database-worker shard; allow for event-loop scheduling stalls.
-const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 5_000;
-const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 30_000;
+const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 1_000;
+const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 15_000;
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-" });
 
 async function createTempDeviceIdentity() {
@@ -109,12 +108,11 @@ describe("gateway cli backend connect", () => {
       let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
 
       try {
-        // Native auth-store startup belongs to fixture setup, before the handshake budget.
-        await prepareGatewayClientDeviceAuth({
-          url: server.url,
-          token,
-          deviceIdentity,
-        });
+        // Actor preparation leaves its command runtime lazy. Join a real fixture read
+        // before timing the handshake, which still loads fresh token facts itself.
+        await expect(
+          loadDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role: "operator" }),
+        ).resolves.toBeNull();
         client = await connectTestGatewayClient({
           url: server.url,
           token,

@@ -10,6 +10,7 @@ export function readChild(
   previous: ReleaseRecord | undefined,
   signal?: AbortSignal,
   options?: {
+    reuseSelection?: { runAttempt: number };
     readAttemptJobs?: (
       runId: string,
       runAttempt: number,

@@ -1,11 +1,16 @@
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
   SessionTranscriptWriteScope,
   TranscriptAppendRefusal,
+  TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import type { ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
+import {
+  transcriptWriteScopeIsCurrent,
+  type ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
   assertOwnedTranscriptWriteCommit,
@@ -13,19 +18,22 @@ import {
 } from "./transcript-write-context.js";
 import type { InternalSessionEntry } from "./types.js";
 
+export function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
+  // Message records require parent-link, idempotency, and redaction handling
+  // from appendTranscriptMessage; raw event writes would bypass those invariants.
+  if (isRecord(event) && "type" in event && event.type === "message") {
+    throw new Error(
+      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
+    );
+  }
+}
+
 export function resolveTranscriptAppendRefusal(
   entry: InternalSessionEntry | undefined,
   resolved: ResolvedTranscriptScope,
   scope: SessionTranscriptWriteScope,
 ): TranscriptAppendRefusal | undefined {
-  if (
-    entry &&
-    entry.sessionId === resolved.sessionId &&
-    (scope.expectedLifecycleRevision === undefined ||
-      entry.lifecycleRevision === scope.expectedLifecycleRevision) &&
-    (scope.expectedWriterRunId === undefined ||
-      entry.activeWriterRunId === scope.expectedWriterRunId)
-  ) {
+  if (transcriptWriteScopeIsCurrent(entry, resolved.sessionId, scope)) {
     return undefined;
   }
   const identity = {
@@ -57,7 +65,8 @@ export function assertLockedTranscriptWriteAllowed(
   assertOwnedTranscriptWriteCommit(fencedScope);
   if (
     fencedScope.expectedLifecycleRevision === undefined &&
-    fencedScope.expectedWriterRunId === undefined
+    fencedScope.expectedWriterRunId === undefined &&
+    fencedScope.expectedOwner === undefined
   ) {
     return undefined;
   }

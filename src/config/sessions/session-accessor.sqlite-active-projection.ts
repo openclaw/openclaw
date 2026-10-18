@@ -8,6 +8,7 @@ import {
 import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
+  type ResolvedTranscriptReadScope,
 } from "./session-accessor.sqlite-scope.js";
 import {
   SessionTranscriptProjectionUnavailableError,
@@ -18,24 +19,33 @@ import { startSessionTranscriptIndexReconcile } from "./session-transcript-recon
 export function withCurrentProjectionSnapshot<T>(
   scope: SessionTranscriptReadScope,
   read: (projection: CurrentTranscriptProjection) => T,
-  options: { readOnly?: boolean } = {},
+  options: {
+    readOnly?: boolean;
+    resolvedScope?: ResolvedTranscriptReadScope;
+    transaction?: CurrentTranscriptProjection["database"];
+  } = {},
 ): T {
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const resolved = options.resolvedScope ?? resolveSqliteTranscriptReadScope(scope);
   const databaseOptions = toDatabaseOptions(resolved);
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
-  const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
-    : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
+  if (options.transaction && !options.transaction.db.isTransaction) {
+    throw new Error("Transcript projection lost its borrowed transaction");
+  }
+  const result = options.transaction
+    ? { found: true as const, value: readSnapshot(options.transaction) }
+    : options.readOnly
+      ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, { snapshot: true })
+      : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
-    throw new SessionTranscriptStorageUnavailableError();
+    throw new SessionTranscriptStorageUnavailableError(result.reason);
   }
   if (result.value.kind === "value") {
     return result.value.value;
   }
   // Only the writer lifecycle may rebuild after this stack unwinds. Read-only catalogs
   // report unavailable and leave reconciliation to the source Gateway.
-  if (!options.readOnly) {
+  if (!options.readOnly && !options.transaction) {
     startSessionTranscriptIndexReconcile({
       ...databaseOptions,
       preferredSessionId: resolved.sessionId,

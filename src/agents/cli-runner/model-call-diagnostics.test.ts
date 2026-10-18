@@ -30,9 +30,27 @@ function createContext(): PreparedCliRunContext {
         },
       },
       runId: "claude-diagnostics-test",
+      agentId: "claude-diagnostics-agent",
       sessionId: "session-test",
     },
   } as PreparedCliRunContext;
+}
+
+function createOutputDiagnostics(captureOutputMessages: (messages: unknown) => void) {
+  const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+    if (event.type === "model.call.completed") {
+      captureOutputMessages(privateData.modelContent?.outputMessages);
+    }
+  });
+  const diagnostics = expectDefined(
+    createClaudeCliModelCallDiagnostics({
+      context: createContext(),
+      prompt: "hello",
+      transport: "stdio",
+    }),
+    "Claude CLI diagnostics",
+  );
+  return { diagnostics, stop };
 }
 
 describe("Claude CLI model-call diagnostics", () => {
@@ -95,19 +113,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("bounds serialized escaped content across many envelopes", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 199; index += 1) {
@@ -122,86 +130,11 @@ describe("Claude CLI model-call diagnostics", () => {
     );
   });
 
-  it("caps assistant envelope count and records truncation", async () => {
-    let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
-    });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
-
-    diagnostics.emitStarted();
-    for (let index = 0; index < 250; index += 1) {
-      diagnostics.observeAssistantMessage({ content: `message-${index}` });
-    }
-    diagnostics.emitCompleted({ text: "done" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(outputMessages).toHaveLength(200);
-    expect(JSON.stringify(outputMessages)).toContain("...(truncated)");
-  });
-
-  it("records truncation when the item budget ends inside an envelope", async () => {
-    let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
-    });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
-
-    diagnostics.emitStarted();
-    for (let index = 0; index < 197; index += 1) {
-      diagnostics.observeAssistantMessage({ content: `message-${index}` });
-    }
-    diagnostics.observeAssistantMessage({
-      content: [
-        { type: "text", text: "captured-a" },
-        { type: "text", text: "captured-b" },
-        { type: "text", text: "dropped-c" },
-      ],
-    });
-    diagnostics.emitCompleted({ text: "done" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(outputMessages).toHaveLength(199);
-    expect(JSON.stringify(outputMessages)).toContain("captured-b");
-    expect(JSON.stringify(outputMessages)).not.toContain("dropped-c");
-    expect(JSON.stringify(outputMessages)).toContain("...(truncated)");
-  });
-
   it("keeps fallback response text when prior non-text envelopes fill the limit", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     for (let index = 0; index < 200; index += 1) {
@@ -220,19 +153,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("keeps fallback response text when non-text content fills the byte budget", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({
@@ -248,54 +171,73 @@ describe("Claude CLI model-call diagnostics", () => {
     expect(Buffer.byteLength(outputJson, "utf8")).toBeLessThanOrEqual(CONTENT_LIMIT_BYTES + 512);
   });
 
-  it("keeps the fallback reserve after empty text content", async () => {
-    let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
-    });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
+  it.each([{ content: "" }, { content: [{ type: "text", text: "" }] }])(
+    "keeps the fallback reserve after empty text content (%j)",
+    async ({ content }) => {
+      let outputMessages: unknown;
+      const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+        outputMessages = messages;
+      });
 
-    diagnostics.emitStarted();
-    diagnostics.observeAssistantMessage({ content: "" });
-    diagnostics.observeAssistantMessage({
-      content: Array.from({ length: 200 }, (_, index) => ({
-        type: "thinking",
-        thinking: `reason-${index}`,
-      })),
-    });
-    diagnostics.emitCompleted({ text: "final visible answer" } as CliOutput);
-    await waitForDiagnosticEventsDrained();
-    stop();
+      diagnostics.emitStarted();
+      diagnostics.observeAssistantMessage({ content });
+      diagnostics.observeAssistantMessage({
+        content: Array.from({ length: 200 }, (_, index) => ({
+          type: "thinking",
+          thinking: `reason-${index}`,
+        })),
+      });
+      diagnostics.emitCompleted({ text: "final visible answer" } as CliOutput);
+      await waitForDiagnosticEventsDrained();
+      stop();
 
-    const outputJson = JSON.stringify(outputMessages);
-    expect(outputJson).toContain("final visible answer");
-    expect(outputJson).toContain("...(truncated)");
-  });
+      const outputJson = JSON.stringify(outputMessages);
+      expect(outputJson).toContain("final visible answer");
+      expect(outputJson).toContain("...(truncated)");
+    },
+  );
+
+  it.each(["tool_use", "server_tool_use", "mcp_tool_use"])(
+    "captures visible assistant content without opaque %s fields",
+    async (toolType) => {
+      let outputMessages: unknown;
+      const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+        outputMessages = messages;
+      });
+      diagnostics.emitStarted();
+      diagnostics.observeAssistantMessage({
+        content: [
+          { type: "text", text: "Visible reply" },
+          { type: "thinking", thinking: "Visible reasoning", signature: "opaque-signature" },
+          { type: toolType, name: "lookup", id: "call-1", input: { hidden: "tool arguments" } },
+          { type: "text", text: 42 },
+          null,
+        ],
+        stop_reason: "tool_use",
+      });
+      diagnostics.emitCompleted({ text: "Visible reply" } as CliOutput);
+      await waitForDiagnosticEventsDrained();
+      stop();
+
+      expect(outputMessages).toEqual([
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Visible reply" },
+            { type: "thinking", thinking: "Visible reasoning" },
+            { type: "tool_call", name: "lookup", id: "call-1" },
+          ],
+          stopReason: "tool_use",
+        },
+      ]);
+    },
+  );
 
   it("bounds text probing after the capture budget is exhausted", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({
@@ -321,19 +263,9 @@ describe("Claude CLI model-call diagnostics", () => {
 
   it("counts the truncation marker within the output item limit", async () => {
     let outputMessages: unknown;
-    const stop = onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
-      if (event.type === "model.call.completed") {
-        outputMessages = privateData.modelContent?.outputMessages;
-      }
+    const { diagnostics, stop } = createOutputDiagnostics((messages) => {
+      outputMessages = messages;
     });
-    const diagnostics = expectDefined(
-      createClaudeCliModelCallDiagnostics({
-        context: createContext(),
-        prompt: "hello",
-        transport: "stdio",
-      }),
-      "Claude CLI diagnostics",
-    );
 
     diagnostics.emitStarted();
     diagnostics.observeAssistantMessage({

@@ -36,16 +36,17 @@
   height: 16px;
 }
 
-.chat-thread:has(> openclaw-chat-comment-pins) {
+div.chat-thread:where(.chat-thread--comment-pins) {
   position: relative;
 }
 
 /* Reserve a narrow gutter for pins even when a selected line fills the viewport. */
-.chat-thread:has(> openclaw-chat-comment-pins) .chat-thread-inner {
+div.chat-thread:where(.chat-thread--comment-pins) .chat-thread-inner {
   padding-inline-end: 28px;
 }
 
 openclaw-chat-comment-pins {
+  contain: layout;
   position: absolute;
   top: 0;
   left: 0;
@@ -164,27 +165,15 @@ openclaw-chat-comment-pins {
   margin-top: 4px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-at-start="false"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-start="false"] {
   --annotation-fade-top: 12px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-at-end="false"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-at-end="false"] {
   --annotation-fade-bottom: 12px;
 }
 
-:is(
-  .chat-comment-preview__scroll,
-  .chat-comment-preview__text--comment,
-  .chat-annotation-editor textarea
-)[data-scrollable="true"] {
+:is(.chat-comment-preview__scroll, .chat-comment-preview__text--comment)[data-scrollable="true"] {
   mask-image: linear-gradient(
     to bottom,
     transparent,

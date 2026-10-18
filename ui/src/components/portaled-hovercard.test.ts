@@ -1,10 +1,13 @@
 /* @vitest-environment jsdom */
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
+import { delegateEvents } from "@solidjs/web";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 
 afterEach(() => {
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function fixture(shadow = false) {
@@ -12,7 +15,7 @@ function fixture(shadow = false) {
   const owner = shadow ? pane.attachShadow({ mode: "open" }) : pane;
   const trigger = owner.appendChild(document.createElement("a"));
   const dismiss = vi.fn(() => controller.reset());
-  const controller = new PortaledHovercardController(dismiss);
+  const controller = createPortaledHovercardOwner(dismiss);
   controller.markTrigger(trigger);
   const mount = () => {
     controller.mount(trigger, createPortaledHovercard("preview", "preview"), "vertical");
@@ -22,6 +25,137 @@ function fixture(shadow = false) {
 }
 
 describe("portaled hovercard presentation ownership", () => {
+  it("keeps a Solid card open while its links hold focus and closes after focus leaves", async () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    const card = createPortaledHovercard("solid-preview", "preview");
+    const content = document.createElement("div");
+    const first = document.createElement("a");
+    first.href = "#first";
+    const second = document.createElement("a");
+    second.href = "#second";
+    content.append(first, second);
+    // The application delegates these events before the portal installs native listeners.
+    delegateEvents(["focusin", "focusout"]);
+    mountSolid(() => content, { container: card });
+    const showPopover = card.showPopover.bind(card);
+    vi.spyOn(card, "showPopover").mockImplementation(() => {
+      showPopover();
+      first.focus();
+    });
+    view.controller.mount(view.trigger, card, "vertical");
+    onTestFinished(() => view.controller.reset());
+
+    expect(document.activeElement).toBe(first);
+    view.controller.handleCardPointerLeave();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(first);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    second.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(card.isConnected).toBe(true);
+    expect(document.activeElement).toBe(second);
+    expect(view.dismiss).not.toHaveBeenCalled();
+
+    view.trigger.href = "#outside";
+    view.trigger.focus();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(view.controller.card).toBeNull();
+    expect(view.dismiss).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])(
+    "retires animated exits without waiting for reduced motion (%s)",
+    async (reduced) => {
+      vi.useFakeTimers();
+      vi.stubGlobal(
+        "matchMedia",
+        vi.fn(() => ({ matches: reduced })),
+      );
+      const view = fixture();
+      view.mount();
+      const card = view.controller.card;
+      if (!card) {
+        throw new Error("Expected the mounted hovercard");
+      }
+      try {
+        view.controller.reset(100);
+        expect(card.isConnected).toBe(!reduced);
+        if (!reduced) {
+          await vi.advanceTimersByTimeAsync(150);
+          expect(card.isConnected).toBe(false);
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        view.controller.reset();
+      }
+    },
+  );
+
+  it("retires card listeners before an animated card is replaced", () => {
+    vi.useFakeTimers();
+    const view = fixture();
+    view.mount();
+    const previous = view.controller.card!;
+    view.controller.reset(100);
+    view.controller.markTrigger(view.trigger);
+    view.mount();
+    onTestFinished(() => view.controller.reset());
+
+    previous.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(view.dismiss).not.toHaveBeenCalled();
+    expect(view.controller.card?.isConnected).toBe(true);
+    expect(previous.isConnected).toBe(false);
+
+    view.controller.card?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    );
+    expect(view.dismiss).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it.each([false, true])(
+    "ignores unrelated scrolls and coalesces anchor movement (shadow=%s)",
+    (shadow) => {
+      vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+      const view = fixture(shadow);
+      onTestFinished(() => view.controller.reset());
+      const other = document.body.appendChild(document.createElement("section"));
+      let top = 100;
+      const measure = vi
+        .spyOn(view.trigger, "getBoundingClientRect")
+        .mockImplementation(() => new DOMRect(20, top, 100, 20));
+      view.mount();
+      expect(view.controller.card?.style.top).toBe("130px");
+      measure.mockClear();
+      for (let index = 0; index < 100; index++) {
+        other.dispatchEvent(new Event("scroll"));
+      }
+      vi.advanceTimersToNextFrame();
+      expect(measure).not.toHaveBeenCalled();
+
+      top = 140;
+      for (let index = 0; index < 5; index++) {
+        view.pane.dispatchEvent(new Event("scroll"));
+        window.dispatchEvent(new Event("resize"));
+      }
+      expect(measure).not.toHaveBeenCalled();
+      vi.advanceTimersToNextFrame();
+      expect(measure).toHaveBeenCalledTimes(1);
+      expect(view.controller.card?.style.top).toBe("170px");
+
+      measure.mockClear();
+      view.pane.dispatchEvent(new Event("scroll"));
+      view.controller.reset();
+      vi.advanceTimersToNextFrame();
+      window.dispatchEvent(new Event("resize"));
+      vi.advanceTimersToNextFrame();
+      expect(measure).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["pending", "held"])("retires a %s card across shadow ancestry", async (phase) => {
     vi.useFakeTimers();
     const view = fixture(true);
@@ -62,22 +196,4 @@ describe("portaled hovercard presentation ownership", () => {
     await Promise.resolve();
     expect(first.dismiss).toHaveBeenCalledTimes(1);
   });
-
-  it.each([false, true])(
-    "keeps a modal's card with its trigger and retires it when the modal disconnects (shadow=%s)",
-    async (shadow) => {
-      const modal = document.body.appendChild(document.createElement("openclaw-modal-dialog"));
-      const content = modal.appendChild(document.createElement("section"));
-      const root = shadow ? content.attachShadow({ mode: "open" }) : content;
-      const trigger = root.appendChild(document.createElement("a"));
-      const controller = new PortaledHovercardController(() => controller.reset());
-      controller.markTrigger(trigger);
-      controller.mount(trigger, createPortaledHovercard("modal-preview", "preview"), "vertical");
-      await Promise.resolve();
-      expect(controller.card?.parentElement).toBe(modal);
-      modal.remove();
-      await Promise.resolve();
-      expect(controller.card).toBeNull();
-    },
-  );
 });

@@ -1,12 +1,13 @@
+import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { existsSync, linkSync, renameSync, watch, writeFileSync } from "node:fs";
-import path from "node:path";
+import { existsSync, linkSync, renameSync, writeFileSync } from "node:fs";
 import { parentPort, threadId } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
 import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import {
@@ -14,6 +15,7 @@ import {
   type SqliteWorkerPreparedBackend,
 } from "./sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
+import { withStateDatabaseSchemaMaintenance } from "./state-database-maintenance.js";
 
 let pendingCloses = 0;
 type ReplyOwnership = { kind: string; before: number; after: number };
@@ -58,9 +60,22 @@ type Receipt = {
 };
 export type FixtureOperations = {
   append: { input: { value: string }; output: Receipt };
+  "database.domain.execute": {
+    input: {
+      command: {
+        type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
+        input: { value: string };
+      };
+    };
+    output: Receipt;
+  };
   read: { input: undefined; output: string[] };
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
+  commitWithoutReceipt: {
+    input: { value: string; mode: "native" | "schema-maintenance" };
+    output: never;
+  };
   commitUnserializable: { input: { value: string }; output: symbol };
   failClose: { input: undefined; output: undefined };
   delayClose: { input: { markerPath: string; reject: boolean }; output: undefined };
@@ -71,18 +86,16 @@ export type FixtureOperations = {
 };
 
 function waitForFile(file: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const watcher = watch(path.dirname(file), () => {
+  return new Promise((resolve) => {
+    const check = () => {
       if (existsSync(file)) {
-        watcher.close();
+        clearInterval(poll);
         resolve();
       }
-    });
-    watcher.once("error", reject);
-    if (existsSync(file)) {
-      watcher.close();
-      resolve();
-    }
+    };
+    // Worker watch notifications can be missed or coalesced; observe the persistent gate.
+    const poll = setInterval(check, 50);
+    check();
   });
 }
 
@@ -200,6 +213,39 @@ function createFixtureBackend(
           query.selectFrom("entries").select("value").orderBy("id"),
         ).rows.map((row) => row.value);
       }
+      if (command.type === "commitWithoutReceipt") {
+        // Exit inside the native call: the durable COMMIT precedes its receipt observer.
+        const exec = db.exec.bind(db);
+        db.exec = (sql) => {
+          exec(sql);
+          if (sql === "COMMIT") {
+            process.exit(17);
+          }
+        };
+        const write = () =>
+          runSqliteImmediateTransactionSync(db, () => {
+            executeSqliteQuerySync(
+              db,
+              query.insertInto("entries").values({ value: command.input.value }),
+            );
+          });
+        if (command.input.mode === "schema-maintenance") {
+          withStateDatabaseSchemaMaintenance({ databasePath }, write);
+        } else {
+          write();
+        }
+        throw new Error("Fixture COMMIT did not exit");
+      }
+      if (command.type === "database.domain.execute") {
+        const inner = command.input.command;
+        if (inner.type === "session.private-customer-command") {
+          return runSqliteImmediateTransactionSync(db, () => {
+            append(inner.input.value);
+            throw new Error("Fixture transaction rolled back");
+          });
+        }
+        return append(inner.input.value);
+      }
       const receipt = append(command.input.value);
       if (command.type === "commitThenExit") {
         // Leave an outstanding native lock as well as a committed write when the worker exits.
@@ -218,6 +264,15 @@ function createFixtureBackend(
         return (async () => {
           try {
             await Promise.resolve();
+            assert.throws(
+              () => requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined }),
+              /requires its retained admission/u,
+            );
+            publishSqliteDatabaseAdmission(
+              db,
+              { name: "fixture.cleanup", read: (value) => (value === true ? true : undefined) },
+              true,
+            );
             closeNative();
             writeFileSync(markerPath, "native database closed");
             if (reject) {

@@ -1,8 +1,3 @@
-// Relocated from io.write-config.test.ts (base b45488b243b03defb97422338166d9d1b3ba6b6c):
-// real-fs mixed root+include-owned write-through publish/repair cases.
-// Fixture scaffold (mocks, suite temp roots, itWithHome/createFastConfigIO)
-// duplicated from io.write-config.test.ts's describe("config io write", ...)
-// block -- it is local, unexported test infra, not a shared module.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";

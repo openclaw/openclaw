@@ -88,7 +88,7 @@ jobs:
           echo "guidance-main-sha=$GITHUB_SHA" >> "$GITHUB_OUTPUT"
 
       - name: Run release-validation campaign skill
-        uses: openai/codex-action@52fe01ec70a42f454c9d2ebd47598f9fd6893d56
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_VALIDATION_ARTIFACT_PATH: .artifacts/release-validation-campaign.json
@@ -102,6 +102,12 @@ jobs:
           effort: high
           sandbox: workspace-write
           safety-strategy: drop-sudo
+
+      - name: Setup supported Node runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24.21.0"
+          package-manager-cache: false
 
       - name: Validate campaign artifact
         env:
@@ -124,7 +130,7 @@ jobs:
           NODE
 
       - name: Upload campaign artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-validation-campaign
           path: .artifacts/release-validation-campaign.json
@@ -145,13 +151,13 @@ jobs:
           persist-credentials: false
 
       - name: Download campaign artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-validation-campaign
           path: .artifacts
 
       - name: Create Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token
         continue-on-error: true
         with:
@@ -159,7 +165,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Create fallback Barnacle app token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # zizmor: ignore[github-app] v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # zizmor: ignore[github-app] v3
         id: app-token-fallback
         if: steps.app-token.outcome == 'failure'
         with:

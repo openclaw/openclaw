@@ -70,7 +70,7 @@ function runBasePreparation(
   eventName: string,
 ) {
   const workflow = parse(fs.readFileSync(workflowName, "utf8"));
-  const job = Object.values(workflow.jobs)[0] as { steps: Step[] };
+  const jobs = Object.values(workflow.jobs) as { steps: Step[] }[];
   const values = new Map([
     ["github.event.pull_request.base.sha", base],
     ["github.event.pull_request.base.ref", "main"],
@@ -99,7 +99,9 @@ function runBasePreparation(
     '#!/bin/sh\nif [ "$1" = tee ]; then cat >/dev/null; fi\n',
   );
   fs.chmodSync(path.join(bin, "sudo"), 0o755);
-  const step = job.steps.find((entry) => entry.name === "Prepare Testbox shell");
+  const step = jobs
+    .flatMap((job) => job.steps)
+    .find((entry) => entry.uses === "./.github/actions/prepare-testbox-shell");
   if (!step?.uses) {
     throw new Error("Missing Testbox preparation action");
   }
@@ -132,20 +134,33 @@ function runBasePreparation(
 }
 
 describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
+  it("uses two commits for PR preparation and one for a manual shell", () => {
+    const workflow = parse(fs.readFileSync(workflowName, "utf8"));
+    const jobs = Object.values(workflow.jobs) as { steps: Step[] }[];
+    const checkout = jobs.flatMap((job) => job.steps).find((step) => step.name === "Checkout");
+    expect(checkout?.with?.["fetch-depth"]).toBe(
+      "${{ github.event_name == 'pull_request' && '2' || '1' }}",
+    );
+  });
+
   it.each([
     { shape: "merge", branch: "main", depth: 2, passes: true, eventName: "pull_request" },
-    { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
-    {
-      shape: "merge without parents",
-      branch: "main",
-      depth: 1,
-      passes: false,
-      eventName: "pull_request",
-    },
+    ...(workflowName === workflows[0]
+      ? [
+          { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
+          {
+            shape: "merge without parents",
+            branch: "main",
+            depth: 1,
+            passes: false,
+            eventName: "pull_request",
+          },
+        ]
+      : []),
     {
       shape: "manual",
       branch: "feature",
-      depth: workflowName.endsWith("/ci-check-testbox.yml") ? 1 : 0,
+      depth: 1,
       passes: true,
       eventName: "workflow_dispatch",
     },
@@ -172,16 +187,39 @@ describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
     });
     const trace = path.join(createTempDir("openclaw-testbox-trace-"), "git.jsonl");
     const result = runBasePreparation(repo, workflowName, eventBase, trace, eventName);
-    const fetches = fs
+    const traceEvents = fs
       .readFileSync(trace, "utf8")
       .trim()
       .split("\n")
-      .map((line) => JSON.parse(line))
-      .filter((event) => event.event === "cmd_name" && event.name === "fetch");
+      .map((line) => JSON.parse(line));
+    const fetches = traceEvents.filter(
+      (event) => event.event === "cmd_name" && event.name === "fetch",
+    );
     if (!passes) {
       expect(result.status).not.toBe(0);
       expect(result.stdout).toContain("Base commit still unavailable");
-      expect(fetches).toHaveLength(5);
+      expect(fetches).toHaveLength(6);
+      expect(
+        fetches.map((event) => {
+          const start = traceEvents.find(
+            (candidate) => candidate.event === "start" && candidate.sid === event.sid,
+          );
+          expect(start).toBeDefined();
+          return start.argv.slice(start.argv.indexOf("fetch"));
+        }),
+      ).toEqual([
+        ["fetch", "--filter=blob:none", "--no-tags", "--depth=1", "origin", eventBase],
+        ...[25, 100, 300, 1000].map((deepenBy) => [
+          "fetch",
+          "--filter=blob:none",
+          "--no-tags",
+          `--deepen=${deepenBy}`,
+          "origin",
+          "--",
+          "main",
+        ]),
+        ["fetch", "--filter=blob:none", "--no-tags", "--unshallow", "origin", "--", "main"],
+      ]);
       expect(git(repo, "rev-parse", "refs/remotes/origin/main")).toBe(before.stdout.trim());
       return;
     }

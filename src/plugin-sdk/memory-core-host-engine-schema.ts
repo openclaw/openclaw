@@ -1,8 +1,19 @@
 // Memory schema operations shared by host maintenance and native publication workers.
 export {
+  memoryStandingIntentSearchSchema,
+  memoryTextSearchSchema,
+  memoryVectorSearchSchema,
+} from "../../packages/memory-host-sdk/src/host/memory-search-schema.js";
+export {
+  dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkProvenance,
+  ensureMemoryChunkFtsTriggers,
+  registerMemoryEmbeddingMigrationFunctions,
+  markInvalidImportedMemoryEmbeddings,
+  rebuildMemoryChunkFts,
   ensureMemoryIndexSchema,
+  stageMemoryIndexSchemaExtension,
   ensureMemoryPathFtsTriggers,
   ensureMemoryRecallMetadataSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
@@ -14,4 +25,7 @@ export {
   MEMORY_INDEX_SOURCES_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-export { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/host/sqlite-vec.js";
+export {
+  loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
+} from "../infra/database-engine/sqlite-vec.js";

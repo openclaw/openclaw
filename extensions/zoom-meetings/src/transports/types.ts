@@ -1,7 +1,12 @@
-import { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
-import type { ZoomMeetingsConfig, ZoomMeetingsMode, ZoomMeetingsTransport } from "../config.js";
+import type { MeetingPlatformAdapter } from "openclaw/plugin-sdk/meeting-runtime";
 
-type ZoomMeetingsManualActionReason =
+type ZoomMeetingsConfig = ReturnType<
+  ReturnType<typeof MeetingPlatformAdapter.createPluginConfigSchema>["resolveConfig"]
+>;
+export type ZoomMeetingsMode = ZoomMeetingsConfig["defaultMode"];
+type ZoomMeetingsTransport = "chrome" | "chrome-node";
+
+export type ZoomMeetingsManualActionReason =
   | "zoom-login-required"
   | "zoom-admission-required"
   | "zoom-permission-required"
@@ -13,7 +18,7 @@ type ZoomMeetingsManualActionReason =
   | "zoom-session-conflict"
   | "browser-control-unavailable";
 
-type ZoomMeetingsSpeechBlockedReason =
+export type ZoomMeetingsSpeechBlockedReason =
   | ZoomMeetingsManualActionReason
   | "not-in-call"
   | "browser-unverified"
@@ -31,6 +36,4 @@ type ZoomMeetingsPluginTypes = ReturnType<
   >
 >;
 export type ZoomMeetingsTranscriptSnapshot = ZoomMeetingsPluginTypes["TranscriptSnapshot"];
-export type ZoomMeetingsJoinRequest = ZoomMeetingsPluginTypes["JoinRequest"];
 export type ZoomMeetingsChromeHealth = ZoomMeetingsPluginTypes["ChromeHealth"];
-export type ZoomMeetingsSession = ZoomMeetingsPluginTypes["Session"];

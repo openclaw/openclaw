@@ -3,12 +3,12 @@ import {
   openNodeSqliteDatabase,
 } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
+  encodeMemoryEmbedding,
   ensureMemoryIndexSchema,
   loadSqliteVecExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import { describe, expect, it } from "vitest";
-import { runVectorKnnQuery } from "./manager-search-knn.js";
-import { vectorToBlob } from "./vector-blob.js";
+import { describe, expect, it, vi } from "vitest";
+import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 
 describe("memory vector KNN decision counts", () => {
   it("runs KNN before chunk lookup even when planner statistics favor chunks", async () => {
@@ -24,7 +24,7 @@ describe("memory vector KNN decision counts", () => {
       const insertChunk = db.prepare(
         `INSERT INTO memory_index_chunks
           (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-         VALUES (?, ?, 'memory', 1, 1, ?, 'target', ?, '[1,0]', 1)`,
+         VALUES (?, ?, 'memory', 1, 1, ?, 'target', ?, ?, 1)`,
       );
       const insertVector = db.prepare(
         "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
@@ -33,7 +33,7 @@ describe("memory vector KNN decision counts", () => {
       db.exec("BEGIN");
       for (let index = 0; index < 100; index += 1) {
         const id = `chunk-${index}`;
-        insertChunk.run(id, `memory/${id}.md`, id, `text ${id}`);
+        insertChunk.run(id, `memory/${id}.md`, id, `text ${id}`, encodeMemoryEmbedding([1, 0]));
         insertVector.run(id, vector);
       }
       db.exec("COMMIT; ANALYZE");
@@ -55,7 +55,7 @@ describe("memory vector KNN decision counts", () => {
           WHERE visit_vector(id);
       `);
 
-      const result = runVectorKnnQuery(db, {
+      const result = await runVectorKnnQuery(db, {
         vectorTable: "observed_vectors",
         providerModels: ["target"],
         queryVec: [1, 0],
@@ -70,6 +70,38 @@ describe("memory vector KNN decision counts", () => {
     } finally {
       db.close();
     }
+  });
+
+  it("rejects an invalid native row before underfill counts", async () => {
+    ensureSqliteLibrarySelected();
+    using db = openNodeSqliteDatabase(":memory:", { allowExtension: true });
+    const loaded = await loadSqliteVecExtension({ db });
+    expect(loaded.ok, loaded.error).toBe(true);
+    ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: false });
+    db.exec(
+      `CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(id TEXT PRIMARY KEY, embedding FLOAT[2])`,
+    );
+    db.prepare(`INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+      VALUES ('invalid', 'memory/invalid.md', 'invalid', 1, 1, 'hash', 'target', 'text', ?, 1)`).run(
+      encodeMemoryEmbedding([1, 0]),
+    );
+    db.prepare("INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)").run(
+      "invalid",
+      vectorToBlob([1, 0]),
+    );
+    const prepare = vi.spyOn(db, "prepare");
+    await expect(
+      runVectorKnnQuery(db, {
+        providerModels: ["target"],
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 20,
+        sourceFilter: { sql: "", params: [] },
+      }),
+    ).rejects.toThrow("memory vector KNN query returned an invalid row");
+    expect(
+      prepare.mock.calls.filter(([statement]) => statement.startsWith("SELECT COUNT(*)")),
+    ).toHaveLength(0);
   });
 
   it("stops counting after fallback is decided without enumerating the remaining rows", async () => {
@@ -95,7 +127,14 @@ describe("memory vector KNN decision counts", () => {
         const id = `chunk-${index}`;
         const model = index < 1000 ? "target" : "other";
         const vector = index < 1000 ? [0, 1] : [1, 0];
-        insertChunk.run(id, `memory/${id}.md`, id, model, `text ${id}`, JSON.stringify(vector));
+        insertChunk.run(
+          id,
+          `memory/${id}.md`,
+          id,
+          model,
+          `text ${id}`,
+          encodeMemoryEmbedding(vector),
+        );
         insertVector.run(id, vectorToBlob(vector));
       }
       db.exec("COMMIT");
@@ -119,7 +158,7 @@ describe("memory vector KNN decision counts", () => {
           WHERE visit_vector(id);
       `);
       expect(
-        runVectorKnnQuery(db, {
+        await runVectorKnnQuery(db, {
           vectorTable: "observed_vectors",
           providerModels: ["target"],
           queryVec: [1, 0],

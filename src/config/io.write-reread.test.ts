@@ -1,26 +1,18 @@
-// Covers the canonical reread that follows a committed config write.
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { withExecutor } from "./config-executor.test-support.js";
+import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
 import { readConfigFileSnapshotForWrite, writeConfigFile } from "./io.runtime.js";
-import type { ConfigWriteOptions } from "./io.types.js";
-import { replaceConfigFile } from "./mutate.js";
+import { createConfigIoWorkerFixture } from "./io.worker.test-support.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -31,30 +23,38 @@ import {
 import { withTempHome } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
 
-async function withConfigExecutor(
-  home: string,
-  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-compensation-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
+const original = '{"gateway":{"mode":"local","port":18789}}\n';
+const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
+
+async function prepareWrite(home: string, existed = true) {
+  const configPath = path.join(home, ".openclaw", "openclaw.json");
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  if (existed) {
+    await fs.writeFile(configPath, original);
+  }
+  const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
+  const io = createConfigIO({ env, observe: false, pluginValidation: "skip", homedir: () => home });
+  const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+  const options = {
+    ...writeOptions,
+    baseSnapshot: snapshot,
+    observe: false,
+    skipPluginValidation: true,
+  };
+  return { configPath, env, io, snapshot, options };
 }
 
 describe("writeConfigFile canonical reread", () => {
+  const workerRoots = createSuiteTempRootTracker({ prefix: "openclaw-config-reread-workers-" });
+  const workers = createConfigIoWorkerFixture();
+  beforeAll(async () => {
+    await workers.setup(await workerRoots.setup());
+  });
+  afterAll(async () => {
+    await workers.close();
+    await workerRoots.cleanup();
+  });
+
   afterEach(() => {
     setRuntimeConfigSnapshotRefreshHandler(null);
     clearRuntimeConfigSnapshot();
@@ -72,9 +72,7 @@ describe("writeConfigFile canonical reread", () => {
       };
       await fs.writeFile(configPath, `${JSON.stringify(initialConfig, null, 2)}\n`, "utf-8");
 
-      // Simulate a concurrent edit racing the commit: after the write renames the
-      // new config into place, every subsequent sync read sees corrupt content,
-      // so the canonical reread parses invalid.
+      // Corrupt only the post-commit reread, keeping the persisted payload inspectable.
       let corrupted = false;
       const realRename = fsNode.renameSync;
       vi.spyOn(fsNode, "renameSync").mockImplementation((from, to) => {
@@ -121,37 +119,27 @@ describe("writeConfigFile canonical reread", () => {
       expect(refresh).toHaveBeenCalledExactlyOnceWith({
         sourceConfig: persisted,
         preflightResult: { sourceConfig: persisted },
+        assertCurrent: expect.any(Function),
       });
-      expect(
-        warn.mock.calls.some(([line]) =>
-          String(line).includes("canonical reread after write was invalid"),
-        ),
-      ).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("canonical reread after write was invalid"),
+      );
     });
   });
 
-  it.each([false, true].flatMap((existed) => [false, true].map((revoke) => ({ existed, revoke }))))(
+  it.each([
+    { existed: false, revoke: false },
+    { existed: true, revoke: false },
+    { existed: true, revoke: true },
+  ])(
     "rechecks compensation authority after reading the committed file (existed=$existed, revoke=$revoke)",
     async ({ existed, revoke }) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
-          const configPath = path.join(home, ".openclaw", "openclaw.json");
-          await fs.mkdir(path.dirname(configPath), { recursive: true });
-          const original = '{"gateway":{"mode":"local","port":18789}}\n';
-          if (existed) {
-            await fs.writeFile(configPath, original);
-          }
-          const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-          const io = createConfigIO({
-            env,
-            observe: false,
-            pluginValidation: "skip",
-            homedir: () => home,
-          });
-          const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
+          const { configPath, env, options } = await prepareWrite(home, existed);
           const auditSnapshot = () =>
-            readConfigSnapshotAuditRecord({ env, homedir: () => home, configPath });
-          const beforeAuditSnapshot = auditSnapshot();
+            readLatestConfigSnapshotAuditRecordAsync({ env, homedir: () => home });
+          const beforeAuditSnapshot = await auditSnapshot();
           let compensating = false;
           let committedRaw: string | Buffer | undefined;
           const readFile = fsNode.promises.readFile.bind(fsNode.promises);
@@ -173,32 +161,22 @@ describe("writeConfigFile canonical reread", () => {
             },
           });
 
-          const { failure, capture } = await captureUpdateDoctorConfigWrites(
+          const { failure, hash } = await captureUpdateDoctorConfigWrites(
             configPath,
-            async (writeCapture) => {
-              const writeFailure = await writeConfigFile(
-                { gateway: { mode: "local", port: 19001 } },
-                {
-                  ...writeOptions,
-                  assertCurrent,
-                  baseSnapshot: snapshot,
-                  observe: false,
-                  skipPluginValidation: true,
-                },
-              ).catch((error: unknown) => error);
-              return { failure: writeFailure, capture: writeCapture };
-            },
+            async (capture) => ({
+              failure: await writeConfigFile(nextConfig, { ...options, assertCurrent }).catch(
+                (error: unknown) => error,
+              ),
+              hash: capture.hash,
+            }),
           );
           expect(failure).toBeInstanceOf(Error);
           expect(failure).toMatchObject({
             name: "ConfigWritePostCommitError",
             configPath,
             rollbackStatus: revoke ? "unknown" : "restored",
+            message: expect.stringMatching(/runtime snapshot refresh failed/),
           });
-          expect(failure).toHaveProperty(
-            "message",
-            expect.stringMatching(/runtime snapshot refresh failed/),
-          );
 
           expect(committedRaw).toBeDefined();
           if (revoke) {
@@ -209,14 +187,14 @@ describe("writeConfigFile canonical reread", () => {
               "message",
               expect.stringContaining("Rollback failed"),
             );
-            expect(auditSnapshot()).toEqual(beforeAuditSnapshot);
+            expect(await auditSnapshot()).toEqual(beforeAuditSnapshot);
             if (existed) {
-              expect(await fs.readFile(configPath, "utf8")).toBe(original);
+              await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
             } else {
               await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
             }
           }
-          expect(capture.hash).toBe(
+          expect(hash).toBe(
             hashConfigRaw(revoke ? String(committedRaw) : existed ? original : null),
           );
         }),
@@ -226,21 +204,12 @@ describe("writeConfigFile canonical reread", () => {
 
   it.each([
     { writer: "direct", authority: "ordinary" },
-    { writer: "runtime", authority: "ordinary" },
-    { writer: "mutation", authority: "ordinary" },
-    { writer: "runtime", authority: "explicit" },
     { writer: "runtime", authority: "ambient" },
   ] as const)(
     "restores through guarded copy fallback for $writer writes with $authority authority",
     async ({ writer, authority }) => {
       await withTempHome(async (home) => {
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        const original = '{"gateway":{"mode":"local","port":18789}}\n';
-        await fs.writeFile(configPath, original);
-        const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-        const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
-        const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
+        const { configPath, env, io, options } = await prepareWrite(home);
         const priorAudit =
           writer === "direct"
             ? listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })
@@ -269,43 +238,26 @@ describe("writeConfigFile canonical reread", () => {
             },
           });
         }
-        const write = async (assertCurrent?: () => void) => {
-          const options: ConfigWriteOptions = {
-            ...writeOptions,
-            baseSnapshot: snapshot,
-            observe: false,
-            skipPluginValidation: true,
-            ...(assertCurrent ? { assertCurrent } : {}),
-          };
-          const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
+        const write = async () => {
           const pending =
             writer === "direct"
               ? io.writeConfigFile(nextConfig, options)
-              : writer === "runtime"
-                ? writeConfigFile(nextConfig, options)
-                : replaceConfigFile({ snapshot, writeOptions: options, nextConfig });
+              : writeConfigFile(nextConfig, options);
           const failure = await pending.catch((error: unknown) => error);
           expect(failure).toBeInstanceOf(Error);
           expect(failure).toMatchObject({
             name: "ConfigWritePostCommitError",
             configPath,
             rollbackStatus: "restored",
-          });
-          expect(failure).toHaveProperty(
-            "message",
-            expect.stringMatching(
+            message: expect.stringMatching(
               writer === "direct" ? /config path changed/ : /runtime snapshot refresh failed/,
             ),
-          );
+          });
           if (writer === "direct") {
             expect(failure).toHaveProperty("cause", expect.any(ConfigMutationConflictError));
-            expect(failure).toHaveProperty(
-              "cause",
-              expect.objectContaining({
-                message: "config path changed since last load",
-                retryable: false,
-              }),
-            );
+            expect(failure).toMatchObject({
+              cause: { message: "config path changed since last load", retryable: false },
+            });
             expect(listConfigAuditRecordsForTests({ env: io.env, homedir: () => home })).toEqual(
               priorAudit,
             );
@@ -314,12 +266,8 @@ describe("writeConfigFile canonical reread", () => {
         if (authority === "ordinary") {
           await write();
         } else {
-          await withConfigExecutor(home, async (assertCurrent) => {
-            if (authority === "explicit") {
-              await write(assertCurrent);
-            } else {
-              await withConfigWriteLock(configPath, () => write(), env, assertCurrent);
-            }
+          await withExecutor(home, "config-compensation-fence", async (assertCurrent) => {
+            await withConfigWriteLock(configPath, write, env, assertCurrent);
           });
         }
         expect(compensationDenied).toBe(true);
@@ -328,113 +276,90 @@ describe("writeConfigFile canonical reread", () => {
     },
   );
 
-  it.each(
-    (["direct", "runtime"] as const).flatMap((writer) =>
-      (["authorized", "same-byte-replacement", "revoked"] as const).map((fault) => ({
-        writer,
-        fault,
-      })),
-    ),
-  )("fences $writer root compensation after $fault", async ({ writer, fault }) => {
-    await withTempHome(async (home) =>
-      withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
-        const configPath = path.join(home, ".openclaw", "openclaw.json");
-        await fs.mkdir(path.dirname(configPath), { recursive: true });
-        const original = '{"gateway":{"mode":"local","port":18789}}\n';
-        await fs.writeFile(configPath, original);
-        const env = { ...process.env, OPENCLAW_CONFIG_PATH: configPath };
-        const io = createConfigIO({ env, observe: false, pluginValidation: "skip" });
-        const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
-        const realRename = fsNode.renameSync;
-        const rootRenames: string[] = [];
-        const writes = vi.spyOn(fsNode, "writeSync");
-        const fileWrites = vi.spyOn(fsNode, "writeFileSync");
-        const truncates = vi.spyOn(fsNode, "ftruncateSync");
-        const removes = vi.spyOn(fsNode, "rmSync");
-        const opens = vi.spyOn(fsNode, "openSync");
-        let observed: { raw: string; ino: bigint; counts: number[] } | undefined;
-        const effects = () => [
-          rootRenames.length,
-          writes.mock.calls.length,
-          fileWrites.mock.calls.length,
-          truncates.mock.calls.length,
-          removes.mock.calls.length,
-          opens.mock.calls.filter(([, flags]) =>
-            typeof flags === "number"
-              ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
-              : /[wa+]/.test(flags),
-          ).length,
-        ];
-        const failPublication = () => {
-          const raw = fsNode.readFileSync(configPath, "utf8");
-          const ownedInode = fsNode.lstatSync(configPath, { bigint: true }).ino;
-          if (fault === "same-byte-replacement") {
-            // Preserve the original inode so allocating its replacement cannot reuse it.
-            realRename(configPath, `${configPath}.owned`);
-            fsNode.writeFileSync(configPath, raw);
-            expect(fsNode.lstatSync(configPath, { bigint: true }).ino).not.toBe(ownedInode);
-          } else if (fault === "revoked") {
-            revokeExecutor();
-          }
-          observed = {
-            raw,
-            ino: fsNode.lstatSync(configPath, { bigint: true }).ino,
-            counts: effects(),
-          };
-          if (writer === "direct" && fault === "authorized") {
-            // Refuse acceptance, not source custody: compensation still owns the publication.
-            env.OPENCLAW_CONFIG_PATH = `${configPath}.replacement`;
-          }
-        };
-        vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
-          realRename(source, destination);
-          if (destination === configPath) {
-            rootRenames.push(String(source));
-            if (writer === "direct" && !observed) {
-              failPublication();
+  it.each(["same-byte-replacement", "revoked"] as const)(
+    "fences direct root compensation after %s",
+    async (fault) => {
+      await withTempHome(async (home) =>
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
+          const { configPath, io, options } = await prepareWrite(home);
+          const realRename = fsNode.renameSync;
+          const rootRenames: string[] = [];
+          const mutations = (
+            ["writeSync", "writeFileSync", "ftruncateSync", "rmSync"] as const
+          ).map((name) => vi.spyOn(fsNode, name));
+          const opens = vi.spyOn(fsNode, "openSync");
+          let observed: { raw: string; ino: bigint; counts: number[] } | undefined;
+          const targetsConfig = (target: fsNode.PathLike | number, callOrder: number) => {
+            if (typeof target !== "number") {
+              return String(target) === configPath;
             }
-          }
-        });
-        if (writer === "runtime") {
-          setRuntimeConfigSnapshotRefreshHandler({
-            preflight: () => undefined,
-            refresh: () => {
-              failPublication();
-              throw new Error("runtime activation refused");
-            },
+            const openedAt = opens.mock.results.findLastIndex(
+              (result, index) =>
+                result.type === "return" &&
+                result.value === target &&
+                opens.mock.invocationCallOrder[index]! < callOrder,
+            );
+            return openedAt >= 0 && String(opens.mock.calls[openedAt]?.[0]) === configPath;
+          };
+          // Worker lock custody can advance independently of the fenced config target.
+          const effects = () => [
+            rootRenames.length,
+            ...mutations.map(
+              ({ mock }) =>
+                mock.calls.filter((args, index) =>
+                  targetsConfig(args[0], mock.invocationCallOrder[index]!),
+                ).length,
+            ),
+            opens.mock.calls.filter(
+              ([target, flags]) =>
+                String(target) === configPath &&
+                (typeof flags === "number"
+                  ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
+                  : /[wa+]/.test(flags)),
+            ).length,
+          ];
+          vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {
+            realRename(source, destination);
+            if (destination !== configPath) {
+              return;
+            }
+            rootRenames.push(String(source));
+            if (observed) {
+              return;
+            }
+            const raw = fsNode.readFileSync(configPath, "utf8");
+            const ownedInode = fsNode.lstatSync(configPath, { bigint: true }).ino;
+            if (fault === "same-byte-replacement") {
+              // Preserve the original inode so allocating its replacement cannot reuse it.
+              realRename(configPath, `${configPath}.owned`);
+              fsNode.writeFileSync(configPath, raw);
+              expect(fsNode.lstatSync(configPath, { bigint: true }).ino).not.toBe(ownedInode);
+            } else {
+              revokeExecutor();
+            }
+            observed = {
+              raw,
+              ino: fsNode.lstatSync(configPath, { bigint: true }).ino,
+              counts: effects(),
+            };
           });
-        }
-        const options: ConfigWriteOptions = {
-          ...writeOptions,
-          baseSnapshot: snapshot,
-          assertCurrent,
-          observe: false,
-          skipPluginValidation: true,
-        };
-        const config = { gateway: { mode: "local" as const, port: 19001 } };
-        const failure = await (
-          writer === "direct"
-            ? io.writeConfigFile(config, options)
-            : writeConfigFile(config, options)
-        ).catch((error: unknown) => error);
-        expect.soft(failure).toMatchObject({
-          name: "ConfigWritePostCommitError",
-          rollbackStatus: fault === "authorized" ? "restored" : "unknown",
-        });
-        if (!observed) {
-          throw new Error("root publication fault was not reached");
-        }
-        expect(JSON.parse(observed.raw).gateway.port).toBe(19001);
-        if (fault === "authorized") {
-          expect(await fs.readFile(configPath, "utf8")).toBe(original);
-          expect(rootRenames).toHaveLength(2);
-        } else {
+          const failure = await io
+            .writeConfigFile(nextConfig, { ...options, assertCurrent })
+            .catch((error: unknown) => error);
+          expect.soft(failure).toMatchObject({
+            name: "ConfigWritePostCommitError",
+            rollbackStatus: "unknown",
+          });
+          if (!observed) {
+            throw new Error("root publication fault was not reached");
+          }
+          expect(JSON.parse(observed.raw).gateway.port).toBe(19001);
           expect.soft(effects()).toEqual(observed.counts);
           expect.soft(await fs.readFile(configPath, "utf8")).toBe(observed.raw);
           expect.soft(fsNode.lstatSync(configPath, { bigint: true }).ino).toBe(observed.ino);
-        }
-        expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
-      }),
-    );
-  });
+          expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(original);
+        }),
+      );
+    },
+  );
 });

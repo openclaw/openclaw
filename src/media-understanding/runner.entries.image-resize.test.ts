@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { readImageMetadataFromHeader } from "../media/media-services.js";
 import type { ImageCompressionModelPolicy } from "../media/web-media.js";
@@ -43,7 +42,6 @@ async function setupProvider(
     return { text: "described", model: "vision-v1" };
   });
   const cfg: OpenClawConfig = options.cfg ?? {};
-  const ctx: MsgContext = { Body: "Describe this image.", MediaPath: attachmentPath };
   return {
     describeImage,
     run: async () => {
@@ -52,7 +50,6 @@ async function setupProvider(
           capability: "image",
           entry: { provider: "vision-plugin", model: "vision-v1", maxBytes: options.maxBytes },
           cfg,
-          ctx,
           attachmentIndex: 0,
           cache,
           agentDir: root,

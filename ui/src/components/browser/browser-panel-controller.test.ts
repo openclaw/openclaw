@@ -16,11 +16,10 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 
 setupBrowserPanelTestCleanup();
 
-describe("BrowserPanelController tab and lifecycle ownership", () => {
+describe("BrowserPanel tab and lifecycle ownership", () => {
   it("keeps rejected capture state and replaces stale feedback with the limit error", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
@@ -44,7 +43,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     window.addEventListener(BROWSER_ANNOTATION_EVENT, reject);
 
     try {
-      await controller.sendAnnotation({});
+      await controller.input.sendAnnotation({});
     } finally {
       window.removeEventListener(BROWSER_ANNOTATION_EVENT, reject);
     }
@@ -450,128 +449,6 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(controller.errorText).toBeNull();
   });
 
-  it("rejects an old tab-open snapshot after a newer full refresh", async () => {
-    stubScreenshotMedia();
-    const previousSnapshot = createDeferred<unknown>();
-    const latestUrl = "https://example.test/latest";
-    const previousUrl = "https://example.test/previous";
-    let snapshotCount = 0;
-    let screenshotCount = 0;
-    let screenshotUrl = latestUrl;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs/open") {
-        return createBrowserPanelTestTab("opened-tab", latestUrl, "Opened");
-      }
-      if (envelope.path === "/tabs") {
-        snapshotCount += 1;
-        if (snapshotCount === 1) {
-          return await previousSnapshot.promise;
-        }
-        return {
-          running: true,
-          tabs: [
-            { tabId: "opened-tab", targetId: "raw-opened", title: "Opened", url: latestUrl },
-            { tabId: "latest-tab", targetId: "raw-latest", title: "Latest", url: latestUrl },
-          ],
-        };
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        screenshotUrl = screenshotCount === 1 ? latestUrl : previousUrl;
-        return {
-          path: screenshotCount === 1 ? "/fresh.png" : "/old.png",
-          targetId: "raw-opened",
-          url: screenshotUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(screenshotUrl, "Opened");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "initial-tab");
-
-    const previousNavigation = controller.openUrl(latestUrl, { newTab: true });
-    await flushBrowserResponses();
-    const latestRefresh = controller.refreshAll();
-    await latestRefresh;
-    previousSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "opened-tab", targetId: "raw-opened", title: "Previous", url: previousUrl },
-        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
-      ],
-    });
-    await previousNavigation;
-
-    expect(controller.activeTargetId).toBe("opened-tab");
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["opened-tab", "latest-tab"]);
-    expect(controller.view?.url).toBe(latestUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(1);
-    expect(controller.loading).toBe(false);
-  });
-
-  it("keeps the newest tab snapshot when overlapping refreshes finish out of order", async () => {
-    stubScreenshotMedia();
-    const previousSnapshot = createDeferred<unknown>();
-    const latestSnapshot = createDeferred<unknown>();
-    const snapshots = [previousSnapshot, latestSnapshot];
-    const latestUrl = "https://example.test/latest";
-    const previousUrl = "https://example.test/previous";
-    let screenshotCount = 0;
-    let screenshotUrl = latestUrl;
-    const { client } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/tabs") {
-        const snapshot = snapshots.shift();
-        if (!snapshot) {
-          throw new Error("Unexpected browser snapshot");
-        }
-        return await snapshot.promise;
-      }
-      if (envelope.path === "/screenshot") {
-        screenshotCount += 1;
-        screenshotUrl = screenshotCount === 1 ? latestUrl : previousUrl;
-        return {
-          path: screenshotCount === 1 ? "/fresh.png" : "/old.png",
-          targetId: "raw-stable",
-          url: screenshotUrl,
-        };
-      }
-      if (envelope.path === "/act") {
-        return createBrowserPanelTestMetrics(screenshotUrl, "Stable");
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "stable-tab");
-
-    const previousRefresh = controller.refreshAll();
-    const latestRefresh = controller.refreshAll();
-    latestSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "stable-tab", targetId: "raw-stable", title: "Latest", url: latestUrl },
-        { tabId: "latest-tab", targetId: "raw-latest", title: "Latest tab", url: latestUrl },
-      ],
-    });
-    await latestRefresh;
-    previousSnapshot.resolve({
-      running: true,
-      tabs: [
-        { tabId: "stable-tab", targetId: "raw-stable", title: "Previous", url: previousUrl },
-        createBrowserPanelTestTab("previous-tab", previousUrl, "Previous tab"),
-      ],
-    });
-    await previousRefresh;
-
-    expect(controller.tabs.map((tab) => tab.id)).toEqual(["stable-tab", "latest-tab"]);
-    expect(controller.activeTargetId).toBe("stable-tab");
-    expect(controller.view?.url).toBe(latestUrl);
-    expect(controller.view?.dataUrl).toContain(btoa("fresh screenshot"));
-    expect(screenshotCount).toBe(1);
-    expect(controller.loading).toBe(false);
-  });
-
   it("keeps a newer tab open when an older snapshot would replace the active tab", async () => {
     stubScreenshotMedia();
     const previousSnapshot = createDeferred<unknown>();
@@ -686,34 +563,6 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     ).toHaveLength(2);
   });
 
-  it("clears loading when the final active tab is closed", async () => {
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.method === "DELETE" && envelope.path === "/tabs/tab-a") {
-        return { ok: true };
-      }
-      if (envelope.method === "GET" && envelope.path === "/tabs") {
-        return { running: true, tabs: [] };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-    controller.loading = true;
-
-    await controller.closeTab("tab-a");
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "DELETE", path: "/tabs/tab-a" }),
-    );
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({ method: "GET", path: "/tabs" }),
-    );
-    expect(controller.activeTargetId).toBeNull();
-    expect(controller.view).toBeNull();
-    expect(controller.loading).toBe(false);
-  });
-
   it("invalidates old-document inspection and wheel input before same-tab navigation", async () => {
     vi.useFakeTimers({ now: 1_000 });
     const previousInspection = createDeferred<unknown>();
@@ -728,7 +577,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const inspectedHost = new TestBrowserPanelHost(inspected.client);
-    const inspectedController = new BrowserPanelController(inspectedHost);
+    const inspectedController = inspectedHost.createPanel();
     inspectedController.activeTargetId = "stable-tab";
     inspectedController.view = createView("stable-tab");
     inspectedController.setMode("inspect");
@@ -760,10 +609,10 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const wheeledHost = new TestBrowserPanelHost(wheeled.client);
-    const wheeledController = new BrowserPanelController(wheeledHost);
+    const wheeledController = wheeledHost.createPanel();
     wheeledController.activeTargetId = "stable-tab";
     wheeledController.view = createView("stable-tab");
-    wheeledController.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    wheeledController.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
 
     void wheeledController.openUrl("https://example.test/destination", { newTab: false });
     await vi.advanceTimersByTimeAsync(150);
@@ -798,7 +647,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     const previousView = createView("stable-tab", "https://example.test/previous");
     controller.activeTargetId = "stable-tab";
     controller.view = previousView;
@@ -808,7 +657,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(controller.loading).toBe(true);
 
     host.isConnected = false;
-    controller.hostDisconnected();
+    controller.suspendView();
     expect(controller.loading).toBe(false);
 
     host.isConnected = true;
@@ -871,7 +720,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
     expect(screenshots[0]?.[1]).toMatchObject({ body: { targetId: "tab-b" } });
   });
 
-  it.each(["browser evaluateEnabled=false", "Browser connection temporarily unavailable"])(
+  it.each(["browser evaluateEnabled=false"])(
     "ignores a stale inspection rejection after gateway replacement: %s",
     async (failure) => {
       vi.useFakeTimers({ now: 1_000 });
@@ -879,7 +728,7 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       const previous = createBrowserClient(async () => await previousInspection.promise);
       const replacement = createBrowserClient(async () => ({ running: true, tabs: [] }));
       const host = new TestBrowserPanelHost(previous.client);
-      const controller = new BrowserPanelController(host);
+      const controller = host.createPanel();
       controller.activeTargetId = "tab-a";
       controller.view = createView("tab-a");
       controller.setMode("inspect");
@@ -900,31 +749,4 @@ describe("BrowserPanelController tab and lifecycle ownership", () => {
       expect(controller.errorText).toBeNull();
     },
   );
-  it("preserves normal coalesced wheel actions on their original tab", async () => {
-    vi.useFakeTimers();
-    const { client, request } = createBrowserClient(async (envelope) => {
-      if (envelope.path === "/act") {
-        return { result: true };
-      }
-      throw new Error(`Unexpected browser route: ${envelope.path}`);
-    });
-    const controller = createBrowserPanelTestController(client, "tab-a");
-
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 2, deltaY: 10, cancelable: true }));
-    controller.handleWheel(new WheelEvent("wheel", { deltaX: 3, deltaY: 20, cancelable: true }));
-    await vi.advanceTimersByTimeAsync(150);
-
-    expect(request).toHaveBeenCalledWith(
-      "browser.request",
-      expect.objectContaining({
-        method: "POST",
-        path: "/act",
-        body: expect.objectContaining({
-          kind: "evaluate",
-          targetId: "tab-a",
-          fn: expect.stringContaining("window.scrollBy(5, 30)"),
-        }),
-      }),
-    );
-  });
 });

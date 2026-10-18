@@ -3,6 +3,7 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { renderConfigValidationIssueLines } from "../../config/issue-location.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../../config/recovery-policy.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "../config-recovery-hints.js";
 
 /** Service lifecycle actions; only start/restart bring the gateway up. */
@@ -13,30 +14,30 @@ type ServiceActionPreflightFailure = {
   hints?: string[];
 };
 
-const ACTION_PROSE: Record<DaemonServiceAction, string> = {
-  start: "start the gateway service",
-  restart: "restart the gateway service",
-  stop: "stop the gateway service",
-  uninstall: "uninstall the gateway service",
-};
-
-function formatPluginPackagingRuntimeOutputRecoveryHints(): string[] {
-  return formatPluginPackagingRuntimeOutputRecoveryHint().split("\n");
-}
-
-/** Best-effort validation before a service action mutates runtime state. */
+/** Startup admission, or a diagnostic to report after recovery actions. */
 export async function getServiceActionPreflightFailure(
   action: DaemonServiceAction,
 ): Promise<ServiceActionPreflightFailure | null> {
   let snapshot: ConfigFileSnapshot;
   try {
-    // Stop must remain available before Doctor migrates newly installed plugins.
-    // Core validation and the newer-writer guard still protect service selection.
-    snapshot = await readConfigFileSnapshot({
-      observe: false,
-      pluginValidation: action === "stop" ? "core-only" : undefined,
-    });
-    if (snapshot.exists && !snapshot.valid) {
+    if (action === "restart") {
+      // Selection failures are candidate-config diagnostics, not a veto on the installed service.
+      const { readConfigSnapshotForEngineSelection } =
+        await import("../../commands/config-preflight-snapshot.js");
+      snapshot = await readConfigSnapshotForEngineSelection(process.env, { isolateEnv: false });
+      if (snapshot.valid) {
+        snapshot = await readConfigFileSnapshot({ observe: false });
+      }
+    } else {
+      snapshot = await readConfigFileSnapshot({
+        observe: false,
+        // Recovery diagnostics must not load plugin state after service shutdown/removal.
+        ...(action === "stop" || action === "uninstall"
+          ? { pluginValidation: "core-only" as const }
+          : {}),
+      });
+    }
+    if (!snapshot.valid) {
       const message =
         snapshot.issues.length > 0
           ? renderConfigValidationIssueLines(snapshot, "").join("\n")
@@ -44,17 +45,26 @@ export async function getServiceActionPreflightFailure(
       return {
         message,
         ...(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
-          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHints() }
+          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHint().split("\n") }
           : {}),
       };
     }
-  } catch {
-    return null;
+  } catch (error) {
+    return action === "restart" ? { message: formatErrorMessage(error) } : null;
   }
 
-  const futureBlock = resolveFutureConfigActionBlock({ action: ACTION_PROSE[action], snapshot });
+  const futureBlock = resolveFutureConfigActionBlock({
+    action: `${action} the gateway service`,
+    snapshot,
+  });
   if (futureBlock) {
-    return { message: futureBlock.message, hints: futureBlock.hints };
+    return {
+      message:
+        action === "start"
+          ? futureBlock.message
+          : `Config was last written by OpenClaw ${futureBlock.touchedVersion}; this binary is ${futureBlock.currentVersion}.`,
+      hints: futureBlock.hints,
+    };
   }
   return null;
 }

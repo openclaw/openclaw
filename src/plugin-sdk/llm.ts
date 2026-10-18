@@ -3,6 +3,12 @@
  */
 export type { ApiProvider } from "@openclaw/ai";
 export { resolveProviderContext } from "../../packages/ai/src/provider-types.js";
+export { resolveOpenAIRequestReasoning } from "../../packages/ai/src/providers/openai-request-reasoning.js";
+export {
+  resolveOpenAIModelReasoningEfforts,
+  resolveOpenAIReasoningEffortMapping,
+} from "../../packages/ai/src/providers/openai-reasoning-effort.js";
+export { resolveOpenAIReasoningEffortMap } from "../../packages/ai/src/transports/openai-reasoning-compat.js";
 export type {
   ProviderContext,
   ProviderModel,
@@ -27,6 +33,11 @@ export {
 } from "@openclaw/ai/internal/shared";
 export { transformMessages } from "@openclaw/ai/internal/shared";
 export { complete, completeSimple, stream, streamSimple } from "../llm/stream.js";
+export {
+  hasRuntimeContextMarker,
+  isRuntimeContextMessage,
+  runtimeContextContentToText,
+} from "../llm/types.js";
 export type {
   Api,
   AssistantMessage,
@@ -40,6 +51,7 @@ export type {
   ModelThinkingLevel,
   ProviderResponse,
   ProviderStreamOptions,
+  RuntimeContextMessage,
   SimpleStreamOptions,
   StopReason,
   StreamFunction,

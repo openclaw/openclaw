@@ -1,9 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { unregisterResolvedAgentDir } from "../../agents/agent-dir-registry.js";
-import { replaceRuntimeAuthProfileStoreSnapshots } from "../../agents/auth-profiles/runtime-snapshots.js";
+import { loadPersistedPluginModelCatalogsReadOnly } from "../../agents/plugin-model-catalog.js";
 import { usePreparedCatalogWorkerFixtures } from "../../agents/test-helpers/prepared-model-catalog-worker-fixture.js";
 import * as runtimeConfig from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -16,10 +15,13 @@ import * as configLoader from "./load-config.js";
 const providerId = "refresh-completion-fixture";
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  runtimeConfig.clearRuntimeConfigSnapshot();
+});
 
 describe("standalone models list refresh", () => {
-  it("waits for discovery beyond the Gateway foreground window before printing rows", async () => {
+  it("persists a slow offline refresh once before printing its discovered rows", async () => {
     const root = makeTempDir("openclaw-models-list-refresh-");
     const stateDir = path.join(root, "state");
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -44,7 +46,7 @@ module.exports = {
       auth: [],
       catalog: {
         async run() {
-          fs.writeFileSync(${JSON.stringify(marker)}, "started");
+          fs.appendFileSync(${JSON.stringify(marker)}, "started\\n");
           await new Promise((resolve) => {
             const check = () => {
               if (!fs.existsSync(${JSON.stringify(hold)})) {
@@ -103,11 +105,18 @@ module.exports = {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
       OPENCLAW_GATEWAY_PORT: undefined,
     };
-    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store: { version: 1, profiles: {} } }]);
     retireAfterTest(() => {
       unregisterResolvedAgentDir({ agentId: "main", agentDir, env });
     });
-    vi.spyOn(runtimeConfig, "getRuntimeConfig").mockReturnValue(config);
+    vi.spyOn(runtimeConfig, "captureRuntimeConfigAsyncReader").mockReturnValue(
+      Object.assign(
+        async () => {
+          runtimeConfig.setRuntimeConfigSnapshot(config, config);
+          return config;
+        },
+        { assertCurrent() {} },
+      ),
+    );
     vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
       sourceConfig: config,
       resolvedConfig: config,
@@ -123,6 +132,8 @@ module.exports = {
       writeStdout: vi.fn(),
     };
     await withEnvAsync(env, async () => {
+      // Preserve the full refresh budget, including time beyond normal generation preparation.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       let completed = false;
       const command = modelsListCommand(
         { agent: "main", provider: providerId, refresh: true, json: true },
@@ -135,16 +146,19 @@ module.exports = {
         await expect.poll(() => fs.existsSync(marker) || completed, { timeout: 30_000 }).toBe(true);
         expect(completed).toBe(false);
         expect(fs.existsSync(marker)).toBe(true);
-        // A live worker cannot use fake timers. Keep discovery held beyond the old five-second race.
-        await delay(5_100);
+        await vi.advanceTimersByTimeAsync(125_100);
         expect(completed).toBe(false);
         expect(runtime.writeJson).not.toHaveBeenCalled();
       } finally {
-        fs.rmSync(hold, { force: true });
-        await command;
+        try {
+          fs.rmSync(hold, { force: true });
+          await command;
+        } finally {
+          vi.useRealTimers();
+        }
       }
       expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
-        {
+        expect.objectContaining({
           count: 1,
           models: [
             expect.objectContaining({
@@ -152,12 +166,27 @@ module.exports = {
               name: "Discovered model",
             }),
           ],
-        },
+        }),
         2,
       );
       expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
         "Gateway is not running. Refreshing the local model catalog.",
       );
+    });
+    expect(fs.readFileSync(marker, "utf8")).toBe("started\n");
+    const persisted = loadPersistedPluginModelCatalogsReadOnly(agentDir);
+    expect(persisted).toContainEqual({
+      pluginId: providerId,
+      contents: expect.any(String),
+    });
+    expect(
+      JSON.parse(persisted.find((entry) => entry.pluginId === providerId)!.contents),
+    ).toMatchObject({
+      providers: {
+        [providerId]: {
+          models: [{ id: "discovered-model", name: "Discovered model" }],
+        },
+      },
     });
   });
 });

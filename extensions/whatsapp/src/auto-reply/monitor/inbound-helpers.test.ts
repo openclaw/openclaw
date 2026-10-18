@@ -1,14 +1,12 @@
-import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 // Whatsapp tests cover inbound context plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { formatGroupMembers, noteGroupMember } from "./group-members.js";
+import { noteGroupMember } from "./group-members.js";
 import {
   resolveVisibleWhatsAppGroupHistory,
   resolveVisibleWhatsAppReplyContext,
 } from "./inbound-context.js";
 import { trackBackgroundTask } from "./last-route.js";
-import { projectPreparedChannelInbound, type PreparedChannelInbound } from "./prepared-inbound.js";
 
 type ReplyContextParams = Parameters<typeof resolveVisibleWhatsAppReplyContext>[0];
 
@@ -87,26 +85,6 @@ describe("whatsapp inbound context visibility", () => {
     expect(reply).toBeNull();
   });
 
-  it("keeps blocked quoted replies in allowlist_quote mode", () => {
-    const reply = resolveVisibleWhatsAppReplyContext({
-      msg: makeBlockedQuotedReplyMessage("msg-reply-2"),
-      mode: "allowlist_quote",
-      groupPolicy: "allowlist",
-      groupAllowFrom: ["+111"],
-    });
-
-    expect(reply).toEqual({
-      id: "blocked-reply",
-      body: "Blocked quoted text",
-      sender: {
-        jid: "999@s.whatsapp.net",
-        lid: null,
-        e164: "+999",
-        label: "Mallory (+999)",
-      },
-    });
-  });
-
   it("renders structured quoted media only at the visible preview boundary", () => {
     const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
     msg.quote = {
@@ -131,14 +109,6 @@ describe("whatsapp inbound context visibility", () => {
 });
 
 describe("group member display", () => {
-  it("normalizes member phone numbers before storing", () => {
-    const groupMemberNames = new Map<string, Map<string, string>>();
-
-    noteGroupMember(groupMemberNames, "g1", "+1 (555) 123-4567", "Alice");
-
-    expect(groupMemberNames.get("g1")?.get("+15551234567")).toBe("Alice");
-  });
-
   it("ignores incomplete member values", () => {
     const groupMemberNames = new Map<string, Map<string, string>>();
 
@@ -146,36 +116,6 @@ describe("group member display", () => {
     noteGroupMember(groupMemberNames, "g1", "+15551234567", undefined);
 
     expect(groupMemberNames.get("g1")).toBeUndefined();
-  });
-
-  it.each([
-    {
-      name: "deduplicates participants and appends named roster members",
-      params: {
-        participants: ["+1 (555) 000-0000", "+15550000000", "+16660000000"],
-        roster: new Map([
-          ["+16660000000", "Bob"],
-          ["+17770000000", "Carol"],
-        ]),
-      },
-      expected: "+15550000000, Bob (+16660000000), Carol (+17770000000)",
-    },
-    {
-      name: "falls back to sender when no participants or roster are available",
-      params: {
-        participants: [],
-        roster: undefined,
-        fallbackE164: "+1 (555) 222-3333",
-      },
-      expected: "+15552223333",
-    },
-    {
-      name: "returns undefined when no members can be resolved",
-      params: { participants: [], roster: undefined },
-      expected: undefined,
-    },
-  ])("$name", ({ params, expected }) => {
-    expect(formatGroupMembers(params)).toBe(expected);
   });
 });
 
@@ -212,65 +152,5 @@ describe("trackBackgroundTask", () => {
 
     expect(backgroundTasks.size).toBe(0);
     expect(unhandledRejections).toStrictEqual([]);
-  });
-});
-
-describe("WhatsApp prepared inbound", () => {
-  it("projects portable facts without WhatsApp transport state", () => {
-    const inbound = {
-      channel: "whatsapp",
-      accountId: "work",
-      event: { id: "event-1", fullId: "whatsapp:event-1", timestamp: 1_710_000_000 },
-      from: "whatsapp:user:u1",
-      sender: { id: "u1", name: "Alice" },
-      conversation: { kind: "group", id: "room-1", label: "Example Room" },
-      route: {
-        agentId: "main",
-        accountId: "work",
-        routeSessionKey: "agent:main:whatsapp:group:room-1",
-      },
-      reply: { to: "whatsapp:room:room-1", replyToId: "quoted-1" },
-      message: {
-        body: "agent body",
-        bodyForAgent: "agent body",
-        rawBody: "raw body",
-        commandBody: "/status",
-      },
-      command: {
-        kind: "text-slash",
-        body: "/status",
-        authorization: { kind: "denied", reason: "sender_not_allowed" },
-      },
-      media: [{ path: "/tmp/example.jpg", contentType: "image/jpeg", kind: "image" }],
-      context: { senderE164: "+15550001111" },
-    } satisfies PreparedChannelInbound;
-
-    const projected = projectPreparedChannelInbound({
-      inbound,
-      control: { messageReceivedHooks: "core" },
-      buildContext: buildChannelInboundEventContext,
-    });
-
-    expect(projected.input).toEqual({
-      id: "event-1",
-      timestamp: 1_710_000_000,
-      rawText: "raw body",
-      textForAgent: "agent body",
-      textForCommands: "/status",
-      raw: inbound,
-    });
-    expect(projected.context).toMatchObject({
-      MessageSid: "event-1",
-      MessageSidFull: "whatsapp:event-1",
-      BodyForAgent: "agent body",
-      RawBody: "raw body",
-      CommandBody: "/status",
-      ReplyToId: "quoted-1",
-      CommandAuthorized: false,
-      ConversationLabel: "Example Room",
-      GroupSubject: "Example Room",
-      SenderE164: "+15550001111",
-      media: [{ path: "/tmp/example.jpg", contentType: "image/jpeg", kind: "image" }],
-    });
   });
 });

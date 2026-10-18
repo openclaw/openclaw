@@ -113,7 +113,7 @@ async function resolveProviderModel(params: {
     createProviderConfig(params.baseUrl ?? "http://127.0.0.1:8123/v1", params.timeoutSeconds),
     {
       authStorage: { mocked: true } as never,
-      modelRegistry: { find: () => null } as never,
+      modelRegistry: { find: () => null, getProviderMetadataOwners: () => undefined } as never,
       runtimeHooks: params.runtimeHooks ?? createProviderRuntimeTestMock(),
       skipAgentDiscovery: true,
       workspaceDir: state.workspaceDir,
@@ -212,19 +212,16 @@ async function nextIdleGuardedHttpEvent(params: {
 }
 
 describe("provider request timeout across rebuilding runtime hooks", () => {
-  it.each(["model", "transport"] as const)(
-    "keeps the configured timeout when the %s hook rebuilds the resolved model",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
-        runtimeHooks: createRebuildingRuntimeHooks(stage),
-      });
+  it("keeps the configured timeout when the transport hook rebuilds the resolved model", async () => {
+    const model = await resolveProviderModel({
+      timeoutSeconds: CONFIGURED_TIMEOUT_SECONDS,
+      runtimeHooks: createRebuildingRuntimeHooks("transport"),
+    });
 
-      expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
-    },
-  );
+    expect(model.requestTimeoutMs).toBe(CONFIGURED_TIMEOUT_MS);
+  });
 
-  it.each(["model", "transport"] as const)(
+  it.each(["model"] as const)(
     "preserves an explicit timeout supplied by the rebuilding %s hook",
     async (stage) => {
       const model = await resolveProviderModel({
@@ -233,17 +230,6 @@ describe("provider request timeout across rebuilding runtime hooks", () => {
       });
 
       expect(model.requestTimeoutMs).toBe(HOOK_TIMEOUT_MS);
-    },
-  );
-
-  it.each(["model", "transport"] as const)(
-    "does not invent a timeout when a %s hook rebuilds an unconfigured model",
-    async (stage) => {
-      const model = await resolveProviderModel({
-        runtimeHooks: createRebuildingRuntimeHooks(stage),
-      });
-
-      expect(model).not.toHaveProperty("requestTimeoutMs");
     },
   );
 

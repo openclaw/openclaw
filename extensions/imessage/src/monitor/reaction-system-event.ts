@@ -28,6 +28,6 @@ export function enqueueIMessageReactionSystemEvent(params: {
       decision.reaction.emoji
     }`,
   );
-  params.logVerbose?.(`imessage: reaction event enqueued: ${decision.text}`);
+  params.logVerbose?.("imessage: reaction event enqueued");
   return queued;
 }

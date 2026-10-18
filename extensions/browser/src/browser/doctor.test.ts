@@ -1,6 +1,6 @@
-// Browser tests cover doctor plugin behavior.
 import { describe, expect, it } from "vitest";
 import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
+import type { BrowserStatus } from "./client.types.js";
 import { buildBrowserDoctorReport } from "./doctor.js";
 
 const outdatedExtensionVersion = chromeExtensionManifest.version === "2.0.0" ? "1.0.0" : "2.0.0";
@@ -9,244 +9,131 @@ const equivalentExtensionVersion =
     ? `${chromeExtensionManifest.version}.0`
     : chromeExtensionManifest.version.replace(/\.0$/, "");
 
-function collectWarningCheckIds(checks: readonly { id: string; status: string }[]): string[] {
-  const ids: string[] = [];
-  for (const check of checks) {
-    if (check.status === "warn") {
-      ids.push(check.id);
-    }
-  }
-  return ids;
+function reportFor(
+  overrides: Partial<BrowserStatus>,
+  options: Omit<Parameters<typeof buildBrowserDoctorReport>[0], "status"> = {},
+) {
+  const status: BrowserStatus = {
+    enabled: true,
+    profile: "openclaw",
+    transport: "cdp",
+    running: false,
+    pid: null,
+    cdpPort: 18800,
+    chosenBrowser: null,
+    detectedBrowser: "chromium",
+    detectedExecutablePath: "/usr/bin/chromium",
+    userDataDir: "/tmp/openclaw",
+    color: "#FF4500",
+    headless: false,
+    attachOnly: false,
+    ...overrides,
+  };
+  return buildBrowserDoctorReport({ status, ...options });
+}
+
+function check(report: ReturnType<typeof buildBrowserDoctorReport>, id: string) {
+  return report.checks.find((entry) => entry.id === id);
+}
+
+function runningGraphics(graphics: BrowserStatus["graphics"]) {
+  return reportFor({
+    running: true,
+    cdpReady: true,
+    cdpHttp: true,
+    headless: true,
+    graphics,
+  });
 }
 
 describe("buildBrowserDoctorReport", () => {
   it("reports stopped managed browsers as launchable diagnostics", () => {
-    const report = buildBrowserDoctorReport({
-      platform: "linux",
-      env: { DISPLAY: ":99" },
-      uid: 1000,
-      status: {
-        enabled: true,
-        profile: "openclaw",
-        driver: "openclaw",
-        transport: "cdp",
-        running: false,
-        cdpReady: false,
-        cdpHttp: false,
-        pid: null,
-        cdpPort: 18800,
-        cdpUrl: "http://127.0.0.1:18800",
-        chosenBrowser: null,
-        detectedBrowser: "chromium",
-        detectedExecutablePath: "/usr/bin/chromium",
-        detectError: null,
-        userDataDir: "/tmp/openclaw",
-        color: "#FF4500",
-        headless: false,
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: false,
+    const report = reportFor(
+      {},
+      {
+        platform: "linux",
+        env: { DISPLAY: ":99" },
+        uid: 1000,
       },
-    });
+    );
 
     expect(report.ok).toBe(true);
-    const websocketCheck = report.checks.find((check) => check.id === "cdp-websocket");
+    const websocketCheck = report.checks.find((entry) => entry.id === "cdp-websocket");
     expect(websocketCheck?.status).toBe("info");
     expect(websocketCheck?.summary).toBe("Browser is launchable but not running");
-    expect(report.checks.find((check) => check.id === "extension-version")).toBeUndefined();
+    expect(report.checks.find((entry) => entry.id === "extension-version")).toBeUndefined();
   });
 
   it("fails when Chrome MCP attach is not ready", () => {
-    const report = buildBrowserDoctorReport({
-      status: {
-        enabled: true,
-        profile: "user",
-        driver: "existing-session",
-        transport: "chrome-mcp",
-        running: false,
-        cdpReady: false,
-        cdpHttp: false,
-        pid: null,
-        cdpPort: null,
-        cdpUrl: null,
-        chosenBrowser: null,
-        detectedBrowser: null,
-        detectedExecutablePath: null,
-        detectError: null,
-        userDataDir: null,
-        color: "#00AA00",
-        headless: false,
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: true,
-      },
-    });
+    const report = reportFor({ transport: "chrome-mcp" });
 
     expect(report.ok).toBe(false);
-    const attachCheck = report.checks.find((check) => check.id === "attach-target");
-    expect(attachCheck?.status).toBe("fail");
-    expect(report.checks.find((check) => check.id === "extension-version")).toBeUndefined();
+    expect(check(report, "attach-target")?.status).toBe("fail");
+    expect(check(report, "extension-version")).toBeUndefined();
   });
 
   it("keeps managed launch warnings non-fatal", () => {
-    const report = buildBrowserDoctorReport({
-      platform: "linux",
-      env: {},
-      uid: 0,
-      status: {
-        enabled: true,
-        profile: "openclaw",
-        driver: "openclaw",
-        transport: "cdp",
-        running: false,
-        cdpReady: false,
-        cdpHttp: false,
-        pid: null,
-        cdpPort: 18800,
-        cdpUrl: "http://127.0.0.1:18800",
-        chosenBrowser: null,
+    const report = reportFor(
+      {
         detectedBrowser: null,
         detectedExecutablePath: null,
-        detectError: null,
-        userDataDir: "/tmp/openclaw",
-        color: "#FF4500",
-        headless: false,
         headlessSource: "config",
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: false,
       },
-    });
+      { platform: "linux", env: {}, uid: 0 },
+    );
 
     expect(report.ok).toBe(true);
-    expect(collectWarningCheckIds(report.checks)).toEqual([
-      "managed-executable",
-      "display",
-      "linux-sandbox",
-    ]);
-    const displayCheck = report.checks.find((check) => check.id === "display");
-    expect(displayCheck?.summary).toBe(
+    expect(
+      report.checks.filter((entry) => entry.status === "warn").map((entry) => entry.id),
+    ).toEqual(["managed-executable", "display", "linux-sandbox"]);
+    expect(check(report, "display")?.summary).toBe(
       "No DISPLAY or WAYLAND_DISPLAY is set while headed mode is selected (config)",
     );
   });
 
-  it("reports Linux no-display fallback without a display warning", () => {
-    const report = buildBrowserDoctorReport({
-      platform: "linux",
-      env: {},
-      uid: 1000,
-      status: {
-        enabled: true,
-        profile: "openclaw",
-        driver: "openclaw",
-        transport: "cdp",
-        running: false,
-        cdpReady: false,
-        cdpHttp: false,
-        pid: null,
-        cdpPort: 18800,
-        cdpUrl: "http://127.0.0.1:18800",
-        chosenBrowser: null,
-        detectedBrowser: "chrome",
-        detectedExecutablePath: "/usr/bin/google-chrome-stable",
-        detectError: null,
-        userDataDir: "/tmp/openclaw",
-        color: "#FF4500",
-        headless: true,
-        headlessSource: "linux-display-fallback",
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: false,
-      },
-    });
+  it("reports default headless mode without a display warning", () => {
+    const report = reportFor(
+      { headless: true, headlessSource: "default" },
+      { platform: "linux", env: {}, uid: 1000 },
+    );
 
-    const headlessCheck = report.checks.find((check) => check.id === "headless-mode");
-    expect(headlessCheck?.status).toBe("pass");
-    expect(report.checks.find((check) => check.id === "display")).toBeUndefined();
+    expect(check(report, "headless-mode")?.status).toBe("pass");
+    expect(check(report, "display")).toBeUndefined();
   });
 
   it("reports cached software graphics facts without failing doctor", () => {
-    const report = buildBrowserDoctorReport({
-      status: {
-        enabled: true,
-        profile: "openclaw",
-        driver: "openclaw",
-        transport: "cdp",
-        running: true,
-        cdpReady: true,
-        cdpHttp: true,
-        pid: 4321,
-        cdpPort: 18800,
-        cdpUrl: "http://127.0.0.1:18800",
-        chosenBrowser: "chromium",
-        detectedBrowser: "chromium",
-        detectedExecutablePath: "/usr/bin/chromium",
-        detectError: null,
-        userDataDir: "/tmp/openclaw",
-        color: "#FF4500",
-        headless: true,
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: false,
-        graphics: {
-          status: "available",
-          observedAt: 123,
-          acceleration: "software",
-          renderer: "ANGLE (Google, SwiftShader Device)",
-          vendor: "Google Inc.",
-          version: "OpenGL ES 3.0",
-          backend: "(gl=angle,angle=swiftshader)",
-          devices: [],
-          featureStatus: { webgl: "enabled_readback" },
-          disabledFeatures: [],
-          driverBugWorkarounds: [],
-          videoDecoding: [],
-          videoEncoding: [],
-        },
-      },
+    const report = runningGraphics({
+      status: "available",
+      observedAt: 123,
+      acceleration: "software",
+      renderer: "ANGLE (Google, SwiftShader Device)",
+      vendor: "Google Inc.",
+      version: "OpenGL ES 3.0",
+      backend: "(gl=angle,angle=swiftshader)",
+      devices: [],
+      featureStatus: { webgl: "enabled_readback" },
+      disabledFeatures: [],
+      driverBugWorkarounds: [],
+      videoDecoding: [],
+      videoEncoding: [],
     });
 
     expect(report.ok).toBe(true);
-    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
-    expect(graphicsCheck?.status).toBe("info");
+    const graphicsCheck = check(report, "graphics");
+    expect(graphicsCheck).toMatchObject({ status: "info" });
     expect(graphicsCheck?.summary).toContain("software");
     expect(graphicsCheck?.summary).toContain("SwiftShader");
   });
 
   it("warns when a running managed browser cannot provide graphics facts", () => {
-    const report = buildBrowserDoctorReport({
-      status: {
-        enabled: true,
-        profile: "openclaw",
-        driver: "openclaw",
-        transport: "cdp",
-        running: true,
-        cdpReady: true,
-        cdpHttp: true,
-        pid: 4321,
-        cdpPort: 18800,
-        cdpUrl: "http://127.0.0.1:18800",
-        chosenBrowser: "chromium",
-        detectedBrowser: "chromium",
-        detectedExecutablePath: "/usr/bin/chromium",
-        detectError: null,
-        userDataDir: "/tmp/openclaw",
-        color: "#FF4500",
-        headless: true,
-        noSandbox: false,
-        executablePath: null,
-        attachOnly: false,
-        graphics: {
-          status: "unavailable",
-          observedAt: 123,
-          reason: "SystemInfo domain unavailable",
-        },
-      },
+    const report = runningGraphics({
+      status: "unavailable",
+      observedAt: 123,
+      reason: "SystemInfo domain unavailable",
     });
 
     expect(report.ok).toBe(true);
-    const graphicsCheck = report.checks.find((check) => check.id === "graphics");
-    expect(graphicsCheck).toMatchObject({
+    expect(check(report, "graphics")).toMatchObject({
       status: "warn",
       summary: "unavailable: SystemInfo domain unavailable",
     });
@@ -264,25 +151,9 @@ describe("buildBrowserDoctorReport", () => {
     ["all-zero version", "0.0.0.0", "info"],
     ["too many version components", "2.0.0.0.0", "info"],
   ] as const)("classifies %s extension version evidence", (_label, extensionVersion, severity) => {
-    const report = buildBrowserDoctorReport({
-      status: {
-        enabled: true,
-        profile: "chrome",
-        driver: "extension",
-        transport: "extension",
-        running: true,
-        pid: null,
-        cdpPort: 18792,
-        chosenBrowser: null,
-        userDataDir: null,
-        color: "#00AA00",
-        headless: false,
-        attachOnly: true,
-      },
-      extensionVersion,
-    });
+    const report = reportFor({ transport: "extension", running: true }, { extensionVersion });
 
-    const versionCheck = report.checks.find((check) => check.id === "extension-version");
+    const versionCheck = check(report, "extension-version");
     expect(versionCheck?.status).toBe(severity);
     if (severity === "warn") {
       expect(versionCheck?.summary).toContain(

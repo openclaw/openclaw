@@ -142,6 +142,7 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         },
       }));
       vi.doMock("../state/openclaw-state-db.js", () => ({
+        closeOpenClawStateDatabaseAsync: async () => {},
         closeOpenClawStateDatabaseForTest: closeDatabase,
         openOpenClawStateDatabase: vi.fn(),
       }));
@@ -150,7 +151,7 @@ test("abandonment fixture joins canceled startup and teardown before admitting a
         ["../agents/worktrees/registry.js", ["insertRegistryWorktree"]],
         ["../config/sessions/archive-compression.js", ["readSessionArchiveContentSync"]],
         ["../config/sessions/session-accessor.js", ["upsertSessionEntryCore"]],
-        ["./session-utils.js", ["loadGatewaySessionEntryReadOnly"]],
+        ["./session-utils.js", ["loadGatewaySessionEntryReadOnlyAsync"]],
         ["./worker-environments/placement-store.js", ["createWorkerSessionPlacementStore"]],
         ["./worker-environments/placement-test-fixtures.js", ["seedAttachedPlacementEnvironment"]],
         ["./worker-environments/store.js", ["createWorkerEnvironmentStore"]],

@@ -22,13 +22,15 @@ import {
   readAgentCommandExecutionIdentitySpawnFacts,
   withoutAgentCommandExecutionIdentitySpawnFacts,
 } from "./agent-command-execution-identity-spawn.js";
-import type {
-  AgentCommandGatewayIngressOpts,
-  AgentCommandIngressOpts,
-  AgentCommandOpts,
+import {
+  AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
+  type AgentCommandGatewayIngressOpts,
+  type AgentCommandIngressOpts,
+  type AgentCommandOpts,
 } from "./command/types.js";
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
+import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
@@ -54,6 +56,7 @@ function prepareAgentCommandRunAdmission(
     runId: string;
     onAdmitted?: Parameters<typeof prepareAgentRunAdmission>[0]["onAdmitted"];
     assertSourceCurrent?: () => void;
+    operatorAuthority?: AgentCommandOpts["operatorAuthority"];
   },
   spawnFacts?: AgentCommandExecutionIdentitySpawnFacts,
 ) {
@@ -82,6 +85,7 @@ function prepareAgentCommandRunAdmission(
     ...(params.admission ? { recovery: params.admission } : {}),
     ...(params.onAdmitted ? { onAdmitted: params.onAdmitted } : {}),
     assertSourceCurrent: params.assertSourceCurrent,
+    operatorAuthority: params.operatorAuthority,
   });
 }
 
@@ -127,6 +131,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
   lifecycleGeneration: string;
 }) {
   const { opts, prepared } = params;
+  const pendingFinalRecoverySource = capturePendingFinalRecoverySource(prepared.sessionEntry);
   const operationalRunInstance =
     opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
   const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);
@@ -166,6 +171,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     operationalRunInstance,
     runId: prepared.runId,
     assertSourceCurrent: opts.assertSourceCurrent,
+    operatorAuthority: opts.operatorAuthority,
     onAdmitted: async (admittedRunContext) => {
       await opts.onAdmittedRunContext?.(admittedRunContext);
       admittedContext = admittedRunContext;
@@ -192,6 +198,7 @@ export function prepareAgentCommandExecutionIdentity(params: {
     : preparedAdmission;
   return Object.freeze({
     ...admission,
+    pendingFinalRecoverySource,
     // Observational events do not await consumers. Finish their recovery write
     // before releasing the admission; explicit close remains immediate.
     finish: async () => {
@@ -223,18 +230,7 @@ export function sanitizePublicAgentCommandIngressOpts(
 ): AgentCommandGatewayIngressOpts {
   return withoutAgentCommandExecutionIdentitySpawnFacts({
     ...opts,
-    runtimeContextFragments: undefined,
-    senderIsOwner: false,
-    mainRestartRecoveryOwnerLease: undefined,
-    mainRestartRecoveryAdmitted: undefined,
-    mainRestartRecoveryAttempt: undefined,
-    pinnedWidgetAuthoring: undefined,
-    executionIdentityAdmission: undefined,
-    operationalRunInstance: undefined,
-    assertSourceCurrent: undefined,
-    cronCreatorAuthorityCapability: undefined,
-    onAdmittedRunContext: undefined,
-    onPostAdmittedRunContext: undefined,
+    ...AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
   });
 }
 

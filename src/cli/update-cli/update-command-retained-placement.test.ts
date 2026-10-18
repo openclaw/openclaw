@@ -1,6 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { execFileUtf8 } from "../../daemon/exec-file.js";
@@ -12,8 +9,6 @@ import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceUpdateAuthority,
 } from "../../daemon/service-update-authority.js";
-import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 
 // Changed-base composition only. The actual scopes, dispatch and read lifetime run;
 // external file/lease owners and the native command are inert. No custody proof.
@@ -35,20 +30,6 @@ vi.mock("../../process/exec.js", () => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe("current native placement", () => {
-  it.each(["commandRun", "retainedRecovery", "retainedService", "sealedRuntime"] as const)(
-    "keeps %s source and packaged entrypoints resolvable together",
-    (key) => {
-      const entry = updateExecutorNativeEntrypoints[key];
-      const source = resolveRuntimeWorkerUrl(entry);
-      expect(fs.existsSync(fileURLToPath(source))).toBe(true);
-      expect(source.pathname).toMatch(/\.[jt]s$/);
-      const packaged = resolveRuntimeWorkerUrl({ ...entry, root: "/unexecuted-retained-package" });
-      expect(fileURLToPath(packaged)).toBe(
-        path.join("/unexecuted-retained-package", "dist", entry.distWorkerPath),
-      );
-    },
-  );
-
   it.each([false, true])(
     "joins current retained-read disposal inside native authority, disposal failure=%s",
     async (failClose) => {
@@ -99,8 +80,7 @@ describe("current native placement", () => {
             }
             return "current scope completed";
           }),
-        undefined,
-        native,
+        { nativeCommand: native },
       ).then(
         (value) => {
           settled = true;

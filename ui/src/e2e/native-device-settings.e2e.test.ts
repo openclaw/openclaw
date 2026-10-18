@@ -7,6 +7,7 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createIosNativeDeviceSettingsSnapshot,
   createNativeDeviceSettingsSnapshot,
+  createTauriDeviceSettingsSnapshot,
 } from "../test-helpers/native-device-settings.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installNativeEmbed, installNativeWebChrome } from "./native-nav.test-support.ts";
@@ -74,6 +75,56 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
+  it("shows the desktop companion setting and reconciles native sharing changes", async () => {
+    const artifactDir = createControlUiE2eArtifactDir("tauri-desktop-sharing");
+    await suite.withPage(
+      { locale: "en-US", colorScheme: "light", viewport: { width: 1440, height: 1000 } },
+      async ({ page }) => {
+        await installMockGateway(page, { operatorScopes: ["operator.read"] });
+        await page.goto(`${suite.server.baseUrl}settings/device`);
+        await page.getByText(/only available inside the OpenClaw app/).waitFor();
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "before.png"),
+        });
+
+        const snapshot = createTauriDeviceSettingsSnapshot("linux");
+        await installDeviceSettingsBridge(page, snapshot);
+        await page.reload();
+        const devicePage = page.locator("openclaw-device-page");
+        const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
+        await expect.poll(() => sharing.isChecked()).toBe(true);
+        await devicePage.getByText("Running", { exact: true }).waitFor();
+        expect(
+          await page.locator('.settings-sidebar a[href="/settings/device/permissions"]').count(),
+        ).toBe(0);
+        expect(await devicePage.getByText("This computer", { exact: true }).count()).toBe(1);
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(artifactDir, "after.png"),
+        });
+
+        await devicePage
+          .locator(".settings-row__title")
+          .filter({ hasText: /^Desktop sharing$/ })
+          .click();
+        await expect
+          .poll(() =>
+            page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages),
+          )
+          .toContainEqual({ type: "set", key: "capabilities.desktopSharingEnabled", value: false });
+        await replyToDeviceSetting(page, {
+          ...snapshot,
+          revision: 2,
+          capabilities: { desktopSharingEnabled: false },
+          desktopSharing: { state: "off" },
+        });
+        await expect.poll(() => sharing.isChecked()).toBe(false);
+        await devicePage.getByText("Off", { exact: true }).waitFor();
+      },
+    );
+  });
+
   for (const colorScheme of ["light", "dark"] as const) {
     it(`edits this iPhone in embedded settings in ${colorScheme}`, async () => {
       const artifactDir = createControlUiE2eArtifactDir("ios-device-settings");
@@ -145,7 +196,9 @@ suite.define(() => {
           const precise = permissionsPage.locator(".settings-row").filter({
             has: page.locator(".settings-row__title").filter({ hasText: /^Precise location$/ }),
           });
-          await precise.getByRole("button", { name: "Open Settings", exact: true }).waitFor();
+          await precise
+            .getByRole("button", { name: "Open Settings: Precise location", exact: true })
+            .waitFor();
           expect(await precise.getByRole("switch").count()).toBe(0);
           await capture("04-ios-permissions");
           await precise.scrollIntoViewIfNeeded();
@@ -186,6 +239,35 @@ suite.define(() => {
           page.evaluate(() => (window as DeviceSettingsTestWindow).nativeDeviceSettingsMessages);
         await expect.poll(messages).toContainEqual({ type: "status" });
 
+        const sharing = devicePage.getByRole("switch", { name: "Desktop sharing", exact: true });
+        const computerControl = devicePage.getByRole("switch", {
+          name: "Allow Computer Control",
+          exact: true,
+        });
+        await expect.poll(() => sharing.isChecked()).toBe(true);
+        const sharingLabel = devicePage
+          .locator(".settings-row__title")
+          .filter({ hasText: /^Desktop sharing$/ });
+        await sharingLabel.click();
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "capabilities.desktopSharingEnabled",
+          value: false,
+        });
+        snapshot.capabilities.desktopSharingEnabled = false;
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => sharing.isChecked()).toBe(false);
+        expect(await computerControl.isChecked()).toBe(true);
+        await sharingLabel.click();
+        await expect.poll(messages).toContainEqual({
+          type: "set",
+          key: "capabilities.desktopSharingEnabled",
+          value: true,
+        });
+        snapshot.capabilities.desktopSharingEnabled = true;
+        await replyToDeviceSetting(page, snapshot);
+        await expect.poll(() => sharing.isChecked()).toBe(true);
+
         const iconStyle = devicePage.getByRole("combobox", { name: "Dock icon", exact: true });
         await expect.poll(() => iconStyle.inputValue()).toBe("paper");
         expect(await iconStyle.locator("option").allTextContents()).toEqual(
@@ -225,7 +307,9 @@ suite.define(() => {
         const notifications = permissionsPage.locator(".settings-row").filter({
           has: page.locator(".settings-row__title").filter({ hasText: /^Notifications$/ }),
         });
-        await notifications.getByRole("button", { name: "Grant…", exact: true }).click();
+        await notifications
+          .getByRole("button", { name: "Grant…: Notifications", exact: true })
+          .click();
         await expect
           .poll(messages)
           .toContainEqual({ type: "request-permission", id: "notifications" });

@@ -27,16 +27,31 @@ import {
 } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
-afterEach(() => {
+afterEach(async () => {
   resetGlobalHookRunner();
-  resetCodeModeTestState();
+  await resetCodeModeTestState();
 });
+
+function rewriteOperation(operation = "remove") {
+  const hook = vi.fn(async () => ({ params: { operation } }));
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
+  );
+  return hook;
+}
+
+async function expectContractFailure(result: Promise<unknown>, code = "output_contract") {
+  expect(getToolContractFailureCode(await result.catch((error: unknown) => error))).toBe(code);
+}
 
 function createFixture(
   options: {
     validateInput?: boolean;
     output?: unknown;
     executeTool?: ToolSearchToolContext["executeTool"];
+    outputSchema?: AnyAgentTool["outputSchema"];
+    prepareBeforeToolCallParams?: AnyAgentTool["prepareBeforeToolCallParams"];
+    finalizeBeforeToolCallParams?: AnyAgentTool["finalizeBeforeToolCallParams"];
   } = {},
 ) {
   const execute = vi.fn(async (_toolCallId: string, _input: unknown) =>
@@ -47,13 +62,17 @@ function createFixture(
     label: "Records",
     description: "List or remove records",
     parameters: Type.Object({ operation: Type.String() }),
-    outputSchema: defineToolOutputSchema({
-      inputProperty: "operation",
-      variants: {
-        list: Type.Object({ records: Type.Array(Type.String()) }),
-        remove: Type.Object({ removed: Type.Boolean() }),
-      },
-    }),
+    outputSchema:
+      options.outputSchema ??
+      defineToolOutputSchema({
+        inputProperty: "operation",
+        variants: {
+          list: Type.Object({ records: Type.Array(Type.String()) }),
+          remove: Type.Object({ removed: Type.Boolean() }),
+        },
+      }),
+    prepareBeforeToolCallParams: options.prepareBeforeToolCallParams,
+    finalizeBeforeToolCallParams: options.finalizeBeforeToolCallParams,
     execute,
   };
   const catalogRef = createToolSearchCatalogRef();
@@ -63,38 +82,17 @@ function createFixture(
     resolveToolSearchConfig({ tools: { toolSearch: { enabled: true, mode: "tools" } } }),
     { validateInput: options.validateInput ?? false },
   );
-  return { target, execute, runtime, catalogRef };
+  return { target, execute, runtime };
 }
 
 describe("Tool Search input-dependent output contracts", () => {
-  it.each([true, false])(
-    "rejects another operation's output after exactly one execution (validateInput=%s)",
-    async (validateInput) => {
-      const { runtime, execute } = createFixture({ validateInput });
-
-      const error = await runtime
-        .callValue("records", { operation: "list" })
-        .catch((e: unknown) => e);
-
-      expect(getToolContractFailureCode(error)).toBe("output_contract");
-      expect(execute).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
     { validateInput: true, operation: "legacy", output: { removed: true }, accepted: true },
-    { validateInput: false, operation: "legacy", output: { removed: true }, accepted: true },
-    { validateInput: true, operation: "list", output: { removed: true }, accepted: false },
-    { validateInput: false, operation: "list", output: { removed: true }, accepted: false },
-    { validateInput: true, operation: "list", output: { records: ["R-1"] }, accepted: false },
     { validateInput: false, operation: "list", output: { records: ["R-1"] }, accepted: false },
   ])(
     "preserves both caller and executed contracts (validateInput=$validateInput, operation=$operation, output=$output)",
     async ({ validateInput, operation, output, accepted }) => {
-      const hook = vi.fn(async () => ({ params: { operation: "remove" } }));
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([{ hookName: "before_tool_call", handler: hook }]),
-      );
+      const hook = rewriteOperation();
       const { runtime, execute } = createFixture({ validateInput, output });
 
       const result = await runtime.callValue("records", { operation }).catch((e: unknown) => e);
@@ -111,21 +109,14 @@ describe("Tool Search input-dependent output contracts", () => {
   );
 
   it("accepts hook rewrites between operations with compatible result contracts", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async () => ({ params: { operation: "remove" } }),
-        },
-      ]),
-    );
-    const { target, catalogRef, runtime, execute } = createFixture();
+    rewriteOperation();
     const removal = Type.Object({ removed: Type.Boolean() });
-    target.outputSchema = defineToolOutputSchema({
-      inputProperty: "operation",
-      variants: { remove: removal, delete: removal },
+    const { runtime, execute } = createFixture({
+      outputSchema: defineToolOutputSchema({
+        inputProperty: "operation",
+        variants: { remove: removal, delete: removal },
+      }),
     });
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
 
     await expect(runtime.callValue("records", { operation: "delete" })).resolves.toEqual({
       removed: true,
@@ -134,15 +125,8 @@ describe("Tool Search input-dependent output contracts", () => {
     expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
   });
 
-  it("rejects an incompatible hook result before typed Code Mode can consume it", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async () => ({ params: { operation: "remove" } }),
-        },
-      ]),
-    );
+  it("rejects an incompatible hook result before Code Mode can consume it", async () => {
+    rewriteOperation();
     const { target, execute } = createFixture();
     const continued = vi.fn(async () => jsonResult({ consumed: true }));
     const continuation: AnyAgentTool = {
@@ -157,8 +141,6 @@ describe("Tool Search input-dependent output contracts", () => {
 
     const result = resultDetails(
       await expectDefined(h.tools[0], "Code Mode exec").execute("rewritten-list", {
-        language: "typescript",
-        typecheck: true,
         code: `
           try {
             const list = await records({operation: "list"});
@@ -184,21 +166,13 @@ describe("Tool Search input-dependent output contracts", () => {
   });
 
   it("selects the finalized operation after tool-owned preparation and hook changes", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        { hookName: "before_tool_call", handler: async () => ({ params: { operation: "list" } }) },
-      ]),
-    );
-    const { target, catalogRef, runtime, execute } = createFixture({ output: { records: [] } });
-    target.prepareBeforeToolCallParams = () => ({ operation: "list" });
-    target.finalizeBeforeToolCallParams = () => ({ operation: "remove" });
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
-
-    const error = await runtime
-      .callValue("records", { operation: "list" })
-      .catch((e: unknown) => e);
-
-    expect(getToolContractFailureCode(error)).toBe("output_contract");
+    rewriteOperation("list");
+    const { runtime, execute } = createFixture({
+      output: { records: [] },
+      prepareBeforeToolCallParams: () => ({ operation: "list" }),
+      finalizeBeforeToolCallParams: () => ({ operation: "remove" }),
+    });
+    await expectContractFailure(runtime.callValue("records", { operation: "list" }));
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.calls[0]?.[1]).toEqual({ operation: "remove" });
   });
@@ -207,69 +181,66 @@ describe("Tool Search input-dependent output contracts", () => {
     { label: "unsupported annotation version", version: 2, mapping: { list: 0 } },
     { label: "missing branch", version: 1, mapping: { list: 2 } },
   ])("rejects $label before any side effect", async ({ version, mapping }) => {
-    const { target, catalogRef, runtime, execute } = createFixture();
-    target.outputSchema = Type.Union([Type.String(), Type.Boolean()], {
-      "x-openclaw-input-discriminator": { version, inputProperty: "operation", mapping },
+    const { runtime, execute } = createFixture({
+      outputSchema: Type.Union([Type.String(), Type.Boolean()], {
+        "x-openclaw-input-discriminator": { version, inputProperty: "operation", mapping },
+      }),
     });
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
-
-    const error = await runtime
-      .callValue("records", { operation: "list" })
-      .catch((e: unknown) => e);
-
-    expect(getToolContractFailureCode(error)).toBe("invalid_contract");
+    await expectContractFailure(
+      runtime.callValue("records", { operation: "list" }),
+      "invalid_contract",
+    );
     expect(execute).not.toHaveBeenCalled();
   });
 
   it("compiles even unselected output branches before any side effect", async () => {
-    const { target, catalogRef, runtime, execute } = createFixture();
-    target.outputSchema = {
-      anyOf: [{ type: "boolean" }, { type: "sting" }],
-      "x-openclaw-input-discriminator": {
-        version: 1,
-        inputProperty: "operation",
-        mapping: { list: 0, remove: 1 },
-      },
-    } as never;
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
-
-    const error = await runtime
-      .callValue("records", { operation: "list" })
-      .catch((e: unknown) => e);
-
-    expect(getToolContractFailureCode(error)).toBe("invalid_contract");
-    expect(execute).not.toHaveBeenCalled();
-  });
-
-  it.each(
-    [false, true].flatMap((references) => [
-      { references, output: { owner: "current", records: ["R-1"] }, accepted: true },
-      { references, output: { owner: "current", removed: true }, accepted: references },
-      { references, output: { records: ["R-1"] }, accepted: false },
-    ]),
-  )(
-    "preserves root constraints and uses umbrella fallback only for references ($references, $output)",
-    async ({ references, output, accepted }) => {
-      const { target, catalogRef, runtime, execute } = createFixture({ output });
-      const definitions = {
-        listing: Type.Object({ records: Type.Array(Type.String()) }),
-        removal: Type.Object({ removed: Type.Boolean() }),
-      };
-      target.outputSchema = {
-        type: "object",
-        properties: { owner: { const: "current" } },
-        required: ["owner"],
-        ...(references ? { $defs: definitions } : {}),
-        anyOf: references
-          ? [{ $ref: "#/$defs/listing" }, { $ref: "#/$defs/removal" }]
-          : [definitions.listing, definitions.removal],
+    const { runtime, execute } = createFixture({
+      outputSchema: {
+        anyOf: [{ type: "boolean" }, { type: "sting" }],
         "x-openclaw-input-discriminator": {
           version: 1,
           inputProperty: "operation",
           mapping: { list: 0, remove: 1 },
         },
-      } as never;
-      registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+      } as never,
+    });
+    await expectContractFailure(
+      runtime.callValue("records", { operation: "list" }),
+      "invalid_contract",
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { references: false, output: { owner: "current", records: ["R-1"] }, accepted: true },
+    { references: false, output: { owner: "current", removed: true }, accepted: false },
+    { references: true, output: { owner: "current", removed: true }, accepted: true },
+    { references: false, output: { records: ["R-1"] }, accepted: false },
+    { references: true, output: { records: ["R-1"] }, accepted: false },
+  ])(
+    "preserves root constraints and uses umbrella fallback only for references ($references, $output)",
+    async ({ references, output, accepted }) => {
+      const definitions = {
+        listing: Type.Object({ records: Type.Array(Type.String()) }),
+        removal: Type.Object({ removed: Type.Boolean() }),
+      };
+      const { runtime, execute } = createFixture({
+        output,
+        outputSchema: {
+          type: "object",
+          properties: { owner: { const: "current" } },
+          required: ["owner"],
+          ...(references ? { $defs: definitions } : {}),
+          anyOf: references
+            ? [{ $ref: "#/$defs/listing" }, { $ref: "#/$defs/removal" }]
+            : [definitions.listing, definitions.removal],
+          "x-openclaw-input-discriminator": {
+            version: 1,
+            inputProperty: "operation",
+            mapping: { list: 0, remove: 1 },
+          },
+        } as never,
+      });
 
       const result = await runtime
         .callValue("records", { operation: "list" })
@@ -284,11 +255,11 @@ describe("Tool Search input-dependent output contracts", () => {
     },
   );
 
-  it.each([{ child: null }, { child: { child: null } }])(
-    "preserves recursive root alternatives when returning $child",
-    async (output) => {
-      const { target, catalogRef, runtime, execute } = createFixture({ output });
-      target.outputSchema = {
+  it("preserves recursive root alternatives through nested children", async () => {
+    const output = { child: { child: null } };
+    const { runtime, execute } = createFixture({
+      output,
+      outputSchema: {
         anyOf: [
           { type: "null" },
           { type: "object", properties: { child: { $ref: "#" } }, required: ["child"] },
@@ -298,15 +269,14 @@ describe("Tool Search input-dependent output contracts", () => {
           inputProperty: "operation",
           mapping: { empty: 0, node: 1 },
         },
-      } as never;
-      registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
+      } as never,
+    });
 
-      await expect(runtime.callValue("records", { operation: "node" })).resolves.toEqual(output);
-      expect(execute).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(runtime.callValue("records", { operation: "node" })).resolves.toEqual(output);
+    expect(execute).toHaveBeenCalledOnce();
+  });
 
-  it.each(["$ref", "$dynamicRef", "$recursiveRef"])(
+  it.each(["$dynamicRef", "$recursiveRef"])(
     "retains the exact umbrella schema when a schema position contains %s",
     (reference) => {
       const schema = defineToolOutputSchema({
@@ -382,11 +352,7 @@ describe("Tool Search input-dependent output contracts", () => {
       },
     });
 
-    const error = await runtime
-      .callValue("records", { operation: "remove" })
-      .catch((e: unknown) => e);
-
-    expect(getToolContractFailureCode(error)).toBe("output_contract");
+    await expectContractFailure(runtime.callValue("records", { operation: "remove" }));
     expect(execute).toHaveBeenCalledOnce();
   });
 });

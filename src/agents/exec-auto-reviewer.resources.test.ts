@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listenProvider } from "../gateway/gateway-provider-fixture.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -36,6 +38,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       // Restore this probe when transformed Fetch bodies forward cancellation under Bun.
       testContext.skip();
     }
+    const timesOut = mode === "late-preparation" || mode === "callback-tail";
     const roots = createSyncSuiteTempRootTracker("exec-reviewer-resources");
     const root = fs.realpathSync(roots.makeTempDir());
     fs.mkdirSync(path.join(root, "provider"));
@@ -65,13 +68,8 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       requests.push(response);
       arrived.resolve();
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Fixture server has no TCP port");
-    }
+    const baseUrl = await listenProvider(server);
+    const origin = new URL(baseUrl).origin;
     const cfg: OpenClawConfig = {
       agents: { defaults: { workspace: root, model: `${fixture.providerId}/reviewer` } },
       models: {
@@ -79,7 +77,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
           [fixture.providerId]: {
             api: "openai-completions",
             apiKey: "fixture-only",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
+            baseUrl,
             models: [
               {
                 id: "reviewer",
@@ -109,7 +107,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
         },
         async () => {
           const parent = new AsyncWorkScope();
-          const create = vi.spyOn(ModelRegistry, "create");
+          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const realResolve = modelResolution.resolveModelAsync;
           const resolver = vi.spyOn(modelResolution, "resolveModelAsync");
           let transportSpy: { mockRestore(): void } | undefined;
@@ -153,7 +151,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             const realFetch = globalThis.fetch;
             fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
               const response = await realFetch(...args);
-              if (!response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+              if (!response.url.startsWith(`${origin}/`)) {
                 return response;
               }
               const reader = response.body?.getReader();
@@ -183,18 +181,26 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               );
             });
           }
-          const acquire = () =>
-            acquireSimpleCompletionModelForAgent({
+          const acquire = async () => {
+            const prepared = await acquireSimpleCompletionModelForAgent({
               cfg,
               agentId: "main",
               allowMissingApiKeyModes: ["aws-sdk"],
             });
+            if ("error" in prepared) {
+              throw new Error("Fixture preparation failed");
+            }
+            return prepared;
+          };
           try {
             const reviewer = createModelExecAutoReviewer({
               cfg,
               agentId: "main",
               reviewer: { timeoutMs: 5000 },
             });
+            if (timesOut) {
+              vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+            }
             first = parent.track(() => reviewer(input));
             const started = mode === "late-preparation" ? heldWorkStarted.promise : arrived.promise;
             await Promise.race([
@@ -210,7 +216,13 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               await heldWorkStarted.promise;
             }
             if (mode !== "overlap") {
+              if (timesOut) {
+                await vi.advanceTimersByTimeAsync(5000);
+              }
               const decision = await first;
+              if (timesOut) {
+                vi.useRealTimers();
+              }
               // Only project the public decision; prepared objects include runtime environment data.
               expect(decision).toMatchObject({
                 decision: "ask",
@@ -224,9 +236,6 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               });
             }
             const second = await acquire();
-            if ("error" in second) {
-              throw new Error("Second fixture preparation failed");
-            }
             try {
               expect.soft(create.mock.calls.length).toBe(builds);
               if (mode !== "overlap") {
@@ -246,15 +255,15 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
               expect(requests.length).toBe(0);
             }
             const after = await acquire();
-            if ("error" in after) {
-              throw new Error("Final fixture preparation failed");
-            }
             try {
               expect(create.mock.calls.length).toBe(builds + 1);
             } finally {
               await after[Symbol.asyncDispose]();
             }
           } finally {
+            if (timesOut) {
+              vi.useRealTimers();
+            }
             finishWork.resolve();
             requests.forEach(finish);
             await first?.catch(() => {});
@@ -273,9 +282,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       );
     } finally {
       server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(server.close.bind(server))();
       roots.cleanup();
     }
   },

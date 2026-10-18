@@ -1,4 +1,3 @@
-/** E2E tests for auto-reply trigger and command handling. */
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
@@ -16,20 +15,20 @@ import {
   withTempHome,
 } from "../../test/helpers/auto-reply/trigger-handling-test-harness.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
-import { renderControlUiAgentFailureCopy } from "../agents/failover/user-copy.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
   loadExactSessionEntry,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../state/openclaw-agent-db-resources.js";
 import { registerGroupIntroPromptCases } from "./reply.triggers.group-intro-prompts.cases.js";
 import { registerTriggerHandlingUsageSummaryCases } from "./reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.cases.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 import type { MsgContext } from "./templating.js";
-import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 type GetReplyFromConfig = typeof import("./reply/get-reply.js").getReplyFromConfig;
+type ReplyAgentParams = Parameters<typeof import("./reply/agent-runner-run.js").runReplyAgent>[0];
 
 async function withUnavailableThinkingCatalog(
   run: (
@@ -59,60 +58,24 @@ const TELEGRAM_DIRECT_MESSAGE = {
   Surface: "telegram",
 } as const;
 
-vi.mock("./reply/agent-runner.runtime.js", () => ({
-  runReplyAgent: async (params: {
-    commandBody: string;
-    followupRun: {
-      run: {
-        provider: string;
-        model: string;
-        authProfileId?: string;
-        authProfileIdSource?: "auto" | "user";
-        sessionId: string;
-        sessionKey?: string;
-        sessionFile: string;
-        workspaceDir: string;
-        config: object;
-        extraSystemPrompt?: string;
-      };
-    };
-  }) => {
+// mock-isolation: Exercise command routing without starting a provider-backed agent runtime.
+vi.mock("./reply/agent-runner-run.js", () => ({
+  runReplyAgent: async ({ commandBody, followupRun: { run } }: ReplyAgentParams) => {
     const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-    const normalizeErrorText = (message: string) => {
-      if (/context window exceeded/i.test(message)) {
-        return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
-      }
-      return renderControlUiAgentFailureCopy(message);
-    };
-    const stripHeartbeat = (text?: string) => {
-      const trimmed = text?.trim();
-      if (!trimmed || trimmed === HEARTBEAT_TOKEN) {
-        return undefined;
-      }
-      return trimmed.startsWith(`${HEARTBEAT_TOKEN} `)
-        ? trimmed.slice(HEARTBEAT_TOKEN.length).trimStart()
-        : trimmed;
-    };
-
-    try {
-      const result = await runEmbeddedAgentMock({
-        prompt: params.commandBody,
-        provider: params.followupRun.run.provider,
-        model: params.followupRun.run.model,
-        authProfileId: params.followupRun.run.authProfileId,
-        authProfileIdSource: params.followupRun.run.authProfileIdSource,
-        sessionId: params.followupRun.run.sessionId,
-        sessionKey: params.followupRun.run.sessionKey,
-        sessionFile: params.followupRun.run.sessionFile,
-        workspaceDir: params.followupRun.run.workspaceDir,
-        config: params.followupRun.run.config,
-        extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
-      });
-      return { text: stripHeartbeat(result?.payloads?.[0]?.text) };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return { text: normalizeErrorText(message) };
-    }
+    const result = await runEmbeddedAgentMock({
+      prompt: commandBody,
+      provider: run.provider,
+      model: run.model,
+      authProfileId: run.authProfileId,
+      authProfileIdSource: run.authProfileIdSource,
+      sessionId: run.sessionId,
+      sessionKey: run.sessionKey,
+      sessionFile: run.sessionFile,
+      workspaceDir: run.workspaceDir,
+      config: run.config,
+      extraSystemPrompt: run.extraSystemPrompt,
+    });
+    return { text: result?.payloads?.[0]?.text };
   },
 }));
 
@@ -158,10 +121,6 @@ function formatDateStampForZone(nowMs: number, timeZone: string): string {
   return `${year}-${month}-${day}`;
 }
 
-function mockEmbeddedOkPayload() {
-  return mockRunEmbeddedAgentOk("ok");
-}
-
 function mockRunEmbeddedAgentText(text: string, durationMs: number) {
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockReset();
@@ -186,13 +145,14 @@ async function writeDailyMemoryNotes(
   }
 }
 
-async function seedTargetSession(storePath: string, targetSessionKey: string) {
+async function seedTargetSession(
+  storePath: string,
+  sessionKey: string,
+  overrides: Partial<NonNullable<ReturnType<typeof loadSessionEntry>>> = {},
+) {
   await replaceSessionEntry(
-    { storePath, sessionKey: targetSessionKey },
-    {
-      sessionId: "session-target",
-      updatedAt: Date.now(),
-    },
+    { storePath, sessionKey },
+    { sessionId: "session-target", updatedAt: Date.now(), ...overrides },
   );
 }
 
@@ -211,86 +171,34 @@ function makeNativeTelegramCommandMessage(params: {
   };
 }
 
-function makeTelegramSessionMessage(body: string, sessionKey: string) {
-  return {
-    Body: body,
-    ...TELEGRAM_DIRECT_MESSAGE,
-    SessionKey: sessionKey,
-  };
-}
-
-function makeAuthorizedSmsCommandMessage(body: string) {
-  return {
-    Body: body,
-    From: "+1003",
-    To: "+2000",
-    CommandAuthorized: true,
-  };
-}
-
-function makeStartupContextCfg(home: string, startupContext?: { applyOn: Array<"new" | "reset"> }) {
+function makeStartupContextCfg(home: string, reset: boolean) {
   const cfg = makeCfg(home);
   cfg.agents ??= {};
   cfg.agents.defaults ??= {};
   cfg.agents.defaults.userTimezone = TEST_TIME_ZONE;
-  if (startupContext) {
-    cfg.agents.defaults.startupContext = startupContext;
+  if (reset) {
+    cfg.agents.defaults.startupContext = { applyOn: ["reset"] };
   }
   return cfg;
 }
 
 async function runAuthorizedSmsCommand(body: string, cfg: ReturnType<typeof makeCfg>) {
-  return await getReplyFromConfig(makeAuthorizedSmsCommandMessage(body), {}, cfg);
+  return await getReplyFromConfig(
+    { ...BASE_MESSAGE, Body: body, From: "+1003", CommandAuthorized: true },
+    {},
+    cfg,
+  );
 }
 
 function firstMockCallArg(
   mock: { mock: { calls: unknown[][] } },
   label: string,
 ): Record<string, unknown> {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call params`);
-  }
-  const arg = call[0];
+  const arg = mock.mock.calls[0]?.[0];
   if (!arg || typeof arg !== "object") {
     throw new Error(`expected ${label} first argument`);
   }
   return arg as Record<string, unknown>;
-}
-
-async function expectNextRunUsesTargetSession(
-  params: {
-    cfg: ReturnType<typeof makeCfg>;
-    targetSessionKey: string;
-    runEmbeddedAgentMock: ReturnType<typeof getRunEmbeddedAgentMock>;
-  },
-  expected: Record<string, unknown>,
-) {
-  mockRunEmbeddedAgentText("ok", 5);
-
-  await getReplyFromConfig(
-    makeTelegramSessionMessage("hi", params.targetSessionKey),
-    {},
-    params.cfg,
-  );
-
-  expect(params.runEmbeddedAgentMock).toHaveBeenCalledOnce();
-  const runParams = firstMockCallArg(params.runEmbeddedAgentMock, "embedded OpenClaw agent");
-  for (const [key, value] of Object.entries(expected)) {
-    expect(runParams[key]).toEqual(value);
-  }
-}
-
-async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
-  await replaceSessionEntry(
-    { storePath: requireSessionStorePath(cfg), sessionKey: MAIN_SESSION_KEY },
-    {
-      sessionId: "main",
-      updatedAt: Date.now(),
-      providerOverride: "openai",
-      modelOverride: "gpt-5.4",
-    },
-  );
 }
 
 function mockSuccessfulCompaction() {
@@ -306,15 +214,10 @@ function mockSuccessfulCompaction() {
   });
 }
 
-function makeUnauthorizedWhatsAppCfg(home: string) {
-  const baseCfg = makeCfg(home);
-  baseCfg.channels = {
-    ...baseCfg.channels,
-    whatsapp: {
-      allowFrom: ["+1000"],
-    },
-  };
-  return baseCfg;
+function makeStoredCfg(home: string, name: string) {
+  const cfg = makeCfg(home);
+  cfg.session = { ...cfg.session, store: join(home, `${name}.sessions.json`) };
+  return cfg;
 }
 
 async function expectResetBlockedForNonOwner(params: {
@@ -324,7 +227,7 @@ async function expectResetBlockedForNonOwner(params: {
   const { home, command } = params;
   const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
   runEmbeddedAgentMock.mockClear();
-  const cfg = makeCfg(home);
+  const cfg = makeStoredCfg(home, "blocked-reset");
   cfg.channels ??= {};
   cfg.channels.whatsapp = {
     ...cfg.channels.whatsapp,
@@ -333,10 +236,6 @@ async function expectResetBlockedForNonOwner(params: {
   cfg.commands = {
     ...cfg.commands,
     ownerAllowFrom: ["whatsapp:+1999"],
-  };
-  cfg.session = {
-    ...cfg.session,
-    store: join(home, "blocked-reset.sessions.json"),
   };
   await withUnavailableThinkingCatalog(async (catalog) => {
     const res = await getReplyFromConfig(
@@ -355,126 +254,41 @@ async function expectResetBlockedForNonOwner(params: {
   });
 }
 
-function mockEmbeddedOk() {
-  return mockRunEmbeddedAgentOk("ok");
-}
-
-async function runInlineUnauthorizedCommand(params: { home: string; command: "/status" }) {
-  const cfg = makeUnauthorizedWhatsAppCfg(params.home);
-  const res = await getReplyFromConfig(
-    {
-      Body: `please ${params.command} now`,
-      From: "+2001",
-      To: "+2000",
-      Provider: "whatsapp",
-      SenderE164: "+2001",
-    },
-    {},
-    cfg,
-  );
-  return res;
-}
-
 describe("trigger handling", () => {
   registerGroupIntroPromptCases();
   registerTriggerHandlingUsageSummaryCases({
     getReplyFromConfig: () => getReplyFromConfig,
   });
 
-  for (const testCase of [
-    {
-      error: "sandbox is not defined.",
-      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
-    },
-    {
-      error: "Context window exceeded",
-      expected:
-        "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.",
-    },
-  ] as const) {
-    it(`surfaces agent error: ${testCase.error}`, async () => {
+  it.each([
+    { command: "/new", text: "✅ New session started.", reset: false },
+    { command: "/RESET", text: "✅ Session reset.", reset: true },
+  ])(
+    "acknowledges bare $command without invoking the model or loading startup memory",
+    async ({ command, text, reset }) => {
       await withTempHome(async (home) => {
-        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-        runEmbeddedAgentMock.mockReset();
-        runEmbeddedAgentMock.mockImplementation(async () => {
-          throw new Error(testCase.error);
+        const workspaceDir = join(home, "openclaw");
+        const nowMs = Date.now();
+        const todayStamp = formatDateStampForZone(nowMs, TEST_TIME_ZONE);
+        const yesterdayStamp = formatDateStampForZone(nowMs - 24 * 60 * 60 * 1000, TEST_TIME_ZONE);
+        await writeDailyMemoryNotes(workspaceDir, [
+          { stamp: todayStamp, text: "today startup note" },
+          { stamp: yesterdayStamp, text: "yesterday startup note" },
+        ]);
+
+        const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
+
+        const cfg = makeStartupContextCfg(home, reset);
+
+        await withUnavailableThinkingCatalog(async (catalog) => {
+          const res = await runAuthorizedSmsCommand(command, cfg);
+          expect(maybeReplyText(res)).toBe(text);
+          expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+          expect(catalog).not.toHaveBeenCalled();
         });
-        const errorRes = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-        expect(maybeReplyText(errorRes), testCase.error).toBe(testCase.expected);
-        expect(runEmbeddedAgentMock, testCase.error).toHaveBeenCalledOnce();
       });
-    });
-  }
-
-  it("strips heartbeat-only replies and preserves normal text", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      const tokenCases = [
-        { text: HEARTBEAT_TOKEN, expected: undefined },
-        { text: `${HEARTBEAT_TOKEN} hello`, expected: "hello" },
-      ] as const;
-
-      for (const testCase of tokenCases) {
-        runEmbeddedAgentMock.mockReset();
-        runEmbeddedAgentMock.mockResolvedValue({
-          payloads: [{ text: testCase.text }],
-          meta: {
-            durationMs: 1,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        });
-        const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-        expect(maybeReplyText(res)).toBe(testCase.expected);
-        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      }
-    });
-  });
-
-  it("acknowledges bare /new without invoking the model or loading startup memory", async () => {
-    await withTempHome(async (home) => {
-      const workspaceDir = join(home, "openclaw");
-      const nowMs = Date.now();
-      const todayStamp = formatDateStampForZone(nowMs, TEST_TIME_ZONE);
-      const yesterdayStamp = formatDateStampForZone(nowMs - 24 * 60 * 60 * 1000, TEST_TIME_ZONE);
-      await writeDailyMemoryNotes(workspaceDir, [
-        { stamp: todayStamp, text: "today startup note" },
-        { stamp: yesterdayStamp, text: "yesterday startup note" },
-      ]);
-
-      const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
-
-      const cfg = makeStartupContextCfg(home);
-
-      await withUnavailableThinkingCatalog(async (catalog) => {
-        const res = await runAuthorizedSmsCommand("/new", cfg);
-        expect(maybeReplyText(res)).toBe("✅ New session started.");
-        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        expect(catalog).not.toHaveBeenCalled();
-      });
-    });
-  });
-
-  it("acknowledges normalized bare /RESET without invoking the model", async () => {
-    await withTempHome(async (home) => {
-      const workspaceDir = join(home, "openclaw");
-      const nowMs = Date.now();
-      const todayStamp = formatDateStampForZone(nowMs, TEST_TIME_ZONE);
-      await writeDailyMemoryNotes(workspaceDir, [
-        { stamp: todayStamp, text: "reset startup note" },
-      ]);
-
-      const runEmbeddedAgentMock = mockRunEmbeddedAgentText("hello", 1);
-
-      const cfg = makeStartupContextCfg(home, { applyOn: ["reset"] });
-
-      await withUnavailableThinkingCatalog(async (catalog) => {
-        const res = await runAuthorizedSmsCommand("/RESET", cfg);
-        expect(maybeReplyText(res)).toBe("✅ Session reset.");
-        expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-        expect(catalog).not.toHaveBeenCalled();
-      });
-    });
-  });
+    },
+  );
 
   it("resolves model capabilities when /new includes follow-up text", async () => {
     await withTempHome(async (home) => {
@@ -499,55 +313,35 @@ describe("trigger handling", () => {
         "Give me the status",
       ].join("\n");
       const currentBody = "Give me the status\n\nif ready:\n    report_status()";
+      const message = { ...BASE_MESSAGE, CommandAuthorized: true };
       const thinkCases = [
-        {
-          label: "context-wrapper",
-          request: {
-            Body: historyBody,
-            commandText: "Give me the status",
-            From: "+1002",
-            To: "+2000",
-            CommandAuthorized: true,
-          },
-          options: {},
-          expectedPrompt: historyBody,
-        },
-        {
-          label: "current-message",
-          request: {
-            Body: `/thinking high ${currentBody}`,
-            From: "+1002",
-            To: "+2000",
-            CommandAuthorized: true,
-          },
-          options: {},
-          expectedPrompt: currentBody,
-        },
-        {
-          label: "heartbeat",
-          request: {
-            Body: "HEARTBEAT /think:high",
-            From: "+1003",
-            To: "+1003",
-          },
-          options: { isHeartbeat: true },
-          expectedPrompt: undefined,
-        },
+        [
+          "context-wrapper",
+          { ...message, Body: historyBody, commandText: "Give me the status" },
+          {},
+          historyBody,
+        ],
+        ["current-message", { ...message, Body: `/thinking high ${currentBody}` }, {}, currentBody],
+        [
+          "heartbeat",
+          { Body: "HEARTBEAT /think:high", From: "+1003", To: "+1003" },
+          { isHeartbeat: true },
+          undefined,
+        ],
       ] as const;
-
-      for (const testCase of thinkCases) {
+      for (const [label, request, options, expectedPrompt] of thinkCases) {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
         runEmbeddedAgentMock.mockReset();
         mockRunEmbeddedAgentOk();
-        const res = await getReplyFromConfig(testCase.request, testCase.options, makeCfg(home));
+        const res = await getReplyFromConfig(request, options, makeCfg(home));
         const text = maybeReplyText(res);
-        expect(text, testCase.label).toBe("ok");
-        expect(text, testCase.label).not.toMatch(/Thinking level set/i);
-        expect(runEmbeddedAgentMock, testCase.label).toHaveBeenCalledOnce();
-        if (testCase.expectedPrompt !== undefined) {
+        expect(text, label).toBe("ok");
+        expect(text, label).not.toMatch(/Thinking level set/i);
+        expect(runEmbeddedAgentMock, label).toHaveBeenCalledOnce();
+        if (expectedPrompt !== undefined) {
           const prompt =
             firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent").prompt ?? "";
-          expect(prompt, testCase.label).toBe(testCase.expectedPrompt);
+          expect(prompt, label).toBe(expectedPrompt);
         }
       }
     });
@@ -555,131 +349,75 @@ describe("trigger handling", () => {
 
   it("resolves heartbeat model selection from overrides", async () => {
     await withTempHome(async (home) => {
-      const modelCases = [
-        {
-          label: "heartbeat-override",
-          setup: (cfg: ReturnType<typeof makeCfg>) => {
-            cfg.agents = {
-              ...cfg.agents,
-              defaults: {
-                ...cfg.agents?.defaults,
-                heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
-              },
-            };
-          },
-          expected: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
-        },
-        {
-          label: "stored-override",
-          setup: () => undefined,
-          expected: { provider: "openai", model: "gpt-5.4" },
-        },
-      ] as const;
-
-      for (const testCase of modelCases) {
+      for (const [label, provider, model] of [
+        ["heartbeat-override", "anthropic", "claude-haiku-4-5-20251001"],
+        ["stored-override", "openai", "gpt-5.4"],
+      ] as const) {
         const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
         runEmbeddedAgentMock.mockReset();
-        mockEmbeddedOkPayload();
+        mockRunEmbeddedAgentOk("ok");
         const cfg = makeCfg(home);
-        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
-        await writeStoredModelOverride(cfg);
-        testCase.setup(cfg);
+        cfg.session = { ...cfg.session, store: join(home, `${label}.sessions.json`) };
+        await seedTargetSession(requireSessionStorePath(cfg), MAIN_SESSION_KEY, {
+          sessionId: "main",
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+        });
+        if (label === "heartbeat-override") {
+          cfg.agents ??= {};
+          cfg.agents.defaults ??= {};
+          cfg.agents.defaults.heartbeat = { model: `${provider}/${model}` };
+        }
         await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
         const call = firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent");
-        expect(call?.provider).toBe(testCase.expected.provider);
-        expect(call?.model).toBe(testCase.expected.model);
+        expect(call).toMatchObject({ provider, model });
       }
     });
   });
 
-  it("compacts the active main session", async () => {
+  it.each(["main", "worker"] as const)("compacts the %s session", async (kind) => {
     await withTempHome(async (home) => {
-      const storePath = join(home, "compact-main.sessions.json");
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: storePath };
+      const cfg = makeStoredCfg(home, `compact-${kind}`);
+      const storePath = requireSessionStorePath(cfg);
+      const workerSessionKey = "agent:worker1:telegram:12345";
       const request = {
-        Body: "/compact focus on decisions",
-        From: "+1003",
+        Body: kind === "main" ? "/compact focus on decisions" : "/compact",
+        From: kind === "main" ? "+1003" : "+1004",
         To: "+2000",
+        ...(kind === "worker" ? { SessionKey: workerSessionKey } : {}),
       };
-      const sessionKey = resolveSessionKey("per-sender", request, undefined, "main");
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        { sessionId: "compact-main-session", updatedAt: Date.now() },
-      );
-      mockSuccessfulCompaction();
-
-      const res = await getReplyFromConfig(
-        {
-          ...request,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-      const text = maybeReplyText(res);
-      expect(text).toMatch(/^⚙️ Compacted/u);
-      expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
-    });
-  });
-
-  it("compacts worker sessions via the explicit session target", async () => {
-    await withTempHome(async (home) => {
+      const sessionKey =
+        kind === "worker"
+          ? workerSessionKey
+          : resolveSessionKey("per-sender", request, undefined, "main");
+      await seedTargetSession(storePath, sessionKey, { sessionId: `compact-${kind}-session` });
       getCompactEmbeddedAgentSessionMock().mockReset();
       mockSuccessfulCompaction();
-      const cfg = makeCfg(home);
-      const storePath = join(home, "compact-worker.sessions.json");
-      const sessionKey = "agent:worker1:telegram:12345";
-      cfg.session = { ...cfg.session, store: storePath };
-      await replaceSessionEntry(
-        { storePath, sessionKey },
-        { sessionId: "compact-worker-session", updatedAt: Date.now() },
-      );
-      const res = await getReplyFromConfig(
-        {
-          Body: "/compact",
-          From: "+1004",
-          To: "+2000",
-          SessionKey: sessionKey,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-
-      const text = maybeReplyText(res);
-      expect(text).toMatch(/^⚙️ Compacted/u);
+      const res = await getReplyFromConfig({ ...request, CommandAuthorized: true }, {}, cfg);
+      expect(maybeReplyText(res)).toMatch(/^⚙️ Compacted/u);
       expect(getCompactEmbeddedAgentSessionMock()).toHaveBeenCalledOnce();
-      const call = firstMockCallArg(
-        getCompactEmbeddedAgentSessionMock(),
-        "embedded OpenClaw compaction",
-      );
-      expect(call.sessionTarget).toMatchObject({
-        agentId: "worker1",
-        sessionKey: "agent:worker1:telegram:12345",
-        storePath: cfg.session.store,
-      });
-      expect(call.sessionFile).toBe("agent:worker1:telegram:12345");
+      if (kind === "main") {
+        expect(loadSessionEntry({ storePath, sessionKey })?.compactionCount).toBe(1);
+      } else {
+        expect(
+          firstMockCallArg(getCompactEmbeddedAgentSessionMock(), "embedded OpenClaw compaction"),
+        ).toMatchObject({
+          sessionTarget: { agentId: "worker1", sessionKey, storePath },
+          sessionFile: sessionKey,
+        });
+      }
     });
   });
 
   it("aborts native target sessions and clears queued followups", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-stop.sessions.json") };
+      const cfg = makeStoredCfg(home, "native-stop");
       getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
       const storePath = requireSessionStorePath(cfg);
       const targetSessionKey = "agent:main:telegram:group:123";
       const targetSessionId = "session-target";
-      await replaceSessionEntry(
-        { storePath, sessionKey: targetSessionKey },
-        {
-          sessionId: targetSessionId,
-          updatedAt: Date.now(),
-        },
-      );
+      await seedTargetSession(storePath, targetSessionKey);
       const followupRun: FollowupRun = {
         prompt: "queued",
         enqueuedAt: Date.now(),
@@ -707,195 +445,131 @@ describe("trigger handling", () => {
       );
       expect(getFollowupQueueDepth(targetSessionKey)).toBe(1);
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/stop",
-          From: "telegram:111",
-          To: "telegram:111",
-          ChatType: "direct",
-          Provider: "telegram",
-          Surface: "telegram",
-          SessionKey: "telegram:slash:111",
-          CommandSource: "native",
-          CommandTargetSessionKey: targetSessionKey,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
+      const native = await vi.importActual<
+        typeof import("../agents/embedded-agent-runner/runs.js")
+      >("../agents/embedded-agent-runner/runs.js");
+      const { createEmbeddedRunHandle } =
+        await import("../agents/embedded-agent-runner/runs.test-support.js");
+      const abort = vi.fn();
+      const handle = createEmbeddedRunHandle({ abort });
+      native.setActiveEmbeddedRun(targetSessionId, handle, targetSessionKey, undefined, "main");
+      getAbortEmbeddedAgentRunMock().mockImplementation(native.abortEmbeddedAgentRun);
+      try {
+        const res = await getReplyFromConfig(
+          makeNativeTelegramCommandMessage({
+            body: "/stop",
+            slashSessionKey: "telegram:slash:111",
+            targetSessionKey,
+          }),
+          {},
+          cfg,
+        );
 
-      expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
-      expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
-      expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })?.abortedLastRun).toBe(
-        true,
-      );
-      expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+        expect(maybeReplyText(res)).toBe("⚙️ Agent was aborted.");
+        expect(getAbortEmbeddedAgentRunMock()).toHaveBeenCalledWith(targetSessionId);
+        expect(abort).toHaveBeenCalledOnce();
+        expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })?.abortedLastRun).toBe(
+          true,
+        );
+        expect(getFollowupQueueDepth(targetSessionKey)).toBe(0);
+      } finally {
+        native.clearActiveEmbeddedRun(targetSessionId, handle);
+        getAbortEmbeddedAgentRunMock().mockReset().mockReturnValue(false);
+      }
     });
   });
 
-  it("applies native model changes to the target session", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-model.sessions.json") };
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      runEmbeddedAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
-      const slashSessionKey = "telegram:slash:111";
-      const targetSessionKey = MAIN_SESSION_KEY;
-
-      await seedTargetSession(storePath, targetSessionKey);
-
-      const res = await getReplyFromConfig(
-        makeNativeTelegramCommandMessage({
-          body: "/model openai/gpt-4.1-mini",
-          slashSessionKey,
-          targetSessionKey,
-        }),
-        {},
-        cfg,
-      );
-
-      expect(maybeReplyText(res)).toContain("Model set to openai/gpt-4.1-mini");
-
-      const targetEntry = loadSessionEntry({ storePath, sessionKey: targetSessionKey });
-      expect(targetEntry?.providerOverride).toBe("openai");
-      expect(targetEntry?.modelOverride).toBe("gpt-4.1-mini");
-      expect(loadExactSessionEntry({ storePath, sessionKey: slashSessionKey })).toBeUndefined();
-
-      await expectNextRunUsesTargetSession(
-        { cfg, targetSessionKey, runEmbeddedAgentMock },
-        {
-          provider: "openai",
-          model: "gpt-4.1-mini",
-        },
-      );
-    });
-  });
-
-  it("applies native model changes to Telegram topic thread sessions", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          models: {
-            ...cfg.agents?.defaults?.models,
+  it.each(["thread model", "auth profile"] as const)(
+    "applies native %s overrides to the target session",
+    async (variant) => {
+      await withTempHome(async (home) => {
+        const cfg = makeStoredCfg(home, "native-model");
+        const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
+        runEmbeddedAgentMock.mockReset();
+        const storePath = requireSessionStorePath(cfg);
+        const authProfile = variant === "auth profile";
+        const slashSessionKey = authProfile
+          ? "telegram:slash:111"
+          : "agent:main:telegram:slash:7595562691";
+        const targetSessionKey = authProfile
+          ? MAIN_SESSION_KEY
+          : "agent:main:main:thread:7595562691:12812";
+        const provider = authProfile ? "openai" : "deepseek";
+        const model = authProfile ? "gpt-5.4" : "deepseek-v4-pro";
+        if (authProfile) {
+          const oauth = (suffix: string) => ({
+            type: "oauth" as const,
+            provider: "openai",
+            access: `oauth-access-token${suffix}`,
+            refresh: `oauth-refresh-token${suffix}`,
+            expires: Date.now() + 60_000,
+          });
+          saveAuthProfileStore(
+            {
+              version: 1,
+              profiles: {
+                [TEST_PRIMARY_PROFILE_ID]: oauth("-josh"),
+                [TEST_SECONDARY_PROFILE_ID]: oauth(""),
+              },
+              order: {
+                openai: [TEST_PRIMARY_PROFILE_ID],
+              },
+            },
+            join(home, ".openclaw", "agents", "main", "agent"),
+          );
+          await seedTargetSession(storePath, targetSessionKey);
+        } else {
+          cfg.agents ??= {};
+          cfg.agents.defaults ??= {};
+          cfg.agents.defaults.models = {
+            ...cfg.agents.defaults.models,
             "deepseek/deepseek-v4-pro": {},
-          },
-        },
-      };
-      cfg.session = { ...cfg.session, store: join(home, "native-model-thread.sessions.json") };
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      runEmbeddedAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
-      const slashSessionKey = "agent:main:telegram:slash:7595562691";
-      const targetSessionKey = "agent:main:main:thread:7595562691:12812";
+          };
+          await seedTargetSession(storePath, targetSessionKey, {
+            providerOverride: "zai",
+            modelOverride: "glm-5.1",
+          });
+        }
 
-      await replaceSessionEntry(
-        { storePath, sessionKey: targetSessionKey },
-        {
-          sessionId: "session-target",
-          updatedAt: Date.now(),
-          providerOverride: "zai",
-          modelOverride: "glm-5.1",
-        },
-      );
+        const res = await getReplyFromConfig(
+          makeNativeTelegramCommandMessage({
+            body: `/model ${provider}/${model}${authProfile ? `@${TEST_SECONDARY_PROFILE_ID}` : ""}`,
+            slashSessionKey,
+            targetSessionKey,
+          }),
+          {},
+          cfg,
+        );
 
-      const res = await getReplyFromConfig(
-        makeNativeTelegramCommandMessage({
-          body: "/model deepseek/deepseek-v4-pro",
-          slashSessionKey,
-          targetSessionKey,
-        }),
-        {},
-        cfg,
-      );
+        expect(maybeReplyText(res)).toContain(
+          authProfile
+            ? `Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`
+            : `Model set to ${provider}/${model}`,
+        );
+        expect(loadSessionEntry({ storePath, sessionKey: targetSessionKey })).toMatchObject(
+          authProfile
+            ? { authProfileOverride: TEST_SECONDARY_PROFILE_ID, authProfileOverrideSource: "user" }
+            : { providerOverride: provider, modelOverride: model },
+        );
+        expect(loadExactSessionEntry({ storePath, sessionKey: slashSessionKey })).toBeUndefined();
 
-      expect(maybeReplyText(res)).toContain("Model set to deepseek/deepseek-v4-pro");
-
-      const targetEntry = loadSessionEntry({ storePath, sessionKey: targetSessionKey });
-      expect(targetEntry?.providerOverride).toBe("deepseek");
-      expect(targetEntry?.modelOverride).toBe("deepseek-v4-pro");
-      expect(loadExactSessionEntry({ storePath, sessionKey: slashSessionKey })).toBeUndefined();
-
-      await expectNextRunUsesTargetSession(
-        { cfg, targetSessionKey, runEmbeddedAgentMock },
-        {
-          provider: "deepseek",
-          model: "deepseek-v4-pro",
-        },
-      );
-    });
-  });
-
-  it("applies native model auth profile overrides to the target session", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: join(home, "native-model-auth.sessions.json") };
-      const runEmbeddedAgentMock = getRunEmbeddedAgentMock();
-      runEmbeddedAgentMock.mockReset();
-      const storePath = requireSessionStorePath(cfg);
-      const authDir = join(home, ".openclaw", "agents", "main", "agent");
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [TEST_PRIMARY_PROFILE_ID]: {
-              type: "oauth",
-              provider: "openai",
-              access: "oauth-access-token-josh",
-              refresh: "oauth-refresh-token-josh",
-              expires: Date.now() + 60_000,
-            },
-            [TEST_SECONDARY_PROFILE_ID]: {
-              type: "oauth",
-              provider: "openai",
-              access: "oauth-access-token",
-              refresh: "oauth-refresh-token",
-              expires: Date.now() + 60_000,
-            },
-          },
-          order: {
-            openai: [TEST_PRIMARY_PROFILE_ID],
-          },
-        },
-        authDir,
-      );
-
-      const slashSessionKey = "telegram:slash:111";
-      const targetSessionKey = MAIN_SESSION_KEY;
-
-      await seedTargetSession(storePath, targetSessionKey);
-
-      const res = await getReplyFromConfig(
-        makeNativeTelegramCommandMessage({
-          body: `/model openai/gpt-5.4@${TEST_SECONDARY_PROFILE_ID}`,
-          slashSessionKey,
-          targetSessionKey,
-        }),
-        {},
-        cfg,
-      );
-
-      expect(maybeReplyText(res)).toContain(`Auth profile set to ${TEST_SECONDARY_PROFILE_ID}`);
-
-      const targetEntry = loadSessionEntry({ storePath, sessionKey: targetSessionKey });
-      expect(targetEntry?.authProfileOverride).toBe(TEST_SECONDARY_PROFILE_ID);
-      expect(targetEntry?.authProfileOverrideSource).toBe("user");
-      expect(loadExactSessionEntry({ storePath, sessionKey: slashSessionKey })).toBeUndefined();
-
-      await expectNextRunUsesTargetSession(
-        { cfg, targetSessionKey, runEmbeddedAgentMock },
-        {
-          provider: "openai",
-          model: "gpt-5.4",
-          authProfileId: TEST_SECONDARY_PROFILE_ID,
-          authProfileIdSource: "user",
-        },
-      );
-    });
-  });
+        mockRunEmbeddedAgentText("ok", 5);
+        await getReplyFromConfig(
+          { Body: "hi", ...TELEGRAM_DIRECT_MESSAGE, SessionKey: targetSessionKey },
+          {},
+          cfg,
+        );
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        expect(firstMockCallArg(runEmbeddedAgentMock, "embedded OpenClaw agent")).toMatchObject({
+          provider,
+          model,
+          ...(authProfile
+            ? { authProfileId: TEST_SECONDARY_PROFILE_ID, authProfileIdSource: "user" }
+            : {}),
+        });
+      });
+    },
+  );
 
   it("handles bare session reset, inline commands, and unauthorized inline status", async () => {
     await withTempHome(async (home) => {
@@ -911,16 +585,39 @@ describe("trigger handling", () => {
         blockReplyContains: "Identity",
         requestOverrides: { SenderId: "12345" },
       });
-      const inlineRunEmbeddedAgentMock = mockEmbeddedOk();
-      const res = await runInlineUnauthorizedCommand({
-        home,
-        command: "/status",
-      });
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("ok");
+      const inlineRunEmbeddedAgentMock = mockRunEmbeddedAgentOk("ok");
+      const cfg = makeCfg(home);
+      cfg.channels = { ...cfg.channels, whatsapp: { allowFrom: ["+1000"] } };
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /status now",
+          From: "+2001",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+2001",
+        },
+        {},
+        cfg,
+      );
+      expect(maybeReplyText(res)).toBe("ok");
       expect(inlineRunEmbeddedAgentMock).toHaveBeenCalled();
       const prompt = inlineRunEmbeddedAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
       expect(prompt).toContain("/status");
+    });
+  });
+
+  it("keeps fixture files until asynchronous database custody closes", async () => {
+    await withTempHome(async (home) => {
+      const markerPath = join(home, "custody.txt");
+      await fs.writeFile(markerPath, "retained until close");
+      registerOpenClawAgentDatabaseAsyncResource({
+        agentId: "main",
+        path: join(home, "custody.sqlite"),
+        revoke: () => {},
+        close: async () => {
+          await expect(fs.readFile(markerPath, "utf8")).resolves.toBe("retained until close");
+        },
+      });
     });
   });
 });

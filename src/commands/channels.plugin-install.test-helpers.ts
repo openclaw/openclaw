@@ -11,7 +11,7 @@ export function createMockChannelSetupPluginInstallModule(
   return {
     ...actual,
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }) => ({ cfg, installed: true })),
-    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(() => createTestRegistry()),
+    loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(async () => createTestRegistry()),
   };
 }
 

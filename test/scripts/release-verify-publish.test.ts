@@ -3,6 +3,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createPluginNpmPublicationReadback } from "../../scripts/plugin-npm-publication-readback.mjs";
+import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../src/infra/runtime-worker-url.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createNpmPublicationReadbackFixture,
@@ -18,20 +23,12 @@ describe("full parent publication verifier entrypoint", () => {
   it.each([
     "none",
     "no-publish",
+    // Detailed fault matrices belong to plugin-npm-publication-readback.test.ts.
     "missing-tarball",
-    "conflicting-bytes",
-    "missing-receipt",
     "missing-planned-job",
-    "prior-missing-tarball",
-    "prior-conflicting-bytes",
-    "prior-archive-identity",
   ])("gates release success on qualified plugin readback: %s", async (fault) => {
     const root = tempDirs.make("parent-publish-cli-");
-    const fixture = await createNpmPublicationReadbackFixture(
-      root,
-      fault.startsWith("prior-") ? "prior-deferred" : "direct",
-      fault.replace(/^prior-/u, ""),
-    );
+    const fixture = await createNpmPublicationReadbackFixture(root, "direct", fault);
     const readback = await createPluginNpmPublicationReadback(fixture.options).catch(
       () => undefined,
     );
@@ -82,11 +79,14 @@ globalThis.fetch = async (url) => {
     const result = spawnSync(
       process.execPath,
       [
-        "--import",
-        resolve("node_modules/tsx/dist/loader.mjs"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyPublish),
+        ).slice(0, -1),
         "--import",
         preload,
-        resolve("scripts/release-verify-publish.ts"),
+        ...resolveRuntimeWorkerArgv(
+          resolveRuntimeWorkerUrl(scriptProcessEntrypoints.releaseVerifyPublish),
+        ).slice(-1),
         version,
         "--release-sha",
         sourceSha,
@@ -139,15 +139,7 @@ globalThis.fetch = async (url) => {
       ).toMatchObject([{ packageName, verification: "published-registry" }]);
     } else {
       expect(result.stderr).toContain(
-        fault === "missing-planned-job"
-          ? "planned candidate"
-          : fault === "missing-receipt"
-            ? "Expected one consumed"
-            : fault.endsWith("missing-tarball")
-              ? "HTTP 404"
-              : fault === "prior-archive-identity"
-                ? "archive package identity"
-                : "bytes differ",
+        fault === "missing-planned-job" ? "planned candidate" : "HTTP 404",
       );
     }
   });

@@ -22,17 +22,20 @@ export type ForegroundCompactionOwner = {
 /** Keeps physical cleanup separate from the compaction result and transcript fences. */
 export async function runForegroundCompactionWork(
   run: (owner: ForegroundCompactionOwner) => Promise<EmbeddedAgentCompactResult>,
+  abortSignal?: AbortSignal,
 ): Promise<EmbeddedAgentCompactResult> {
   const result = createDeferredCore<EmbeddedAgentCompactResult>();
   const trackOwner = captureAsyncWorkTracker();
   const parentSignal = getAsyncWorkSignal();
+  const cancellationSignal =
+    abortSignal && parentSignal
+      ? AbortSignal.any([abortSignal, parentSignal])
+      : (abortSignal ?? parentSignal);
   void trackOwner(async () => {
     const work = new AsyncWorkScope();
     const factoryWork = new AsyncWorkScope();
-    const cleanupWork = new AsyncWorkScope();
     let runInContext = work.run(() => AsyncLocalStorage.snapshot());
     let factoryContext = factoryWork.run(() => AsyncLocalStorage.snapshot());
-    let cleanupContext = cleanupWork.run(() => AsyncLocalStorage.snapshot());
     let foregroundClosed: Promise<void> | undefined;
     const closeForegroundWork = () =>
       (foregroundClosed ??= AsyncWorkScope.runWhenAllIdle(
@@ -45,14 +48,13 @@ export async function runForegroundCompactionWork(
     let engine: ContextEngine | undefined;
     let engineTransferred = false;
     const closeFromParent = () => {
-      runInContext(() => work.beginClose(parentSignal?.reason));
+      runInContext(() => work.beginClose(cancellationSignal?.reason));
       if (!engineTransferred) {
-        factoryContext(() => factoryWork.beginClose(parentSignal?.reason));
+        factoryContext(() => factoryWork.beginClose(cancellationSignal?.reason));
       }
-      cleanupContext(() => cleanupWork.beginClose(parentSignal?.reason));
     };
-    parentSignal?.addEventListener("abort", closeFromParent, { once: true });
-    if (parentSignal?.aborted) {
+    cancellationSignal?.addEventListener("abort", closeFromParent, { once: true });
+    if (cancellationSignal?.aborted) {
       closeFromParent();
     }
     try {
@@ -92,12 +94,9 @@ export async function runForegroundCompactionWork(
       try {
         await closeForegroundWork();
         if (!engineTransferred) {
-          cleanupContext = factoryContext(() =>
-            cleanupWork.run(() => AsyncLocalStorage.snapshot()),
-          );
           // Factory services can need their disposer to start before their signal closes.
-          const disposal = cleanupContext(() =>
-            cleanupWork.track(async () => {
+          const disposal = factoryContext(() =>
+            factoryWork.track(async () => {
               try {
                 await engine?.dispose?.();
               } catch (error) {
@@ -108,13 +107,9 @@ export async function runForegroundCompactionWork(
             }),
           );
           await Promise.all([disposal, closeFactoryWork()]);
-          await AsyncWorkScope.runWhenAllIdle(
-            () => [cleanupWork],
-            () => cleanupContext(() => cleanupWork.drain()),
-          );
         }
       } finally {
-        parentSignal?.removeEventListener("abort", closeFromParent);
+        cancellationSignal?.removeEventListener("abort", closeFromParent);
         if (!engineTransferred) {
           await lease?.[Symbol.asyncDispose]();
         }

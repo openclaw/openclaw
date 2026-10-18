@@ -46,6 +46,6 @@ final class CLIOptionTests: XCTestCase {
     }
 
     private func parse(_ arguments: [String]) throws -> ParsedValues {
-        try Program(descriptors: CLIRegistry.descriptors).resolve(argv: ["swabble"] + arguments).parsedValues
+        try Program(descriptors: CLIRegistry.descriptors).resolve(arguments: ["swabble"] + arguments).parsedValues
     }
 }

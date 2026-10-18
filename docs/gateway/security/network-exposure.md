@@ -16,7 +16,7 @@ The Gateway multiplexes WebSocket + HTTP on one port (default `18789`; config/fl
 `gateway.bind` controls where the Gateway listens:
 
 - `"loopback"` (default): only local clients can connect.
-- `"lan"`, `"tailnet"`, `"custom"`: expand the attack surface. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
+- `"lan"`, `"tailnet"`, `"custom"`: make the Gateway reachable by more clients. Only use with gateway auth (shared token/password, or a correctly configured trusted proxy) and a real firewall.
 
 Rules of thumb: prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback and Tailscale handles access); if you must bind to LAN, firewall the port to a tight source-IP allowlist rather than port-forwarding broadly; never expose the Gateway unauthenticated on `0.0.0.0`.
 
@@ -81,7 +81,7 @@ In minimal mode the Gateway broadcasts `role`, `gatewayPort`, `transport` but om
 
 ### Gateway WebSocket auth
 
-Gateway auth is required by default - with no valid auth path configured, the Gateway refuses WebSocket connections (fail-closed). Onboarding generates a token by default (even for loopback) so local clients must authenticate.
+Gateway auth is required by default - with no valid auth path configured, the Gateway refuses WebSocket connections. Onboarding generates a token by default (even for loopback) so local clients must authenticate.
 
 ```json5
 { gateway: { auth: { mode: "token", token: "your-token" } } }
@@ -90,7 +90,7 @@ Gateway auth is required by default - with no valid auth path configured, the Ga
 `openclaw doctor --generate-gateway-token` can generate one for you.
 
 <Note>
-`gateway.remote.token` and `gateway.remote.password` are client credential sources - they do not protect local WS access by themselves. Local call paths use `gateway.remote.*` only as fallback when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote-fallback masking).
+`gateway.remote.token` and `gateway.remote.password` are client credential sources - they do not protect local WS access by themselves. Local call paths use `gateway.remote.*` only as fallback when `gateway.auth.*` is unset. If `gateway.auth.token` or `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution stops with an error instead of falling back to remote credentials.
 </Note>
 
 Pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`. Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs; for other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as break-glass (process environment only, not an `openclaw.json` key). Mobile pairing and Android manual/scanned gateway routes are stricter: cleartext only for loopback, while private-LAN, link-local, `.local`, and dotless hostnames must use TLS unless you explicitly opt into the trusted private-network cleartext path.
@@ -117,7 +117,7 @@ Gateway HTTP bearer auth is effectively all-or-nothing operator access. Credenti
 
 Tokenless Serve auth assumes the gateway host itself is trusted - it is not protection against hostile same-host processes. If untrusted local code may run on the gateway host, disable `allowTailscale` and require explicit shared-secret auth (`token` or `password`).
 
-An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup probes keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
+An externally managed Tailscale Serve or Funnel route may forward these headers to the ordinary listener only through an explicitly configured `gateway.trustedProxies` source with a valid non-loopback forwarded client address. OpenClaw treats that request as generic proxy ingress: the configured gateway auth applies, `allowTailscale` grants nothing, and no WhoIs lookup runs. Gateway-protected routes reject external Funnel ingress when auth mode is `none`; aggregate health, readiness, and startup checks keep their bounded unauthenticated responses. See [Tailscale](/gateway/tailscale#externally-managed-serve-and-funnel), [Health and readiness](/gateway/health), and [Trusted Proxy Auth](/gateway/trusted-proxy-auth).
 
 See [Tailscale](/gateway/tailscale) and [Web overview](/web).
 
@@ -135,7 +135,7 @@ Configure `trustedProxies` narrowly and make the proxy overwrite or safely
 rebuild forwarded headers; see [Rate
 limiting](/gateway/security/rate-limiting#unconfigured-same-host-reverse-proxies).
 
-`trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it fails closed on loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
+`trustedProxies` also feeds `gateway.auth.mode: "trusted-proxy"`, which is stricter: it rejects loopback-source proxies by default. Same-host loopback reverse proxies can use `trustedProxies` for local-client detection and forwarded-IP handling, but can only satisfy `trusted-proxy` auth mode when `gateway.auth.trustedProxy.allowLoopback = true`; otherwise use token/password auth.
 
 ```yaml
 gateway:
@@ -147,7 +147,7 @@ gateway:
     password: ${OPENCLAW_GATEWAY_PASSWORD}
 ```
 
-When `trustedProxies` is set, the Gateway uses `X-Forwarded-For` to determine client IP; `X-Real-IP` is ignored unless `gateway.allowRealIpFallback: true` is explicitly set. Ensure your proxy **overwrites** `X-Forwarded-For`/`X-Real-IP` rather than appending to them:
+When `trustedProxies` is set, the Gateway uses `X-Forwarded-For` to determine client IP; `X-Real-IP` is ignored unless `gateway.allowRealIpFallback: true` is explicitly set. Check that your proxy **overwrites** `X-Forwarded-For`/`X-Real-IP` rather than appending to them:
 
 ```nginx
 # good
@@ -160,11 +160,31 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 
 Trusted proxy headers do not make node device pairing automatically trusted - `gateway.nodes.pairing.autoApproveCidrs` is a separate, disabled-by-default operator policy, and loopback-source trusted-proxy header paths stay excluded from node auto-approval even when loopback trusted-proxy auth is enabled (because local callers can forge those headers).
 
+### Plugin remote Control UI ingress
+
+A trusted plugin such as [MCP Relay](/plugins/mcp-relay) can expose the
+[remote Control UI ingress](/plugins/sdk-gateway-ingress). Each grant is bound to
+the shared owner on a token or password Gateway without `gateway.roles`, or to a
+verified person on a Cloudflare Access trusted-proxy Gateway with roles. The
+plugin must authenticate the browser as its locally approved grant holder before
+forwarding any request or socket. Core treats the live handle like a trusted
+proxy: a browser with a signed device identity connects as an operator, with
+scopes limited to the grant's ceiling intersected with the principal's current
+authority. No reusable device token is issued. Shared Gateway secrets, bootstrap
+credentials, device-less connections, non-operator roles, and scopes above the
+ceiling are refused.
+
+The browser appears in **Devices** and `openclaw devices list` as a paired-device
+row kept for visibility and key checks. It holds no bearer credential that works
+on the Gateway's direct listener; every reconnect is admitted by the live grant.
+Revoke the plugin grant to end delegated access. Revocation closes the ingress
+path and its retained work without deleting the paired-device row.
+
 ### HSTS and origin notes
 
 - OpenClaw's gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS there.
 - If the gateway itself terminates HTTPS, `gateway.http.securityHeaders.strictTransportSecurity` emits the HSTS header from OpenClaw responses.
-- Non-loopback Control UI deployments require `gateway.controlUi.allowedOrigins` by default; `allowedOrigins: ["*"]` is an explicit allow-all policy, not a hardened default - avoid it outside tightly controlled local testing.
+- Non-loopback Control UI deployments need configured browser origins: omit `gateway.controlUi.allowedOrigins` to use `gateway.publicOrigin`, or set an explicit list. An explicit list replaces the default; `allowedOrigins: ["*"]` allows every browser origin and should be avoided outside tightly controlled local testing.
 - Failed authentication from loopback is never locked out, so a local CLI cannot be denied before its credentials are checked. Wrong credentials are still tracked and progressively delayed (bounded delay, one shared timer per key); successful authentication resets only the matching credential-class history. This raises the cost of repeated guessing from one loopback source; it is not a defense against an attacker who can already open many parallel loopback connections, because credentials are compared before the failure response is delayed. Loopback reachability is a trust boundary in its own right - see [Node pairing](/gateway/pairing#silent-local-pairing).
 - Browser-origin auth failures on loopback are still rate-limited even with the general loopback exemption enabled, but the lockout key is scoped per normalized `Origin` value instead of one shared localhost bucket.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.

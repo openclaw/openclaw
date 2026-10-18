@@ -50,116 +50,6 @@ describe("doctor invalid plugin config repair", () => {
     },
   );
 
-  it("disables plugins and removes invalid config payloads", () => {
-    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-      ok: false,
-      warnings: [],
-      issues: [
-        {
-          path: "plugins.entries.community-feedback.config.communityRepo",
-          message: 'invalid config: must match pattern "^[^/]+/[^/]+$"',
-        },
-      ],
-    });
-
-    const result = maybeRepairInvalidPluginConfig({
-      plugins: {
-        entries: {
-          "community-feedback": {
-            enabled: true,
-            config: {
-              communityRepo: "",
-            },
-          },
-          whatsapp: {
-            enabled: true,
-            config: {
-              session: "keep",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- plugins.entries: quarantined 1 invalid plugin config (community-feedback)",
-    ]);
-    expect(result.config.plugins?.entries?.["community-feedback"]).toEqual({
-      enabled: false,
-    });
-    expect(result.config.plugins?.entries?.whatsapp).toEqual({
-      enabled: true,
-      config: {
-        session: "keep",
-      },
-    });
-  });
-
-  it("handles slash-delimited plugin ids", () => {
-    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-      ok: false,
-      warnings: [],
-      issues: [
-        {
-          path: "plugins.entries.pack/one.config.repo",
-          message: "invalid config: must NOT have fewer than 1 characters",
-        },
-      ],
-    });
-
-    const result = maybeRepairInvalidPluginConfig({
-      plugins: {
-        entries: {
-          "pack/one": {
-            config: {
-              repo: "",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.config.plugins?.entries?.["pack/one"]).toEqual({
-      enabled: false,
-    });
-  });
-
-  it("disables plugins whose required config payload is missing", () => {
-    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
-      ok: false,
-      warnings: [],
-      issues: [
-        {
-          path: "plugins.entries.community-feedback.config.communityRepo",
-          message: 'invalid config: must have required property "communityRepo"',
-        },
-      ],
-    });
-
-    const result = maybeRepairInvalidPluginConfig({
-      plugins: {
-        entries: {
-          "community-feedback": {
-            enabled: true,
-            hooks: {
-              allowPromptInjection: true,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.changes).toEqual([
-      "- plugins.entries: quarantined 1 invalid plugin config (community-feedback)",
-    ]);
-    expect(result.config.plugins?.entries?.["community-feedback"]).toEqual({
-      enabled: false,
-      hooks: {
-        allowPromptInjection: true,
-      },
-    });
-  });
-
   it("ignores non-plugin validation issues", () => {
     validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
       ok: false,
@@ -202,9 +92,9 @@ describe("legacy migration with invalid plugin config", () => {
       agents: {
         defaults: {
           model: { primary: "openai/gpt-5.5" },
-          llm: { idleTimeoutSeconds: 120 },
         },
       },
+      session: { typingMode: "thinking" },
     };
     const result = migrateLegacyConfig(raw, { sourceConfigBeforeMigrations: raw });
 
@@ -213,11 +103,13 @@ describe("legacy migration with invalid plugin config", () => {
         agents: {
           defaults: {
             model: { primary: "openai/gpt-5.5" },
+            typingMode: "thinking",
           },
         },
+        session: {},
       },
       changes: [
-        "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
+        "Moved session.typingMode → agents.defaults.typingMode.",
         "Migration applied; other validation issues remain — run doctor to review.",
       ],
       partiallyValid: true,

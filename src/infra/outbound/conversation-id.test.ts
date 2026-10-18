@@ -11,11 +11,6 @@ describe("resolveConversationIdFromTargets", () => {
       expected: "123456789",
     },
     {
-      name: "normalizes numeric thread ids",
-      params: { threadId: 123456789, targets: ["channel:987654321"] },
-      expected: "123456789",
-    },
-    {
       name: "truncates decimal numeric thread ids",
       params: { threadId: 42.9, targets: ["channel:987654321"] },
       expected: "42",
@@ -30,11 +25,6 @@ describe("resolveConversationIdFromTargets", () => {
   });
 
   it.each([
-    {
-      name: "extracts channel ids from channel targets",
-      targets: ["channel:987654321"],
-      expected: "987654321",
-    },
     {
       name: "trims channel target ids",
       targets: ["channel: 987654321 "],

@@ -5,16 +5,13 @@ import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { NormalizedChromeMcpProfileOptions } from "./chrome-mcp-contracts.js";
 import { withChromeMcpLease } from "./chrome-mcp-routing.js";
-import {
-  closeChromeMcpSession,
-  getChromeMcpPid,
-  resetChromeMcpSessionsForTest,
-} from "./chrome-mcp-session.js";
+import { closeChromeMcpSession, getChromeMcpPid } from "./chrome-mcp-session.js";
 
 const { warn } = vi.hoisted(() => ({ warn: vi.fn<(message: string) => void>() }));
 
 // Observe diagnostics before any additional logger redaction; keep the SDK and cleanup real.
-vi.mock("../logging/subsystem.js", () => ({
+vi.mock("openclaw/plugin-sdk/logging-core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/logging-core")>()),
   createSubsystemLogger: () => ({ child: () => ({ warn }) }),
 }));
 
@@ -24,13 +21,16 @@ describe("Chrome MCP subprocess startup diagnostics", () => {
   let homeDir: string;
   let options: NormalizedChromeMcpProfileOptions;
   let ownsDescendant = false;
-  let expectsSubprocess = true;
+
+  const assertGone = (pid: number) =>
+    expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+  const rejectOperation = async () => {
+    throw new Error("failed startup must not admit an operation");
+  };
 
   beforeEach(async () => {
-    await resetChromeMcpSessionsForTest();
     warn.mockClear();
     ownsDescendant = false;
-    expectsSubprocess = true;
     state = await createOpenClawTestState({ prefix: "chrome-mcp-startup-" });
     await state.writeConfig({ logging: { redactSensitive: "off" } });
     // Worker env overlays do not change native os.homedir(); the runner isolates both homes.
@@ -98,29 +98,23 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
     const pid = Number(await fs.readFile(state.statePath("pid"), "utf8"));
     expect(pid).toBeGreaterThan(0);
     expect(pid).not.toBe(process.pid);
-    await vi.waitFor(async () => {
-      // Windows terminates the process tree before the transport can close stdin.
-      if (process.platform !== "win32") {
-        expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
-      }
-      expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
-    });
+    // The awaited session owner joins transport close and verifies its tracked tree is absent.
+    // Windows terminates the process tree before the transport can close stdin.
+    if (process.platform !== "win32") {
+      expect(await fs.readFile(state.statePath("stdin-ended"), "utf8")).toBe("closed");
+    }
+    assertGone(pid);
     expect(getChromeMcpPid(profileName)).toBeNull();
   }
 
   afterEach(async () => {
     try {
-      await resetChromeMcpSessionsForTest();
-      if (expectsSubprocess) {
-        await expectSubprocessClosed();
-      }
+      await closeChromeMcpSession(profileName);
     } finally {
       if (ownsDescendant) {
         const pid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
         await fs.writeFile(state.statePath("descendant-stop"), "stop");
-        await vi.waitFor(() =>
-          expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" })),
-        );
+        await vi.waitFor(() => assertGone(pid));
       }
       await state.cleanup();
     }
@@ -149,20 +143,22 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
         options.browserUrl =
           "wss://fixture-user:fixture-password@browser.example/chrome?token=fixture-token";
       }
-      const attempt = withChromeMcpLease(profileName, options, { ephemeral }, async () => {
-        throw new Error("failed startup must not admit an operation");
-      });
+      const attempt = withChromeMcpLease(profileName, options, { ephemeral }, rejectOperation);
       await expect(attempt).rejects.toThrow("fixture attach failed");
       await expect(attempt).rejects.toThrow("~/profiles/fixture-profile");
       await expect(attempt).rejects.toThrow("~/chrome/Profile 1");
+      await expect(attempt).rejects.toThrow("Chrome MCP existing-session attach failed");
+      await expect(attempt).rejects.toThrow(
+        ephemeral
+          ? "the configured Chromium user data dir (~/chrome/Profile 1)"
+          : /the configured Chrome endpoint \(wss:\/\/browser\.example\/chrome\?token=/,
+      );
       await expect(attempt).rejects.not.toThrow(/fixture-user|fixture-password|fixture-token/);
       await expect(attempt).rejects.not.toThrow(homeDir);
       if (ownsDescendant) {
         const descendantPid = Number(await fs.readFile(state.statePath("descendant-pid"), "utf8"));
         expect(descendantPid).toBeGreaterThan(0);
-        expect(() => process.kill(descendantPid, 0)).toThrow(
-          expect.objectContaining({ code: "ESRCH" }),
-        );
+        assertGone(descendantPid);
       }
       await expectSubprocessClosed();
 
@@ -183,12 +179,8 @@ for await (const line of readline.createInterface({ input: process.stdin })) {
   );
 
   it("reports an unspawnable command without waiting for an unused stderr pipe", async () => {
-    expectsSubprocess = false;
     options.command = state.statePath("missing-mcp-command");
-    const attempt = withChromeMcpLease(profileName, options, { ephemeral: true }, async () => {
-      throw new Error("failed startup must not admit an operation");
-    });
-
+    const attempt = withChromeMcpLease(profileName, options, { ephemeral: true }, rejectOperation);
     await expect(attempt).rejects.toThrow("ENOENT");
     expect(warn).not.toHaveBeenCalled();
     expect(getChromeMcpPid(profileName)).toBeNull();

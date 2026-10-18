@@ -15,7 +15,7 @@ type SecretProviderResolutionCode =
   | "SECRET_PROVIDER_NOT_CONFIGURED"
   | "SECRET_PROVIDER_UNAVAILABLE";
 
-export type SecretResolutionFailureReason =
+type SecretResolutionFailureReason =
   | "secret provider failed"
   | "secret provider policy denied resolution"
   | "secret provider response violated its contract"
@@ -144,27 +144,20 @@ export function describeSecretResolutionOperatorRecovery(value: unknown): string
     : "Restore Windows path security verification, or use an existing secret file whose owner and ACLs OpenClaw can verify";
 }
 
-export function providerResolutionError(params: {
-  code?: SecretProviderResolutionCode;
-  source: SecretRefSource;
-  provider: string;
-  message: string;
-  cause?: unknown;
-}): SecretProviderResolutionError {
+export function providerResolutionError(
+  params: Omit<ConstructorParameters<typeof SecretProviderResolutionError>[0], "code"> & {
+    code?: SecretProviderResolutionCode;
+  },
+): SecretProviderResolutionError {
   return new SecretProviderResolutionError({
     ...params,
     code: params.code ?? "SECRET_PROVIDER_UNAVAILABLE",
   });
 }
 
-export function refResolutionError(params: {
-  code: SecretRefResolutionCode;
-  source: SecretRefSource;
-  provider: string;
-  refId: string;
-  message: string;
-  cause?: unknown;
-}): SecretRefResolutionError {
+export function refResolutionError(
+  params: ConstructorParameters<typeof SecretRefResolutionError>[0],
+): SecretRefResolutionError {
   return new SecretRefResolutionError(params);
 }
 

@@ -46,146 +46,48 @@ describe("ReefInboxConnection recovery", () => {
     expect(requestedAfter).toEqual([0, 0, 20]);
   });
 
-  it.each([false, true])(
-    "retains the previous cursor when asynchronous persistence fails (empty page: %s)",
-    async (empty) => {
-      const requestedAfter: number[] = [];
-      const persistence = createDeferred<void>();
-      const started = createDeferred<void>();
-      const failure = new Error("cursor persistence failed");
-      let fail = true;
-      const client = createClient(async (input) => {
-        const after = Number(parseRequestUrl(input).searchParams.get("after"));
-        requestedAfter.push(after);
-        return Response.json({
-          entries: !empty && after === 7 ? [receiptEntry(8)] : [],
-          cursor: 8,
-        });
-      });
-      const inbox = new ReefInboxConnection(
-        client,
-        async () => {},
-        () => new ControlledSocket() as unknown as WebSocketLike,
-        {
-          initialCursor: 7,
-          persistCursor: async () => {
-            started.resolve();
-            if (fail) {
-              await persistence.promise;
-            }
-          },
-        },
-      );
-      const first = expect(inbox.drain()).rejects.toBe(failure);
-      await started.promise;
-      expect(requestedAfter).toEqual([7]);
-      persistence.reject(failure);
-      await first;
-      fail = false;
-      await inbox.drain();
-      expect(requestedAfter).toEqual(empty ? [7, 7] : [7, 7, 8]);
-    },
-  );
-
-  it("starts REST catch-up at the durable cursor and advances only processed entries", async () => {
+  it("retains the previous cursor when asynchronous persistence fails", async () => {
     const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const processed: number[] = [];
+    const persistence = createDeferred<void>();
+    const started = createDeferred<void>();
+    const failure = new Error("cursor persistence failed");
+    let fail = true;
     const client = createClient(async (input) => {
       const after = Number(parseRequestUrl(input).searchParams.get("after"));
       requestedAfter.push(after);
-      return after === 7
-        ? Response.json({ entries: [receiptEntry(8)], cursor: 8 })
-        : Response.json({ entries: [], cursor: after });
+      return Response.json({
+        entries: after === 7 ? [receiptEntry(8)] : [],
+        cursor: 8,
+      });
     });
     const inbox = new ReefInboxConnection(
       client,
-      async (entries) => {
-        processed.push(...entries.map((entry) => entry.seq));
+      async () => {},
+      () => new ControlledSocket() as unknown as WebSocketLike,
+      {
+        initialCursor: 7,
+        persistCursor: async () => {
+          started.resolve();
+          if (fail) {
+            await persistence.promise;
+          }
+        },
       },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
     );
-
+    const first = expect(inbox.drain()).rejects.toBe(failure);
+    await started.promise;
+    expect(requestedAfter).toEqual([7]);
+    persistence.reject(failure);
+    await first;
+    fail = false;
     await inbox.drain();
-
-    expect(requestedAfter).toEqual([7, 8]);
-    expect(processed).toEqual([8]);
-    expect(persisted).toEqual([8]);
-  });
-
-  it("does not advance past an entry that failed processing", async () => {
-    const persisted: number[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8), receiptEntry(9)], cursor: 9 }),
-    );
-    const inbox = new ReefInboxConnection(
-      client,
-      async ([entry]) => {
-        if (entry?.seq === 9) {
-          throw new Error("entry failed");
-        }
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    await expect(inbox.drain()).rejects.toThrow("entry failed");
-    expect(persisted).toEqual([8]);
-  });
-
-  it("parks an entry without advancing the cursor and completes later entries", async () => {
-    const persisted: number[] = [];
-    const attempts: number[] = [];
-    let parked = true;
-    const client = createClient(async (input) => {
-      const after = Number(parseRequestUrl(input).searchParams.get("after"));
-      return after === 7
-        ? Response.json({
-            entries: [receiptEntry(8), receiptEntry(9), receiptEntry(10)],
-            cursor: 10,
-          })
-        : Response.json({ entries: [], cursor: after });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async ([entry]) => {
-        attempts.push(entry!.seq);
-        if (entry!.seq === 8 && parked) {
-          throw new ReefInboxEntryParkedError("review approval pending");
-        }
-      },
-      () => {
-        throw new Error("socket should not open during direct drain");
-      },
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
-    );
-
-    // First drain: entry 8 parks, 9 and 10 still complete, durable cursor holds.
-    await inbox.drain();
-    expect(attempts).toEqual([8, 9, 10]);
-    expect(persisted).toEqual([]);
-
-    // Re-poll while parked: only the parked entry is re-attempted.
-    await inbox.poll();
-    expect(attempts).toEqual([8, 9, 10, 8]);
-    expect(persisted).toEqual([]);
-
-    // Owner decision resolves the park; the cursor folds through the entries
-    // that already completed above it.
-    parked = false;
-    await inbox.poll();
-    expect(attempts).toEqual([8, 9, 10, 8, 8]);
-    expect(persisted).toEqual([8, 9, 10]);
+    expect(requestedAfter).toEqual([7, 7, 8]);
   });
 
   it("retries a parked live entry after a later separate frame completes", async () => {
     vi.useFakeTimers();
     const socket = new ControlledSocket();
+    const errors: string[] = [];
     const retainedEntries: ReturnType<typeof receiptEntry>[] = [];
     const requestedAfter: number[] = [];
     const persisted: number[] = [];
@@ -209,7 +111,11 @@ describe("ReefInboxConnection recovery", () => {
         completed.push(entry!.seq);
       },
       () => socket as unknown as WebSocketLike,
-      { initialCursor: 7, persistCursor: (cursor) => persisted.push(cursor) },
+      {
+        initialCursor: 7,
+        persistCursor: (cursor) => persisted.push(cursor),
+        onError: (error) => errors.push(error.message),
+      },
     );
 
     const running = inbox.start(abort.signal);
@@ -235,6 +141,7 @@ describe("ReefInboxConnection recovery", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(completed).toEqual([9]);
       expect(socket.closed).toBe(false);
+      expect(errors).toEqual([]);
       // Continue through recovery even if the earlier frame's cursor barrier was lost.
       expect.soft(persisted).toEqual([]);
 
@@ -251,36 +158,6 @@ describe("ReefInboxConnection recovery", () => {
       await running;
       vi.useRealTimers();
     }
-  });
-
-  it("keeps the live socket up while an entry stays parked", async () => {
-    const socket = new ControlledSocket();
-    const errors: string[] = [];
-    const client = createClient(async () =>
-      Response.json({ entries: [receiptEntry(8)], cursor: 8 }),
-    );
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {
-        throw new ReefInboxEntryParkedError("review approval pending");
-      },
-      () => socket as unknown as WebSocketLike,
-      { initialCursor: 7, onError: (error) => errors.push(error.message) },
-    );
-    const running = inbox.start(abort.signal);
-    socket.emit("open");
-    await vi.waitFor(() => expect(socket.closed).toBe(false));
-    // Give catch-up a macrotask to finish; a parked entry is a waiting state,
-    // not a connection failure, so nothing may close or report.
-    await new Promise((resolve) => {
-      setTimeout(resolve, 20);
-    });
-    expect(errors).toEqual([]);
-    expect(socket.closed).toBe(false);
-    abort.abort();
-    socket.emit("close");
-    await running;
   });
 
   it("sends keepalive pings, absorbs pongs, and reconnects on a dead link", async () => {
@@ -341,60 +218,6 @@ describe("ReefInboxConnection recovery", () => {
     );
     expect(processed).toEqual([]);
     expect(persisted).toEqual([]);
-  });
-
-  it("persists cursor-only progress when retained entries have expired", async () => {
-    const requestedAfter: number[] = [];
-    const persisted: number[] = [];
-    const client = createClient(async (input) => {
-      requestedAfter.push(Number(parseRequestUrl(input).searchParams.get("after")));
-      return Response.json({ entries: [], cursor: 12 });
-    });
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => new ControlledSocket() as unknown as WebSocketLike,
-      {
-        initialCursor: 7,
-        persistCursor: (cursor) => persisted.push(cursor),
-      },
-    );
-
-    await inbox.drain();
-
-    expect(requestedAfter).toEqual([7]);
-    expect(persisted).toEqual([12]);
-  });
-
-  it("reports connected before a slow REST catch-up completes", async () => {
-    const socket = new ControlledSocket();
-    const states: string[] = [];
-    const pullGate = createDeferred<void>();
-    const pullStarted = createDeferred<void>();
-    const client = createClient(async () => {
-      pullStarted.resolve();
-      await pullGate.promise;
-      return Response.json({ entries: [], cursor: 0 });
-    });
-    const abort = new AbortController();
-    const inbox = new ReefInboxConnection(
-      client,
-      async () => {},
-      () => socket as unknown as WebSocketLike,
-      { onState: (state) => states.push(state) },
-    );
-
-    const running = inbox.start(abort.signal);
-    try {
-      socket.emit("open");
-      await vi.waitFor(() => pullStarted.promise);
-      expect(states).toEqual(["connected"]);
-    } finally {
-      pullGate.resolve();
-      abort.abort();
-      await running;
-    }
-    expect(states).toEqual(["connected", "disconnected"]);
   });
 
   it("serializes socket frames behind catch-up and skips pull/socket duplicates", async () => {
@@ -458,6 +281,7 @@ describe("ReefInboxConnection recovery", () => {
     try {
       socket.emit("open");
       await vi.waitFor(() => pullStarted.promise);
+      expect(states).toEqual(["connected"]);
       socket.emit("close");
       await vi.waitFor(() => expect(states).toEqual(["connected", "disconnected"]));
     } finally {

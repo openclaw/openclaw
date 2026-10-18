@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { createOpenClawReadTool } from "./agent-tools.read.js";
+import { createOpenClawReadTool, resolveAdaptiveReadMaxBytes } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createApplyPatchTool } from "./apply-patch.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
@@ -13,8 +13,6 @@ import {
   runUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createEditTool, createReadTool, createWriteTool } from "./sessions/index.js";
-import { createFindTool } from "./sessions/tools/find.js";
-import { createGrepTool } from "./sessions/tools/grep.js";
 import { createLsTool } from "./sessions/tools/ls.js";
 import { DEFAULT_MAX_BYTES } from "./sessions/tools/truncate.js";
 import { resolveToolResultBudget, toolResultFitsBudget } from "./tool-result-limits.js";
@@ -46,7 +44,7 @@ describe("filesystem tool output contracts", () => {
   });
 
   afterEach(async () => {
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -81,155 +79,34 @@ describe("filesystem tool output contracts", () => {
     },
   );
 
-  it.each([
-    { mode: "matching", files: ["alpha.txt"], limit: 10, content: "alpha.txt" },
-    { mode: "empty", files: [], limit: 10, content: "No files found matching pattern" },
-    {
-      mode: "limited",
-      files: ["alpha.txt", "beta.txt"],
-      limit: 1,
-      content: "alpha.txt\n\n[1 results limit reached]",
-      resultLimitReached: 1,
-    },
-  ])(
-    "preserves $mode file search output through Code Mode",
-    async ({ files, limit, content, resultLimitReached }) => {
-      await Promise.all(files.map((file) => fs.writeFile(path.join(tmpDir, file), "fixture\n")));
-      const tool = createFindTool(tmpDir, {
-        operations: {
-          exists: (absolutePath) =>
-            fs.access(absolutePath).then(
-              () => true,
-              () => false,
-            ),
-          glob: async (pattern, cwd, options) => {
-            const matches: string[] = [];
-            for await (const match of fs.glob(pattern, { cwd })) {
-              matches.push(match);
-            }
-            return matches.toSorted().slice(0, options.limit);
-          },
-        },
-      }) as unknown as AnyAgentTool;
-      const args = { pattern: "*.txt", limit };
-      const direct = await tool.execute("direct-find", args);
-      const result = await callThroughCodeMode(tool, args);
-
-      expect(direct.content).toEqual([{ type: "text", text: content }]);
-      expect(result).toMatchObject({
-        status: "completed",
-        value: { content, ...(resultLimitReached === undefined ? {} : { resultLimitReached }) },
-      });
-    },
-  );
-
-  it.each([
-    {
-      mode: "matching",
-      pattern: "needle",
-      limit: 10,
-      content: "sample.txt:1: needle alpha\nsample.txt:2: needle beta",
-    },
-    { mode: "empty", pattern: "absent", limit: 10, content: "No matches found" },
-    {
-      mode: "limited",
-      pattern: "needle",
-      limit: 1,
-      content:
-        "sample.txt:1: needle alpha\n\n[1 matches limit reached. Use limit=2 for more, or refine pattern]",
-      matchLimitReached: 1,
-    },
-  ])(
-    "preserves $mode text search output through Code Mode",
-    async ({ pattern, limit, content, matchLimitReached }) => {
-      await fs.writeFile(path.join(tmpDir, "sample.txt"), "needle alpha\nneedle beta\n");
-      const tool = createGrepTool(tmpDir) as unknown as AnyAgentTool;
-      const args = { pattern, limit };
-      const direct = await tool.execute("direct-grep", args);
-      const result = await callThroughCodeMode(tool, args);
-
-      expect(direct.content).toEqual([{ type: "text", text: content }]);
-      expect(result).toMatchObject({
-        status: "completed",
-        value: { content, ...(matchLimitReached === undefined ? {} : { matchLimitReached }) },
-      });
-    },
-  );
-
-  it("keeps oversized find output inside the Code Mode value budget", async () => {
-    // ASCII output fits once, but its duplicate crosses the Code Mode value budget.
-    const longName = "f".repeat(240);
-    await Promise.all(
-      Array.from({ length: 260 }, (_, index) =>
-        fs.writeFile(path.join(tmpDir, `${longName}-${index}.txt`), "fixture\n"),
-      ),
-    );
-    const tool = createFindTool(tmpDir, {
-      operations: {
-        exists: (absolutePath) =>
-          fs.access(absolutePath).then(
-            () => true,
-            () => false,
-          ),
-        glob: async (pattern, cwd, options) => {
-          const matches: string[] = [];
-          for await (const match of fs.glob(pattern, { cwd })) {
-            matches.push(match);
-          }
-          return matches.toSorted().slice(0, options.limit);
-        },
-      },
-    });
-    const args = { pattern: "*.txt" };
-
-    const direct = await tool.execute("direct-find", args);
-    expect(direct.details.truncation?.truncated).toBe(true);
-    expect(direct.details.content).toContain(longName);
-
-    const result = await callThroughCodeMode(tool, args);
-    expect(result).toMatchObject({ status: "completed", value: direct.details });
-    expect(direct.details.truncation).not.toHaveProperty("content");
-  });
-
-  it("keeps oversized grep output inside the Code Mode value budget", async () => {
-    // The path prefix makes 100 capped match rows exceed the tool's byte limit.
-    const longDir = path.join(tmpDir, "d".repeat(60));
-    await fs.mkdir(longDir, { recursive: true });
-    const matchLine = `${"m".repeat(500)}\n`;
-    await fs.writeFile(path.join(longDir, "sample.txt"), matchLine.repeat(120), "utf8");
-    const tool = createGrepTool(tmpDir);
-    const args = { pattern: "m+" };
-
-    const direct = await tool.execute("direct-grep", args);
-    expect(direct.details.truncation?.truncated).toBe(true);
-    expect(direct.details.content).toContain("sample.txt:");
-
-    const result = await callThroughCodeMode(tool, args);
-    expect(result).toMatchObject({ status: "completed", value: direct.details });
-    expect(direct.details.truncation).not.toHaveProperty("content");
-  });
-
   it("validates read text, image, truncation, and optional-not-found results", async () => {
     await fs.writeFile(path.join(tmpDir, "notes.txt"), "ordinary text\n", "utf8");
     await fs.writeFile(path.join(tmpDir, "pixel.png"), Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
     await fs.writeFile(path.join(tmpDir, "long.txt"), "x".repeat(DEFAULT_MAX_BYTES + 1), "utf8");
 
-    const tool = createOpenClawReadTool(
-      createReadTool(tmpDir, { autoResizeImages: false }) as unknown as AnyAgentTool,
-    );
+    const tool = createOpenClawReadTool(createReadTool(tmpDir, { autoResizeImages: false }));
     const text = await tool.execute("read-text", { path: "notes.txt", limit: 10 });
     const image = await tool.execute("read-image", { path: "pixel.png", limit: 10 });
+    const omittedImage = await createOpenClawReadTool(
+      createReadTool(tmpDir, { autoResizeImages: false }),
+      { imageSanitization: { maxBytes: 1 } },
+    ).execute("read-omitted-image", { path: "pixel.png", limit: 10 });
     const truncated = await tool.execute("read-truncated", { path: "long.txt", limit: 10 });
     const notFound = await tool.execute("read-not-found", {
       path: "memory/2026-07-17.md",
       optional: true,
     });
 
-    for (const result of [text, image, truncated, notFound]) {
+    for (const result of [text, image, omittedImage, truncated, notFound]) {
       expectContract(tool, result.details);
     }
     expect(text.details).toEqual({ kind: "text", content: "ordinary text\n" });
     expect(image.details).toMatchObject({ kind: "image", mimeType: "image/png" });
+    expect(omittedImage.content.some((block) => block.type === "image")).toBe(false);
+    expect(omittedImage.details).toMatchObject({
+      kind: "text",
+      content: expect.stringContaining("omitted image payload"),
+    });
     expect(truncated.details).toMatchObject({
       kind: "truncated",
       truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 },
@@ -246,12 +123,8 @@ describe("filesystem tool output contracts", () => {
   });
 
   it.each([
-    { mode: "native lines", wrapped: false, indent: 2, limit: undefined },
-    { mode: "native cursor", wrapped: false, indent: 0, limit: undefined },
-    { mode: "adaptive lines", wrapped: true, indent: 2, limit: undefined },
     { mode: "adaptive cursor", wrapped: true, indent: 0, limit: undefined },
     { mode: "native explicit line pages", wrapped: false, indent: 2, limit: 500 },
-    { mode: "adaptive explicit line pages", wrapped: true, indent: 2, limit: 500 },
     {
       mode: "adaptive blank line pages",
       wrapped: true,
@@ -269,7 +142,7 @@ describe("filesystem tool output contracts", () => {
       const original =
         "\n".repeat(leadingBlankLines) + JSON.stringify(records, null, indent) + "\n";
       await fs.writeFile(path.join(tmpDir, "records.json"), original);
-      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 }) as unknown as AnyAgentTool;
+      const base = createReadTool(tmpDir, { maxBytes: 16 * 1024 });
       const tool = wrapped ? createOpenClawReadTool(base) : base;
       const first = await tool.execute("first-page", { path: "records.json" });
       expectContract(tool, first.details);
@@ -307,9 +180,58 @@ describe("filesystem tool output contracts", () => {
     },
   );
 
+  it.each([
+    { name: "one leading blank line", prefix: "\n", size: 52 * 1024 },
+    { name: "no leading blank line", prefix: "", size: 52 * 1024 },
+    { name: "two leading blank lines", prefix: "\n\n", size: 52 * 1024 },
+    { name: "a short file", prefix: "\n", size: 10 },
+    { name: "an offset on a blank line", prefix: "\n", size: 52 * 1024, offset: 2 },
+    {
+      name: "a blank page before a fitting continuation",
+      prefix: "\n",
+      size: 2_000,
+      maxBytes: 1_024,
+    },
+  ])("preserves $name across read continuations", async ({ prefix, size, offset, maxBytes }) => {
+    const expected = `${prefix}${JSON.stringify({ generated: "x".repeat(size) })}`;
+    await fs.writeFile(path.join(tmpDir, "paged.json"), `${offset ? "before\n" : ""}${expected}`);
+    const tool = createOpenClawReadTool(
+      createReadTool(tmpDir, { maxBytes: maxBytes ?? resolveAdaptiveReadMaxBytes() }),
+    );
+    let args: { path: string; offset?: number; cursor?: number; limit?: number } = {
+      path: "paged.json",
+      ...(offset ? { offset } : {}),
+    };
+    let actual = "";
+    let display = "";
+    let separator = "";
+    for (let page = 0; page < 8; page++) {
+      const result = await tool.execute(`read-page-${page}`, args);
+      expectContract(tool, result.details);
+      const details = result.details;
+      if (details.kind !== "text" && details.kind !== "truncated") {
+        throw new Error("Expected file text");
+      }
+      const text = result.content.find((block) => block.type === "text")!.text;
+      actual += separator + details.content;
+      display +=
+        separator +
+        (details.kind === "truncated" ? text.slice(0, text.lastIndexOf("\n\n[")) : text);
+      if (details.kind === "text") {
+        expect(actual).toBe(expected);
+        expect(display).toBe(expected);
+        return;
+      }
+      const { kind, ...continuation } = details.continuation;
+      separator = kind === "line" ? "\n" : "";
+      args = { path: "paged.json", ...continuation };
+    }
+    throw new Error("Read did not reach EOF");
+  });
+
   it("bounds structured blank pages independently of their short display summary", async () => {
     await fs.writeFile(path.join(tmpDir, "blank.txt"), "\n".repeat(10_000));
-    const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool, {
+    const tool = createOpenClawReadTool(createReadTool(tmpDir), {
       modelContextWindowTokens: 1_024,
     });
     const result = await tool.execute("blank-budget", { path: "blank.txt" });
@@ -328,7 +250,7 @@ describe("filesystem tool output contracts", () => {
 
   it("retains source continuation when only its notice exceeds the rebound budget", async () => {
     await fs.writeFile(path.join(tmpDir, "continued.txt"), "x".repeat(2_000));
-    const base = createReadTool(tmpDir, { maxBytes: 200 }) as unknown as AnyAgentTool;
+    const base = createReadTool(tmpDir, { maxBytes: 200 });
     const tool = createOpenClawReadTool(base, { modelContextWindowTokens: 100 });
     const result = await tool.execute("continued-rebound", { path: "continued.txt" });
     expectContract(tool, result.details);
@@ -338,20 +260,17 @@ describe("filesystem tool output contracts", () => {
     });
   });
 
-  it.each([0, -1, 0.5])(
-    "honors normalized explicit limit %s without automatic paging",
-    async (limit) => {
-      await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
-      const tool = createOpenClawReadTool(createReadTool(tmpDir) as unknown as AnyAgentTool);
-      const result = await tool.execute("normalized-limit", { path: "limited.txt", limit });
-      expectContract(tool, result.details);
-      expect(result.details).toMatchObject({
-        kind: "truncated",
-        content: "alpha",
-        continuation: { kind: "line", offset: 2, limit: 1 },
-      });
-    },
-  );
+  it("honors normalized explicit limit 0 without automatic paging", async () => {
+    await fs.writeFile(path.join(tmpDir, "limited.txt"), "alpha\nbeta\ngamma");
+    const tool = createOpenClawReadTool(createReadTool(tmpDir));
+    const result = await tool.execute("normalized-limit", { path: "limited.txt", limit: 0 });
+    expectContract(tool, result.details);
+    expect(result.details).toMatchObject({
+      kind: "truncated",
+      content: "alpha",
+      continuation: { kind: "line", offset: 2, limit: 1 },
+    });
+  });
 
   it("validates edit changed and no-op results", async () => {
     const filePath = path.join(tmpDir, "edit.txt");

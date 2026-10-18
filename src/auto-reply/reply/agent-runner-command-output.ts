@@ -1,15 +1,12 @@
 import { asFiniteNumber as readFiniteNumberValue } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecordValue } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
+import { stripOpenClawMcpToolPrefix } from "../../agents/cli-runner/tool-policy.js";
 import type { EmbeddedAgentEvent } from "../../agents/embedded-agent-subscribe.shared-types.js";
-import { inferToolMetaFromArgsCore } from "../../agents/tool-display.js";
+import { inferToolMetaFromArgsCore, isShellToolDisplayName } from "../../agents/tool-display.js";
 import type { GetReplyOptions } from "../types.js";
 
-/**
- * CLI backends report a tool result as its raw content: a string, or the text
- * blocks the harness streamed. Structured runners send a record instead, so the
- * command projection has to read both or every CLI command result is dropped.
- */
+/** CLI outcomes use raw strings/text blocks; structured runners supply records. */
 function readToolResultText(value: unknown): string | undefined {
   const direct = readStringValue(value);
   if (direct !== undefined) {
@@ -26,19 +23,6 @@ function readToolResultText(value: unknown): string | undefined {
   return text || undefined;
 }
 
-function readNullableNumberValue(value: unknown): number | null | undefined {
-  if (value === null) {
-    return null;
-  }
-  return readFiniteNumberValue(value);
-}
-
-function isCommandToolName(name: string | undefined): boolean {
-  const normalized = name?.trim().toLowerCase();
-  return normalized === "exec" || normalized === "bash" || normalized === "shell";
-}
-
-/** Projects a completed command-tool event into the channel command-output contract. */
 export function buildCommandOutputFromToolResultEvent(
   evt: EmbeddedAgentEvent,
 ): Parameters<NonNullable<GetReplyOptions["onCommandOutput"]>>[0] | undefined {
@@ -47,7 +31,7 @@ export function buildCommandOutputFromToolResultEvent(
   }
   const name = evt.data.name;
   const commandBearing = evt.data.commandBearing === true;
-  if (!name || (!commandBearing && !isCommandToolName(name))) {
+  if (!name || (!commandBearing && !isShellToolDisplayName(name))) {
     return undefined;
   }
   const result = readRecordValue(evt.data.result);
@@ -59,9 +43,8 @@ export function buildCommandOutputFromToolResultEvent(
     readToolResultText(evt.data.result);
   const explicitStatus =
     evt.data.status ?? readStringValue(result?.status) ?? readStringValue(details?.status);
-  const exitCode = readNullableNumberValue(
-    result?.exitCode ?? details?.exitCode ?? evt.data.exitCode,
-  );
+  const rawExitCode = result?.exitCode ?? details?.exitCode ?? evt.data.exitCode;
+  const exitCode = rawExitCode === null ? null : readFiniteNumberValue(rawExitCode);
   const durationMs = readFiniteNumberValue(
     result?.durationMs ?? details?.durationMs ?? evt.data.durationMs,
   );
@@ -88,7 +71,9 @@ export function buildCommandOutputFromToolResultEvent(
   const args = evt.data.args;
   const title =
     evt.data.title ??
-    (args ? inferToolMetaFromArgsCore(name, args, { detailMode: "explain" }) : undefined);
+    (args
+      ? inferToolMetaFromArgsCore(stripOpenClawMcpToolPrefix(name), args, { detailMode: "explain" })
+      : undefined);
   return {
     itemId: evt.data.itemId,
     phase: "end",

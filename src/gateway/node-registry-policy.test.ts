@@ -89,6 +89,7 @@ function createFixture(
 
 function readCommandState(node: NodeSession, config: OpenClawConfig, command: string) {
   return resolveRequiredNodeCommandAuthority({
+    nodeId: node.nodeId,
     requiredCommands: [command],
     declaredCommands: node.declaredCommands,
     effectiveCommands: node.commands,
@@ -270,7 +271,7 @@ describe("connected node runtime policy", () => {
         /not pending|not authorized|unavailable/,
       );
       expect(await result).toMatchObject({ ok: false, error: { code: "POLICY_CHANGED" } });
-      expect(socket.send).toHaveBeenCalledWith(
+      expect(socket.send.mock.calls.map(([frame]) => String(frame))).toContainEqual(
         expect.stringContaining('"event":"node.invoke.cancel"'),
       );
       expect(

@@ -1,44 +1,37 @@
 import type { Socket } from "node:net";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
+import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  emitTrustedDiagnosticEvent,
+  type DiagnosticEventInput,
+} from "../../infra/diagnostic-events.js";
+import type {
+  GatewayWsPresenceMode,
+  GatewayWsSessionEventAttribution,
+} from "../../infra/diagnostic-rpc-types.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { GATEWAY_EVENTS } from "../events.js";
 
 const LOG_HEADER_MAX_LEN = 300;
-const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
-
-function replaceControlChars(value: string): string {
-  let cleaned = "";
-  for (const char of value) {
-    const codePoint = char.codePointAt(0);
-    if (
-      codePoint !== undefined &&
-      (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-    ) {
-      cleaned += " ";
-      continue;
-    }
-    cleaned += char;
-  }
-  return cleaned;
-}
 
 export function stringMetaValue(meta: Record<string, unknown>, key: string): string | undefined {
-  const value = meta[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+  return readNonBlankString(meta[key]);
 }
 
 export function sanitizeWsLogValue(value: string | undefined): string | undefined {
   if (!value) {
     return undefined;
   }
-  const cleaned = replaceControlChars(value)
-    .replace(LOG_HEADER_FORMAT_REGEX, " ")
+  const cleaned = value
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
   if (!cleaned) {
     return undefined;
-  }
-  if (cleaned.length <= LOG_HEADER_MAX_LEN) {
-    return cleaned;
   }
   return truncateUtf16Safe(cleaned, LOG_HEADER_MAX_LEN);
 }
@@ -83,13 +76,62 @@ export function resolveSocketAddress(socket: WebSocket): {
 }
 
 export function isWsPayloadLimitError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  const code = (err as { code?: unknown }).code;
-  if (code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
+  const error = asOptionalObjectRecord(err);
+  if (error?.code === "WS_ERR_UNSUPPORTED_MESSAGE_LENGTH") {
     return true;
   }
-  const message = (err as { message?: unknown }).message;
+  const message = error?.message;
   return typeof message === "string" && /max payload size exceeded/i.test(message);
+}
+
+const gatewayEventNames = new Set(GATEWAY_EVENTS);
+type EventTraffic = Extract<DiagnosticEventInput, { type: "gateway.ws.event" }>;
+let pendingEventTraffic: Map<string, EventTraffic> | undefined;
+
+export function recordGatewayWsEvent(
+  event: string,
+  bytes: number,
+  sessionEvent?: GatewayWsSessionEventAttribution,
+  presenceMode?: GatewayWsPresenceMode,
+): void {
+  if (
+    !areDiagnosticsEnabledForProcess() ||
+    !hasInternalDiagnosticEventInterest("gateway.ws.event", true)
+  ) {
+    return;
+  }
+  // Bound storage to the protocol catalog and publish once per event-loop turn,
+  // so fanout counts every socket without queueing a diagnostic per frame.
+  const name = gatewayEventNames.has(event) ? event : "other";
+  if (!pendingEventTraffic) {
+    pendingEventTraffic = new Map();
+    runInDetachedAsyncContext(() =>
+      setImmediate(() => {
+        const batch = pendingEventTraffic!;
+        pendingEventTraffic = undefined;
+        for (const observation of batch.values()) {
+          emitTrustedDiagnosticEvent(observation);
+        }
+      }).unref(),
+    );
+  }
+  const key = sessionEvent
+    ? `${name}:${sessionEvent.reason}:${sessionEvent.delivery}`
+    : presenceMode
+      ? `${name}:${presenceMode}`
+      : name;
+  const observation = pendingEventTraffic.get(key);
+  if (observation) {
+    observation.count++;
+    observation.bytes += bytes;
+  } else {
+    pendingEventTraffic.set(key, {
+      type: "gateway.ws.event",
+      event: name,
+      count: 1,
+      bytes,
+      ...(sessionEvent ? { sessionEvent } : {}),
+      ...(presenceMode ? { presenceMode } : {}),
+    });
+  }
 }

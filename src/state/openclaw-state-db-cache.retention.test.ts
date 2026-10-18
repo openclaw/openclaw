@@ -1,20 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it("releases closed shared database wrappers after path and global retirement", () => {
   const stateDir = tempDirs.make("openclaw-state-retention-");
-  const moduleUrl = new URL("./openclaw-state-db.ts", import.meta.url).href;
-  const cacheModuleUrl = new URL("./openclaw-state-db-cache.ts", import.meta.url).href;
+  const moduleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabase);
+  const cacheModuleUrl = resolveRuntimeWorkerUrl(stateNativeProcessEntrypoints.stateDatabaseCache);
   const script = `
     import assert from "node:assert/strict";
     import {
       closeOpenClawStateDatabase,
       openOpenClawStateDatabase,
-    } from ${JSON.stringify(moduleUrl)};
-    import { closeOpenClawStateDatabaseByPath } from ${JSON.stringify(cacheModuleUrl)};
+    } from ${JSON.stringify(moduleUrl.href)};
+    import { closeOpenClawStateDatabaseByPath } from ${JSON.stringify(cacheModuleUrl.href)};
 
     const control = new WeakRef({ uncached: true });
     function retire(byPath) {
@@ -49,8 +51,7 @@ it("releases closed shared database wrappers after path and global retirement", 
     [
       "--disable-warning=ExperimentalWarning",
       "--expose-gc",
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(moduleUrl).slice(0, -1),
       "--input-type=module",
       "--eval",
       script,

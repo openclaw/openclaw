@@ -133,7 +133,8 @@ command source or automatic reset reason.
 
 The hook captures the departing conversation before a reset closes its active
 window, then writes the snapshot in the background. Capture is bounded to
-4,096 scanned messages and 8 MiB.
+4,096 scanned messages and 8 MiB. Incognito sessions do not create memory
+artifacts, including on manual or automatic reset.
 Manual resets do not await the file write or optional slug-model call; automatic
 reset dispatch also runs independently of the successor turn. Wait for
 `Session context saved to ...` in logs before expecting the file.

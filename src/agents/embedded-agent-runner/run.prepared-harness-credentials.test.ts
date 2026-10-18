@@ -20,7 +20,11 @@ describe("prepared plugin harness credentials", () => {
   >["registerPreparedAgentHarness"];
   beforeAll(async () => {
     const loaded = await loadRunOverflowCompactionHarness();
-    runEmbeddedAgent = loaded.runEmbeddedAgent;
+    const { setRuntimeConfigSnapshot } = await import("../../config/runtime-snapshot.js");
+    runEmbeddedAgent = (params) => {
+      setRuntimeConfigSnapshot(params.config ?? {});
+      return loaded.runEmbeddedAgent(params);
+    };
     registerPreparedAgentHarness = loaded.registerPreparedAgentHarness;
     const modelAuth = await import("../model-auth.js");
     const actual = await vi.importActual<typeof modelAuth>("../model-auth.js");

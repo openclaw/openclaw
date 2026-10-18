@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, vi } from "vitest";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
+import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import {
   createControlledWorkerCompiler,
   createWorkerArtifactTest,
@@ -12,9 +13,35 @@ import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
+const generationDirectory = (url: string) => fileURLToPath(new URL("../../", url));
+
 // Each sequence owns its cache and two generations; keep their observations ordered.
-// Full SQLite/archive/TUI/setup/KNN execution stays in worker-artifacts source/borrower tests.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
+  it("keeps one lifetime identity when the fixture compiler runs twice in one process", ({
+    workerArtifacts,
+  }) =>
+    workerArtifacts.fixtureLifetime.run(async () => {
+      const { runtime } = workerArtifacts.createFixtureCommands();
+      const directory = workerArtifacts.fixtureDirectory();
+      const controlled = createControlledWorkerCompiler(directory, testRunnerFixtureEnv());
+      const [compiler, first, input, receipt] = controlled.args(path.join(directory, "first"));
+      const result = await runtime([
+        "--input-type=module",
+        "--eval",
+        `import {runWorkerFixtureCompiler} from ${JSON.stringify(pathToFileURL(compiler!).href)};
+        await runWorkerFixtureCompiler(${JSON.stringify(first)}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});
+        await runWorkerFixtureCompiler(${JSON.stringify(path.join(directory, "second"))}, ${JSON.stringify(input)}, ${JSON.stringify(receipt)});`,
+      ]);
+      expect(result.code, result.stderr + result.stdout).toBe(0);
+      const compilers = controlled.read();
+      expect(compilers).toHaveLength(2);
+      expect(compilers[0]!.processStartTime).toBeGreaterThan(0);
+      expect(compilers[1]).toMatchObject({
+        pid: compilers[0]!.pid,
+        processStartTime: compilers[0]!.processStartTime,
+      });
+    }));
+
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
     ({ layout }, { workerArtifacts }) =>
@@ -25,16 +52,19 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           directory,
           layout,
         );
+        const projectNames = layout === "projects" ? ["first", "second"] : ["first"];
+        const projectCount = projectNames.length;
         const controlled = createControlledWorkerCompiler(
           directory,
-          process.env,
+          testRunnerFixtureEnv(),
           process.versions.bun ? "bun" : "node",
         );
         const readLines = (name: string) =>
           fs.readFileSync(path.join(directory, name), "utf8").trim().split("\n");
+        const readJsonLines = (name: string) => readLines(name).map((line) => JSON.parse(line));
         const counts = () => {
-          const transformed = readLines("transforms.jsonl").map((line) =>
-            path.normalize(JSON.parse(line)),
+          const transformed = readJsonLines("transforms.jsonl").map((file: string) =>
+            path.normalize(file),
           );
           return [[value, configuredValue], [parent]].map(
             (ids) => transformed.filter((actual) => ids.includes(actual)).length,
@@ -61,10 +91,18 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
         try {
           const launch = async (
             mode: "compiled" | "source",
+            transforms: number[],
             expectedValue = "first",
-            configValue = "first",
           ) => {
-            const args = ["run", "--config", config, "--project", "first"];
+            const args = [
+              "run",
+              "--config",
+              config,
+              ...projectNames.flatMap((name) => ["--project", name]),
+            ];
+            const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
+              ? readLines("observations.jsonl").length
+              : 0;
             const reuse = mode === "compiled" && generations.size > 0;
             const result = reuse
               ? await startBorrower(owner, args).result
@@ -81,54 +119,48 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                   controlled.env,
                 );
             expect(result.code, result.stderr + result.stdout).toBe(0);
-            const generation: string = JSON.parse(readLines("generations.jsonl").at(-1)!);
-            const observed = JSON.parse(readLines("observations.jsonl").at(-1)!);
-            expect(observed.value).toBe(expectedValue);
-            expect(observed.configValue).toBe(configValue);
+            const currentGenerations: string[] =
+              readJsonLines("generations.jsonl").slice(previousObservations);
+            const observed = readJsonLines("observations.jsonl").slice(previousObservations);
+            expect(observed).toEqual(
+              projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
+            );
+            expect(currentGenerations).toHaveLength(projectCount);
+            expect(new Set(currentGenerations).size).toBe(1);
+            const generation = currentGenerations[0]!;
             if (mode === "compiled") {
-              const generationDirectory = fileURLToPath(new URL("../../", generation));
+              const dir = generationDirectory(generation);
               if (reuse) {
                 expect(result.stderr).not.toContain("[vitest-workers] prepared");
-                expect(path.resolve(generationDirectory)).toBe(owner.descriptor.directory);
+                expect(path.resolve(dir)).toBe(owner.descriptor.directory);
               } else {
                 expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
               }
               generations.add(generation);
-              expect(path.dirname(generationDirectory)).toBe(
-                path.join(root, ".artifacts", "vitest-workers"),
-              );
+              expect(path.dirname(dir)).toBe(path.join(root, ".artifacts", "vitest-workers"));
               expect(fileURLToPath(generation)).toBe(
-                path.join(generationDirectory, "dist/infra/runtime-process-entrypoints.js"),
+                path.join(dir, "dist/infra/runtime-process-entrypoints.js"),
               );
-              // The direct invocation disposes immediately; shared borrowers retain
-              // their owner's unchanged generation until the whole sequence finishes.
-              expect(fs.existsSync(generationDirectory)).toBe(reuse);
+              expect(fs.existsSync(dir)).toBe(reuse);
             } else {
               expect(result.stderr).not.toContain("[vitest-workers] prepared");
               expect(fileURLToPath(generation)).toBe(
                 path.join(root, "src/infra/runtime-process-entrypoints.ts"),
               );
             }
-            console.log(
-              "cache transport",
-              JSON.stringify({ mode, ...observed, generation, transforms: counts() }),
+            expect(counts(), "filesystem transform reuse").toEqual(
+              transforms.map((count) => count * projectCount),
             );
           };
-          await launch("compiled");
-          expect(counts()).toEqual([1, 1]);
+          await launch("compiled", [1, 1]);
           expect(
             JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
           ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
-          await launch("compiled");
+          await launch("compiled", [1, 1]);
           expect(generations.size).toBe(2);
-          expect(counts(), "unchanged parents must reuse filesystem transforms").toEqual([1, 1]);
-          await launch("source");
-          expect(counts()).toEqual([2, 2]);
-          // Switching back with a leaf edit also proves the unchanged parent reuses
-          // its compiled transform, without preparing another complete worker set.
+          await launch("source", [2, 2]);
           fs.writeFileSync(value, 'export const value: string = "second";');
-          await launch("compiled", "second");
-          expect(counts()).toEqual([3, 2]);
+          await launch("compiled", [3, 2], "second");
           fs.writeFileSync(
             config,
             fs
@@ -138,8 +170,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                 `replacement:${JSON.stringify(configuredValue)}`,
               ),
           );
-          await launch("compiled", "configured");
-          expect(counts()).toEqual([4, 3]);
+          await launch("compiled", [4, 3], "configured");
           expect(generations.size).toBe(2);
           expect(
             preparationLog.mock.calls.filter(([line]) =>
@@ -149,18 +180,22 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
           const compilers = controlled.read();
           expect(redirectedCompilers).toBe(1);
           expect(compilers).toHaveLength(2);
-          expect(new Set(compilers.map(({ pid }) => pid)).size).toBe(2);
-          expect(new Set(compilers.map(({ directory }) => path.resolve(directory)))).toEqual(
-            new Set(
-              [...generations].map((generation) =>
-                path.resolve(fileURLToPath(new URL("../../", generation))),
-              ),
-            ),
-          );
+          // Windows can recycle a PID after exit; process start distinguishes its next owner.
+          expect(
+            new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
+              .size,
+          ).toBe(2);
+          expect(
+            new Set(compilers.map(({ directory: generation }) => path.resolve(generation))),
+          ).toEqual(new Set([...generations].map((url) => path.resolve(generationDirectory(url)))));
           for (const compiler of compilers) {
-            expect(compiler).toMatchObject({ inputs: 2, outputs: 2 });
+            expect(compiler).toMatchObject({
+              inputs: 3,
+              outputs: 3,
+              processStartTime: expect.any(Number),
+              isMainThread: true,
+            });
           }
-          console.log("Controlled compiler receipts", JSON.stringify(compilers));
         } finally {
           try {
             await owner.dispose();

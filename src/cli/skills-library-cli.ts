@@ -1,3 +1,4 @@
+import { lstat } from "node:fs/promises";
 import { Option, type Command } from "commander";
 import type {
   SkillsLibraryActivateResult,
@@ -31,9 +32,7 @@ type LibraryOptions = GatewayRpcOpts & {
 function rpcOptions(command: Command): GatewayRpcOpts {
   const opts = command.opts<GatewayRpcOpts>();
   const value = <K extends keyof GatewayRpcOpts>(name: K): GatewayRpcOpts[K] =>
-    command.getOptionValueSource(name) !== "default" && opts[name] !== undefined
-      ? opts[name]
-      : (inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name]);
+    inheritOptionFromParent<GatewayRpcOpts[K]>(command, name) ?? opts[name];
   return {
     url: value("url"),
     port: value("port"),
@@ -47,6 +46,14 @@ function rpcOptions(command: Command): GatewayRpcOpts {
 
 function receiptText(receipt: SkillsLibraryReceipt): string {
   return `${receipt.state}: ${receipt.entry.slug} (${receipt.target}, owner ${receipt.entry.ownerLabel})\nSkill ID: ${receipt.entry.skillId}\nRevision: ${receipt.entry.revision}\n${receipt.nextAction}\n`;
+}
+
+async function saveLocalLibrarySkill(input: string, slug: string, rpc: GatewayRpcOpts) {
+  return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
+    slug,
+    expectedRevision: null,
+    ...(await readLibraryInput(input)),
+  });
 }
 
 export function registerSkillsLibraryCli(skills: Command): void {
@@ -171,16 +178,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
     .argument("<path>", "Local SKILL.md or skill directory")
     .requiredOption("--slug <slug>", "Library name (lowercase letters, digits, hyphens)")
     .action((input: string, opts: LibraryOptions & { slug: string }, command: Command) =>
-      execute(
-        command,
-        async (rpc) =>
-          callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(input)),
-          }),
-        receiptText,
-      ),
+      execute(command, (rpc) => saveLocalLibrarySkill(input, opts.slug, rpc), receiptText),
     );
 
   leaf(
@@ -253,14 +251,10 @@ export function registerSkillsLibraryCli(skills: Command): void {
               },
             );
           }
-          if (source.toLowerCase().endsWith(".zip")) {
+          if (source.toLowerCase().endsWith(".zip") && !(await lstat(source)).isDirectory()) {
             return uploadLibraryZip(source, opts.slug, rpc);
           }
-          return callGatewayFromCliWithTransport<SkillsLibraryReceipt>("skills.library.save", rpc, {
-            slug: opts.slug,
-            expectedRevision: null,
-            ...(await readLibraryInput(source)),
-          });
+          return saveLocalLibrarySkill(source, opts.slug, rpc);
         },
         receiptText,
       ),

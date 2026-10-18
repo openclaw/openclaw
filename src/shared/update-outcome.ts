@@ -1,3 +1,4 @@
+import type { UpdateRecovery } from "../infra/update-recovery.js";
 import type { NodeVersionManager } from "./version-manager-path.js";
 
 export type UpdateRecoveryStep =
@@ -77,6 +78,7 @@ export const UPDATE_FOREIGN_DESTINATION_REASON = "global-install-foreign-destina
 export const UPDATE_GLOBAL_PERMISSION_REASON = "global-install-permission-denied";
 export const UPDATE_ENVIRONMENT_FAILURE_REASONS: ReadonlySet<string> = new Set([
   "node-runtime-preflight",
+  "source-artifact-ownership",
   UPDATE_GLOBAL_PERMISSION_REASON,
   UPDATE_FOREIGN_DESTINATION_REASON,
 ]);
@@ -130,6 +132,15 @@ export function classifyUpdateOutcome(outcome: {
   return outcome.reason !== undefined && Object.hasOwn(SKIPPED_UPDATE_OUTCOMES, outcome.reason)
     ? SKIPPED_UPDATE_OUTCOMES[outcome.reason]
     : "failed";
+}
+
+/** The restored package and its running service have both passed verification. */
+export function isVerifiedUpdateRollback(result: { recovery?: UpdateRecovery }): boolean {
+  return (
+    result.recovery?.serviceRestartSafe === true &&
+    result.recovery.packageRollbackVerified === true &&
+    result.recovery.service === "healthy"
+  );
 }
 
 /** Ledger refusals can be failed attempts even when no update work started. */

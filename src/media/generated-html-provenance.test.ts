@@ -1,0 +1,295 @@
+import fs, { lstat as mediaLstat, realpath as mediaRealpath } from "node:fs/promises";
+import path from "node:path";
+import { deserialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement as awaitGate,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { stageGatewayWorkspaceMedia } from "../infra/outbound/message-action-gateway-media.js";
+import * as brokerReply from "../infra/sqlite-worker-broker-reply.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { StateDatabaseReadAdmissionInvalidatedError as ReadRevoked } from "../state/openclaw-state-db-async-lifecycle.js";
+import * as stateRead from "../state/openclaw-state-db-readonly.js";
+import * as stateWorker from "../state/openclaw-state-worker-store.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { HostReadMediaTypeError } from "./local-media-access.js";
+import { cleanOldMedia, pruneOutboundMedia, saveMediaBuffer } from "./store.js";
+import {
+  loadWebMedia,
+  markTrustedGeneratedHtmlPath as markHtml,
+  pruneStaleTrustedGeneratedHtmlMarkers as pruneMarkers,
+} from "./web-media.js";
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, lstat: vi.fn(actual.lstat), realpath: vi.fn(actual.realpath) };
+});
+
+const html = Buffer.from("<!doctype html><title>Report</title><h1>Original</h1>");
+const replacement = Buffer.from("<!doctype html><title>Report</title><h1>Replaced</h1>");
+async function whilePaused(
+  signal: AbortSignal,
+  install: (pause: () => Promise<void>) => { mockRestore(): void },
+  start: () => Promise<unknown>,
+  change: () => Promise<void>,
+) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const intercept = install(async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  const operation = start();
+  try {
+    await withinTest(awaitGate(entered.promise, operation, "Skipped filesystem admission"), signal);
+    await change();
+    release.resolve();
+    await operation;
+  } finally {
+    release.resolve();
+    await Promise.allSettled([operation]);
+    intercept.mockRestore();
+  }
+}
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    vi.restoreAllMocks();
+    vi.mocked(mediaLstat).mockReset();
+    vi.mocked(mediaRealpath).mockReset();
+    await closeStateDatabaseForTest();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
+
+describe("generated HTML provenance worker boundary", () => {
+  let stateDir: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    stateDir = tempDirs.make("html-provenance-state-");
+    workspace = tempDirs.make("html-provenance-workspace-", resolvePreferredOpenClawTmpDir());
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  });
+
+  const readHtml = (file: string) =>
+    loadWebMedia(file, {
+      localRoots: [stateDir],
+      readFile: (source) => fs.readFile(source),
+      hostReadCapability: true,
+    });
+
+  async function stageHtml(operation?: "upsert" | "prune") {
+    const source = path.join(workspace, "report.html");
+    await fs.writeFile(source, html);
+    const access = { localRoots: [workspace], readFile: (file: string) => fs.readFile(file) };
+    const result = await stageGatewayWorkspaceMedia({
+      cfg: {},
+      channel: "discord",
+      payload: { text: "Report", mediaUrl: source },
+      mediaUrls: [source],
+      mediaAccess: access,
+      workspaceMediaAccess: access,
+    });
+    expect(result.mediaUrl).toBeDefined();
+    expect(result.mediaUrl).not.toBe(source);
+    if (operation === "prune") {
+      await fs.rm(result.mediaUrl!);
+    }
+    return result.mediaUrl!;
+  }
+
+  const writeMarker = (operation: "upsert" | "prune", staged: string) =>
+    operation === "upsert" ? markHtml(staged, replacement) : pruneMarkers();
+
+  it("stages, reloads, and prunes through both media entry points without caller SQL", async () => {
+    const sql = observeMainThreadSql();
+    try {
+      sql.calibrate();
+      for (const prune of [
+        () => cleanOldMedia(undefined, { recursive: true }),
+        pruneOutboundMedia,
+      ]) {
+        const staged = await stageHtml();
+        expect(await readHtml(staged)).toMatchObject({
+          buffer: html,
+          contentType: "text/html",
+          trustedGeneratedHtmlSource: true,
+        });
+        await fs.utimes(staged, new Date(0), new Date(0));
+        await prune();
+        await expect(fs.stat(staged)).rejects.toMatchObject({ code: "ENOENT" });
+        await fs.mkdir(path.dirname(staged), { recursive: true });
+        await fs.writeFile(staged, html);
+        await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
+      }
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+  });
+
+  it("fails closed when worker lookup is refused", async () => {
+    const staged = await stageHtml();
+    const refusal = new ReadRevoked("Reader authority revoked");
+    const read = vi
+      .spyOn(stateRead, "executeExistingOpenClawStateRead")
+      .mockRejectedValueOnce(refusal);
+    await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
+    expect(read).toHaveBeenCalledTimes(1);
+    read.mockRestore();
+    expect((await readHtml(staged)).buffer).toEqual(html);
+  });
+
+  it.each([
+    { operation: "upsert", stage: "transaction" },
+    { operation: "upsert", stage: "commit" },
+    { operation: "prune", stage: "transaction" },
+    { operation: "prune", stage: "commit" },
+  ] as const)(
+    "rolls back $operation at $stage and retains the refusal identity",
+    async ({ operation, stage }) => {
+      const staged = await stageHtml(operation);
+      const refusal = new ReadRevoked("Writer authority revoked");
+      const requests: string[] = [];
+      const interception = probe.admission(workerAdmission, (request, grant, admit) => {
+        requests.push(request.stage);
+        if (request.stage === stage) {
+          throw refusal;
+        }
+        admit(request, grant);
+      });
+      const writing = writeMarker(operation, staged);
+      await expect(writing).rejects.toBe(refusal);
+      expect(requests).toContain(stage);
+      interception.mockRestore();
+      if (operation === "prune") {
+        await fs.writeFile(staged, html);
+      }
+      expect((await readHtml(staged)).buffer).toEqual(html);
+    },
+  );
+
+  it("recovers committed upsert and cleanup receipts when ordinary replies are lost", async () => {
+    const dispatch = brokerReply.dispatchSqliteWorkerJob;
+    const receive = brokerReply.receiveSqliteWorkerReply;
+    const commandTypes = new WeakMap<object, string>();
+    const corrupted: string[] = [];
+    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
+      if (job.request.type === "execute") {
+        const command: unknown = deserialize(job.request.input);
+        if (isRecord(command) && typeof command.type === "string") {
+          commandTypes.set(job.request, command.type);
+        }
+      }
+      return dispatch(slot, job, onRejected);
+    });
+    vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
+      if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
+        const commandType = commandTypes.get(slot.current.request);
+        if (
+          commandType === "generatedHtmlProvenance.upsert" ||
+          commandType === "generatedHtmlProvenance.prune"
+        ) {
+          corrupted.push(commandType);
+          return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
+        }
+      }
+      return receive(slot, reply, owner);
+    });
+    const staged = await stageHtml();
+    expect((await readHtml(staged)).buffer).toEqual(html);
+    await fs.rm(staged);
+    await pruneMarkers();
+    await fs.writeFile(staged, html);
+    await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
+    expect(corrupted).toEqual(["generatedHtmlProvenance.upsert", "generatedHtmlProvenance.prune"]);
+  });
+
+  it.each(["upsert", "prune"] as const)(
+    "does not replay an unknown %s outcome",
+    async (operation) => {
+      const staged = await stageHtml(operation);
+      const failure = new SqliteWorkerError("Native outcome is unknown", "outcome-unknown");
+      const run = vi
+        .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+        .mockRejectedValueOnce(failure);
+      const writing = writeMarker(operation, staged);
+      await expect(writing).rejects.toBe(failure);
+      expect(run).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("pins the marker store and bytes before filesystem work yields", async (test) => {
+    const saved = await saveMediaBuffer(html, "text/html", "outbound", 1024, "report.html");
+    const realpath = fs.realpath;
+    const contents = Buffer.from(html);
+    await whilePaused(
+      test.signal,
+      (pause) =>
+        vi.mocked(mediaRealpath).mockImplementationOnce(async (...args) => {
+          await pause();
+          return realpath(...args);
+        }),
+      () => markHtml(saved.path, contents),
+      async () => {
+        vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("html-provenance-other-"));
+        replacement.copy(contents);
+      },
+    );
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    expect((await readHtml(saved.path)).buffer).toEqual(html);
+  });
+
+  it.for(["newer marker", "state routing"] as const)(
+    "pins prune identity while %s changes during file inspection",
+    async (change, test) => {
+      const staged = await stageHtml("prune");
+      const otherStateDir = tempDirs.make("html-provenance-cleanup-other-");
+      const lstat = fs.lstat;
+      await whilePaused(
+        test.signal,
+        (pause) => {
+          const intercept = vi.mocked(mediaLstat).mockImplementation(async (...args) => {
+            if (String(args[0]) === staged) {
+              intercept.mockRestore();
+              await pause();
+              if (change === "newer marker") {
+                throw Object.assign(new Error("Stale file was absent"), { code: "ENOENT" });
+              }
+            }
+            return lstat(...args);
+          });
+          return intercept;
+        },
+        pruneMarkers,
+        async () => {
+          if (change === "newer marker") {
+            await fs.writeFile(staged, replacement);
+            await markHtml(staged, replacement);
+          } else {
+            vi.stubEnv("OPENCLAW_STATE_DIR", otherStateDir);
+          }
+        },
+      );
+      if (change === "newer marker") {
+        expect((await readHtml(staged)).buffer).toEqual(replacement);
+      } else {
+        vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+        await fs.writeFile(staged, html);
+        await expect(readHtml(staged)).rejects.toBeInstanceOf(HostReadMediaTypeError);
+        await expect(
+          fs.stat(path.join(otherStateDir, "state", "openclaw.sqlite")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+      }
+    },
+  );
+});

@@ -14,6 +14,7 @@ const BUNDLED_PROVIDER_COMPAT_CONTRACT_KEYS = [
   "webFetchProviders",
   "webSearchProviders",
   "workerProviders",
+  "storageProviders",
   "usageProviders",
   "migrationProviders",
 ] as const satisfies readonly PluginManifestContractListKey[];

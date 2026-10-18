@@ -9,10 +9,7 @@ import {
   fetchWithSsrFGuard,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import {
-  reserveMSTeamsQaWebhookPort,
-  startMSTeamsQaBotFrameworkServer,
-} from "./bot-framework-server.js";
+import { startMSTeamsQaBotFrameworkServer } from "./bot-framework-server.js";
 
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type FactoryContext = Parameters<AdapterFactory["create"]>[0];
@@ -58,7 +55,7 @@ function createMSTeamsQaBotToken() {
   const encode = (value: Record<string, unknown>) =>
     Buffer.from(JSON.stringify(value)).toString("base64url");
   // Teams SDK decodes custom tokens before attaching them to Connector requests.
-  // This unsigned value is accepted only by the nonce-protected loopback server.
+  // The private QA Gateway and nonce-protected Connector require this per-run value.
   return [
     encode({ alg: "none", typ: "JWT" }),
     encode({ appid: APP_ID, jti: randomUUID(), tid: TENANT_ID }),
@@ -84,7 +81,13 @@ async function waitForMSTeamsChannelReady(
     const accounts = payload.channelAccounts?.msteams ?? [];
     lastAccounts = accounts;
     const account = accounts.find((entry) => entry.accountId === DEFAULT_ACCOUNT_ID);
-    if (account?.running === true && account.restartPending !== true) {
+    // Gateway task admission sets running before the Teams monitor registers its route.
+    if (
+      account?.running === true &&
+      account.lifecycle === "ready" &&
+      account.connected === true &&
+      account.restartPending !== true
+    ) {
       return;
     }
     await sleep(pollIntervalMs);
@@ -96,7 +99,7 @@ export async function createMSTeamsQaTransportAdapter(
   context: FactoryContext,
 ): Promise<AdapterDefinition> {
   const accountId = context.adapterOptions?.sutAccountId?.trim() || DEFAULT_ACCOUNT_ID;
-  const webhookPort = await reserveMSTeamsQaWebhookPort();
+  let webhookUrl: string | undefined;
   const nonce = randomUUID();
   const botToken = createMSTeamsQaBotToken();
   const bootstrapPath = path.join(context.outputDir, ".msteams-private-qa-bootstrap.mjs");
@@ -189,17 +192,23 @@ export async function createMSTeamsQaTransportAdapter(
         ...(input.replyToId ? { replyToId: input.replyToId } : {}),
         channelData: {
           tenant: { id: TENANT_ID },
-          team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
-          channel: { id: conversationId },
+          ...(input.conversation.kind === "channel"
+            ? {
+                team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
+                channel: { id: conversationId },
+              }
+            : {}),
         },
       };
-      const webhookUrl = `http://127.0.0.1:${webhookPort}/api/messages`;
+      if (!webhookUrl) {
+        throw new Error("Microsoft Teams QA Gateway URL has not been configured");
+      }
       const { response, release } = await fetchWithSsrFGuard({
         url: webhookUrl,
         init: {
           method: "POST",
           headers: {
-            authorization: "Bearer private-qa",
+            authorization: `Bearer ${botToken}`,
             "content-type": "application/json",
           },
           body: JSON.stringify(activity),
@@ -231,8 +240,8 @@ export async function createMSTeamsQaTransportAdapter(
       conversationKindByNativeId.clear();
       logicalConversationByNativeId.clear();
     },
-    createGatewayConfig: () =>
-      ({
+    createGatewayConfig: () => {
+      return {
         channels: {
           msteams: {
             enabled: true,
@@ -244,10 +253,12 @@ export async function createMSTeamsQaTransportAdapter(
             groupPolicy: "open",
             requireMention: requireGroupMention,
             replyStyle: "thread",
-            webhook: { port: webhookPort, path: "/api/messages" },
+            webhook: { path: "/api/messages" },
+            legacyWebhook: false,
           },
         },
-      }) as Pick<OpenClawConfig, "channels" | "messages">,
+      } satisfies Pick<OpenClawConfig, "channels" | "messages">;
+    },
     createRuntimeEnvPatch: () => ({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       NODE_OPTIONS: [process.env.NODE_OPTIONS?.trim(), `--import=${bootstrapUrl}`]
@@ -255,8 +266,12 @@ export async function createMSTeamsQaTransportAdapter(
         .join(" "),
     }),
     createRuntimePreloads: () => [bootstrapUrl],
-    waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
-      await waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
+    prepareFlow: async ({ gateway }) => {
+      // createGatewayConfig receives the Lab origin; flow preparation owns the actual Gateway URL.
+      webhookUrl = new URL("/api/messages", gateway.baseUrl).toString();
+    },
+    waitReady: ({ gateway, timeoutMs, pollIntervalMs }) =>
+      waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({
       channel: "msteams",
       to: target,

@@ -1,21 +1,11 @@
-/**
- * Signal reactions via signal-cli JSON-RPC API
- */
-
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { resolveSignalAccount } from "./accounts.js";
-import { signalRpcRequest, type SignalTransportKind } from "./client-adapter.js";
+import { signalRpcRequest } from "./client-adapter.js";
 import { normalizeSignalReactionRecipient } from "./normalize.js";
 import { resolveSignalRpcContext } from "./rpc-context.js";
+import type { SignalRpcOpts } from "./send.js";
 
-export type SignalReactionOpts = {
-  cfg: OpenClawConfig;
-  baseUrl?: string;
-  transportKind?: SignalTransportKind;
-  account?: string;
-  accountId?: string;
-  timeoutMs?: number;
+export type SignalReactionOpts = SignalRpcOpts & {
   targetAuthor?: string;
   targetAuthorUuid?: string;
   groupId?: string;
@@ -93,13 +83,6 @@ async function sendReactionSignalCore(params: {
   };
 }
 
-/**
- * Send a Signal reaction to a message
- * @param recipient - UUID or E.164 phone number of the message author
- * @param targetTimestamp - Message ID (timestamp) to react to
- * @param emoji - Emoji to react with
- * @param opts - Optional account/connection overrides
- */
 export async function sendReactionSignal(
   recipient: string,
   targetTimestamp: number,
@@ -115,13 +98,6 @@ export async function sendReactionSignal(
   });
 }
 
-/**
- * Remove a Signal reaction from a message
- * @param recipient - UUID or E.164 phone number of the message author
- * @param targetTimestamp - Message ID (timestamp) to remove reaction from
- * @param emoji - Emoji to remove
- * @param opts - Optional account/connection overrides
- */
 export async function removeReactionSignal(
   recipient: string,
   targetTimestamp: number,

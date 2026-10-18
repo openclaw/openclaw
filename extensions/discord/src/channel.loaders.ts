@@ -21,7 +21,7 @@ export const loadDiscordProviderRuntime = createLazyRuntimeModule(
   () => import("./monitor/provider.runtime.js"),
 );
 
-export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.js"));
 
 export async function probeDiscordStatusAccount(params: {
   token: string;

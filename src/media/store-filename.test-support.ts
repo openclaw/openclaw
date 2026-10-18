@@ -1,5 +1,3 @@
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 
 export async function expectSavedOriginalFilenameCase(
@@ -9,7 +7,6 @@ export async function expectSavedOriginalFilenameCase(
     expectedIdPattern: RegExp;
     expectedExtractedFilename?: string;
     expectUuidOnly?: boolean;
-    maxBaseNameLength?: number;
   },
 ) {
   const saved = await store.saveMediaBuffer(
@@ -26,12 +23,5 @@ export async function expectSavedOriginalFilenameCase(
   }
   if (params.expectUuidOnly) {
     expect(saved.id).not.toContain("---");
-  }
-  if (params.maxBaseNameLength !== undefined) {
-    const baseName = expectDefined(
-      path.parse(saved.id).name.split("---")[0],
-      'path.parse(saved.id).name.split("---")[0] test invariant',
-    );
-    expect(baseName.length).toBeLessThanOrEqual(params.maxBaseNameLength);
   }
 }

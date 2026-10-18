@@ -1,14 +1,17 @@
 // Session target resolution chooses the effective channel, destination,
 // account, and thread from explicit input, turn source, or session history.
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { channelRouteTargetsShareConversation } from "../../plugin-sdk/channel-route.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import {
+  channelRoutesShareConversation,
+  normalizeChannelRouteTarget,
+  type ChannelRouteTargetInput,
+} from "../../plugin-sdk/channel-route.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
   isNormalizedMessageChannel,
   normalizeMessageChannel,
@@ -31,25 +34,9 @@ export type SessionDeliveryTarget = {
   lastThreadId?: string | number;
 };
 
-function resolveRouteTarget(params: {
-  channel: string;
-  accountId?: string;
-  rawTarget?: string | null;
-  fallbackThreadId?: string | number | null;
-}) {
-  const channel = normalizeLowercaseStringOrEmpty(params.channel);
-  const rawTo = normalizeOptionalString(params.rawTarget);
-  if (!channel || !rawTo) {
-    return null;
-  }
-  const threadId = normalizeOptionalThreadValue(params.fallbackThreadId);
-  return {
-    channel,
-    accountId: params.accountId,
-    rawTo,
-    to: rawTo,
-    ...(threadId != null ? { threadId } : {}),
-  };
+function resolveRouteTarget(params: ChannelRouteTargetInput) {
+  const route = normalizeChannelRouteTarget(params);
+  return route?.channel && route.target ? route : undefined;
 }
 
 /**
@@ -78,12 +65,7 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isNormalizedMessageChannel(context.channel) ? context.channel : undefined;
   const parsedSessionTarget = sessionLastChannel
-    ? resolveRouteTarget({
-        channel: sessionLastChannel,
-        accountId: context?.accountId,
-        rawTarget: context?.to,
-        fallbackThreadId: context?.threadId,
-      })
+    ? resolveRouteTarget({ ...context, channel: sessionLastChannel })
     : null;
 
   const hasTurnSourceChannel = params.turnSourceChannel != null;
@@ -92,32 +74,32 @@ export function resolveSessionDeliveryTarget(params: {
       ? resolveRouteTarget({
           channel: params.turnSourceChannel,
           accountId: params.turnSourceAccountId,
-          rawTarget: params.turnSourceTo,
-          fallbackThreadId: params.turnSourceThreadId,
+          to: params.turnSourceTo,
+          threadId: params.turnSourceThreadId,
         })
       : null;
-  const hasTurnSourceThreadId = parsedTurnSourceTarget?.threadId != null;
+  const hasTurnSourceThreadId = parsedTurnSourceTarget?.thread?.id != null;
   const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
   const lastTo = hasTurnSourceChannel
-    ? (parsedTurnSourceTarget?.to ?? params.turnSourceTo)
-    : (parsedSessionTarget?.to ?? context?.to);
+    ? (parsedTurnSourceTarget?.target?.to ?? params.turnSourceTo)
+    : (parsedSessionTarget?.target?.to ?? context?.to);
   const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
   const turnToMatchesSession =
     !params.turnSourceTo ||
     !context?.to ||
     (params.turnSourceChannel === sessionLastChannel &&
-      channelRouteTargetsShareConversation({
+      channelRoutesShareConversation({
         left: parsedTurnSourceTarget,
         right: parsedSessionTarget,
       }));
   // Shared sessions can receive cross-channel or cross-account updates mid-turn;
   // only inherit session threads from the same account-scoped conversation.
   const lastThreadId = hasTurnSourceThreadId
-    ? parsedTurnSourceTarget?.threadId
+    ? parsedTurnSourceTarget?.thread?.id
     : hasTurnSourceChannel &&
         (params.turnSourceChannel !== sessionLastChannel || !turnToMatchesSession)
       ? undefined
-      : parsedSessionTarget?.threadId;
+      : parsedSessionTarget?.thread?.id;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
@@ -128,13 +110,10 @@ export function resolveSessionDeliveryTarget(params: {
         ? requested
         : undefined;
 
-  const rawExplicitTo =
-    typeof params.explicitTo === "string" && params.explicitTo.trim()
-      ? params.explicitTo.trim()
-      : undefined;
+  const explicitTo = normalizeOptionalString(params.explicitTo);
 
   const explicitPrefixedChannel =
-    requestedChannel === "last" ? resolveTargetPrefixedChannel(rawExplicitTo) : undefined;
+    requestedChannel === "last" ? resolveTargetPrefixedChannel(explicitTo) : undefined;
   let channel =
     explicitPrefixedChannel && isNormalizedMessageChannel(explicitPrefixedChannel)
       ? explicitPrefixedChannel
@@ -145,27 +124,12 @@ export function resolveSessionDeliveryTarget(params: {
     channel = params.fallbackChannel;
   }
 
-  const explicitTarget =
-    channel && rawExplicitTo
-      ? resolveRouteTarget({
-          channel,
-          rawTarget: rawExplicitTo,
-          fallbackThreadId: params.explicitThreadId,
-        })
-      : null;
-  const explicitTo = explicitTarget?.to ?? rawExplicitTo;
-  const explicitThreadId = normalizeOptionalThreadValue(
-    explicitTarget?.threadId ?? params.explicitThreadId,
-  );
+  const explicitThreadId = normalizeOptionalThreadValue(params.explicitThreadId);
   const explicitThreadIdSource = explicitThreadId != null ? "explicit" : undefined;
 
   let to = explicitTo;
-  if (!to && lastTo) {
-    if (channel && channel === lastChannel) {
-      to = lastTo;
-    } else if (params.allowMismatchedLastTo) {
-      to = lastTo;
-    }
+  if (!to && lastTo && ((channel && channel === lastChannel) || params.allowMismatchedLastTo)) {
+    to = lastTo;
   }
 
   const mode = params.mode ?? (explicitTo ? "explicit" : "implicit");
@@ -181,12 +145,11 @@ export function resolveSessionDeliveryTarget(params: {
 
   const inheritedThreadIdSource =
     threadId != null ? (hasTurnSourceThreadId ? "turn-source" : "session") : undefined;
-  const resolvedThreadId = explicitThreadId ?? threadId;
   return {
     channel,
     to,
     accountId,
-    threadId: resolvedThreadId,
+    threadId: explicitThreadId ?? threadId,
     threadIdSource: explicitThreadIdSource ?? inheritedThreadIdSource,
     mode,
     lastChannel,

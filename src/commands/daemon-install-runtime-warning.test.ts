@@ -3,11 +3,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   resolveSystemNodeInfo: vi.fn(),
+  resolveNodeRuntimeInfo: vi.fn(),
   renderSystemNodeWarning: vi.fn(),
 }));
 
-vi.mock("../daemon/runtime-paths.js", () => ({
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
+  resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
 }));
 
@@ -18,10 +21,35 @@ afterEach(() => {
 });
 
 describe("emitNodeRuntimeWarning", () => {
+  it.each([
+    { selected: "/opt/node", status: "supported", warns: false },
+    { selected: "/opt/node", status: "unsupported", warns: true },
+    { selected: "/opt/node", status: "probe-failed", warns: true },
+    { selected: "/usr/bin/node", status: "supported", warns: true },
+  ])("scopes system warnings with $selected ($status)", async ({ selected, status, warns }) => {
+    const warn = vi.fn();
+    mocks.resolveSystemNodeInfo.mockResolvedValue({ path: "/usr/bin/node", status: "unsupported" });
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status });
+    mocks.renderSystemNodeWarning.mockReturnValue("System Node SQLite is unsafe");
+
+    await emitNodeRuntimeWarning({
+      env: { PATH: "/usr/bin" },
+      runtime: "node",
+      nodeProgram: selected,
+      warn,
+      title: "Gateway runtime",
+    });
+
+    expect(warn.mock.calls).toEqual(
+      warns ? [["System Node SQLite is unsafe", "Gateway runtime"]] : [],
+    );
+  });
+
   it("emits warning when system node check returns one", async () => {
     const warn = vi.fn();
     mocks.resolveSystemNodeInfo.mockResolvedValue({ path: "/usr/bin/node", version: "18.0.0" });
     mocks.renderSystemNodeWarning.mockReturnValue("Node too old");
+    mocks.resolveNodeRuntimeInfo.mockResolvedValue({ status: "unsupported" });
 
     await emitNodeRuntimeWarning({
       env: { PATH: "/usr/bin" },

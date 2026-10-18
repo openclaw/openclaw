@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { storeLiveApiKeyProfile } from "../../test/helpers/live-api-key-profile.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -17,6 +18,7 @@ import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
 import type { Message } from "../llm/types.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
+import { isProjectedForwardedMessage } from "./chat-display-projection.helpers.js";
 
 const describeLive =
   isLiveTestEnabled() && process.env.OPENAI_API_KEY?.trim() ? describe : describe.skip;
@@ -43,7 +45,6 @@ describeLive("cron tool allowlists through live harnesses", () => {
           ...Object.fromEntries(
             listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
           ),
-          OPENAI_API_KEY: process.env.OPENAI_API_KEY,
           OPENAI_BASE_URL: undefined,
           OPENAI_API_BASE: undefined,
           OPENCLAW_AGENT_RUNTIME: undefined,
@@ -80,13 +81,11 @@ describeLive("cron tool allowlists through live harnesses", () => {
               entries: { probe: { workspace } },
             },
             tools: { exec: { host: "gateway", security: "full", ask: "off" } },
-            secrets: { providers: { default: { source: "env" } } },
             models: {
               mode: "merge",
               providers: {
                 openai: {
                   api: "openai-responses",
-                  apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                   baseUrl: "https://api.openai.com/v1",
                   models: [],
                 },
@@ -95,6 +94,11 @@ describeLive("cron tool allowlists through live harnesses", () => {
           };
           await instance.state.writeConfig(config);
           await instance.startGateway();
+          const profileId = await storeLiveApiKeyProfile(instance, {
+            provider: "openai",
+            apiKey: process.env.OPENAI_API_KEY,
+            agentId: "probe",
+          });
 
           const addArgs = [
             "cron",
@@ -105,6 +109,8 @@ describeLive("cron tool allowlists through live harnesses", () => {
             new Date(Date.now() + 86_400_000).toISOString(),
             "--agent",
             "probe",
+            "--model",
+            `${MODEL_KEY}@${profileId}`,
             "--session",
             "isolated",
             "--no-deliver",
@@ -178,7 +184,10 @@ describeLive("cron tool allowlists through live harnesses", () => {
             expect(completed.run.sessionId).toBeTypeOf("string");
             expect(history.sessionId).toBe(completed.run.sessionId);
             expect(history.sessionInfo.agentRuntime?.id).toBe(runtime);
-            const assistants = history.messages.filter((message) => message.role === "assistant");
+            const assistants = history.messages.filter(
+              (message) =>
+                message.role === "assistant" && !isProjectedForwardedMessage({ ...message }),
+            );
             const calls = assistants.flatMap((message) =>
               Array.isArray(message.content)
                 ? message.content.filter((block) => block.type === "toolCall")
@@ -187,8 +196,13 @@ describeLive("cron tool allowlists through live harnesses", () => {
             const results = history.messages.filter((message) => message.role === "toolResult");
             expect(assistants.length, JSON.stringify(history)).toBeGreaterThan(0);
             if (cap === "") {
-              expect(calls).toEqual([]);
-              expect(results).toEqual([]);
+              // Codex model metadata (`tool_mode: code_mode_only`) outranks the thread's
+              // `features.code_mode=false`, so Codex always registers `exec`/`wait` with an
+              // empty nested catalog. Allow only those inert probes; any other tool is a leak.
+              const inertProbes = new Set(runtime === "codex" ? ["exec", "wait"] : []);
+              expect(calls.filter((call) => !inertProbes.has(call.name))).toEqual([]);
+              expect(results.filter((result) => !inertProbes.has(result.toolName))).toEqual([]);
+              expect(JSON.stringify(results)).not.toContain(marker);
               expect(JSON.stringify(assistants)).not.toContain(marker);
               const assistantText = assistants
                 .map((message) =>

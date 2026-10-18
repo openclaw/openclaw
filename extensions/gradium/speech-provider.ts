@@ -1,13 +1,14 @@
-// Gradium provider module implements model/runtime integration.
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
-  SpeechDirectiveTokenParseContext,
   SpeechProviderConfig,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech";
-import { resolveSpeechProviderApiKey } from "openclaw/plugin-sdk/speech-provider";
+import {
+  createSpeechDirectiveParser,
+  resolveSpeechProviderApiKey,
+} from "openclaw/plugin-sdk/speech-provider";
 import {
   asOptionalRecord,
   normalizeOptionalString as trimToUndefined,
@@ -15,15 +16,9 @@ import {
 import { DEFAULT_GRADIUM_VOICE_ID, GRADIUM_VOICES, normalizeGradiumBaseUrl } from "./shared.js";
 import { gradiumTTS } from "./tts.js";
 
-type GradiumProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  voiceId: string;
-};
-
-function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): GradiumProviderConfig {
+function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.gradium) ?? asOptionalRecord(rawConfig.gradium);
+  const raw = asOptionalRecord(providers?.gradium);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -34,13 +29,10 @@ function normalizeGradiumProviderConfig(rawConfig: Record<string, unknown>): Gra
   };
 }
 
-function readGradiumProviderConfig(config: SpeechProviderConfig): GradiumProviderConfig {
-  const defaults = normalizeGradiumProviderConfig({});
-  return {
-    apiKey: trimToUndefined(config.apiKey) ?? defaults.apiKey,
-    baseUrl: normalizeGradiumBaseUrl(trimToUndefined(config.baseUrl) ?? defaults.baseUrl),
-    voiceId: trimToUndefined(config.voiceId) ?? defaults.voiceId,
-  };
+function readGradiumProviderConfig(config: SpeechProviderConfig) {
+  return normalizeGradiumProviderConfig({
+    providers: { gradium: { ...config, apiKey: trimToUndefined(config.apiKey) } },
+  });
 }
 
 function resolveGradiumApiKey(configApiKey: unknown): string | undefined {
@@ -83,30 +75,13 @@ function isGradiumProviderConfigured(config: SpeechProviderConfig): boolean {
   }
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: Record<string, unknown>;
-  warnings?: string[];
-} {
-  switch (ctx.key) {
-    case "voice":
-    case "voice_id":
-    case "voiceid":
-    case "gradium_voice":
-    case "gradiumvoice":
-      if (!ctx.policy.allowVoice) {
-        return { handled: true };
-      }
-      return {
-        handled: true,
-        overrides: { ...ctx.currentOverrides, voiceId: ctx.value },
-      };
-    default:
-      return { handled: false };
-  }
-}
+const parseDirectiveToken = createSpeechDirectiveParser({
+  voiceId: ["allowVoice", ["voice", "voice_id", "voiceid", "gradium_voice", "gradiumvoice"]],
+});
 
 export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    isGradiumProviderConfigured(providerConfig);
   return {
     id: "gradium",
     label: "Gradium",
@@ -115,7 +90,9 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeGradiumProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => GRADIUM_VOICES.map((v) => ({ id: v.id, name: v.name })),
-    isConfigured: ({ providerConfig }) => isGradiumProviderConfigured(providerConfig),
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const wantsVoiceNote = req.target === "voice-note";
       const outputFormat = wantsVoiceNote ? "opus" : "wav";
@@ -127,11 +104,10 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
         voiceCompatible: wantsVoiceNote,
       };
     },
-    synthesizeTelephony: async (req) => {
-      const outputFormat = "ulaw_8000";
-      const sampleRate = 8_000;
-      const audioBuffer = await synthesizeGradium(req, outputFormat);
-      return { audioBuffer, outputFormat, sampleRate };
-    },
+    synthesizeTelephony: async (req) => ({
+      audioBuffer: await synthesizeGradium(req, "ulaw_8000"),
+      outputFormat: "ulaw_8000",
+      sampleRate: 8_000,
+    }),
   };
 }

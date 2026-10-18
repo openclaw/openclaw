@@ -1,4 +1,3 @@
-// Signal helper module supports config schema behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   buildChannelConfigSchema,
@@ -15,20 +14,10 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { z } from "zod";
 import { resolveSignalAccountEntry } from "./account-selection.js";
 import { signalChannelConfigUiHints } from "./config-ui-hints.js";
+import { LEGACY_SIGNAL_TRANSPORT_FIELDS } from "./legacy-transport.js";
 import { assertSignalSocketTransport } from "./transport-url.js";
 
-const SIGNAL_RETIRED_TRANSPORT_KEYS = [
-  "apiMode",
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
+const SIGNAL_RETIRED_TRANSPORT_KEYS = ["apiMode", ...LEGACY_SIGNAL_TRANSPORT_FIELDS] as const;
 
 const SIGNAL_TRANSPORT_URL_PATTERN = /^[Hh][Tt][Tt][Pp][Ss]?:\/\/(?![^/?#]*@)/;
 const SignalTransportUrlSchema = z

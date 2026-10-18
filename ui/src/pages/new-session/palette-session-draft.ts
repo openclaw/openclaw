@@ -1,46 +1,60 @@
-import { html, nothing, type ReactiveController } from "lit";
-import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { closeMenusWithin } from "../../components/solid/menu.tsx";
 import { t } from "../../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
-import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
-import type { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
-import "../../components/web-awesome-popover.ts";
+import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
+import type { ChatAttachmentControlsProps } from "../chat/components/chat-attachment-controls.types.ts";
 import "../../styles/new-session.css";
-import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
-import { NewSessionDraftController } from "./draft-controller.ts";
+import "../../styles/chat/composer.css";
+import {
+  appendChatAttachmentFiles,
+  handleChatAttachmentPaste,
+} from "../chat/components/chat-attachments.ts";
+import { ConnectMachineSetupState } from "./connect-machine-dialog.ts";
+import { NewSessionDraft } from "./draft.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { closeSessionMenus } from "./new-session-runtime.ts";
+import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import { PaletteSessionPreferences } from "./palette-session-preferences.ts";
-import { PaletteSessionSettings } from "./palette-session-settings.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
+import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 registerCommandPaletteEnglish();
 
-/** Launcher-local text and selections; never binds the full page's durable draft or handoff. */
-export class PaletteSessionDraft implements ReactiveController {
-  private draft: NewSessionDraftController | undefined;
+/** Launcher-local prompt and selections; never binds the full page's durable draft or handoff. */
+export class PaletteSessionDraft {
+  private draft: NewSessionDraft | undefined;
   private data: NewSessionRouteData | undefined;
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   private agentPickerOpen = false;
   private readonly preferences: PaletteSessionPreferences;
-  private readonly settings: PaletteSessionSettings;
+  private closeSettings: (() => void) | undefined;
+  private readonly registerSettingsClose = (close: () => void) => {
+    this.closeSettings = close;
+    return () => {
+      this.closeSettings = undefined;
+    };
+  };
   private rejectedOpen: (() => void) | undefined;
+  private coldSubmit: { readSignal?: AbortSignal } | undefined;
   private owner: { gateway: ApplicationContext["gateway"]; url: string; scope: string } | undefined;
   private readonly connectMachine: ConnectMachineSetupState;
-  private readonly subscriptions: SubscriptionsController;
   private static nextId = 0;
   private readonly idPrefix = `palette-session-${++PaletteSessionDraft.nextId}`;
 
   constructor(
-    private readonly host: OpenClawLightDomElement,
+    private readonly element: Pick<
+      HTMLElement,
+      "isConnected" | "ownerDocument" | "querySelectorAll"
+    >,
     private readonly read: () => { context: ApplicationContext | undefined; open: boolean },
     private readonly callbacks: {
+      changed: () => void;
+      updateComplete: () => Promise<unknown>;
       onClose: () => void;
       onMessageChange?: (message: string) => void;
     },
@@ -48,47 +62,49 @@ export class PaletteSessionDraft implements ReactiveController {
     this.preferences = new PaletteSessionPreferences(
       () => ({ draft: this.draft, context: this.read().context }),
       (preference) => this.restoreSettings(preference),
-      () => host.requestUpdate(),
+      callbacks.changed,
     );
-    this.settings = new PaletteSessionSettings(host, this.idPrefix);
     this.connectMachine = new ConnectMachineSetupState(
       () => ({
         client: this.draft?.gateway.client ?? null,
         connected: this.draft?.gateway.connected ?? false,
       }),
-      () => host.requestUpdate(),
+      callbacks.changed,
     );
-    this.subscriptions = new SubscriptionsController(host)
-      .watch(
-        () => this.draft && this.read().context?.agents,
-        (agents, notify) => agents.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.sessions,
-        (sessions, notify) => sessions.subscribe(notify),
-      )
-      .watch(
-        () => this.draft && this.read().context?.config,
-        (config, notify) => config.subscribe(() => notify()),
-      );
-    host.addController(this);
   }
 
   get message(): string {
     return this.draft?.submission.message ?? "";
   }
+  get mentions(): readonly HumanMention[] {
+    return this.draft?.submission.mentions ?? [];
+  }
+  get mentionDirectory() {
+    return this.draft && this.read().open && !this.messageLocked
+      ? resolveNewSessionMentionDirectory({
+          context: this.read().context,
+          agentId: this.draft.place.agentId,
+          draftOwnerKey: this.idPrefix,
+          visibility: this.draft.submission.visibility,
+        })
+      : undefined;
+  }
   get submitting(): boolean {
     return this.draft?.submission.submitting ?? false;
   }
   get messageLocked(): boolean {
-    return this.submitting || Boolean(this.draft?.submission.pendingPlacement.sessionKey);
+    return (
+      this.submitting ||
+      Boolean(this.coldSubmit || this.draft?.submission.pendingPlacement.sessionKey)
+    );
+  }
+  get hasPrompt(): boolean {
+    return Boolean(
+      this.message.trim() || this.draft?.submission.attachmentDraft.attachments.length,
+    );
   }
   get canSubmit(): boolean {
-    return Boolean(this.message.trim() && this.draft?.submission.canSubmit());
+    return !this.coldSubmit && this.hasPrompt && Boolean(this.draft?.submission.canSubmit());
   }
   get error(): string | null {
     const submission = this.draft?.submission;
@@ -103,15 +119,69 @@ export class PaletteSessionDraft implements ReactiveController {
     return this.draft?.submission.submitDisabledReason();
   }
 
-  setMessage(value: string) {
-    if (!this.draft || this.submitting || this.draft.submission.pendingPlacement.sessionKey) {
+  setMessage(value: string, mentions?: readonly HumanMention[]) {
+    if (!this.draft || this.messageLocked) {
       return;
     }
-    if (value !== this.message) {
+    if (value !== this.message || (mentions !== undefined && mentions !== this.mentions)) {
       this.rejectedOpen = undefined;
       this.draft.submission.clearError();
     }
-    this.draft.submission.setMessage(value);
+    this.draft.submission.setMessage(value, mentions);
+  }
+
+  attachmentProps(): ChatAttachmentControlsProps | undefined {
+    const attachmentDraft = this.draft?.submission.attachmentDraft;
+    if (!attachmentDraft) {
+      return undefined;
+    }
+    const readSignal = attachmentDraft.reads.readSignal;
+    return {
+      uploadConfig: this.read().context?.config,
+      attachments: attachmentDraft.attachments,
+      attachmentReads: attachmentDraft.reads,
+      attachmentLimits: resolveChatAttachmentLimits(
+        this.read().context?.gateway.snapshot.hello?.policy,
+      ),
+      disabled: this.messageLocked,
+      getAttachments: () => attachmentDraft.attachments,
+      readSignal,
+      onPendingReadsChange: (delta) => attachmentDraft.reads.updatePending(readSignal, delta),
+      onAttachmentsChange: (attachments) => {
+        if (
+          readSignal.aborted ||
+          !this.read().open ||
+          this.submitting ||
+          this.draft?.submission.pendingPlacement.sessionKey
+        ) {
+          return;
+        }
+        this.rejectedOpen = undefined;
+        this.draft?.submission.clearError();
+        attachmentDraft.replace(attachments);
+      },
+    };
+  }
+
+  readonly pasteImages = (event: ClipboardEvent) => {
+    this.synchronizePresentationScope();
+    const props = this.attachmentProps();
+    if (this.read().open && !this.messageLocked && props) {
+      handleChatAttachmentPaste(event, props, { imagesOnly: true });
+    }
+  };
+
+  adoptImageFiles(files: readonly File[], submitRequested = false) {
+    const props = this.attachmentProps();
+    if (!this.read().open || this.messageLocked || !props) {
+      return;
+    }
+    const admitted = appendChatAttachmentFiles(files, props);
+    if (submitRequested && admitted === files.length) {
+      // The loader accepted Send before the readers existed. Carry that one
+      // intent across preparation, but never across dismissal or invalidation.
+      this.submitCold(props.readSignal);
+    }
   }
 
   open() {
@@ -132,29 +202,29 @@ export class PaletteSessionDraft implements ReactiveController {
       agentId,
       requestedAgentId: agentId,
       catalogId: "",
-      model: "",
       catalogLabel: "",
       startTerminal: false,
     };
     if (!this.draft) {
-      this.draft = new NewSessionDraftController(
-        this.host,
+      this.draft = new NewSessionDraft(
         () => ({
           context: this.read().context,
           data: this.data,
           // A closed launcher still owns its submitted transaction until acceptance or failure.
-          isConnected: this.host.isConnected,
+          isConnected: this.element.isConnected,
         }),
         {
-          requestUpdate: () => this.host.requestUpdate(),
+          changed: this.callbacks.changed,
+          updateComplete: this.callbacks.updateComplete,
           onMessageChange: (message) => this.callbacks.onMessageChange?.(message),
-          querySelector: (selector) => this.host.querySelector(selector),
-          activeElement: () => this.host.ownerDocument.activeElement,
-          body: () => this.host.ownerDocument.body,
-          pickerIdPrefix: this.idPrefix,
+          activeElement: () => this.element.ownerDocument.activeElement,
           preferenceScope: "palette",
           readPalettePreference: () => this.preferences.selection,
-          closeTransientUi: () => closeSessionMenus(this.host),
+          closeTransientUi: () => {
+            this.draft?.browser.close();
+            this.closeSettings?.();
+            closeMenusWithin(this.element);
+          },
           onInvalidate: () => this.connectMachine.close(),
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
           onAccepted: (result) => this.accepted(result),
@@ -162,32 +232,59 @@ export class PaletteSessionDraft implements ReactiveController {
         },
       );
     }
+    this.draft.connect();
     this.rejectedOpen = undefined;
+    this.coldSubmit = undefined;
     this.draft.place.resetDraft();
     this.draft.submission.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.preferences.begin();
     this.draft.place.adoptAgentDefaults();
-    this.host.requestUpdate();
+    this.callbacks.changed();
   }
 
   close() {
-    this.settings.close();
+    this.coldSubmit = undefined;
+    const submission = this.draft?.submission;
+    // A failed create or rejected turn retains the same retry/recovery draft.
+    // Ordinary dismissal discards its previews immediately, not on next open.
+    if (
+      submission &&
+      !this.submitting &&
+      !submission.pendingPlacement.sessionKey &&
+      !submission.submissionOutcomeUnknown &&
+      !submission.error
+    ) {
+      submission.attachmentDraft.reset();
+    } else {
+      submission?.attachmentDraft.reads.abortReads();
+    }
+    this.closeSettings?.();
     this.draft?.browser.close();
     this.connectMachine.close();
-    closeSessionMenus(this.host);
+    closeMenusWithin(this.element);
   }
 
   async submit(): Promise<void> {
     this.synchronizePresentationScope();
-    if (!this.read().open || !this.message.trim() || !this.draft) {
+    if (!this.read().open || this.coldSubmit || !this.hasPrompt || !this.draft) {
       return;
     }
     await this.draft.submission.submit(undefined, true);
   }
 
-  hostUpdate() {
+  submitCold(readSignal?: AbortSignal) {
+    this.coldSubmit = { readSignal };
+    this.callbacks.changed();
+  }
+
+  connect() {
+    this.draft?.connect();
+  }
+
+  synchronize() {
     this.synchronizePresentationScope();
+    this.draft?.synchronize();
   }
 
   private synchronizePresentationScope() {
@@ -210,7 +307,7 @@ export class PaletteSessionDraft implements ReactiveController {
     this.callbacks.onMessageChange?.("");
   }
 
-  hostUpdated() {
+  settled() {
     const draft = this.draft;
     if (!draft) {
       return;
@@ -221,6 +318,28 @@ export class PaletteSessionDraft implements ReactiveController {
     this.preferences.synchronize();
     draft.synchronizeSelections();
     draft.submission.resumeInterruptedSubmission();
+    const attachmentDraft = draft.submission.attachmentDraft;
+    const pending = this.coldSubmit;
+    if (
+      pending &&
+      (!pending.readSignal ||
+        attachmentDraft.reads.pendingReads === 0 ||
+        pending.readSignal.aborted)
+    ) {
+      const failed =
+        pending.readSignal &&
+        (pending.readSignal.aborted ||
+          attachmentDraft.reads
+            .project(attachmentDraft.attachments)
+            .some((entry) => entry.state === "error"));
+      if (failed || draft.gateway.placementPolicyReady) {
+        this.coldSubmit = undefined;
+        this.callbacks.changed();
+        if (!failed) {
+          void this.submit();
+        }
+      }
+    }
     if (this.read().open) {
       void this.read().context?.agentIdentity.ensure(
         this.agentPickerOpen
@@ -230,38 +349,37 @@ export class PaletteSessionDraft implements ReactiveController {
     }
   }
 
-  hostDisconnected() {
-    this.disconnect();
-  }
-
   disconnect() {
     this.close();
-    this.subscriptions.clear();
     this.draft?.disconnect();
   }
 
-  renderControls() {
+  settingsView() {
     const draft = this.draft;
     if (!draft) {
-      return nothing;
+      return undefined;
     }
-    return this.settings.render({
-      draft,
-      context: this.read().context,
-      preferences: this.preferences,
-      onAgentPickerOpen: (open) => {
-        this.agentPickerOpen = open;
-        this.host.requestUpdate();
+    return {
+      id: this.idPrefix,
+      registerClose: this.registerSettingsClose,
+      options: {
+        draft,
+        context: this.read().context,
+        preferences: this.preferences,
+        onAgentPickerOpen: (open: boolean) => {
+          this.agentPickerOpen = open;
+          this.callbacks.changed();
+        },
+        onChange: () => this.preferences.changed(),
+        onConnectMachine: () => {
+          if (draft.place.isAdmin()) {
+            this.closeSettings?.();
+            draft.browser.close();
+            this.connectMachine.start();
+          }
+        },
       },
-      onChange: () => this.preferences.changed(),
-      onConnectMachine: () => {
-        if (draft.place.isAdmin()) {
-          this.settings.close();
-          draft.browser.close();
-          this.connectMachine.start();
-        }
-      },
-    });
+    };
   }
 
   private restoreSettings(preference: PaletteSessionPreference | null) {
@@ -272,35 +390,23 @@ export class PaletteSessionDraft implements ReactiveController {
     const agentId = preference?.agentId ?? defaultAgent;
     this.data = { ...this.data, agentId, requestedAgentId: agentId };
     this.draft.place.resetDraft();
-    this.draft.place.setAgentsHydrated(this.draft.agentsReady());
+    this.draft.place.agentsHydrated = this.draft.agentsReady();
     this.draft.place.adoptAgentDefaults();
     this.draft.place.restorePreferenceSelections();
   }
 
-  renderRecovery() {
-    return this.rejectedOpen
-      ? html`<button class="btn btn--sm" type="button" @click=${this.rejectedOpen}>
-          ${t("sessionsView.openSession")}
-        </button>`
-      : nothing;
+  get recoveryAction() {
+    return this.rejectedOpen;
   }
 
-  renderAuxiliary() {
-    return renderConnectMachineDialog({
-      open: this.connectMachine.open && this.read().open && (this.draft?.place.isAdmin() ?? false),
-      loading: this.connectMachine.loading,
-      error: this.connectMachine.error,
-      setup: this.connectMachine.setup,
-      onRefresh: () => void this.connectMachine.refresh(),
-      onClose: () => {
-        this.connectMachine.close();
-        this.host.requestUpdate();
-      },
-      onManageDevices: () => {
+  auxiliaryView() {
+    return this.connectMachine.view(
+      this.read().open && (this.draft?.place.isAdmin() ?? false),
+      () => {
         this.callbacks.onClose();
         this.read().context?.navigate("devices");
       },
-    });
+    );
   }
 
   private bindOwner(url: string, scope: string) {
@@ -323,11 +429,7 @@ export class PaletteSessionDraft implements ReactiveController {
     if (!context) {
       return;
     }
-    const { gateway } = context;
-    const client = gateway.snapshot.client;
-    const revision = gateway.connectionRevision;
-    const gatewayUrl = gateway.connection.gatewayUrl;
-    const recoveryScope = gateway.snapshot.hello?.auth?.recoveryScope;
+    const isCurrentOwner = captureSessionNoticeOwner(context);
     const row = context.sessions.state.result?.sessions.find(
       (candidate) => candidate.key === result.key,
     );
@@ -340,34 +442,10 @@ export class PaletteSessionDraft implements ReactiveController {
               : "sessionsView.statusIdle",
           );
     const openSession = () => {
-      if (
-        this.read().context !== context ||
-        context.gateway !== gateway ||
-        gateway.snapshot.phase !== "connected" ||
-        gateway.connection.gatewayUrl !== gatewayUrl ||
-        gateway.connectionRevision !== revision ||
-        gateway.snapshot.hello?.auth?.recoveryScope !== recoveryScope ||
-        // A transport reconnect does not retire a session owned by the same
-        // authenticated recovery scope. Unscoped actions stay connection-bound.
-        (!recoveryScope && gateway.snapshot.client !== client)
-      ) {
+      if (this.read().context !== context || !isCurrentOwner()) {
         return;
       }
-      selectApplicationSession({
-        selection: context.agentSelection,
-        gateway,
-        sessionKey: result.key,
-        agentId: result.agentId,
-      });
-      context.navigate(
-        "chat",
-        sessionNavigationTarget({
-          context,
-          face: "chat",
-          sessionKey: result.key,
-          agentId: result.agentId,
-        }).options,
-      );
+      openSessionNoticeTarget(context, result.key, result.agentId);
       if (result.initialRun.status === "rejected") {
         this.callbacks.onClose();
       }
@@ -380,7 +458,7 @@ export class PaletteSessionDraft implements ReactiveController {
     });
     if (result.initialRun.status === "rejected") {
       this.rejectedOpen = openSession;
-      this.host.requestUpdate();
+      this.callbacks.changed();
     } else {
       this.callbacks.onClose();
     }

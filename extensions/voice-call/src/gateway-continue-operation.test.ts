@@ -14,7 +14,6 @@ describe("voice-call gateway continue operation store", () => {
     });
 
     const started = store.start({
-      callId: "call-1",
       rt: {
         config: {},
       } as never,

@@ -103,15 +103,11 @@ function normalizeBrowserQuery(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function resolveBrowserTimeoutMs(timeoutMs: number | undefined, fallbackMs: number) {
-  return resolvePositiveTimerTimeoutMs(timeoutMs, fallbackMs);
-}
-
 export async function callQaBrowserRequest<T = unknown>(
   env: QaBrowserEnv,
   params: QaBrowserRequestParams,
 ): Promise<T> {
-  const timeoutMs = resolveBrowserTimeoutMs(params.timeoutMs, 20_000);
+  const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, 20_000);
   const payload = await env.gateway.call(
     "browser.request",
     {
@@ -135,7 +131,7 @@ export async function qaBrowserOpenTab<T = unknown>(
     path: "/tabs/open",
     query: params.profile ? { profile: params.profile } : undefined,
     body: { url: params.url },
-    timeoutMs: resolveBrowserTimeoutMs(params.timeoutMs, 20_000),
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -160,7 +156,7 @@ export async function qaBrowserSnapshot<T = unknown>(
       mode: params.mode,
       maxChars: params.maxChars,
     },
-    timeoutMs: resolveBrowserTimeoutMs(params.timeoutMs, 20_000),
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -173,7 +169,7 @@ export async function qaBrowserAct<T = unknown>(
     path: "/act",
     query: params.profile ? { profile: params.profile } : undefined,
     body: params.request,
-    timeoutMs: resolveBrowserTimeoutMs(params.timeoutMs, 20_000),
+    timeoutMs: params.timeoutMs,
   });
 }
 
@@ -185,8 +181,8 @@ export async function waitForQaBrowserReady<T extends QaBrowserStatus = QaBrowse
   env: QaBrowserEnv,
   params: QaBrowserReadyParams = {},
 ): Promise<T> {
-  const timeoutMs = resolveBrowserTimeoutMs(params.timeoutMs, 20_000);
-  const intervalMs = resolveBrowserTimeoutMs(params.intervalMs, 250);
+  const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, 20_000);
+  const intervalMs = resolvePositiveTimerTimeoutMs(params.intervalMs, 250);
   const startedAt = Date.now();
   let lastStatus: QaBrowserStatus | null = null;
   while (Date.now() - startedAt < timeoutMs) {

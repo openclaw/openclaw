@@ -6,9 +6,9 @@
 
 typedef struct OpenClawUVCController OpenClawUVCController;
 
-int openclaw_uvc_parse_camera_terminal(
-    const uint8_t *descriptors,
-    size_t descriptors_length,
+int openclaw_uvc_parse_camera_terminal_descriptor(
+    const uint8_t *descriptor,
+    size_t descriptor_length,
     uint8_t *terminal_id_out,
     uint32_t *controls_out
 );

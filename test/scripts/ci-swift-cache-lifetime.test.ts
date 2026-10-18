@@ -60,6 +60,7 @@ function runClockStep(owner: Step, now: number, started = "") {
 }
 
 type Context = {
+  cacheMode?: string;
   allowed?: string;
   authorized?: boolean;
   phase?: string;
@@ -78,7 +79,10 @@ function selected(owner: Step, context: Context = {}) {
   const result = runInNewContext((owner.if ?? "true").replace(/\.([a-zA-Z_][\w-]*)/g, '["$1"]'), {
     needs: {
       preflight: {
-        outputs: { cache_write_allowed: context.authorized === false ? "false" : "true" },
+        outputs: {
+          cache_mode: context.cacheMode ?? "restore",
+          cache_write_allowed: context.authorized === false ? "false" : "true",
+        },
       },
     },
     matrix: { phase: context.phase ?? "tests" },
@@ -116,14 +120,29 @@ describe("macOS optional Swift cache lifetime", () => {
       expect(required["continue-on-error"]).not.toBe(true);
     }
     expect(budget.env?.CACHE_STARTED).toBe("${{ steps.swift-cache-clock.outputs.started }}");
+    const jobTimeout = runInNewContext(job["timeout-minutes"].replace(/^\$\{\{\s*|\s*\}\}$/g, ""), {
+      github: { event_name: "pull_request" },
+      needs: { preflight: { outputs: { validation_tier: "main" } } },
+      inputs: {},
+      matrix: { phase: "tests" },
+    });
+    expect(jobTimeout).toBe(30);
+    const tail = [budget, packageSave, metadata, buildSave];
+    expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
+    let minutes = 0;
+    for (const owner of tail) {
+      expect(owner["continue-on-error"], owner.name).toBe(true);
+      expect(owner["timeout-minutes"], owner.name).toBeGreaterThan(0);
+      minutes += owner["timeout-minutes"]!;
+    }
+    expect(minutes).toBe(5);
+    expect(20 + minutes).toBeLessThanOrEqual(jobTimeout - 5);
   });
 
   it.each([
     [0, "1000", "true"],
     [1199, "1000", "true"],
     [1200, "1000", "false"],
-    [1760, "1000", "false"],
-    [1800, "1000", "false"],
     [-1, "1000", "false"],
     [1, "", "false"],
     [1, "broken", "false"],
@@ -135,20 +154,6 @@ describe("macOS optional Swift cache lifetime", () => {
     for (const owner of [packageSave, metadata, buildSave]) {
       expect(selected(owner, { allowed }), owner.name).toBe(expected === "true");
     }
-  });
-
-  it("leaves terminal reserve even if every admitted optional step uses its entire timeout", () => {
-    expect(job["timeout-minutes"]).toBe(30);
-    const tail = [budget, packageSave, metadata, buildSave];
-    expect(steps.slice(steps.indexOf(budget))).toEqual(tail);
-    let minutes = 0;
-    for (const owner of tail) {
-      expect(owner["continue-on-error"], owner.name).toBe(true);
-      expect(owner["timeout-minutes"], owner.name).toBeGreaterThan(0);
-      minutes += owner["timeout-minutes"]!;
-    }
-    expect(minutes).toBe(5);
-    expect(20 + minutes).toBeLessThanOrEqual(job["timeout-minutes"] - 5);
   });
 
   it.each([packageSave, metadata, buildSave])(
@@ -168,6 +173,10 @@ describe("macOS optional Swift cache lifetime", () => {
   );
 
   it("retains phase ownership and historical metadata compatibility", () => {
+    expect(selected(budget, { phase: "packages" })).toBe(false);
+    for (const owner of [packageSave, metadata, buildSave]) {
+      expect(selected(owner, { phase: "packages", allowed: "" }), owner.name).toBe(false);
+    }
     expect(selected(packageSave, { primary: "release" })).toBe(false);
     expect(selected(packageSave, { primary: "release", phase: "release" })).toBe(true);
     expect(selected(buildSave, { primary: "release" })).toBe(true);
@@ -193,7 +202,12 @@ describe("macOS optional Swift cache lifetime", () => {
       ["Restore Swift build directory cache", buildSave],
     ] as const) {
       const restore = step(restoreName);
-      expect(restore.if).toBe("needs.preflight.outputs.cache_mode != 'off'");
+      for (const phase of ["tests", "release", "packages"]) {
+        expect(selected(restore, { phase }), `${restoreName}: ${phase}`).toBe(
+          phase !== "packages" || save === packageSave,
+        );
+        expect(selected(restore, { phase, cacheMode: "off" })).toBe(false);
+      }
       expect(restore.uses).toBe("actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
       expect(save.uses).toBe("actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9");
       expect(save.with?.path).toBe(restore.with?.path);

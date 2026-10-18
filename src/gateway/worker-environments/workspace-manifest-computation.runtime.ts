@@ -2,10 +2,6 @@ import { createHash } from "node:crypto";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
-  readActualWorkspaceManifestImpl,
-  readWorkspaceFileSnapshotWithLimit,
-} from "./workspace-actual-manifest.js";
-import {
   pruneWorkspaceHashMemo,
   withWorkerWorkspaceHashMemo,
   withWorkspaceHashMemo,
@@ -29,34 +25,18 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
-import { localWorkspaceNode } from "./workspace-reconcile-fs.js";
-import { preflightWorkspaceApplyImpl } from "./workspace-reconcile-preflight.js";
-import {
-  loadStagedWorkerWorkspace,
-  readStagedWorkerWorkspaceEntries,
-} from "./workspace-result-inventory.runtime.js";
-import { buildWorkspaceStageInput } from "./workspace-result-preparation.runtime.js";
+
+function decodeUtf8(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString("utf8");
+}
 
 function decodeManifestValue<Type extends keyof WorkspaceManifestValueInputs>(command: {
   type: Type;
   input: { payload: Uint8Array<ArrayBuffer> };
 }): WorkspaceManifestValueInputs[Type] {
-  const payload = command.input.payload;
-  const parsed: unknown = JSON.parse(
-    Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength).toString("utf8"),
-  );
+  const parsed: unknown = JSON.parse(decodeUtf8(command.input.payload));
   // SAFETY: Only the private host adapter creates these typed serialized payloads.
   return parsed as WorkspaceManifestValueInputs[Type];
-}
-
-function captureArguments(input: WorkspaceManifestValueInputs["workspace.manifest.capture"]) {
-  return {
-    root: input.root,
-    baseCommit: input.baseCommit,
-    includePaths: input.includePaths === undefined ? undefined : new Set(input.includePaths),
-    preserveDirectories:
-      input.preserveDirectories === undefined ? undefined : new Set(input.preserveDirectories),
-  };
 }
 
 async function withHashes<T>(
@@ -86,12 +66,22 @@ async function withHashes<T>(
 
 export function executeWorkspaceManifestComputation<
   Command extends WorkspaceManifestComputationCommand,
->(command: Command): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
+>(
+  command: Command,
+  assertBeforeMutation?: () => void,
+): Promise<WorkspaceManifestComputationOperations[Command["type"]]["output"]>;
 export async function executeWorkspaceManifestComputation(
   command: WorkspaceManifestComputationCommand,
+  assertBeforeMutation?: () => void,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.remote-capture": {
+      const { captureNodeWorkspaceManifestImpl } =
+        await import("./workspace-manifest-script.runtime.js");
+      return await captureNodeWorkspaceManifestImpl(command.input, assertBeforeMutation);
+    }
     case "workspace.manifest.nodes": {
+      const { localWorkspaceNode } = await import("./workspace-reconcile-fs.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, async () => {
         const result = await runTasksWithConcurrency({
@@ -108,43 +98,53 @@ export async function executeWorkspaceManifestComputation(
         return result.results;
       });
     }
-    case "workspace.manifest.staged":
+    case "workspace.manifest.staged": {
+      const { loadStagedWorkerWorkspace } = await import("./workspace-result-inventory.runtime.js");
       return await loadStagedWorkerWorkspace(command.input.root, command.input.ref);
-    case "workspace.manifest.stage-input":
-      return await buildWorkspaceStageInput(command.input);
-    case "workspace.manifest.entries":
+    }
+    case "workspace.manifest.stage-input": {
+      const { buildWorkspaceStageInput } =
+        await import("./workspace-result-preparation.runtime.js");
+      return await buildWorkspaceStageInput(command.input, assertBeforeMutation);
+    }
+    case "workspace.manifest.tree-input": {
+      const { buildWorkspaceTreeInput } = await import("./workspace-result-preparation.runtime.js");
+      return await buildWorkspaceTreeInput(decodeManifestValue(command), assertBeforeMutation);
+    }
+    case "workspace.manifest.entries": {
+      const { readStagedWorkerWorkspaceEntries } =
+        await import("./workspace-result-inventory.runtime.js");
       return ownedWorkerBytes(await readStagedWorkerWorkspaceEntries(command.input));
-    case "workspace.manifest.capture": {
+    }
+    case "workspace.manifest.capture":
+    case "workspace.manifest.snapshot": {
+      const { readActualWorkspaceManifestImpl } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, async () => {
-        const { manifest, manifestRef } = await readActualWorkspaceManifestImpl(
-          captureArguments(input),
-        );
-        return { manifest, manifestRef };
+        const snapshot = await readActualWorkspaceManifestImpl({
+          ...input,
+          includePaths: input.includePaths && new Set(input.includePaths),
+          preserveDirectories: input.preserveDirectories && new Set(input.preserveDirectories),
+        });
+        return command.type === "workspace.manifest.snapshot"
+          ? snapshot
+          : { manifest: snapshot.manifest, manifestRef: snapshot.manifestRef };
       });
     }
-    case "workspace.manifest.snapshot": {
-      const input = decodeManifestValue(command);
-      return await withHashes(input.hashes, () =>
-        readActualWorkspaceManifestImpl(captureArguments(input)),
-      );
-    }
     case "workspace.manifest.file": {
+      const { readWorkspaceFileSnapshotWithLimit } = await import("./workspace-actual-manifest.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, () =>
         readWorkspaceFileSnapshotWithLimit(input.path, input.maxBytes, input.root),
       );
     }
     case "workspace.reconcile.preflight": {
+      const { preflightWorkspaceApplyImpl } = await import("./workspace-reconcile-preflight.js");
       const input = decodeManifestValue(command);
       return await withHashes(input.hashes, () => preflightWorkspaceApplyImpl(input));
     }
     case "workspace.manifest.parse": {
-      const raw = Buffer.from(
-        command.input.raw.buffer,
-        command.input.raw.byteOffset,
-        command.input.raw.byteLength,
-      ).toString("utf8");
+      const raw = decodeUtf8(command.input.raw);
       const manifestRef =
         command.input.expectedRef ?? `sha256:${createHash("sha256").update(raw).digest("hex")}`;
       return {
@@ -166,16 +166,8 @@ export async function executeWorkspaceManifestComputation(
       return { raw, manifestRef: `sha256:${createHash("sha256").update(raw).digest("hex")}` };
     }
     case "workspace.manifest.pair": {
-      const baseRaw = Buffer.from(
-        command.input.baseRaw.buffer,
-        command.input.baseRaw.byteOffset,
-        command.input.baseRaw.byteLength,
-      ).toString("utf8");
-      const currentRaw = Buffer.from(
-        command.input.currentRaw.buffer,
-        command.input.currentRaw.byteOffset,
-        command.input.currentRaw.byteLength,
-      ).toString("utf8");
+      const baseRaw = decodeUtf8(command.input.baseRaw);
+      const currentRaw = decodeUtf8(command.input.currentRaw);
       const base = parseWorkerWorkspaceManifest(baseRaw, command.input.baseRef);
       const current = parseWorkerWorkspaceManifest(currentRaw, command.input.currentRef);
       const compared = parseChangedWorkspaceResult(base, current);

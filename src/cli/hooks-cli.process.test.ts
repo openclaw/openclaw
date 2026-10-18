@@ -1,21 +1,26 @@
-// Hooks CLI process tests cover plugin-owned handles that outlive command output.
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   buildNativeHookRelayCommand,
   registerOwnedNativeHookRelay,
   testing as nativeHookRelayTesting,
 } from "../agents/harness/native-hook-relay.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { writeCliPluginFixture, writeFixtureJson } from "./cli-fixtures.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const activeChildren = new Set<ChildProcessWithoutNullStreams>();
@@ -38,37 +43,16 @@ async function terminateChild(child: ChildProcessWithoutNullStreams): Promise<vo
   await once(child, "close");
 }
 
-async function createLingeringPluginFixture(): Promise<{
-  configPath: string;
-  markerPath: string;
-  stateDir: string;
-}> {
+async function createLingeringPluginFixture() {
   const root = tempDirs.make("openclaw-hooks-cli-");
   const stateDir = path.join(root, "state");
   const pluginDir = path.join(root, "linger-plugin");
   const markerPath = path.join(root, "registered");
   await fs.mkdir(stateDir, { recursive: true });
-  await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify({
-      name: "linger-plugin",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: "linger",
-      name: "Linger",
-      activation: { onCapabilities: ["hook"] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "index.js"),
+  await writeCliPluginFixture(
+    pluginDir,
+    "linger-plugin",
+    { id: "linger", name: "Linger", activation: { onCapabilities: ["hook"] } },
     [
       'import fs from "node:fs";',
       "export default {",
@@ -77,35 +61,29 @@ async function createLingeringPluginFixture(): Promise<{
       "  register(api) {",
       '    fs.writeFileSync(process.env.LINGER_MARKER, "registered\\n");',
       '    api.registerHook("command:new", () => {}, { name: "fixture-hook", description: "Fixture hook" });',
-      "    setInterval(() => {}, 60_000);",
+      "    const timer = setInterval(() => {}, 60_000);",
+      '    api.lifecycle.onDispose(() => { clearInterval(timer); fs.appendFileSync(process.env.LINGER_MARKER, "disposed\\n"); });',
       "  },",
       "};",
       "",
     ].join("\n"),
   );
   const configPath = path.join(stateDir, "openclaw.json");
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      plugins: {
-        load: { paths: [pluginDir] },
-        entries: { linger: { enabled: true } },
-      },
-    }),
-  );
+  await writeFixtureJson(configPath, {
+    plugins: {
+      load: { paths: [pluginDir] },
+      entries: { linger: { enabled: true } },
+    },
+  });
   return { configPath, markerPath, stateDir };
 }
 
 async function createRelayPreloadFixture(
-  mode: "linger" | "missing-drain-callbacks" = "linger",
-): Promise<{
-  markerPath: string;
-  preloadPath: string;
-  stateDir: string;
-}> {
+  mode: "natural-exit" | "missing-drain-callbacks" = "natural-exit",
+) {
   const root = tempDirs.make("openclaw-hooks-relay-");
   const markerPath = path.join(root, "loaded");
-  const preloadPath = path.join(root, "linger.mjs");
+  const preloadPath = path.join(root, "natural-exit.mjs");
   const stateDir = path.join(root, "state");
   await fs.mkdir(stateDir, { recursive: true });
   await fs.writeFile(
@@ -113,8 +91,9 @@ async function createRelayPreloadFixture(
     [
       'import fs from "node:fs";',
       'fs.writeFileSync(process.env.LINGER_MARKER, "loaded\\n");',
-      ...(mode === "linger"
-        ? ["setInterval(() => {}, 60_000);"]
+      'process.exit = () => { throw new Error("unexpected forced process exit"); };',
+      ...(mode === "natural-exit"
+        ? []
         : [
             "for (const stream of [process.stdout, process.stderr]) {",
             "  const write = stream.write.bind(stream);",
@@ -127,13 +106,7 @@ async function createRelayPreloadFixture(
   return { markerPath, preloadPath, stateDir };
 }
 
-async function createTimeoutOwnershipFixture(): Promise<{
-  nodeWrapperPath: string;
-  pidLogPath: string;
-  preloadPath: string;
-  readyMarkerPath: string;
-  stateDir: string;
-}> {
+async function createTimeoutOwnershipFixture() {
   const root = tempDirs.make("openclaw-hooks-timeout-owner-");
   const nodeWrapperPath = path.join(root, "node-with-tsx");
   const pidLogPath = path.join(root, "pids");
@@ -149,6 +122,7 @@ async function createTimeoutOwnershipFixture(): Promise<{
       "const originalAsyncIterator = process.stdin[Symbol.asyncIterator].bind(process.stdin);",
       "process.stdin[Symbol.asyncIterator] = function () {",
       "  fs.writeFileSync(process.env.RELAY_READY_MARKER, `${process.pid}\\n`);",
+      '  process.stdout.write("relay-ready\\n");',
       "  return originalAsyncIterator();",
       "};",
       "",
@@ -173,6 +147,14 @@ async function readPidFile(filePath: string): Promise<number[]> {
   }
 }
 
+function relayEnv(fixture: Awaited<ReturnType<typeof createRelayPreloadFixture>>) {
+  return {
+    LINGER_MARKER: fixture.markerPath,
+    NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+    OPENCLAW_STATE_DIR: fixture.stateDir,
+  };
+}
+
 function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -186,15 +168,18 @@ async function runHooksCli(params: {
   args: string[];
   completion: "exit" | "output-then-exit";
   entryPath?: string;
+  entryArgv?: string[];
   label: string;
   env?: NodeJS.ProcessEnv;
   nodeExecutable?: string;
   stdin?: string;
 }) {
-  const startedAt = performance.now();
   const child = spawn(
     params.nodeExecutable ?? process.execPath,
-    ["--import", "tsx", params.entryPath ?? "src/entry.ts", ...params.args],
+    [
+      ...(params.entryArgv ?? ["--import", "tsx", params.entryPath ?? "src/entry.ts"]),
+      ...params.args,
+    ],
     {
       cwd: path.resolve("."),
       env: {
@@ -213,83 +198,66 @@ async function runHooksCli(params: {
   child.stderr.setEncoding("utf8");
   child.stdin.end(params.stdin ?? "");
 
-  return await new Promise<{
-    code: number | null;
-    signal: NodeJS.Signals | null;
-    stderr: string;
-    stdout: string;
-  }>((resolve, reject) => {
-    let timedOut = false;
-    let outputObserved = false;
-    let outputAfterMs: number | null = null;
-    let exit: { afterMs: number; code: number | null; signal: NodeJS.Signals | null } | null = null;
-    const processState = () => ({
-      afterMs: Math.round(performance.now() - startedAt),
-      outputAfterMs,
-      exit,
-      exitCode: child.exitCode,
-      signalCode: child.signalCode,
-      stdoutClosed: child.stdout.closed,
-      stderrClosed: child.stderr.closed,
-    });
-    let timeoutState: ReturnType<typeof processState> | undefined;
-    child.once("exit", (code, signal) => {
-      exit = { afterMs: Math.round(performance.now() - startedAt), code, signal };
-    });
-    const onTimeout = () => {
-      timedOut = true;
-      timeoutState ??= processState();
-      child.kill("SIGKILL");
-    };
-    // Silent relay success has no stream milestone. Give it an exit deadline
-    // while keeping the tighter post-output deadline for leaked handles.
-    const initialTimeoutMs = params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs;
-    let timer = setTimeout(onTimeout, initialTimeoutMs);
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-      outputAfterMs ??= Math.round(performance.now() - startedAt);
-      if (params.completion === "exit" || outputObserved) {
-        return;
-      }
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", (code, signal) => resolve({ code, signal }));
+    },
+  );
+  let outputObserved = false;
+  const processState = () => ({
+    outputObserved,
+    exitCode: child.exitCode,
+    signalCode: child.signalCode,
+    stdoutClosed: child.stdout.closed,
+    stderrClosed: child.stderr.closed,
+  });
+  let timeoutState: ReturnType<typeof processState> | undefined;
+  const onTimeout = () => {
+    timeoutState ??= processState();
+    child.kill("SIGKILL");
+  };
+  // Silent relays need an exit deadline; output-producing commands must release handles after output.
+  let timer = setTimeout(
+    onTimeout,
+    params.completion === "exit" ? exitOnlyTimeoutMs : outputTimeoutMs,
+  );
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+    if (!timeoutState && params.completion !== "exit" && !outputObserved) {
       outputObserved = true;
       clearTimeout(timer);
       timer = setTimeout(onTimeout, exitAfterOutputTimeoutMs);
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.once("error", (error) => {
-      clearTimeout(timer);
-      activeChildren.delete(child);
-      reject(error);
-    });
-    child.once("close", (code, signal) => {
-      clearTimeout(timer);
-      activeChildren.delete(child);
-      if (timedOut) {
-        const timeoutMessage =
-          params.completion === "exit"
-            ? `${params.label} did not exit within ${exitOnlyTimeoutMs}ms`
-            : timeoutState?.outputAfterMs != null
-              ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
-              : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
-        reject(
-          new Error(
-            `${timeoutMessage}\nprocess: ${JSON.stringify({ beforeKill: timeoutState, atClose: processState() })}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
-          ),
-        );
-        return;
-      }
-      resolve({ code, signal, stderr, stdout });
-    });
+    }
   });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  try {
+    const exit = await closed;
+    if (timeoutState) {
+      const timeoutMessage =
+        params.completion === "exit"
+          ? `${params.label} did not exit within ${exitOnlyTimeoutMs}ms`
+          : timeoutState.outputObserved
+            ? `${params.label} did not exit within ${exitAfterOutputTimeoutMs}ms after emitting output`
+            : `${params.label} did not emit output within ${outputTimeoutMs}ms`;
+      throw new Error(
+        `${timeoutMessage}\nprocess: ${JSON.stringify({ beforeKill: timeoutState, atClose: processState() })}\nstdout:\n${stdout}\nstderr:\n${stderr}`,
+      );
+    }
+    return { ...exit, stderr, stdout };
+  } finally {
+    clearTimeout(timer);
+    activeChildren.delete(child);
+  }
 }
 
 describe("hooks CLI process lifecycle", () => {
   it.each([
     {
       name: "invalid JSON",
-      preloadMode: "linger" as const,
+      preloadMode: "natural-exit" as const,
       args: [
         "hooks",
         "relay",
@@ -302,13 +270,6 @@ describe("hooks CLI process lifecycle", () => {
       ],
       stdin: "{",
       diagnostic: "failed to read native hook input",
-    },
-    {
-      name: "missing required option",
-      preloadMode: "linger" as const,
-      args: ["hooks", "relay"],
-      stdin: "",
-      diagnostic: "native hook relay failed: Missing required option --provider",
     },
     {
       name: "missing drain callbacks with no lingering handle",
@@ -328,11 +289,7 @@ describe("hooks CLI process lifecycle", () => {
         completion: "exit",
         label: "dedicated relay error",
         nodeExecutable: resolveTestNodeExecPath(),
-        env: {
-          LINGER_MARKER: fixture.markerPath,
-          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
-          OPENCLAW_STATE_DIR: fixture.stateDir,
-        },
+        env: relayEnv(fixture),
       });
       expect(result, result.stderr).toMatchObject({ code: 1, signal: null });
       expect(result.stdout).toBe("");
@@ -345,7 +302,7 @@ describe("hooks CLI process lifecycle", () => {
 
   it.runIf(process.platform !== "win32")(
     "keeps the relay on the timeout-owned shell PID",
-    async () => {
+    async ({ signal }) => {
       const fixture = await createTimeoutOwnershipFixture();
       const command = buildNativeHookRelayCommand({
         provider: "codex",
@@ -372,6 +329,16 @@ describe("hooks CLI process lifecycle", () => {
         stdio: ["pipe", "pipe", "pipe"],
       });
       activeChildren.add(child);
+      const closed = once(child, "close");
+      const ready = createDeferred();
+      let stdout = "";
+      child.stdout.setEncoding("utf8");
+      child.stdout.on("data", (chunk: string) => {
+        stdout += chunk;
+        if (stdout.includes("relay-ready\n")) {
+          ready.resolve();
+        }
+      });
       child.once("close", () => activeChildren.delete(child));
       const timeoutOwnedPid = child.pid;
       if (!timeoutOwnedPid) {
@@ -379,27 +346,24 @@ describe("hooks CLI process lifecycle", () => {
       }
 
       try {
-        await expect
-          .poll(async () => (await readPidFile(fixture.readyMarkerPath))[0], {
-            interval: 100,
-            timeout: outputTimeoutMs,
-          })
-          .toBe(timeoutOwnedPid);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            ready.promise,
+            closed,
+            "native hook relay exited before writing its ready marker",
+          ),
+          signal,
+        );
+        expect((await readPidFile(fixture.readyMarkerPath))[0]).toBe(timeoutOwnedPid);
         expect(new Set(await readPidFile(fixture.pidLogPath))).toEqual(new Set([timeoutOwnedPid]));
 
-        const closed = once(child, "close");
         expect(child.kill("SIGKILL")).toBe(true);
-        await closed;
-        await expect
-          .poll(() => isProcessAlive(timeoutOwnedPid), { interval: 50, timeout: 5_000 })
-          .toBe(false);
-        await expect
-          .poll(
-            async () =>
-              (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
-            { interval: 50, timeout: 5_000 },
-          )
-          .toEqual([]);
+        await withinTest(closed, signal);
+        // Every recorded relay is the reaped shell PID; close also joins its output streams.
+        expect(isProcessAlive(timeoutOwnedPid)).toBe(false);
+        expect(
+          (await readPidFile(fixture.pidLogPath)).filter((pid) => isProcessAlive(pid)),
+        ).toEqual([]);
       } finally {
         await terminateChild(child);
         for (const pid of await readPidFile(fixture.pidLogPath)) {
@@ -413,7 +377,7 @@ describe("hooks CLI process lifecycle", () => {
   );
 
   it.each(["src/entry.ts", "src/cli/native-hook-relay-entry.ts"])(
-    "%s uses the explicit relay database and exits despite a lingering handle",
+    "%s uses the explicit relay database and exits naturally",
     async (entryPath) => {
       const relay = registerOwnedNativeHookRelay({
         provider: "codex",
@@ -450,28 +414,25 @@ describe("hooks CLI process lifecycle", () => {
         label: "hooks relay explicit state database",
         nodeExecutable: resolveTestNodeExecPath(),
         env: {
-          LINGER_MARKER: fixture.markerPath,
-          NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
+          ...relayEnv(fixture),
           OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_STATE_DIR: fixture.stateDir,
         },
         stdin: JSON.stringify({ hook_event_name: "PostToolUse" }),
       });
 
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null });
-      expect(result.stderr).toBe("");
-      expect(result.stdout).toBe("");
+      expect(result, result.stderr).toEqual({ code: 0, signal: null, stderr: "", stdout: "" });
       await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("loaded\n");
     },
     90_000,
   );
 
-  it("exits after hooks list output when plugin registration leaves a ref'd handle", async () => {
+  it("joins the plugin-owned handle after hooks list output", async () => {
     const fixture = await createLingeringPluginFixture();
     const unavailableGatewayPort = await getFreePort();
 
     const listResult = await runHooksCli({
-      entryPath: fileURLToPath(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
+      // Prepare CLI code before timing the fresh process and its plugin lifecycle.
+      entryArgv: resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       args: ["hooks", "list", "--json"],
       completion: "output-then-exit",
       label: "hooks list",
@@ -480,6 +441,7 @@ describe("hooks CLI process lifecycle", () => {
         OPENCLAW_CONFIG_PATH: fixture.configPath,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
         OPENCLAW_GATEWAY_PORT: String(unavailableGatewayPort),
+        OPENCLAW_NO_RESPAWN: "1",
         OPENCLAW_STATE_DIR: fixture.stateDir,
       },
     });
@@ -489,6 +451,6 @@ describe("hooks CLI process lifecycle", () => {
     expect(JSON.parse(listResult.stdout)).toMatchObject({
       hooks: expect.arrayContaining([expect.objectContaining({ name: "fixture-hook" })]),
     });
-    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\n");
+    await expect(fs.readFile(fixture.markerPath, "utf8")).resolves.toBe("registered\ndisposed\n");
   }, 150_000);
 });

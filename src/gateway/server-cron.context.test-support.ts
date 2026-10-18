@@ -6,9 +6,10 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { refreshCronScheduler } from "../cron/service/scheduler-actor.js";
 import type { CronServiceState } from "../cron/service/state.js";
-import { armTimer } from "../cron/service/timer.js";
 import type { CronJobCreate } from "../cron/types.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
@@ -18,6 +19,12 @@ import {
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import type { buildGatewayCronService } from "./server-cron.js";
 
 type CronFixture = ReturnType<typeof buildGatewayCronService>;
@@ -32,7 +39,9 @@ type GatewayCronContextTestHarness = {
   createCronConfig: (name: string) => OpenClawConfig;
   createCronService: (
     cfg: OpenClawConfig,
-    overrides?: Pick<Parameters<typeof buildGatewayCronService>[0], "resolveGatewayContext">,
+    overrides?: Partial<
+      Pick<Parameters<typeof buildGatewayCronService>[0], "resolveGatewayContext" | "scheduler">
+    >,
   ) => CronFixture;
   getCronState: (service: CronFixture) => CronServiceState;
   addAgentTurnJob: AddCronJob;
@@ -59,10 +68,63 @@ export function registerGatewayCronContextTests({
   requestHeartbeatAndWaitMock,
 }: GatewayCronContextTestHarness) {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
+  it.each(["main", "agent:ops:cron:job-1:run:one"])(
+    "keeps a targeted global wake on its selected agent's stored route (%s)",
+    async (sessionKey) => {
+      await withOpenClawTestState({ label: "cron-global-delivery-owner" }, async (state) => {
+        const cfg = {
+          agents: {
+            ownership: "explicit",
+            defaults: { systemAgent: { agentId: "main" } },
+            entries: { main: {}, ops: {} },
+          },
+          session: { scope: "global" },
+          cron: { enabled: false, triggers: { enabled: false } },
+        } satisfies OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg);
+        const routes = {
+          main: { channel: "telegram", to: "telegram:main", accountId: "main", threadId: "11" },
+          ops: { channel: "telegram", to: "telegram:ops", accountId: "ops", threadId: "22" },
+        };
+        loadConfigMock.mockReturnValue(cfg);
+        for (const [agentId, context] of Object.entries(routes)) {
+          await replaceSessionEntry(
+            { agentId, sessionKey: "global", env: state.env },
+            {
+              sessionId: `${agentId}-global`,
+              updatedAt: 1,
+              delivery: normalizeSessionDeliveryState({ context }),
+            },
+          );
+        }
+        const service = createCronService(cfg);
+        try {
+          const enqueue = vi.spyOn(getCronState(service).deps, "enqueueSystemEvent");
+          expect(
+            await service.cron.wake({
+              mode: "next-heartbeat",
+              text: "wake ops",
+              agentId: "ops",
+              sessionKey,
+            }),
+          ).toEqual({ ok: true });
+          expect(enqueue).toHaveBeenCalledWith("wake ops", {
+            agentId: "ops",
+            sessionKey,
+            deliveryContext: routes.ops,
+          });
+        } finally {
+          await service.cron.stopAndDrain?.();
+        }
+      });
+    },
+  );
+
   it("owns timer execution and settlement after its creator context closes", async () => {
     const broker = await createBroker();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T01:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     const cfg = createCronConfig("server-cron-scheduled-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const gatewayContext = {
@@ -98,7 +160,10 @@ export function registerGatewayCronContextTests({
     });
 
     const state = runWithSpawnBroker(broker, () =>
-      createCronService(cfg, { resolveGatewayContext: () => gatewayContext }),
+      createCronService(cfg, {
+        scheduler: createTestGatewayScheduler(clock.clock),
+        resolveGatewayContext: () => gatewayContext,
+      }),
     );
     try {
       await state.cron.start();
@@ -132,7 +197,7 @@ export function registerGatewayCronContextTests({
                   isWebchatConnect: () => false,
                 } as never,
                 () => {
-                  armTimer(cronState);
+                  refreshCronScheduler(cronState);
                   return {
                     run: AsyncLocalStorage.snapshot(),
                     assertCurrent: captureGatewayToolCallerAssertion(),
@@ -145,8 +210,7 @@ export function registerGatewayCronContextTests({
       requestContextActive = false;
       await creatorWork.drain();
 
-      // Fake timers need the context that a native timer captures when armed.
-      await creatorScope.run(() => vi.advanceTimersByTimeAsync(60_000));
+      await creatorScope.run(() => clock.advanceBy(60_000));
       await ran.promise;
       await settled.promise;
 
@@ -192,6 +256,7 @@ export function registerGatewayCronContextTests({
   it("withholds a retired gateway context from a scheduled run", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T02:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     // The process-wide context holder is not cleared on shutdown, so an
     // unfenced resolver would hand a queued run a retired context. No context
     // fails visibly; a retired one operates against a dead Gateway generation.
@@ -210,7 +275,10 @@ export function registerGatewayCronContextTests({
       return { status: "ok", text: "done" } as never;
     });
 
-    const state = createCronService(cfg, { resolveGatewayContext: () => retiredContext });
+    const state = createCronService(cfg, {
+      scheduler: createTestGatewayScheduler(clock.clock),
+      resolveGatewayContext: () => retiredContext,
+    });
     try {
       await state.cron.start();
       await addAgentTurnJob(state, "retired-context", "run it", {
@@ -218,7 +286,7 @@ export function registerGatewayCronContextTests({
         schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
       });
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      await clock.advanceBy(60_000);
       await ran.promise;
 
       expect(observed).toBeUndefined();
@@ -231,6 +299,7 @@ export function registerGatewayCronContextTests({
   it("gives a scheduled heartbeat wake a resolvable gateway context", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-21T03:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
     // Main-session cron jobs and heartbeat monitors reach the agent through the
     // heartbeat adapter, which shares the isolated path's contextless defect.
     const cfg = createCronConfig("server-cron-heartbeat-gateway-context");
@@ -247,7 +316,10 @@ export function registerGatewayCronContextTests({
       return { status: "ran", durationMs: 1 };
     });
 
-    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
+    const state = createCronService(cfg, {
+      scheduler: createTestGatewayScheduler(clock.clock),
+      resolveGatewayContext: () => gatewayContext,
+    });
     try {
       await state.cron.start();
       await addSystemEventJob(state, "scheduled-heartbeat", "run it", {
@@ -256,7 +328,7 @@ export function registerGatewayCronContextTests({
         sessionTarget: "main",
         wakeMode: "now",
       });
-      await vi.advanceTimersByTimeAsync(60_000);
+      await clock.advanceBy(60_000);
       await ran.promise;
 
       expect(observed).toBe(gatewayContext);
@@ -266,7 +338,7 @@ export function registerGatewayCronContextTests({
     }
   });
 
-  it("keeps an RPC-inherited gateway context instead of the scheduler resolver", async () => {
+  it("replaces an RPC-inherited gateway context with the scheduler owner after activation", async () => {
     const cfg = createCronConfig("server-cron-rpc-gateway-context");
     loadConfigMock.mockReturnValue(cfg);
     const rpcContext = { terminalSessions: { rpc: true } } as never;
@@ -278,6 +350,7 @@ export function registerGatewayCronContextTests({
     let observed: unknown = "never-ran";
     let callerActive = true;
     let assertCaller: ReturnType<typeof captureGatewayToolCallerAssertion>;
+    let assertInitiatingCaller: ((method?: string) => void) | undefined;
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       observed = getInProcessGatewayToolContext();
       assertCaller = captureGatewayToolCallerAssertion();
@@ -297,18 +370,21 @@ export function registerGatewayCronContextTests({
           operationalRunInstance: { runId: "manual-run", instanceId: "manual-instance" },
           receiptAuthority: () => callerActive,
         },
-        () =>
-          withPluginRuntimeGatewayRequestScope(
+        () => {
+          assertInitiatingCaller = captureGatewayToolCallerAssertion();
+          return withPluginRuntimeGatewayRequestScope(
             { context: rpcContext, isWebchatConnect: () => false } as never,
             () => state.cron.run(job.id, "force"),
-          ),
+          );
+        },
       );
 
-      expect(observed).toBe(rpcContext);
-      expect(assertCaller).toBeTypeOf("function");
-      expect(() => assertCaller?.("chat.history")).not.toThrow();
+      expect(observed).toBe(schedulerContext);
+      expect(assertCaller).toBeUndefined();
+      expect(assertInitiatingCaller).toBeTypeOf("function");
+      expect(() => assertInitiatingCaller?.("chat.history")).not.toThrow();
       callerActive = false;
-      expect(() => assertCaller?.("chat.history")).toThrow(
+      expect(() => assertInitiatingCaller?.("chat.history")).toThrow(
         "agent tool caller authority is no longer active",
       );
     } finally {

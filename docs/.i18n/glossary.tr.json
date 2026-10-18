@@ -40,10 +40,6 @@
     "target": "LINE"
   },
   {
-    "source": "Mintlify",
-    "target": "Mintlify"
-  },
-  {
     "source": "Node",
     "target": "Node"
   },
@@ -86,5 +82,737 @@
   {
     "source": "CI pipeline",
     "target": "CI işlem hattı"
+  },
+  {
+    "source": "Control UI",
+    "target": "Kontrol Arayüzü"
+  },
+  {
+    "source": "Get started",
+    "target": "Başlangıç"
+  },
+  {
+    "source": "First steps",
+    "target": "İlk adımlar"
+  },
+  {
+    "source": "Install",
+    "target": "Kurulum"
+  },
+  {
+    "source": "Install overview",
+    "target": "Kurulum genel bakışı"
+  },
+  {
+    "source": "onboarding",
+    "target": "ilk kurulum"
+  },
+  {
+    "source": "Onboarding",
+    "target": "İlk kurulum"
+  },
+  {
+    "source": "Quick start",
+    "target": "Hızlı başlangıç"
+  },
+  {
+    "source": "Quick Start",
+    "target": "Hızlı başlangıç"
+  },
+  {
+    "source": "Capabilities",
+    "target": "Yetenekler"
+  },
+  {
+    "source": "Platforms",
+    "target": "Platformlar"
+  },
+  {
+    "source": "Channels",
+    "target": "Kanallar"
+  },
+  {
+    "source": "Agents",
+    "target": "Ajanlar"
+  },
+  {
+    "source": "Models",
+    "target": "Modeller"
+  },
+  {
+    "source": "Guides",
+    "target": "Kılavuzlar"
+  },
+  {
+    "source": "Settings",
+    "target": "Ayarlar"
+  },
+  {
+    "source": "Appearance",
+    "target": "Görünüm"
+  },
+  {
+    "source": "Language",
+    "target": "Dil"
+  },
+  {
+    "source": "Note",
+    "target": "Not"
+  },
+  {
+    "source": "Tip",
+    "target": "İpucu"
+  },
+  {
+    "source": "Migrating",
+    "target": "Geçiş"
+  },
+  {
+    "source": "Memory",
+    "target": "Bellek"
+  },
+  {
+    "source": "Web browser",
+    "target": "Web tarayıcısı"
+  },
+  {
+    "source": "Web tools",
+    "target": "Web araçları"
+  },
+  {
+    "source": "Setup",
+    "target": "Kurulum"
+  },
+  {
+    "source": "Runtime",
+    "target": "Çalışma zamanı"
+  },
+  {
+    "source": "Features",
+    "target": "Özellikler"
+  },
+  {
+    "source": "Authentication and secrets",
+    "target": "Kimlik doğrulama ve gizli bilgiler"
+  },
+  {
+    "source": "Health and diagnostics",
+    "target": "Sağlık ve tanılama"
+  },
+  {
+    "source": "Scaling and operations",
+    "target": "Ölçeklendirme ve operasyonlar"
+  },
+  {
+    "source": "Security and sandboxing",
+    "target": "Güvenlik ve korumalı alanda çalıştırma"
+  },
+  {
+    "source": "Protocols and APIs",
+    "target": "Protokoller ve API'ler"
+  },
+  {
+    "source": "Networking and discovery",
+    "target": "Ağ ve keşif"
+  },
+  {
+    "source": "Media capabilities",
+    "target": "Medya yetenekleri"
+  },
+  {
+    "source": "Node features",
+    "target": "Node özellikleri"
+  },
+  {
+    "source": "Gateway and service",
+    "target": "Gateway ve hizmet"
+  },
+  {
+    "source": "Agents and sessions",
+    "target": "Ajanlar ve oturumlar"
+  },
+  {
+    "source": "Channels and messaging",
+    "target": "Kanallar ve mesajlaşma"
+  },
+  {
+    "source": "Tools and execution",
+    "target": "Araçlar ve yürütme"
+  },
+  {
+    "source": "Plugins and skills",
+    "target": "Pluginler ve Skills"
+  },
+  {
+    "source": "Interfaces",
+    "target": "Arayüzler"
+  },
+  {
+    "source": "Utility",
+    "target": "Yardımcı araçlar"
+  },
+  {
+    "source": "Gateway & Ops",
+    "target": "Gateway ve operasyonlar"
+  },
+  {
+    "source": "Reference",
+    "target": "Başvuru"
+  },
+  {
+    "source": "Releases",
+    "target": "Sürümler"
+  },
+  {
+    "source": "Contributing",
+    "target": "Katkıda bulunma"
+  },
+  {
+    "source": "Help",
+    "target": "Yardım"
+  },
+  {
+    "source": "Overview",
+    "target": "Genel bakış"
+  },
+  {
+    "source": "Setup guides and reference",
+    "target": "Kurulum kılavuzları ve başvuru"
+  },
+  {
+    "source": "Runtimes",
+    "target": "Çalışma zamanları"
+  },
+  {
+    "source": "Maintenance",
+    "target": "Bakım"
+  },
+  {
+    "source": "Updating",
+    "target": "Güncelleme"
+  },
+  {
+    "source": "Containers",
+    "target": "Kapsayıcılar"
+  },
+  {
+    "source": "Docker",
+    "target": "Docker"
+  },
+  {
+    "source": "Hosting",
+    "target": "Barındırma"
+  },
+  {
+    "source": "App platforms",
+    "target": "Uygulama platformları"
+  },
+  {
+    "source": "Cloud servers",
+    "target": "Bulut sunucuları"
+  },
+  {
+    "source": "Self-hosted and local",
+    "target": "Kendi sunucunuzda ve yerel barındırma"
+  },
+  {
+    "source": "Advanced setup",
+    "target": "Gelişmiş kurulum"
+  },
+  {
+    "source": "Mainstream messaging",
+    "target": "Yaygın mesajlaşma"
+  },
+  {
+    "source": "Discord",
+    "target": "Discord"
+  },
+  {
+    "source": "iMessage",
+    "target": "iMessage"
+  },
+  {
+    "source": "Matrix",
+    "target": "Matrix"
+  },
+  {
+    "source": "Microsoft Teams",
+    "target": "Microsoft Teams"
+  },
+  {
+    "source": "Slack",
+    "target": "Slack"
+  },
+  {
+    "source": "Telegram",
+    "target": "Telegram"
+  },
+  {
+    "source": "Developer and self-hosted",
+    "target": "Geliştirici ve öz barındırma"
+  },
+  {
+    "source": "Regional platforms",
+    "target": "Bölgesel platformlar"
+  },
+  {
+    "source": "Feishu",
+    "target": "Feishu"
+  },
+  {
+    "source": "Configuration",
+    "target": "Yapılandırma"
+  },
+  {
+    "source": "Agent runtime",
+    "target": "Ajan çalışma zamanı"
+  },
+  {
+    "source": "Agent workspace",
+    "target": "Ajan çalışma alanı"
+  },
+  {
+    "source": "Sessions and memory",
+    "target": "Oturumlar ve bellek"
+  },
+  {
+    "source": "Active memory",
+    "target": "Active Memory"
+  },
+  {
+    "source": "Multi-agent",
+    "target": "Çoklu ajan"
+  },
+  {
+    "source": "Messages and delivery",
+    "target": "Mesajlar ve teslimat"
+  },
+  {
+    "source": "Plugins",
+    "target": "Pluginler"
+  },
+  {
+    "source": "Plugin guides",
+    "target": "Plugin kılavuzları"
+  },
+  {
+    "source": "Codex",
+    "target": "Codex"
+  },
+  {
+    "source": "Codex harness",
+    "target": "Codex harness"
+  },
+  {
+    "source": "Meetings and calls",
+    "target": "Toplantılar ve aramalar"
+  },
+  {
+    "source": "Google Meet",
+    "target": "Google Meet"
+  },
+  {
+    "source": "Voice call",
+    "target": "Sesli arama"
+  },
+  {
+    "source": "Models and memory",
+    "target": "Modeller ve bellek"
+  },
+  {
+    "source": "Secrets and vaults",
+    "target": "Gizli bilgiler ve kasalar"
+  },
+  {
+    "source": "Automation and integrations",
+    "target": "Otomasyon ve entegrasyonlar"
+  },
+  {
+    "source": "Building plugins",
+    "target": "Plugin oluşturma"
+  },
+  {
+    "source": "Channel plugins",
+    "target": "Kanal pluginleri"
+  },
+  {
+    "source": "Provider plugins",
+    "target": "Sağlayıcı pluginleri"
+  },
+  {
+    "source": "Plugin hooks",
+    "target": "Plugin kancaları"
+  },
+  {
+    "source": "Automation",
+    "target": "Otomasyon"
+  },
+  {
+    "source": "Automations",
+    "target": "Otomasyonlar"
+  },
+  {
+    "source": "Hooks",
+    "target": "Kancalar"
+  },
+  {
+    "source": "Tools",
+    "target": "Araçlar"
+  },
+  {
+    "source": "Running code and approvals",
+    "target": "Kod çalıştırma ve onaylar"
+  },
+  {
+    "source": "Media and documents",
+    "target": "Medya ve belgeler"
+  },
+  {
+    "source": "Text to speech",
+    "target": "Metinden konuşmaya"
+  },
+  {
+    "source": "Tool catalogs and workflows",
+    "target": "Araç katalogları ve iş akışları"
+  },
+  {
+    "source": "Code Mode",
+    "target": "Code Mode"
+  },
+  {
+    "source": "Context and reasoning",
+    "target": "Bağlam ve akıl yürütme"
+  },
+  {
+    "source": "Chat and UI tools",
+    "target": "Sohbet ve arayüz araçları"
+  },
+  {
+    "source": "Browsing and fetching pages",
+    "target": "Sayfalara göz atma ve sayfa alma"
+  },
+  {
+    "source": "Browser",
+    "target": "Tarayıcı"
+  },
+  {
+    "source": "Web search",
+    "target": "Web araması"
+  },
+  {
+    "source": "Agent coordination",
+    "target": "Ajan koordinasyonu"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "Alt ajanlar"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP ajanları"
+  },
+  {
+    "source": "Concepts and configuration",
+    "target": "Kavramlar ve yapılandırma"
+  },
+  {
+    "source": "Model providers",
+    "target": "Model sağlayıcıları"
+  },
+  {
+    "source": "Providers",
+    "target": "Sağlayıcılar"
+  },
+  {
+    "source": "Chat and coding models",
+    "target": "Sohbet ve kodlama modelleri"
+  },
+  {
+    "source": "OpenAI",
+    "target": "OpenAI"
+  },
+  {
+    "source": "Speech and audio",
+    "target": "Konuşma ve ses"
+  },
+  {
+    "source": "Image, video, and music",
+    "target": "Görsel, video ve müzik"
+  },
+  {
+    "source": "Gateways and routers",
+    "target": "Ağ geçitleri ve yönlendiriciler"
+  },
+  {
+    "source": "Local runtimes",
+    "target": "Yerel çalışma zamanları"
+  },
+  {
+    "source": "Ollama",
+    "target": "Ollama"
+  },
+  {
+    "source": "Platforms overview",
+    "target": "Platformlara genel bakış"
+  },
+  {
+    "source": "macOS companion app",
+    "target": "macOS eşlikçi uygulaması"
+  },
+  {
+    "source": "Secrets management",
+    "target": "Gizli bilgi yönetimi"
+  },
+  {
+    "source": "Doctor",
+    "target": "Doctor"
+  },
+  {
+    "source": "OpenTelemetry",
+    "target": "OpenTelemetry"
+  },
+  {
+    "source": "Troubleshooting",
+    "target": "Sorun giderme"
+  },
+  {
+    "source": "Cloud Workers",
+    "target": "Cloud Workers"
+  },
+  {
+    "source": "Sandboxing",
+    "target": "Korumalı alanda çalıştırma"
+  },
+  {
+    "source": "Gateway protocol",
+    "target": "Gateway protokolü"
+  },
+  {
+    "source": "Models and local providers",
+    "target": "Modeller ve yerel sağlayıcılar"
+  },
+  {
+    "source": "Remote access",
+    "target": "Uzaktan erişim"
+  },
+  {
+    "source": "Security",
+    "target": "Güvenlik"
+  },
+  {
+    "source": "Nodes and media",
+    "target": "Node'lar ve medya"
+  },
+  {
+    "source": "Talk mode",
+    "target": "Konuşma modu"
+  },
+  {
+    "source": "Web interfaces",
+    "target": "Web arayüzleri"
+  },
+  {
+    "source": "CLI commands",
+    "target": "CLI komutları"
+  },
+  {
+    "source": "Running the service",
+    "target": "Hizmeti çalıştırma"
+  },
+  {
+    "source": "Setup and maintenance",
+    "target": "Kurulum ve bakım"
+  },
+  {
+    "source": "Update",
+    "target": "Güncelleme"
+  },
+  {
+    "source": "Diagnostics and security",
+    "target": "Tanılama ve güvenlik"
+  },
+  {
+    "source": "Agents, models, and sessions",
+    "target": "Ajanlar, modeller ve oturumlar"
+  },
+  {
+    "source": "Events and audit records",
+    "target": "Olaylar ve denetim kayıtları"
+  },
+  {
+    "source": "Plugins CLI",
+    "target": "Plugin CLI"
+  },
+  {
+    "source": "Policy",
+    "target": "İlke"
+  },
+  {
+    "source": "MCP",
+    "target": "MCP"
+  },
+  {
+    "source": "RPC and API",
+    "target": "RPC ve API"
+  },
+  {
+    "source": "Codex runtime reference",
+    "target": "Codex çalışma zamanı başvurusu"
+  },
+  {
+    "source": "Codex harness reference",
+    "target": "Codex harness başvurusu"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Codex harness çalışma zamanı"
+  },
+  {
+    "source": "Plugin reference",
+    "target": "Plugin başvurusu"
+  },
+  {
+    "source": "Plugin SDK reference",
+    "target": "Plugin SDK başvurusu"
+  },
+  {
+    "source": "Plugin SDK overview",
+    "target": "Plugin SDK genel bakışı"
+  },
+  {
+    "source": "Plugin manifest",
+    "target": "Plugin bildirimi"
+  },
+  {
+    "source": "Plugin entry points",
+    "target": "Plugin giriş noktaları"
+  },
+  {
+    "source": "Plugin runtime helpers",
+    "target": "Plugin çalışma zamanı yardımcıları"
+  },
+  {
+    "source": "Agent harness plugins",
+    "target": "Ajan harness pluginleri"
+  },
+  {
+    "source": "Plugin internals",
+    "target": "Plugin iç yapısı"
+  },
+  {
+    "source": "Plugin architecture internals",
+    "target": "Plugin mimarisinin iç yapısı"
+  },
+  {
+    "source": "Plugin SDK migration",
+    "target": "Plugin SDK geçişi"
+  },
+  {
+    "source": "Templates",
+    "target": "Şablonlar"
+  },
+  {
+    "source": "Dev agent templates",
+    "target": "Geliştirme ajanı şablonları"
+  },
+  {
+    "source": "Retired workspace files",
+    "target": "Kullanımdan kaldırılan çalışma alanı dosyaları"
+  },
+  {
+    "source": "Technical reference",
+    "target": "Teknik başvuru"
+  },
+  {
+    "source": "Session management deep dive",
+    "target": "Oturum yönetiminin ayrıntıları"
+  },
+  {
+    "source": "Database schemas",
+    "target": "Veritabanı şemaları"
+  },
+  {
+    "source": "Schemas and formatting",
+    "target": "Şemalar ve biçimlendirme"
+  },
+  {
+    "source": "Project and contributing",
+    "target": "Proje ve katkıda bulunma"
+  },
+  {
+    "source": "Maintainer scripts",
+    "target": "Proje bakım betikleri"
+  },
+  {
+    "source": "Release notes",
+    "target": "Sürüm notları"
+  },
+  {
+    "source": "Release process",
+    "target": "Sürüm süreci"
+  },
+  {
+    "source": "Full release validation",
+    "target": "Tam sürüm doğrulaması"
+  },
+  {
+    "source": "Maturity",
+    "target": "Olgunluk"
+  },
+  {
+    "source": "Testing and CI",
+    "target": "Test ve CI"
+  },
+  {
+    "source": "Tests",
+    "target": "Testler"
+  },
+  {
+    "source": "CI",
+    "target": "CI"
+  },
+  {
+    "source": "Scope and routing",
+    "target": "Kapsam ve yönlendirme"
+  },
+  {
+    "source": "Release validation",
+    "target": "Sürüm doğrulaması"
+  },
+  {
+    "source": "QA stack",
+    "target": "Kalite güvence araçları"
+  },
+  {
+    "source": "Testing guide",
+    "target": "Test kılavuzu"
+  },
+  {
+    "source": "Live testing guide",
+    "target": "Canlı test kılavuzu"
+  },
+  {
+    "source": "Start here",
+    "target": "Buradan başlayın"
+  },
+  {
+    "source": "FAQ",
+    "target": "SSS"
+  },
+  {
+    "source": "FAQ topics",
+    "target": "SSS konuları"
+  },
+  {
+    "source": "First-run FAQ",
+    "target": "İlk çalıştırma SSS"
+  },
+  {
+    "source": "Diagnostics",
+    "target": "Tanılama"
+  },
+  {
+    "source": "Community and meta",
+    "target": "Topluluk ve meta"
   }
 ]

@@ -4,6 +4,21 @@ import type { CaptureViewModel } from "./ui-render-capture-model.js";
 import { redactCaptureValue } from "./ui-render-capture-redaction.js";
 import { esc, formatDuration } from "./ui-render-utils.js";
 
+function renderCaptureRadioOptions(
+  name: string,
+  selected: string,
+  options: ReadonlyArray<readonly [value: string, label: string]>,
+): string {
+  return options
+    .map(
+      ([value, label]) => `<label class="capture-detail-view-option">
+              <input type="radio" name="${esc(name)}" value="${esc(value)}"${selected === value ? " checked" : ""} />
+              <span>${esc(label)}</span>
+            </label>`,
+    )
+    .join("\n            ");
+}
+
 export function renderCaptureDetailView(model: CaptureViewModel): string {
   const {
     state,
@@ -41,26 +56,23 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
               </div>
             </div>
             <div class="capture-nav-row">
-              ${
-                previousFlowEvent
-                  ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(previousFlowEvent))}" type="button">
-                      <span class="capture-nav-label">Previous on flow</span>
-                      <span class="capture-nav-meta">${esc(previousFlowEvent.kind)} · ${esc(new Date(previousFlowEvent.ts).toLocaleTimeString())}${
-                        previousFlowEventVisible ? "" : " · outside current view"
+              ${(
+                [
+                  [previousFlowEvent, previousFlowEventVisible, "Previous", "earlier"],
+                  [nextFlowEvent, nextFlowEventVisible, "Next", "later"],
+                ] as const
+              )
+                .map(([event, visible, label, position]) =>
+                  event
+                    ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(event))}" type="button">
+                      <span class="capture-nav-label">${label} on flow</span>
+                      <span class="capture-nav-meta">${esc(event.kind)} · ${esc(new Date(event.ts).toLocaleTimeString())}${
+                        visible ? "" : " · outside current view"
                       }</span>
                     </button>`
-                  : '<div class="capture-nav-placeholder">No earlier event on this flow.</div>'
-              }
-              ${
-                nextFlowEvent
-                  ? `<button class="capture-nav-button" data-capture-event="${esc(captureEventKey(nextFlowEvent))}" type="button">
-                      <span class="capture-nav-label">Next on flow</span>
-                      <span class="capture-nav-meta">${esc(nextFlowEvent.kind)} · ${esc(new Date(nextFlowEvent.ts).toLocaleTimeString())}${
-                        nextFlowEventVisible ? "" : " · outside current view"
-                      }</span>
-                    </button>`
-                  : '<div class="capture-nav-placeholder">No later event on this flow.</div>'
-              }
+                    : `<div class="capture-nav-placeholder">No ${position} event on this flow.</div>`,
+                )
+                .join("\n              ")}
             </div>
           </section>`
         : '<div class="empty-state">This event does not have a usable flow.</div>',
@@ -104,60 +116,35 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
             </section>`
         : "",
   };
-  const renderDetailView = () => {
-    if (!selectedEvent) {
-      return "";
-    }
-    if (effectiveDetailView === "flow") {
-      return `
+  if (!selectedEvent) {
+    return "";
+  }
+  if (effectiveDetailView === "flow") {
+    return `
         <div class="capture-detail-stack">
           <div class="capture-subview-switch" role="radiogroup" aria-label="Flow layout">
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-flow-layout" value="nav-first"${
-                effectiveFlowLayout === "nav-first" ? " checked" : ""
-              } />
-              <span>Nav first</span>
-            </label>
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-flow-layout" value="pair-first"${
-                effectiveFlowLayout === "pair-first" ? " checked" : ""
-              } />
-              <span>Pair first</span>
-            </label>
+            ${renderCaptureRadioOptions("capture-flow-layout", effectiveFlowLayout, [
+              ["nav-first", "Nav first"],
+              ["pair-first", "Pair first"],
+            ])}
           </div>
           ${effectiveFlowLayout === "pair-first" ? flowSections.pair + flowSections.navigation : flowSections.navigation + flowSections.pair}
         </div>`;
-    }
-    if (effectiveDetailView === "payload") {
-      return `
+  }
+  if (effectiveDetailView === "payload") {
+    return `
         <section class="capture-detail-section">
           <div class="capture-subview-switch" role="radiogroup" aria-label="Payload layout">
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-payload-layout" value="formatted"${
-                effectivePayloadLayout === "formatted" ? " checked" : ""
-              } />
-              <span>Formatted</span>
-            </label>
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-payload-layout" value="raw"${
-                effectivePayloadLayout === "raw" ? " checked" : ""
-              } />
-              <span>Raw preview</span>
-            </label>
+            ${renderCaptureRadioOptions("capture-payload-layout", effectivePayloadLayout, [
+              ["formatted", "Formatted"],
+              ["raw", "Raw preview"],
+            ])}
           </div>
           <div class="capture-subview-switch" role="radiogroup" aria-label="Payload extent">
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-payload-extent" value="preview"${
-                effectivePayloadExtent === "preview" ? " checked" : ""
-              } />
-              <span>Preview</span>
-            </label>
-            <label class="capture-detail-view-option">
-              <input type="radio" name="capture-payload-extent" value="full"${
-                effectivePayloadExtent === "full" ? " checked" : ""
-              } />
-              <span>Full inline</span>
-            </label>
+            ${renderCaptureRadioOptions("capture-payload-extent", effectivePayloadExtent, [
+              ["preview", "Preview"],
+              ["full", "Full inline"],
+            ])}
           </div>
           <div class="capture-summary-header">
             <div class="capture-summary-label">Payload</div>
@@ -177,24 +164,15 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
             selectedPayload.mode === "sse"
               ? `<div class="capture-payload-toolbar">
                   <div class="capture-detail-radio-row" role="radiogroup" aria-label="Payload event sort">
-                    <label class="capture-detail-view-option">
-                      <input type="radio" name="capture-payload-event-sort" value="stream"${
-                        state.capturePayloadEventSort === "stream" ? " checked" : ""
-                      } />
-                      <span>Stream order</span>
-                    </label>
-                    <label class="capture-detail-view-option">
-                      <input type="radio" name="capture-payload-event-sort" value="name"${
-                        state.capturePayloadEventSort === "name" ? " checked" : ""
-                      } />
-                      <span>Name</span>
-                    </label>
-                    <label class="capture-detail-view-option">
-                      <input type="radio" name="capture-payload-event-sort" value="size"${
-                        state.capturePayloadEventSort === "size" ? " checked" : ""
-                      } />
-                      <span>Largest first</span>
-                    </label>
+                    ${renderCaptureRadioOptions(
+                      "capture-payload-event-sort",
+                      state.capturePayloadEventSort,
+                      [
+                        ["stream", "Stream order"],
+                        ["name", "Name"],
+                        ["size", "Largest first"],
+                      ],
+                    )}
                   </div>
                   <label class="capture-search-field capture-payload-filter-field">Filter
                     <input
@@ -234,9 +212,9 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
               </section>`
             : ""
         }`;
-    }
-    if (effectiveDetailView === "headers") {
-      return `
+  }
+  if (effectiveDetailView === "headers") {
+    return `
         <section class="capture-detail-section">
           <div class="capture-summary-header">
             <div class="capture-summary-label">Headers</div>
@@ -263,8 +241,8 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
               </details>`
             : ""
         }`;
-    }
-    return `
+  }
+  return `
       <div class="capture-detail-stack">
         <section class="capture-detail-section">
           <div class="capture-summary-label">Overview</div>
@@ -297,6 +275,4 @@ export function renderCaptureDetailView(model: CaptureViewModel): string {
             : ""
         }
       </div>`;
-  };
-  return renderDetailView();
 }

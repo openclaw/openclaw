@@ -70,6 +70,7 @@ export function createConfigHandlerHarness(args?: {
       configRevisionProjector: {
         projectRawHash: (hash: string) => hash,
         projectResolvedHash: (hash: string) => hash,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
       logGateway,
       disconnectClientsUsingSharedGatewayAuth,

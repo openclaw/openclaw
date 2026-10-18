@@ -1,12 +1,14 @@
 /** Shared test harness for CLI runner bundle-MCP config preparation tests. */
 import fs from "node:fs/promises";
-import { afterAll, beforeAll } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
 } from "../../plugins/bundle-mcp.test-support.js";
 import { captureEnv, setTestEnvValue, withEnvAsync } from "../../test-utils/env.js";
+import { disposeAllSessionMcpRuntimes } from "../agent-bundle-mcp-manager-api.js";
+import { bindSessionMcpRuntimeTestScheduler } from "../agent-bundle-mcp-manager.test-support.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
 
@@ -43,6 +45,9 @@ export function requireMcpConfigPath(args: readonly string[] | undefined): strin
 }
 
 export function setupCliBundleMcpTestHarness(): void {
+  beforeEach(bindSessionMcpRuntimeTestScheduler);
+  afterEach(disposeAllSessionMcpRuntimes);
+
   beforeAll(async () => {
     // Use an empty bundled-dir override so only temp fixture plugins participate.
     envSnapshot = captureEnv(["OPENCLAW_BUNDLED_PLUGINS_DIR"]);

@@ -5,17 +5,16 @@ export {
   ComputerUseCapabilityDescriptorSchema,
   ScreenSnapshotParamsSchema,
   ScreenSnapshotResultSchema,
-  compileComputerUseValidator,
   parseComputerActParamsJSON,
   parseScreenSnapshotParamsJSON,
-  registerComputerUseProvider,
 } from "../plugins/computer-use-contract.js";
 export type {
   ComputerActParams,
   ComputerActResult,
   ComputerUseCapabilityDescriptor,
-  ComputerUseProvider,
   ComputerUseV2ActionName,
   ScreenSnapshotParams,
   ScreenSnapshotResult,
 } from "../plugins/computer-use-contract.js";
+export { registerComputerUseProvider } from "../plugins/computer-use-registration.js";
+export type { ComputerUseProvider } from "../plugins/computer-use-registration.js";

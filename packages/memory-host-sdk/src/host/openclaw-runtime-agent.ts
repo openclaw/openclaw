@@ -23,4 +23,3 @@ export {
   type ResolvedMemorySearchSyncConfig,
 } from "../../../../src/agents/memory-search.js";
 export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
-export { getAgentWorkspaceAccess } from "../../../../src/agents/workspace-access.js";

@@ -1,4 +1,15 @@
 import { createDeferredCore } from "../shared/deferred.js";
+import type { ConfigWriteOptions } from "./io.types.js";
+import { createMergePatch, mergePatchConflicts } from "./merge-patch.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSnapshotMetadata,
+  hashRuntimeConfigValue,
+  notifyRuntimeConfigWriteListeners,
+  type ConfigWriteAfterWrite,
+  type RuntimeConfigWritePreparedCandidate,
+} from "./runtime-snapshot.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigWriteApplicationStatus =
   | "applied"
@@ -12,6 +23,7 @@ export type RuntimeConfigWriteApplicationStatus =
 
 export type RuntimeConfigWriteApplicationClaim = {
   settle: (status: RuntimeConfigWriteApplicationStatus) => void;
+  isCarriedBy?: (config: OpenClawConfig) => boolean;
   prepare?: (assertCurrent: () => void) => Promise<void>;
   requireImmediateApplication?: boolean;
   // Re-enter only the originating request root so channel drain excludes the RPC awaiting
@@ -23,6 +35,7 @@ type RuntimeConfigWriteApplication = {
   result: Promise<RuntimeConfigWriteApplicationStatus>;
   readonly claimed: boolean;
   claim: () => RuntimeConfigWriteApplicationClaim | null;
+  recordConfigChange: (previous: OpenClawConfig, written: OpenClawConfig) => void;
 };
 
 const runtimeConfigWriteApplications = new WeakMap<object, RuntimeConfigWriteApplication>();
@@ -33,11 +46,19 @@ export function createRuntimeConfigWriteApplication(
   activation?: Pick<RuntimeConfigWriteApplicationClaim, "prepare" | "requireImmediateApplication">,
 ): RuntimeConfigWriteApplication {
   let claimed = false;
+  let settled = false;
+  let isCarriedBy: RuntimeConfigWriteApplicationClaim["isCarriedBy"];
   const result = createDeferredCore<RuntimeConfigWriteApplicationStatus>();
   return {
     result: result.promise,
     get claimed() {
       return claimed;
+    },
+    recordConfigChange: (previous, written) => {
+      if (!activation?.prepare && !activation?.requireImmediateApplication) {
+        const patch = createMergePatch(previous, written);
+        isCarriedBy = (config) => !settled && !mergePatchConflicts(written, config, patch);
+      }
     },
     claim: () => {
       if (claimed) {
@@ -46,12 +67,14 @@ export function createRuntimeConfigWriteApplication(
       claimed = true;
       const claim: RuntimeConfigWriteApplicationClaim = {
         settle: (status) => {
+          settled = true;
           // Reply settlement releases the RPC root; retained watcher intent must reacquire admission.
           delete claim.runTransaction;
           result.resolve(status);
         },
         ...(runTransaction ? { runTransaction } : {}),
         ...activation,
+        ...(isCarriedBy ? { isCarriedBy } : {}),
       };
       return claim;
     },
@@ -85,4 +108,75 @@ export function getRuntimeConfigWriteApplication(
   target: object,
 ): RuntimeConfigWriteApplication | undefined {
   return runtimeConfigWriteApplications.get(target);
+}
+
+export function publishRuntimeConfigWrite(params: {
+  configPath: string;
+  snapshot: ConfigFileSnapshot;
+  sourceConfig: OpenClawConfig;
+  previousSourceConfig: OpenClawConfig;
+  writtenSourceConfig: OpenClawConfig;
+  runtimeConfig: OpenClawConfig;
+  persistedHash: string;
+  deferRuntimeActivation: boolean;
+  preparedCandidates: ReadonlyMap<symbol, RuntimeConfigWritePreparedCandidate>;
+  writeOptions?: ConfigWriteOptions;
+  afterWrite?: ConfigWriteAfterWrite;
+}): void {
+  const runtimeConfig = params.deferRuntimeActivation
+    ? params.runtimeConfig
+    : getRuntimeConfigSnapshot();
+  if (!runtimeConfig) {
+    return;
+  }
+  const application = params.writeOptions && getRuntimeConfigWriteApplication(params.writeOptions);
+  const afterWrite = params.afterWrite ?? params.writeOptions?.afterWrite;
+  const refresh = params.writeOptions?.runtimeRefresh;
+  if (
+    (!afterWrite || afterWrite.mode === "auto") &&
+    !refresh?.includeAuthStoreRefs &&
+    !refresh?.requireImmediateApplication
+  ) {
+    application?.recordConfigChange(params.previousSourceConfig, params.writtenSourceConfig);
+  }
+  const preparedCandidatesByOwner = new Map(
+    [...params.preparedCandidates].map(([ownerId, candidate]) => [
+      ownerId,
+      {
+        ...candidate,
+        runtimeConfig:
+          candidate.reapplyRuntimeOverlays?.(params.runtimeConfig) ?? candidate.runtimeConfig,
+        compareConfig:
+          candidate.reapplyCompareOverlays?.(params.sourceConfig) ?? candidate.compareConfig,
+      },
+    ]),
+  );
+  const publishedMetadata = getRuntimeConfigSnapshotMetadata();
+  const metadata =
+    runtimeConfig === getRuntimeConfigSnapshot() && publishedMetadata
+      ? publishedMetadata
+      : {
+          revision: publishedMetadata?.revision ?? 0,
+          fingerprint: hashRuntimeConfigValue(runtimeConfig),
+          sourceFingerprint: hashRuntimeConfigValue(params.sourceConfig),
+          updatedAtMs: Date.now(),
+        };
+  notifyRuntimeConfigWriteListeners(
+    copyRuntimeConfigWriteApplication(params.writeOptions, {
+      configPath: params.configPath,
+      snapshot: params.snapshot,
+      sourceConfig: params.sourceConfig,
+      runtimeConfig,
+      persistedHash: params.persistedHash,
+      revision: metadata.revision,
+      fingerprint: metadata.fingerprint,
+      sourceFingerprint: metadata.sourceFingerprint,
+      writtenAtMs: Date.now(),
+      afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
+      ...(params.writeOptions?.runtimeRefresh
+        ? { runtimeRefresh: params.writeOptions.runtimeRefresh }
+        : {}),
+      ...(preparedCandidatesByOwner.size > 0 ? { preparedCandidatesByOwner } : {}),
+    }),
+  );
 }

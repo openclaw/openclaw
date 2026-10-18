@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -96,7 +97,7 @@ suite.define(() => {
       }
       const markdown = await text(stream);
       expect(markdown).toContain("# Chat with OpenClaw");
-      expect(markdown).toContain("## You");
+      expect(markdown).toContain("## Message");
       expect(markdown).toContain(question);
       expect(markdown).toContain("## OpenClaw");
       expect(markdown).toContain(answer);
@@ -112,9 +113,16 @@ suite.define(() => {
           { length: 16 },
           (_, index) => `choice-${String(index).padStart(2, "0")}`,
         );
-        const commands = Array.from({ length: 16 }, (_, index) => ({
+        const commands = Array.from({ length: 16 }, (_, index): CommandEntry => ({
           acceptsArgs: true,
-          args: [{ name: "choice", choices }],
+          args: [
+            {
+              name: "choice",
+              description: "Choose a synthetic viewport option.",
+              type: "string",
+              choices: choices.map((value) => ({ value, label: value })),
+            },
+          ],
           category: "tools",
           description: "Choose a synthetic viewport option.",
           name: `viewport-${String(index).padStart(2, "0")}`,

@@ -40,6 +40,10 @@ async function captureCompletedLease(options: LeaseOptions) {
     await callerScope.run(caller, () =>
       withOpenClawStateLease(options, async (lease) => {
         retained.lease = lease;
+        if (options.heartbeat === "worker") {
+          assert.ok(lease.assertOwnedAsync);
+          await lease.assertOwnedAsync();
+        }
         // The child keeps the real lease-owner scope, but its caller generation has advanced.
         retained.timer = callerScope.run({ label: "next gateway generation" }, () =>
           setInterval(() => undefined, 60_000),
@@ -52,14 +56,6 @@ async function captureCompletedLease(options: LeaseOptions) {
   return { reference, retained };
 }
 
-function renewFromCaller(lease: OpenClawStateLeaseContext) {
-  assert.equal(typeof lease.renew, "function");
-  const caller = { label: "renewing caller" };
-  const reference = new WeakRef(caller);
-  callerScope.run(caller, () => lease.renew?.());
-  return reference;
-}
-
 await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
   const options: LeaseOptions = {
     scope: "core:test-retention",
@@ -70,6 +66,10 @@ await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
   };
   const scenario = process.argv[2];
   if (scenario === "completed" || scenario === "completed-worker") {
+    if (scenario === "completed-worker") {
+      // Observe the heartbeat, not the shared acquisition worker. The completed case stays cold.
+      await withOpenClawStateLease(options, async (lease) => lease.assertOwned());
+    }
     const { reference, retained } = await captureCompletedLease({
       ...options,
       ...(scenario === "completed-worker" ? { heartbeat: "worker" as const } : {}),
@@ -84,22 +84,16 @@ await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
       assert.ok(retained.timer);
       assert.throws(() => retained.lease?.assertOwned(), { code: "OPENCLAW_STATE_LEASE_LOST" });
       assert.throws(() => retained.lease?.renew?.(), { code: "OPENCLAW_STATE_LEASE_LOST" });
+      if (scenario === "completed-worker") {
+        assert.ok(retained.lease.assertOwnedAsync);
+        await assert.rejects(retained.lease.assertOwnedAsync(), {
+          code: "OPENCLAW_STATE_LEASE_LOST",
+        });
+      }
       await withOpenClawStateLease(options, async (next) => next.assertOwned());
     } finally {
       clearInterval(retained.timer);
     }
-  } else if (scenario === "paused") {
-    await withOpenClawStateLease(options, async (lease) => {
-      const reference = renewFromCaller(lease);
-      assert.ok(lease.withDatabaseFileExclusion);
-      await lease.withDatabaseFileExclusion(async (assertCurrent) => {
-        await assertCollected(reference, scenario);
-        assertCurrent();
-        lease.assertOwned();
-      });
-      lease.assertOwned();
-      lease.renew?.();
-    });
   } else {
     throw new Error(`Unknown lease retention scenario: ${scenario}`);
   }

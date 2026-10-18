@@ -1,17 +1,18 @@
-// Runs the full live Vitest suite with live-test env and heartbeat output.
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
+import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
-import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
-import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
+import { exitVitestBySignal, spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
+import { resolveVitestTestCommand } from "./lib/vitest-test-runtime.mts";
+import { createVitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import {
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mts";
 
-/**
- * Renders CLI usage for the live-test wrapper.
- */
 function testLiveUsage() {
   return [
     "Usage: node --import tsx scripts/test-live.mts [options] [--] [vitest targets/args...]",
@@ -27,9 +28,6 @@ function testLiveUsage() {
   ].join("\n");
 }
 
-/**
- * Parses live-test wrapper flags and forwarded Vitest args.
- */
 export function parseTestLiveArgs(argv: string[]) {
   const forwardedArgs: string[] = [];
   let quietOverride: "0" | "1" | undefined;
@@ -74,9 +72,6 @@ export function parseTestLiveArgs(argv: string[]) {
 
 export type TestLiveArgs = ReturnType<typeof parseTestLiveArgs>;
 
-/**
- * Builds env for live tests, including quiet mode and Codex harness opt-in.
- */
 export function buildTestLiveEnv(args: TestLiveArgs, baseEnv = process.env) {
   return {
     ...baseEnv,
@@ -89,9 +84,6 @@ export function buildTestLiveEnv(args: TestLiveArgs, baseEnv = process.env) {
   };
 }
 
-/**
- * Reads the live-test heartbeat interval.
- */
 export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   const value = baseEnv.OPENCLAW_LIVE_WRAPPER_HEARTBEAT_MS;
   if (value === undefined || value === "") {
@@ -108,145 +100,142 @@ export function resolveTestLiveHeartbeatMs(baseEnv = process.env) {
   return parsed;
 }
 
-/**
- * Reads the live-test no-output timeout using the shared Vitest watchdog contract.
- */
-export function resolveTestLiveNoOutputTimeoutMs(baseEnv = process.env) {
-  return resolveVitestNoOutputTimeoutMs(baseEnv);
+export function buildTestLiveVitestArgs(args: TestLiveArgs) {
+  return ["run", "--config", "test/vitest/vitest.live.config.ts", ...args.forwardedArgs];
 }
 
-/**
- * Builds pnpm/vitest args for full live test execution.
- */
-export function buildTestLivePnpmArgs(args: TestLiveArgs) {
-  return [
-    "exec",
-    "vitest",
-    "run",
-    "--config",
-    "test/vitest/vitest.live.config.ts",
-    ...args.forwardedArgs,
-  ];
-}
-
-/**
- * Builds spawn options for the live-test Vitest child.
- */
-export function buildTestLiveSpawnParams(env: NodeJS.ProcessEnv, platform = process.platform) {
-  return {
-    detached: shouldUseDetachedVitestProcessGroup(platform),
-    env,
-    stdio: ["inherit", "pipe", "pipe"],
-  } satisfies Pick<PnpmRunnerParams, "detached" | "env" | "stdio">;
-}
-
-/**
- * Runs the live-test wrapper process.
- */
-export function main(argv = process.argv.slice(2), baseEnv = process.env) {
+export async function main(argv = process.argv.slice(2), baseEnv = process.env) {
   const args = parseTestLiveArgs(argv);
   if (args.help) {
     console.log(testLiveUsage());
-    process.exit(0);
+    return;
   }
 
-  const env = buildTestLiveEnv(args, baseEnv);
+  const env = {
+    ...buildTestLiveEnv(args, baseEnv),
+    OPENCLAW_VITEST_RUNTIME: resolveTestRuntime(baseEnv),
+  };
   const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
-  const noOutputTimeoutMs = resolveTestLiveNoOutputTimeoutMs(baseEnv);
+  const noOutputTimeoutMs = resolveVitestNoOutputTimeoutMs(baseEnv);
   const startedAt = Date.now();
   let lastOutputAt = startedAt;
   let lastHeartbeatAt = startedAt;
   let timedOut = false;
 
-  const spawnParams = buildTestLiveSpawnParams(env);
-  const { child, completion } = spawnOwnedVitestProcess({
-    ...createPnpmRunnerSpawnSpec({
-      pnpmArgs: buildTestLivePnpmArgs(args),
-      ...spawnParams,
-    }),
-    homeMode: resolveVitestHomeSelection(buildTestLivePnpmArgs(args), { env }),
-  });
-  const childCleanup = installVitestProcessGroupCleanup({
-    child,
-    forceSignal: "SIGKILL",
-    forceSignalDelayMs: 100,
-  });
-
-  const teardown = () => {
-    clearInterval(heartbeat);
-    childCleanup.teardown();
-  };
-
-  const noteOutput = () => {
-    lastOutputAt = Date.now();
-    lastHeartbeatAt = lastOutputAt;
-  };
-
-  child.stdout?.on("data", (chunk) => {
-    noteOutput();
-    process.stdout.write(chunk);
-  });
-
-  child.stderr?.on("data", (chunk) => {
-    noteOutput();
-    process.stderr.write(chunk);
-  });
-
-  const heartbeat = setInterval(
-    () => {
-      const now = Date.now();
-      const quietMs = now - lastOutputAt;
-      if (noOutputTimeoutMs !== null && quietMs >= noOutputTimeoutMs) {
-        timedOut = true;
-        clearInterval(heartbeat);
-        process.stderr.write(
-          `[test:live] no output for ${noOutputTimeoutMs}ms; terminating stalled Vitest process group\n`,
-        );
-        terminateManagedChild(child, "SIGKILL");
-        return;
-      }
-      if (quietMs < heartbeatMs || now - lastHeartbeatAt < heartbeatMs) {
-        return;
-      }
-      const elapsedSec = Math.max(1, Math.round((now - startedAt) / 1_000));
-      const quietSec = Math.max(1, Math.round(quietMs / 1_000));
-      process.stderr.write(
-        `[test:live] still running (${elapsedSec}s elapsed, ${quietSec}s since last output)\n`,
-      );
-      lastHeartbeatAt = now;
-    },
-    Math.min(heartbeatMs, noOutputTimeoutMs ?? heartbeatMs),
+  const vitestArgs = buildTestLiveVitestArgs(args);
+  const testCommand = resolveVitestTestCommand(
+    [resolveVitestCliEntry({ env }), ...vitestArgs],
+    env,
   );
-  heartbeat.unref?.();
+  // Live suites need the same compiled native owners as ordinary tests; source
+  // loaders cannot acquire Linux subreaper custody. Join every borrower before cleanup.
+  const workers = createVitestWorkerRun(env);
+  const cliIndex = testCommand.args.findIndex((arg) => path.basename(arg) === "vitest.mjs");
+  testCommand.args.splice(
+    cliIndex,
+    0,
+    fileURLToPath(new URL("./lib/vitest-worker-bootstrap.mts", import.meta.url)),
+    workers.descriptor.directory,
+  );
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+  };
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  try {
+    const { child, completion } = spawnOwnedVitestProcess({
+      ...testCommand,
+      options: {
+        detached: shouldUseDetachedVitestProcessGroup(),
+        env: { ...env, ...testCommand.envOverrides },
+        stdio: ["inherit", "pipe", "pipe", "ipc"],
+      },
+      homeMode: resolveVitestHomeSelection(vitestArgs, { env }),
+    });
+    const childCleanup = installVitestProcessGroupCleanup({
+      child,
+      forceSignal: "SIGKILL",
+      forceSignalDelayMs: 100,
+    });
 
-  completion.finally(teardown).then(
-    ({ code, signal }) => {
-      const forwardedSignal = childCleanup.getForwardedSignal();
-      if (forwardedSignal) {
-        process.kill(process.pid, forwardedSignal);
-        return;
-      }
-      if (timedOut) {
-        process.exit(1);
-        return;
-      }
-      if (signal) {
+    const teardown = () => {
+      clearInterval(heartbeat);
+      childCleanup.teardown();
+    };
+
+    const noteOutput = () => {
+      lastOutputAt = Date.now();
+      lastHeartbeatAt = lastOutputAt;
+    };
+
+    child.stdout?.on("data", (chunk) => {
+      noteOutput();
+      process.stdout.write(chunk);
+    });
+
+    child.stderr?.on("data", (chunk) => {
+      noteOutput();
+      process.stderr.write(chunk);
+    });
+
+    const heartbeat = setInterval(
+      () => {
+        const now = Date.now();
+        const quietMs = now - lastOutputAt;
+        if (noOutputTimeoutMs !== null && quietMs >= noOutputTimeoutMs) {
+          timedOut = true;
+          clearInterval(heartbeat);
+          process.stderr.write(
+            `[test:live] no output for ${noOutputTimeoutMs}ms; terminating stalled Vitest process group\n`,
+          );
+          terminateManagedChild(child, "SIGKILL");
+          return;
+        }
+        if (quietMs < heartbeatMs || now - lastHeartbeatAt < heartbeatMs) {
+          return;
+        }
+        const elapsedSec = Math.max(1, Math.round((now - startedAt) / 1_000));
+        const quietSec = Math.max(1, Math.round(quietMs / 1_000));
+        process.stderr.write(
+          `[test:live] still running (${elapsedSec}s elapsed, ${quietSec}s since last output)\n`,
+        );
+        lastHeartbeatAt = now;
+      },
+      Math.min(heartbeatMs, noOutputTimeoutMs ?? heartbeatMs),
+    );
+    heartbeat.unref?.();
+
+    try {
+      const { code, signal } = await workers.borrow(child, completion, noteOutput);
+      interrupted ??=
+        childCleanup.getForwardedSignal() ?? (timedOut ? undefined : (signal ?? undefined));
+      if (signal && !timedOut && !childCleanup.getForwardedSignal()) {
         process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
-        process.kill(process.pid, signal);
-        return;
       }
-      if ((code ?? 1) !== 0) {
+      if ((code ?? 1) !== 0 && !interrupted) {
         process.stderr.write(`[test:live] vitest exited code=${code ?? 1}\n`);
       }
-      process.exit(code ?? 1);
-    },
-    (error: unknown) => {
-      console.error(error);
-      process.exit(1);
-    },
-  );
+      process.exitCode = timedOut ? 1 : (code ?? 1);
+    } finally {
+      teardown();
+    }
+  } finally {
+    try {
+      await workers.dispose();
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (interrupted) {
+        await exitVitestBySignal(interrupted);
+      }
+    }
+  }
 }
 
 if (import.meta.main) {
-  main();
+  void main().catch((error: unknown) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

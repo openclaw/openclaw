@@ -11,7 +11,8 @@ import {
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
 import { installScheduledTask } from "./schtasks-install.js";
-import { buildScheduledTaskXml, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { captureGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { native } from "./service-definition-backup.mocks.test-support.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";
@@ -19,10 +20,13 @@ import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-t
 import { stageSystemdService } from "./systemd-install.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
+import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
+  // The updater has stopped the task before giving these tests definition custody.
+  native.taskState = 3;
   native.command.mockReset();
   native.task.mockReset();
   native.transport.mockReset().mockResolvedValue(undefined);
@@ -51,11 +55,13 @@ async function fixture(
     HOME: root,
     USERPROFILE: root,
     OPENCLAW_STATE_DIR: path.join(root, "state"),
+    ...(platform === "win32" ? { OPENCLAW_GATEWAY_PORT: "18789" } : {}),
     OPENCLAW_SYSTEMD_UNIT: "openclaw-owned",
     OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.receipt-fixture",
     USERNAME: "operator",
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
   };
+  await seedCompletedRuntimePinMigration(env);
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   const readFile = fs.readFile.bind(fs);
   if (platform === "linux") {
@@ -124,6 +130,10 @@ async function fixture(
     }
     if (args[0] === "/Create") {
       task = (await fs.readFile(args[args.indexOf("/XML") + 1]!)).subarray(2).toString("utf16le");
+    } else if (args[0] === "/Run") {
+      native.taskState = 4;
+    } else if (args[0] === "/End") {
+      native.taskState = 3;
     }
     return { code: 0, stderr: "", stdout: "" };
   });

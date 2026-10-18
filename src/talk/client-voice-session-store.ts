@@ -1,10 +1,12 @@
+import { sql } from "kysely";
 import { z } from "zod";
-/** SQLite-backed persistence for durable per-agent Talk voice-call records. */
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "../state/openclaw-agent-db.js";
 import { VOICE_TRANSCRIPT_MAX_UNRESOLVED } from "./voice-transcript.js";
 
@@ -12,34 +14,28 @@ const VOICE_SESSION_CACHE_SCOPE = "talk-client-voice-sessions";
 export const VOICE_SESSION_RECORD_VERSION = 1;
 export const VOICE_SESSION_STALE_AFTER_MS = 6 * 60 * 60_000;
 
-export type ClientVoiceToolEffect = {
-  runId: string;
+type ClientVoiceToolEffect = SchemaContract<
+  Pick<z.output<typeof clientVoiceToolEffectSchema>, keyof typeof clientVoiceToolEffectSchema.shape>
+> & {
   toolCallId?: string;
-  toolName: string;
-  startedAt: number;
   finishedAt?: number;
-  status: "started" | "succeeded" | "failed" | "cancelled" | "blocked";
 };
 
-export type ClientVoiceSessionRecord = {
-  version: typeof VOICE_SESSION_RECORD_VERSION;
-  voiceSessionId: string;
-  agentId: string;
-  sessionKey: string;
-  provider?: string;
-  origin: "client" | "relay";
-  status: "open" | "closed";
-  createdAt: number;
-  updatedAt: number;
+export type ClientVoiceSessionRecord = SchemaContract<
+  Omit<
+    Pick<
+      z.output<typeof clientVoiceSessionRecordSchema>,
+      keyof typeof clientVoiceSessionRecordSchema.shape
+    >,
+    "effects"
+  >
+> & {
   closedAt?: number;
-  consultRunIds: string[];
   effects: ClientVoiceToolEffect[];
   digestDeliveredAt?: number;
-  /** Bounded hashes of transcript entries that must succeed before close can commit. */
-  transcriptFailureKeys: string[];
   /** Declared at create when the client speaks the transcript protocol (sent sessionKey). */
   transcriptCapable?: boolean;
-  /** Set once a finalized user utterance persisted; gates spoken confirmation capability. */
+  /** Set once a finalized user utterance persisted; records observed transcript capability. */
   hasUserTranscript?: boolean;
 };
 
@@ -91,6 +87,7 @@ const clientVoiceSessionRecordSchema = z.looseObject({
           })
         : [],
     ),
+  /** Bounded hashes of transcript entries that must succeed before close can commit. */
   transcriptFailureKeys: z
     .unknown()
     .optional()
@@ -103,11 +100,6 @@ const clientVoiceSessionRecordSchema = z.looseObject({
     ),
 });
 
-function parseVoiceSessionRecord(value: unknown): ClientVoiceSessionRecord | undefined {
-  const parsed = clientVoiceSessionRecordSchema.safeParse(value);
-  return parsed.success ? (parsed.data as ClientVoiceSessionRecord) : undefined;
-}
-
 export function parseStoredVoiceSessionRecord(
   valueJson: unknown,
 ): ClientVoiceSessionRecord | undefined {
@@ -115,7 +107,8 @@ export function parseStoredVoiceSessionRecord(
     return undefined;
   }
   try {
-    return parseVoiceSessionRecord(JSON.parse(valueJson));
+    const parsed = clientVoiceSessionRecordSchema.safeParse(JSON.parse(valueJson));
+    return parsed.success ? (parsed.data as ClientVoiceSessionRecord) : undefined;
   } catch {
     return undefined;
   }
@@ -124,22 +117,23 @@ export function parseStoredVoiceSessionRecord(
 export function readVoiceSessionRecord(
   agentId: string,
   voiceSessionId: string,
+  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
 ): ClientVoiceSessionRecord | undefined {
   return readVoiceSessionRecordInTransaction(
-    openOpenClawAgentDatabase({ agentId }),
+    openOpenClawAgentDatabase({ ...options, agentId }),
     voiceSessionId,
   );
 }
 
-function voiceSessionRowsQuery(database: OpenClawAgentDatabase) {
+export function voiceSessionRowsQuery(database: Pick<OpenClawAgentDatabase, "db">) {
   return getNodeSqliteKysely<Pick<OpenClawAgentKyselyDatabase, "cache_entries">>(database.db)
     .selectFrom("cache_entries")
     .select("value_json")
-    .where("scope", "=", VOICE_SESSION_CACHE_SCOPE);
+    .where("scope", "=", sql.lit(VOICE_SESSION_CACHE_SCOPE));
 }
 
 export function readVoiceSessionRecordInTransaction(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   voiceSessionId: string,
 ): ClientVoiceSessionRecord | undefined {
   const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
@@ -151,18 +145,48 @@ export function readVoiceSessionRecordInTransaction(
   return parseStoredVoiceSessionRecord(row?.value_json);
 }
 
-export function readVoiceSessionRecordRows(agentId: string, updatedBefore?: number) {
-  const database = openOpenClawAgentDatabase({ agentId });
-  const query = voiceSessionRowsQuery(database);
-  const { compiled, bind } = compileSqliteQueryBindings<void>(() =>
-    updatedBefore === undefined
-      ? query.orderBy("updated_at", "desc")
-      : query.where("updated_at", "<=", updatedBefore),
+type VoiceSessionFacts = Readonly<
+  Pick<
+    ClientVoiceSessionRecord,
+    "agentId" | "sessionKey" | "origin" | "status" | "transcriptCapable" | "hasUserTranscript"
+  >
+>;
+/** Synchronous tool policy reads the current record without a separate freshness probe. */
+function readVoiceSessionFacts(
+  agentId: string,
+  voiceSessionId: string,
+  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
+): VoiceSessionFacts | undefined {
+  const record = readVoiceSessionRecord(agentId, voiceSessionId, options);
+  return (
+    record &&
+    Object.freeze({
+      agentId: record.agentId,
+      sessionKey: record.sessionKey,
+      origin: record.origin,
+      status: record.status,
+      transcriptCapable: record.transcriptCapable,
+      hasUserTranscript: record.hasUserTranscript,
+    })
   );
-  return /* sqlite-allow-raw: Compiled SQL snapshots recovery candidates before awaits. */ database.db
-    .prepare(compiled.sql)
-    .all(...bind());
 }
+
+export function readOwnedVoiceSessionFacts(
+  params: ClientVoiceRunBinding,
+  options?: Pick<OpenClawAgentDatabaseOptions, "env" | "path">,
+): VoiceSessionFacts {
+  const record = readVoiceSessionFacts(params.agentId, params.voiceSessionId, options);
+  if (!record) {
+    throw new Error("voice session not found");
+  }
+  assertVoiceSessionOwnership(record, params);
+  return record;
+}
+
+export type VoiceSessionLookup =
+  | { kind: "legacy"; agentId: string; sessionKey: string }
+  | { kind: "stale"; agentId: string; updatedBefore: number; excludeVoiceSessionId?: string };
+export type VoiceSessionMatch = Pick<ClientVoiceSessionRecord, "voiceSessionId" | "sessionKey">;
 
 export function writeVoiceSessionRecordInTransaction(
   database: OpenClawAgentDatabase,
@@ -191,7 +215,7 @@ export function writeVoiceSessionRecordInTransaction(
 }
 
 export function assertVoiceSessionOwnership(
-  record: ClientVoiceSessionRecord,
+  record: Pick<ClientVoiceSessionRecord, "agentId" | "sessionKey">,
   params: { agentId: string; sessionKey: string },
 ): void {
   if (record.agentId !== params.agentId || record.sessionKey !== params.sessionKey) {

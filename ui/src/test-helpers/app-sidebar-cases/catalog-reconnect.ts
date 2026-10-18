@@ -16,7 +16,8 @@ describe("AppSidebar catalog reconnect", () => {
         .mockResolvedValue(catalogPage([]));
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       const hello = {
-        features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
+        auth: { role: "operator", scopes: ["operator.read"] },
+        features: { methods: ["sessions.catalog.list"] },
       } as ApplicationGatewaySnapshot["hello"];
       gateway.publish({ hello });
       const { sidebar } = await mountSidebar(
@@ -38,13 +39,14 @@ describe("AppSidebar catalog reconnect", () => {
       await vi.advanceTimersByTimeAsync(0);
       await sidebar.updateComplete;
       expect(sidebar.textContent).not.toContain("Stale session");
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-      await vi.advanceTimersByTimeAsync(200);
+      document.dispatchEvent(new Event("visibilitychange"));
+      await vi.advanceTimersByTimeAsync(5_000);
 
       expect(request).toHaveBeenLastCalledWith("sessions.catalog.list", {
         agentId: "main",
         limitPerHost: 40,
         progressId: expect.any(String),
+        allowPartialResults: true,
       });
     } finally {
       vi.useRealTimers();

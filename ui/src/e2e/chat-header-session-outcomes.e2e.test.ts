@@ -10,6 +10,7 @@ import {
   controlUiSessionUrl,
   installMockGateway,
 } from "./chat-flow.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -149,17 +150,15 @@ suite.define(() => {
 
         if (restartable) {
           await page.getByRole("button", { name: "Unarchive", exact: true }).waitFor();
-          await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: "All", exact: true })
-            .click();
+          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await chooseSidebarMenuOption(page, "Status", "All");
+          await closeSidebarMenu(page);
         }
         const sidebarRow = page.locator(
           `.sidebar-recent-session[data-session-key="${sessionKey}"]`,
         );
         await sidebarRow.hover();
-        await sidebarRow.getByRole("button", { name: "Open session menu" }).click();
+        await sidebarRow.click({ button: "right" });
         const sidebarMenu = page.locator("openclaw-session-menu");
         await sidebarMenu
           .getByRole("menuitem", { name: restartable ? "Restore session" : "Archive session" })

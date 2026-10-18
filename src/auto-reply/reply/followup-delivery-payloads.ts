@@ -1,13 +1,13 @@
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { setReplyPayloadMetadata } from "../reply-payload.js";
+import { setReplyPayloadMetadata, isRenderablePayload } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads-base.js";
-import { filterMessagingToolReplyPayload } from "./reply-payloads.js";
+import { applyReplyTagsToPayload } from "./reply-payloads-base.js";
+import { filterMessagingToolReplyPayload } from "./reply-payloads-dedupe.js";
 import {
   createReplyDeliveryContext,
   createReplyToModeFilterForChannel,
@@ -53,24 +53,17 @@ export function resolveFollowupDeliveryPayloads(params: {
         ...(accountId ? { accountId } : {}),
       }
     : undefined;
-  const deliverablePayloads = params.payloads.filter(
-    (payload) =>
-      !(payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) &&
-      !(payload.isCommentary === true && params.commentaryPayloadsEnabled !== true),
+  const sanitizedPayloads = params.payloads.flatMap((payload) =>
+    (payload.isReasoning === true && params.reasoningPayloadsEnabled !== true) ||
+    (payload.isCommentary === true && params.commentaryPayloadsEnabled !== true)
+      ? []
+      : (normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? []),
   );
-  const sanitizedPayloads: ReplyPayload[] = [];
-  for (const payload of deliverablePayloads) {
-    const normalized = normalizeReplyPayload(payload, { applyChannelTransforms: false });
-    if (normalized) {
-      sanitizedPayloads.push(normalized);
-    }
-  }
-  const originatingTo = params.originatingTo;
   const applyReplyToMode = createReplyToModeFilterForChannel(replyToMode, replyToChannel);
   return sanitizedPayloads.flatMap((payload) =>
     filterMessagingToolReplyPayload({
       payload: applyReplyToMode.preview(
-        setReplyPayloadMetadata(applyReplyTagsToPayload(payload), {
+        setReplyPayloadMetadata(applyReplyTagsToPayload({ payload }), {
           replyDelivery,
           ...(replyDeliverySource ? { replyDeliverySource } : {}),
         }),
@@ -78,7 +71,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       config: params.cfg,
       messageProvider: replyMessageProvider,
       messagingToolSentTargets: params.sentTargets,
-      originatingTo,
+      originatingTo: params.originatingTo,
       originatingThreadId: params.originatingThreadId,
       accountId,
       sentMediaUrls: params.sentMediaUrls,

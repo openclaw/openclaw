@@ -1,14 +1,12 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
-import { createOrderedPolicyShape, firstPolicyShapeFinding } from "./ordered-shape.js";
+import {
+  createOrderedPolicyShape,
+  firstPolicyShapeFinding,
+  type PolicyShapeContext,
+} from "./ordered-shape.js";
 
 type PostureShape = "agents" | "workspace" | "tools" | "scoped-tools" | "sandbox" | "gateway";
-type ShapeContext = {
-  readonly policyDocName: string;
-  readonly policyPath: string;
-  readonly targetPrefix?: string;
-  readonly propertyPrefix?: string;
-};
 type ListStyle =
   | { readonly kind: "node-commands" }
   | {
@@ -33,8 +31,6 @@ type ShapeStep =
       readonly style?: ListStyle;
     };
 
-const rules: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
-
 function object(path: string): ShapeStep {
   return { kind: "object", path: path.split(".") };
 }
@@ -47,7 +43,7 @@ function keys(
 ): ShapeStep {
   const prefix = path.split(".");
   const allowed = new Set<string>();
-  for (const entry of rules) {
+  for (const entry of POLICY_RULE_METADATA) {
     if (
       prefix.every((part, index) => entry.policyPath[index] === part) &&
       (!scoped || entry.scopeSelectors?.includes("agentIds"))
@@ -62,7 +58,7 @@ function keys(
 }
 
 function rule(path: string, valueName = "", style?: ListStyle["kind"]): ShapeStep {
-  const metadata = rules.find((entry) => entry.policyPath.join(".") === path);
+  const metadata = POLICY_RULE_METADATA.find((entry) => entry.policyPath.join(".") === path);
   if (
     metadata === undefined ||
     (metadata.valueType !== "boolean" && metadata.valueType !== "string-list")
@@ -129,9 +125,9 @@ const shapes: Record<PostureShape, readonly ShapeStep[]> = {
     object("sandbox.containers"),
     object("sandbox.browser"),
     keys("sandbox.containers", "sandbox", "a supported sandbox container posture rule"),
-    ...rules
-      .filter((entry) => entry.policyPath[0] === "sandbox" && entry.policyPath[1] === "containers")
-      .map((entry) => rule(entry.policyPath.join("."))),
+    ...POLICY_RULE_METADATA.filter(
+      (entry) => entry.policyPath[0] === "sandbox" && entry.policyPath[1] === "containers",
+    ).map((entry) => rule(entry.policyPath.join("."))),
     keys("sandbox.browser", "sandbox", "a supported sandbox browser posture rule"),
     rule("sandbox.browser.requireCdpSourceRange"),
   ],
@@ -157,7 +153,7 @@ const shapes: Record<PostureShape, readonly ShapeStep[]> = {
 export function posturePolicyShapeFinding(
   shape: PostureShape,
   value: unknown,
-  params: ShapeContext,
+  params: PolicyShapeContext,
 ): HealthFinding | undefined {
   if (value === undefined) {
     return undefined;

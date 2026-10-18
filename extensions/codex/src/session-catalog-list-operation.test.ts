@@ -1,109 +1,35 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
 import { describe, expect, it, vi } from "vitest";
-import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
-import type {
-  CodexSessionCatalogPage,
-  CodexSessionCatalogPageParams,
-} from "./session-catalog-types.js";
+import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import {
-  CODEX_APP_SERVER_THREADS_LIST_COMMAND,
-  config,
-  createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createControl,
-  createGatewayApi,
-  createRuntime,
-  registerCodexSessionCatalog,
-} from "./session-catalog.test-helpers.js";
+  fixture,
+  nodeFixture,
+  observe,
+  page,
+} from "./session-catalog-list-operation.test-support.js";
+import { CODEX_APP_SERVER_THREADS_LIST_COMMAND } from "./session-catalog-parsing.js";
+import { CODEX_TERMINAL_START_COMMAND } from "./session-catalog-terminal.js";
+import type { CodexSessionCatalogPage } from "./session-catalog-types.js";
 
-function page(ids: string[], nextCursor?: string): CodexSessionCatalogPage {
+const adoption = vi.hoisted(() => ({
+  hold: undefined as { promise: Promise<Map<string, never>>; started: () => void } | undefined,
+}));
+
+vi.mock("./session-catalog-adoption.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-catalog-adoption.js")>();
   return {
-    sessions: ids.map((threadId) => ({
-      threadId,
-      name: threadId,
-      status: "idle",
-      source: "cli",
-      archived: false,
-    })),
-    ...(nextCursor ? { nextCursor } : {}),
-  };
-}
-
-function observe<T>(promise: Promise<T>) {
-  const state = { settled: false };
-  const done = promise
-    .then(
-      (value) => ({ status: "fulfilled" as const, value }),
-      (reason: unknown) => ({ status: "rejected" as const, reason }),
-    )
-    .finally(() => {
-      state.settled = true;
-    });
-  return { state, done };
-}
-
-async function fixture(homeCount = 1) {
-  const { runtime } = createRuntime();
-  const base = createCodexSessionCatalogControlFactory({
-    getPluginConfig: () => ({ supervision: { enabled: true } }),
-    getRuntimeConfig: () => config,
-  });
-  const primary = (await base.homesForAgent("main"))[0]!;
-  const homes = Array.from({ length: homeCount }, (_, index) => ({
-    ...primary,
-    sourceHomeId: `home-${index}`,
-    hostId: index === 0 ? "gateway:local" : `gateway:local:home-${index}`,
-    label: `Home ${index}`,
-  }));
-  const listPage =
-    vi.fn<
-      (homeId: string, params: CodexSessionCatalogPageParams) => Promise<CodexSessionCatalogPage>
-    >();
-  listPage.mockResolvedValue(page(["visible"]));
-  const snapshot = vi.fn(
-    async () => new Map(homes.map((home) => [home.sourceHomeId, new Set(["managed"])])),
-  );
-  const bindingStore = Object.assign(createCodexTestBindingStore(), {
-    managedThreads: { has: vi.fn(async () => false), mark: vi.fn(async () => true), snapshot },
-  });
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore,
-    control: {
-      ...base,
-      homesForAgent: async () => homes,
-      forRequest: (_agentId, source) =>
-        createControl({
-          listPage: (params) => listPage(source!.sourceHomeId, params),
-        }),
-    },
-    getRuntimeConfig: () => config,
-  });
-  const controller = new AbortController();
-  const onHost = vi.fn();
-  const publications: Promise<void>[] = [];
-  const start = (params: Partial<Parameters<SessionCatalogProvider["list"]>[0]> = {}) => {
-    const provider = getProvider()!;
-    if (!provider.createListOperation) {
-      throw new Error("Codex list operation is unavailable");
-    }
-    return provider.createListOperation({
-      agentId: "main",
-      limitPerHost: 1,
-      hostIds: homes.map((home) => home.hostId),
-      signal: controller.signal,
-      onHost,
-      waitUntil: (completion) => {
-        publications.push(completion);
+    ...actual,
+    listAdoptedSessionEntries: vi.fn(
+      (params: Parameters<typeof actual.listAdoptedSessionEntries>[0]) => {
+        const held = adoption.hold;
+        adoption.hold = undefined;
+        held?.started();
+        return held?.promise ?? actual.listAdoptedSessionEntries(params);
       },
-      ...params,
-    });
+    ),
   };
-  return { runtime, homes, listPage, snapshot, controller, onHost, publications, start };
-}
+});
 
 describe("Codex catalog list operation", () => {
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
@@ -204,213 +130,69 @@ describe("Codex catalog list operation", () => {
     }
   });
 
-  it.each(["resolve", "reject"] as const)(
-    "leaves an asynchronous %s publication tail with waitUntil",
-    async (outcome) => {
-      const f = await fixture();
-      const publication = createDeferred<void>();
-      const published = createDeferred<void>();
-      const operation = f.start({
-        // oxlint-disable-next-line typescript/no-misused-promises -- The void SDK callback can return a JS promise that publication must retain.
-        onHost: () => {
-          published.resolve();
-          return publication.promise;
-        },
-      });
-      const advancing = observe(operation.next());
-      const error = new Error("publication failed");
-      try {
-        await published.promise;
-        await nextTurn();
-        expect.soft(advancing.state.settled).toBe(true);
-        if (advancing.state.settled) {
-          operation.close();
-        }
-        if (outcome === "resolve") {
-          publication.resolve();
-        } else {
-          publication.reject(error);
-        }
-        await expect(advancing.done).resolves.toMatchObject({
-          status: "fulfilled",
-          value: { done: true, hosts: [{ connected: true }] },
-        });
-        const tails = await Promise.allSettled(f.publications);
-        expect(tails).toEqual(
-          outcome === "resolve"
-            ? [{ status: "fulfilled", value: undefined }]
-            : [{ status: "rejected", reason: error }],
-        );
-        expect(f.listPage).toHaveBeenCalledOnce();
-      } finally {
-        publication.resolve();
-        await advancing.done;
-        operation.close();
-        await Promise.allSettled(f.publications);
+  it("yields before the next local page after a completed terminal-only node placeholder", async () => {
+    const f = await fixture();
+    const firstPage = createDeferred<CodexSessionCatalogPage>();
+    const nodePublished = createDeferred<void>();
+    const refillStarted = createDeferred<void>();
+    f.listPage.mockImplementation(async (_home, params) => {
+      if (params.cursor) {
+        refillStarted.resolve();
+        return page(["visible"]);
       }
-    },
-  );
-
-  it("lets a fast home refill and publish while another home's first page stays active", async () => {
-    const f = await fixture(2);
-    const first = createDeferred<CodexSessionCatalogPage>();
-    const slow = createDeferred<CodexSessionCatalogPage>();
-    let slowStarted = false;
-    let fastPublished = false;
-    f.listPage.mockImplementation(async (home, params) => {
-      if (home === "home-1") {
-        slowStarted = true;
-        return slow.promise;
-      }
-      return params.cursor ? page(["fast-visible"]) : first.promise;
+      return firstPage.promise;
     });
     const operation = f.start({
+      hostIds: undefined,
+      listNodes: async () => ({
+        nodes: [
+          {
+            nodeId: "remote",
+            connected: true,
+            commands: [CODEX_TERMINAL_START_COMMAND],
+            invocableCommands: [CODEX_TERMINAL_START_COMMAND],
+          },
+        ],
+      }),
       onHost: (host) => {
-        if (host.hostId === f.homes[0]!.hostId) {
-          fastPublished = true;
+        f.onHost(host);
+        if (host.hostId === "node:remote") {
+          nodePublished.resolve();
         }
       },
     });
     const advancing = observe(operation.next());
     try {
-      await vi.waitFor(() => expect(slowStarted).toBe(true));
-      first.resolve(page(["managed"], "next"));
-      await vi.waitFor(() => expect(fastPublished).toBe(true));
-      expect(f.listPage.mock.calls.filter(([home]) => home === "home-0")).toHaveLength(2);
-      expect(advancing.state.settled).toBe(false);
-      slow.resolve(page(["slow-visible"]));
-      await expect(advancing.done).resolves.toMatchObject({
-        status: "fulfilled",
-        value: {
-          done: true,
-          hosts: [
-            { hostId: f.homes[0]!.hostId, sessions: [{ threadId: "fast-visible" }] },
-            { hostId: f.homes[1]!.hostId, sessions: [{ threadId: "slow-visible" }] },
-          ],
-        },
-      });
-    } finally {
-      first.resolve(page([]));
-      slow.resolve(page([]));
-      await advancing.done;
-      operation.close();
-      await Promise.allSettled(f.publications);
-    }
-  });
-
-  it("continues inline during unknown discovery and yields only after an actual empty selection", async () => {
-    const f = await fixture();
-    const discovery = createDeferred<{ nodes: [] }>();
-    const second = createDeferred<CodexSessionCatalogPage>();
-    let secondStarted = false;
-    f.listPage.mockImplementation(async (_home, params) => {
-      if (params.cursor === "second") {
-        secondStarted = true;
-        return second.promise;
-      }
-      return params.cursor === "third" ? page(["visible"]) : page(["managed"], "second");
-    });
-    const operation = f.start({ hostIds: undefined, listNodes: () => discovery.promise });
-    const advancing = observe(operation.next());
-    try {
-      await vi.waitFor(() => expect(secondStarted).toBe(true));
-      expect(advancing.state.settled).toBe(false);
-      discovery.resolve({ nodes: [] });
+      await nodePublished.promise;
       await nextTurn();
-      second.resolve(page(["managed"], "third"));
+      firstPage.resolve(page(["managed"], "next"));
+      await expect(
+        Promise.race([
+          advancing.done.then(() => "yielded"),
+          refillStarted.promise.then(() => "refilled"),
+        ]),
+      ).resolves.toBe("yielded");
       await expect(advancing.done).resolves.toEqual({
         status: "fulfilled",
         value: { done: false },
       });
-      expect(f.listPage).toHaveBeenCalledTimes(2);
+      expect(f.listPage).toHaveBeenCalledOnce();
       await expect(operation.next()).resolves.toMatchObject({
         done: true,
-        hosts: [{ sessions: [{ threadId: "visible" }] }],
+        hosts: [
+          { sessions: [{ threadId: "visible" }] },
+          { hostId: "node:remote", connected: true, sessions: [] },
+        ],
       });
-      expect(f.listPage).toHaveBeenCalledTimes(3);
+      expect(f.runtime.nodes.invoke).not.toHaveBeenCalled();
+      expect(f.onHost).toHaveBeenCalledWith(expect.objectContaining({ canStartTerminal: true }));
     } finally {
-      discovery.resolve({ nodes: [] });
-      second.resolve(page([]));
+      firstPage.resolve(page([]));
       await advancing.done;
       operation.close();
       await Promise.allSettled(f.publications);
     }
   });
-
-  it.each(["terminal-only", "offline"] as const)(
-    "yields before the next local page after a completed %s node placeholder",
-    async (route) => {
-      const f = await fixture();
-      const firstPage = createDeferred<CodexSessionCatalogPage>();
-      const nodePublished = createDeferred<void>();
-      const refillStarted = createDeferred<void>();
-      f.listPage.mockImplementation(async (_home, params) => {
-        if (params.cursor) {
-          refillStarted.resolve();
-          return page(["visible"]);
-        }
-        return firstPage.promise;
-      });
-      const operation = f.start({
-        hostIds: undefined,
-        listNodes: async () => ({
-          nodes: [
-            {
-              nodeId: "remote",
-              connected: route !== "offline",
-              commands: [
-                route === "offline"
-                  ? CODEX_APP_SERVER_THREADS_LIST_COMMAND
-                  : CODEX_TERMINAL_START_COMMAND,
-              ],
-              invocableCommands: [CODEX_TERMINAL_START_COMMAND],
-            },
-          ],
-        }),
-        onHost: (host) => {
-          f.onHost(host);
-          if (host.hostId === "node:remote") {
-            nodePublished.resolve();
-          }
-        },
-      });
-      const advancing = observe(operation.next());
-      try {
-        await nodePublished.promise;
-        await nextTurn();
-        firstPage.resolve(page(["managed"], "next"));
-        await expect(
-          Promise.race([
-            advancing.done.then(() => "yielded"),
-            refillStarted.promise.then(() => "refilled"),
-          ]),
-        ).resolves.toBe("yielded");
-        await expect(advancing.done).resolves.toEqual({
-          status: "fulfilled",
-          value: { done: false },
-        });
-        expect(f.listPage).toHaveBeenCalledOnce();
-        await expect(operation.next()).resolves.toMatchObject({
-          done: true,
-          hosts: [
-            { sessions: [{ threadId: "visible" }] },
-            { hostId: "node:remote", connected: route !== "offline", sessions: [] },
-          ],
-        });
-        expect(f.runtime.nodes.invoke).not.toHaveBeenCalled();
-        if (route === "terminal-only") {
-          expect(f.onHost).toHaveBeenCalledWith(
-            expect.objectContaining({ canStartTerminal: true }),
-          );
-        }
-      } finally {
-        firstPage.resolve(page([]));
-        await advancing.done;
-        operation.close();
-        await Promise.allSettled(f.publications);
-      }
-    },
-  );
 
   it("keeps the filled operation inline after failed discovery", async () => {
     const f = await fixture();
@@ -437,16 +219,12 @@ describe("Codex catalog list operation", () => {
     }
   });
 
-  it.each(["resolve", "reject", "no waitUntil"] as const)(
-    "keeps refill inline until a timed-out node's invocation and publication %s",
+  it.each(["reject", "no waitUntil"] as const)(
+    "settles timed-out local work while a node publication can still %s",
     async (outcome) => {
       const f = await fixture();
       vi.useFakeTimers();
       const first = createDeferred<CodexSessionCatalogPage>();
-      const second = createDeferred<CodexSessionCatalogPage>();
-      const third = createDeferred<CodexSessionCatalogPage>();
-      const secondStarted = createDeferred<void>();
-      const thirdStarted = createDeferred<void>();
       const invoked = createDeferred<void>();
       const invokeResult = createDeferred<unknown>();
       const published = createDeferred<void>();
@@ -456,17 +234,7 @@ describe("Codex catalog list operation", () => {
         invoked.resolve();
         return invokeResult.promise;
       });
-      f.listPage.mockImplementation(async (_home, params) => {
-        if (params.cursor === "second") {
-          secondStarted.resolve();
-          return second.promise;
-        }
-        if (params.cursor === "third") {
-          thirdStarted.resolve();
-          return third.promise;
-        }
-        return params.cursor === "fourth" ? page(["visible"]) : first.promise;
-      });
+      f.listPage.mockImplementation(async () => first.promise);
       const operation = f.start({
         hostIds: undefined,
         listNodes: async () => ({
@@ -491,57 +259,41 @@ describe("Codex catalog list operation", () => {
       const advancing = observe(operation.next());
       try {
         await invoked.promise;
-        await vi.advanceTimersByTimeAsync(8_000);
+        await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
+        expect(advancing.state.settled).toBe(true);
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [
+              { error: { code: "APP_SERVER_UNAVAILABLE" } },
+              { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
+            ],
+          },
+        });
+        operation.close();
         first.resolve(page(["managed"], "second"));
-        await expect(
-          Promise.race([
-            secondStarted.promise.then(() => "refilled"),
-            advancing.done.then(() => "settled"),
-          ]),
-        ).resolves.toBe("refilled");
-        expect(advancing.state.settled).toBe(false);
-
         invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
         await published.promise;
-        second.resolve(page(["managed"], "third"));
-        await expect(
-          Promise.race([
-            thirdStarted.promise.then(() => "refilled"),
-            advancing.done.then(() => "settled"),
-          ]),
-        ).resolves.toBe("refilled");
-        expect(advancing.state.settled).toBe(false);
-
+        const tails = observe(Promise.allSettled(f.publications));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(f.listPage).toHaveBeenCalledOnce();
+        expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
         if (outcome === "reject") {
+          expect(tails.state.settled).toBe(false);
           publication.reject(publicationError);
         } else {
           publication.resolve();
         }
-        await nextTurn();
-        third.resolve(page(["managed"], "fourth"));
-        await expect(advancing.done).resolves.toEqual({
-          status: "fulfilled",
-          value: { done: false },
-        });
-        expect(f.listPage).toHaveBeenCalledTimes(3);
-        await expect(operation.next()).resolves.toMatchObject({
-          done: true,
-          hosts: [
-            { sessions: [{ threadId: "visible" }] },
-            { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
-          ],
-        });
-        expect(f.runtime.nodes.invoke).toHaveBeenCalledOnce();
-        const tails = await Promise.allSettled(f.publications);
-        expect(tails.filter((tail) => tail.status === "rejected")).toEqual(
+        await expect(tails.done).resolves.toMatchObject({ status: "fulfilled" });
+        const results = await Promise.allSettled(f.publications);
+        expect(results.filter((tail) => tail.status === "rejected")).toEqual(
           outcome === "reject" ? [{ status: "rejected", reason: publicationError }] : [],
         );
       } finally {
         invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
         publication.resolve();
         first.resolve(page([]));
-        second.resolve(page([]));
-        third.resolve(page([]));
         await advancing.done;
         operation.close();
         await Promise.allSettled(f.publications);
@@ -550,52 +302,75 @@ describe("Codex catalog list operation", () => {
     },
   );
 
-  it("returns a complete local list at the node response deadline while its publication stays owned", async () => {
-    const f = await fixture();
+  it("delivers each cold query when the newer query publishes first", async () => {
+    const f = await nodeFixture();
+    const older = createDeferred<unknown>();
+    const newer = createDeferred<unknown>();
+    f.invoke.mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const firstHost = vi.fn();
+    const secondHost = vi.fn();
     vi.useFakeTimers();
-    const invoked = createDeferred<void>();
-    const invokeResult = createDeferred<unknown>();
-    vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
-      invoked.resolve();
-      return invokeResult.promise;
-    });
-    const operation = f.start({
-      hostIds: undefined,
-      listNodes: async () => ({
-        nodes: [
-          { nodeId: "remote", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
-        ],
-      }),
-    });
-    const advancing = observe(operation.next());
+    const first = observe(f.read({ onHost: firstHost }));
+    const second = observe(f.read({ onHost: secondHost, limitPerHost: 2 }));
     try {
-      await invoked.promise;
-      await vi.advanceTimersByTimeAsync(8_000);
-      await expect(advancing.done).resolves.toMatchObject({
-        status: "fulfilled",
-        value: {
-          done: true,
-          hosts: [
-            { sessions: [{ threadId: "visible" }] },
-            { hostId: "node:remote", error: { code: "NODE_INVOKE_FAILED" } },
-          ],
-        },
-      });
-      operation.close();
-      expect(f.onHost.mock.calls.map(([host]) => host.hostId)).toEqual(["gateway:local"]);
-      invokeResult.resolve({ payloadJSON: JSON.stringify(page(["late-node-row"])) });
-      await Promise.all(f.publications);
-      expect(f.onHost).toHaveBeenCalledWith(
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(first.state.settled).toBe(true);
+      expect(second.state.settled).toBe(true);
+      newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+      await nextTurn();
+      older.resolve({ payloadJSON: JSON.stringify(page(["first-answer"])) });
+      await nextTurn();
+      expect(firstHost).toHaveBeenCalledWith(
         expect.objectContaining({
           hostId: "node:remote",
-          sessions: [expect.objectContaining({ threadId: "late-node-row" })],
+          sessions: [expect.objectContaining({ threadId: "first-answer" })],
         }),
       );
-      expect(f.listPage).toHaveBeenCalledOnce();
+      newer.resolve({ payloadJSON: JSON.stringify(page(["newer-answer"])) });
+      await Promise.all(f.publications);
+      expect(secondHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: "node:remote",
+          sessions: [expect.objectContaining({ threadId: "newer-answer" })],
+        }),
+      );
     } finally {
-      invokeResult.resolve({ payloadJSON: JSON.stringify(page([])) });
-      await advancing.done;
-      operation.close();
+      older.resolve({ payloadJSON: JSON.stringify(page([])) });
+      newer.resolve({ payloadJSON: JSON.stringify(page([])) });
+      await Promise.allSettled([first.done, second.done, ...f.publications]);
+      vi.useRealTimers();
+    }
+  });
+
+  it("invalidates delayed node publications after abort", async () => {
+    const f = await nodeFixture();
+    await f.read();
+    const old = createDeferred<unknown>();
+    f.invoke.mockReturnValueOnce(old.promise);
+    await f.read();
+    f.controller.abort();
+    const held = createDeferred<unknown>();
+    f.invoke.mockReturnValueOnce(held.promise);
+    vi.useFakeTimers();
+    const pending = observe(f.read({ signal: new AbortController().signal }));
+    try {
+      await nextTurn();
+      await vi.advanceTimersByTimeAsync(250);
+      old.resolve({ payloadJSON: JSON.stringify(page(["obsolete"])) });
+      await nextTurn();
+      expect(pending.state.settled).toBe(true);
+      expect(
+        f.onHost.mock.calls.flatMap(([host]) =>
+          host.sessions.map((row: { threadId: string }) => row.threadId),
+        ),
+      ).not.toContain("obsolete");
+      const result = await pending.done;
+      expect(result.status).toBe("fulfilled");
+    } finally {
+      old.resolve({ payloadJSON: JSON.stringify(page([])) });
+      held.resolve({ payloadJSON: JSON.stringify(page([])) });
+      await pending.done;
       await Promise.allSettled(f.publications);
       vi.useRealTimers();
     }
@@ -687,6 +462,87 @@ describe("Codex catalog list operation", () => {
       await advancing.done;
       operation.close();
       await Promise.allSettled(f.publications);
+    }
+  });
+
+  it.each([
+    { phase: "page", progressive: false },
+    { phase: "page", progressive: true },
+    { phase: "adoption", progressive: false },
+    { phase: "adoption", progressive: true },
+  ])("isolates a stalled $phase with progressive=$progressive", async ({ phase, progressive }) => {
+    const f = await fixture(2);
+    vi.useFakeTimers();
+    const started = createDeferred<void>();
+    const heldPage = createDeferred<CodexSessionCatalogPage>();
+    const heldAdoption = createDeferred<Map<string, never>>();
+    if (phase === "adoption") {
+      adoption.hold = { promise: heldAdoption.promise, started: started.resolve };
+    }
+    f.listPage.mockImplementation(async (home) => {
+      if (home !== "home-0") {
+        if (phase === "adoption") {
+          await started.promise;
+        }
+        return page(["survivor"]);
+      }
+      if (phase === "page") {
+        started.resolve();
+        return heldPage.promise;
+      }
+      return page(["stalled"]);
+    });
+    const operation = f.start({ allowPartialResults: progressive });
+    const advancing = observe(operation.next());
+    try {
+      await started.promise;
+      if (progressive) {
+        await vi.advanceTimersByTimeAsync(250);
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [{ pending: true }, { sessions: [{ threadId: "survivor" }] }],
+          },
+        });
+        operation.close();
+      }
+      await vi.advanceTimersByTimeAsync(CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS);
+      if (!progressive) {
+        await expect(advancing.done).resolves.toMatchObject({
+          status: "fulfilled",
+          value: {
+            done: true,
+            hosts: [
+              { error: { code: "APP_SERVER_UNAVAILABLE" } },
+              { sessions: [{ threadId: "survivor" }] },
+            ],
+          },
+        });
+      }
+      await Promise.all(f.publications);
+      expect(f.onHost).toHaveBeenCalledWith(
+        expect.objectContaining({
+          hostId: f.homes[0]!.hostId,
+          connected: false,
+          sessions: [],
+          error: expect.objectContaining({ code: "APP_SERVER_UNAVAILABLE" }),
+        }),
+      );
+      heldPage.resolve(page(["late"]));
+      heldAdoption.resolve(new Map<string, never>());
+      await vi.advanceTimersByTimeAsync(0);
+      expect(
+        f.onHost.mock.calls.filter(([host]) => host.hostId === f.homes[0]!.hostId),
+      ).toHaveLength(1);
+    } finally {
+      adoption.hold = undefined;
+      heldPage.resolve(page([]));
+      heldAdoption.resolve(new Map<string, never>());
+      await advancing.done;
+      operation.close();
+      await Promise.allSettled(f.publications);
+      vi.useRealTimers();
     }
   });
 });

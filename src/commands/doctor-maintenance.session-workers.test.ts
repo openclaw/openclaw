@@ -1,5 +1,6 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
@@ -7,13 +8,11 @@ import {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   replaceSessionEntry,
-  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import { certifySessionCanonicalValidationPending } from "../config/sessions/session-canonical-validation-readiness.js";
-import {
-  hasPendingCanonicalSessionValidation,
-  seedCanonicalSessionValidation,
-} from "../config/sessions/session-canonical-validation.js";
+import { hasPendingCanonicalSessionValidation } from "../config/sessions/session-canonical-validation.js";
 import { readSessionColdTranscript } from "../config/sessions/session-cold-storage-state.js";
 import {
   restoreSessionColdTranscript,
@@ -36,13 +35,20 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
-const quietRuntime = { log() {}, error() {}, exit() {} };
+function begin() {
+  return beginDoctorMaintenance({
+    options: { repair: true, nonInteractive: true },
+    root: null,
+    runtime: { log() {}, error() {}, exit() {} },
+  });
+}
 
 describe("Doctor maintenance with session workers", () => {
   it("certifies pending canonical rows under Doctor without changing them or retaining worker leases", async () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-canonical-worker" },
       async (state) => {
+        setRuntimeConfigSnapshot({});
         const options = { agentId: "main", env: state.env };
         const scopes = ["first", "second"].map((name) => ({
           agentId: options.agentId,
@@ -50,11 +56,7 @@ describe("Doctor maintenance with session workers", () => {
           sessionId: `doctor-canonical-${name}`,
           sessionKey: `agent:main:doctor-canonical-${name}`,
         }));
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const maintenance = await begin();
         try {
           await maintenance!.run(async () => {
             for (const scope of scopes) {
@@ -75,7 +77,7 @@ describe("Doctor maintenance with session workers", () => {
               ).rows;
             const before = rows();
             expect(before).toHaveLength(2);
-            runOpenClawAgentWriteTransaction(seedCanonicalSessionValidation, options);
+            runOpenClawAgentWriteTransaction(markCanonicalSessionValidationPending, options);
             expect(hasPendingCanonicalSessionValidation(database)).toBe(true);
 
             await certifySessionCanonicalValidationPending(options);
@@ -86,11 +88,7 @@ describe("Doctor maintenance with session workers", () => {
         } finally {
           await maintenance?.release();
         }
-        const next = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const next = await begin();
         try {
           next!.run(() => {
             for (const scope of scopes) {
@@ -140,11 +138,7 @@ describe("Doctor maintenance with session workers", () => {
               message: { role: "user", content: "Preserve this history through Doctor repair." },
             },
           ];
-          const maintenance = await beginDoctorMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: quietRuntime,
-          });
+          const maintenance = await begin();
           try {
             await maintenance!.run(async () => {
               if (sharedStore) {
@@ -188,11 +182,7 @@ describe("Doctor maintenance with session workers", () => {
             await maintenance?.release();
           }
 
-          const next = await beginDoctorMaintenance({
-            options: { repair: true, nonInteractive: true },
-            root: null,
-            runtime: quietRuntime,
-          });
+          const next = await begin();
           try {
             next!.run(() => {
               expect(loadExactSessionEntryReadOnly(source)).toBeUndefined();
@@ -210,11 +200,7 @@ describe("Doctor maintenance with session workers", () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "doctor-cold-workers" },
       async (state) => {
-        const maintenance = await beginDoctorMaintenance({
-          options: { repair: true, nonInteractive: true },
-          root: null,
-          runtime: quietRuntime,
-        });
+        const maintenance = await begin();
         let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
         try {
           fixture = await maintenance!.run(async () => {

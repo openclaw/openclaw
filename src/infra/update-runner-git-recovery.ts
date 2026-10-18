@@ -2,11 +2,8 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { verifyGitUpdateRecovery } from "./update-git-runtime.js";
 import type { UpdateRecovery } from "./update-recovery.js";
 import { UPDATE_RUNNER_TIMEOUT_MS } from "./update-run-timeouts.js";
-import type {
-  UpdateRunResult,
-  UpdateStepProgress,
-  UpdateStepResult,
-} from "./update-runner-types.js";
+import type { UpdateRunResult, UpdateStepProgress } from "./update-runner-types.js";
+import type { UpdateStepResult } from "./update-step-result.js";
 
 /** Diagnostic storage must never replay or interrupt restoration. */
 export function recordGitRollbackOutcome(params: {
@@ -19,7 +16,7 @@ export function recordGitRollbackOutcome(params: {
     params.progress?.onRollbackOutcome?.(params.outcome);
   } catch {
     params.steps.push({
-      name: "rollback outcome recording",
+      name: "rollback-outcome-recording",
       command: "",
       cwd: params.root,
       durationMs: 0,

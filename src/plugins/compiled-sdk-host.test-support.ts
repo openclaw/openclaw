@@ -10,6 +10,7 @@ type SdkEntrypoint = Parameters<typeof resolveRuntimeWorkerUrl>[0];
 export function createCompiledSdkHost(
   [entrypoint, ...additionalEntrypoints]: readonly [SdkEntrypoint, ...SdkEntrypoint[]],
   makeTempDir: (prefix: string) => string,
+  options: { mode?: "copy" | "link" } = {},
 ): string | undefined {
   const artifact = fileURLToPath(resolveRuntimeWorkerUrl(entrypoint));
   const artifacts = [
@@ -33,6 +34,12 @@ export function createCompiledSdkHost(
     files.add("dist/build-info.json");
   }
   const hostRoot = makeTempDir("openclaw-sdk-host-");
+  if (options.mode === "link") {
+    // The invocation retains this graph until its children join; native SDK and
+    // already-running compiled callers must keep the same physical modules.
+    fs.symlinkSync(sourceDist, path.join(hostRoot, "dist"), "junction");
+    files.clear();
+  }
   const createdDirectories = new Set<string>();
   let copiedEmbeddedDependencies = false;
   for (const file of files) {

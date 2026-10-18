@@ -7,9 +7,11 @@ import { promisify } from "node:util";
 import { build } from "esbuild";
 import { describe, expect, it } from "vitest";
 import { writePackageDistInventory } from "../../scripts/lib/package-dist-inventory.ts";
+import { createStateSchemaInlinePlugin } from "../../scripts/lib/state-schema-inline-plugin.mts";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 
 const exec = promisify(execFile);
+const stateSchemas = createStateSchemaInlinePlugin();
 
 // Copy the real published JS and available native packages into the installation.
 // No repository node_modules link may keep the moved updater's dependencies alive.
@@ -103,6 +105,23 @@ describe("local replay from the installation being replaced", () => {
           platform: "node",
           format: "esm",
           target: "node22",
+          plugins: [
+            {
+              name: stateSchemas.name,
+              setup(bundle) {
+                bundle.onLoad({ filter: /./ }, ({ path: modulePath }) => {
+                  const watchFiles: string[] = [];
+                  const result = stateSchemas.load.call(
+                    { addWatchFile: (file) => watchFiles.push(file) },
+                    modulePath,
+                  );
+                  return result
+                    ? { contents: result.code, loader: result.moduleType, watchFiles }
+                    : undefined;
+                });
+              },
+            },
+          ],
           external: ["@openclaw/fs-safe", "@openclaw/fs-safe/*"],
           banner: {
             js: 'import { createRequire as createFixtureRequire } from "node:module"; const require = createFixtureRequire(import.meta.url);',

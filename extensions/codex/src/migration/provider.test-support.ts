@@ -6,6 +6,10 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
@@ -272,6 +276,10 @@ afterEach(async () => {
   appServerRequest.mockReset();
   sourceAppServerClientScope.mockReset();
   defaultCodexAppInventoryCache.clear();
+  for (const workspace of tempWorkspaces) {
+    await closeOpenClawAgentDatabasesAsync(workspace.dir);
+  }
+  await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
 

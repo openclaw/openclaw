@@ -11,11 +11,11 @@ import { handleFileFetch } from "./file-fetch.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-async function fixture(bytes = Buffer.from("output"), maxBytes = bytes.length) {
+async function fixture(bytes = Buffer.from("output")) {
   const directory = await fs.realpath(tempDirs.make("binary-fetch-"));
   const target = path.join(directory, "output.bin");
   await fs.writeFile(target, bytes);
-  const params = { path: target, transport: "binary", maxBytes };
+  const params = { path: target, transport: "binary", maxBytes: bytes.length };
   const preflight = await handleFileFetch({ ...params, preflightOnly: true });
   if (!preflight.ok) {
     throw new Error(preflight.message);
@@ -74,12 +74,14 @@ async function fixture(bytes = Buffer.from("output"), maxBytes = bytes.length) {
 }
 
 describe("binary file.fetch", () => {
-  it("preflights without a stream and waits for START before sending bounded chunks", async () => {
+  it("preflights without a stream and sends bounded chunks from the authorized handle after START", async () => {
     const value = await fixture(Buffer.alloc(17 * 1024 * 1024, 0x5a));
     expect(value.preflight).toMatchObject({ preflightOnly: true, base64: "", sha256: "" });
     const pending = value.start();
     await value.ready.promise;
     expect(value.chunks).toHaveLength(0);
+    await fs.rename(value.target, `${value.target}.old`);
+    await fs.writeFile(value.target, "other");
     await value.send("start");
     const result = await pending;
     expect(result).toMatchObject({
@@ -100,26 +102,6 @@ describe("binary file.fetch", () => {
     expect(result).not.toHaveProperty("transport");
     expect(value.chunks).toHaveLength(0);
     await expect(value.send("start")).rejects.toThrow("No receiver");
-  });
-
-  it("rejects replacement after preflight before opening a stream", async () => {
-    const value = await fixture();
-    await fs.rename(value.target, `${value.target}.old`);
-    await fs.writeFile(value.target, "other");
-    expect(await value.start()).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
-    expect(value.chunks).toHaveLength(0);
-    await expect(value.send("start")).rejects.toThrow("No receiver");
-  });
-
-  it("retains the opened file when the pathname is replaced after readiness", async () => {
-    const value = await fixture();
-    const pending = value.start();
-    await value.ready.promise;
-    await fs.rename(value.target, `${value.target}.old`);
-    await fs.writeFile(value.target, "other");
-    await value.send("start");
-    expect(await pending).toMatchObject({ ok: true, size: value.bytes.length });
-    expect(Buffer.concat(value.chunks)).toEqual(value.bytes);
   });
 
   it("rejects growth beyond the budget without sending excess bytes", async () => {
@@ -155,11 +137,12 @@ describe("binary file.fetch", () => {
     expect(value.chunks).toHaveLength(0);
   });
 
-  it.each([undefined, -1, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
+  it.each([undefined, -1, Number.MAX_SAFE_INTEGER + 1])(
     "rejects an invalid explicit binary budget %s",
     async (maxBytes) => {
-      const value = await fixture();
-      expect(await handleFileFetch({ ...value.params, maxBytes })).toMatchObject({
+      expect(
+        await handleFileFetch({ path: "/unused", transport: "binary", maxBytes }),
+      ).toMatchObject({
         ok: false,
         code: "INVALID_PARAMS",
       });

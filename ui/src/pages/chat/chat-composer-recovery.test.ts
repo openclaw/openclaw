@@ -13,7 +13,7 @@ import { findChatSendPayload, makeChatHost } from "./chat-host.test-support.ts";
 import { ChatPaneComposerHandoff } from "./chat-pane-attachment-handoff.ts";
 import { createInitializationContext } from "./chat-pane.test-support.ts";
 import { retryQueuedChatMessage } from "./chat-send-actions.ts";
-import { ChatStateController } from "./chat-state-controller.ts";
+import { createChatState } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createPageState } from "./chat-state-page.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -26,13 +26,10 @@ function mount(
   context = { ...createInitializationContext(), sessions: transport.sessions },
   sessionKey = "agent:main:source",
 ) {
-  const controller = new ChatStateController<ChatPageHost>({
-    addController: () => undefined,
-    removeController: () => undefined,
-    requestUpdate: () => undefined,
-    updateComplete: Promise.resolve(true),
+  const controller = createChatState<ChatPageHost>({
+    awaitDomCommit: async () => true,
   });
-  controller.hostConnected();
+  const dispose = controller.dispose;
   const state = createPageState(
     context,
     controller.createRenderLifecycle(),
@@ -48,10 +45,10 @@ function mount(
     assistantAgentId: "main",
   });
   controller.attach(state);
-  controller.restoreComposer();
-  controller.startComposerPersistence();
-  disposals.push(() => controller.hostDisconnected());
-  return { state, controller, context };
+  controller.composerPersistence.restore();
+  controller.composerPersistence.start();
+  disposals.push(dispose);
+  return { state, controller, context, dispose };
 }
 
 function stageCommand(state: ChatPageHost) {
@@ -111,14 +108,17 @@ describe("pending send composer ownership", () => {
       const handoff = new ChatPaneComposerHandoff(source.context, {
         state: () => pane.state,
         owner: () => transport.client,
+        presentationOwner: () => pane.controller.composerPersistence.presentationOwner,
         region: () => region,
         presented: visible,
-        pause: () => pane.controller.pauseComposerPersistence(),
+        pause: () => pane.controller.composerPersistence.stop(),
+        takeAttachmentReads: () => pane.controller.takeAttachmentReads(),
+        adoptAttachmentReads: (reads) => pane.controller.adoptAttachmentReads(reads, pane.state),
         resume: (restore) => {
           if (restore) {
-            pane.controller.restoreComposer();
+            pane.controller.composerPersistence.restore();
           }
-          pane.controller.startComposerPersistence();
+          pane.controller.composerPersistence.start();
         },
       });
       handoff.claim();
@@ -133,8 +133,8 @@ describe("pending send composer ownership", () => {
     const pending = source.state.chatQueue[0]!;
     const reopen = () => mount(transport, source.context, source.state.sessionKey);
     if (lifecycle === "evicted" || lifecycle === "replaced") {
-      source.controller.persistComposerForEviction();
-      source.controller.hostDisconnected();
+      source.controller.composerPersistence.persistForRouteSwitchResult();
+      source.dispose();
     }
     let replacement: typeof source | undefined;
     if (lifecycle === "replaced" || lifecycle === "handoff") {
@@ -191,8 +191,8 @@ describe("pending send composer ownership", () => {
     await vi.waitFor(() =>
       expect(transport.request.mock.calls.some(([method]) => method === "chat.send")).toBe(true),
     );
-    source.controller.persistComposerForEviction();
-    source.controller.hostDisconnected();
+    source.controller.composerPersistence.persistForRouteSwitchResult();
+    source.dispose();
     acknowledgment.resolve({ status: "ok" });
     await send;
     const reopened = mount(transport, source.context);

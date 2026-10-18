@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-// Validates docs i18n glossary terms against configured usage rules.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -96,14 +95,6 @@ function loadGlossarySources() {
   );
 }
 
-function containsLatin(text: string) {
-  return /[A-Za-z]/.test(text);
-}
-
-function wordCount(text: string) {
-  return text.trim().split(/\s+/).filter(Boolean).length;
-}
-
 function unquoteScalar(raw: string) {
   const value = raw.trim();
   if (
@@ -116,23 +107,14 @@ function unquoteScalar(raw: string) {
 }
 
 function isGlossaryCandidate(term: string, maxWords: number) {
-  if (!term) {
-    return false;
-  }
   // Bare versions are language-neutral identifiers, not translation terminology.
-  if (VERSION_LABEL_RE.test(term)) {
-    return false;
-  }
-  if (!containsLatin(term)) {
-    return false;
-  }
-  if (term.includes("`")) {
-    return false;
-  }
-  if (term.length > MAX_TERM_LENGTH) {
-    return false;
-  }
-  return wordCount(term) <= maxWords;
+  return (
+    !VERSION_LABEL_RE.test(term) &&
+    /[A-Za-z]/.test(term) &&
+    !term.includes("`") &&
+    term.length <= MAX_TERM_LENGTH &&
+    term.split(/\s+/).length <= maxWords
+  );
 }
 
 function readGitFile(base: string, relPath: string) {
@@ -215,10 +197,7 @@ function main() {
     const baseTerms = extractTerms(relPath, readGitFile(base, relPath));
 
     for (const [term, match] of currentTerms) {
-      if (baseTerms.has(term)) {
-        continue;
-      }
-      if (glossary.has(term)) {
+      if (baseTerms.has(term) || glossary.has(term)) {
         continue;
       }
       missing.push(match);

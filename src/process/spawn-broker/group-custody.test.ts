@@ -8,7 +8,7 @@ import { createSpawnBrokerHost } from "./host.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = process.platform === "win32";
 
 describe.skipIf(skipBrokerTests)("spawn broker process-group custody", () => {
   it.each(["native", "execa"] as const)(

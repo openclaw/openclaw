@@ -1,5 +1,18 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isIntermediateAssistantTranscriptMessage } from "../agents/embedded-agent-runner/message-visibility.js";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
+import {
+  isSilentAssistantTranscriptMessage,
+  readTerminalSourceReplyDeliveryMirror,
+} from "../shared/chat-message-content.js";
+import { isOpenClawDeliveryMirrorAssistantMessage } from "../shared/transcript-only-openclaw-assistant.js";
+import { readNestedToolActivity } from "./nested-tool-activity.js";
+import {
+  readSessionTranscriptRunId,
+  resolveTerminalAssistantTranscriptRunId,
+} from "./transcript-events.js";
 
 export function isVisibleTranscriptRecord(value: unknown): value is Record<string, unknown> {
   const record = asOptionalRecord(value);
@@ -11,4 +24,103 @@ export function isVisibleTranscriptRecord(value: unknown): value is Record<strin
       record.display === true &&
       record.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
   );
+}
+
+export function isAssistantResultEventForRun(event: unknown, runId: string): boolean {
+  if (
+    !isRecord(event) ||
+    !isRecord(event.message) ||
+    readSessionTranscriptRunId(event.message) !== runId ||
+    resolveTerminalAssistantTranscriptRunId(event.message, runId) === undefined ||
+    // An interim stop asked the provider to continue, so it is progress, not the answer.
+    event.message.endTurn === false ||
+    isIntermediateAssistantTranscriptMessage(event.message)
+  ) {
+    return false;
+  }
+  const mirror = event.message.openclawDeliveryMirror;
+  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
+    return false;
+  }
+  return true;
+}
+
+export function isVisibleAssistantResultEventForRun(event: unknown, runId: string): boolean {
+  if (!isAssistantResultEventForRun(event, runId) || !isRecord(event)) {
+    return false;
+  }
+  const text = extractStoredAssistantText(event.message);
+  return Boolean(text?.trim()) && !isSilentAssistantTranscriptMessage(event.message);
+}
+
+/** Matches newest-first without resurrecting unsent output after an explicit silent final. */
+export function createVisibleAssistantResultEventMatcher(
+  runId: string,
+): (event: unknown) => boolean {
+  let silentFinalSeen = false;
+  return (event) => {
+    if (!isAssistantResultEventForRun(event, runId) || !isRecord(event)) {
+      return false;
+    }
+    if (
+      (isRecord(event.message) && event.message.display === true) ||
+      readTerminalSourceReplyDeliveryMirror(event.message)
+    ) {
+      return isVisibleAssistantResultEventForRun(event, runId);
+    }
+    if (silentFinalSeen) {
+      return false;
+    }
+    if (isSilentAssistantTranscriptMessage(event.message)) {
+      silentFinalSeen = true;
+      return false;
+    }
+    return isVisibleAssistantResultEventForRun(event, runId);
+  };
+}
+
+export type { SessionTranscriptEventMatch } from "../config/sessions/session-history-read.types.js";
+
+/** Navigation only filters candidates; canonical content and active identity remain authoritative. */
+export function matchesTranscriptEvent(
+  event: unknown,
+  match: SessionTranscriptEventMatch,
+  projection?: "navigation",
+): boolean {
+  if (match.kind === "latest") {
+    return true;
+  }
+  if (match.kind === "visible-final" && projection !== "navigation") {
+    return isVisibleAssistantResultEventForRun(event, match.runId);
+  }
+  const message = asOptionalRecord(asOptionalRecord(event)?.message);
+  if (match.kind === "canvas-widget") {
+    if (asOptionalRecord(event)?.type !== "message" || !message) {
+      return false;
+    }
+    if (projection === "navigation") {
+      return message.role === "toolResult" || message.role === "custom";
+    }
+    const activity = readNestedToolActivity(message);
+    const tool = activity?.details ?? (message.role === "toolResult" ? message : undefined);
+    const details = asOptionalRecord(activity ? activity.details.result.details : message.details);
+    return (
+      tool?.toolName === "show_widget" &&
+      tool.isError !== true &&
+      details?.kind === "canvas" &&
+      asOptionalRecord(details.view)?.id === match.docId &&
+      asOptionalRecord(details.presentation)?.target === "assistant_message"
+    );
+  }
+  if (match.kind === "idempotency") {
+    return (
+      message?.idempotencyKey === match.key &&
+      (!match.assistant || message.role === "assistant") &&
+      (match.runId === undefined || readSessionTranscriptRunId(message) === match.runId) &&
+      (projection === "navigation" ||
+        !match.deliveryMirror ||
+        isOpenClawDeliveryMirrorAssistantMessage(message))
+    );
+  }
+  return message?.role === "assistant" && readSessionTranscriptRunId(message) === match.runId;
 }

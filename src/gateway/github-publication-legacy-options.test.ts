@@ -1,23 +1,27 @@
+import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ensurePersonalGitHubPublicationSchema } from "../state/openclaw-state-db-schema-additive.js";
+import { removeTempDirectoryAsync } from "../infra/sqlite-readonly-location-cleanup.js";
+import { createSqliteSnapshotStagingDirectory } from "../infra/sqlite-snapshot-staging.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   callPersonalPublicationRpc,
   createPersonalPublicationFixture,
   personalPublicationAccount as account,
+  preparePersonalPublicationFixtureAction,
 } from "./github-personal-publication.test-support.js";
+import * as publicationStore from "./github-publication-store-async.js";
 import {
-  claimGitHubPublicationExecution,
-  createGitHubPublicationExecutionStore,
-} from "./github-publication-store.js";
+  claimGitHubPublicationExecutionFixture,
+  createGitHubPublicationExecutionStoreFixture,
+} from "./github-publication-store.test-support.js";
 import {
   NEW_HEAD,
   SESSION_KEY,
   commands,
   installGitHubPublicationTestHarness,
+  root,
 } from "./github-publication.test-support.js";
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
-import { preparePersonalGitHubSessionAction } from "./server-methods/github-personal-authorization.js";
 
 installGitHubPublicationTestHarness();
 let fixture: Awaited<ReturnType<typeof createPersonalPublicationFixture>>;
@@ -27,6 +31,23 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("publication options after a retained-state upgrade", () => {
+  it("reads current receipts while another snapshot retains an earlier launch environment", async () => {
+    const directory = await createSqliteSnapshotStagingDirectory(root, false, undefined, true);
+    vi.stubEnv("OPENCLAW_GITHUB_OPTIONS_FIXTURE", "changed-after-staging-allocation");
+    try {
+      const row = insertSharedWorktreeReceipt("current-shared");
+      const options = await callPersonalPublicationRpc(fixture, "sessions.github.options");
+      expect(options[0], JSON.stringify(options[2])).toBe(true);
+      expect(fs.existsSync(directory)).toBe(true);
+      expect(options[1]).toMatchObject({
+        personal: { state: "connected", generation: fixture.generation, account },
+        latestShared: { result: { requestId: row.request_id, status: "requested" } },
+      });
+    } finally {
+      expect(await removeTempDirectoryAsync(directory)).toBe(true);
+    }
+  });
+
   it.each(["table", "row"])(
     "keeps account choices and personal recovery with no legacy lifecycle %s",
     async (missing) => {
@@ -34,8 +55,8 @@ describe("publication options after a retained-state upgrade", () => {
       const rpc = (method: string, params?: Record<string, unknown>) =>
         callPersonalPublicationRpc(fixture, method, params);
       const legacy = insertSharedWorktreeReceipt("legacy-terminal");
-      const claimed = claimGitHubPublicationExecution(legacy.request_id, "legacy-instance");
-      createGitHubPublicationExecutionStore("legacy-instance").complete(claimed, {
+      const claimed = claimGitHubPublicationExecutionFixture(legacy.request_id, "legacy-instance");
+      createGitHubPublicationExecutionStoreFixture("legacy-instance").complete(claimed, {
         requestId: legacy.request_id,
         status: "published",
         repository: "openclaw/openclaw",
@@ -62,29 +83,32 @@ describe("publication options after a retained-state upgrade", () => {
       });
 
       const controller = new AbortController();
-      ensurePersonalGitHubPublicationSchema(db);
-      db.function("stop_personal_upgrade_admission", () => {
-        controller.abort();
-        return 1;
-      });
-      db.exec(
-        "CREATE TEMP TRIGGER stop_personal_upgrade_admission AFTER INSERT ON github_personal_publication_requests BEGIN SELECT stop_personal_upgrade_admission(); END",
+      const claim = publicationStore.claimPersonalGitHubPublicationAsync;
+      const interrupted = vi
+        .spyOn(publicationStore, "claimPersonalGitHubPublicationAsync")
+        .mockImplementation(async (...args) => {
+          const execution = await claim(...args);
+          controller.abort();
+          return execution;
+        });
+      const action = await preparePersonalPublicationFixtureAction(
+        { client, context },
+        controller.signal,
       );
-      const action = preparePersonalGitHubSessionAction(
-        { client, context, signal: controller.signal },
-        { sessionKey: SESSION_KEY },
-      );
-      await expect(
-        coordinator.requestPersonalForSession(
-          {
-            sessionKey: SESSION_KEY,
-            idempotencyKey: "personal-after-upgrade",
-            selection: { source: "personal", generation, account },
-          },
-          action,
-        ),
-      ).rejects.toThrow("current");
-      db.exec("DROP TRIGGER stop_personal_upgrade_admission");
+      try {
+        await expect(
+          coordinator.requestPersonalForSessionV2(
+            {
+              sessionKey: SESSION_KEY,
+              idempotencyKey: "personal-after-upgrade",
+              selection: { source: "personal", generation, account },
+            },
+            action,
+          ),
+        ).rejects.toMatchObject({ name: "AbortError" });
+      } finally {
+        interrupted.mockRestore();
+      }
       const recovered = await rpc("sessions.github.options");
       expect(recovered[0], JSON.stringify(recovered[2])).toBe(true);
       expect(recovered[1]).toMatchObject({

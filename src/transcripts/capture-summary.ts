@@ -1,8 +1,13 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
-import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
-import { getAsyncWorkSignal, runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import {
+  isGatewayRestartDraining,
+  runWithGatewayDetachedWorkAdmission,
+} from "../process/gateway-work-admission.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { assertTranscriptCaptureEnabled } from "./capture-startup.js";
 import type { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
@@ -14,6 +19,7 @@ import { summarizeTranscripts } from "./summary.js";
 type SummaryParams = {
   config: ReturnType<typeof resolveTranscriptsConfig>;
   cfg?: OpenClawConfig;
+  stateDir: string;
   store: TranscriptsStore;
   session: TranscriptSessionDescriptor;
   expectedInputRevision?: string;
@@ -106,7 +112,10 @@ async function readTranscriptSummary(
   const utterances = params.snapshot.utterances;
   const agentId = params.session.metadata?.agentId;
   try {
-    if (params.cfg) {
+    if (params.cfg && !isGatewayRestartDraining()) {
+      // Final notes still persist during shutdown, but optional inference must not
+      // load a new agent runtime after an in-place update replaced its chunks.
+      assertTranscriptCaptureEnabled({ config: params.cfg, stateDir: params.stateDir });
       const modeled = await summarizeTranscriptsWithModel({
         cfg: params.cfg,
         agentId:
@@ -147,20 +156,18 @@ async function persistSnapshot(
   lane.abort = abort;
   try {
     const summary = await readTranscriptSummary({ ...params, snapshot, abortSignal: abort.signal });
-    const intendedSummaryPath = await params.store.writeSummary(
-      summary,
-      params.session,
-      undefined,
-      () => {
+    const intendedSummaryPath = await params.store.writeSummary(summary, params.session, {
+      guard: {
+        inputRevision: snapshot.inputRevision,
+        nextSequence: snapshot.nextSequence,
+        summaryRevision: snapshot.summaryRevision,
+        allowAppends: params.allowAppends === true,
+      },
+      assertCurrent: () => {
         abort.signal.throwIfAborted();
         params.assertCurrent?.();
-        params.store.assertSummarySnapshotCurrent(
-          params.session,
-          snapshot,
-          params.allowAppends === true,
-        );
       },
-    );
+    });
     if (lane.live) {
       lane.live.lastSequence = snapshot.nextSequence;
     }

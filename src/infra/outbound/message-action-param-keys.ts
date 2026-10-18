@@ -63,12 +63,10 @@ export function hasPotentialPluginActionParam(params: Record<string, unknown>): 
     if (STANDARD_MESSAGE_ACTION_PARAM_KEYS.has(key)) {
       return false;
     }
-    if (typeof value === "string") {
-      return Boolean(normalizeOptionalString(value));
-    }
-    if (typeof value === "number") {
-      return Number.isFinite(value);
-    }
-    return value !== undefined;
+    return typeof value === "string"
+      ? Boolean(normalizeOptionalString(value))
+      : typeof value === "number"
+        ? Number.isFinite(value)
+        : value !== undefined;
   });
 }

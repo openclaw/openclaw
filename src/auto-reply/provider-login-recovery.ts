@@ -66,11 +66,10 @@ export function buildProviderLoginRecovery(
   evidence: ProviderLoginRecoveryEvidence,
 ): ProviderLoginRecovery | undefined {
   const needsLogin =
-    evidence.oauthReason !== null && evidence.oauthReason !== undefined
-      ? true
-      : evidence.authMode === "oauth" &&
-        evidence.failoverReason !== undefined &&
-        AUTH_PROFILE_LOGIN_REASONS.has(evidence.failoverReason);
+    evidence.oauthReason != null ||
+    (evidence.authMode === "oauth" &&
+      evidence.failoverReason !== undefined &&
+      AUTH_PROFILE_LOGIN_REASONS.has(evidence.failoverReason));
   if (!needsLogin) {
     return undefined;
   }

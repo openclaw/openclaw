@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -8,6 +9,7 @@ import {
   requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { chooseSidebarMenuOption, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -51,8 +53,26 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}sessions`);
       const roster = page.locator("openclaw-sessions-page");
-      const search = roster.locator(".sessions-toolbar__search input");
+      const filters = roster.getByRole("button", { name: "Filters", exact: true });
+      const popover = roster.locator(".sessions-filter-popover");
+      const openFilters = async () => {
+        if ((await popover.getAttribute("data-phase")) === "closing") {
+          await expect.poll(() => popover.getAttribute("data-phase")).toBe("hidden");
+        }
+        if ((await popover.getAttribute("data-phase")) === "hidden") {
+          await filters.click();
+        }
+        await expect.poll(() => popover.getAttribute("data-phase")).toBe("open");
+      };
+      await openFilters();
+      const search = popover.locator("input[type='text']");
+      await page.clock.install();
+      await pauseVirtualClock(page);
       await search.pressSequentially("observatory", { delay: 40 });
+      // Slow runners must not dispatch an intermediate prefix between keystrokes.
+      // Cross the search debounce and deliver its nested mock response timer.
+      await page.clock.runFor(201);
+      await page.clock.resume();
       await roster.getByRole("button", { name: "Load more sessions", exact: true }).click();
       await expect
         .poll(() => gateway.getRequests("sessions.list"))
@@ -74,7 +94,12 @@ suite.define(() => {
         }),
       ]);
       await gateway.deferNext("sessions.list", { search: "older" });
+      await openFilters();
+      await pauseVirtualClock(page);
       await search.fill("older");
+      expect(await search.inputValue()).toBe("older");
+      await page.clock.runFor(201);
+      await page.clock.resume();
       await expect
         .poll(() => gateway.getRequests("sessions.list"))
         .toContainEqual(
@@ -88,8 +113,8 @@ suite.define(() => {
       await search.pressSequentially("superseded", { delay: 40 });
       await search.fill("");
       await search.pressSequentially("latest", { delay: 40 });
-      await roster.locator('.sessions-view-segment wa-radio[value="archived"]').click();
-      await roster.locator('.sessions-view-segment wa-radio[value="all"]').click();
+      await roster.locator('.sessions-view-segment input[value="archived"]').click();
+      await roster.locator('.sessions-view-segment input[value="all"]').click();
       expect(await search.inputValue()).toBe("latest");
       expect(await gateway.getRequests("sessions.list")).toEqual(beforeTyping);
       await gateway.resolveDeferred(
@@ -103,7 +128,11 @@ suite.define(() => {
         }),
       ]);
       expect(await roster.getByText("Retired result", { exact: true }).count()).toBe(0);
+      await openFilters();
+      await pauseVirtualClock(page);
       await search.fill("failed");
+      await page.clock.runFor(201);
+      await page.clock.resume();
       await roster.getByText("Metadata search unavailable", { exact: false }).waitFor();
       expect(
         await roster.getByText("No sessions match your filters.", { exact: true }).count(),
@@ -133,11 +162,9 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         const selectFilter = async (label: "Archived" | "All" | "Active") => {
-          await page.getByRole("button", { name: "Filter & sort" }).click();
-          await page
-            .locator(".sidebar-session-sort-menu")
-            .getByRole("menuitemradio", { name: label, exact: true })
-            .click();
+          await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+          await chooseSidebarMenuOption(page, "Status", label);
+          await closeSidebarMenu(page);
         };
         await selectFilter(statusFilter);
         await page.getByText("Archived planning", { exact: true }).first().waitFor();

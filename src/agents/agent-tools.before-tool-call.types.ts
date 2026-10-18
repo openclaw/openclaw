@@ -31,8 +31,12 @@ export type ToolOutcomeObservation = {
 export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
 
 export type HookContext = {
+  /** Host-owned workspace attribution barrier, captured for this exact run. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
   agentId?: string;
   config?: OpenClawConfig;
+  /** Selected tool registration owner; independent of the hook requesting approval. */
+  toolOwnerPluginId?: string;
   /** Tool execution cwd for host-derived path facts. */
   cwd?: string;
   /** Host workspace used to resolve relative tool params for diagnostics only. */
@@ -95,7 +99,6 @@ export type BeforeToolCallPolicyDiagnosticState = {
 };
 
 export type HookBlockedReason =
-  | "client-voice-confirmation"
   | "plugin-before-tool-call"
   | "plugin-approval"
   | "plugin-approval-unavailable"

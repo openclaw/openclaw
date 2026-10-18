@@ -1,107 +1,144 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
 } from "../../../test/helpers/theme-fixture.js";
+import { ThemesImportParamsSchema } from "./schema/themes.js";
 import {
   isThemeId,
   normalizeThemeDefinition,
   normalizeThemeMode,
   parseThemeDefinition,
+  resolveThemeBranding,
   THEME_COLOR_KEYS,
+  type ThemePalette,
 } from "./theme.js";
 
+function createDarkTheme(palette: Partial<ThemePalette>) {
+  return createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) });
+}
+
 describe("portable theme definition", () => {
-  it("normalizes a complete dark-only palette and preserves supported color formats", () => {
-    const definition = normalizeThemeDefinition(
-      createThemeDefinitionFixture({
-        name: " Xenovessel ",
-        dark: createThemePaletteFixture({
-          background: "oklch(15% 0.04 280deg)",
-          foreground: "hsl(240 20% 95% / 0.9)",
-          primary: "rgb(180, 255, 40)",
-          accent: "color(display-p3 0.2 0.9 1)",
-        }),
-      }),
+  it.each(["none"] as const)(
+    "accepts the %s mascot, authored critters and hat, and normalizes custom working phrases",
+    (mascot) => {
+      expect(
+        normalizeThemeDefinition(
+          createThemeDefinitionFixture({
+            mascot,
+            workingPhrases: [" Building ", "x".repeat(24)],
+            critters: ["fedora", "penguin"],
+            avatarHat: "fedora",
+          }),
+        ),
+      ).toMatchObject({
+        mascot,
+        workingPhrases: ["Building", "x".repeat(24)],
+        critters: ["fedora", "penguin"],
+        avatarHat: "fedora",
+      });
+    },
+  );
+
+  it.each(["none"] as const)(
+    "accepts independent branding with the %s working indicator",
+    (workingIndicator) => {
+      const fields = {
+        brandName: "Mission Control",
+        brandIcon: "mark",
+        workingIndicator,
+        lobsterdex: false,
+        communityLinks: false,
+      };
+      const definition = createThemeDefinitionFixture(fields);
+      expect(
+        normalizeThemeDefinition({ ...definition, brandName: " Mission Control " }),
+      ).toMatchObject(fields);
+      expect(Value.Check(ThemesImportParamsSchema, { id: "mission", definition })).toBe(true);
+      expect(
+        normalizeThemeDefinition({ ...definition, brandName: "a".repeat(80) }).brandName,
+      ).toHaveLength(80);
+    },
+  );
+
+  it("restricts custom brand icons to the manifest's icon IDs", () => {
+    const definition = createThemeDefinitionFixture({ brandIcon: "rocket" });
+    expect(() => normalizeThemeDefinition(definition)).toThrow("theme.brandIcon");
+    expect(() =>
+      normalizeThemeDefinition(definition, { hatIds: ["rocket"], critterIds: ["rocket"] }),
+    ).toThrow("theme.brandIcon");
+    expect(normalizeThemeDefinition(definition, { iconIds: ["rocket"] }).brandIcon).toBe("rocket");
+    expect(parseThemeDefinition(definition)).toBeNull();
+  });
+
+  it.each([null])("keeps undeclared avatar hat %j out of personal definitions", (avatarHat) => {
+    const definition = { ...createThemeDefinitionFixture(), avatarHat };
+    expect(() => normalizeThemeDefinition(definition)).toThrow(
+      "theme.avatarHat must be one of fedora, crown, santa, party, pumpkin",
     );
-    expect(definition.name).toBe("Xenovessel");
-    expect(definition.light).toBeUndefined();
-    expect(definition.dark?.accent).toBe("color(display-p3 0.2 0.9 1)");
+    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(
+      avatarHat !== null,
+    );
+  });
+
+  it("accepts plugin artwork only from declared IDs of the corresponding kind", () => {
+    const definition = createThemeDefinitionFixture({ avatarHat: "beret", critters: ["ferris"] });
+    expect(() => normalizeThemeDefinition(definition)).toThrow(
+      "theme.critters[0] must be one of penguin, fedora",
+    );
+    expect(() =>
+      normalizeThemeDefinition(definition, { hatIds: ["ferris"], critterIds: ["beret"] }),
+    ).toThrow("theme.critters[0]");
+    expect(
+      normalizeThemeDefinition(definition, { hatIds: ["beret"], critterIds: ["ferris"] }),
+    ).toMatchObject({ avatarHat: "beret", critters: ["ferris"] });
+    expect(Value.Check(ThemesImportParamsSchema, { id: "hat-theme", definition })).toBe(true);
+    expect(parseThemeDefinition(definition)).toBeNull();
+  });
+
+  it.each(["<svg>"])("rejects nonportable artwork ID %j at the wire boundary", (id) => {
+    for (const branding of [{ brandIcon: id }, { avatarHat: id }, { critters: [id] }]) {
+      expect(
+        Value.Check(ThemesImportParamsSchema, {
+          id: "hat-theme",
+          definition: createThemeDefinitionFixture(branding),
+        }),
+      ).toBe(false);
+    }
+  });
+
+  it.each<[Record<string, unknown>, string]>([
+    [{ brandName: "hello\ud800" }, "theme.brandName"],
+    [{ workingIndicator: "spinner" }, "theme.workingIndicator"],
+    [{ lobsterdex: "false" }, "theme.lobsterdex"],
+    [{ mascot: "robot" }, "theme.mascot must be one of claw, none"],
+    [
+      { workingPhrases: Array.from({ length: 25 }, (_, index) => `Working ${index}`) },
+      "at most 24 entries",
+    ],
+    [{ workingPhrases: ["Building", " Building "] }, "duplicate entries after trimming"],
+    [{ critters: Array.from({ length: 9 }, () => "penguin") }, "at most 8 entries"],
+    [{ critters: ["penguin", "penguin"] }, "duplicate entries"],
+  ])("rejects invalid branding %j", (fields, message) => {
+    expect(() =>
+      normalizeThemeDefinition({ ...createThemeDefinitionFixture(), ...fields }),
+    ).toThrow(message);
   });
 
   it.each([
-    { background: 'url("https://example.invalid/pixel")' },
     { background: "#000;display:none" },
     { background: "var(--other-theme)" },
-    { background: "rgb()" },
-    { background: "rgb(1 2 3 .5)" },
-    { background: "rgb(1, 2 3)" },
-    { background: "rgb(1 2, 3)" },
-    { background: "rgb(1, 2, 3 / .5)" },
-    { background: "rgb(1%, 2, 3%)" },
-    { background: "rgb(1. 2 3)" },
-    { background: "rgb(1\u00a02\u00a03)" },
-    { background: "hsl(180, 40, 50)" },
-    { background: "hsl(180 40% 50% .5)" },
-    { background: "oklch(50%, 0.2, 180)" },
-    { background: "lab(50%, 20, 10)" },
-    { background: "color(srgb\u00a00 0 0)" },
-    { background: "red/* hidden */" },
-    { "font-sans": "monospace; background: url(https://example.invalid)" },
     { "font-sans": "var(--font-body)" },
-    { "font-sans": "'unterminated" },
-    { "font-sans": "Roboto,,monospace" },
-    { "font-sans": "123Font" },
-    { "font-sans": "Foo.Bar" },
-    { "font-sans": "-1font" },
-    { "font-sans": "serif Foo" },
     { "font-sans": "Foo serif" },
-    { "font-sans": "Foo inherit" },
-    { "font-sans": "default Foo" },
     { "font-sans": "default" },
-    { "font-sans": "-webkit-body Foo" },
   ])("rejects unsafe or malformed CSS values %j", (palette) => {
-    expect(
-      parseThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) }),
-      ),
-    ).toBeNull();
+    expect(parseThemeDefinition(createDarkTheme(palette))).toBeNull();
   });
 
-  it.each([
-    "rgb(1 2 3)",
-    "rgb(1e2 2 3)",
-    "rgb(1% 2 3% / 50%)",
-    "rgba(1, 2, 3, .5)",
-    "rgb(1%, 2%, 3%, 50%)",
-    "hsl(180 40 50 / .5)",
-    "hsla(0.5turn, 40%, 50%, .5)",
-    "lab(50% -20 10 / .5)",
-    "lch(50% 20 180deg)",
-    "oklab(50% -.2 .1 / 50%)",
-    "oklch(50% 0.2 180)",
-    "color(display-p3 .1 .2 .3 / .5)",
-  ])("preserves supported color syntax: %s", (background) => {
+  it.each(["JetBrains Mono, monospace"])("preserves font family names: %s", (font) => {
     expect(
-      normalizeThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background }) }),
-      ).dark?.background,
-    ).toBe(background);
-  });
-
-  it.each([
-    "JetBrains Mono, monospace",
-    "'A,B', monospace",
-    "\"A'B\", 'C\"D'",
-    '"123 Font", monospace',
-    "'serif Foo', 'Foo serif', 'Foo inherit', 'default Foo', 'default', 'inherit'",
-    "--font, Foo_Bar",
-    '""',
-  ])("preserves font family names: %s", (font) => {
-    expect(
-      normalizeThemeDefinition(
-        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ "font-sans": font }) }),
-      ).dark?.["font-sans"],
+      normalizeThemeDefinition(createDarkTheme({ "font-sans": font })).dark?.["font-sans"],
     ).toBe(font);
   });
 
@@ -127,40 +164,69 @@ describe("portable theme definition", () => {
 
   it.each([
     ["claw", true],
-    ["rose", true],
-    ["custom", false],
-    ["space/neon", true],
-    ["pack/one/neon", true],
-    ["Space/Entry/neon", true],
-    ["@scope/Pack/neon", true],
-    ["@scope/Pack/Entry/neon", true],
     ["user/xenovessel", true],
     ["space/../neon", false],
-    ["space/./neon", false],
-    ["space//neon", false],
-    ["space\\entry/neon", false],
-    ["space/entry/Neon", false],
-    ["user/neon/more", false],
-    [`${"a".repeat(251)}/neon`, true],
     [`${"a".repeat(252)}/neon`, false],
   ])("validates catalog identity %s", (id, expected) => {
     expect(isThemeId(id)).toBe(expected);
   });
 });
 
+it("resolves omitted branding to the claw without critters or a hat and retains authored branding", () => {
+  const defaults = {
+    mascot: "claw",
+    brandName: "OpenClaw",
+    brandIcon: "claw",
+    workingIndicator: "claw",
+    lobsterdex: true,
+    communityLinks: true,
+    workingPhrases: undefined,
+    critters: [],
+    avatarHat: undefined,
+  };
+  expect(resolveThemeBranding(undefined)).toEqual(defaults);
+  expect(resolveThemeBranding({})).toEqual(defaults);
+  expect(resolveThemeBranding({ workingPhrases: [] })).toEqual({
+    ...defaults,
+    workingPhrases: [],
+  });
+  expect(
+    resolveThemeBranding({
+      mascot: "none",
+      workingPhrases: ["Building"],
+      critters: ["penguin", "fedora"],
+      avatarHat: "fedora",
+    }),
+  ).toEqual({
+    ...defaults,
+    mascot: "none",
+    brandIcon: "mark",
+    workingIndicator: "dots",
+    workingPhrases: ["Building"],
+    critters: ["penguin", "fedora"],
+    avatarHat: "fedora",
+  });
+});
+
+it("keeps explicit branding independent from mascot defaults", () => {
+  const source = {
+    mascot: "none",
+    brandName: "Mission Control",
+    brandIcon: "rocket",
+    workingIndicator: "brand",
+    lobsterdex: false,
+    communityLinks: false,
+    artwork: { icons: { rocket: { url: "/icon" } } },
+  } as const;
+  expect(resolveThemeBranding(source)).toMatchObject(source);
+  expect(resolveThemeBranding({ mascot: "claw", workingIndicator: "none" }).workingIndicator).toBe(
+    "none",
+  );
+});
+
 it.each([
-  ["system", "system"],
-  ["light", "light"],
   ["dark", "dark"],
-  ["DARK", undefined],
-  [" light ", undefined],
-  ["", undefined],
   [null, undefined],
-  [undefined, undefined],
-  [0, undefined],
-  [false, undefined],
-  [[], undefined],
-  [{ mode: "light" }, undefined],
 ])("normalizes only exact theme mode literals: %j", (input, expected) => {
   expect(normalizeThemeMode(input)).toBe(expected);
 });

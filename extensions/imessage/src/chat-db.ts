@@ -10,6 +10,10 @@ import type { IMessageTarget } from "./targets.js";
 export type IMessageChatDbOperations = {
   startupWatermark: { input: undefined; output: number | null };
   messageGuid: { input: { messageId: string }; output: string | null };
+  messageChats: {
+    input: { messageGuid: string };
+    output: { chatId: unknown; chatGuid: unknown; chatIdentifier: unknown }[];
+  };
   latestSentGuid: {
     input: { target: IMessageTarget; text: string; sentAfterMs?: number };
     output: string | null;
@@ -20,7 +24,7 @@ type ReadReceiptGuid = (
   command: SqliteWorkerCommand<Pick<IMessageChatDbOperations, "messageGuid" | "latestSentGuid">>,
 ) => Promise<string | null>;
 
-function openIMessageChatDbReader(databasePath: string) {
+export function openIMessageChatDbReader(databasePath: string) {
   return openSqliteWorkerStore<IMessageChatDbOperations>({
     moduleUrl: resolveRuntimeWorkerUrl({
       currentModuleUrl: import.meta.url,

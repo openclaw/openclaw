@@ -1,25 +1,14 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import { NODE_PORTAL_ATTACH_PATH } from "../shared/node-desktop-stream.js";
+import { decodeWorkerRequest } from "../worker/protocol-record.js";
 import { runNodeStreamTransport } from "./node-stream-transport.js";
 
 const REQUEST_MAX_BYTES = 16 * 1024;
 const TICKET_PATTERN = /^[a-f0-9]{48}$/u;
 
-function parseNodeWorkerPortalStreamInput(raw?: string | null): {
-  ticket: string;
-  attachPath: string;
-  port: number;
-} {
-  if (!raw || Buffer.byteLength(raw, "utf8") > REQUEST_MAX_BYTES) {
-    throw new Error("INVALID_REQUEST: invalid node worker portal stream request");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    throw new Error("INVALID_REQUEST: malformed node worker portal stream request");
-  }
+function parseNodeWorkerPortalStreamInput(raw?: string | null) {
+  const value = decodeWorkerRequest(raw, REQUEST_MAX_BYTES, "node worker portal stream");
   if (
     !isRecord(value) ||
     Object.keys(value).length !== 3 ||

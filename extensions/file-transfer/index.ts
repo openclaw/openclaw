@@ -1,4 +1,3 @@
-// File Transfer plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type AnyAgentTool,
@@ -11,13 +10,9 @@ import {
   DIR_LIST_TOOL_DESCRIPTOR,
   FILE_FETCH_TOOL_DESCRIPTOR,
   FILE_WRITE_TOOL_DESCRIPTOR,
+  type FileTransferToolDescriptor,
 } from "./src/tools/descriptors.js";
 import { registerNodeWorkspaces } from "./src/workspace-service.js";
-
-type FileTransferToolDescriptor = Pick<
-  AnyAgentTool,
-  "label" | "name" | "description" | "parameters"
->;
 
 function readNodeCommandParams(paramsJSON: string | null | undefined): unknown {
   return paramsJSON ? JSON.parse(paramsJSON) : {};
@@ -28,14 +23,10 @@ function createLazyTool(
   loadTool: () => Promise<AnyAgentTool>,
 ): AnyAgentTool {
   let toolPromise: Promise<AnyAgentTool> | undefined;
-  const loadOnce = () => {
-    toolPromise ??= loadTool();
-    return toolPromise;
-  };
   return {
     ...descriptor,
     async execute(toolCallId, args, signal, onUpdate) {
-      const tool = await loadOnce();
+      const tool = await (toolPromise ??= loadTool());
       return await tool.execute(toolCallId, args, signal, onUpdate);
     },
   };
@@ -44,6 +35,7 @@ function createLazyTool(
 const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "file.stat",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     handle: async (paramsJSON) => {
@@ -91,6 +83,7 @@ const fileTransferNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   },
   {
     command: "file.create",
+    hasActiveWork: () => false,
     cap: "file",
     dangerous: true,
     duplex: true,
@@ -120,6 +113,28 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
+    for (const kind of ["memory", "skills"] as const) {
+      api.registerNodeHostCommand({
+        command: `workspace.${kind}`,
+        hasActiveWork: () => false,
+        cap: "file",
+        dangerous: true,
+        duplex: true,
+        handle: async (...args) => {
+          const { createWorkspaceCommand } = await import("./src/node-host/workspace-memory.js");
+          return await createWorkspaceCommand(api, kind).handle(...args);
+        },
+      });
+      api.registerNodeInvokePolicy({
+        commands: [`workspace.${kind}`],
+        dangerous: true,
+        async handle(ctx) {
+          const { createWorkspaceWorkerPolicy } =
+            await import("./src/shared/workspace-memory-policy.js");
+          return await createWorkspaceWorkerPolicy(kind).handle(ctx);
+        },
+      });
+    }
     registerNodeWorkspaces(api);
     api.registerCli(
       async ({ program }) => {

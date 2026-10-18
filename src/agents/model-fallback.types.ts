@@ -1,11 +1,9 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { FailoverReason } from "./failover/signal.js";
 
 export const MODEL_FALLBACK_SKIPPED_CODE = "MODEL_FALLBACK_SKIPPED";
 
-export type ModelCandidate = {
-  provider: string;
-  model: string;
-};
+export type ModelCandidate = ProviderModelRef;
 
 export type ModelFallbackRouteOrigin = "requested" | "configured-fallback" | "configured-primary";
 export type ModelFallbackRouteResolution = "raw" | "resolved";
@@ -16,10 +14,9 @@ export type ModelFallbackCandidate = ModelCandidate & {
   routeResolution: ModelFallbackRouteResolution;
 };
 
-export type FallbackAttempt = {
-  provider: string;
-  model: string;
+export type FallbackAttempt = ModelCandidate & {
   error: string;
+  rateLimitRetriesExhausted?: number;
   reason?: FailoverReason;
   authMode?: string;
   status?: number;
@@ -31,5 +28,7 @@ export type ModelFallbackAttemptProvenance = {
   requestedProvider: string;
   requestedModel: string;
   stage: "initial" | "fallback";
+  /** A user switch invalidates automatic routing for the original selection for this cycle. */
+  selectionChanged?: boolean;
   fallbackReason?: FailoverReason;
 };

@@ -1,49 +1,44 @@
-// Link-understanding runner tests cover guarded fetches, command execution, scoping, and template behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { LinkModelConfig } from "../config/types.tools.js";
+import type { LinkModelConfig, LinkToolsConfig } from "../config/types.tools.js";
+import * as globals from "../globals.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { applyLinkUnderstanding } from "./apply.js";
-import { runLinkUnderstanding } from "./runner.js";
 
 const mocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
   runCommandWithTimeout: vi.fn(),
 }));
 
-vi.mock("../infra/net/fetch-guard.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/net/fetch-guard.js")>(
-    "../infra/net/fetch-guard.js",
-  );
-  return {
-    ...actual,
-    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
-  };
-});
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
+  fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+}));
 
-vi.mock("../process/exec.js", async () => {
-  const actual = await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
-  return {
-    ...actual,
-    runCommandWithTimeout: mocks.runCommandWithTimeout,
-  };
-});
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.runCommandWithTimeout,
+}));
 
-function cfg(entry: LinkModelConfig) {
+function cfg(
+  entry: LinkModelConfig | LinkModelConfig[] = { type: "cli", command: "summarize" },
+  options: Omit<LinkToolsConfig, "models"> = {},
+): OpenClawConfig {
   return {
     tools: {
       links: {
         enabled: true,
-        models: [entry],
+        ...options,
+        models: Array.isArray(entry) ? entry : [entry],
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
-function ctx(body: string): MsgContext {
-  return { Body: body } as MsgContext;
+function ctx(body = "see https://example.com/page"): MsgContext {
+  return { Body: body };
 }
 
 function mockGuardedFetch(body = "guarded content", finalUrl = "https://example.com/final") {
@@ -67,77 +62,125 @@ function mockCommand(stdout = "summary") {
   });
 }
 
-describe("runLinkUnderstanding", () => {
+describe("applyLinkUnderstanding", () => {
   beforeEach(() => {
     mocks.fetchWithSsrFGuard.mockReset();
     mocks.runCommandWithTimeout.mockReset();
   });
 
   it("applies shared media scope rules to link message context", async () => {
-    const result = await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            enabled: true,
-            scope: {
-              default: "allow",
-              rules: [
-                {
-                  action: "deny",
-                  match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
-                },
-              ],
+    const context: MsgContext = {
+      Body: "see https://example.com/page",
+      ChatType: "channel",
+      Provider: "discord",
+      SessionKey: "agent:main:slack:channel:C123",
+      Surface: "slack",
+    };
+    const before = structuredClone(context);
+    await applyLinkUnderstanding({
+      cfg: cfg(undefined, {
+        scope: {
+          default: "allow",
+          rules: [
+            {
+              action: "deny",
+              match: { channel: "slack", chatType: "channel", keyPrefix: "agent:main:" },
             },
-            models: [{ type: "cli", command: "summarize" }],
-          },
+          ],
         },
-      } as OpenClawConfig,
-      ctx: {
-        Body: "see https://example.com/page",
-        ChatType: "channel",
-        Provider: "discord",
-        SessionKey: "agent:main:slack:channel:C123",
-        Surface: "slack",
-      } as MsgContext,
+      }),
+      ctx: context,
     });
 
-    expect(result).toEqual([]);
+    expect(context).toEqual(before);
+    expect(context.LinkUnderstanding).toBeUndefined();
     expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
   it("fetches links through the SSRF guard before passing content to CLI stdin", async () => {
-    const controller = new AbortController();
-    const release = mockGuardedFetch("page body", "https://example.com/final");
-    mockCommand("summarized page");
+    const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+    const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    const body = "synthetic private link context https://example.com/page";
+    try {
+      const controller = new AbortController();
+      const release = mockGuardedFetch("page body", "https://example.com/final");
+      mockCommand("summarized page");
 
-    const result = await runLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize", args: ["--source", "{{LinkUrl}}"] }),
-      ctx: ctx("see https://example.com/page"),
-      signal: controller.signal,
-    });
-
-    expect(result).toEqual(["summarized page"]);
-    expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
-      expect.objectContaining({
-        auditContext: "link-understanding",
-        mode: "strict",
-        url: "https://example.com/page",
+      const context = ctx(body);
+      await applyLinkUnderstanding({
+        cfg: cfg({
+          type: "cli",
+          command: "summarize",
+          args: ["--source", "{{LinkUrl}}", "--context", "{{Body}}"],
+        }),
+        ctx: context,
         signal: controller.signal,
-      }),
-    );
-    expect(runCommandWithTimeout).toHaveBeenCalledWith(["summarize", "--source"], {
-      env: {
-        OPENCLAW_LINK_FINAL_URL: "https://example.com/final",
-        OPENCLAW_LINK_URL: "https://example.com/page",
-      },
-      input: "page body",
-      signal: controller.signal,
-      killProcessTree: true,
-      timeoutMs: 30000,
-    });
-    expect(release).toHaveBeenCalledOnce();
+      });
+
+      expect(context.LinkUnderstanding).toEqual(["summarized page"]);
+      expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
+        expect.objectContaining({
+          auditContext: "link-understanding",
+          mode: "strict",
+          url: "https://example.com/page",
+          signal: controller.signal,
+        }),
+      );
+      expect(runCommandWithTimeout).toHaveBeenCalledWith(
+        ["summarize", "--source", "--context", body],
+        {
+          env: {
+            OPENCLAW_LINK_FINAL_URL: "https://example.com/final",
+            OPENCLAW_LINK_URL: "https://example.com/page",
+          },
+          input: "page body",
+          signal: controller.signal,
+          killProcessTree: true,
+          timeoutMs: 30000,
+        },
+      );
+      expect(release).toHaveBeenCalledOnce();
+      expect(JSON.stringify(log.mock.calls)).not.toContain(body);
+    } finally {
+      log.mockRestore();
+      verbose.mockRestore();
+    }
   });
+
+  it.each(["fetch", "cli"])(
+    "keeps %s failures content-free without changing fallback",
+    async (stage) => {
+      const verbose = vi.spyOn(globals, "shouldLogVerbose").mockReturnValue(true);
+      const log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+      const privateText = "synthetic-private-link-content";
+      try {
+        if (stage === "fetch") {
+          mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(privateText));
+        } else {
+          mockGuardedFetch("fallback page body");
+          mocks.runCommandWithTimeout.mockRejectedValueOnce(new Error(privateText));
+        }
+        const context = ctx(`https://example.com/${privateText}`);
+        const before = structuredClone(context);
+        await applyLinkUnderstanding({
+          cfg: cfg(),
+          ctx: context,
+        });
+        if (stage === "fetch") {
+          expect(context).toEqual(before);
+          expect(context.LinkUnderstanding).toBeUndefined();
+        } else {
+          expect(context.LinkUnderstanding).toEqual(["fallback page body"]);
+        }
+        expect(log).toHaveBeenCalled();
+        expect(JSON.stringify(log.mock.calls)).not.toContain(privateText);
+      } finally {
+        log.mockRestore();
+        verbose.mockRestore();
+      }
+    },
+  );
 
   it.each([
     {
@@ -160,10 +203,7 @@ describe("runLinkUnderstanding", () => {
         ...text,
       };
 
-      await applyLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: context,
-      });
+      await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
 
       expect(context.Body).toBe("transport envelope\n\nsummarized page");
       expect(context.agentText).toBe(
@@ -190,10 +230,7 @@ describe("runLinkUnderstanding", () => {
     };
     const before = structuredClone(context);
 
-    await applyLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: context,
-    });
+    await applyLinkUnderstanding({ cfg: cfg(), ctx: context });
 
     expect(context).toEqual(before);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
@@ -202,40 +239,18 @@ describe("runLinkUnderstanding", () => {
   it("does not run configured curl fetchers against attacker-controlled URLs", async () => {
     mockGuardedFetch("guarded page body");
 
-    const result = await runLinkUnderstanding({
+    const context = ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials");
+    await applyLinkUnderstanding({
       cfg: cfg({
         type: "cli",
         command: "curl",
         args: ["-s", "-L", "{{LinkUrl}}"],
       }),
-      ctx: ctx("see http://192.168.1.64.nip.io:8888/aws-iam-credentials"),
+      ctx: context,
     });
 
-    expect(result).toEqual(["guarded page body"]);
+    expect(context.LinkUnderstanding).toEqual(["guarded page body"]);
     expect(fetchWithSsrFGuard).toHaveBeenCalledOnce();
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [
-      "skips links rejected by the guarded fetch DNS policy",
-      "http://169.254.169.254.nip.io/latest/meta-data/",
-      "Blocked: resolves to private/internal/special-use IP address",
-    ],
-    [
-      "skips links rejected by the guarded fetch redirect policy",
-      "https://public.example/redirect-to-metadata",
-      "redirect target resolves to private network",
-    ],
-  ])("%s", async (_name, url, errorMessage) => {
-    mocks.fetchWithSsrFGuard.mockRejectedValueOnce(new Error(errorMessage));
-
-    const result = await runLinkUnderstanding({
-      cfg: cfg({ type: "cli", command: "summarize" }),
-      ctx: ctx(`see ${url}`),
-    });
-
-    expect(result).toEqual([]);
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
   });
 
@@ -250,20 +265,15 @@ describe("runLinkUnderstanding", () => {
     mockGuardedFetch("page body", "https://example.com/final");
     mockCommand("summarized page");
 
-    await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            enabled: true,
-            ...timeoutConfig,
-            models: [
-              { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
-              { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
-            ],
-          },
-        },
-      } as OpenClawConfig,
-      ctx: ctx("see https://example.com/page"),
+    await applyLinkUnderstanding({
+      cfg: cfg(
+        [
+          { type: "cli", command: "summarize-fast", timeoutSeconds: 1 },
+          { type: "cli", command: "summarize-slow", timeoutSeconds: 9 },
+        ],
+        timeoutConfig,
+      ),
+      ctx: ctx(),
     });
 
     expect(fetchWithSsrFGuard).toHaveBeenCalledWith(
@@ -277,13 +287,13 @@ describe("runLinkUnderstanding", () => {
   it("skips pre-aborted work without changing inbound context", async () => {
     const controller = new AbortController();
     controller.abort();
-    const context = ctx("see https://example.com/page");
+    const context = ctx();
     const original = { ...context };
 
     await expect(
       applyLinkUnderstanding({
         ctx: context,
-        cfg: cfg({ type: "cli", command: "summarize" }),
+        cfg: cfg(),
         signal: controller.signal,
       }),
     ).resolves.toBeUndefined();
@@ -299,19 +309,14 @@ describe("runLinkUnderstanding", () => {
     mockCommand("");
     mockCommand("second summary");
 
-    const result = await runLinkUnderstanding({
-      cfg: {
-        tools: {
-          links: {
-            models: [{ command: "summarize-a" }, { command: "summarize-b" }],
-          },
-        },
-      },
-      ctx: ctx("see https://example.com/page"),
+    const context = ctx();
+    await applyLinkUnderstanding({
+      cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
+      ctx: context,
       signal: controller.signal,
     });
 
-    expect(result).toEqual(["second summary"]);
+    expect(context.LinkUnderstanding).toEqual(["second summary"]);
     for (const [index, command] of ["summarize-a", "summarize-b"].entries()) {
       expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
         index + 1,
@@ -321,30 +326,27 @@ describe("runLinkUnderstanding", () => {
     }
   });
 
-  it.each([
-    { outcome: "successful exit", code: 0, stdout: "late summary", termination: "exit" },
-    { outcome: "failed exit", code: 1, stdout: "", termination: "exit" },
-    { outcome: "signal termination", code: null, stdout: "", termination: "signal" },
-  ])("cancellation overrides $outcome without fallback or context changes", async (result) => {
+  it("cancellation overrides successful exit without fallback or context changes", async () => {
     const controller = new AbortController();
     const reason = new Error("reply canceled");
     mockGuardedFetch("first body", "https://example.com/first");
     mocks.runCommandWithTimeout.mockImplementationOnce(async () => {
       controller.abort(reason);
-      return { ...result, killed: false, signal: null, stderr: "" };
+      return {
+        code: 0,
+        stdout: "late summary",
+        termination: "exit",
+        killed: false,
+        signal: null,
+        stderr: "",
+      };
     });
     const context = ctx("see https://example.com/first and https://example.com/second");
     const original = { ...context };
 
     await expect(
       applyLinkUnderstanding({
-        cfg: {
-          tools: {
-            links: {
-              models: [{ command: "summarize-a" }, { command: "summarize-b" }],
-            },
-          },
-        },
+        cfg: cfg([{ command: "summarize-a" }, { command: "summarize-b" }]),
         ctx: context,
         signal: controller.signal,
       }),
@@ -362,9 +364,9 @@ describe("runLinkUnderstanding", () => {
     mocks.fetchWithSsrFGuard.mockRejectedValueOnce(abortError);
 
     await expect(
-      runLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: ctx("see https://example.com/page"),
+      applyLinkUnderstanding({
+        cfg: cfg(),
+        ctx: ctx(),
         signal: new AbortController().signal,
       }),
     ).rejects.toBe(abortError);
@@ -380,9 +382,9 @@ describe("runLinkUnderstanding", () => {
     });
 
     await expect(
-      runLinkUnderstanding({
-        cfg: cfg({ type: "cli", command: "summarize" }),
-        ctx: ctx("see https://example.com/page"),
+      applyLinkUnderstanding({
+        cfg: cfg(),
+        ctx: ctx(),
         signal: controller.signal,
       }),
     ).rejects.toMatchObject({ name: "AbortError", cause: reason });

@@ -17,7 +17,8 @@ built for AI agents:
 | Parallel Search        | `parallel`      | `PARALLEL_API_KEY` -- paid Search API, higher rate limits and objective tuning             |
 
 Set `tools.web.search.provider` to `parallel-free` or `parallel` to select
-one explicitly; neither is auto-detected.
+one explicitly. Paid Parallel can also be auto-detected from its API key;
+Parallel Search (Free) must be selected explicitly.
 
 <Note>
   Direct OpenAI Responses models (`api: "openai-responses"`, provider

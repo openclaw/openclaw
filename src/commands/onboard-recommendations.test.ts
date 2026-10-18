@@ -1,12 +1,35 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createOnboardingRecommendationsStore } from "../state/onboarding-recommendations.js";
+import {
+  createOnboardingRecommendationsStore,
+  type OnboardingRecommendationsRecord,
+  type OnboardingRecommendationsStore,
+} from "../state/onboarding-recommendations.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   acknowledgeOnboardRecommendationsCommand,
   onboardRecommendationsCommand,
   refreshOnboardRecommendationsCommand,
 } from "./onboard-recommendations.js";
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  const loadConfigMock = vi.fn(actual.loadConfig);
+  return {
+    ...actual,
+    loadConfig: loadConfigMock,
+    captureRuntimeConfigAsyncReader: () => async () => loadConfigMock(),
+  };
+});
+
+vi.mock("../state/onboarding-recommendations.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/onboarding-recommendations.js")>();
+  return {
+    ...actual,
+    createOnboardingRecommendationsStore: vi.fn(actual.createOnboardingRecommendationsStore),
+  };
+});
 
 function makeRuntime(): RuntimeEnv {
   return {
@@ -16,25 +39,46 @@ function makeRuntime(): RuntimeEnv {
   };
 }
 
-describe.each([
-  {
-    operation: "read",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      onboardRecommendationsCommand({ agent, json: true }, runtime),
-  },
-  {
-    operation: "acknowledge",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      acknowledgeOnboardRecommendationsCommand({ agent }, runtime),
-  },
-  {
-    operation: "refresh",
-    run: (agent: string, runtime: RuntimeEnv) =>
-      refreshOnboardRecommendationsCommand({ agent }, runtime),
-  },
-])("onboard recommendations $operation selection", ({ run }) => {
+function chatMatch(): OnboardingRecommendationsRecord["matches"][number] {
+  return {
+    appLabel: "Chat",
+    candidateId: "chat-plugin",
+    tier: "recommended",
+    reason: "Connects conversations",
+    candidate: {
+      id: "chat-plugin",
+      displayName: "Chat plugin",
+      summary: "Chat",
+      source: "official-channel",
+    },
+  };
+}
+
+function notesMatch(id = "@demo-owner/notes"): OnboardingRecommendationsRecord["matches"][number] {
+  return {
+    appLabel: "Notes",
+    candidateId: id,
+    tier: "optional",
+    reason: "Connects notes",
+    candidate: { id, displayName: "Notes skill", summary: "Notes", source: "clawhub-skill" },
+  };
+}
+
+function createOffer(
+  overrides: Partial<OnboardingRecommendationsRecord> = {},
+): OnboardingRecommendationsRecord {
+  return {
+    inventoryHash: "hash",
+    offeredAt: 1,
+    acceptedAt: null,
+    updatedAt: 1,
+    matches: [chatMatch()],
+    ...overrides,
+  };
+}
+
+describe("onboard recommendations read selection", () => {
   it.each([
-    { agent: "", error: "--agent must not be blank" },
     { agent: "   ", error: "--agent must not be blank" },
     { agent: "writer!", error: 'Unknown agent id "writer!"' },
   ])(
@@ -45,233 +89,99 @@ describe.each([
           agents: { entries: { writer: { workspace: state.workspaceDir } } },
         });
         const store = createOnboardingRecommendationsStore({ workspaceDir: state.workspaceDir });
-        const offer = store.writeOffer({
+        const offer = await store.writeOffer({
           inventory: [{ label: "Legacy app" }],
-          matches: [
-            {
-              appLabel: "Legacy app",
-              candidateId: "legacy-app",
-              tier: "recommended",
-              reason: "Legacy offer",
-              candidate: {
-                id: "legacy-app",
-                displayName: "Legacy app",
-                summary: "Legacy offer",
-                source: "clawhub-skill",
-              },
-            },
-          ],
+          matches: [notesMatch("@demo-owner/legacy-app")],
           answered: false,
           nowMs: 1,
         });
 
-        expect(() => run(agent, makeRuntime())).toThrow(error);
-        expect(store.read()).toEqual(offer);
+        await expect(
+          onboardRecommendationsCommand({ agent, json: true }, makeRuntime()),
+        ).rejects.toThrow(error);
+        expect(await store.read()).toEqual(offer);
       });
     },
   );
 });
 
 describe("onboard recommendations command", () => {
-  it("returns stored matches as JSON without rescanning", () => {
-    const runtime = makeRuntime();
-    const read = vi.fn(() => ({
-      inventoryHash: "hash",
-      offeredAt: 1,
-      acceptedAt: null,
-      updatedAt: 1,
-      matches: [
-        {
-          appLabel: "Chat",
-          candidateId: "chat-plugin",
-          tier: "recommended" as const,
-          reason: "Connects conversations",
-          candidate: {
-            id: "chat-plugin",
-            displayName: "Chat plugin",
-            summary: "Chat",
-            source: "official-channel" as const,
-          },
-        },
-      ],
-    }));
+  let store: OnboardingRecommendationsStore;
+  let runtime: RuntimeEnv;
 
-    onboardRecommendationsCommand({ json: true }, runtime, { read });
-
-    expect(read).toHaveBeenCalledOnce();
-    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
-    expect(typeof output).toBe("string");
-    expect(JSON.parse(output as string)).toEqual([
-      { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
-    ]);
-    expect(output).not.toContain("Connects conversations");
-    expect(output).not.toContain("Chat plugin");
-  });
-
-  it("returns an empty JSON list when no offer is stored", () => {
-    const runtime = makeRuntime();
-
-    onboardRecommendationsCommand({ json: true }, runtime, { read: () => null });
-
-    expect(runtime.log).toHaveBeenCalledWith("[]");
-  });
-
-  it("returns an empty JSON list after the offer was answered", () => {
-    const runtime = makeRuntime();
-
-    onboardRecommendationsCommand({ json: true }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: 2,
-        updatedAt: 2,
-        matches: [
-          {
-            appLabel: "Chat",
-            candidateId: "chat-plugin",
-            tier: "recommended" as const,
-            reason: "Connects conversations",
-            candidate: {
-              id: "chat-plugin",
-              displayName: "Chat plugin",
-              summary: "Chat",
-              source: "official-channel" as const,
-            },
-          },
-        ],
-      }),
+  beforeEach(() => {
+    runtime = makeRuntime();
+    vi.mocked(loadConfig).mockReturnValue({
+      agents: { entries: { main: { workspace: "/tmp/onboard-recommendations-test" } } },
     });
+    store = {
+      read: vi.fn(),
+      writeOffer: vi.fn(),
+      acknowledge: vi.fn(),
+      updatePending: vi.fn(),
+      clearPending: vi.fn(),
+      clear: vi.fn(),
+    };
+    vi.mocked(createOnboardingRecommendationsStore).mockReturnValue(store);
+  });
+
+  afterEach(() => {
+    vi.mocked(loadConfig).mockReset();
+    vi.mocked(createOnboardingRecommendationsStore).mockReset();
+  });
+
+  it("returns an empty JSON list after the offer was answered", async () => {
+    vi.mocked(store.read).mockResolvedValue(createOffer({ acceptedAt: 2, updatedAt: 2 }));
+
+    await onboardRecommendationsCommand({ json: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
-  it("acknowledges a pending offer", () => {
-    const runtime = makeRuntime();
-    const acknowledge = vi.fn(() => ({
-      inventoryHash: "hash",
-      offeredAt: 1,
-      acceptedAt: 2,
-      updatedAt: 2,
-      matches: [],
-    }));
+  it("acknowledges a pending offer", async () => {
+    vi.mocked(store.acknowledge).mockResolvedValue(
+      createOffer({ acceptedAt: 2, updatedAt: 2, matches: [] }),
+    );
 
-    acknowledgeOnboardRecommendationsCommand({}, runtime, { acknowledge });
+    await acknowledgeOnboardRecommendationsCommand({}, runtime);
 
-    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(store.acknowledge).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith("Onboarding recommendations acknowledged.");
   });
 
-  it("leaves failed bootstrap installs pending and consumes the other matches", () => {
-    const runtime = makeRuntime();
-    const updatePending = vi.fn(() => ({
-      inventoryHash: "hash",
-      offeredAt: 1,
-      acceptedAt: null,
-      updatedAt: 2,
-      matches: [],
-    }));
-    const matches = [
-      {
-        appLabel: "Chat",
-        candidateId: "chat-plugin",
-        tier: "recommended" as const,
-        reason: "Connects conversations",
-        candidate: {
-          id: "chat-plugin",
-          displayName: "Chat plugin",
-          summary: "Chat",
-          source: "official-channel" as const,
-        },
-      },
-      {
-        appLabel: "Notes",
-        candidateId: "@demo-owner/notes",
-        tier: "optional" as const,
-        reason: "Connects notes",
-        candidate: {
-          id: "@demo-owner/notes",
-          displayName: "Notes skill",
-          summary: "Notes",
-          source: "clawhub-skill" as const,
-        },
-      },
-    ];
+  it("leaves failed bootstrap installs pending and consumes the other matches", async () => {
+    const matches = [chatMatch(), notesMatch()];
+    vi.mocked(store.read).mockResolvedValue(createOffer({ matches }));
+    vi.mocked(store.updatePending).mockResolvedValue(createOffer({ updatedAt: 2, matches: [] }));
 
-    acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
-        matches,
-      }),
-      updatePending,
-    });
+    await acknowledgeOnboardRecommendationsCommand({ retry: ["@demo-owner/notes"] }, runtime);
 
-    expect(updatePending).toHaveBeenCalledWith({
+    expect(store.updatePending).toHaveBeenCalledWith({
       matches: [matches[1]],
-      expected: {
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
-        matches,
-      },
+      expected: createOffer({ matches }),
     });
     expect(runtime.log).toHaveBeenCalledWith(
       "Onboarding recommendations updated; 1 left pending for retry.",
     );
   });
 
-  it("rejects unknown bootstrap retry ids without consuming the offer", () => {
-    const runtime = makeRuntime();
-    const acknowledge = vi.fn();
-    const updatePending = vi.fn();
+  it("rejects unknown bootstrap retry ids without consuming the offer", async () => {
+    vi.mocked(store.read).mockResolvedValue(createOffer({ matches: [] }));
 
-    acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
-        matches: [],
-      }),
-      acknowledge,
-      updatePending,
-    });
+    await acknowledgeOnboardRecommendationsCommand({ retry: ["missing-skill"] }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith("Unknown pending recommendation id: missing-skill");
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(acknowledge).not.toHaveBeenCalled();
-    expect(updatePending).not.toHaveBeenCalled();
+    expect(store.acknowledge).not.toHaveBeenCalled();
+    expect(store.updatePending).not.toHaveBeenCalled();
   });
 
-  it("fails closed when the pending offer changes before retry persistence", () => {
-    const runtime = makeRuntime();
-    const updatePending = vi.fn(() => null);
-    const match = {
-      appLabel: "Notes",
-      candidateId: "@demo-owner/notes",
-      tier: "optional" as const,
-      reason: "Connects notes",
-      candidate: {
-        id: "@demo-owner/notes",
-        displayName: "Notes skill",
-        summary: "Notes",
-        source: "clawhub-skill" as const,
-      },
-    };
+  it("fails closed when the pending offer changes before retry persistence", async () => {
+    const match = notesMatch();
+    vi.mocked(store.read).mockResolvedValue(createOffer({ matches: [match] }));
+    vi.mocked(store.updatePending).mockResolvedValue(null);
 
-    acknowledgeOnboardRecommendationsCommand({ retry: [match.candidateId] }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
-        matches: [match],
-      }),
-      updatePending,
-    });
+    await acknowledgeOnboardRecommendationsCommand({ retry: [match.candidateId] }, runtime);
 
     expect(runtime.error).toHaveBeenCalledWith(
       "Stored recommendations changed; read them again before recording retries.",
@@ -280,61 +190,32 @@ describe("onboard recommendations command", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("clears pending bootstrap offers with legacy bare ClawHub ids", () => {
-    const runtime = makeRuntime();
-    const clearPending = vi.fn(() => true);
+  it("clears pending bootstrap offers with legacy bare ClawHub ids", async () => {
+    vi.mocked(store.read).mockResolvedValue(createOffer({ matches: [notesMatch("notes")] }));
+    vi.mocked(store.clearPending).mockResolvedValue(true);
 
-    onboardRecommendationsCommand({ json: true }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
-        matches: [
-          {
-            appLabel: "Notes",
-            candidateId: "notes",
-            tier: "optional",
-            reason: "Connects notes",
-            candidate: {
-              id: "notes",
-              displayName: "Notes skill",
-              summary: "Notes",
-              source: "clawhub-skill",
-            },
-          },
-        ],
-      }),
-      clearPending,
-    });
+    await onboardRecommendationsCommand({ json: true }, runtime);
 
-    expect(clearPending).toHaveBeenCalledWith({
+    expect(store.clearPending).toHaveBeenCalledWith({
       expected: expect.objectContaining({ inventoryHash: "hash", updatedAt: 1 }),
     });
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
-  it("clears a stored offer for the next onboarding scan", () => {
-    const runtime = makeRuntime();
-    const clear = vi.fn(() => true);
+  it("clears a stored offer for the next onboarding scan", async () => {
+    vi.mocked(store.clear).mockResolvedValue(true);
 
-    refreshOnboardRecommendationsCommand({}, runtime, { clear });
+    await refreshOnboardRecommendationsCommand({}, runtime);
 
-    expect(clear).toHaveBeenCalledOnce();
+    expect(store.clear).toHaveBeenCalledOnce();
     expect(runtime.log).toHaveBeenCalledWith(
       "Onboarding recommendations cleared. The next onboarding run will rescan.",
     );
   });
 
-  it("drops unsafe install identifiers from the bootstrap payload", () => {
-    const runtime = makeRuntime();
-
-    onboardRecommendationsCommand({ json: true }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
+  it("drops unsafe install identifiers from the bootstrap payload", async () => {
+    vi.mocked(store.read).mockResolvedValue(
+      createOffer({
         matches: [
           {
             appLabel: "Chat",
@@ -350,47 +231,35 @@ describe("onboard recommendations command", () => {
           },
         ],
       }),
-    });
+    );
+
+    await onboardRecommendationsCommand({ json: true }, runtime);
 
     expect(runtime.log).toHaveBeenCalledWith("[]");
   });
 
-  it("deduplicates shared candidates and keeps the recommended tier", () => {
-    const runtime = makeRuntime();
-    const candidate = {
-      id: "chat-plugin",
-      displayName: "Chat plugin",
-      summary: "Chat",
-      source: "official-channel" as const,
-    };
-
-    onboardRecommendationsCommand({ json: true }, runtime, {
-      read: () => ({
-        inventoryHash: "hash",
-        offeredAt: 1,
-        acceptedAt: null,
-        updatedAt: 1,
+  it("deduplicates shared candidates and keeps the recommended tier", async () => {
+    const match = chatMatch();
+    vi.mocked(store.read).mockResolvedValue(
+      createOffer({
         matches: [
+          { ...match, tier: "optional" },
           {
-            appLabel: "Chat",
-            candidateId: candidate.id,
-            tier: "optional" as const,
-            reason: "Connects conversations",
-            candidate,
-          },
-          {
+            ...match,
             appLabel: "Work Chat",
-            candidateId: candidate.id,
-            tier: "recommended" as const,
             reason: "Connects work conversations",
-            candidate,
           },
         ],
       }),
-    });
+    );
 
-    expect(JSON.parse(vi.mocked(runtime.log).mock.calls[0]?.[0] as string)).toEqual([
+    await onboardRecommendationsCommand({ json: true }, runtime);
+
+    const output = vi.mocked(runtime.log).mock.calls[0]?.[0];
+    expect(JSON.parse(output as string)).toEqual([
       { id: "chat-plugin", source: "official-plugin", tier: "recommended" },
     ]);
+    expect(output).not.toContain("Connects conversations");
+    expect(output).not.toContain("Chat plugin");
   });
 });

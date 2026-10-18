@@ -1,9 +1,5 @@
 import crypto from "node:crypto";
-import {
-  addTimerTimeoutGraceMs,
-  MAX_TIMER_TIMEOUT_MS,
-  resolveTimerTimeoutMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
@@ -21,24 +17,19 @@ import {
   type BrowserProxyEnvelope,
   type BrowserProxyRoute,
 } from "./browser-proxy-envelope.js";
+import { resolveBrowserProxyTimeouts } from "./browser-proxy-timeouts.js";
 import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
-import {
-  callGatewayTool,
-  fetchBrowserJson,
-  persistBrowserProxyResultFiles,
-} from "./browser-tool.runtime.js";
-import { BrowserServiceError } from "./browser/client-fetch.js";
+import { BrowserServiceError, fetchBrowserJson } from "./browser/client-fetch.js";
+import { persistBrowserProxyResultFiles } from "./browser/proxy-files.js";
 import {
   parseBrowserSessionTabCloseResult,
   type BrowserSessionTabRoute,
 } from "./browser/session-tab-route.js";
 
 const logger = createSubsystemLogger("browser");
-const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
-const BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS = 5_000;
 
 class BrowserNodeSafeFallbackError extends Error {
   constructor(message: string, cause?: unknown) {
@@ -76,32 +67,18 @@ function unwrapBrowserProxyPayload(
   }
 }
 
-async function callBrowserProxy(params: {
-  nodeId: string;
-  nodeLabel?: string;
-  declaredCommands: readonly string[];
-  pendingDeclaredCommands: readonly string[];
-  allowAutomaticHostFallback: boolean;
-  method: string;
-  path: string;
-  query?: Record<string, string | number | boolean | undefined>;
-  body?: unknown;
-  timeoutMs?: number;
-  profile?: string;
-  signal?: AbortSignal;
-}): Promise<BrowserProxyEnvelope> {
-  // Reserve both watchdog windows before clamping so timer saturation cannot
-  // make an outer watchdog expire alongside the browser action.
-  const proxyTimeoutMs = Math.min(
-    resolveTimerTimeoutMs(params.timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS),
-    MAX_TIMER_TIMEOUT_MS - 2 * BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS,
+async function callBrowserProxy(
+  params: Parameters<BrowserProxyRequest>[0] & {
+    nodeId: string;
+    nodeLabel?: string;
+    declaredCommands: readonly string[];
+    pendingDeclaredCommands: readonly string[];
+    allowAutomaticHostFallback: boolean;
+  },
+): Promise<BrowserProxyEnvelope> {
+  const { proxyTimeoutMs, nodeInvokeTimeoutMs, gatewayTimeoutMs } = resolveBrowserProxyTimeouts(
+    params.timeoutMs,
   );
-  const nodeInvokeTimeoutMs =
-    addTimerTimeoutGraceMs(proxyTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    proxyTimeoutMs;
-  const gatewayTimeoutMs =
-    addTimerTimeoutGraceMs(nodeInvokeTimeoutMs, BROWSER_PROXY_GATEWAY_TIMEOUT_SLACK_MS) ??
-    nodeInvokeTimeoutMs;
   if (
     isBrowserProxyUploadRequest(params) &&
     !params.declaredCommands.includes(BROWSER_PROXY_UPLOAD_COMMAND)

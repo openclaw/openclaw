@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
+import * as stateMetadata from "../../infra/update-candidate-state.sizes.js";
 import {
   createUpdateRun,
   getUpdateRun,
@@ -20,7 +21,6 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -32,6 +32,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { VERSION } from "../../version.js";
+import * as restartHealth from "../daemon-cli/restart-health.js";
 import { registerUpdateCli } from "../update-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -81,7 +82,11 @@ vi.mock("../../infra/update-triage.js", () => ({
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
-import { mockRepairManagedService } from "./update-command-lease-service.test-support.js";
+import {
+  registerLeaseServiceRestorationTests,
+  registerLegacyResumeWarningTests,
+  seedInterruptedPostCoreRun,
+} from "./update-command-lease-service.test-support.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
 import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -106,10 +111,28 @@ let entrypoint: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  vi.spyOn(stateMetadata, "readUpdateStateDatabaseSizes").mockImplementation((files, { signal }) =>
+    stateMetadata.readUpdateStateDatabaseSizesInProcess(files, signal),
+  );
   mocks.publication.mockReset().mockImplementation(async (params, publish) => {
     params.assertCurrent();
     return await publish(async () => params.assertCurrent());
   });
+  // Ordinary lease cases have no Gateway; restoration cases supply their managed service state.
+  const readHealth = async ({
+    port,
+  }: {
+    port: number;
+  }): Promise<Awaited<ReturnType<typeof restartHealth.waitForGatewayHealthyRestart>>> => ({
+    outcome: "failed",
+    runtime: { status: "stopped" },
+    portUsage: { port, status: "free", listeners: [], hints: [] },
+    healthy: false,
+    staleGatewayPids: [],
+    waitOutcome: "stopped-free",
+  });
+  vi.spyOn(restartHealth, "waitForGatewayHealthyRestart").mockImplementation(readHealth);
+  vi.spyOn(restartHealth, "inspectGatewayRestart").mockImplementation(readHealth);
   state = await createOpenClawTestState({
     label: "update-lease",
     env: {
@@ -213,7 +236,6 @@ async function invoke(
       {
         json: true,
         yes: true,
-        restart: false,
         timeout: "15",
         deferCompletionCache: true,
       },
@@ -289,51 +311,12 @@ it("passes standalone repair ownership to both fresh Doctor phases through the p
   expect(process.env.OPENCLAW_UPDATE_RUN_ID).toBeUndefined();
 });
 
-it.each([
-  { failDoctor: undefined, restartFails: false },
-  { failDoctor: "pre", restartFails: false },
-  { failDoctor: undefined, restartFails: true },
-] as const)(
-  "the repair parent restores its managed service (Doctor failure=$failDoctor, restart failure=$restartFails)",
-  async ({ failDoctor, restartFails }) => {
-    const recovery = seedInterruptedPostCoreRun();
-    await writeScenario("repair", {
-      verifyRepairOwner: true,
-      verifyServiceCustody: true,
-      failDoctor,
-    });
-    const { serviceState, stop, restart } = await mockRepairManagedService(
-      state,
-      entrypoint,
-      restartFails,
-    );
-
-    await runRegisteredCli({
-      register: registerUpdateCli,
-      argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-    });
-
-    expect(stop.mock.calls.filter(([params]) => params.phase !== "inspect")).toHaveLength(1);
-    expect(restart).toHaveBeenCalledOnce();
-    expect(await fs.readFile(serviceState, "utf8")).toBe(restartFails ? "stopped" : "running");
-    if (restartFails) {
-      expect(listUpdateRuns()[0]).toMatchObject({
-        status: "failed",
-        reason: "doctor-gateway-restoration-failed",
-      });
-      const diagnostics = vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n");
-      expect(diagnostics).toContain("managed Gateway could not be restored");
-      expect(diagnostics).toContain("openclaw gateway restart");
-      expect(getUpdateRun(recovery.runId)).toEqual(recovery);
-    } else if (failDoctor) {
-      expect(listUpdateRuns()[0]).toMatchObject({ status: "failed", reason: "doctor-failed" });
-      expect(getUpdateRun(recovery.runId)).toEqual(recovery);
-    } else {
-      expectSuccess("repair");
-      expectRecoveredRun(getUpdateRun(recovery.runId));
-    }
-  },
-);
+registerLeaseServiceRestorationTests({
+  context: () => ({ state, entrypoint }),
+  writeScenario: (scenario) => writeScenario("repair", scenario),
+  expectSuccess: () => expectSuccess("repair"),
+  expectRecoveredRun,
+});
 
 async function events(): Promise<string[]> {
   return (await fs.readFile(state.statePath("events.jsonl"), "utf8"))
@@ -376,18 +359,6 @@ function reportedResult(lane: Lane): unknown {
   return lane === "repair"
     ? vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]
     : mocks.print.mock.lastCall?.[0];
-}
-
-function seedInterruptedPostCoreRun(): UpdateRunRecord {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
-  try {
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-    return recordUpdateRunPhase(run.runId, "verifying", {
-      step: { step: "post-update verification", status: "in_progress" },
-    });
-  } finally {
-    clock.mockRestore();
-  }
 }
 
 function expectRecoveredRun(run: UpdateRunRecord | undefined): void {
@@ -453,7 +424,8 @@ describe("update orchestration lifecycle ownership", () => {
       shape: "malformed-prepare",
       version: VERSION,
       source: "export const prepareBundledPluginRuntime = 1;",
-      failure: /cannot complete its runtime artifacts/,
+      failure:
+        /^Installed runtime staging is unavailable: .+[/\\]scripts[/\\]stage-bundled-plugin-runtime\.mts$/u,
     },
     {
       shape: "missing-dependency",
@@ -737,35 +709,15 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "legacy resume settles Doctor before its result (changed=%s)",
-    async (changed) => {
-      await writeScenario("resume");
-      await fs.rm(state.path("handoff.json"));
-      const resultPath = state.path("legacy-result.json");
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-      mocks.plugins.mockImplementationOnce(async () => {
-        expect(await events()).toEqual(["post-attempt", "post-acquired"]);
-        expect(await fs.stat(resultPath).catch(() => null)).toBeNull();
-        return { ...pluginResult, changed };
-      });
-
-      await invoke("resume");
-
-      expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toMatchObject({
-        status: "ok",
-        changed,
-      });
-      expect(await events()).toEqual([
-        "post-attempt",
-        "post-acquired",
-        ...(changed ? ["post-attempt", "post-acquired"] : []),
-        "validate",
-        "readiness",
-      ]);
-      expectDoctorDiagnostics();
-    },
-  );
+  registerLegacyResumeWarningTests({
+    context: () => ({ state, entrypoint }),
+    writeScenario: (scenario) => writeScenario("resume", scenario),
+    invoke: () => invoke("resume"),
+    plugins: mocks.plugins,
+    pluginResult,
+    events,
+    expectDoctorDiagnostics,
+  });
 
   it.each(
     (["resume", "candidate-runtime"] as const).flatMap((lane) =>
@@ -858,7 +810,6 @@ describe("update orchestration lifecycle ownership", () => {
       channel: "beta",
       json: true,
       yes: true,
-      restart: false,
       deferCompletionCache: true,
     });
     expectSuccess("repair");
@@ -930,40 +881,44 @@ describe("update orchestration lifecycle ownership", () => {
       return { ...pluginResult, changed: false };
     });
 
-    await expect(invoke("repair", [recovery.runId])).rejects.toThrow("An update resumed");
+    await expect(invoke("repair", [recovery.runId])).rejects.toThrow(
+      "did not assume the update resumed",
+    );
 
     expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", reason: null });
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
-  it("resume reports a plugin exception after releasing its lease", async () => {
-    await writeScenario("resume");
-    const resultPath = state.path("failed-post-core.json");
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
-    mocks.plugins.mockRejectedValueOnce(new Error("plugin fixture failure"));
-    await expect(invoke("resume")).rejects.toThrow("plugin fixture failure");
-    const result = JSON.parse(await fs.readFile(resultPath, "utf8"));
-    expect(result).toMatchObject({
-      status: "failed",
-      error: expect.stringContaining("plugin fixture failure"),
-    });
-    expect(result.error).not.toContain(state.root);
-    const probe = await runExec(process.execPath, [entrypoint, "probe"], { timeoutMs: 15_000 });
-    expect(probe.stdout).toBe("acquired");
-  });
+  it("repair reports unverified recorded ownership for a captured old-host run", async () => {
+    const driver = { host: "renamed-host.example", pid: 424_242, startIdentity: "1" };
+    const created = createUpdateRun({ trigger: "cli", origin: { driver } });
+    const recovery = recordUpdateRunPhase(created.runId, "verifying");
+    await writeScenario("repair", { pluginUpdate: { ...pluginResult, changed: false } });
 
-  it("rejects restart handling after a final doctor failure despite valid config", async () => {
-    await writeScenario("current-process", { failDoctor: "post", hostVersion: "1.0.0" });
-    await invokeReportedFailure("current-process");
-    expect(mocks.print.mock.lastCall?.[0]).toMatchObject({
-      status: "error",
-      recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      postUpdate: { plugins: { reason: "post-plugin-doctor-execution-failed" } },
-    });
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
-    expectDoctorDiagnostics();
-    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+    const error = await invoke("repair", [recovery.runId]).then(
+      () => undefined,
+      (cause: unknown) => cause,
+    );
+
+    expect(error).toBeInstanceOf(Error);
+    const message = String(error);
+    expect(message).toContain(`Update ${recovery.runId} remains recorded as running (verifying);`);
+    expect(message).toContain("driver PID 424242 on renamed-host.example, liveness: not observed");
+    expect(message).toContain(
+      "Repair could not verify that the recorded update work stopped; it did not assume the update resumed.",
+    );
+    expect(message).toContain(
+      'Check each named host or supervisor: this host cannot safely determine liveness when a driver is shown as "not observed".',
+    );
+    expect(message).toContain(
+      "If a driver is active, wait for it or stop it through its owning host or supervisor.",
+    );
+    expect(message).toContain(
+      "If this is the same machine after a rename, restore its recorded hostname before retrying `openclaw update repair`; otherwise contact support.",
+    );
+    expect(message).not.toContain("An update resumed");
+    expect(getUpdateRun(recovery.runId)).toMatchObject({ status: "running", phase: "verifying" });
+    expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -981,19 +936,25 @@ describe("update orchestration lifecycle ownership", () => {
     ],
     ["repair" as const, "finding" as const, "post-plugin-update-readiness-failed"],
     ["repair" as const, "execution" as const, "post-plugin-update-readiness-execution-failed"],
-  ])("%s leaves the Gateway stopped after a readiness %s", async (lane, failure, reason) => {
+  ])("%s preserves a readiness %s outcome", async (lane, failure, reason) => {
     await writeScenario(lane, {
       readinessFailure: failure,
       hostVersion: lane === "current-process" ? "1.0.0" : undefined,
     });
 
-    await invokeReportedFailure(lane);
+    if (failure === "finding") {
+      await invokeReportedFailure(lane);
+    } else {
+      await invoke(lane);
+    }
 
     expect(reportedResult(lane)).toMatchObject({
-      status: "error",
-      postUpdate: { plugins: { reason } },
+      status: failure === "finding" ? "error" : lane === "repair" ? "warning" : "ok",
+      postUpdate: { plugins: { status: failure === "finding" ? "error" : "warning", reason } },
     });
-    expect(mocks.restart).not.toHaveBeenCalled();
+    expect(mocks.restart).toHaveBeenCalledTimes(
+      failure === "execution" && lane !== "repair" ? 1 : 0,
+    );
     expect(await events()).toEqual([
       ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
       ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
@@ -1021,18 +982,36 @@ describe("update orchestration lifecycle ownership", () => {
     if (lane === "resume") {
       await invoke(lane);
       expectSuccess(lane, false);
+    } else if (valid) {
+      await invoke(lane);
+      expect(reportedResult(lane)).toMatchObject({
+        status: lane === "repair" ? "warning" : "ok",
+        postUpdate: {
+          plugins: {
+            status: "warning",
+            reason: "post-plugin-doctor-execution-failed",
+            warnings: [
+              expect.objectContaining({
+                reason: "doctor-advisory",
+                message: expect.stringContaining("doctor fixture failure"),
+              }),
+            ],
+          },
+        },
+      });
+      expect(defaultRuntime.exit).not.toHaveBeenCalled();
+      expectDoctorDiagnostics();
     } else {
       await invokeReportedFailure(lane);
       expect(reportedResult(lane)).toMatchObject({
         status: "error",
         postUpdate: {
           plugins: {
-            reason: valid
-              ? "post-plugin-doctor-execution-failed"
-              : "post-plugin-doctor-invalid-config",
+            reason: "post-plugin-doctor-invalid-config",
           },
         },
       });
+      expect(mocks.restart).not.toHaveBeenCalled();
     }
     const persisted = JSON.parse(await fs.readFile(state.configPath, "utf8")) as OpenClawConfig;
     expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);

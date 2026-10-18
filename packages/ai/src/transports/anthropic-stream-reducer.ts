@@ -27,7 +27,6 @@ import {
   applyAnthropicMessageStartUsage,
   type AnthropicPromptUsageSnapshot,
 } from "../providers/anthropic-usage.js";
-import { tagPendingCommentaryText } from "../utils/assistant-text-phase.js";
 import { createDeferredEventBuffer } from "../utils/deferred-event-buffer.js";
 import {
   createToolArgumentPreviewSchedule,
@@ -42,15 +41,13 @@ import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.
 import {
   coerceTransportToolCallArguments,
   finalizeTerminalToolCallArguments,
+  iterateModelStream,
   sanitizeTransportPayloadText,
   transportAbortError,
   type WritableTransportStream,
 } from "./transport-stream-shared.js";
 
-export type AnthropicStreamBlock = AssistantMessage["content"][number] & {
-  index?: number;
-  partialJson?: string;
-};
+type AnthropicStreamBlock = AssistantMessage["content"][number];
 
 /** One Messages protocol reducer; entry points retain their established preview/replay contracts. */
 export async function consumeAnthropicStream(params: {
@@ -68,9 +65,19 @@ export async function consumeAnthropicStream(params: {
   const managed = params.profile === "transport";
   const eventSink = refusalBuffer ?? stream;
   let costModel = model;
+  const applyServingModelCost = (servingModelId: string | null) => {
+    costModel = {
+      ...model,
+      cost: resolveAnthropicFallbackServingModelCost({
+        requestedModelId: model.id,
+        servingModelId,
+        requestedCost: model.cost,
+      }),
+    };
+    calculateCost(costModel, output.usage);
+  };
   let messageStartPromptUsage: AnthropicPromptUsageSnapshot | undefined;
   let inputTransformations: unknown[] | undefined;
-  const anthropicStream = params.events;
   try {
     const blocks: AnthropicStreamBlock[] = output.content;
     const blockIndexes = new Map<number, number>();
@@ -90,29 +97,48 @@ export async function consumeAnthropicStream(params: {
     const pendingThinkingSignatures = new Map<number, string>();
     const allowReasoningContentReplay =
       managed && resolveProviderEndpoint(model).endpointClass === "xiaomi-native";
-    const reasoningContentThinkingBlocks = new Map<number, number>();
-    const reasoningContentTextBlocks = new Map<number, number>();
+    const reasoningContentBlocks = {
+      thinking: new Map<number, number>(),
+      text: new Map<number, number>(),
+    };
     let sawMessageStart = false;
     let sawMessageStop = false;
     let sawStopReason = false;
-    const pendingTextEnds: Array<Extract<AssistantMessageEvent, { type: "text_end" }>> = [];
-    // Hold text_end until tool-boundary classification is known.
-    const flushPendingTextEnds = () => {
-      for (const event of pendingTextEnds) {
-        eventSink.push(event);
-      }
-      pendingTextEnds.length = 0;
+    let sawFallbackBoundary = false;
+    let terminalFallbackModel: string | undefined;
+    const emitContentEnd = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+    ) => {
+      eventSink.push({
+        type: `${block.type}_end`,
+        contentIndex,
+        content: block.type === "thinking" ? block.thinking : block.text,
+        partial: output,
+      });
     };
-    const emitTextEnd = (event: Extract<AssistantMessageEvent, { type: "text_end" }>) => {
-      if (managed) {
-        pendingTextEnds.push(event);
-      } else {
-        eventSink.push(event);
+    const emitContentStart = (kind: "thinking" | "text", contentIndex: number, delta = "") => {
+      eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
+      if (delta.length > 0) {
+        eventSink.push({ type: `${kind}_delta`, contentIndex, delta, partial: output });
       }
+    };
+    const appendContentDelta = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+      delta: string,
+    ) => {
+      if (block.type === "thinking") {
+        appendAssistantThinking(block, delta);
+      } else {
+        block.text += delta;
+      }
+      eventSink.push({ type: `${block.type}_delta`, contentIndex, delta, partial: output });
     };
     const eventIndexKey = (eventIndex: unknown) =>
       typeof eventIndex === "number" ? eventIndex : -1;
-    const appendReasoningContentThinkingDelta = (
+    const appendReasoningContentDelta = (
+      kind: "thinking" | "text",
       eventIndex: unknown,
       rawText: unknown,
     ): boolean => {
@@ -123,98 +149,42 @@ export async function consumeAnthropicStream(params: {
       if (text.length === 0) {
         return false;
       }
+      const indexes = reasoningContentBlocks[kind];
       const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentThinkingBlocks.get(key);
+      let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "thinking") {
-        block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
+      if (contentIndex === undefined || !block || block.type !== kind) {
+        block =
+          kind === "thinking"
+            ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
+            : { type: "text", text: "" };
         output.content.push(block);
         contentIndex = output.content.length - 1;
-        reasoningContentThinkingBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "thinking_start",
-          contentIndex,
-          partial: output,
-        });
+        indexes.set(key, contentIndex);
+        emitContentStart(kind, contentIndex);
       }
-      if (contentIndex === undefined) {
-        return false;
+      if (block.type === "thinking") {
+        block.thinkingSignature = "reasoning_content";
       }
-      appendAssistantThinking(block, text);
-      block.thinkingSignature = "reasoning_content";
-      eventSink.push({
-        type: "thinking_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
-      return true;
-    };
-    const appendReasoningContentTextDelta = (eventIndex: unknown, rawText: unknown): boolean => {
-      if (typeof rawText !== "string") {
-        return false;
-      }
-      const text = sanitizeTransportPayloadText(rawText);
-      if (text.length === 0) {
-        return false;
-      }
-      const key = eventIndexKey(eventIndex);
-      let contentIndex = reasoningContentTextBlocks.get(key);
-      let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== "text") {
-        block = { type: "text", text: "" };
-        output.content.push(block);
-        contentIndex = output.content.length - 1;
-        reasoningContentTextBlocks.set(key, contentIndex);
-        eventSink.push({
-          type: "text_start",
-          contentIndex,
-          partial: output,
-        });
-      }
-      if (contentIndex === undefined) {
-        return false;
-      }
-      block.text += text;
-      eventSink.push({
-        type: "text_delta",
-        contentIndex,
-        delta: text,
-        partial: output,
-      });
+      appendContentDelta(block, contentIndex, text);
       return true;
     };
     const finishReasoningContentSidecars = (eventIndex: unknown) => {
       const key = eventIndexKey(eventIndex);
-      const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
-      if (thinkingContentIndex !== undefined) {
-        reasoningContentThinkingBlocks.delete(key);
-        const block = output.content[thinkingContentIndex];
-        if (block?.type === "thinking") {
-          eventSink.push({
-            type: "thinking_end",
-            contentIndex: thinkingContentIndex,
-            content: block.thinking,
-            partial: output,
-          });
+      for (const kind of ["thinking", "text"] as const) {
+        const indexes = reasoningContentBlocks[kind];
+        const contentIndex = indexes.get(key);
+        if (contentIndex === undefined) {
+          continue;
+        }
+        indexes.delete(key);
+        const block = output.content[contentIndex];
+        if (block?.type === kind) {
+          emitContentEnd(block, contentIndex);
         }
       }
-      const textContentIndex = reasoningContentTextBlocks.get(key);
-      if (textContentIndex === undefined) {
-        return;
-      }
-      reasoningContentTextBlocks.delete(key);
-      const block = output.content[textContentIndex];
-      if (block?.type === "text") {
-        eventSink.push({
-          type: "text_end",
-          contentIndex: textContentIndex,
-          content: block.text,
-          partial: output,
-        });
-      }
     };
-    for await (const rawEvent of anthropicStream) {
+    for await (const rawEvent of iterateModelStream(params.events, options.signal)) {
       const event = asRecord(rawEvent);
       // A serving-model fallback replaces the initial snapshot; report only once at completion.
       inputTransformations = readAnthropicInputTransformations(event) ?? inputTransformations;
@@ -223,7 +193,10 @@ export async function consumeAnthropicStream(params: {
       }
       if (event.type === "error") {
         const error = asOptionalObjectRecord(event.error);
-        throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
+        throw Object.assign(
+          new Error(readStringField(error, "message") || "Anthropic Messages stream failed"),
+          { error },
+        );
       }
       if (event.type === "message_start") {
         sawMessageStart = true;
@@ -255,13 +228,13 @@ export async function consumeAnthropicStream(params: {
         }
         const fallbackBoundary = refusalBuffer ? readAnthropicFallbackBoundary(contentBlock) : null;
         if (fallbackBoundary) {
+          sawFallbackBoundary = true;
           // Server-side fallback boundary: pre-boundary thinking/tool
           // blocks must not replay or execute, and the buffered preview
           // events reference them, so rebuild the deferred timeline from
           // the surviving text prefix the fallback model continued from.
           refusalBuffer?.discard();
           sealedToolCalls.length = 0;
-          pendingTextEnds.length = 0;
           blockIndexes.clear();
           pendingThinkingSignatures.clear();
           applyAnthropicFallbackBoundary({
@@ -272,117 +245,55 @@ export async function consumeAnthropicStream(params: {
           // Fallback-only iteration partials stay outside the serving-model
           // estimate. Compaction responses are the exception: usage policy
           // aggregates their complete billed iteration list.
-          costModel = {
-            ...model,
-            cost: resolveAnthropicFallbackServingModelCost({
-              requestedModelId: model.id,
-              servingModelId: fallbackBoundary.toModel,
-              requestedCost: model.cost,
-            }),
-          };
-          calculateCost(costModel, output.usage);
+          applyServingModelCost(fallbackBoundary.toModel);
           eventSink.push({ type: "start", partial: output });
           for (const [i, block] of blocks.entries()) {
             if (block.type !== "text") {
               continue;
             }
-            delete block.index;
-            eventSink.push({
-              type: "text_start",
-              contentIndex: i,
-              partial: output,
-            });
-            if (block.text) {
-              eventSink.push({
-                type: "text_delta",
-                contentIndex: i,
-                delta: block.text,
-                partial: output,
-              });
-            }
-            emitTextEnd({
-              type: "text_end",
-              contentIndex: i,
-              content: block.text,
-              partial: output,
-            });
+            emitContentStart("text", i, block.text);
+            emitContentEnd(block, i);
           }
           continue;
         }
         pendingThinkingSignatures.delete(index);
-        if (contentBlock?.type === "text") {
-          const text =
-            typeof contentBlock.text === "string"
-              ? sanitizeTransportPayloadText(contentBlock.text)
-              : "";
-          const block: AnthropicStreamBlock = { type: "text", text, index };
+        if (
+          contentBlock?.type === "text" ||
+          contentBlock?.type === "thinking" ||
+          contentBlock?.type === "redacted_thinking"
+        ) {
+          const block: AnthropicStreamBlock =
+            contentBlock.type === "text"
+              ? {
+                  type: "text",
+                  text:
+                    typeof contentBlock.text === "string"
+                      ? sanitizeTransportPayloadText(contentBlock.text)
+                      : "",
+                }
+              : contentBlock.type === "thinking"
+                ? {
+                    type: "thinking",
+                    thinking:
+                      typeof contentBlock.thinking === "string" ? contentBlock.thinking : "",
+                    thinkingSignature:
+                      typeof contentBlock.signature === "string" ? contentBlock.signature : "",
+                  }
+                : {
+                    type: "thinking",
+                    thinking: "[Reasoning redacted]",
+                    thinkingSignature:
+                      typeof contentBlock.data === "string" ? contentBlock.data : "",
+                    redacted: true,
+                  };
+          const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
           const contentIndex = output.content.length - 1;
           blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: "text_start",
-            contentIndex,
-            partial: output,
-          });
-          if (text.length > 0) {
-            eventSink.push({
-              type: "text_delta",
-              contentIndex,
-              delta: text,
-              partial: output,
-            });
-          }
-          continue;
-        }
-        if (contentBlock?.type === "thinking") {
-          const thinking = typeof contentBlock.thinking === "string" ? contentBlock.thinking : "";
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking,
-            thinkingSignature:
-              typeof contentBlock.signature === "string" ? contentBlock.signature : "",
-            index,
-          };
-          output.content.push(block);
-          const contentIndex = output.content.length - 1;
-          blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex,
-            partial: output,
-          });
-          if (thinking.length > 0) {
-            eventSink.push({
-              type: "thinking_delta",
-              contentIndex,
-              delta: thinking,
-              partial: output,
-            });
-          }
-          continue;
-        }
-        if (contentBlock?.type === "redacted_thinking") {
-          const block: AnthropicStreamBlock = {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: typeof contentBlock.data === "string" ? contentBlock.data : "",
-            redacted: true,
-            index,
-          };
-          output.content.push(block);
-          blockIndexes.set(index, output.content.length - 1);
-          eventSink.push({
-            type: "thinking_start",
-            contentIndex: output.content.length - 1,
-            partial: output,
-          });
+          emitContentStart(block.type, contentIndex, delta);
           continue;
         }
         if (contentBlock?.type === "tool_use") {
-          if (managed) {
-            tagPendingCommentaryText(output.content);
-          }
-          flushPendingTextEnds();
           const block: AnthropicStreamBlock = {
             type: "toolCall",
             id: typeof contentBlock.id === "string" ? contentBlock.id : "",
@@ -394,7 +305,6 @@ export async function consumeAnthropicStream(params: {
                 : "",
             arguments: asRecord(contentBlock.input),
             partialJson: "",
-            index,
           };
           output.content.push(block);
           blockIndexes.set(index, output.content.length - 1);
@@ -418,7 +328,8 @@ export async function consumeAnthropicStream(params: {
         let index = eventIndex === undefined ? undefined : blockIndexes.get(eventIndex);
         let block = index === undefined ? undefined : blocks[index];
         if (allowReasoningContentReplay) {
-          const appendedThinking = appendReasoningContentThinkingDelta(
+          const appendedThinking = appendReasoningContentDelta(
+            "thinking",
             event.index,
             delta?.reasoning_content,
           );
@@ -436,16 +347,10 @@ export async function consumeAnthropicStream(params: {
             const text = sanitizeTransportPayloadText(delta.content);
             if (text.length > 0) {
               if (block?.type === "text" && index !== undefined) {
-                block.text += text;
-                eventSink.push({
-                  type: "text_delta",
-                  contentIndex: index,
-                  delta: text,
-                  partial: output,
-                });
+                appendContentDelta(block, index, text);
                 appendedContent = true;
               } else {
-                appendedContent = appendReasoningContentTextDelta(event.index, text);
+                appendedContent = appendReasoningContentDelta("text", event.index, text);
               }
             }
           }
@@ -454,18 +359,13 @@ export async function consumeAnthropicStream(params: {
           }
         }
         if (managed && !block && delta?.type === "text_delta" && typeof delta.text === "string") {
-          const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
-          block = { type: "text", text: "", index: recoveredIndex };
+          block = { type: "text", text: "" };
           output.content.push(block);
           index = output.content.length - 1;
           if (typeof event.index === "number") {
             blockIndexes.set(event.index, index);
           }
-          eventSink.push({
-            type: "text_start",
-            contentIndex: index,
-            partial: output,
-          });
+          emitContentStart("text", index);
         }
         if (index === undefined) {
           continue;
@@ -475,13 +375,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "text_delta" &&
           typeof delta.text === "string"
         ) {
-          block.text += delta.text;
-          eventSink.push({
-            type: "text_delta",
-            contentIndex: index,
-            delta: delta.text,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.text);
           continue;
         }
         if (
@@ -489,13 +383,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "thinking_delta" &&
           typeof delta.thinking === "string"
         ) {
-          appendAssistantThinking(block, delta.thinking);
-          eventSink.push({
-            type: "thinking_delta",
-            contentIndex: index,
-            delta: delta.thinking,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.thinking);
           continue;
         }
         if (
@@ -557,34 +445,15 @@ export async function consumeAnthropicStream(params: {
           continue;
         }
         blockIndexes.delete(eventIndex);
-        delete block.index;
-        if (block.type === "text") {
-          emitTextEnd({
-            type: "text_end",
-            contentIndex: index,
-            content: block.text,
-            partial: output,
-          });
-          finishReasoningContentSidecars(event.index);
-          continue;
-        }
-        if (block.type === "thinking") {
-          if (pendingSignature !== undefined) {
-            block.thinkingSignature = pendingSignature;
-          }
-          eventSink.push({
-            type: "thinking_end",
-            contentIndex: index,
-            content: block.thinking,
-            partial: output,
-          });
-          finishReasoningContentSidecars(event.index);
-          continue;
+        if (block.type === "thinking" && pendingSignature !== undefined) {
+          block.thinkingSignature = pendingSignature;
         }
         if (block.type === "toolCall") {
           sealedToolCalls.push({ block, contentIndex: index });
-          finishReasoningContentSidecars(event.index);
+        } else {
+          emitContentEnd(block, index);
         }
+        finishReasoningContentSidecars(event.index);
         continue;
       }
       if (event.type === "message_delta") {
@@ -593,6 +462,15 @@ export async function consumeAnthropicStream(params: {
         const usage = asOptionalObjectRecord(event.usage);
         if (typeof delta?.stop_reason === "string" && delta.stop_reason) {
           sawStopReason = true;
+          const iteration = Array.isArray(usage?.iterations)
+            ? asOptionalObjectRecord(usage.iterations.at(-1))
+            : undefined;
+          terminalFallbackModel =
+            iteration?.type === "fallback_message" &&
+            typeof iteration.model === "string" &&
+            iteration.model.trim()
+              ? iteration.model
+              : undefined;
           if (delta.stop_reason === "refusal") {
             applyAnthropicRefusal(output, delta.stop_details, model.provider);
           } else {
@@ -600,18 +478,10 @@ export async function consumeAnthropicStream(params: {
           }
         }
         applyAnthropicMessageDeltaUsage(output.usage, usage, messageStartPromptUsage);
-        calculateCost(costModel, output.usage);
-        // Gate on the turn CONTAINING a tool call, not the provider's stop_reason
-        // label: Bedrock/Vertex-proxied routes (e.g. pioneer) report "end_turn" on
-        // tool-using turns. No-op for direct Anthropic (already "toolUse" here).
-        if (
-          managed &&
-          (output.stopReason === "toolUse" ||
-            output.content.some((block) => block.type === "toolCall"))
-        ) {
-          tagPendingCommentaryText(output.content);
+        if (sawStopReason && messageStartPromptUsage && typeof usage?.output_tokens === "number") {
+          output.usage.usageReport = { state: "available" };
         }
-        flushPendingTextEnds();
+        calculateCost(costModel, output.usage);
       }
     }
     // Anthropic completes every SSE response with message_stop. Compatible
@@ -644,6 +514,24 @@ export async function consumeAnthropicStream(params: {
       undefined,
       { repairStringLiterals: true },
     );
+    // Sticky fallback has no content boundary. Commit its explicit terminal identity
+    // only after validation; failed streams must not acquire a fallback diagnostic.
+    if (refusalBuffer && terminalFallbackModel && !sawFallbackBoundary) {
+      output.responseModel = terminalFallbackModel;
+      applyServingModelCost(terminalFallbackModel);
+      output.diagnostics = [
+        ...(output.diagnostics ?? []),
+        {
+          type: "provider_fallback",
+          timestamp: Date.now(),
+          details: {
+            provider: model.provider,
+            fromModel: model.id,
+            toModel: terminalFallbackModel,
+          },
+        },
+      ];
+    }
     for (const sealed of sealedToolCalls) {
       delete sealed.block.partialJson;
       eventSink.push({
@@ -654,18 +542,6 @@ export async function consumeAnthropicStream(params: {
       });
     }
     refusalBuffer?.flush();
-    // Backstop: streaming tags commentary at the tool-boundary above, but
-    // replay/non-streaming assembly may reach here with tool calls untagged.
-    // Idempotent, so it never double-tags the streaming path. Gate on the turn
-    // containing a tool call (not stop_reason) so proxied Bedrock/Vertex routes
-    // that mislabel tool turns as "end_turn" still tag their narration.
-    if (
-      managed &&
-      (output.stopReason === "toolUse" || output.content.some((block) => block.type === "toolCall"))
-    ) {
-      tagPendingCommentaryText(output.content);
-    }
-    flushPendingTextEnds();
   } finally {
     logAnthropicThinkingDrops(inputTransformations);
   }

@@ -3,6 +3,7 @@ import {
   controlUiBundledSettingsStorageKey,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { openChatDetails } from "./chat-details.test-support.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -14,7 +15,7 @@ import {
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
-  it("hides and restores composer progress across tabs and reloads without clearing it", async () => {
+  it("hides and restores Details progress across tabs and reloads without clearing it", async () => {
     const sessionKey = "agent:main:progress-preference";
     await suite.withPage(
       { colorScheme: "dark", locale: "en-US", viewport: { width: 1280, height: 900 } },
@@ -59,7 +60,8 @@ suite.define(() => {
           },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const card = page.locator('[data-progress-card-placement="composer"]');
+        const card = page.locator('[data-progress-card-placement="details"]');
+        await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
         await captureUiProof(suite, page, "progress-preference", "01-cards-enabled.png");
 
@@ -77,11 +79,8 @@ suite.define(() => {
             })
             .first();
         const showRow = row("Show task progress cards");
-        const collapseRow = row("Collapse task progress by default");
-        const enabled = () =>
-          showRow
-            .locator("wa-switch")
-            .evaluate((element) => Boolean((element as { checked?: boolean }).checked));
+        const collapseRow = row("Collapse task progress by default on desktop");
+        const enabled = () => showRow.getByRole("switch").isChecked();
         await expect.poll(enabled).toBe(true);
         await expect.poll(() => showRow.textContent()).not.toContain("Using default:");
         await settingsPage
@@ -92,14 +91,8 @@ suite.define(() => {
         await collapseRow.click();
         await showRow.click();
         await expect.poll(enabled).toBe(false);
-        await expect
-          .poll(() =>
-            collapseRow
-              .locator("wa-switch")
-              .evaluate((element) => Boolean((element as { disabled?: boolean }).disabled)),
-          )
-          .toBe(true);
-        await expect.poll(() => page.locator(".agent-chat__progress-float").count()).toBe(0);
+        await expect.poll(() => collapseRow.getByRole("switch").isDisabled()).toBe(true);
+        await expect.poll(() => card.count()).toBe(0);
         await captureUiProof(suite, settingsPage, "progress-preference", "03-setting-disabled.png");
         await captureUiProof(suite, page, "progress-preference", "04-cards-hidden.png");
 
@@ -115,7 +108,7 @@ suite.define(() => {
         expect((await gateway.getRequests("progressCard.get")).length).toBe(reads);
         await page.reload();
         await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
-        expect(await page.locator(".agent-chat__progress-float").count()).toBe(0);
+        expect(await card.count()).toBe(0);
         // The page-owned mock request log restarts on reload.
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
         await settingsPage.reload();
@@ -124,6 +117,7 @@ suite.define(() => {
 
         await showRow.click();
         await expect.poll(enabled).toBe(true);
+        await openChatDetails(page);
         await expect.poll(() => card.isVisible()).toBe(true);
         await expect
           .poll(() => card.textContent())

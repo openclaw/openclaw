@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { registerTranscriptMarkerQueueTests } from "./server-session-events.marker-queue.test-support.js";
 import {
   createGatewayBroadcaster,
   createHandler,
@@ -75,40 +75,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
-
-  it.each(["missing", "rebuilding"])(
-    "invalidates history when the committed row is %s",
-    async (kind) => {
-      if (kind === "missing") {
-        readSessionMessageByIdAsyncMock.mockResolvedValueOnce({ found: false, oversized: false });
-      } else {
-        readSessionMessageByIdAsyncMock.mockRejectedValueOnce(
-          new SessionTranscriptProjectionUnavailableError("sess-main"),
-        );
-      }
-      const { broadcastToConnIds, handler } = createHandler(false);
-      await handler({
-        target: {
-          agentId: "main",
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/canonical-update.sqlite",
-        },
-        messageId: "removed-id",
-        message: { role: "assistant", content: "stale queued content" },
-      });
-      expect(broadcastToConnIds).toHaveBeenCalledOnce();
-      expect(broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({ sessionKey: "agent:main:main" }),
-        expect.any(Set),
-      );
-      expect(broadcastToConnIds.mock.calls[0]?.[1]).not.toHaveProperty("message");
-      expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
-    },
-  );
 
   it("never silently drops an authoritative session message for a slow subscriber", async () => {
     const { broadcastToConnIds, handler } = createHandler(false);
@@ -130,6 +99,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -178,6 +148,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         phase: "message",
       }),
       new Set(["conn-broad", "conn-shared", "conn-targeted"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("message");
@@ -212,6 +183,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "sessions.changed",
       expect.objectContaining({ sessionKey: "agent:main:current" }),
       new Set(["conn-1", "conn-current"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -233,6 +205,8 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
   });
 
+  registerTranscriptMarkerQueueTests();
+
   it.each([
     {
       updateSource: "committed",
@@ -250,19 +224,9 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       lifecycleRevision: "revision-before-reset",
     },
     {
-      updateSource: "legacy",
-      ownerChange: "deleted",
-      lifecycleRevision: undefined,
-    },
-    {
       updateSource: "committed",
       ownerChange: "rebound",
       lifecycleRevision: "revision-before-reset",
-    },
-    {
-      updateSource: "legacy",
-      ownerChange: "rebound",
-      lifecycleRevision: undefined,
     },
   ])(
     "discards a queued $updateSource message when its session owner is $ownerChange",
@@ -364,6 +328,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     expect(payload).not.toHaveProperty("lifecycleRevision");
@@ -400,6 +365,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 1,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -429,6 +395,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         messageSeq: 3,
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -463,6 +430,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         }),
       }),
       expect.any(Set),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
   });
 
@@ -572,6 +540,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "session.message",
       expect.objectContaining({ sessionKey: "global" }),
       new Set(["conn-scoped", "conn-global"]),
+      expect.objectContaining({ prepareSessionProjection: expect.any(Function) }),
     );
     const payload = broadcastToConnIds.mock.calls[0]?.[1];
     if (agentId) {
@@ -617,6 +586,7 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
         agentId: "ops",
         dropIfSlow: true,
         sessionKeys: ["agent:ops:global"],
+        sessionEventSubscriptionKeys: ["agent:ops:global"],
       },
     );
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);

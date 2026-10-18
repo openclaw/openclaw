@@ -1,7 +1,7 @@
 // Target-aware runtime recovery; startup discovery retains its inherited-environment guards.
-import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { withNodeRuntimePath } from "../../../node-runtime-env.mjs";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { applyPathPrepend } from "../../infra/path-prepend.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
@@ -12,12 +12,10 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
+import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
-import {
-  resolvePackageRuntimePreflight,
-  type PackageRuntimePreflight,
-} from "./update-command-service-plan.js";
 
 /** Only a live updater may provision; discovery never reads dotenv-selected paths. */
 export function createPackageRuntimeRecovery(params: {
@@ -39,20 +37,32 @@ export function createPackageRuntimeRecovery(params: {
               params.root,
               async (_grant, bindChild) => {
                 authority.assertRequesterCurrent();
-                const result = await runCommandWithTimeout([command, ...args], {
-                  baseEnv: {},
-                  env,
-                  cwd: params.root,
-                  input: "",
-                  beforeInput: (pid, argv) => {
-                    authority.assertRequesterCurrent();
-                    bindChild(pid, argv);
+                const gate = prepareUpdateCommandNativeGate(randomUUID(), [env]);
+                const result = await runCommandWithTimeout(
+                  [
+                    process.execPath,
+                    "--input-type=module",
+                    "-e",
+                    gate.source,
+                    "--",
+                    command,
+                    ...args,
+                  ],
+                  {
+                    baseEnv: {},
+                    env: gate.env,
+                    cwd: params.root,
+                    input: gate.input,
+                    beforeInput: (pid, argv) => {
+                      authority.assertRequesterCurrent();
+                      bindChild(pid, argv);
+                    },
+                    timeoutMs: params.timeoutMs,
+                    killProcessTree: true,
+                    requireProcessTreeExtinction: true,
+                    maxOutputBytes: 64 * 1024,
                   },
-                  timeoutMs: params.timeoutMs,
-                  killProcessTree: true,
-                  requireProcessTreeExtinction: true,
-                  maxOutputBytes: 64 * 1024,
-                });
+                );
                 if (result.cleanup === "forced" || result.cleanup === "uncertain") {
                   throw new CommandProcessCleanupError();
                 }
@@ -77,32 +87,11 @@ export function createPackageRuntimeRecovery(params: {
               { auxiliaryPreflight: true },
             );
             authority.assertCurrent();
-            return installResult.termination === "exit" && !installResult.killed
-              ? installResult.code
-              : null;
+            return installResult.code;
           },
         }
       : {}),
   };
-}
-
-function reportPackageRuntimeSelection(
-  selection: PackageRuntimePreflight,
-  opts: { json?: boolean; tag: string },
-): void {
-  if (!selection.replacedNodeRunner || opts.json) {
-    return;
-  }
-  defaultRuntime.log(
-    theme.warn(
-      `Managed gateway service Node (${selection.replacedNodeRunner}) cannot run openclaw@${selection.targetVersion ?? opts.tag}.`,
-    ),
-  );
-  defaultRuntime.log(
-    theme.muted(
-      `Using compatible Node (${selection.nodeRunner}) for the update and managed service refresh.`,
-    ),
-  );
 }
 
 /** The same target-runtime owner serves admitted updates and target-owned initialization. */
@@ -113,7 +102,7 @@ export async function preparePackageUpdateRuntime(params: {
   managedService?: PreManagedServiceStop;
   packageUpdateNodeRunner?: string;
   packageInstallEnv?: NodeJS.ProcessEnv;
-  packageRuntimeTarget?: { version: string; nodeEngine: string | null };
+  packageRuntimeTarget?: Parameters<typeof resolvePackageRuntimePreflight>[0]["target"];
   shouldRestart: boolean;
   opts: UpdateCommandOptions;
   executor: UpdateCommandExecutor;
@@ -147,12 +136,14 @@ export async function preparePackageUpdateRuntime(params: {
     channel: params.channel,
     requestedChannel: params.requestedChannel,
     target: params.packageRuntimeTarget,
+    installedRoot: params.root,
     timeoutMs: params.timeoutMs,
     nodeRunner:
       params.managedServiceRoot && canRefreshManagedServiceNode
         ? params.packageUpdateNodeRunner
         : (managedServiceNodeRunner ?? params.packageUpdateNodeRunner),
-    fallbackNodeRunner: canRefreshManagedServiceNode ? resolveNodeRunner() : undefined,
+    fallbackNodeRunner:
+      canRefreshManagedServiceNode && !process.versions.bun ? resolveNodeRunner() : undefined,
     runtimeRecovery:
       !managedServiceNodeRunner || canRefreshManagedServiceNode
         ? createPackageRuntimeRecovery({
@@ -166,12 +157,24 @@ export async function preparePackageUpdateRuntime(params: {
   fence.assertCurrent();
   if (result.ok) {
     if (params.packageInstallEnv && result.value.nodeRunner) {
-      // SAFETY: createGlobalInstallEnv filters undefined entries into a string-valued copy.
-      applyPathPrepend(params.packageInstallEnv as Record<string, string>, [
-        path.dirname(result.value.nodeRunner),
-      ]);
+      Object.assign(
+        params.packageInstallEnv,
+        withNodeRuntimePath(params.packageInstallEnv, result.value.nodeRunner),
+      );
     }
-    reportPackageRuntimeSelection(result.value, { json: params.opts.json, tag: params.tag });
+    const selection = result.value;
+    if (selection.replacedNodeRunner && !params.opts.json) {
+      defaultRuntime.log(
+        theme.warn(
+          `Managed gateway service Node (${selection.replacedNodeRunner}) cannot run openclaw@${selection.targetVersion ?? params.tag}.`,
+        ),
+      );
+      defaultRuntime.log(
+        theme.muted(
+          `Using compatible Node (${selection.nodeRunner}) for the update and managed service refresh.`,
+        ),
+      );
+    }
   }
   return result;
 }

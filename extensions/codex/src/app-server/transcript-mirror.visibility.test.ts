@@ -23,10 +23,11 @@ registerCodexEventProjectorTestLifecycle();
 
 it.each([
   { sourceTool: "sessions_send", hidden: true },
-  { sourceTool: "subagent_announce", hidden: false },
+  { sourceTool: "subagent_settle", privateCompletion: true as const, hidden: true },
+  { sourceTool: "subagent_settle", hidden: false },
 ])(
-  "keeps Codex $sourceTool work in SQLite with its display policy",
-  async ({ sourceTool, hidden }) => {
+  "keeps Codex $sourceTool work in SQLite with its display policy (private=$privateCompletion)",
+  async ({ sourceTool, hidden, privateCompletion }) => {
     const base = await createParams();
     const target = {
       agentId: "main",
@@ -42,6 +43,7 @@ it.each([
       sessionTarget: target,
       workspaceDir: path.dirname(target.storePath),
       prompt: "Review the worker result",
+      privateCompletion,
       inputProvenance: { kind: "inter_session", sourceTool, sourceRole: "subagent" },
     };
     initializeGlobalHookRunner(

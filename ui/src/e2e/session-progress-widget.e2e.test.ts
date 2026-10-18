@@ -1,7 +1,13 @@
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
-import { openSlot } from "../pages/chat/sidebar-layout.ts";
+import {
+  ensureSidebarConversation,
+  openSlot,
+  toggleSidebarPanelExpanded,
+} from "../pages/chat/sidebar-layout.ts";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -78,9 +84,9 @@ beforeEach(() => {
 
 suite.define(() => {
   it.each([
-    { height: 900, name: "desktop", width: 1440, routeKey: sessionKey },
     { height: 844, name: "mobile", width: 390, routeKey: sessionKey },
     { height: 900, name: "bare-route", width: 1440, routeKey: "progress-dashboard" },
+    { height: 900, name: "expanded-side", width: 1440, routeKey: sessionKey },
     { height: 900, name: "inactive", width: 1440, routeKey: sessionKey },
   ])("keeps unowned progress paused on $name", async (viewport) => {
     await suite.withPage({ locale: "en-US", viewport }, async ({ page }) => {
@@ -128,12 +134,12 @@ suite.define(() => {
       });
       const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
       await page.addInitScript(
-        ({ key, rawKey, storage, dashboardLayout }) => {
+        ({ key, rawKey, storage, dashboardLayout, expandedSide }) => {
           localStorage.setItem(
             storage,
             JSON.stringify({
               boardSessionViews: { [key]: { activeTabId: "main" } },
-              ...(rawKey === key
+              ...(rawKey === key && !expandedSide
                 ? {}
                 : {
                     // Each split pane owns its presentation independently of the current route.
@@ -154,13 +160,22 @@ suite.define(() => {
           key: sessionKey,
           rawKey: viewport.routeKey,
           storage: storageKey,
-          dashboardLayout: openSlot({ columns: [] }, "dashboard"),
+          expandedSide: viewport.name === "expanded-side",
+          dashboardLayout:
+            viewport.name === "expanded-side"
+              ? toggleSidebarPanelExpanded(
+                  openSlot(ensureSidebarConversation({ columns: [] }), "dashboard"),
+                  "dashboard",
+                )
+              : openSlot({ columns: [] }, "dashboard"),
         },
       );
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
       const surface =
-        viewport.routeKey === sessionKey ? page : page.locator(".chat-split-view__column").nth(1);
+        viewport.routeKey === sessionKey && viewport.name !== "expanded-side"
+          ? page
+          : page.locator(".chat-split-view__column").nth(1);
       const card = surface.locator('[data-progress-card-placement="board"]');
       if (viewport.routeKey !== sessionKey) {
         await expect
@@ -249,6 +264,16 @@ suite.define(() => {
       await error.getByRole("button", { name: "Retry", exact: true }).click();
       await expect.poll(() => card.textContent()).toContain("Refreshed task");
       await expect.poll(() => error.count()).toBe(0);
+      await page.waitForURL((url) => url.pathname.startsWith("/dashboard/"));
+      await surface.locator("openclaw-board-view").waitFor({ state: "visible" });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      if (viewport.name === "expanded-side") {
+        const mainChat = surface.locator('.sidebar-region__primary[data-region="main"]');
+        await mainChat.waitFor({ state: "hidden" });
+        await selectChatLayoutAction(surface, "Restore split");
+        await mainChat.waitFor({ state: "visible" });
+        await surface.locator('[data-panel-slot="dashboard"]').waitFor({ state: "visible" });
+      }
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
@@ -280,9 +305,16 @@ suite.define(() => {
   it("keeps target liveness when the selected agent scope changes", async () => {
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const mainSessions = sessionListResponse(sessionKey, "Main progress dashboard", {
+        hasActiveRun: true,
+        startedAt: now - 30_000,
+        updatedAt: now,
+      });
       const gateway = await installMockGateway(page, {
         sessionKey,
-        sessions: [{ key: sessionKey }],
+        heldMethods: ["sessions.describe"],
+        // Describe and startup publish full snapshots of the same running session.
+        sessions: mainSessions.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -302,11 +334,7 @@ suite.define(() => {
             cases: [
               {
                 match: { agentId: "main" },
-                response: sessionListResponse(sessionKey, "Main progress dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
+                response: mainSessions,
               },
               {
                 match: { agentId: "writer" },
@@ -340,18 +368,12 @@ suite.define(() => {
       await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
 
-      await page.waitForFunction(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context?: { agentSelection?: { setScope?: (agentId: string) => void } } };
-        };
-        return typeof app.runtime?.context?.agentSelection?.setScope === "function";
+      await evaluateControlUiContext(page, (context) => {
+        context.agentSelection.setScope("writer");
       });
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime?: { context?: { agentSelection?: { setScope?: (agentId: string) => void } } };
-        };
-        app.runtime?.context?.agentSelection?.setScope?.("writer");
-      });
+      await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
+      // Reconcile the descriptor after the running roster and scope transition.
+      await gateway.resolveDeferred("sessions.describe");
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some((request) => {
@@ -386,191 +408,12 @@ suite.define(() => {
           }),
         )
         .toBe(false);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
+      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
       await page.screenshot({
         animations: "disabled",
         fullPage: true,
         path: path.join(proofDir, "session-progress-widget-scope-transition.png"),
-      });
-    });
-  });
-
-  it("pauses a dashboard card when the session has no active run", async () => {
-    const inactiveSessionKey = "agent:main:progress-dashboard-inactive";
-    await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
-      await installMockGateway(page, {
-        sessionKey: inactiveSessionKey,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
-        featureMethods: dashboardFeatureMethods,
-        methodResponses: {
-          "board.get": boardResponse(inactiveSessionKey),
-          "progressCard.get": {
-            card: {
-              sessionKey: inactiveSessionKey,
-              revision: 1,
-              updatedAt: 3,
-              markdown: "**Paused dashboard tile** is durable work.",
-              steps: [{ step: "Resume the dashboard task", status: "in_progress" }],
-            },
-          },
-          "sessions.list": sessionListResponse(inactiveSessionKey, "Inactive progress dashboard", {
-            hasActiveRun: false,
-            startedAt: 3,
-            updatedAt: 3,
-          }),
-        },
-      });
-
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: inactiveSessionKey, storage: storageKey },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, inactiveSessionKey, "dashboard"));
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
-      await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(1);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(0);
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-inactive.png"),
-      });
-    });
-  });
-
-  it("pauses a dashboard card that predates the current active run", async () => {
-    const staleSessionKey = "agent:main:progress-dashboard-stale";
-    await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
-      await installMockGateway(page, {
-        sessionKey: staleSessionKey,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
-        featureMethods: dashboardFeatureMethods,
-        methodResponses: {
-          "board.get": boardResponse(staleSessionKey),
-          "progressCard.get": {
-            card: {
-              sessionKey: staleSessionKey,
-              revision: 1,
-              updatedAt: 3,
-              markdown: "**Stale dashboard tile** belongs to an earlier run.",
-              steps: [{ step: "Show the current run", status: "in_progress" }],
-            },
-          },
-          "sessions.list": sessionListResponse(staleSessionKey, "Stale progress dashboard", {
-            hasActiveRun: true,
-            startedAt: 4,
-            updatedAt: 4,
-          }),
-        },
-      });
-
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: staleSessionKey, storage: storageKey },
-      );
-
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, staleSessionKey, "dashboard"));
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
-      await expect.poll(() => card.textContent()).toContain("Stale dashboard tile");
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-stale.png"),
-      });
-      await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(1);
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(0);
-    });
-  });
-
-  it("reads target liveness from the shared roster independently of board membership", async () => {
-    const splitRosterSessionKey = "agent:main:progress:dashboard:split-roster";
-    await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
-      const now = Date.now();
-      await installMockGateway(page, {
-        sessionKey: splitRosterSessionKey,
-        controlUiWidgetKinds: [
-          { pluginId: "session", kind: "session:progress", label: "Session progress" },
-        ],
-        featureMethods: dashboardFeatureMethods,
-        methodResponses: {
-          "board.get": boardResponse(splitRosterSessionKey),
-          "progressCard.get": {
-            card: {
-              sessionKey: splitRosterSessionKey,
-              revision: 1,
-              updatedAt: now,
-              markdown: "**Split roster dashboard tile** follows its target session.",
-              steps: [{ step: "Read the dashboard roster", status: "in_progress" }],
-            },
-          },
-          "sessions.list": {
-            cases: [
-              {
-                // The dashboard gallery view sees an idle board inventory.
-                match: { hasBoard: true },
-                response: sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
-                  hasActiveRun: false,
-                  startedAt: 2,
-                  updatedAt: 3,
-                }),
-              },
-              {
-                // The shared target roster still reports the live run.
-                match: {},
-                response: sessionListResponse(splitRosterSessionKey, "Split roster dashboard", {
-                  hasActiveRun: true,
-                  startedAt: now - 30_000,
-                  updatedAt: now,
-                }),
-              },
-            ],
-          },
-        },
-      });
-
-      const storageKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-      await page.addInitScript(
-        ({ key, storage }) => {
-          localStorage.setItem(
-            storage,
-            JSON.stringify({ boardSessionViews: { [key]: { activeTabId: "main" } } }),
-          );
-        },
-        { key: splitRosterSessionKey, storage: storageKey },
-      );
-
-      await page.goto(
-        controlUiSessionUrl(suite.server.baseUrl, splitRosterSessionKey, "dashboard"),
-      );
-      const card = page.locator('[data-progress-card-placement="board"]');
-      await card.waitFor();
-      await expect.poll(() => card.textContent()).toContain("Split roster dashboard tile");
-      // Liveness comes from the shared target roster, not the gallery-filtered view.
-      await expect.poll(() => card.locator(".session-run-spinner").count()).toBe(1);
-      await expect.poll(() => card.locator(".session-progress-card__step--paused").count()).toBe(0);
-      await page.screenshot({
-        animations: "disabled",
-        fullPage: true,
-        path: path.join(proofDir, "session-progress-widget-split-roster.png"),
       });
     });
   });
@@ -580,9 +423,36 @@ suite.define(() => {
     const boardlessTargetKey = "agent:main:progress-boardless-target";
     await suite.withPage(englishDesktopPageOptions, async ({ page }) => {
       const now = Date.now();
+      const targetRoster = {
+        count: 2,
+        defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
+        path: "",
+        sessions: [
+          {
+            key: boardOwnerKey,
+            kind: "direct",
+            label: "Progress board owner",
+            status: "done",
+            hasActiveRun: false,
+            startedAt: 2,
+            endedAt: 3,
+            updatedAt: 3,
+          },
+          {
+            key: boardlessTargetKey,
+            kind: "direct",
+            label: "Board-less running target",
+            status: "running",
+            hasActiveRun: true,
+            startedAt: now - 30_000,
+            updatedAt: now,
+          },
+        ],
+        ts: now,
+      };
       await installMockGateway(page, {
         sessionKey: boardOwnerKey,
-        sessions: [{ key: boardOwnerKey }, { key: boardlessTargetKey }],
+        sessions: targetRoster.sessions,
         controlUiWidgetKinds: [
           { pluginId: "session", kind: "session:progress", label: "Session progress" },
         ],
@@ -615,33 +485,7 @@ suite.define(() => {
               },
               {
                 match: {},
-                response: {
-                  count: 2,
-                  defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-                  path: "",
-                  sessions: [
-                    {
-                      key: boardOwnerKey,
-                      kind: "direct",
-                      label: "Progress board owner",
-                      status: "done",
-                      hasActiveRun: false,
-                      startedAt: 2,
-                      endedAt: 3,
-                      updatedAt: 3,
-                    },
-                    {
-                      key: boardlessTargetKey,
-                      kind: "direct",
-                      label: "Board-less running target",
-                      status: "running",
-                      hasActiveRun: true,
-                      startedAt: now - 30_000,
-                      updatedAt: now,
-                    },
-                  ],
-                  ts: now,
-                },
+                response: targetRoster,
               },
             ],
           },

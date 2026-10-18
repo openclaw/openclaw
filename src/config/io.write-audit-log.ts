@@ -1,150 +1,92 @@
-// Config-write audit/log helper cluster, extracted from io.write.ts so that
-// file stays under the line-cap ratchet. Explicit params instead of closures:
-// this module has no access to writeConfigFile's local scope.
 import type fs from "node:fs";
 import { isVerbose } from "../global-state.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
-import { restoreConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { restoreConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import {
-  appendConfigAuditRecord,
   createConfigWriteAuditRecordBase,
   finalizeConfigWriteAuditRecord,
   formatConfigOverwriteLogMessage,
   type ConfigWriteAuditResult,
 } from "./io.audit.js";
+import { withConfigWriteState } from "./io.meta.js";
 import { loggedConfigWarningFingerprints, setBoundedConfigIoWarningEntry } from "./io.state.js";
-import type { ConfigWriteAuditOrigin } from "./io.types.js";
 import { resolveConfigStatMetadata } from "./io.write-safety.js";
 
-export function createConfigWriteAuditLog(params: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
-  logger: { warn: (message: string) => void };
-  skipOutputLogs?: boolean;
-  assertConfigPathForWrite?: () => void;
-  existsBefore: boolean;
-  previousHash: string | null;
-  nextHash: string;
-  previousBytes: number | null;
-  nextBytes: number;
-  previousStat: fs.Stats | null;
-  changedPathCount: number | null | undefined;
-  changedPaths: readonly string[];
-  origin?: ConfigWriteAuditOrigin;
-  hasMetaBefore: boolean;
-  hasMetaAfter: boolean;
-  gatewayModeBefore: string | null;
-  gatewayModeAfter: string | null;
-  suspiciousReasons: string[];
-}): {
-  logConfigOverwrite: () => void;
-  logConfigWriteAnomalies: () => void;
-  appendWriteAudit: (
-    result: ConfigWriteAuditResult,
-    error?: unknown,
-    nextStat?: fs.Stats | null,
-  ) => Promise<void>;
-} {
-  const readTestLogFlag = (name: string) =>
-    isVitestRuntimeEnv(params.env) && params.env[name] === "1";
-
+export function createConfigWriteAuditLog(
+  params: Parameters<typeof createConfigWriteAuditRecordBase>[0] & {
+    changedPathCount?: number;
+    logger: Pick<typeof console, "warn">;
+    skipOutputLogs?: boolean;
+    appendRecord: (record: ReturnType<typeof finalizeConfigWriteAuditRecord>) => Promise<void>;
+  },
+) {
+  const { env, configPath, suspicious: suspiciousReasons } = params;
+  const readTestLogFlag = (name: string) => isVitestRuntimeEnv(env) && env[name] === "1";
   const logConfigOverwrite = () => {
-    if (
-      !params.existsBefore ||
-      params.skipOutputLogs ||
-      (isVitestRuntimeEnv(params.env) && !readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG"))
-    ) {
+    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
+    if (!params.existsBefore || params.skipOutputLogs || (isVitestRuntimeEnv(env) && !testLog)) {
       return;
     }
-    const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
-    if (!isVerbose() && params.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
+    if (!isVerbose() && env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !testLog) {
       return;
     }
     params.logger.warn(
       formatConfigOverwriteLogMessage({
-        configPath: params.configPath,
+        configPath,
         previousHash: params.previousHash,
         nextHash: params.nextHash,
-        changedPathCount: params.changedPathCount ?? undefined,
+        changedPathCount: params.changedPathCount,
       }),
     );
   };
-
   const logConfigWriteAnomalies = () => {
     const testLog = readTestLogFlag("OPENCLAW_TEST_CONFIG_WRITE_LOG");
     if (
-      params.suspiciousReasons.length === 0 ||
+      suspiciousReasons.length === 0 ||
       params.skipOutputLogs ||
-      (isVitestRuntimeEnv(params.env) && !testLog)
+      (isVitestRuntimeEnv(env) && !testLog)
     ) {
       return;
     }
-    const showMissingMeta =
-      isVerbose() || params.env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
+    const showMissingMeta = isVerbose() || env.OPENCLAW_CONFIG_WRITE_ANOMALY_LOG === "1" || testLog;
     const visibleReasons = showMissingMeta
-      ? params.suspiciousReasons
-      : params.suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
+      ? suspiciousReasons
+      : suspiciousReasons.filter((reason) => reason !== "missing-meta-before-write");
     if (visibleReasons.length > 0) {
-      params.logger.warn(
-        `Config write anomaly: ${params.configPath} (${visibleReasons.join(", ")})`,
-      );
+      params.logger.warn(`Config write anomaly: ${configPath} (${visibleReasons.join(", ")})`);
     }
   };
-
-  const auditRecordBase = createConfigWriteAuditRecordBase({
-    configPath: params.configPath,
-    env: params.env,
-    existsBefore: params.existsBefore,
-    previousHash: params.previousHash,
-    nextHash: params.nextHash,
-    previousBytes: params.previousBytes,
-    nextBytes: params.nextBytes,
-    previousMetadata: resolveConfigStatMetadata(params.previousStat),
-    changedPathCount: params.changedPathCount,
-    changedPaths: params.changedPaths,
-    origin: params.origin,
-    hasMetaBefore: params.hasMetaBefore,
-    hasMetaAfter: params.hasMetaAfter,
-    gatewayModeBefore: params.gatewayModeBefore,
-    gatewayModeAfter: params.gatewayModeAfter,
-    suspicious: params.suspiciousReasons,
-  });
-
+  const base = createConfigWriteAuditRecordBase(params);
   const appendWriteAudit = async (
     result: ConfigWriteAuditResult,
     error?: unknown,
     nextStat?: fs.Stats | null,
   ) => {
-    params.assertConfigPathForWrite?.();
-    await appendConfigAuditRecord({
-      env: params.env,
-      homedir: params.homedir,
-      record: finalizeConfigWriteAuditRecord({
-        base: auditRecordBase,
+    await params.appendRecord(
+      finalizeConfigWriteAuditRecord({
+        base,
         result,
         err: error,
         nextMetadata: resolveConfigStatMetadata(nextStat ?? null),
       }),
-    });
+    );
   };
-
   return { logConfigOverwrite, logConfigWriteAnomalies, appendWriteAudit };
 }
 
-type RestoreSnapshotParams = Parameters<typeof restoreConfigSnapshotAuditRecord>[0];
-
-export function createConfigWriteEffectRestorer(params: {
-  configPath: string;
-  env: NodeJS.ProcessEnv;
-  homedir: () => string;
-  snapshot: RestoreSnapshotParams["snapshot"];
-  expectedSnapshot: RestoreSnapshotParams["expectedSnapshot"];
-  previousWarningFingerprint: string | undefined;
-}): (assertCurrent: () => void) => void {
-  return (assertCurrent) => {
+export function createConfigWriteEffectRestorer(
+  params: Parameters<typeof restoreConfigSnapshotAuditRecordAsync>[0] & {
+    configPath: string;
+    stateSelection: Parameters<typeof withConfigWriteState>[0];
+    previousWarningFingerprint: string | undefined;
+  },
+) {
+  return async (assertCurrent: () => void) => {
     assertCurrent();
-    restoreConfigSnapshotAuditRecord(params);
+    await withConfigWriteState(params.stateSelection, () =>
+      restoreConfigSnapshotAuditRecordAsync(params, assertCurrent),
+    );
+    assertCurrent();
     if (params.previousWarningFingerprint === undefined) {
       loggedConfigWarningFingerprints.delete(params.configPath);
     } else {

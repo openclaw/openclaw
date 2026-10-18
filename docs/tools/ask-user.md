@@ -12,8 +12,16 @@ wait for the answers. It is for decisions that genuinely belong to the user,
 not routine confirmation or information the agent can derive from the request,
 code, or a sensible default.
 
-The tool is available only in the main session. Subagents and other non-primary
-runs do not receive it.
+The tool is available only in the main session on a surface that supports
+question input: Discord, Slack, Telegram, and WebChat (including the Control UI
+and native OpenClaw clients). Subagents and other non-primary runs do not
+receive it, and an explicit tool denial still takes precedence.
+
+On iMessage, Mattermost, Signal, WhatsApp, and other channels without declared
+question input, the agent asks in ordinary plain text instead of calling
+`ask_user`. Approval reactions are separate and remain available. Native agent
+runtimes can have their own question tools; this availability rule applies to
+OpenClaw's built-in `ask_user` tool.
 
 ## Answer a question
 
@@ -26,6 +34,10 @@ You can answer from any supported conversation surface:
   or expired questions keep their wording alongside the outcome.
   Switching between pending questions preserves both selected choices and typed
   answers, even when typed text matches an option label.
+  Use number keys to choose an option and Ctrl+Enter (Cmd+Enter on macOS) to
+  continue while the panel, a choice, or an answer field is focused. Plain Enter
+  adds a line in **Other**; links, file pickers, and action buttons keep their
+  native keyboard behavior.
 - The TUI shows a question prompt in both Gateway and local modes. Use arrow
   keys or number keys to choose an option, **Other…** to type an answer, or
   **Skip**. Multi-select prompts let you toggle choices before confirming;
@@ -34,18 +46,32 @@ You can answer from any supported conversation surface:
 - Telegram renders each choice as a full-width native button for one
   single-select question. **Other…** switches to Telegram's reply input without
   resolving the question.
-- Discord, Slack, and Mattermost render native buttons for a single-choice,
-  single-question prompt. Mattermost retires its prompt on the tap it accepts;
-  a question that ends elsewhere leaves the buttons in place until someone taps
-  one and is told it was already answered.
-- For a question created by an active OpenClaw run, a plain-text reply works on
-  any channel when your current permissions match the creator's. Reply with a
-  number, an option label, or your own answer. For multi-select questions,
-  separate choices with commas.
+- Discord and Slack render native buttons for a single-choice, single-question
+  prompt.
+- On a supported messaging channel, a plain-text reply can answer a question
+  created by an active OpenClaw run when your current permissions match the
+  creator's. Reply with a number, an option label, or your own answer. For
+  multi-select questions, separate choices with commas.
 
 Questions from a standalone [attached MCP client](/cli/attach) do not carry an
 OpenClaw run's creator binding. Answer those using the question controls in the
 Control UI, TUI, or native app, not an ordinary channel message.
+
+Guests with `operator.sessions.write` can answer ordinary questions from their
+own authorized agent run in a session they created. The Control UI restores
+those pending questions after reconnecting. Access to another person's session
+does not expose their questions or make them answerable. Secret, administrative,
+and sessionless questions keep their existing privileged access requirements.
+Answering a question does not grant the agent additional permissions.
+
+An accepted answer belongs to the waiting agent turn, which can save its tool
+result and continue after the answer enters conversation history. An unrelated
+new user turn, a changed transcript branch, or revoked run authority still
+prevents that older turn from appending a response.
+
+If a standalone question link cannot refresh after reconnecting, use **Retry**
+to load it again without losing the answer you typed in that page. A question
+that is no longer available remains unavailable.
 
 OpenClaw always enables a free-text **Other** answer. The agent must not add an
 `Other` option to the authored option list.
@@ -56,8 +82,8 @@ without it entering the chat, the transcript, or the model's context.
 
 ## Platform behavior
 
-Answers work on every supported conversation surface. The web Control UI and
-TUI show one question at a time; collapsing the prompt restores the composer
+Answers work on the surfaces listed above. The web Control UI and TUI show one
+question at a time; collapsing the prompt restores the composer
 with a slim pending-question indicator. The TUI's `/question` command reopens
 it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
@@ -65,18 +91,56 @@ idiom. The TUI keeps a compact resolution notice in the chat; other platforms
 keep the question-to-answer summary without timed eviction. **Skip** is
 available everywhere and declines the entire prompt.
 
-Multi-question and multi-select prompts degrade to readable text on messaging
-channels. The Control UI and TUI keep the full structured stepper. The TUI shows
-the time remaining, dismisses expired prompts, and restores pending questions
+Multi-question and multi-select prompts use readable text on Discord, Slack,
+and Telegram; reply in text to answer them. The Control UI and TUI keep the
+full structured stepper. The TUI shows the time remaining, dismisses expired
+prompts, and restores pending questions
 for the selected session after reconnecting or switching sessions. Local mode
 keeps questions in the running process; they do not survive exiting the TUI.
+
+A turn started through the `agent` Gateway method with a supported messaging
+channel target also delivers its question to that conversation. The question is
+an explicit tool message; automatic final-reply delivery is configured separately.
+
+## Async questions
+
+Codex async questions use the same panel above the Control UI composer. They open
+without taking keyboard focus and leave the message box available while the agent
+continues working. Collapse the panel to keep a compact unanswered-question count
+and the current question visible. New messages, the question's own completed
+turn, and collapsed work history do not dismiss the question or reopen a minimized
+panel. When a later run completes successfully, older reminders leave the dock.
+Overlapping runs, commentary, interruptions, and failed runs do not retire a
+question. Successful restart recovery also moves older reminders into history;
+restarting alone does not.
+The transcript keeps the question with **No longer pending** and an **Answer**
+button to reopen it. Reopening preserves the draft until you submit, skip, or a
+later run completes. Moving a reminder into history never answers it, grants
+permission, or marks its underlying task complete.
+The question dock also stays available when a plugin replaces the composer.
+
+Use the panel's request arrows to switch between pending requests without losing
+answer drafts. A new blocking question takes priority; async questions remain
+available through the same navigation. Submitting an async answer sends an ordinary
+chat message, using the existing outbox and retry controls. Skipping removes that
+request from the dock without sending an answer. The transcript retains a summary.
+Minimizing alone neither answers nor skips a question.
+
+The question summary shows whether your answer is queued, sending, failed, or
+confirmed in saved conversation history. If delivery fails or becomes uncertain
+after reconnecting, **Retry answer** retries the existing outbox message instead
+of submitting a second answer. **Discard** removes that queued answer and reopens
+its preserved draft in the currently open panes for that conversation.
+Saved replies remain confirmed after reload, including answers edited in the
+outbox or containing quoted question headings. When those headings make individual
+answers ambiguous, the summary shows the saved reply text without splitting it.
 
 ## Timeout and no answer
 
 The default timeout is 900 seconds. `timeoutSeconds` is clamped to the range
 30 through 3600 seconds. This is a maximum human wait, subject to earlier agent
-run cancellation or the overall run timeout. A pending question does not extend
-an explicit run budget.
+run cancellation or the current model attempt's timeout. A pending question
+does not pause or extend that attempt's execution budget.
 
 If the question expires or is cancelled before an answer arrives, the tool
 returns `status: "no_answer"`. The agent then continues with its best judgment.
@@ -140,3 +204,9 @@ The model-facing contract tells the agent to:
 
 The agent should not use `ask_user` to ask whether it may proceed or to confirm
 its own plan.
+
+## Related
+
+- [Secrets](/tools/secrets) — the credential-safe path when the answer is a secret
+- [Control UI](/web/control-ui) — where the docked answer panel appears
+- [Tools overview](/tools) — the rest of the built-in tool surface

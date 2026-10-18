@@ -1,3 +1,6 @@
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveDefaultCronStaggerMs } from "../../../../src/cron/stagger.js";
 import type { CronJob } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { parseCronDurationMs } from "./decimal.ts";
@@ -50,23 +53,19 @@ export function durationMsToSecondsString(ms: number): string {
 export function parseStaggerSchedule(
   staggerMs?: number,
 ): Pick<CronFormState, "scheduleExact" | "staggerAmount" | "staggerUnit"> {
-  if (staggerMs === 0) {
-    return { scheduleExact: true, staggerAmount: "", staggerUnit: "seconds" };
+  if (
+    staggerMs === 0 ||
+    typeof staggerMs !== "number" ||
+    !Number.isFinite(staggerMs) ||
+    staggerMs < 0
+  ) {
+    return { scheduleExact: staggerMs === 0, staggerAmount: "", staggerUnit: "seconds" };
   }
-  if (typeof staggerMs !== "number" || !Number.isFinite(staggerMs) || staggerMs < 0) {
-    return { scheduleExact: false, staggerAmount: "", staggerUnit: "seconds" };
-  }
-  if (staggerMs % 60_000 === 0) {
-    return {
-      scheduleExact: false,
-      staggerAmount: String(staggerMs / 60_000),
-      staggerUnit: "minutes",
-    };
-  }
+  const minutes = staggerMs % 60_000 === 0;
   return {
     scheduleExact: false,
-    staggerAmount: durationMsToSecondsString(staggerMs),
-    staggerUnit: "seconds",
+    staggerAmount: minutes ? String(staggerMs / 60_000) : durationMsToSecondsString(staggerMs),
+    staggerUnit: minutes ? "minutes" : "seconds",
   };
 }
 
@@ -74,6 +73,20 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   const schedule = job.schedule;
   if (form.scheduleKind !== schedule.kind) {
     return false;
+  }
+  if (schedule.kind === "event") {
+    if (schedule.source !== "mcp-events") {
+      return true;
+    }
+    try {
+      return (
+        form.eventServer.trim() === schedule.options.server &&
+        form.eventName.trim() === schedule.options.name &&
+        jsonSchemaValuesEqual(JSON.parse(form.eventArguments), schedule.options.arguments ?? {})
+      );
+    } catch {
+      return false;
+    }
   }
   if (schedule.kind === "at") {
     return form.scheduleAt === formatDateTimeLocal(schedule.at);
@@ -94,7 +107,22 @@ export function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boo
   return true;
 }
 
-export function buildCronSchedule(form: CronFormState) {
+export function buildCronSchedule(form: CronFormState, previous?: CronJob["schedule"]) {
+  if (form.scheduleKind === "event") {
+    const args: unknown = JSON.parse(form.eventArguments);
+    if (!isRecord(args)) {
+      throw new Error(t("cron.events.eventArgumentsInvalid"));
+    }
+    return {
+      kind: "event" as const,
+      source: "mcp-events",
+      options: {
+        server: form.eventServer.trim(),
+        name: form.eventName.trim(),
+        arguments: args,
+      },
+    };
+  }
   if (form.scheduleKind === "at") {
     const ms = Date.parse(form.scheduleAt);
     if (!Number.isFinite(ms)) {
@@ -113,16 +141,20 @@ export function buildCronSchedule(form: CronFormState) {
   if (!expr) {
     throw new Error(t("cron.errors.cronExprRequiredShort"));
   }
-  if (form.scheduleExact) {
-    return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs: 0 };
-  }
+  let staggerMs: number | undefined;
   const staggerAmount = form.staggerAmount.trim();
-  if (!staggerAmount) {
-    return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
-  }
-  const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
-  if (staggerMs === undefined) {
-    throw new Error(t("cron.errors.invalidStaggerAmount"));
+  if (form.scheduleExact) {
+    staggerMs = 0;
+  } else if (!staggerAmount) {
+    // Same-expression updates preserve omitted windows; new defaults must stay unspecified.
+    const clearsSavedWindow =
+      previous?.kind === "cron" && previous.expr === expr && previous.staggerMs !== undefined;
+    staggerMs = resolveDefaultCronStaggerMs(expr) ?? (clearsSavedWindow ? 0 : undefined);
+  } else {
+    staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
+    if (staggerMs === undefined) {
+      throw new Error(t("cron.errors.invalidStaggerAmount"));
+    }
   }
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
