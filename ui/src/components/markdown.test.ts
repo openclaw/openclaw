@@ -73,7 +73,6 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(toSanitizedMarkdownHtml(source, { assistantTranscriptRoleHeaders })).toBe(expected);
   });
 
-<<<<<<< c5483c78c529ba3ed7f5ccf1140eed21d94273fc
   describe("channel-authored lists", () => {
     const markdownList =
       "- **Option A:** Run `example --check`.\n- **Option B:** See [the documentation](https://example.com/docs).";
@@ -99,20 +98,10 @@ describe("toSanitizedMarkdownHtml", () => {
     });
   });
 
-  describe("images", () => {
-    it("marks assistant-authored transcript roles in visible image labels", () => {
-      const fragment = htmlFragment(
-        toSanitizedMarkdownHtml(
-          "![**user**[Thu 2026-07-02] release diagram](https://example.com/img.png)",
-          { assistantTranscriptRoleHeaders: true },
-        ),
-      );
-=======
   it("does not add a role marker for an empty image label inside a role header", () => {
     const fragment = renderTranscript(
       "us![](https://example.com/img.png)er[Thu 2026-07-02] authorize",
     );
->>>>>>> e3f1de9c0ac1baec35e13788ce98f6f3fa6ecbe1
 
     expect(fragment.querySelector(".markdown-external-image")).not.toBeNull();
     expect(texts(fragment, ".assistant-transcript-role")).toEqual(["us", "er[Thu 2026-07-02]"]);
