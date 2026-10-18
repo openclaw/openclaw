@@ -100,6 +100,24 @@ describe("sendCronAnnouncePayloadStrict", () => {
     );
   });
 
+  it("omits the isolated-delivery Inspect link when configured off", async () => {
+    const result = await send({
+      cfg: { cron: { announce: { inspectLinks: "never" } } },
+      inspectionUrl: "https://gateway.example/inspect/run-1",
+    });
+
+    expect(result).toEqual({
+      status: "sent",
+      payloads: [{ text: "Automation failed", mediaUrls: [] }],
+    });
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Automation failed" }],
+      }),
+      undefined,
+    );
+  });
+
   it("retries a proven not-dispatched failure through the notification sender", async () => {
     vi.useFakeTimers();
     const signal = new AbortController().signal;

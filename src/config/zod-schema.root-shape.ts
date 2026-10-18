@@ -395,6 +395,12 @@ export const OpenClawSchemaShape = {
           enabled: z.boolean().optional(),
         })
         .optional(),
+      /** Controls whether cron notifications include Control UI run-inspection links. */
+      announce: z
+        .strictObject({
+          inspectLinks: z.enum(["always", "errors", "never"]).optional(),
+        })
+        .optional(),
       /** Bearer token for cron webhook POST delivery. */
       webhookToken: SecretInputSchema.optional().register(sensitive),
       /** SSRF policy for all outbound cron webhook deliveries. */

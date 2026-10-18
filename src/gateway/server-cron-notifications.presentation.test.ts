@@ -125,9 +125,18 @@ describe("sendGatewayCronFailureAlert presentation", () => {
       expectedText:
         "cron failed\nRun started: 2026-01-15 10:30 EST\nInspect: https://gateway.example/control/automations?job=job-1&run=cron%3Ajob-1%3A1768491000000",
     },
+    {
+      name: "with inspection links disabled",
+      gateway: {
+        publicOrigin: "https://gateway.example",
+        controlUi: { basePath: "/control" },
+      },
+      cron: { announce: { inspectLinks: "never" as const } },
+      expectedText: "cron failed\nRun started: 2026-01-15 10:30 EST",
+    },
   ])(
     "composes failure alert details $name without dropping presentation",
-    async ({ gateway, expectedText }) => {
+    async ({ gateway, cron, expectedText }) => {
       const job = makeCronJob({
         delivery: {
           mode: "announce",
@@ -141,7 +150,7 @@ describe("sendGatewayCronFailureAlert presentation", () => {
         logger: { warn: vi.fn() },
         resolveCronAgent: () => ({
           agentId: "main",
-          cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway },
+          cfg: { agents: { defaults: { userTimezone: "America/New_York" } }, gateway, cron },
         }),
         job,
         payload: {

@@ -18,6 +18,7 @@ import { resolveAgentOutboundIdentity } from "../infra/outbound/identity.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { hasReplyPayloadContent } from "../interactive/payload.js";
 import type { CronCompletionDeliveryFence } from "./delivery-attempt-fence.js";
+import { shouldIncludeCronInspectLink } from "./inspect-links.js";
 import {
   buildDirectCronDeliveryIdempotencyKey,
   DIRECT_CRON_DELIVERY_COMPLETION_RETENTION,
@@ -119,7 +120,7 @@ export async function sendCronAnnouncePayloadStrict(params: {
     : normalized.payload;
   const payloads = appendCronRunInspectionLink(
     prepared.filter((payload) => hasReplyPayloadContent(payload, { trimText: true })),
-    params.inspectionUrl,
+    shouldIncludeCronInspectLink(params.cfg, "completion") ? params.inspectionUrl : undefined,
   );
   if (payloads.length === 0) {
     return { status: "suppressed", reason: "empty_after_tts" };
