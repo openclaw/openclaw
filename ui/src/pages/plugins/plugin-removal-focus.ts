@@ -1,3 +1,5 @@
+import type { PluginInstallActionHandle } from "./install-action.tsx";
+
 /**
  * Confirmed removal retires the focused Uninstall control. Move focus that fell to the
  * document body onto the remaining view's heading; leave focus the user moved elsewhere.
@@ -15,8 +17,6 @@ function focusHeadingAfterRemoval(
   heading.tabIndex = -1;
   heading.focus();
 }
-import type { PluginInstallActionHandle } from "./install-action.tsx";
-
 export function createPluginPageTargets() {
   const headings = new Set<HTMLHeadingElement>();
   const installActions = new Set<PluginInstallActionHandle>();
