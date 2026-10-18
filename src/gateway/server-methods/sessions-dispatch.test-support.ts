@@ -1,11 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, vi } from "vitest";
-import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import type { SessionsReclaimParams } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
+import type {
+  SessionsDispatchParams,
+  SessionsMoveParams,
+  SessionsReclaimParams,
+} from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import {
@@ -14,7 +14,6 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import type { NodeWorkerSupervisorNodeProof } from "../node-registry-private.js";
 import { findCanonicalStoreMatch } from "../session-utils-store-selection.js";
 import * as sessionStoreWorker from "../session-utils-store-worker.js";
@@ -22,7 +21,9 @@ import * as sessionStore from "../session-utils-store.js";
 import type { GatewaySessionStoreTargetWithStore } from "../session-utils-store.types.js";
 import { releaseGatewaySessionStoreFixture } from "../test/server-sessions-resources.test-helpers.js";
 import { bindDeviceWorkerAvailability } from "../worker-environments/device-provider.js";
+import { createNodeWorkerBundleTestNode } from "../worker-environments/node-worker-bundle.test-support.js";
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
+import { localPlacement } from "../worker-environments/placement-suite.test-support.js";
 import type { GatewayRequestContext, RespondFn, SessionMutationAuthorization } from "./types.js";
 
 const dispatchTestMocks = vi.hoisted(() => ({
@@ -139,10 +140,8 @@ export function makeReclaimedPlacement(): Extract<
   { state: "reclaimed" }
 > {
   return {
-    sessionId: dispatchTestSessionId,
-    agentId: "main",
+    ...localPlacement(dispatchTestSessionId),
     sessionKey: dispatchTestSessionKey,
-    executionMode: "worker-turn",
     state: "reclaimed",
     environmentId: "environment-previous",
     generation: 4,
@@ -152,11 +151,6 @@ export function makeReclaimedPlacement(): Extract<
     workerBundleHash: "c".repeat(64),
     lastTranscriptAckCursor: 3,
     lastLiveEventAckCursor: 2,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-    turnClaim: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
   };
@@ -167,7 +161,6 @@ export function makeFailedPlacement(): Extract<WorkerSessionPlacementRecord, { s
     ...makeReclaimedPlacement(),
     state: "failed",
     recoveryError: "gateway restarted during worker dispatch",
-    turnClaim: null,
   };
 }
 
@@ -219,13 +212,11 @@ export function makeDispatchTestContext(
     bindDeviceWorkerAvailability(workerEnvironmentService, async (deviceId) => {
       const observed = overrides.nodeRegistry?.get?.(deviceId);
       const node: NodeWorkerSupervisorNodeProof = {
+        ...createNodeWorkerBundleTestNode(),
         nodeId: deviceId,
         connId: observed?.connId ?? `conn-${deviceId}`,
         pairingIdentity: observed?.pairingIdentity ?? `identity-${deviceId}`,
         pairingGeneration: observed?.pairingGeneration ?? `generation-${deviceId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
         workerHost: {
           enabled: true,
           capacity: { total: 2, available: 2 },
@@ -279,15 +270,7 @@ export function makeDispatchTestContext(
 
 export async function invokeSessionDispatch(
   context: GatewayRequestContext,
-  target: {
-    profileId?: string;
-    machineClass?: string;
-    os?: string;
-    deviceId?: string;
-    autoDevice?: true;
-  } = {
-    profileId: "test",
-  },
+  target: Omit<SessionsDispatchParams, "key" | "agentId"> = { profileId: "test" },
   sessionMutationAuthorization?: SessionMutationAuthorization,
   signal?: AbortSignal,
 ) {
@@ -296,14 +279,7 @@ export async function invokeSessionDispatch(
 
 export async function invokeSessionMove(
   context: GatewayRequestContext,
-  params: {
-    expected: { generation: number; environmentId: string; ownerEpoch: number };
-    abandonSource?: true;
-    target:
-      | { kind: "gateway" }
-      | { kind: "profile"; profileId: string; machineClass?: string; os?: string }
-      | { kind: "device"; deviceId: string };
-  },
+  params: Omit<SessionsMoveParams, "key" | "agentId">,
   sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
   return invokeSessionMethod("move", context, params, sessionMutationAuthorization);

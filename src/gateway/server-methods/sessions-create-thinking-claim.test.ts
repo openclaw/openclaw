@@ -29,6 +29,8 @@ import { initializeSessionReadContext } from "./sessions-read-cache.test-support
 import type { GatewayClient } from "./types.js";
 
 const fixedNow = vi.hoisted(() => 1_800_000_000_000);
+const waitFor = <T>(promise: Promise<T>, label: string) =>
+  withTimeout(promise, 15_000, `created-claim ${label}`);
 
 vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-cpu.js")>();
@@ -88,7 +90,6 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const replyFinished = createDeferred();
     const releaseFirstList = createDeferred();
     const firstListRead = createDeferred();
-    const failures: unknown[] = [];
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
     const scope = { agentId: "main", sessionKey: key, storePath };
@@ -104,9 +105,6 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         const result = await getReplyFromConfig(...args);
         order.push("directive-complete");
         return result;
-      } catch (error) {
-        failures.push(error);
-        throw error;
       } finally {
         replyFinished.resolve(undefined);
       }
@@ -149,12 +147,14 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const requests = vi.spyOn(gatewayClient, "request");
     const { gateway, emitEvent } = createGatewayHarness(gatewayClient);
     const sessions = createTestSessionCapability(gateway);
+    const refresh = () => sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
+    const row = () => sessions.state.result?.sessions.find((entry) => entry.key === key);
     try {
       await initializeSessionReadContext(context);
       // Thinking reconciliation needs compact detail facts, not the sidebar display projection.
-      await sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
-      expect(sessions.state.result?.sessions.some((row) => row.key === key)).toBe(false);
-      const created = await withTimeout(
+      await refresh();
+      expect(row()).toBeUndefined();
+      const created = await waitFor(
         sessions.createResult(
           {
             key,
@@ -165,8 +165,7 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
           },
           { reconciliation: "background" },
         ),
-        15_000,
-        "created-claim create response",
+        "create response",
       );
       expect(created, sessions.state.error ?? undefined).toMatchObject({
         key,
@@ -178,18 +177,18 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         updatedAt: Date.now(),
       });
       expect(sessions.think(key, "main")).toBe("high");
-      await withTimeout(replyEntered.promise, 15_000, "created-claim reply admission");
-      await withTimeout(firstListRead.promise, 15_000, "created-claim first list");
+      await waitFor(replyEntered.promise, "reply admission");
+      await waitFor(firstListRead.promise, "first list");
       releaseReply.resolve(undefined);
-      await withTimeout(replyFinished.promise, 15_000, "created-claim directive completion");
+      await waitFor(replyFinished.promise, "directive completion");
       await settleWorkspaceRuns(context, storePath, key);
-      expect(failures).toEqual([]);
       expect(runModel).not.toHaveBeenCalled();
-      expect(loadSessionEntry(scope)).toMatchObject({
+      const lowEntry = {
         sessionId: created?.entry?.sessionId,
         thinkingLevel: "low",
         updatedAt: created?.entry?.updatedAt,
-      });
+      };
+      expect(loadSessionEntry(scope)).toMatchObject(lowEntry);
       expect(deliveredEvents.filter(({ event }) => event === "sessions.changed")).toEqual([]);
       if (mode === "delivered-event") {
         subscribers.add("created-thinking-proof");
@@ -204,19 +203,13 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
           event: "sessions.changed",
           payload: expect.objectContaining({
             sessionKey: key,
-            sessionId: created?.entry?.sessionId,
             agentId: "main",
-            thinkingLevel: "low",
-            updatedAt: created?.entry?.updatedAt,
+            ...lowEntry,
           }),
         });
         expect(sessions.think(key, "main")).toBe("low");
         releaseFirstList.resolve(undefined);
-        await vi.waitFor(() =>
-          expect(
-            sessions.state.result?.sessions.find((row) => row.key === key)?.thinkingLevel,
-          ).toBe("high"),
-        );
+        await vi.waitFor(() => expect(row()?.thinkingLevel).toBe("high"));
         // This real high read was issued before the low event replaced the unlisted claim.
         expect(sessions.think(key, "main")).toBe("low");
       } else if (mode === "ui-patch") {
@@ -228,16 +221,11 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         await patched;
       }
       if (mode !== "ui-patch") {
-        const refresh = sessions.refresh({ agentId: "main", rowMode: "compact", force: true });
+        const refreshed = refresh();
         releaseFirstList.resolve(undefined);
-        await refresh;
+        await refreshed;
       }
-      const row = sessions.state.result?.sessions.find((entry) => entry.key === key);
-      expect(row).toMatchObject({
-        sessionId: created?.entry?.sessionId,
-        thinkingLevel: "low",
-        updatedAt: created?.entry?.updatedAt,
-      });
+      expect(row()).toMatchObject(lowEntry);
       expect(order).toEqual(["create-ack", "list-1-read", "directive-complete", "list-2-read"]);
       expect(sessions.think(key, "main")).toBeUndefined();
     } finally {
