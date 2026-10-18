@@ -503,17 +503,17 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 !row.sessionId || isIncognitoSessionKey(row.key)
                   ? t("chat.sessionSharing.publicUnavailable")
                   : publicShareDisabledReason,
-              onPublicShareChange: (enabled: boolean) =>
-                void this.setSessionPublicShare(row, enabled),
-              onCopyPublicLink: () => void this.copySessionPublicLink(row),
+              onPublicShareChange: (enabled: boolean) => this.setSessionPublicShare(row, enabled),
+              onCopyPublicLink: () => this.copySessionPublicLink(row),
               ownerViewing,
               personActivity,
               showOwner: showOwnerChip && !this.mergedChrome,
               onOpen: () => void this.loadSessionSharing(row),
               onVisibilityChange: (visibility: SessionVisibility) =>
-                void this.mutateSessionSharing(row, { visibility }),
+                this.mutateSessionSharing(row, { visibility }),
               onMemberChange: (identityId: string, member: boolean) =>
-                void this.mutateSessionSharing(row, { identityId, member }),
+                this.mutateSessionSharing(row, { identityId, member }),
+
             }
           : null,
     );

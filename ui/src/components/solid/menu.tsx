@@ -75,7 +75,14 @@ export type MenuItem = {
 export type MenuEntry =
   | MenuItem
   | { kind: "content"; id: string; content: JSX.Element }
-  | { kind: "group"; id: string; class?: string; items: readonly MenuEntry[] };
+  | {
+      kind: "group";
+      id: string;
+      class?: string;
+      items: readonly MenuEntry[];
+      /** Custom layout retains the native item bindings and this group's lifetime. */
+      render?: (children: JSX.Element) => JSX.Element;
+    };
 
 export type MenuHandle = {
   overlay: Overlay;
@@ -430,7 +437,15 @@ export function Menu(props: BranchProps): JSX.Element {
         };
         const fallback = (
           <Show when={group()} fallback={content()}>
-            {(section) => <div class={section().class}>{renderEntries(() => section().items)}</div>}
+            {(section) => {
+              const initialRenderCustom = untrack(() => section().render);
+              const children = renderEntries(() => section().items);
+              return initialRenderCustom ? (
+                initialRenderCustom(children)
+              ) : (
+                <div class={section().class}>{children}</div>
+              );
+            }}
           </Show>
         );
         return (
