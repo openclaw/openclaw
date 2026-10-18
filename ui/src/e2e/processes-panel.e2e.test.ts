@@ -87,7 +87,7 @@ suite.define(() => {
         await panel.getByText(process.name, { exact: true }).waitFor();
         const request = await gateway.waitForRequest("sessions.processes.list");
         expect(request.params).toMatchObject({ key });
-        const finishedToggle = panel.getByRole("button", { name: "Finished (1)", exact: true });
+        const finishedToggle = panel.getByRole("button", { name: /^Finished\s*1$/ });
         const finishedRow = panel.getByRole("button", { name: finishedProcess.name, exact: true });
         await finishedToggle.waitFor();
         if (capture) {
