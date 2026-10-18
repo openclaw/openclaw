@@ -254,15 +254,20 @@ describe("sessions_send dispatch admission", () => {
       );
       return operation;
     });
-    const callGateway = vi.fn(async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
-      if (request.method === "sessions.resolve") {
-        return { key: targetSessionKey, agentId: "main" };
-      }
-      if (request.method === "sessions.list") {
-        return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
-      }
-      throw new Error(`Unexpected Gateway method: ${request.method}`);
-    });
+    const gateway = vi
+      .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
+      .mockImplementation(async (request) => {
+        if (request.method === "sessions.resolve") {
+          return { key: targetSessionKey, agentId: "main" };
+        }
+        if (request.method === "sessions.list") {
+          return { sessions: [{ key: targetSessionKey, agentId: "main", kind: "direct" }] };
+        }
+        throw new Error(`Unexpected Gateway method: ${request.method}`);
+      });
+    const mutation = vi
+      .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+      .mockImplementation(gateway);
     const pending = withPluginRuntimeGatewayRequestScope(
       {
         client: owner,
@@ -290,7 +295,6 @@ describe("sessions_send dispatch admission", () => {
                 createSessionsSendTool({
                   agentSessionKey: requesterSessionKey,
                   config,
-                  callGateway,
                   idempotencyKey: runId,
                 }).execute("steer-physical-owner", {
                   sessionKey: targetSessionKey,
@@ -328,6 +332,8 @@ describe("sessions_send dispatch admission", () => {
         detachActiveEmbeddedRun("target-session", handle, targetSessionKey);
         operations[index]!.complete();
       }
+      gateway.mockRestore();
+      mutation.mockRestore();
       observeCapture.mockRestore();
       source.release();
     }
