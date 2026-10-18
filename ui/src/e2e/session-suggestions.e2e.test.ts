@@ -370,6 +370,7 @@ suite.define(() => {
         .locator(".chat-message-avatar-anchor")
         .getByRole("img", { name: "Owner" });
       await expect(typingAvatar).toBeVisible();
+      await expect(typingAvatar).toHaveText("O");
       await expect(typingAvatar).toHaveCSS("position", "absolute");
       await screenshot(page, "typing-dots-before.png");
 
