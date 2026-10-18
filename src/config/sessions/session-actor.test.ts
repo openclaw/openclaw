@@ -13,7 +13,7 @@ import type {
   SessionActorAuthority,
   SessionActorCommandContext,
 } from "./session-actor-contract.js";
-import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
 import { withActor } from "./session-actor-transport.test-support.js";
@@ -66,7 +66,7 @@ it("publishes actor initialization from its absent transaction preimage", async 
       sessionKey: "agent:main:actor-first-maintenance",
       sessionId: "actor-first-maintenance",
     };
-    const actor = await createDurableSessionActorFactory({
+    const actor = await createSessionActorFactory({
       agentId: "main",
       path: fixture.database.path,
       env,
@@ -168,7 +168,7 @@ it.each([false, true])(
       if (typeof identity.identity !== "string") {
         throw new Error("Fixture requires durable storage");
       }
-      const factory = createDurableSessionActorFactory({
+      const factory = createSessionActorFactory({
         agentId: "main",
         path: fixture.database.path,
         env,
