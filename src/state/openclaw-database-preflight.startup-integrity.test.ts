@@ -16,7 +16,7 @@ import {
 } from "../infra/sqlite-database-admission.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import * as integrity from "../infra/sqlite-integrity.js";
-import * as snapshots from "../infra/sqlite-snapshot.js";
+import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { VERSION } from "../version.js";
 import { readAgentDatabaseAdmissionRefusal } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
