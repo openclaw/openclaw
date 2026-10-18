@@ -6046,7 +6046,6 @@
 ["src/gateway/event-web-push.storage-scope.test.ts","./session-sharing-preparation.js","606aedaf9e1dea177b54454e1e98b9268b94f455f8eff3ae94636667e57c163c",1]
 ["src/gateway/event-web-push.storage-scope.test.ts","./session-sharing.js","cfb9a71c9c65595e089081a52aff4eab8031ab66e03ab8adb7febcb113111ffc",1]
 ["src/gateway/gateway-cli-backend.live-helpers.test.ts","../../packages/gateway-client/src/readiness.js","e5feb821234f658953d99cb7cfdafe1765c015649f1264e6302636b9f01ba6ea",1]
-["src/gateway/gateway-connection.test-mocks.ts","../infra/tailnet.js","f4a96e8b019e4e929d6340261b01c194129c04f052052eb6f02c94b4d402325a",1]
 ["src/gateway/gateway-misc.test.ts","../../packages/gateway-client/src/websocket.js","08b12c5f526925a53198154c3c1754ae250de19ef1f2399702684e7057ac776f",1]
 ["src/gateway/gateway-models.profiles.live.test-helpers.test.ts","../agents/live-provider-owner.js","83f1364a5c13f76b3f725764b0504908f08cf43c9ec16525708abea496e64b67",1]
 ["src/gateway/gateway-route-model-reuse.lifecycle.test.ts","../../test/helpers/gateway-client.js","b8b9b0406d6245cc86cd560c574253cc6834d48ad1a471832415ac9ae6e14da8",1]
