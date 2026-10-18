@@ -13,6 +13,7 @@ export {
   getInternalToolTurnCompletion,
   setInternalBeforeToolBatch,
   setInternalRepetitionGuard,
+  setInternalToolSteeringAllowance,
   setInternalToolTurnCompletion,
   type InternalBeforeToolBatchHook,
   type InternalToolExecutionPreparer,

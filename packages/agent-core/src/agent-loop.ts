@@ -36,6 +36,16 @@ import {
   combineExecutedToolBatches,
   resolveToolBatchTermination,
 } from "./tool-batch-completion.js";
+import type {
+  ResolvedToolCallOutcome,
+  ToolBatchContext as ToolBatchContextBase,
+  ToolPlanState,
+} from "./tool-batch-context.js";
+import {
+  hidesToolCallFromChannelProgress,
+  preparedCallForSteering,
+  resolveToolSteeringCheckpoint,
+} from "./tool-batch-steering.js";
 import {
   createErrorToolResult,
   createToolExecutionErrorResult,
@@ -68,7 +78,6 @@ import type {
   StreamFn,
   ToolLoopIntervention,
   ToolLoopRecoveryState,
-  ToolLoopWarning,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
@@ -83,8 +92,6 @@ const TOOL_ADMISSION_FAILURE_DETAILS = {
   status: "blocked",
   deniedReason: "tool-admission",
 } as const;
-
-type ToolPlanState = { executionStarted: boolean };
 
 /** Run a prompt-started loop and emit events through a caller-owned sink. */
 export async function runAgentLoop(
@@ -551,38 +558,7 @@ async function executeToolCalls(
   return executeToolCallGroups(batch, toolCalls, sequential);
 }
 
-type ToolBatchContext = {
-  currentContext: AgentContext;
-  assistantMessage: AssistantMessage;
-  config: AgentLoopConfig;
-  signal: AbortSignal | undefined;
-  emit: AgentEventSink;
-  resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
-  validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
-  lifecycle?: InternalToolBatchLifecycle;
-  warnings?: ToolLoopWarning[];
-  onParallelStarted?: () => void;
-  hasUnobservedAsyncToolResults: boolean;
-  toolPlan: ToolPlanState;
-  toolLoopRecoveryState: ToolLoopRecoveryState;
-  waitForPrevious?: () => Promise<void>;
-};
-
-type ResolvedToolCallOutcome =
-  | { kind: "resolved"; tool?: AgentTool }
-  | { kind: "error"; error: unknown };
-
-function hidesToolCallFromChannelProgress(
-  batch: ToolBatchContext,
-  toolCall: AgentToolCall,
-): boolean {
-  const resolution = batch.resolved.get(toolCall);
-  const tool =
-    resolution?.kind === "resolved"
-      ? resolution.tool
-      : batch.currentContext.tools?.find((candidate) => candidate.name === toolCall.name);
-  return tool?.hideFromChannelProgress === true;
-}
+type ToolBatchContext = ToolBatchContextBase<ValidatedToolCallOutcome>;
 
 async function executeToolCallGroups(
   batch: ToolBatchContext,
@@ -597,11 +573,18 @@ async function executeToolCallGroups(
   let intervention: ToolLoopIntervention | undefined;
 
   while (cursor < toolCalls.length) {
+    let allowSteeredCall = false;
     if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
-      const steering = getSteeringAtCheckpoint(batch.config);
-      steeringMessages = Array.isArray(steering) ? steering : await steering;
+      const checkpoint = await resolveToolSteeringCheckpoint(
+        batch.config,
+        batch,
+        steeringMessages,
+        toolCalls[cursor],
+      );
+      steeringMessages = checkpoint.steeringMessages;
+      allowSteeredCall = checkpoint.allowSteeredCall;
     }
-    if (steeringMessages.length > 0) {
+    if (steeringMessages.length > 0 && !allowSteeredCall) {
       batch.lifecycle?.releaseSkippedCalls?.(admittedIds(toolCalls.slice(cursor), batch.validated));
       break;
     }
@@ -627,8 +610,14 @@ async function executeToolCallGroups(
 
       const hasReady = entries.some((entry) => "kind" in entry);
       if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
-        const steering = getSteeringAtCheckpoint(batch.config);
-        steeringMessages = Array.isArray(steering) ? steering : await steering;
+        const checkpoint = await resolveToolSteeringCheckpoint(
+          batch.config,
+          batch,
+          steeringMessages,
+          preparedCallForSteering(entries),
+        );
+        steeringMessages = checkpoint.steeringMessages;
+        allowSteeredCall = checkpoint.allowSteeredCall;
       }
       const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>
         "kind" in entry ? undefined : entry,
@@ -657,7 +646,7 @@ async function executeToolCallGroups(
 
       // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
-        steeringMessages.length > 0
+        steeringMessages.length > 0 && !allowSteeredCall
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle, batch.toolPlan);
       // Streamed batches serialize admission until source execution begins.
@@ -670,8 +659,10 @@ async function executeToolCallGroups(
       }
       fatal = launched?.rejected ? { error: launched.rejected.error } : undefined;
       const skippedIndex =
-        steeringMessages.length > 0 ? 0 : (launched?.rejected?.index ?? entries.length);
-      if (steeringMessages.length > 0) {
+        steeringMessages.length > 0 && !allowSteeredCall
+          ? 0
+          : (launched?.rejected?.index ?? entries.length);
+      if (steeringMessages.length > 0 && !allowSteeredCall) {
         for (const entry of entries) {
           if ("kind" in entry) {
             entry.execution.dispose();
