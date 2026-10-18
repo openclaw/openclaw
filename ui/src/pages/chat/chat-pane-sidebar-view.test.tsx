@@ -158,13 +158,17 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
         onRegionElementRef={(element) => {
           regionElement = element;
           return () => {
-            if (regionElement === element) regionElement = null;
+            if (regionElement === element) {
+              regionElement = null;
+            }
           };
         }}
         onRegionViewRef={(element) => {
           regionView = element;
           return () => {
-            if (regionView === element) regionView = null;
+            if (regionView === element) {
+              regionView = null;
+            }
           };
         }}
       />

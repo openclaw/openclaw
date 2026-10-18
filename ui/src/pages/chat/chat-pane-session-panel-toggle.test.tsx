@@ -305,7 +305,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   const pane = document.createElement("div");
   let pendingUpdate: Promise<void> | undefined;
   let sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
-  let browserPanel: HTMLElementTagNameMap["openclaw-browser-panel"] | undefined;
+  let browserPanel: HTMLElement | undefined;
   const state = createPageState(
     createInitializationContext(),
     { afterCommit: () => () => {} },
@@ -363,30 +363,29 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     });
     view ??= mountSolid(
       () => {
-        const definitions = sidebarPanelDefinitions().map((definition) => ({
-          ...definition,
-          available: definition.slot === "browser",
-          get panelHost() {
-            return definition.slot === "browser" ? browserPanel : undefined;
-          },
-          content:
-            definition.slot === "browser"
-              ? () => (
-                  <BrowserCard
-                    sessionKey={snapshot().sessionKey}
-                    presented={isSidebarSlotVisible(snapshot().layout, "browser")}
-                    refresh={snapshot().refresh}
-                  />
-                )
-              : null,
-        }));
+        const definitions = sidebarPanelDefinitions();
+        for (const definition of definitions) {
+          definition.available = definition.slot === "browser";
+          if (definition.available) {
+            Object.defineProperty(definition, "panelHost", { get: () => browserPanel });
+            definition.content = (
+              <BrowserCard
+                sessionKey={snapshot().sessionKey}
+                presented={isSidebarSlotVisible(snapshot().layout, "browser")}
+                refresh={snapshot().refresh}
+              />
+            );
+          }
+        }
         const region = createMemo(() =>
           renderSidebarRegion({
             presentationId: "delayed-browser-card",
             onRegionViewRef: (element) => {
               sidebarRegion = element;
               return () => {
-                if (sidebarRegion === element) sidebarRegion = null;
+                if (sidebarRegion === element) {
+                  sidebarRegion = null;
+                }
               };
             },
             availableWidth: 1400,
