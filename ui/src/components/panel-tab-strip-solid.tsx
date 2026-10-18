@@ -11,10 +11,10 @@ import {
   onSettled,
   untrack,
 } from "solid-js";
+import { createShadowStyles } from "../lib/reactive/shadow-styles.ts";
 import { createTabList } from "../lib/tabs.ts";
 import type { PanelTabStripTab } from "./panel-tab-strip-types.ts";
 import { Icon } from "./solid/icon.tsx";
-import { bindShadowStyles } from "./solid/shadow-styles.ts";
 import "./tooltip.ts";
 import "../styles/tabs.css";
 import tabsStyles from "../styles/tabs.css?inline";
@@ -156,8 +156,12 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     JSON.stringify([layoutKey(), props.tabs.map((tab) => tab.className)]),
   );
 
+  createShadowStyles(
+    () => group,
+    () => [tabsStyles],
+  );
+
   onSettled(() => {
-    const styles = bindShadowStyles(group, [tabsStyles]);
     let disposed = false;
     let resizeObserver: ResizeObserver | undefined;
     let observed = new Set<Element>();
@@ -213,7 +217,6 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
     schedule();
     return () => {
       disposed = true;
-      styles.dispose();
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
       if (frame !== undefined) {
@@ -291,9 +294,9 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
         <For each={props.tabs} keyed={(tab) => tab.id}>
           {(tab, index) => {
             // The keyed id is this node's lifetime identity.
-            const tabId = untrack(() => tab().id);
-            const ref = tabs.ref(tabId);
-            onCleanup(() => labels.delete(tabId));
+            const initialTabId = untrack(() => tab().id);
+            const ref = tabs.ref(initialTabId);
+            onCleanup(() => labels.delete(initialTabId));
             const selected = () => tab().id === props.activeId;
             const reorderId = () => tab().reorderId ?? tab().id;
             const draggable = () => Boolean(props.onReorder) && tab().draggable !== false;
@@ -327,7 +330,10 @@ function TabGroupView<T extends SolidPanelTabStripTab>(props: PanelTabStripProps
                     {props.renderIcon ? props.renderIcon(tab) : tab().icon}
                   </span>
                 </Show>
-                <span class="tabstrip-tab__label" ref={(element) => labels.set(tabId, element)}>
+                <span
+                  class="tabstrip-tab__label"
+                  ref={(element) => labels.set(initialTabId, element)}
+                >
                   {tab().label}
                 </span>
                 <Show when={tab().badge}>
