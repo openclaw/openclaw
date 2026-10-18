@@ -162,8 +162,9 @@ describe("scoped SQLite read-only children", () => {
         expect(assertCurrent).toHaveBeenCalledOnce();
         expect(fs.statSync(fork.location).ino).not.toBe(fs.statSync(prepared.location).ino);
         expect(fs.existsSync(`${fork.location}-shm`)).toBe(false);
-        if (scenario === "frame-free read")
+        if (scenario === "frame-free read") {
           expect(fs.existsSync(`${fork.location}-wal`)).toBe(false);
+        }
         {
           using writable = new (requireNodeSqlite().DatabaseSync)(fork.location);
           expect(writable.prepare("SELECT value FROM witness ORDER BY rowid").all()).toEqual(
@@ -193,7 +194,9 @@ describe("scoped SQLite read-only children", () => {
           expect(await fork.cleanupAsync()).toBe(true);
           expect(fs.existsSync(fork.cleanupRoot!)).toBe(false);
         }
-        if (prepared) expect(await prepared.cleanupAsync()).toBe(true);
+        if (prepared) {
+          expect(await prepared.cleanupAsync()).toBe(true);
+        }
         await preparation.startClose().result;
       }
       expect(fs.existsSync(prepared!.cleanupRoot!)).toBe(false);

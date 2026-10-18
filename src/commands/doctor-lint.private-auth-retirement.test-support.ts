@@ -130,7 +130,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       .mockImplementation(async (...args) => {
         const prepared = await fork(...args);
         cleanupFork = prepared.cleanupAsync;
-        if (windows || !cleanupFailure) return prepared;
+        if (windows || !cleanupFailure) {
+          return prepared;
+        }
         // Native-child payload retirement is outside this host's fs mock.
         return {
           ...prepared,
@@ -211,7 +213,9 @@ export async function verifyDoctorLintPrivateAuthRetirement(
       expect(report.warnings ?? []).toMatchObject(
         cleanupFailure ? [{ requirement: "temporary-snapshot-cleanup", severity: "warning" }] : [],
       );
-      if (!windows && cleanupFailure) expect(disposalRefused).toBe(true);
+      if (!windows && cleanupFailure) {
+        expect(disposalRefused).toBe(true);
+      }
       expect(auth?.isOpen).toBe(readerFailure);
       if (readerFailure || cleanupFailure) {
         expect([privateState?.db.isOpen, privateRead?.database.db.isOpen]).toEqual([false, false]);

@@ -1,7 +1,9 @@
 import type { BigIntStats } from "node:fs";
 import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
-import type { SqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import type { SqliteFileContent } from "./sqlite-snapshot-file.js";
+
+/** Transient facts minted before an owned private family is exposed to readers. */
+export type SqlitePrivateSnapshotFamily = { root: string; main: string; wal: string | null };
 
 export type PreparedSqliteReadOnlyLocation = {
   cleanup: () => boolean;

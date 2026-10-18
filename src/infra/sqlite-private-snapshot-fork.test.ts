@@ -87,7 +87,9 @@ it.each(["auto", "off"] as const)(
     } finally {
       reads.mockRestore();
       configureFsSafeNative(native);
-      if (fork) expect(await fork.cleanupAsync()).toBe(true);
+      if (fork) {
+        expect(await fork.cleanupAsync()).toBe(true);
+      }
       expect(await removeTempDirectoryAsync(source.owned)).toBe(true);
     }
     expect(fs.readdirSync(source.destination)).toEqual([]);
@@ -103,7 +105,9 @@ it("preserves committed WAL rows in a separately writable image", async () => {
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE entries(value TEXT); PRAGMA wal_checkpoint(TRUNCATE); INSERT INTO entries VALUES('committed in WAL');",
     );
     // No native connection owns the copied source; its retained family is the fork input.
-    for (const suffix of ["", "-wal"]) fs.copyFileSync(seedPath + suffix, source.source + suffix);
+    for (const suffix of ["", "-wal"]) {
+      fs.copyFileSync(seedPath + suffix, source.source + suffix);
+    }
   } finally {
     seed.close();
   }
@@ -137,7 +141,9 @@ it.each([
     const source = fixture();
     const changeWal = (bytes: number | null) => {
       fs.rmSync(`${source.source}-wal`, { force: true });
-      if (bytes !== null) fs.writeFileSync(`${source.source}-wal`, Buffer.alloc(bytes, 29));
+      if (bytes !== null) {
+        fs.writeFileSync(`${source.source}-wal`, Buffer.alloc(bytes, 29));
+      }
     };
     changeWal(before);
     const family = captureSqlitePrivateSnapshotFamily(source.source, source.owned);
@@ -194,7 +200,9 @@ it.each(["before admission", "during copy"] as const)(
       const fsync = fs.fsyncSync.bind(fs);
       vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
         fsync(descriptor);
-        if (!changed && fs.fstatSync(descriptor).size === 65573) removeWal();
+        if (!changed && fs.fstatSync(descriptor).size === 65573) {
+          removeWal();
+        }
       });
     }
     try {
@@ -241,7 +249,9 @@ it("cleans failed destination work and releases source custody", async () => {
   const failure = Object.assign(new Error("private destination fsync failed"), { code: "EIO" });
   const fsync = fs.fsyncSync.bind(fs);
   vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-    if (fs.fstatSync(descriptor).size === 65573) throw failure;
+    if (fs.fstatSync(descriptor).size === 65573) {
+      throw failure;
+    }
     fsync(descriptor);
   });
   await expect(

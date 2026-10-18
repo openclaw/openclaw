@@ -8,13 +8,11 @@ import {
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { copySourceFile, SqliteSourceChangedError } from "./sqlite-readonly-location.js";
+import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import {
   acquireSqliteSnapshotReadToken,
   createSqliteSnapshotStagingDirectorySync,
 } from "./sqlite-snapshot-staging.js";
-
-/** Transient facts minted before an owned private family is exposed to readers. */
-export type SqlitePrivateSnapshotFamily = { root: string; main: string; wal: string | null };
 
 function fingerprint(file: BigIntStats): string {
   return [file.dev, file.ino, file.birthtimeNs, file.ctimeNs, file.mtimeNs, file.size].join(":");

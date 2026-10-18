@@ -5,10 +5,7 @@ import { acquireWithWait } from "../infra/acquire-with-wait.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
-import {
-  captureSqlitePrivateSnapshotFamily,
-  type SqlitePrivateSnapshotFamily,
-} from "../infra/sqlite-private-snapshot-fork.js";
+import { captureSqlitePrivateSnapshotFamily } from "../infra/sqlite-private-snapshot-fork.js";
 import {
   deferSqliteSnapshotCleanupAfterRead,
   retainSnapshotTempDirectory,
@@ -18,6 +15,7 @@ import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-read
 import type {
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "../infra/sqlite-readonly-location.types.js";
 import {
   readSqliteInspectionBudget,

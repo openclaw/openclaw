@@ -15,10 +15,7 @@ import {
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { prepareSqliteSnapshotFromLiveOwner } from "./sqlite-live-snapshot.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
-import {
-  captureSqlitePrivateSnapshotFamily,
-  type SqlitePrivateSnapshotFamily,
-} from "./sqlite-private-snapshot-fork.js";
+import { captureSqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
 import {
   adoptPreparedLocation,
   removeTempDirectory,
@@ -31,6 +28,7 @@ import type {
   PreparedSqliteReadOnlyLocation,
   AsyncPreparedSqliteReadOnlyLocation,
   RetainedSqliteSnapshotPreparation,
+  SqlitePrivateSnapshotFamily,
 } from "./sqlite-readonly-location.types.js";
 import {
   resolveSqliteInspectionSignal,

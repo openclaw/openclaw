@@ -546,7 +546,9 @@ describe("doctor lint state isolation", () => {
             ).toHaveLength(0);
             expect(fork).toHaveBeenCalledOnce();
             expect(fork.mock.calls[0]![0]).not.toBe(source.path);
-            if (mode === "closed WAL") expect(fork.mock.calls[0]![1].wal).toBeNull();
+            if (mode === "closed WAL") {
+              expect(fork.mock.calls[0]![1].wal).toBeNull();
+            }
             expect(observed).toEqual([
               { source: value, previous: undefined },
               { source: value, previous: 0 },

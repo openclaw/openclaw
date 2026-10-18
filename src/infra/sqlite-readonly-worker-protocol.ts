@@ -3,7 +3,7 @@ import { toUSVString } from "node:util";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
-import type { SqlitePrivateSnapshotFamily } from "./sqlite-private-snapshot-fork.js";
+import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
