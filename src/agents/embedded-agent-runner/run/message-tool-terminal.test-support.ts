@@ -19,7 +19,7 @@ export function createTerminalTestModel(): Model {
   };
 }
 
-const terminalModel = createTerminalTestModel();
+export const terminalModel: Model = createTerminalTestModel();
 
 export function terminalResponse(
   content: AssistantMessage["content"],

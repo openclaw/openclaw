@@ -146,7 +146,7 @@ function createInput(options?: { terminalHookError?: Error }) {
       activeSession.agent.state.systemPrompt = prompt;
       events.push("apply-system-prompt");
     }),
-    replaceCustomTools: vi.fn(),
+    replaceCustomTools: vi.fn(() => events.push("replace-custom-tools")),
   } as unknown as AgentSession;
   const sessionManager = { id: "session-manager" };
   const transcriptLifecycle = {
@@ -197,6 +197,7 @@ function createInput(options?: { terminalHookError?: Error }) {
         throw options.terminalHookError;
       }
       onDeliveredSourceReply = input.onDeliveredSourceReply;
+      return () => {};
     },
   );
 

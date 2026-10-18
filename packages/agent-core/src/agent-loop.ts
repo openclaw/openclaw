@@ -43,6 +43,15 @@ import {
   mergeToolExecutionFailure,
   resolveToolBatchTermination,
 } from "./tool-batch-completion.js";
+import type {
+  ResolvedToolCallOutcome,
+  ToolBatchContext as ToolBatchContextBase,
+} from "./tool-batch-context.js";
+import {
+  hidesToolCallFromChannelProgress,
+  preparedCallForSteering,
+  resolveToolSteeringCheckpoint,
+} from "./tool-batch-steering.js";
 import {
   completeUnstartedToolCall,
   completeStartedToolCall,
@@ -51,8 +60,6 @@ import {
   immediateToolArgumentValidationError,
   immediateToolCallError,
   immediateToolPreparationError,
-  hidesToolCallFromChannelProgress,
-  type ResolvedToolCallOutcome,
   type FinalizedToolCallOutcome,
   type ImmediateToolCallOutcome,
 } from "./tool-call-outcome.js";
@@ -72,7 +79,6 @@ import type {
   StreamFn,
   ToolLoopIntervention,
   ToolLoopRecoveryState,
-  ToolLoopWarning,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
 
@@ -565,21 +571,7 @@ async function executeToolCalls(
   return executeToolCallGroups(batch, toolCalls, sequential);
 }
 
-type ToolBatchContext = {
-  currentContext: AgentContext;
-  assistantMessage: AssistantMessage;
-  config: AgentLoopConfig;
-  signal: AbortSignal | undefined;
-  emit: AgentEventSink;
-  resolved: Map<AgentToolCall, ResolvedToolCallOutcome>;
-  validated: Map<AgentToolCall, ValidatedToolCallOutcome>;
-  lifecycle?: InternalToolBatchLifecycle;
-  warnings?: ToolLoopWarning[];
-  onParallelStarted?: () => void;
-  hasUnobservedAsyncToolResults: boolean;
-  toolPlan: ToolPlanState;
-  toolLoopRecoveryState: ToolLoopRecoveryState;
-  waitForPrevious?: () => Promise<void>;
+type ToolBatchContext = ToolBatchContextBase<ValidatedToolCallOutcome> & {
   isLocalError?: AgentCoreStreamRuntimeDeps["isLocalError"];
 };
 
@@ -596,11 +588,18 @@ async function executeToolCallGroups(
   let intervention: ToolLoopIntervention | undefined;
 
   while (cursor < toolCalls.length) {
+    let allowSteeredCall = false;
     if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
-      const steering = getSteeringAtCheckpoint(batch.config);
-      steeringMessages = Array.isArray(steering) ? steering : await steering;
+      const checkpoint = await resolveToolSteeringCheckpoint(
+        batch.config,
+        batch,
+        steeringMessages,
+        toolCalls[cursor],
+      );
+      steeringMessages = checkpoint.steeringMessages;
+      allowSteeredCall = checkpoint.allowSteeredCall;
     }
-    if (steeringMessages.length > 0) {
+    if (steeringMessages.length > 0 && !allowSteeredCall) {
       batch.lifecycle?.releaseSkippedCalls?.(admittedIds(toolCalls.slice(cursor), batch.validated));
       break;
     }
@@ -648,8 +647,14 @@ async function executeToolCallGroups(
 
       const hasReady = entries.some((entry) => "kind" in entry);
       if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
-        const steering = getSteeringAtCheckpoint(batch.config);
-        steeringMessages = Array.isArray(steering) ? steering : await steering;
+        const checkpoint = await resolveToolSteeringCheckpoint(
+          batch.config,
+          batch,
+          steeringMessages,
+          preparedCallForSteering(entries),
+        );
+        steeringMessages = checkpoint.steeringMessages;
+        allowSteeredCall = checkpoint.allowSteeredCall;
       }
       for (const [index, entry] of entries.entries()) {
         ordered[index] = "kind" in entry ? undefined : entry;
@@ -657,7 +662,7 @@ async function executeToolCallGroups(
 
       // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
-        steeringMessages.length > 0
+        steeringMessages.length > 0 && !allowSteeredCall
           ? undefined
           : await launchParallelToolCalls(entries, batch.lifecycle, batch.toolPlan);
       fatal = launched?.rejected ? { error: launched.rejected.error } : undefined;
@@ -692,8 +697,10 @@ async function executeToolCallGroups(
         throw error;
       }
       const skippedIndex =
-        steeringMessages.length > 0 ? 0 : (launched?.rejected?.index ?? entries.length);
-      if (steeringMessages.length > 0) {
+        steeringMessages.length > 0 && !allowSteeredCall
+          ? 0
+          : (launched?.rejected?.index ?? entries.length);
+      if (steeringMessages.length > 0 && !allowSteeredCall) {
         for (const entry of entries) {
           if ("kind" in entry) {
             entry.execution.dispose();
