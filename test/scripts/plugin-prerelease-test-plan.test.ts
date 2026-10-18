@@ -1,3 +1,4 @@
+// Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join, matchesGlob } from "node:path";
@@ -39,15 +40,6 @@ function readPluginPrereleaseWorkflow() {
   return parse(readFileSync(".github/workflows/plugin-prerelease.yml", "utf8"));
 }
 
-function prereleaseStep(name: string) {
-  return expectDefined(
-    readPluginPrereleaseWorkflow().jobs.preflight.steps.find(
-      (step: WorkflowStep) => step.name === name,
-    ),
-    name,
-  );
-}
-
 function getDockerLane(name: string) {
   const lane = findLaneByName(name);
   if (!lane) {
@@ -82,7 +74,13 @@ function runPluginPhaseValidation(params: {
   fullReleaseValidation?: boolean;
   phase: string;
 }) {
-  const step = prereleaseStep("Validate phase inputs");
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Validate phase inputs",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease phase validation step");
+  }
   return spawnSync("bash", ["-c", step.run], {
     encoding: "utf8",
     env: {
@@ -101,7 +99,13 @@ function runPluginManifest(
   runtimePolicy = "",
   targetRoot?: string,
 ) {
-  const step = prereleaseStep("Build plugin prerelease manifest");
+  const workflow = readPluginPrereleaseWorkflow();
+  const step = workflow.jobs.preflight.steps.find(
+    (candidate: WorkflowStep) => candidate.name === "Build plugin prerelease manifest",
+  );
+  if (!step?.run) {
+    throw new Error("Missing plugin prerelease manifest step");
+  }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
   const result = spawnSync("bash", ["-c", step.run], {
@@ -122,7 +126,18 @@ function runPluginManifest(
   };
 }
 
-function runExtensionSummary(extensions: string) {
+function runPluginSummary(params: {
+  docker: string;
+  extensions: string;
+  inspector?: string;
+  node: string;
+  runDocker: boolean;
+  runExtensions: boolean;
+  runNode: boolean;
+  runNpmSecurity: boolean;
+  runStatic: boolean;
+  static: string;
+}) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs["plugin-prerelease-suite"].steps.find(
     (candidate: WorkflowStep) => candidate.name === "Verify plugin prerelease suite",
@@ -133,33 +148,53 @@ function runExtensionSummary(extensions: string) {
   return spawnSync("bash", ["-c", step.run], {
     encoding: "utf8",
     env: {
-      DOCKER_RESULT: "skipped",
-      EXTENSIONS_RESULT: extensions,
-      INSPECTOR_RESULT: "skipped",
-      NODE_RESULT: "skipped",
+      DOCKER_RESULT: params.docker,
+      EXTENSIONS_RESULT: params.extensions,
+      INSPECTOR_RESULT: params.inspector ?? "skipped",
+      NODE_RESULT: params.node,
       PATH: process.env.PATH,
-      RUN_DOCKER: "false",
-      RUN_EXTENSIONS: "true",
-      RUN_NODE: "false",
-      RUN_NPM_SECURITY: "false",
-      RUN_STATIC: "false",
+      RUN_DOCKER: String(params.runDocker),
+      RUN_EXTENSIONS: String(params.runExtensions),
+      RUN_NODE: String(params.runNode),
+      RUN_NPM_SECURITY: String(params.runNpmSecurity),
+      RUN_STATIC: String(params.runStatic),
       SECURITY_RESULT: "success",
-      STATIC_RESULT: "skipped",
+      STATIC_RESULT: params.static,
     },
   });
 }
 
 describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
   it.each([
-    [false, undefined, "bun-all", true],
-    [true, undefined, "dual-all", true],
-    [false, " node ", "node", false],
-    [true, "node", "node", false],
-    [false, "dual-all", "dual-all", true],
-    [true, "bun-all", "bun-all", true],
-  ] as const)(
-    "selects runtime for release=%s with override=%s",
-    async (fullReleaseValidation, runtimePolicy, expectedPolicy, requiresBun) => {
+    { fullReleaseValidation: false, expectedPolicy: "bun-all", requiresBun: true },
+    { fullReleaseValidation: true, expectedPolicy: "dual-all", requiresBun: true },
+    {
+      fullReleaseValidation: false,
+      runtimePolicy: " node ",
+      expectedPolicy: "node",
+      requiresBun: false,
+    },
+    {
+      fullReleaseValidation: true,
+      runtimePolicy: "node",
+      expectedPolicy: "node",
+      requiresBun: false,
+    },
+    {
+      fullReleaseValidation: false,
+      runtimePolicy: "dual-all",
+      expectedPolicy: "dual-all",
+      requiresBun: true,
+    },
+    {
+      fullReleaseValidation: true,
+      runtimePolicy: "bun-all",
+      expectedPolicy: "bun-all",
+      requiresBun: true,
+    },
+  ])(
+    "selects $expectedPolicy for release=$fullReleaseValidation with override=$runtimePolicy",
+    async ({ fullReleaseValidation, runtimePolicy, expectedPolicy, requiresBun }) => {
       expect(
         await resolvePluginPrereleaseExtensionRuntime({
           fullReleaseValidation,
@@ -501,9 +536,9 @@ export const createExtensionTestShards = () => [{
     const hourly = runPluginManifest("independent", "schedule");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
-    for (const { result } of [hourly, release, forcedNode]) {
-      expect(result.status, result.stderr).toBe(0);
-    }
+    expect(hourly.result.status, hourly.result.stderr).toBe(0);
+    expect(release.result.status, release.result.stderr).toBe(0);
+    expect(forcedNode.result.status, forcedNode.result.stderr).toBe(0);
     const outputs = (output: string) =>
       Object.fromEntries(
         output
@@ -517,6 +552,9 @@ export const createExtensionTestShards = () => [{
         ({ requires_bun: _bun, test_runtime_policy: _runtime, ...row }: Record<string, unknown>) =>
           row,
       );
+    expect(ownership(selected.plugin_prerelease_extension_matrix)).toEqual(
+      ownership(outputs(release.output).plugin_prerelease_extension_matrix),
+    );
     for (const [run, policy] of [
       [release, "dual-all"],
       [forcedNode, "node"],
@@ -598,7 +636,17 @@ export const createExtensionTestShards = () => [{
       expect(selected[`run_plugin_prerelease_${family}`]).toBe("false");
     }
     for (const result of ["success", "failure", "cancelled", "skipped"]) {
-      const summary = runExtensionSummary(result);
+      const summary = runPluginSummary({
+        docker: "skipped",
+        extensions: result,
+        node: "skipped",
+        static: "skipped",
+        runDocker: false,
+        runExtensions: true,
+        runNode: false,
+        runNpmSecurity: false,
+        runStatic: false,
+      });
       expect(summary.status).toBe(result === "success" ? 0 : 1);
     }
   });
@@ -671,22 +719,25 @@ export const createExtensionTestShards = () => [{
     expect(resolveTargetStep.run).toContain('--expected-sha "$EXPECTED_SHA"');
     expect(targetSummaryStep.run).toContain("- Validation SHA:");
     expect(targetSummaryStep.run).not.toContain("- Code SHA:");
-    for (const [workflow, jobs] of [
-      [releaseChecksWorkflow, ["resolve_target", "prepare_release_package", "summary"]],
-      [
-        fullReleaseWorkflow,
-        [
-          "normal_ci",
-          "plugin_prerelease_independent",
-          "plugin_prerelease_candidate",
-          "npm_telegram",
-          "summary",
-        ],
-      ],
-    ] as const) {
-      for (const name of jobs) {
-        expect(evaluateWorkflowRunner(workflow.jobs[name]["runs-on"])).toBe("ubuntu-24.04");
-      }
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.resolve_target["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
+    expect(
+      evaluateWorkflowRunner(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]),
+    ).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(releaseChecksWorkflow.jobs.summary["runs-on"])).toBe(
+      "ubuntu-24.04",
+    );
+    for (const jobName of [
+      "normal_ci",
+      "plugin_prerelease_independent",
+      "plugin_prerelease_candidate",
+      "npm_telegram",
+      "summary",
+    ]) {
+      expect(evaluateWorkflowRunner(fullReleaseWorkflow.jobs[jobName]["runs-on"])).toBe(
+        "ubuntu-24.04",
+      );
     }
     expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(15);
     expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
@@ -802,11 +853,15 @@ export const createExtensionTestShards = () => [{
     );
     expect(explicitOptIn).toBeGreaterThanOrEqual(0);
     expect(releaseRefGuard).toBeGreaterThan(explicitOptIn ?? -1);
-    for (const job of ["install_smoke", "live_repo_e2e", "docker_e2e"]) {
-      expect(workflow.jobs[`${job}_release_checks`].with.allow_unreleased_changelog).toBe(
-        currentTreeAllowance,
-      );
-    }
+    expect(workflow.jobs.install_smoke_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.live_repo_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
+    expect(workflow.jobs.docker_e2e_release_checks.with.allow_unreleased_changelog).toBe(
+      currentTreeAllowance,
+    );
     const fullReleaseAllowance =
       "${{ inputs.allow_unreleased_changelog || (inputs.target_context_ref == '' && (inputs.ref == 'main' || inputs.ref == 'refs/heads/main')) }}";
     const summarizeTarget = fullReleaseWorkflow.jobs.resolve_target.steps.find(
@@ -820,9 +875,11 @@ export const createExtensionTestShards = () => [{
   });
 
   it("keeps runtime tool coverage blocking in release checks", () => {
-    const releaseChecksWorkflow = parse(
-      readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
+    const releaseChecksSource = readFileSync(
+      ".github/workflows/openclaw-release-checks.yml",
+      "utf8",
     );
+    const releaseChecksWorkflow = parse(releaseChecksSource);
     const runtimeToolCoverage = releaseChecksWorkflow.jobs.runtime_tool_coverage_release_checks;
 
     expect(runtimeToolCoverage["continue-on-error"]).toBeUndefined();
@@ -830,19 +887,24 @@ export const createExtensionTestShards = () => [{
       "resolve_target",
       "qa_lab_runtime_parity_release_checks",
     ]);
-    for (const text of [
-      "pnpm openclaw qa coverage",
-      "--summary .artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
-    ]) {
-      expect(runtimeToolCoverage.steps).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "Enforce core runtime tool coverage",
-            run: expect.stringContaining(text),
-          }),
-        ]),
-      );
-    }
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce core runtime tool coverage",
+          run: expect.stringContaining("pnpm openclaw qa coverage"),
+        }),
+      ]),
+    );
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce core runtime tool coverage",
+          run: expect.stringContaining(
+            "--summary .artifacts/qa-e2e/runtime-pair-core/qa-suite-summary.json",
+          ),
+        }),
+      ]),
+    );
     expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
       "runtime_tool_coverage_release_checks",
     );

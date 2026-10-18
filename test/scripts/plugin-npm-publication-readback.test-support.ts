@@ -19,10 +19,30 @@ export const version = "2026.9.2-beta.1";
 const publisherName = `Publish plugin npm package (${packageName})`;
 const preflightName = `Preflight plugin npm package (${packageName})`;
 
-export async function zipNpmFixture(entries: Record<string, Buffer>) {
+export function npmWorkflowRun(
+  id: number,
+  attempt: number,
+  completed = true,
+  conclusion = "success",
+) {
+  return {
+    id,
+    run_attempt: attempt,
+    path: workflowPath,
+    event: "workflow_dispatch",
+    head_sha: workflowSha,
+    head_branch: "main",
+    repository: { full_name: repository },
+    head_repository: { full_name: repository },
+    status: completed ? "completed" : "in_progress",
+    conclusion: completed ? conclusion : null,
+  };
+}
+
+export async function zipNpmFixture(entries: Record<string, Buffer | object>) {
   const archive = new JSZip();
   for (const [name, bytes] of Object.entries(entries)) {
-    archive.file(name, bytes);
+    archive.file(name, Buffer.isBuffer(bytes) ? bytes : JSON.stringify(bytes));
   }
   return archive.generateAsync({ type: "nodebuffer", compression: "STORE" });
 }
@@ -66,20 +86,20 @@ export async function createNpmPublicationReadbackFixture(
   const producerId = mode === "prepared" ? 100 : runId;
   const producerAttempt =
     mode === "prepared" ? 3 : mode === "retained-qualification" ? 1 : publisherAttempt;
-  const source = writePublishablePluginFixture(root, {
-    extensionId: "demo",
-    version,
-    publishTo: "npm",
-  });
   const mixed = ["missing-planned-job", "existing-package"].includes(fault);
-  if (mixed) {
+  const selected = (mixed ? ["demo", "existing"] : ["demo"]).map((extensionId) => ({
+    packageName: `@openclaw/${extensionId}`,
+    packageDir: `extensions/${extensionId}`,
+    version,
+  }));
+  for (const entry of selected) {
     writePublishablePluginFixture(root, {
-      extensionId: "existing",
+      extensionId: entry.packageDir.slice("extensions/".length),
       version,
       publishTo: "npm",
     });
   }
-  const sourcePackage = readFileSync(join(source.packageDir, "package.json"));
+  const sourcePackage = readFileSync(join(root, "extensions/demo/package.json"));
   const artifactDir = join(root, "artifact");
   const tarballPath = join(artifactDir, "demo.tgz");
   await packNpmFixture(join(root, "packed"), tarballPath, {
@@ -116,22 +136,7 @@ export async function createNpmPublicationReadbackFixture(
     });
     existingBytes = readFileSync(existingTarball);
   }
-  const qualifiedZip = await zipNpmFixture({
-    "demo.tgz": bytes,
-    "plugin-publication-manifest.json": readFileSync(created.manifestPath),
-  });
-  const run = (id: number, attempt: number, completed = true, conclusion = "success") => ({
-    id,
-    run_attempt: attempt,
-    path: workflowPath,
-    event: "workflow_dispatch",
-    head_sha: workflowSha,
-    head_branch: "main",
-    repository: { full_name: repository },
-    head_repository: { full_name: repository },
-    status: completed ? "completed" : "in_progress",
-    conclusion: completed ? conclusion : null,
-  });
+  const run = npmWorkflowRun;
   const job = (id: number, name: string, attempt: number, conclusion = "success") => ({
     id,
     name,
@@ -165,6 +170,10 @@ export async function createNpmPublicationReadbackFixture(
     expired: false,
     expires_at: "2099-01-01T00:00:00Z",
     workflow_run: { id: producer, head_sha: workflowSha },
+  });
+  const qualifiedZip = await zipNpmFixture({
+    "demo.tgz": bytes,
+    "plugin-publication-manifest.json": readFileSync(created.manifestPath),
   });
   const qualifiedMetadata = metadata(41, artifactName, qualifiedZip, producerId);
   const metadataPath = join(root, "metadata.json");
@@ -216,50 +225,40 @@ export async function createNpmPublicationReadbackFixture(
   if (fault === "artifact") {
     receipt.artifactDigest = `sha256:${"f".repeat(64)}`;
   }
-  const receiptZip = await zipNpmFixture({
-    "demo-npm-qualification.json": Buffer.from(JSON.stringify(receipt)),
-  });
+  const receiptZip = await zipNpmFixture({ "demo-npm-qualification.json": receipt });
   const receiptMetadata = metadata(
     42,
     `plugin-npm-qualification-demo-${runId}-${publisherAttempt}`,
     receiptZip,
     runId,
   );
-  const selected = [{ packageName, packageDir: "extensions/demo", version }];
-  if (mixed) {
-    selected.push({
-      packageName: "@openclaw/existing",
-      packageDir: "extensions/existing",
-      version,
-    });
-  }
   const candidates = noPublication
     ? []
     : fault === "existing-package"
       ? selected.slice(0, 1)
       : selected;
   const planZip = await zipNpmFixture({
-    "npm-publication-plan.json": Buffer.from(
-      JSON.stringify({
-        sourceSha,
-        all: selected,
-        candidates,
-        skippedPublished: selected.filter((entry) => !candidates.includes(entry)),
-      }),
-    ),
+    "npm-publication-plan.json": {
+      sourceSha,
+      all: selected,
+      candidates,
+      skippedPublished: selected.filter((entry) => !candidates.includes(entry)),
+    },
   });
   const planMetadata = metadata(43, `plugin-npm-plan-${runId}-${plannerAttempt}`, planZip, runId);
   const requests: string[] = [];
-  const effectiveJobs =
-    fault === "empty-jobs"
-      ? []
-      : noPublication
-        ? [
-            ...(replanned ? allJobs : [planner]),
-            job(4, "Publish plugin npm package (${{ matrix.plugin.packageName }})", 1, "skipped"),
-          ]
-        : allJobs;
+  const skipped = job(
+    4,
+    "Publish plugin npm package (${{ matrix.plugin.packageName }})",
+    1,
+    "skipped",
+  );
+  let effectiveJobs = noPublication ? [...(replanned ? allJobs : [planner]), skipped] : allJobs;
+  if (fault === "empty-jobs") {
+    effectiveJobs = [];
+  }
   const ghResponses: Record<string, string> = {};
+  const conclusion = (attempt: number) => (attempt < runAttempt ? "failure" : "success");
   const runResponses = [
     run(
       producerId,
@@ -267,39 +266,39 @@ export async function createNpmPublicationReadbackFixture(
       true,
       mode === "prepared" || producerAttempt === runAttempt ? "success" : "failure",
     ),
-    run(runId, publisherAttempt, true, publisherAttempt < runAttempt ? "failure" : "success"),
-    run(runId, plannerAttempt, true, plannerAttempt < runAttempt ? "failure" : "success"),
+    run(runId, publisherAttempt, true, conclusion(publisherAttempt)),
+    run(runId, plannerAttempt, true, conclusion(plannerAttempt)),
   ];
   const respondGh = (endpoint: string) => {
     if (endpoint.endsWith(`/actions/runs/${runId}`)) {
-      return JSON.stringify(run(runId, runAttempt));
+      return run(runId, runAttempt);
     }
     if (endpoint.includes(`/actions/runs/${runId}/jobs?`)) {
-      return JSON.stringify({ total_count: effectiveJobs.length, jobs: effectiveJobs });
+      return { total_count: effectiveJobs.length, jobs: effectiveJobs };
     }
     if (endpoint.includes(`/actions/runs/${runId}/artifacts?`)) {
       const artifacts = [planMetadata, ...(fault === "missing-receipt" ? [] : [receiptMetadata])];
-      return JSON.stringify({ total_count: artifacts.length, artifacts });
+      return { total_count: artifacts.length, artifacts };
     }
     if (endpoint.includes("/attempts/") && endpoint.includes("/jobs?")) {
       const attempt = Number(endpoint.split("/attempts/")[1]?.split("/")[0]);
       const jobs = allJobs.filter((entry) => entry.run_attempt === attempt);
-      return JSON.stringify({ total_count: jobs.length, jobs });
+      return { total_count: jobs.length, jobs };
     }
     const attempt = runResponses.find((value) =>
       endpoint.endsWith(`/actions/runs/${value.id}/attempts/${value.run_attempt}`),
     );
     if (attempt) {
-      return JSON.stringify(attempt);
+      return attempt;
     }
     if (endpoint.endsWith("/actions/artifacts/41")) {
-      return JSON.stringify(qualifiedMetadata);
+      return qualifiedMetadata;
     }
     throw new Error(`Unexpected GitHub read: ${endpoint}`);
   };
   const runGh = (args: string[]) => {
     const endpoint = expectDefined(args[1], "GitHub fixture endpoint");
-    const response = respondGh(endpoint);
+    const response = JSON.stringify(respondGh(endpoint));
     ghResponses[endpoint] = response;
     return response;
   };
