@@ -25,7 +25,6 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { boundCodeModeError } from "./code-mode-json.js";
 import { createSubscribedCodeModeHarness } from "./code-mode.bridge.lifecycle.test-support.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -40,6 +39,7 @@ import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { getTextContent as resultText } from "./test-helpers/agent-tools-fs-helpers.js";
 import { snapshotToolSearchTargetTranscriptResult } from "./tool-search-transcript.js";
 
 afterEach(async () => {
@@ -66,10 +66,6 @@ function toolTurn(id: string, name: string, args: Record<string, unknown>) {
     toolCall,
     assistantMessage: makeAgentAssistantMessage({ content: [toolCall], stopReason: "toolUse" }),
   };
-}
-
-function resultText(result: AgentToolResult<unknown>) {
-  return result.content.find((part) => part.type === "text")?.text ?? "";
 }
 
 function toolResultMessage(
@@ -104,18 +100,24 @@ function pollFixture(output = "") {
     );
   const persist = (id: string, result: AgentToolResult<unknown>) =>
     manager.appendMessage(toolResultMessage(id, result));
-  return { session, manager, guard, turn, poll, persist };
+  const appendTurn = (id: string) => manager.appendMessage(turn(id).assistantMessage);
+  return { session, manager, guard, turn, poll, persist, appendTurn };
 }
 
-async function runProcessInCodeMode(args: Record<string, unknown>) {
+function processCodeMode(lazy = false) {
   const h = createCodeModeHarness();
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createProcessTool()] });
-  return await runUntilCompleted({
-    execTool: expectDefined(h.tools[0], "Code Mode exec"),
-    waitTool: expectDefined(h.tools[1], "Code Mode wait"),
-    code: `return await process(${JSON.stringify(args)});`,
-  });
+  const tool = lazy ? createLazyProcessTool() : createProcessTool();
+  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
+  return (code: string) =>
+    runUntilCompleted({
+      execTool: expectDefined(h.tools[0], "Code Mode exec"),
+      waitTool: expectDefined(h.tools[1], "Code Mode wait"),
+      code,
+    });
 }
+
+const runProcessInCodeMode = (args: Record<string, unknown>) =>
+  processCodeMode()(`return await process(${JSON.stringify(args)});`);
 
 test("retains a waiting poll completion through failed persistence and acknowledges late receipts", async () => {
   vi.useFakeTimers();
@@ -148,7 +150,7 @@ test("retains a waiting poll completion through failed persistence and acknowled
     },
   );
   h.guard();
-  h.manager.appendMessage(h.turn("persist-notify").assistantMessage);
+  h.appendTurn("persist-notify");
   expect(() => h.persist("persist-notify", result)).toThrow("result persistence failed");
   recordCompletion();
   expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
@@ -171,11 +173,11 @@ test("replays repaired poll output and consumes it after transformed persistence
   });
   const dropped = snapshotToolSearchTargetTranscriptResult(await h.poll("dropped"));
   expect(resultText(dropped)).toContain("running-output");
-  h.manager.appendMessage(h.turn("dropped").assistantMessage);
+  h.appendTurn("dropped");
   guard.flushPendingToolResults();
   const retry = snapshotToolSearchTargetTranscriptResult(await h.poll("retry"));
   expect(resultText(retry)).toContain("running-output");
-  h.manager.appendMessage(h.turn("retry").assistantMessage);
+  h.appendTurn("retry");
   h.persist("retry", retry);
   expect(resultText(await h.poll("observed"))).not.toContain("running-output");
 });
@@ -219,10 +221,7 @@ test.each(["blocked", "error"] as const)(
       text: expect.stringContaining("nested-output"),
     });
     try {
-      const first = await poll("nested-first");
-      expect(first, boundCodeModeError(JSON.stringify(first), 1_024)).toMatchObject({
-        status: "completed",
-      });
+      expect(await poll("nested-first")).toMatchObject({ status: "completed" });
       const firstActivities = await h.readNestedActivities();
       if (mode === "error") {
         expect(firstActivities).toHaveLength(1);
@@ -273,14 +272,14 @@ test("Code Mode pages retained logs after showing the default tail and continuat
 });
 
 test.each([
-  { action: "paste", text: "", bracketed: false, error: "No paste text provided." },
-  {
-    action: "send-keys",
-    keys: ["up"],
-    error:
-      "Session process cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.",
-  },
-])("Code Mode preserves actionable $action failures", async ({ error, ...args }) => {
+  ["empty paste", { action: "paste", text: "", bracketed: false }, "No paste text provided."],
+  [
+    "unknown cursor mode",
+    { action: "send-keys", keys: ["up"] },
+    "Session process cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.",
+  ],
+  ["literal constructor key", { action: "send-keys", keys: ["constructor"] }, null],
+] as const)("Code Mode preserves %s handling", async (_name, args, error) => {
   const session = createSession();
   session.cursorKeyMode = "unknown";
   const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
@@ -289,29 +288,13 @@ test.each([
   session.stdin = { write, end: vi.fn() };
   expect(await runProcessInCodeMode({ sessionId: session.id, ...args })).toMatchObject({
     status: "completed",
-    value: { status: "failed", error },
+    value: error ? { status: "failed", error } : { status: "running", sessionId: session.id },
   });
-  expect(write).not.toHaveBeenCalled();
-});
-
-test("send-keys writes literal constructor before the cursor key mode is known", async () => {
-  const key = "constructor";
-  const session = createSession();
-  session.cursorKeyMode = "unknown";
-  const write = vi.fn<NonNullable<ProcessSession["stdin"]>["write"]>((_data, callback) =>
-    callback?.(),
-  );
-  session.stdin = { write, end: vi.fn() };
-
-  const result = await createProcessTool().execute("literal-key", {
-    action: "send-keys",
-    sessionId: session.id,
-    keys: [key],
-  });
-
-  expect(result.details).toMatchObject({ status: "running", sessionId: session.id });
-  expect(write).toHaveBeenCalledTimes(1);
-  expect(write).toHaveBeenCalledWith(Buffer.from(key), expect.any(Function));
+  if (error) {
+    expect(write).not.toHaveBeenCalled();
+  } else {
+    expect(write).toHaveBeenCalledExactlyOnceWith(Buffer.from("constructor"), expect.any(Function));
+  }
 });
 
 test("a retained old snapshot cannot consume a successor poll delivery", async () => {
@@ -319,11 +302,11 @@ test("a retained old snapshot cannot consume a successor poll delivery", async (
   h.guard();
   const result = await h.poll("old-result");
   const retained = snapshotToolSearchTargetTranscriptResult(result);
-  h.manager.appendMessage(h.turn("old-result").assistantMessage);
+  h.appendTurn("old-result");
   h.persist("old-result", result);
   appendOutput(h.session, "stdout", "successor-output\n");
   expect(resultText(await h.poll("successor-dropped"))).toContain("successor-output");
-  h.manager.appendMessage(h.turn("retained-old-result").assistantMessage);
+  h.appendTurn("retained-old-result");
   h.persist("retained-old-result", retained);
   expect(resultText(await h.poll("successor-retry"))).toContain("successor-output");
 });
@@ -345,7 +328,7 @@ test("replays blocked poll output immediately when the retry has a timeout", asy
         : undefined,
   });
   const dropped = await h.poll("blocked-result");
-  h.manager.appendMessage(h.turn("blocked-result").assistantMessage);
+  h.appendTurn("blocked-result");
   expect(h.persist("blocked-result", dropped)).toBeUndefined();
   vi.useFakeTimers();
   let settled = false;
@@ -360,10 +343,7 @@ test("replays blocked poll output immediately when the retry has a timeout", asy
 
 test("composes lazy process actions through generated declarations and JavaScript", async () => {
   createSession("first\nsecond", "typed-process");
-  const h = createCodeModeHarness();
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, createLazyProcessTool()] });
-  const run = (code: string) =>
-    runUntilCompleted({ execTool: h.tools[0]!, waitTool: h.tools[1]!, code });
+  const run = processCodeMode(true);
   const composition = `
     async function consume() {
       const listed = await process({ action: "list" });
