@@ -603,6 +603,7 @@ describe("gateway client capability tool filtering", () => {
           action: expect.any(Object),
           conflictsResolved: expect.any(Object),
           baseCommit: expect.any(Object),
+          draft: expect.any(Object),
           title: expect.any(Object),
           body: expect.any(Object),
           requestId: expect.any(Object),

@@ -33,7 +33,7 @@ function describeGitHubPublishTool(
     : "continue that work before ending the turn, or explain that a scheduled continuation is unavailable";
   const publication = publicationAvailable
     ? `Publish or edit the current session's PR through Gateway-held credentials, for local or cloud repository workspaces.
-- Omitted action: publish accepted workspace changes as a draft PR; title/body are used only when creating a PR. Finish the turn so changes can be saved. Busy/recovering workspaces wait; the receipt arrives in this conversation without resuming the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it.
+- Omitted action: publish accepted workspace changes as an open PR by default; draft: true creates a draft. title/body and draft are used only when creating a PR. Updating an existing PR preserves its state. Finish the turn so changes can be saved. Busy/recovering workspaces wait; the receipt arrives in this conversation without resuming the agent. If authorized review, CI or landing remains, ${continuation}; a receipt does not complete it.
 - edit: omit title/body to read current metadata. To change either field, send requestId, expectedHeadCommit, and its new value with the observed expectedTitle/expectedBody. Keep attribution, marker and footer unchanged in the full body. Omitted fields stay unchanged. Edit never synchronizes, stages, commits or pushes files or changes PR state. Read with edit after an uncertain response before retrying.
 - ready: mark the current session's own draft ready for review, using the requestId and expectedHeadCommit observed with edit. After an uncertain response, read with edit before retrying. This does not merge the PR.
 - request_review: after an explicit re-review request, read the current PR with edit, then send requestId and expectedHeadCommit to post only "@clawsweeper re-review". No comment text, focus or child target is accepted. Posting is not review acceptance or completion. If the response is uncertain, read existing PR comments before any new request; never retry blindly.
@@ -90,6 +90,7 @@ export function createGitHubPublishTool(
                 ),
             title: Type.Optional(GitHubPublicationTitleSchema),
             body: GitHubPublicationEditSchema.properties.body,
+            draft: Type.Optional(Type.Boolean()),
           },
           { additionalProperties: false },
         )
@@ -111,6 +112,9 @@ export function createGitHubPublishTool(
       const caller = getGatewayToolCallerIdentity();
       if (!caller?.sessionKey) {
         throw new Error("GitHub publication requires the current Gateway session.");
+      }
+      if (input.draft !== undefined && input.action && input.action !== "publish") {
+        throw new Error("draft only selects the state when publishing a new PR.");
       }
       if (input.action === "request_review") {
         if (
@@ -215,6 +219,7 @@ export function createGitHubPublishTool(
         idempotencyKey: assistantTurnId ? `${assistantTurnId}:${toolCallId}` : toolCallId,
         ...(input.title ? { title: input.title } : {}),
         ...(input.body !== undefined ? { body: input.body } : {}),
+        ...(input.draft !== undefined ? { draft: input.draft } : {}),
       });
       return jsonResult(result);
     },

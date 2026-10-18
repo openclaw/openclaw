@@ -9361,6 +9361,19 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_docker_seed_e2e).toBe("false");
     expect(legacy.outputs.docker_seed_lanes).toBe("");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
+    expect(legacy.outputs.run_plugin_contracts_shards).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(legacy.outputs.plugin_contracts_matrix, "legacy plugin contract matrix"),
+      ).include.flatMap((shard: { groups: unknown[] }) => shard.groups),
+    ).toEqual([
+      {
+        checkName: "checks-fast-contracts-plugins-legacy",
+        includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+        runtime: "node",
+        task: "contracts-plugins",
+      },
+    ]);
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
     expect(
       JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))

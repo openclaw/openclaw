@@ -135,7 +135,7 @@ export async function saveModelProviderApiKey(params: {
     ),
   );
   const validateSharedBinding = () => {
-    if (readLocalCredentials.some((read) => read())) {
+    if (readLocalCredentials.some((reader) => reader.readCurrentCredential())) {
       throw new Error(
         "An agent already overrides this shared key. Remove that agent's override before replacing the shared key.",
       );
@@ -161,7 +161,9 @@ export async function saveModelProviderApiKey(params: {
   );
   let configChanged = false;
   await updateConfig(
-    (current) => {
+    async (current) => {
+      // A catalog may publish credentials after the key write and before config preparation.
+      await Promise.all(readLocalCredentials.map((reader) => reader.waitUntilCurrent()));
       validateSharedBinding();
       params.assertCurrent?.();
       const id = params.profileId ? undefined : configuredKey(current);

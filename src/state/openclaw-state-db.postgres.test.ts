@@ -43,8 +43,12 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import {
   ensureAgentDatabaseLeaseSchema,
+  ensureGitHubPublicationSchema,
+  ensurePersonalGitHubPublicationSchema,
+  ensureRepositoryGitHubPublicationSchema,
   ensureAgentDeletionJournalPhaseSchema,
 } from "./openclaw-state-db-schema-additive.js";
+import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -70,6 +74,34 @@ const legacyWriteIndexesSql = `
   ${statePostgresRuntime.preWriteIndexesV27Sql.skill_usage}
   ${statePostgresRuntime.preWriteIndexesV27Sql.acp_replay_events}
 `;
+
+// Dropping a column leaves an attnum hole; rebuild only these empty fixture tables
+// so the predecessor and migrated catalogs retain their real column positions.
+async function restorePublicationSchemaV27(client: pg.Client) {
+  for (const table of [
+    "github_publication_requests",
+    "github_personal_publication_requests",
+    "github_repository_publication_requests",
+  ]) {
+    const result = await client.query("SELECT to_regclass($1) IS NOT NULL AS present", [table]);
+    if (!result.rows[0].present) {
+      continue;
+    }
+    const fragment = statePostgresRuntime.fragments.find((entry) => entry.tables.includes(table));
+    if (!fragment) {
+      throw new Error("Missing publication fixture schema");
+    }
+    await client.query(`DROP TABLE ${table}; ${withLegacyPublicationDraft(fragment.sql)}`);
+  }
+}
+const legacyPublicationInsert = `INSERT INTO github_publication_requests
+  (request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
+    worktree_id, repository_fingerprint, identity_source, identity_account_id,
+    identity_login, status, branch, created_at_ms, updated_at_ms)
+  VALUES ('retained-publication', 'accepted',
+    'beda069ac7c4479d5f27d419da7a1c81073d1494f373ab8059f0558ca9ca415c',
+    'publication-migration', 'agent:main:publication', 'main', 'worktree', 'repository',
+    'system-detected', 42, 'publisher', 'requested', 'topic', 1, 1)`;
 
 describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
   it("prunes worker history with bounded UTF-8 ordering and placement protection", async () => {
@@ -424,8 +456,8 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
     }
   });
 
-  it.each([25, 26])(
-    "migrates version %i indexes while preserving heads, leases, lazy fragments and schema admission",
+  it.each([25, 26, 27])(
+    "migrates version %i while preserving heads, leases, lazy fragments and publication intent",
     async (previousVersion) => {
       const directory = tempDirs.make("state-layout-postgres-");
       const pathname = path.join(directory, "state.sqlite");
@@ -441,6 +473,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         const facts = withEngineStoreAdmission(() =>
           runOpenClawStateWriteTransaction(({ db }) => {
             ensureUserBackgroundSchema(options);
+            ensureGitHubPublicationSchema(db);
+            ensurePersonalGitHubPublicationSchema(db);
+            ensureRepositoryGitHubPublicationSchema(db);
             db.prepare(`INSERT INTO session_state_heads
             (session_key, agent_id, last_sequence, pruned_max_sequence, updated_at)
             VALUES (?, ?, ?, ?, ?)`).run("shared-key", "main", 7, 3, 11);
@@ -463,6 +498,7 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         const retainedLease = await client.query(
           `SELECT * FROM "${namespace}".state_leases WHERE scope = 'synthetic'`,
         );
+
         const currentIndexes = await client.query(
           `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1
           AND tablename IN ('acp_replay_events', 'skill_usage', 'state_leases') ORDER BY indexname`,
@@ -470,18 +506,29 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
         );
         closeOpenClawStateDatabaseForTest();
         retireSqliteDatabaseAdmissionForPath(pathname);
-        // Restore the actual pre-v27 catalog before relabeling metadata.
-        await client.query(`BEGIN;
-        SET LOCAL search_path TO "${namespace}";
-        ${legacyWriteIndexesSql}
+        // Restore the actual historical catalog before relabeling metadata.
+        await client.query(`BEGIN; SET LOCAL search_path TO "${namespace}";`);
+        await restorePublicationSchemaV27(client);
+        await client.query(legacyPublicationInsert);
+        await client.query(`${previousVersion < 27 ? legacyWriteIndexesSql : ""}
         UPDATE schema_meta SET schema_version = ${previousVersion};
         UPDATE config_machine_state SET value_json = '${previousVersion}'
           WHERE state_key = 'state.schema.contentVersion';
         UPDATE openclaw_schema_meta
           SET version = ${previousVersion}, fingerprint = NULL, ddl_hash = NULL, server_major = NULL;
         COMMIT;`);
+        const retainedPublication = await client.query(
+          `SELECT * FROM "${namespace}".github_publication_requests WHERE request_id = 'retained-publication'`,
+        );
         withEngineStoreAdmission(() => {
           const upgraded = openOpenClawStateDatabase(options);
+          for (const table of [
+            "github_publication_requests",
+            "github_personal_publication_requests",
+            "github_repository_publication_requests",
+          ]) {
+            expect(() => upgraded.db.prepare(`SELECT draft FROM ${table}`).all()).not.toThrow();
+          }
           expect(getPostgresPhysicalFacts(upgraded.db)?.version).toBe(
             OPENCLAW_STATE_SCHEMA_VERSION,
           );
@@ -530,6 +577,13 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
             )
           ).rows,
         ).toEqual(currentIndexes.rows);
+        expect(
+          (
+            await client.query(
+              `SELECT * FROM "${namespace}".github_publication_requests WHERE request_id = 'retained-publication'`,
+            )
+          ).rows,
+        ).toEqual([{ ...retainedPublication.rows[0], draft: null }]);
         expect(
           (await client.query(`SELECT * FROM "${namespace}".user_background_images`)).rows,
         ).toEqual([]);
@@ -612,8 +666,9 @@ describe.skipIf(!connection)("PostgreSQL shared-state owner", () => {
       namespace = cold.namespace;
       expect(cold.threadId).not.toBe(0);
       await client.query(`SET search_path = "${namespace}"`);
-      await client.query(`BEGIN;
-        ${legacyWriteIndexesSql}
+      await client.query("BEGIN");
+      await restorePublicationSchemaV27(client);
+      await client.query(`${legacyWriteIndexesSql}
         UPDATE openclaw_schema_meta
           SET version = 24, fingerprint = NULL, ddl_hash = NULL, server_major = NULL
           WHERE store = 'state';

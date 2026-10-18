@@ -1972,6 +1972,7 @@ src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
 src/state/openclaw-state-db-schema-v27-indexes.ts
+src/state/openclaw-state-db-schema-v28-publication.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts

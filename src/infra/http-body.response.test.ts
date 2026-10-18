@@ -341,21 +341,24 @@ describe("readResponseWithLimit", () => {
     },
   );
 
-  it("cancels a trickling body when its overall timeout expires", async () => {
+  it("cancels a trickling body at its lazily resolved overall deadline", async () => {
     vi.useFakeTimers();
     try {
       const cancel = vi.fn();
+      const timeoutMs = vi.fn(() => 100);
       const response = new Response(makeTricklingStream(40, cancel));
       const assertion = expect(
         readResponseWithLimit(response, 1024, {
           chunkTimeoutMs: 50,
-          timeoutMs: 100,
-          onTimeout: ({ timeoutMs }) => new Error(`custom overall ${timeoutMs}`),
+          timeoutMs,
+          onTimeout: ({ timeoutMs: resolved }) => new Error(`custom overall ${resolved}`),
         }),
       ).rejects.toThrow("custom overall 100");
 
+      expect(timeoutMs).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(110);
       await assertion;
+      expect(timeoutMs).toHaveBeenCalledOnce();
       expect(cancel).toHaveBeenCalledTimes(1);
       expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
       expect((cancel.mock.calls[0]?.[0] as Error | undefined)?.message).toBe("custom overall 100");
@@ -377,28 +380,6 @@ describe("readResponseWithLimit", () => {
         name: "TimeoutError",
         message: "Response body timed out after 50ms",
       });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("resolves a lazy overall timeout immediately before reading", async () => {
-    vi.useFakeTimers();
-    try {
-      const cancel = vi.fn();
-      const timeoutMs = vi.fn(() => 75);
-      const response = new Response(makeTricklingStream(40, cancel));
-      const assertion = expect(
-        readResponseWithLimit(response, 1024, {
-          timeoutMs,
-          onTimeout: ({ timeoutMs: resolved }) => new Error(`lazy overall ${resolved}`),
-        }),
-      ).rejects.toThrow("lazy overall 75");
-
-      expect(timeoutMs).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(80);
-      await assertion;
-      expect(cancel).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }
