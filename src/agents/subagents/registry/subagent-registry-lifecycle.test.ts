@@ -2500,6 +2500,29 @@ describe("subagent registry lifecycle hardening", () => {
     expect(readLifecycleRun(entry)).toEqual(original);
   });
 
+  it("keeps a confirmed cancellation's pending notice when the killed callback repeats", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      endedReason: SUBAGENT_ENDED_REASON_KILLED,
+      outcome: { status: "error", error: "agent run aborted" },
+      expectsCompletionMessage: true,
+      completion: { required: true, resultText: null, capturedAt: 4_000 },
+      delivery: { status: "pending" },
+      cleanupHandled: true,
+    });
+    const original = structuredClone(entry);
+    const runSubagentAnnounceFlow = vi.fn(async () => "delivered" as const);
+    const controller = createLifecycleController({ entry, runSubagentAnnounceFlow });
+
+    await controller.completeSubagentRun(
+      makeKilledSubagentCompletion(entry, { triggerCleanup: true }),
+    );
+
+    expect(readLifecycleRun(entry).killReconciliation).toBeUndefined();
+    expect(readLifecycleRun(entry)).toEqual(original);
+    expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
+  });
+
   it("keeps cancellation that becomes durable during completion capture", async () => {
     const { entry, controller, captured, captureSubagentCompletionReply } = createCaptureFixture(
       makeProvisionalKilledRunEntry(),
