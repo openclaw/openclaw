@@ -213,7 +213,10 @@ describe("Android app i18n resources", () => {
       SettingsMetric("Host", gatewayName)
       ConnectionState(connected = false, statusText = "$host")
       ConnectionState(connected = true, statusText = nativeString("Connected"))
-      SettingsToggleRow("Title", "Hint")
+      SettingsToggleRow(
+        "Title",
+        "Hint",
+      )
       SettingsToggleRow(nativeString("Localized capability"), nativeString("Localized detail"))
       Text(text = fileName ?: "File")
       Modifier.clickable(onClickLabel = "Open", onClick = {})

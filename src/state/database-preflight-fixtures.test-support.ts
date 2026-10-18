@@ -102,7 +102,7 @@ export function closeDatabases() {
   closeOpenClawStateDatabaseForTest();
 }
 
-export function openRawDatabase(pathname: string, options?: { readOnly?: boolean }) {
+export function openRawDatabase(pathname: string, options: { readOnly?: boolean } = {}) {
   return new (requireNodeSqlite().DatabaseSync)(pathname, options);
 }
 
