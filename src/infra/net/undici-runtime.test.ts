@@ -25,7 +25,6 @@ const DESTINATION_AGENT = Symbol("destination agent");
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-  MockProxyAgent.latest = undefined;
   poolCtor.mockReset();
   proxyAgentCtor.mockReset();
   proxyConnect.mockReset();
@@ -78,7 +77,6 @@ class MockEnvHttpProxyAgent extends EventEmitter {
 }
 
 class MockProxyAgent extends EventEmitter {
-  static latest: MockProxyAgent | undefined;
   readonly [DESTINATION_AGENT]: MockAgent;
 
   constructor(public readonly options: unknown) {
@@ -87,7 +85,6 @@ class MockProxyAgent extends EventEmitter {
       expectOptionsRecord(options, "expected ProxyAgent options"),
     );
     proxyAgentCtor(options);
-    MockProxyAgent.latest = this;
   }
 }
 
@@ -202,30 +199,20 @@ describe("installed dispatcher lifecycle", () => {
     expect(output.trim()).toBe("ok");
   });
 
-  it.each([["destroy", "destroyed"]] as const)(
-    "supports %s without a runtime override",
-    async (method, state) => {
-      const dispatcher = createHttp1Agent();
+  it("supports destroy without a runtime override", async () => {
+    const dispatcher = createHttp1Agent();
 
-      await dispatcher[method]();
+    await dispatcher.destroy();
 
-      expect(dispatcher[state]).toBe(true);
-    },
-  );
+    expect(dispatcher.destroyed).toBe(true);
+  });
 });
 
 describe("undici dispatcher errors", () => {
-  it.each([
-    {
-      name: "direct agent client",
-      createClient: () => {
-        const agent = createHttp1Agent() as unknown as MockAgent;
-        return agent.createOriginDispatcher({ connections: 1 });
-      },
-    },
-  ])("handles an internal error from $name before connect", ({ createClient }) => {
+  it("handles an internal error from direct agent client before connect", () => {
     installUndiciRuntimeDeps();
-    const client = createClient();
+    const agent = createHttp1Agent() as unknown as MockAgent;
+    const client = agent.createOriginDispatcher({ connections: 1 });
     const error = new Error("stream handler aborted");
 
     expect(() => client.emit("error", error)).not.toThrow();

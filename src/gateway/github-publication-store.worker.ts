@@ -254,7 +254,7 @@ export function insertGitHubPublicationRequest(
   input.assertCurrent();
   const { request, identity, worktree, claim, snapshot } = input;
   const query = githubPublicationDatabase(db);
-  const inserted = executeSqliteQuerySync(
+  const inserted = executeSqliteQueryTakeFirstSync(
     db,
     query
       .insertInto("github_publication_requests")
@@ -286,15 +286,20 @@ export function insertGitHubPublicationRequest(
         status: "requested",
         updated_at_ms: input.now,
       })
-      .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing()),
+      .onConflict((conflict) => conflict.columns(["session_id", "idempotency_key"]).doNothing())
+      .returningAll(),
   );
-  if (inserted.numAffectedRows === 1n) {
+  if (inserted) {
     insertGitHubPublicationSessionLifecycle(db, {
       publicationKind: "shared",
       requestId: input.requestId,
       lifecycleRevision: input.lifecycleRevision,
       requester: input.requester,
     });
+    input.assertCurrent();
+    githubPublicationReceipts.stageRow(db, "shared", inserted);
+    deferSharedGitHubPublicationChanged(db, inserted);
+    return inserted;
   }
   const stored = readGitHubPublicationRequest(db, {
     sessionId: input.sessionId,
@@ -322,10 +327,6 @@ export function insertGitHubPublicationRequest(
     }
   }
   input.assertCurrent();
-  if (inserted.numAffectedRows === 1n) {
-    githubPublicationReceipts.stageRow(db, "shared", stored);
-    deferSharedGitHubPublicationChanged(db, stored);
-  }
   return stored;
 }
 

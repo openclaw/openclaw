@@ -27,13 +27,12 @@ async function mountTab(
   request = createGatewayRequestMock().mockResolvedValue(
     catalogPage([{ threadId: "stable", name: "Stable catalog" }]),
   ),
-  events: string[] | undefined = ["sessions.catalog.changed"],
 ) {
   const gateway = createGatewayHarness(createTestGatewayClient(request));
   gateway.publish({
     hello: {
       auth: { role: "operator", scopes: ["operator.read"] },
-      features: { methods: ["sessions.catalog.list"], events },
+      features: { methods: ["sessions.catalog.list"] },
     } as ApplicationGatewaySnapshot["hello"],
   });
   const { sidebar } = await mountSidebar(
@@ -57,41 +56,40 @@ describe("AppSidebar catalog event refresh", () => {
     vi.useRealTimers();
   });
 
-  it("ignores session churn and unrelated agents while coalescing catalog event bursts", async () => {
+  it("ignores session churn while coalescing tab activation bursts", async () => {
     const { gateway, request } = await mountTab();
     gateway.publishEvent("sessions.changed", {
       agentId: "research",
       sessionKey: "agent:research:x",
     });
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "research" });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(1);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(5_000);
     expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps a stable 30-second fallback when catalog changes are not advertised", async () => {
-    const events = ["sessions.changed"];
+  it("discovers native sessions every two minutes while visible", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce(catalogPage([]))
       .mockResolvedValue(catalogPage([{ threadId: "discovered", name: "New catalog row" }]));
-    const { gateway, sidebar } = await mountTab(request, events);
-    gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+    const { gateway, sidebar } = await mountTab(request);
     gateway.publishEvent("sessions.changed", { agentId: "main", sessionKey: "agent:main:x" });
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect.soft(request).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(2);
     expect(sidebar.textContent).toContain("New catalog row");
-    await vi.advanceTimersByTimeAsync(29_999);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(request).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
     expect(request).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(6 * 60_000);
+    expect(request).toHaveBeenCalledTimes(6);
   });
 
   it.each(["recovered", "exhausted"] as const)("paces busy retries until %s", async (outcome) => {
@@ -112,14 +110,14 @@ describe("AppSidebar catalog event refresh", () => {
     } else {
       request.mockRejectedValue(error);
     }
-    const { gateway, sidebar } = await mountTab(request);
+    const { sidebar } = await mountTab(request);
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Stable catalog");
     expect(sidebar.sessionData.sessionCatalogRefreshStatus.error).toBeNull();
     if (outcome === "recovered") {
       for (let second = 0; second < 4; second += 1) {
-        gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+        document.dispatchEvent(new Event("visibilitychange"));
         await vi.advanceTimersByTimeAsync(1_000);
         expect(request).toHaveBeenCalledTimes(2);
       }
@@ -148,7 +146,7 @@ describe("AppSidebar catalog event refresh", () => {
       });
       expect(warning).toHaveBeenCalledOnce();
     }
-    await vi.advanceTimersByTimeAsync(300_000);
+    await vi.advanceTimersByTimeAsync(119_999);
     expect(request).toHaveBeenCalledTimes(outcome === "recovered" ? 3 : 5);
   });
 
@@ -243,10 +241,10 @@ describe("AppSidebar catalog event refresh", () => {
     let visibility: DocumentVisibilityState = "visible";
     const spy = vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
     try {
-      const { gateway, request, sidebar } = await mountTab();
+      const { request, sidebar } = await mountTab();
       const context = sidebar.sessionData.context;
       context?.connectionBootstrap.setForegroundRoute(undefined);
-      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      document.dispatchEvent(new Event("visibilitychange"));
       await vi.advanceTimersByTimeAsync(5_000);
       visibility = "hidden";
       document.dispatchEvent(new Event("visibilitychange"));

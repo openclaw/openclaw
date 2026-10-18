@@ -5,6 +5,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -60,6 +62,85 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     current().opts.onHello?.(HELLO);
   }
+
+  it.each(["session", "agent", "short", "late"])(
+    "shares the connect %s catalog across cold readers and returns",
+    async (kind) => {
+      vi.useFakeTimers();
+      const scope = {
+        agentId: "main",
+        ...(kind !== "agent"
+          ? { sessionKey: "agent:main:12345678-1234-1234-1234-123456789abc" }
+          : {}),
+      };
+      const catalog = { models: [{ id: "first", provider: "fixture", name: "First" }] };
+      const target =
+        kind === "agent" ? {} : kind === "short" ? { agentId: "main", shortId: "12345678" } : scope;
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => target }));
+      gateway.start();
+      expect(current().opts.modelCatalog).toEqual(target);
+      current().opts.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      if (kind === "late") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const client = gateway.snapshot.client!;
+      const first = loadModelCatalog(client, scope);
+      const shared = loadModelCatalog(client, scope);
+      expect(current().request).not.toHaveBeenCalledWith("models.list", expect.anything());
+      current().opts.onEvent?.(createGatewayEvent("models.snapshot", { target, scope, catalog }));
+      expect(await first).toEqual(catalog);
+      expect(await shared).toEqual(catalog);
+      const other = { agentId: "main", sessionKey: "agent:main:other" };
+      await loadModelCatalog(client, other);
+      await loadModelCatalog(client, scope);
+      await loadModelCatalog(client, other);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { ...other, view: "configured" }],
+      ]);
+    },
+  );
+
+  it.each(["timeout", "invalidation", "refresh", "reconnect"])(
+    "recovers a waiting bootstrap read after %s without publishing retired facts",
+    async (recovery) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      expect(current().opts.modelCatalog).toEqual(scope);
+      current().opts.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const client = gateway.snapshot.client!;
+      const waiting = loadModelCatalog(client, scope);
+      const outcome = waiting.catch((error: unknown) => error);
+      if (recovery === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else if (recovery === "invalidation") {
+        invalidateModelCatalogCache(client, scope);
+      } else if (recovery === "refresh") {
+        await loadModelCatalog(client, { ...scope, refresh: true });
+      } else {
+        current().opts.onClose?.({ code: 1006, reason: "restart", willRetry: true });
+        expect(await outcome).toMatchObject({ name: "AbortError" });
+        expect(current().request).not.toHaveBeenCalled();
+        return;
+      }
+      expect(await outcome).toEqual(catalog);
+      current().opts.onEvent?.(
+        createGatewayEvent("models.snapshot", {
+          target: scope,
+          scope,
+          catalog: { models: [{ id: "retired", provider: "fixture", name: "Retired" }] },
+        }),
+      );
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(
+        current().request.mock.calls.filter(([method]) => method === "models.list"),
+      ).toHaveLength(1);
+    },
+  );
 
   function unavailable(reason: string, details: Record<string, unknown>, code = 1013) {
     return {
@@ -133,14 +214,22 @@ describe("createApplicationGateway connection ownership", () => {
     const legacyHello = {
       ...HELLO,
       server: { version: "2026.7.20", connId: "legacy-conn" },
+      features: { methods: ["plugins.reload"] },
     };
 
     current().opts.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("connected");
+    const capabilities = gateway.snapshot.pluginCapabilities;
+    expect(capabilities).not.toBeNull();
 
     current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
-    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.hello).toBe(legacyHello);
+    expect(gateway.snapshot.pluginCapabilities).toBe(capabilities);
+    const staleHello = { ...legacyHello };
+    current().opts.onHello?.(staleHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.hello).toBe(staleHello);
+    expect(gateway.snapshot.pluginCapabilities).toBeNull();
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {
@@ -151,7 +240,13 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.connect();
     current().opts.onHello?.({
       ...HELLO,
-      snapshot: { sessionDefaults: { defaultAgentId: "roboclaw" } },
+      snapshot: {
+        sessionDefaults: {
+          defaultAgentId: "roboclaw",
+          mainKey: "main",
+          mainSessionKey: "agent:roboclaw:main",
+        },
+      },
     });
     expect(gateway.snapshot.assistantAgentId).toBe("roboclaw");
     gateway.stop();

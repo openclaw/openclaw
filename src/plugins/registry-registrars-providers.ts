@@ -2,6 +2,7 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentHarness, AgentHarnessRegistrationOptions } from "../agents/harness/types.js";
 import type { AgentExecutorController } from "./agent-executor-controller.types.js";
+import { warnOnMissingCliBackendModelProvider } from "./cli-backend-registration.js";
 import { getCoreEmbeddingProvider } from "./core-embedding-providers.js";
 import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -49,7 +50,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       record.providerIds.push(id);
     }
     if (normalizedProvider.normalizeToolSchemas) {
-      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas);
+      getPluginInstance(record)?.admitFactory(normalizedProvider.normalizeToolSchemas, "tool");
     }
     registry.providers.push(
       createRegistration(record, {
@@ -174,6 +175,9 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       );
       return;
     }
+    warnOnMissingCliBackendModelProvider(backend, (message) =>
+      reportRegistrationWarning(record, message),
+    );
     if (backend.prepareExecution) {
       getPluginInstance(record)?.admitFactory(backend.prepareExecution);
     }
@@ -249,6 +253,7 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     <T extends { id: string }>(params: {
       kindLabel: string;
       factory?: (provider: T) => ((...args: never[]) => unknown) | undefined;
+      factoryResult?: "tool";
       registrations: Array<PluginOwnedProviderRegistration<T>>;
       ownedIds: (record: PluginRecord) => string[];
       catalogKinds?: Parameters<typeof registerModelCatalogProvider>[1]["kinds"];
@@ -274,7 +279,10 @@ export function createProviderRegistrars(state: PluginRegistryState) {
       }
       const factory = params.factory?.(provider);
       if (factory) {
-        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(factory);
+        (getPluginValueInstance(factory) ?? getPluginInstance(record))?.admitFactory(
+          factory,
+          params.factoryResult,
+        );
       }
       params.registrations.push(
         createIdentityRegistration(record, {
@@ -388,12 +396,14 @@ export function createProviderRegistrars(state: PluginRegistryState) {
     registerWebFetchProvider: createProviderLikeRegistrar({
       kindLabel: "web fetch provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webFetchProviders,
       ownedIds: (record) => record.webFetchProviderIds,
     }),
     registerWebSearchProvider: createProviderLikeRegistrar({
       kindLabel: "web search provider",
       factory: (provider) => provider.createTool,
+      factoryResult: "tool",
       registrations: registry.webSearchProviders,
       ownedIds: (record) => record.webSearchProviderIds,
     }),

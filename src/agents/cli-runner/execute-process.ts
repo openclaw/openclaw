@@ -12,6 +12,7 @@ import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
+import { withChildProcessOperation } from "../../process/spawn-diagnostics.js";
 import type { RunExit } from "../../process/supervisor/types.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
@@ -90,7 +91,11 @@ export async function executeCliProcess(params: {
     sessionId: runParams.sessionId,
     lane: runParams.lane,
   };
-  const outputErrorContext = { ...failoverContext, runId: runParams.runId };
+  const outputErrorContext = {
+    ...failoverContext,
+    runId: runParams.runId,
+    classifyErrorCode: context.backendResolved.classifyErrorCode,
+  };
   // buildCliArgs emits this option only for an actual checkpointed resume.
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
@@ -177,18 +182,18 @@ export async function executeCliProcess(params: {
   // carry output, never the authority or deadline used to protect its execution.
   const reportStreamProgress = createModelCallStreamProgressReporter({
     recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+    target: {
+      runId: runParams.runId,
+      ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
+      ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
+    },
   });
-  const streamProgressTarget = {
-    runId: runParams.runId,
-    ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
-    ...(runParams.sessionId ? { sessionId: runParams.sessionId } : {}),
-  };
   const consumeStdout = (chunk: string) => {
     const chunkBytes = Buffer.byteLength(chunk);
     params.diagnostics?.observeCliOutput(chunk, "stdout", chunkBytes);
     if (chunkBytes > 0) {
       if (params.events.activeParsedToolCount() === 0) {
-        reportStreamProgress(streamProgressTarget);
+        reportStreamProgress();
       } else {
         // Tool chatter renews the transport's quiet allowance, not the separate
         // blocked-tool progress clock.
@@ -350,30 +355,34 @@ export async function executeCliProcess(params: {
           assertProcessCurrent,
         );
         const managedRun = await runWithAgentToolSourceExecutionScope(params.assertCurrent, () =>
-          supervisor.spawn({
-            assertCurrent: params.assertCurrent,
-            prepareSpawn: params.argsPrompt ? context.cliHistoryWriter?.assertReadable : undefined,
-            prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
-            runId: runParams.runId,
-            scopeKey,
-            replaceExistingScope: Boolean(params.useResume && scopeKey),
-            mode: "child",
-            argv: [params.executionCommand, ...params.executionLeadingArgv],
-            resolveArgs: params.resolveExecutionArgs,
-            argv0: params.executionArgv0,
-            timeoutMs: runParams.timeoutMs,
-            noOutputTimeoutMs: params.noOutputTimeoutMs,
-            onCancel: () => {
-              processCancelled = true;
-            },
-            cwd: context.cwd ?? context.workspaceDir,
-            env: params.env,
-            input: params.stdin ?? "",
-            secretInput: context.preparedBackend.secretInput,
-            captureOutput: false,
-            onStdout: consumeStdout,
-            onStderr: consumeStderr,
-          }),
+          withChildProcessOperation("agent.cli", () =>
+            supervisor.spawn({
+              assertCurrent: params.assertCurrent,
+              prepareSpawn: params.argsPrompt
+                ? context.cliHistoryWriter?.assertReadable
+                : undefined,
+              prepareInput: params.stdin ? context.cliHistoryWriter?.assertReadable : undefined,
+              runId: runParams.runId,
+              scopeKey,
+              replaceExistingScope: Boolean(params.useResume && scopeKey),
+              mode: "child",
+              argv: [params.executionCommand, ...params.executionLeadingArgv],
+              resolveArgs: params.resolveExecutionArgs,
+              argv0: params.executionArgv0,
+              timeoutMs: runParams.timeoutMs,
+              noOutputTimeoutMs: params.noOutputTimeoutMs,
+              onCancel: () => {
+                processCancelled = true;
+              },
+              cwd: context.cwd ?? context.workspaceDir,
+              env: params.env,
+              input: params.stdin ?? "",
+              secretInput: context.preparedBackend.secretInput,
+              captureOutput: false,
+              onStdout: consumeStdout,
+              onStderr: consumeStderr,
+            }),
+          ),
         );
         managedRunPid = managedRun.pid;
         const detachReplyBackend = attachCliReplyBackend(runParams, () => {
@@ -555,6 +564,7 @@ export async function executeCliProcess(params: {
     const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
+      classifyErrorCode: context.backendResolved.classifyErrorCode,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
       retryEmptyFailure,

@@ -2,6 +2,7 @@ import {
   normalizeOptionalString as stringifyConfigValue,
   normalizeStringEntriesLower,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "./providers/index.js";
 import { isRepoRootRelativeRef } from "./repo-path.js";
 import {
@@ -12,7 +13,6 @@ import {
   readQaScorecardTaxonomyReport,
   type QaScorecardTaxonomyReport,
 } from "./scorecard-taxonomy.js";
-import { shellQuote } from "./shell-quote.js";
 
 type QaCoverageScenarioSummary = ReturnType<typeof summarizeScenario>;
 type QaScenarioSearchMatch = ReturnType<typeof summarizeScenarioSearchMatch>;

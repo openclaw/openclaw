@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { resolveRuntimeScriptPosition } from "../daemon/runtime-binary.js";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
 import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
@@ -263,12 +264,11 @@ function resolveArgumentPath(workspaceDir: string, arg: string): string | undefi
 }
 
 export function assertWorkspaceArgv(workspaceDir: string, argv: readonly string[]): void {
-  // This private transport owns cwd and direct path operands; it is not the user-facing
-  // system.run policy domain, so absolute/relative escapes must never cross its workspace.
+  // This private transport owns cwd and direct path operands, separate from system.run policy.
+  const { sourceIndices } = resolveRuntimeScriptPosition(argv);
   for (const [index, arg] of argv.entries()) {
-    // Canonical workspace helpers travel as the source operand to `node -e`.
-    // Treating JavaScript slash characters as host paths rejects the shipped scripts.
-    if (index > 0 && argv[index - 1] === "-e" && path.basename(argv[0] ?? "") === "node") {
+    // Runtime eval source can contain slashes without representing a host path.
+    if (sourceIndices.includes(index)) {
       continue;
     }
     const candidate = resolveArgumentPath(workspaceDir, arg);

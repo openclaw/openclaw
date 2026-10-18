@@ -474,6 +474,8 @@ it.each(["returned", "cooperating"] as const)(
           expect(fixture.state.database!.isOpen).toBe(true);
           expect(fixture.state.disposals).toBe(0);
         } finally {
+          // Native worker shutdown joins through setImmediate; fake timers must end first.
+          vi.useRealTimers();
           resume.resolve();
           await Promise.allSettled([closing, descendant]);
           await (release ?? resources.release());

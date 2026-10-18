@@ -1,7 +1,10 @@
 import type { RawBuilder, Selectable } from "kysely";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import { emptyOutboundDeliveryQueueAdmission } from "./delivery-queue-cache.js";
+import {
+  emptyOutboundDeliveryQueueAdmission,
+  failedDeliveryQueueHealthAdmission,
+} from "./delivery-queue-cache.js";
 import { deriveDeliveryQueueRetentionColumns } from "./delivery-queue-retention-columns.js";
 import type { DeliveryQueueEntryState } from "./delivery-queue-sqlite.types.js";
 import {
@@ -123,31 +126,41 @@ export function pruneDeliveryQueueTombstones(
         ),
       ),
   );
+  if ((result.numAffectedRows ?? 0n) > 0n) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
   const ordinaryPruned = prefix ? false : pruneOrdinaryDeliveryReceipts(db, now);
   return (result.numAffectedRows ?? 0n) > 0n || ordinaryPruned;
 }
 
 /** Cheap maintenance cleanup: age predicates only, with no window sort. */
 export function pruneDeliveryQueueTombstoneAges(db: EngineConnection, now: number): void {
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<DeliveryQueueDatabase>(db)
       .deleteFrom("delivery_queue_entries")
       .where((eb) =>
-        eb(
-          eb.refTuple("queue_name", "id"),
-          "in",
-          eb
-            .selectFrom(boundedDeliveryReceipts(db).as("policies"))
-            .select(["queue_name", "id"])
-            .where((policy) =>
-              policy("enqueued_at", "<", policy(policy.val(now), "-", policy.ref("max_age_ms"))),
-            )
-            .$asTuple("queue_name", "id"),
-        ),
+        eb.or([
+          eb.and([
+            eb("status", "in", ["completed", "failed"]),
+            eb("recovery_state", "=", "completed_bounded"),
+            eb("retention_id_prefix", "is not", null),
+            eb("enqueued_at", "<", eb(eb.val(now), "-", eb.ref("retention_max_age_ms"))),
+          ]),
+          eb.and([
+            eb("status", "=", "completed"),
+            eb("enqueued_at", "<", now - COMPLETED_TOMBSTONE_RETENTION_MS),
+            eb.or([
+              eb("recovery_state", "is", null),
+              eb("recovery_state", "not in", ["completed_permanent", "completed_bounded"]),
+            ]),
+          ]),
+        ]),
       ),
   );
-  pruneOrdinaryDeliveryReceipts(db, now);
+  if ((result.numAffectedRows ?? 0n) > 0n) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
 }
 
 /** CAS-compacts one exact row, or deletes it when no fence is authored. */
@@ -185,7 +198,11 @@ export function terminalizeBoundDeliveryQueueEntry(
           failed_at: now,
         })
     : queueDb.deleteFrom("delivery_queue_entries").where((eb) => eb.and(expected));
-  return executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  const changed = executeSqliteQuerySync(db, query).numAffectedRows === 1n;
+  if (changed) {
+    publishSqliteDatabaseAdmission(db, failedDeliveryQueueHealthAdmission, undefined);
+  }
+  return changed;
 }
 
 function pruneOrdinaryDeliveryReceipts(db: EngineConnection, now: number): boolean {
@@ -361,6 +378,7 @@ export function upsertBoundDeliveryQueueEntryInDatabase(
   if (changed) {
     // Every queue insertion/replacement passes here; deletion cannot make an empty queue nonempty.
     publishSqliteDatabaseAdmission(database.db, emptyOutboundDeliveryQueueAdmission, undefined);
+    publishSqliteDatabaseAdmission(database.db, failedDeliveryQueueHealthAdmission, undefined);
   }
   return changed;
 }

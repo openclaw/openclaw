@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 it.each(["acknowledged", "uncertain"] as const)(
-  "does not publish stale reads after an %s write",
+  "publishes metadata only after an %s write settles",
   async (outcome) => {
     const original = {
       clientInformation: { client_id: "original-client" },
@@ -67,27 +67,19 @@ it.each(["acknowledged", "uncertain"] as const)(
     } satisfies McpOAuthStore;
     read.mockResolvedValueOnce(original);
     const provider = await createMcpOAuthClientProvider(providerParams);
-    const earlier = createDeferred<McpOAuthStore>();
-    read.mockReturnValueOnce(earlier.promise);
-    const information = provider.clientInformation();
     const failure = new Error("The write committed, but coordinator release failed");
     if (outcome === "uncertain") {
       update.mockRejectedValueOnce(failure);
       await expect(provider.saveClientInformation?.(committed.clientInformation)).rejects.toBe(
         failure,
       );
-    } else {
-      update.mockResolvedValueOnce({ store: committed, applied: true });
-      await provider.saveClientInformation?.(committed.clientInformation);
-      expect(provider.redirectUrl).toBe(committed.redirectUrl);
-    }
-    earlier.resolve(original);
-    expect(await information).toEqual(original.clientInformation);
-    if (outcome === "uncertain") {
       expect(() => provider.redirectUrl).toThrow(failure);
       expect(() => provider.clientMetadata).toThrow(failure);
       read.mockResolvedValueOnce(committed);
       await provider.discoveryState?.();
+    } else {
+      update.mockResolvedValueOnce({ store: committed, applied: true });
+      await provider.saveClientInformation?.(committed.clientInformation);
     }
     expect(provider.redirectUrl).toBe(committed.redirectUrl);
     expect(provider.clientMetadata.redirect_uris).toEqual([committed.redirectUrl]);

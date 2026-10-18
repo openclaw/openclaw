@@ -1,7 +1,6 @@
-// Telegram tests cover group access.base access plugin behavior.
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import { validateTestChannelConfig } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { mergeTelegramAccountConfig } from "./account-config.js";
 import { normalizeAllowFrom, type NormalizedAllowFrom } from "./bot-access.js";
@@ -20,6 +19,17 @@ function allow(entries: string[], hasWildcard = false): NormalizedAllowFrom {
   };
 }
 
+function runBaseAccess(overrides: Partial<Parameters<typeof evaluateTelegramGroupBaseAccess>[0]>) {
+  return evaluateTelegramGroupBaseAccess({
+    hasGroupAllowOverride: true,
+    effectiveGroupAllow: allow([]),
+    senderId: "12345",
+    enforceAllowOverride: true,
+    requireSenderForAllowOverride: true,
+    ...overrides,
+  });
+}
+
 describe("evaluateTelegramGroupBaseAccess", () => {
   it("normalizes sender-only allowlist entries and rejects group ids", () => {
     const result = normalizeAllowFrom(["-1001234567890", " tg:-100999 ", "745123456", "@someone"]);
@@ -33,69 +43,26 @@ describe("evaluateTelegramGroupBaseAccess", () => {
   });
 
   it("fails closed when explicit group allowFrom override is empty", () => {
-    const result = evaluateTelegramGroupBaseAccess({
-      hasGroupAllowOverride: true,
-      effectiveGroupAllow: allow([]),
-      senderId: "12345",
-      enforceAllowOverride: true,
-      requireSenderForAllowOverride: true,
-    });
-
-    expect(result).toEqual({ allowed: false, reason: "group-override-unauthorized" });
+    expect(runBaseAccess({})).toEqual({ allowed: false, reason: "group-override-unauthorized" });
   });
 
   it("allows group message when override is not configured", () => {
-    const result = evaluateTelegramGroupBaseAccess({
-      hasGroupAllowOverride: false,
-      effectiveGroupAllow: allow([]),
-      senderId: "12345",
-      enforceAllowOverride: true,
-      requireSenderForAllowOverride: true,
-    });
-
-    expect(result).toEqual({ allowed: true });
+    expect(runBaseAccess({ hasGroupAllowOverride: false })).toEqual({ allowed: true });
   });
 
   it("allows sender explicitly listed in override", () => {
-    const result = evaluateTelegramGroupBaseAccess({
-      hasGroupAllowOverride: true,
-      effectiveGroupAllow: allow(["12345"]),
-      senderId: "12345",
-      enforceAllowOverride: true,
-      requireSenderForAllowOverride: true,
-    });
-
-    expect(result).toEqual({ allowed: true });
+    expect(runBaseAccess({ effectiveGroupAllow: allow(["12345"]) })).toEqual({ allowed: true });
   });
 });
-
-/**
- * Minimal stubs shared across group policy tests.
- */
-const baseCfg = {
-  channels: { telegram: {} },
-} as unknown as OpenClawConfig;
-
-const baseTelegramCfg: TelegramAccountConfig = {
-  groupPolicy: "allowlist",
-} as unknown as TelegramAccountConfig;
-
-const emptyAllow = { entries: [], hasWildcard: false, hasEntries: false, invalidEntries: [] };
-const senderAllow = {
-  entries: ["111"],
-  hasWildcard: false,
-  hasEntries: true,
-  invalidEntries: [],
-};
 
 type GroupAccessParams = Parameters<typeof evaluateTelegramGroupPolicyAccess>[0];
 
 const DEFAULT_GROUP_ACCESS_PARAMS: GroupAccessParams = {
   isGroup: true,
   chatId: "-100123456",
-  cfg: baseCfg,
-  telegramCfg: baseTelegramCfg,
-  effectiveGroupAllow: emptyAllow,
+  cfg: { channels: { telegram: {} } },
+  telegramCfg: { groupPolicy: "allowlist" },
+  effectiveGroupAllow: allow([]),
   senderId: "999",
   resolveGroupPolicy: () => ({
     allowlistEnabled: true,
@@ -110,8 +77,6 @@ function runAccess(overrides: Partial<GroupAccessParams>) {
   return evaluateTelegramGroupPolicyAccess({
     ...DEFAULT_GROUP_ACCESS_PARAMS,
     ...overrides,
-    resolveGroupPolicy:
-      overrides.resolveGroupPolicy ?? DEFAULT_GROUP_ACCESS_PARAMS.resolveGroupPolicy,
   });
 }
 
@@ -167,15 +132,7 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
   );
 
   it("allows a group explicitly listed in groups config even when no allowFrom entries exist", () => {
-    const result = runAccess({
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: true,
-        allowed: true,
-        groupConfig: { requireMention: false },
-      }),
-    });
-
-    expect(result).toEqual({ allowed: true, groupPolicy: "allowlist" });
+    expect(runAccess({})).toEqual({ allowed: true, groupPolicy: "allowlist" });
   });
 
   it("still blocks when only wildcard match and no allowFrom entries", () => {
@@ -212,7 +169,7 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
 
   it("blocks unauthorized sender even when chat is explicitly allowed and sender entries exist", () => {
     const result = runAccess({
-      effectiveGroupAllow: senderAllow,
+      effectiveGroupAllow: allow(["111"]),
       senderId: "222",
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,
@@ -293,12 +250,7 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
   it("blocks allowlist groups without sender identity before sender matching", () => {
     const result = runAccess({
       senderId: undefined,
-      effectiveGroupAllow: senderAllow,
-      resolveGroupPolicy: () => ({
-        allowlistEnabled: true,
-        allowed: true,
-        groupConfig: { requireMention: false },
-      }),
+      effectiveGroupAllow: allow(["111"]),
     });
 
     expect(result).toEqual({
@@ -310,7 +262,7 @@ describe("evaluateTelegramGroupPolicyAccess", () => {
 
   it("allows authorized sender in wildcard-matched group with sender entries", () => {
     const result = runAccess({
-      effectiveGroupAllow: senderAllow,
+      effectiveGroupAllow: allow(["111"]),
       senderId: "111",
       resolveGroupPolicy: () => ({
         allowlistEnabled: true,

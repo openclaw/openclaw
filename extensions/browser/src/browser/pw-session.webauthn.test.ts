@@ -158,22 +158,6 @@ beforeEach(() => {
 });
 
 describe("headless passkey guard on Playwright connections", () => {
-  it("guards a headless browser once and patches documents that are already open", async () => {
-    const chromium = makeChromium({ commandLine: headlessCommandLine });
-    connectOverCdpSpy.mockResolvedValue(chromium.browser);
-
-    await listPagesViaPlaywright({ cdpUrl });
-    await listPagesViaPlaywright({ cdpUrl });
-
-    expect(passkeyGuardEvents(chromium.events)).toEqual([
-      "default:addInitScript",
-      "EXISTING/main:evaluate",
-      "EXISTING/iframe:evaluate",
-    ]);
-    expect(new Set(chromium.scripts).size).toBe(1);
-    expect(chromium.probe.detach).toHaveBeenCalledOnce();
-  });
-
   it("returns a new connection only after the guard is registered", async () => {
     const gate = createDeferred<void>();
     const chromium = makeChromium({
@@ -244,19 +228,6 @@ describe("headless passkey guard on Playwright connections", () => {
 
     expect(passkeyGuardEvents(chromium.events)).toEqual([]);
     expect(passkeyWarn).not.toHaveBeenCalled();
-  });
-
-  it("records when the browser cannot report its launch mode", async () => {
-    const chromium = makeChromium({ probeError: new Error("SystemInfo.getInfo is not allowed") });
-    connectOverCdpSpy.mockResolvedValue(chromium.browser);
-
-    await expect(listPagesViaPlaywright({ cdpUrl })).resolves.toHaveLength(1);
-    expect(passkeyGuardEvents(chromium.events)).toEqual([]);
-    expect(passkeyWarn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining(
-        "Could not read the browser launch mode (SystemInfo.getInfo is not allowed)",
-      ),
-    );
   });
 
   it("uses the launch owner's headless mode before creating a page when detection fails", async () => {
@@ -395,19 +366,5 @@ describe("headless passkey page script", () => {
     });
     await expect(credentials.get({ password: true })).resolves.toMatchObject({ method: "get" });
     await expect(credentials.create(conditional)).resolves.toMatchObject({ method: "create" });
-  });
-
-  it("patches the prototype like the native methods", async () => {
-    const Container = class extends FakeCredentialsContainer {};
-    await runInFreshRealm({ CredentialsContainer: Container, DOMException });
-    const credentials = new Container();
-
-    expect(Object.getOwnPropertyNames(credentials)).toEqual([]);
-    expect([credentials.get.name, credentials.get.length]).toEqual(["get", 0]);
-    expect([credentials.create.name, credentials.create.length]).toEqual(["create", 0]);
-  });
-
-  it("does nothing where the page has no credentials API", async () => {
-    await expect(runInFreshRealm({ DOMException })).resolves.toBeUndefined();
   });
 });

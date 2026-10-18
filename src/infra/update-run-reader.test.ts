@@ -12,7 +12,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
-import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.test-support.js";
 import {
   createUpdateRun,
   findActiveUpdateRun,

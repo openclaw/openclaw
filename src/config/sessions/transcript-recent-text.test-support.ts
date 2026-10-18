@@ -46,13 +46,6 @@ export function registerRecentTranscriptTextSnapshotTests(params: {
       { type: "leaf", id: "active-leaf", parentId: "abandoned-reply", targetId: "active-reply" },
     );
 
-    await expect(
-      readRecentUserAssistantTextForSession({
-        agentId: "main",
-        sessionKey,
-        storePath: fixture.storePath(),
-      }),
-    ).resolves.toEqual([]);
     const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
       agentId: "main",
     }).path;

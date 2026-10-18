@@ -79,14 +79,19 @@ for (const stopMethod of ["button", "slash"] as const) {
 
   async function capture(page: Page, name: string, surface: Locator, content: Locator[]) {
     const text = (await page.locator("body").textContent()) ?? "";
-    for (const secret of [
-      instance.gatewayToken,
-      instance.hookToken,
-      instance.stateDir,
-      instance.homeDir,
-      "synthetic-background-fixture-key",
-    ]) {
-      expect(text.includes(secret), "proof must contain synthetic public content only").toBe(false);
+    // oxlint-disable-next-line unicorn/prefer-dom-node-text-content -- innerText separately proves rendered visible text.
+    const visibleText = await page.locator("body").innerText();
+    for (const [category, secret] of [
+      ["gatewayToken", instance.gatewayToken],
+      ["hookToken", instance.hookToken],
+      ["stateDir", instance.stateDir],
+      ["homeDir", instance.homeDir],
+      ["fixtureKey", "synthetic-background-fixture-key"],
+    ] as const) {
+      expect(
+        text.includes(secret),
+        `${category}: visible-text-match=${visibleText.includes(secret)}`,
+      ).toBe(false);
     }
     expect(new URL(page.url()).hash).toBe("");
     const frame = await takeControlUiScreenshotFrame(page, surface, content, {
@@ -211,9 +216,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             await stop.waitFor({ state: "hidden" });
             proof.childClosed = true;
             proof.processOpenAfterStopReply = provider.processIsOpen();
-            // Preserve the genuine baseline before the expected failure waits for process cleanup.
-            // The suite closes the recording even when this pre-fix wait reaches the test deadline.
-            await capture(page, "stop-replied", pane, [composer, output]);
             proof.stage = "wait for physical process cleanup";
             await saveProof();
             expect(proof.processOpenAfterStopReply, "Stop must join physical command cleanup").toBe(

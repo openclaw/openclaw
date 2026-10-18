@@ -205,12 +205,6 @@ enum PermissionManager {
     private static func ensureLocation(
         interactive: Bool, isCurrent: @escaping @MainActor () -> Bool) async -> Bool
     {
-        guard CLLocationManager.locationServicesEnabled() else {
-            if interactive, !Task.isCancelled, isCurrent() {
-                SystemSettingsURLSupport.openPrivacySettings(for: .location)
-            }
-            return false
-        }
         let requireAlways = AppDefaults.standard.string(forKey: locationModeKey) == OpenClawLocationMode.always.rawValue
         let status = LocationPermissionRequester.shared.authorizationStatus
         if self.isLocationAuthorized(status: status, requireAlways: requireAlways) { return true }
@@ -310,31 +304,46 @@ final class LocationPermissionRequestCoordinator {
 @MainActor
 final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     static let shared = LocationPermissionRequester()
-    private let manager = CLLocationManager()
+    private let manager: CLLocationManager
+    private let openSettings: @MainActor () -> Void
+    private let locationServicesEnabled: @MainActor () -> Bool
     private let requests = LocationPermissionRequestCoordinator()
     private var timeoutTask: Task<Void, Never>?
     private var requestedAlways = false
 
-    override init() {
+    init(
+        manager: CLLocationManager = CLLocationManager(),
+        locationServicesEnabled: @escaping @MainActor () -> Bool = { CLLocationManager.locationServicesEnabled() },
+        openSettings: @escaping @MainActor () -> Void = {
+            SystemSettingsURLSupport.openPrivacySettings(for: .location)
+        })
+    {
+        self.manager = manager
+        self.locationServicesEnabled = locationServicesEnabled
+        self.openSettings = openSettings
         super.init()
         self.manager.delegate = self
     }
 
     var authorizationStatus: CLAuthorizationStatus {
-        // Core Location retains per-manager framework state, so status polling must reuse this process-lifetime owner.
-        self.manager.authorizationStatus
+        // Reuse the process-lifetime manager; system-wide disablement overrides its cached per-app grant.
+        self.locationServicesEnabled() ? self.manager.authorizationStatus : .denied
     }
 
     func request(
         always: Bool, isCurrent: @escaping @MainActor () -> Bool = { true }) async -> CLAuthorizationStatus
     {
-        let current = self.manager.authorizationStatus
+        let current = self.authorizationStatus
         if PermissionManager.isLocationAuthorized(status: current, requireAlways: always) {
             return current
         }
         guard !Task.isCancelled, isCurrent() else { return current }
         guard AppLaunchRuntimePlan.current.allowsActivation else {
             PermissionManager.reportDeferredRequest()
+            return current
+        }
+        if current == .denied || current == .restricted {
+            self.openSettings()
             return current
         }
 
@@ -372,7 +381,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
             }
             guard !Task.isCancelled, let self, self.requests.hasPendingRequests else { return }
             if self.requests.hasCurrentRequests {
-                SystemSettingsURLSupport.openPrivacySettings(for: .location)
+                self.openSettings()
             }
             self.finish(status: self.manager.authorizationStatus)
         }
@@ -404,7 +413,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
         let status = manager.authorizationStatus
         Task { @MainActor in
             if self.requests.hasCurrentRequests, status == .denied || status == .restricted {
-                SystemSettingsURLSupport.openPrivacySettings(for: .location)
+                self.openSettings()
             }
             self.finish(status: status)
         }

@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { addAbortListener } from "node:events";
-import type { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
@@ -153,22 +153,22 @@ type AgentWorkerPublicationOptions = {
   onAdmitted?: (request: SqliteWorkerAdmissionRequest) => void;
 };
 
-/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; retained until an announced stable removal window. */
+/** @deprecated Use openOpenClawAgentSqliteWorkerStoreV2 without a native handle; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync,
+  publicationSource: EngineConnection,
   worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  publicationSource: EngineConnection | { execution: AgentWorkerPublicationExecution },
   worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>>;
 // Keep the latest released shape last for consumers deriving parameters from this function.
 export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource:
-    | DatabaseSync
+    | EngineConnection
     | {
         execution: AgentWorkerPublicationExecution &
           Pick<OpenClawAgentDatabaseExecution, "capturePreparedGenerationClaim">;
@@ -178,7 +178,7 @@ export function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWork
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
-  publicationSource: DatabaseSync | { execution: AgentWorkerPublicationExecution },
+  publicationSource: EngineConnection | { execution: AgentWorkerPublicationExecution },
   worker: AgentWorkerPublicationOptions,
 ): Promise<OpenClawAgentSqliteWorkerStore<Operations>> {
   if (!("execution" in publicationSource)) {
@@ -208,7 +208,7 @@ export async function openOpenClawAgentSqliteWorkerStoreV2<
 async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
   inputOptions: OpenClawAgentDatabaseOptions,
   publicationSource:
-    | DatabaseSync
+    | EngineConnection
     | { execution: AgentWorkerPublicationExecution }
     | { authority: OpenClawAgentSqliteWorkerAuthorityV2 },
   worker: AgentWorkerPublicationOptions,
@@ -313,7 +313,8 @@ async function createOpenClawAgentSqliteWorkerStore<Operations extends SqliteWor
       !current ||
       current.db !== expectedDatabase ||
       !expectedDatabase.isOpen ||
-      normalizeDatabasePath(expectedDatabase.location() ?? "") !== prepared?.filename
+      normalizeDatabasePath(sqlPublicationAnchor(expectedDatabase).location() ?? "") !==
+        prepared?.filename
     ) {
       throw new Error("Borrowed agent database closed or changed before Worker admission");
     }

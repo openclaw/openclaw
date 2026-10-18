@@ -389,7 +389,11 @@ Send messages with clickable buttons. When a user clicks a button, the agent rec
 
 Buttons come from the semantic `presentation` payload (in normal agent replies and in `message action=send`). OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
 
-The options an `ask_user` question offers are also rendered as buttons, and tapping one answers
+Mattermost does not expose OpenClaw's built-in [`ask_user`](/tools/ask-user) tool.
+The agent asks in ordinary messages instead. Native agent runtimes can have
+their own question tools, whose behavior is separate from this availability rule.
+
+The options in a runtime-authored question are rendered as buttons, and tapping one answers
 that question directly. The question stays answerable by typing, and an option the Gateway does
 not index stays in the prose instead: the "Other…" choice, and any prompt that asks more than one
 question or whose question is multi-select, secret, or does not offer two to four distinct options.

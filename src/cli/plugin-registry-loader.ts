@@ -5,7 +5,9 @@ import type { CliPluginRegistryScope } from "./command-catalog-types.js";
 import { measureCliCommandStartup } from "./command-startup-timing.js";
 import { withConsoleLogsRoutedToStderr } from "./json-output-mode.js";
 
-const pluginRegistryModuleLoader = createLazyImportLoader(() => import("./plugin-registry.js"));
+const pluginRegistryModuleLoader = createLazyImportLoader(
+  () => import("../plugins/runtime/runtime-registry-loader.js"),
+);
 const sandboxRegistryModuleLoader = createLazyImportLoader(
   () => import("../agents/sandbox/registry.js"),
 );

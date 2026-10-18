@@ -169,6 +169,16 @@ export function createVitestResolveConfig(repoRoot: string) {
         replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
       },
       {
+        find: "@openclaw/gateway-protocol/session-row-deltas",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "session-row-deltas.ts",
+        ),
+      },
+      {
         find: "@openclaw/gateway-protocol/startup-unavailable",
         replacement: path.join(
           repoRoot,

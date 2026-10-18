@@ -5,14 +5,13 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import {
   emitAgentEventWithAssistantSourceIfCurrent,
   readAgentAssistantSource,
   type AgentAssistantProjection,
   type AgentAssistantSourceReceipt,
 } from "../infra/agent-events.js";
-import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
+import { normalizeTextForComparison } from "./embedded-agent-helpers/messaging-dedupe.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import {
@@ -45,6 +44,7 @@ type AssistantStreamScope = {
   active?: boolean;
   pending?: boolean;
   emitted?: boolean;
+  nextPartialReplyAt?: number;
 };
 
 const isStreamAppend = ({ data, finalMessage }: AssistantStreamDelivery) =>
@@ -67,7 +67,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
   let streamScope: AssistantStreamScope = {};
-  const drainPartialReply = (scope: AssistantStreamScope) => {
+  const drainPartialReply = (scope: AssistantStreamScope, force = false) => {
     if (
       !scope.delivery ||
       !scope.pending ||
@@ -76,6 +76,18 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     ) {
       return;
     }
+    // Preview consumers can read a full snapshot. Coalesce before that read;
+    // boundaries and settlement flush the last append even if the provider pauses.
+    const now = Date.now();
+    if (
+      !force &&
+      scope === streamScope &&
+      isStreamAppend(scope.delivery) &&
+      now < (scope.nextPartialReplyAt ?? 0)
+    ) {
+      return;
+    }
+    scope.nextPartialReplyAt = now + 75;
     const data = scope.delivery.data;
     scope.pending = false;
     // Reserve before invocation: callbacks may synchronously enqueue text or open another scope.
@@ -241,15 +253,21 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       if (!finalized || options?.finalMessage) {
         eventData = advanceStream(raw, data, options?.finalMessage === true);
         const displayData = advanceStream(display, data, options?.finalMessage === true);
-        assistantProjection = {
-          itemId: assistantItemId,
-          text: display.text,
-          replace: displayData?.replace === true,
-        };
+        assistantProjection =
+          options?.finalMessage || displayData?.replace
+            ? {
+                itemId: assistantItemId,
+                text: display.text,
+                replace: displayData?.replace === true,
+              }
+            : { itemId: assistantItemId, delta: displayData?.delta ?? "", replace: false };
+        if (eventData && !eventData.replace) {
+          assistantProjection.rawDelta = eventData.delta;
+        }
         finalText =
           data.phase === "final_answer"
             ? display.text
-            : display.text.startsWith(finalText)
+            : !displayData?.replace || display.text.startsWith(finalText)
               ? finalText
               : "";
         finalized = options?.finalMessage === true;
@@ -304,6 +322,22 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       }
       if (!scope.emitted && previous.eventData && eventData) {
         delivery.eventData = mergeStreamAppend(previous.eventData, eventData);
+        if (
+          previous.assistantProjection?.rawDelta !== undefined &&
+          delivery.assistantProjection?.rawDelta !== undefined
+        ) {
+          delivery.assistantProjection.rawDelta =
+            previous.assistantProjection.rawDelta + delivery.assistantProjection.rawDelta;
+        }
+        if (
+          previous.assistantProjection?.delta !== undefined &&
+          delivery.assistantProjection?.delta !== undefined
+        ) {
+          delivery.assistantProjection = {
+            ...delivery.assistantProjection,
+            delta: previous.assistantProjection.delta + delivery.assistantProjection.delta,
+          };
+        }
       }
       scope.delivery = delivery;
       scope.emitted = false;
@@ -472,7 +506,11 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             delivery.eventData = { ...delivery.eventData, text: "", delta: "" };
           }
           if (delivery.assistantProjection) {
-            delivery.assistantProjection = { ...delivery.assistantProjection, text: "" };
+            delivery.assistantProjection = {
+              itemId: delivery.assistantProjection.itemId,
+              replace: delivery.assistantProjection.replace,
+              text: "",
+            };
           }
         }
       }
@@ -525,11 +563,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
 
   const pushAssistantText = (text: string, normalizedText?: string) => {
-    if (
-      !text ||
-      (params.silentExpected && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) ||
-      shouldSkipAssistantText(text, normalizedText)
-    ) {
+    if (!text || params.silentExpected || shouldSkipAssistantText(text, normalizedText)) {
       return;
     }
     assistantTexts.push(text);
@@ -565,13 +599,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       // Without block replies, the final payload still owns text seen during interim streaming.
       replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
-    } else if (
-      !addedDuringMessage &&
-      text &&
-      (!chunkerHasBuffered || isSilentReplyText(text, SILENT_REPLY_TOKEN))
-    ) {
-      // Silent markers never produce block payloads. Retain their terminal
-      // evidence before the chunker consumes them without emitting text.
+    } else if (!addedDuringMessage && text && !chunkerHasBuffered) {
       pushAssistantText(text);
     }
 
@@ -584,6 +612,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const includePartialReplies = options?.includePartialReplies !== false;
     while (true) {
       const eventChain = state.pendingEventChain;
+      if (!eventChain && includePartialReplies) {
+        drainPartialReply(streamScope, true);
+      }
       const partialReplyTasks = includePartialReplies ? [...pendingPartialReplyTasks] : [];
       if (!eventChain && partialReplyTasks.length === 0) {
         return;

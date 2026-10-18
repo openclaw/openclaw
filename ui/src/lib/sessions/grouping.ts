@@ -59,7 +59,7 @@ export function collectKnownSessionGroups(
   const catalogSet = new Set(catalog);
   const discovered = rows
     .map((row) => normalizeOptionalString(row.category))
-    .filter((name): name is string => typeof name === "string" && !catalogSet.has(name))
+    .filter((name): name is string => name !== undefined && !catalogSet.has(name))
     .toSorted((a, b) => a.localeCompare(b));
   return [...catalog, ...new Set(discovered)];
 }
@@ -131,7 +131,7 @@ function createDateGroupResolver(now: number): (row: GatewaySessionRow) => strin
   const startOfYesterday = startOfDay(1);
   const startOfWeek = startOfDay(6);
   return ({ updatedAt }) => {
-    if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
+    if (updatedAt == null || updatedAt <= 0) {
       return UNGROUPED_ID;
     }
     if (updatedAt >= startOfToday) {

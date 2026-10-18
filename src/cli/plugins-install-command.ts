@@ -94,7 +94,6 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
                 },
               }),
             ),
-      allowBundledFallback: sourcePlan?.allowBundledFallback,
       logger: createPluginInstallLogger(runtime),
       confirmInstall: resolveClawHubInstallConfirmation(),
       ...resolvePluginCapabilityConsentCliOptions({

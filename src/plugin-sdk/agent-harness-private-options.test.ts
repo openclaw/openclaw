@@ -28,6 +28,15 @@ type HostToolsOptions = Parameters<
 type HostTestAttempt = Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["attempt"];
 
 describe("agent harness private options", () => {
+  it("keeps thinking provenance out of public attempt and tool inputs", () => {
+    expectTypeOf<AgentHarnessAttemptParams>().not.toHaveProperty("thinkingExplicit");
+    expectTypeOf<AgentHarnessAttemptParamsV2>().not.toHaveProperty("thinkingExplicit");
+    expectTypeOf<EmbeddedRunAttemptParams>().not.toHaveProperty("thinkingExplicit");
+    expectTypeOf<EmbeddedRunAttemptParamsV2>().not.toHaveProperty("thinkingExplicit");
+    expectTypeOf<CodingToolsOptions>().not.toHaveProperty("requesterThinkingExplicit");
+    expectTypeOf<AsyncCodingToolsOptions>().not.toHaveProperty("requesterThinkingExplicit");
+  });
+
   it("accepts the optional host run trigger for tool presentation", () => {
     expectTypeOf<Pick<AgentHarnessToolSurfaceRuntimeParams, "trigger">>().toEqualTypeOf<{
       trigger?: AgentHarnessAttemptParamsV2["trigger"];

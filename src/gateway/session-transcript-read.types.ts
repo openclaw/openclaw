@@ -39,7 +39,7 @@ export type ReadSessionMessagesAsyncOptions =
 export type SessionTranscriptMessageByIdOptions = (
   | { currentOnly?: false; maxBytes?: never }
   | { currentOnly: true; maxBytes: number }
-) & { historyVisibility?: { sessionStartedAt?: number } };
+) & { historyVisibility?: { sessionStartedAt?: number; requireVisible?: boolean } };
 
 export type ReadRecentSessionMessagesResult = {
   olderOffset?: number;

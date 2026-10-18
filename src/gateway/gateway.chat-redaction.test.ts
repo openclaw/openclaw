@@ -1,21 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
-import { setTestEnvValue } from "../test-utils/env.js";
-import { acquireTestPortBlock } from "../test-utils/port-claims.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import {
-  createGatewayConfigPath,
-  removeGatewayTempHome,
-  resetGatewayTestState,
-  setupGatewayTempHome,
-} from "./gateway.test-support.js";
-import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
+import { createChatFixture, sendChatAndWait } from "./gateway-chat-fixture.test-support.js";
 
 type TextMessage = {
   role?: string;
@@ -39,144 +26,34 @@ const numericSlashSecret = "1234/" + "Ab9Q".repeat(8) + "Ab9";
 const slashSecret = "Aa0/".repeat(10);
 
 describe("registered Control UI chat text fidelity", () => {
-  const requests: string[] = [];
-  const providerErrors: unknown[] = [];
-  const provider = createServer((request, response) => {
-    void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      }
-      requests.push(Buffer.concat(chunks).toString("utf8"));
-      writeOpenAiResponsesText(response, {
-        text: "Fixture reply complete.",
-        messageId: `msg_${randomUUID()}`,
-        responseId: `resp_${randomUUID()}`,
-      });
-    })().catch((error: unknown) => {
-      providerErrors.push(error);
-      response.writeHead(500).end("fixture provider failed");
-    });
+  const fixture = createChatFixture("chat-redaction", {
+    reset: resetSecretRedactionRegistryForTest,
   });
-  let home: Awaited<ReturnType<typeof setupGatewayTempHome>>;
-  let gateway: Awaited<ReturnType<typeof startGatewayWithClient>>;
-
-  beforeAll(async () => {
-    resetGatewayTestState();
-    home = await setupGatewayTempHome({ prefix: "openclaw-chat-redaction-" });
-    await new Promise<void>((resolve, reject) => {
-      provider.once("error", reject);
-      provider.listen(0, "127.0.0.1", resolve);
-    });
-    const address = provider.address();
-    if (!address || typeof address === "string") {
-      throw new Error("fixture provider did not bind");
-    }
-    const model = buildMockOpenAiResponsesProvider(
-      `http://127.0.0.1:${address.port}/v1`,
-      "redaction-fixture",
-    );
-    const token = randomUUID();
-    setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
-    const cfg = {
-      agents: {
-        defaults: {
-          workspace: home.workspaceDir,
-          skipBootstrap: true,
-          model: { primary: model.modelRef },
-          models: { [model.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
-        },
-      },
-      models: { mode: "replace", providers: { [model.providerId]: model.config } },
-      gateway: { auth: { mode: "token", token } },
-      hooks: { enabled: false },
-    } satisfies OpenClawConfig;
-    const configPath = await createGatewayConfigPath(home.tempHome);
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const { port } = portClaim;
-    gateway = await startGatewayWithClient({
-      cfg,
-      portClaim,
-      clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
-      mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-      origin: `http://127.0.0.1:${port}`,
-      configPath,
-      token,
-      clientDisplayName: "chat-redaction-test",
-    });
-    await gateway.server.startupSettled;
-  }, 90_000);
-
-  afterAll(async () => {
-    try {
-      if (gateway) {
-        try {
-          await disconnectGatewayClient(gateway.client);
-        } finally {
-          await gateway.server.close({ reason: "chat redaction tests complete" });
-        }
-      }
-    } finally {
-      provider.closeAllConnections();
-      await new Promise<void>((resolve) => {
-        provider.close(() => resolve());
-      });
-      resetSecretRedactionRegistryForTest();
-      resetGatewayTestState();
-      if (home) {
-        await removeGatewayTempHome(home.tempHome);
-        home.envSnapshot.restore();
-      }
-    }
-  });
-
-  async function send(sessionKey: string, message: string): Promise<void> {
-    const accepted = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
-      sessionKey,
-      message,
-      deliver: false,
-      idempotencyKey: randomUUID(),
-    });
-    expect(accepted.status).toBe("started");
-    const completed = await gateway.client.request<{ status: string }>(
-      "agent.wait",
-      { runId: accepted.runId, timeoutMs: 30_000 },
-      { timeoutMs: 35_000 },
-    );
-    expect(completed.status).toBe("ok");
-  }
+  beforeAll(() => fixture.start(), 90_000);
+  afterAll(() => fixture.close());
 
   async function expectStoredAndSent(message: string): Promise<void> {
     const sessionKey = `agent:main:redaction-${randomUUID()}`;
     // The first turn creates the session; the regression affects subsequent admission.
-    await send(sessionKey, "Initialize this fixture conversation.");
-    const requestStart = requests.length;
-    await send(sessionKey, message);
-    const history = await gateway.client.request<{ messages: TextMessage[] }>("chat.history", {
+    await sendChatAndWait(fixture.client, sessionKey, "Initialize this fixture conversation.");
+    const requestStart = fixture.requests.length;
+    await sendChatAndWait(fixture.client, sessionKey, message);
+    const history = await fixture.client.request<{ messages: TextMessage[] }>("chat.history", {
       sessionKey,
     });
     expect.soft(userText(history.messages), "chat.history").toContain(message);
-    expect(providerErrors).toEqual([]);
-    const turnRequests = requests.slice(requestStart);
+    expect(fixture.errors).toEqual([]);
+    const turnRequests = fixture.requests.slice(requestStart);
     expect(turnRequests).toHaveLength(1);
     const body = JSON.parse(turnRequests[0]!) as { input: TextMessage[] };
     expect.soft(userText(body.input), "recorded model input").toContain(message);
   }
 
   it.each([
-    publicUrl,
-    `https://example.test/${secret}@latest`,
-    `https://example.test/path-${secret}?foo=@`,
-    JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl])),
-  ])(
-    "chat.send preserves %s in chat.history and recorded model input",
-    async (url) => {
-      await expectStoredAndSent(url);
-    },
-    90_000,
-  );
-
-  it.each([
+    ["public URL", publicUrl],
+    ["URL path with at sign", `https://example.test/${secret}@latest`],
+    ["URL path with query", `https://example.test/path-${secret}?foo=@`],
+    ["nested JSON URLs", JSON.stringify(JSON.stringify([`${publicUrl}?safe=1`, publicUrl]))],
     ["bare credential", secret],
     ["unknown URL query", `https://example.test/?foo=.${secret}`],
     [
@@ -192,9 +69,7 @@ describe("registered Control UI chat text fidelity", () => {
     ["credential after Markdown link", `[docs](${publicUrl})${secret}`],
   ])(
     "chat.send preserves the %s in chat.history and recorded model input",
-    async (_label, input) => {
-      await expectStoredAndSent(input);
-    },
+    (_label, input) => expectStoredAndSent(input),
     90_000,
   );
 
@@ -205,7 +80,7 @@ describe("registered Control UI chat text fidelity", () => {
       JSON.stringify(`${publicUrl} ${secret}`),
       JSON.stringify(`s3://user:${numericSlashSecret}@bucket`),
     ].join(" ");
-    const accepted = await gateway.client.request<{ status: string; id: string }>(
+    const accepted = await fixture.client.request<{ status: string; id: string }>(
       "exec.approval.request",
       {
         command,
@@ -218,12 +93,12 @@ describe("registered Control UI chat text fidelity", () => {
     );
     expect(accepted.status).toBe("accepted");
     try {
-      const display = await gateway.client.request<{ commandText: string }>("exec.approval.get", {
+      const display = await fixture.client.request<{ commandText: string }>("exec.approval.get", {
         id: accepted.id,
       });
       expect(display.commandText).toBe(command);
     } finally {
-      await gateway.client.request("exec.approval.resolve", { id: accepted.id, decision: "deny" });
+      await fixture.client.request("exec.approval.resolve", { id: accepted.id, decision: "deny" });
     }
   });
 

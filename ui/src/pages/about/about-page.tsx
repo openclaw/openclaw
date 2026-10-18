@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -6,21 +6,23 @@ import { copyToClipboard } from "../../lib/clipboard.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import { PageLayout } from "../page-layout.tsx";
 import { AboutView, type AboutCommitCopyState } from "./view.tsx";
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-about-page": HTMLAttributes<HTMLElement>;
+    }
+  }
+}
 
 const COPY_RESULT_VISIBLE_MS = 1800;
 // Mirrors about-clawd-wave so the next poke can replay the settled animation.
 const CLAWD_WAVE_MS = 1400;
 
-function AboutPageContent() {
+export function AboutPage() {
   const context = useApplication();
-  const gateway = projectGateway(untrack(() => context.gateway));
-  createEffect(
-    () => context.gateway,
-    (source) => gateway.replaceSource(source),
-  );
+  const gateway = createMemo(() => projectGateway(context.gateway));
   const [copyState, setCopyState] = createSignal<AboutCommitCopyState>("idle");
   const [clawdWaving, setClawdWaving] = createSignal(false);
   let disposed = false;
@@ -63,12 +65,12 @@ function AboutPageContent() {
   }
 
   function gatewayVersion() {
-    const snapshot = gateway.read().snapshot;
-    return snapshot.phase === "connected" ? snapshot.hello?.server?.version?.trim() || null : null;
+    const snapshot = gateway().read().snapshot;
+    return snapshot.hello?.server?.version?.trim() || null;
   }
 
   return (
-    <>
+    <openclaw-about-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -86,16 +88,6 @@ function AboutPageContent() {
           onPokeClawd={pokeClawd}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-about-page>
   );
 }
-
-export const AboutPage = defineSolidBridge(
-  "openclaw-about-page",
-  (_props, host) => (
-    <PageLayout host={host}>
-      <AboutPageContent />
-    </PageLayout>
-  ),
-  { properties: {} },
-);

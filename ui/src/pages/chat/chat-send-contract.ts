@@ -12,7 +12,6 @@ import type {
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionRefreshTarget } from "../../lib/sessions/index.ts";
 import type { ChatCommandHost } from "./chat-commands.ts";
-import type { ChatSendTimingEntry } from "./chat-send-ack.ts";
 import type { QueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
@@ -40,6 +39,8 @@ export type ChatHost = ToolStreamHost &
     canRestoreComposer?: () => boolean;
     /** Captures this composer's identity while its presentation may hand ownership off. */
     captureComposerRecoveryOwner?: () => ChatComposerRecoveryOwner | undefined;
+    /** Persists and publishes a completed composer mutation without redrawing the transcript. */
+    composerDraftChanged?: () => void;
     /** Captured once at submit; queued delivery never re-reads the current page. */
     getWorkContext?: () => ChatWorkContext | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;
@@ -49,8 +50,6 @@ export type ChatHost = ToolStreamHost &
     chatSendingScopeKey?: string | null;
     refreshSessionsAfterChat: Map<string, SessionRefreshTarget>;
     chatSubmitGuards?: Set<string>;
-    chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
-    eventLogBuffer?: unknown[];
     settings: Pick<UiSettings, "lastActiveSessionKey"> & Partial<UiSettings>;
     applySettings: (patch: Partial<UiSettings>) => void;
     /** Prepared from the browser override and current Gateway effective queue mode. */

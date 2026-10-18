@@ -57,14 +57,15 @@ type CliSessionHistoryParams = {
 const CLI_SESSION_RESEED_CURRENCY_GUIDANCE =
   "[Recovered history may be stale; verify current and time-sensitive facts before acting.]";
 
-type HistoryMessage = {
-  role?: unknown;
-  content?: unknown;
-  summary?: unknown;
-  toolName?: unknown;
-  isError?: unknown;
-  timestamp?: unknown;
-};
+type CliSessionReseedMessage =
+  | { role: "compactionSummary"; summary: string; timestamp?: string }
+  | {
+      role: "user" | "assistant" | "toolResult";
+      content: unknown;
+      timestamp?: string;
+      toolName?: string;
+      isError?: boolean;
+    };
 type RawTranscriptReseedReason =
   | "auth-unknown"
   | "auth-profile"
@@ -75,12 +76,10 @@ type RawTranscriptReseedReason =
   | "mcp"
   | "missing-transcript"
   | "orphaned-tool-use"
-  | "session-expired";
+  | "session-expired"
+  | "stateless";
 
 export function resolveAutoCliSessionReseedHistoryChars(contextWindowTokens: number): number {
-  if (!Number.isFinite(contextWindowTokens) || contextWindowTokens <= 0) {
-    return MAX_CLI_SESSION_RESEED_HISTORY_CHARS;
-  }
   const contextShareChars = Math.floor(
     contextWindowTokens * CLI_SESSION_RESEED_HISTORY_CONTEXT_SHARE * CHARS_PER_TOKEN_ESTIMATE,
   );
@@ -109,45 +108,26 @@ function coerceHistoryText(content: unknown): string {
     .trim();
 }
 
-function formatHistoryTimestamp(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const timestamp = timestampMsToIsoString(Date.parse(value));
-  return timestamp === value ? timestamp : undefined;
-}
-
-function renderHistoryMessage(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as HistoryMessage;
+function renderHistoryMessage(entry: CliSessionReseedMessage): string | undefined {
   const role =
     entry.role === "assistant"
       ? "Assistant"
       : entry.role === "user"
         ? "User"
         : entry.role === "toolResult"
-          ? `Tool result${typeof entry.toolName === "string" ? ` (${entry.toolName})` : ""}${entry.isError === true ? " [error]" : ""}`
-          : entry.role === "compactionSummary"
-            ? "Compaction summary"
-            : undefined;
-  if (!role) {
-    return undefined;
-  }
+          ? `Tool result${entry.toolName !== undefined ? ` (${entry.toolName})` : ""}${entry.isError ? " [error]" : ""}`
+          : "Compaction summary";
   const text =
-    entry.role === "compactionSummary" && typeof entry.summary === "string"
-      ? entry.summary.trim()
-      : coerceHistoryText(entry.content);
+    entry.role === "compactionSummary" ? entry.summary.trim() : coerceHistoryText(entry.content);
   if (!text) {
     return undefined;
   }
-  const timestamp = formatHistoryTimestamp(entry.timestamp);
+  const timestamp = entry.timestamp;
   return `${timestamp ? `[${timestamp}] ` : ""}${role}: ${text}`;
 }
 
 export function buildCliSessionHistoryPrompt(params: {
-  messages: unknown[];
+  messages: CliSessionReseedMessage[];
   prompt: string;
   maxHistoryChars?: number;
 }): string | undefined {
@@ -160,10 +140,7 @@ export function buildCliSessionHistoryPrompt(params: {
   // Pin the leading compaction summary; tail-slicing the whole transcript would
   // discard it whenever the recent turns exceed the budget.
   const firstEntry = params.messages[0];
-  const firstIsCompaction =
-    Boolean(firstEntry) &&
-    typeof firstEntry === "object" &&
-    (firstEntry as HistoryMessage).role === "compactionSummary";
+  const firstIsCompaction = firstEntry?.role === "compactionSummary";
   const summaryRendered = firstIsCompaction ? renderHistoryMessage(firstEntry) : undefined;
   const tailMessages = firstIsCompaction ? params.messages.slice(1) : params.messages;
 
@@ -415,7 +392,7 @@ export async function loadCliSessionHistoryMessages({
 /** Loads canonical replay messages for context-engine updates. */
 export async function loadCliSessionContextEngineMessages(
   params: CliSessionHistoryParams,
-): Promise<unknown[]> {
+): Promise<ReturnType<typeof buildSessionContext>["messages"]> {
   const entries = await loadCliSessionEntries(params);
   const messages = buildSessionContext(entries).messages;
   const boundary = entries.findLast(
@@ -714,7 +691,7 @@ export async function loadCliSessionPromptContext(
     ? [summary, ...history.slice(-(MAX_CLI_SESSION_HISTORY_MESSAGES - 1))]
     : history.slice(-MAX_CLI_SESSION_HISTORY_MESSAGES);
   // Bound the tail before projecting renderer fields; full replay records are unnecessary.
-  const reseedMessages = selected.map((message) => {
+  const reseedMessages = selected.map((message): CliSessionReseedMessage => {
     const timestamp = timestampMsToIsoString(message.timestamp);
     return message.role === "compactionSummary"
       ? { role: message.role, summary: message.summary.trim(), timestamp }

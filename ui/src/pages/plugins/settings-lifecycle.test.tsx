@@ -94,11 +94,15 @@ it("does not dispatch enablement when setup is missing", () => {
   expect(onSetEnabled).not.toHaveBeenCalled();
 });
 
-it("keeps disconnected plugin settings from dispatching enablement", () => {
+it("retains disconnected plugin details without dispatching enablement", () => {
   const onSetEnabled = vi.fn();
   const container = mount({ connected: false, canMutate: false, onSetEnabled });
-  expect(container.textContent).toContain("Connect");
-  expect(container.querySelector('[aria-label="Enable Workboard"]')).toBeNull();
+  expect(container.textContent).toContain("Agent work queue and session handoff.");
+  expect(container.querySelector("[inert]")).toBeNull();
+  const button = container.querySelector<HTMLButtonElement>('[aria-label="Enable Workboard"]')!;
+  expect(button).not.toBeNull();
+  expect(button.disabled).toBe(true);
+  button.click();
   expect(onSetEnabled).not.toHaveBeenCalled();
 });
 

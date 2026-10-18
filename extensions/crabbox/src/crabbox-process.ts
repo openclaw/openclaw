@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { runCommandWithTimeout, type CommandOptions } from "openclaw/plugin-sdk/process-runtime";
 
-export function runCrabboxProcess(argv: string[], options: CommandOptions) {
+export function runCrabboxProcess(argv: string[], options: CommandOptions & { timeoutMs: number }) {
   // Resolve configured executable paths before leaving the caller's directory.
   const command =
     options.cwd === undefined && argv[0] && /[\\/]/u.test(argv[0])

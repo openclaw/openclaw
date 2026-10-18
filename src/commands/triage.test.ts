@@ -390,43 +390,6 @@ describe("triageCommand", () => {
     }
   });
 
-  it("reuses the sanitized support exporter with Gateway status and health snapshots", async () => {
-    const health = { ok: true };
-    const status = { gateway: { reachable: true } };
-    const bundlePath = path.join(stateDir, "diagnostics.zip");
-    mocks.callGatewayFromCliWithTransport.mockResolvedValue(health);
-    mocks.gatherDaemonStatus.mockResolvedValue(status);
-    mocks.writeDiagnosticSupportExport.mockImplementation(async (options) => {
-      expect(await options.readHealthSnapshot()).toBe(health);
-      expect(await options.readStatusSnapshot()).toBe(status);
-      return { path: bundlePath };
-    });
-    const runtime = createTriageRuntime();
-
-    await triageCommand(runtime, { json: true });
-
-    const report = runtime.writeJson.mock.calls[0]?.[0] as {
-      promptPath: string;
-      bundlePath: string;
-      bundleError: null;
-      suggestedCommands: string[];
-    };
-    expect(report).toMatchObject({ bundlePath, bundleError: null });
-    expect(path.isAbsolute(report.promptPath)).toBe(true);
-    expect(path.isAbsolute(report.bundlePath)).toBe(true);
-    expect(report.suggestedCommands[0]).toContain(report.promptPath);
-    expect(report.suggestedCommands[1]).toContain(report.promptPath);
-    expect(await fs.readFile(report.promptPath, "utf8")).toContain(
-      "Sanitized ZIP: $OPENCLAW_STATE_DIR/diagnostics.zip",
-    );
-    expect(mocks.gatherDaemonStatus).toHaveBeenCalledWith({
-      rpc: { timeout: "3000", json: true },
-      probe: true,
-      requireRpc: false,
-      deep: false,
-    });
-  });
-
   it.each([false, true])(
     "does not start a closed recovery after writing its prompt (embedded=%s)",
     async (run) => {

@@ -339,7 +339,6 @@ export function workerProbe(
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
     import { scriptModuleEntrypoints } from ${JSON.stringify(path.join(root, "scripts/script-module-runtime.test-support.mjs"))};
-    import { vectorKnnProcessEntrypoint } from ${JSON.stringify(path.join(root, "extensions/memory-core/src/memory/manager-search-knn-entrypoint.ts"))};
     import { runtimeProcessBuildEntries, runtimeProcessBuildEntrypoints } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
     import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
@@ -414,7 +413,7 @@ export function workerProbe(
           const runtimeArgs = [...forwardedCompilerArgs, ...(sourceLoader ? ['--import', expect.stringMatching(/^file:/)] : process.versions.bun ? ['--no-install'] : [])];
           expect(args.slice(0, runtimeArgs.length + 1)).toEqual([...runtimeArgs, fileURLToPath(generation)]);
           expect(args[runtimeArgs.length]).toMatch(sourceMode ? /\\.ts$/ : /\\.js$/);
-          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(vectorKnnProcessEntrypoint).href})+'\\n');
+          fs.appendFileSync(${JSON.stringify(path.join(directory, "observations.jsonl"))}, JSON.stringify({args, tuiUrls, setupUrls, retentionUrl, value, configValue:inject('configValue'), knn:resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteVector).href})+'\\n');
           fs.appendFileSync(${JSON.stringify(path.join(directory, "generations.jsonl"))}, JSON.stringify(generation)+'\\n');
           ${receiptEndpoint ? `sendReceipt(${JSON.stringify(path.join(directory, "generations.jsonl"))}, 'written');` : ""}
           const release = inject('releaseFile');

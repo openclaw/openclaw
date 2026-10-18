@@ -85,7 +85,7 @@ export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   for (let element: Element | null = anchor; element; element = composedParent(element)) {
     if (
       element.matches(
-        "openclaw-tooltip, openclaw-browser-tab-card, wa-popover, .link-reader-hovercard, .link-hovercard, .session-progress-hovercard, .chat-source-card",
+        "openclaw-tooltip, openclaw-browser-tab-card, .oc-popover, .link-reader-hovercard, .link-hovercard, .session-progress-hovercard, .chat-source-card",
       )
     ) {
       return false;
@@ -99,9 +99,11 @@ export function canPreviewPages(owner: HoverPreviewOwner): boolean {
   return Boolean(
     context?.config.current.automaticallyFetchFavicons &&
     context.gateway.snapshot.client === owner.client &&
-    canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
-      requireAdvertisement: false,
-    }),
+    !owner.client?.offlineRecoveryRetired &&
+    (context.gateway.snapshot.phase !== "connected" ||
+      canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
+        requireAdvertisement: false,
+      })),
   );
 }
 

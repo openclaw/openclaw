@@ -63,6 +63,60 @@ describe("AcpTranslatorSessionUpdates", () => {
     }
   });
 
+  it.each([false, true])(
+    "drains admitted queued ledger updates during shutdown (first write fails: %s)",
+    async (firstFails) => {
+      const writing = createDeferred();
+      const release = createDeferred();
+      const { updates, ledger } = harness();
+      const firstUpdate: SessionUpdate = {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "first" },
+      };
+      const secondUpdate: SessionUpdate = {
+        sessionUpdate: "agent_message_chunk",
+        content: { type: "text", text: "second" },
+      };
+      ledger.recordUpdate.mockImplementation(async ({ update: recordedUpdate }) => {
+        if (
+          recordedUpdate.sessionUpdate === "agent_message_chunk" &&
+          recordedUpdate.content.type === "text" &&
+          recordedUpdate.content.text === "first"
+        ) {
+          writing.resolve();
+          await release.promise;
+          if (firstFails) {
+            throw new Error("ledger write failed during shutdown");
+          }
+        }
+      });
+      const first = updates.emit({ ...emission, update: firstUpdate });
+      await writing.promise;
+      const second = updates.emit({ ...emission, update: secondUpdate });
+      let stopped = false;
+      const closing = updates.stop().then(() => {
+        stopped = true;
+      });
+      try {
+        await Promise.resolve();
+        expect(stopped).toBe(false);
+        release.resolve();
+        await Promise.all([first, second, closing]);
+        expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
+          firstUpdate,
+          secondUpdate,
+        ]);
+        expect(ledger.markIncomplete).toHaveBeenCalledTimes(firstFails ? 1 : 0);
+        if (firstFails) {
+          expect(ledger.markIncomplete).toHaveBeenCalledWith(session);
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second, closing]);
+      }
+    },
+  );
+
   it("preserves ledger order without waiting for ACP delivery", async () => {
     const delivery = createDeferred();
     const recorded = createDeferred();

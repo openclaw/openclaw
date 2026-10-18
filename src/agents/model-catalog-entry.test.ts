@@ -17,6 +17,7 @@ describe("model catalog metadata projection", () => {
       maxTokens: 4096,
       contextWindow: 96_000,
       contextTokens: 48_000,
+      parameterCount: 4_000_000_000,
       contextWindows: [{ id: "large", label: "Large", contextWindow: 96_000 }],
       contextWindowDefault: "large",
       thinkingLevelMap: { off: null, high: "high" },
@@ -36,6 +37,7 @@ describe("model catalog metadata projection", () => {
       api: "openai-responses",
       contextWindow: 96_000,
       contextTokens: 48_000,
+      parameterCount: 4_000_000_000,
       contextWindows: [{ id: "large", label: "Large", contextWindow: 96_000 }],
       contextWindowDefault: "large",
       reasoning: true,
@@ -74,6 +76,7 @@ describe("model catalog metadata projection", () => {
       baseUrl: "https://first.example/v1",
       contextWindow: 128_000,
       contextWindowSource: "synthetic" as const,
+      parameterCount: 4_000_000_000,
     };
     expect(
       overlayCatalogMetadata(base, {
@@ -82,14 +85,14 @@ describe("model catalog metadata projection", () => {
         contextWindowSource: undefined,
       }).contextWindowSource,
     ).toBeUndefined();
-    expect(
-      overlayCatalogMetadata(base, {
-        provider: "fixture",
-        id: "m",
-        name: "M",
-        baseUrl: "https://second.example/v1",
-      }).contextWindowSource,
-    ).toBeUndefined();
+    const moved = overlayCatalogMetadata(base, {
+      provider: "fixture",
+      id: "m",
+      name: "M",
+      baseUrl: "https://second.example/v1",
+    });
+    expect(moved.contextWindowSource).toBeUndefined();
+    expect(moved.parameterCount).toBeUndefined();
     expect(
       overlayCatalogMetadata(base, { provider: "fixture", id: "m", name: "M", reasoning: true })
         .contextWindowSource,

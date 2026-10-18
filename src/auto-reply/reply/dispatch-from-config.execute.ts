@@ -5,6 +5,7 @@ import {
   isFastModeAutoProgressPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
+import { isRequiredReplyExpectation } from "../../agents/reply-completion.js";
 import { isAskUserPromptPending } from "../../agents/tools/ask-user-tool.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
@@ -199,9 +200,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       await waitForReplyDispatcherIdle(dispatcher, getDispatchAbortSignal());
                     },
                     onVisible: (payload) => {
-                      if (hasOutboundReplyContent(payload, { trimText: true })) {
-                        didDeliverVisiblePartialReply = true;
-                      }
+                      didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
+                        trimText: true,
+                      });
                     },
                   }),
               onReasoningStream,
@@ -508,8 +509,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
-        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
+        isRequiredReplyExpectation(state.replyOperationRunState.replyCompletion?.expectation) &&
+        state.replyOperationRunState.replyCompletion?.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }

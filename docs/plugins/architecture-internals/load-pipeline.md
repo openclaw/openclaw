@@ -143,7 +143,9 @@ or an explicit manifest registry. Plugin scopes are in-memory projections;
 ordinary lookups, account changes, and run workspace changes do not trigger
 filesystem scanning, `stat`/`realpath` freshness polling, manifest rereads, or
 hashing. Plugin lifecycle operations prepare fresh metadata in their own cache
-generation. Account health and authentication state are not part of the
+generation. Gateway runtime work after a lifecycle commit, including config
+reload listeners and owners started by the reload, reads the published
+generation instead. Account health and authentication state are not part of the
 immutable package inventory.
 
 Gateway model admission uses the configured agent's workspace and plugin inventory,

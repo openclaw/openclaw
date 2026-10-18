@@ -1,9 +1,14 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runTui } from "../tui/tui.js";
 import { executeSystemAgentOperation, isPersistentSystemAgentOperation } from "./operations.js";
 import type { SystemAgentOverview } from "./overview.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { readLastSystemAgentAuditEntry } from "./system-agent.test-helpers.js";
+
+// mock-isolation: Observe TUI dispatch without opening an interactive terminal or Gateway session.
+vi.mock("../tui/tui.js", () => ({ runTui: vi.fn() }));
+beforeEach(() => vi.clearAllMocks());
 
 function createOverview(gatewayReachable: boolean): SystemAgentOverview {
   return {
@@ -51,7 +56,6 @@ describe("system-agent TUI operations", () => {
 
   it("requires a primary model for a utility-only agent before launching its TUI", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn();
     const overview = createOverview(true);
     overview.defaultModel = "fixture/primary";
     overview.agents[1]!.utilityModel = "fixture/utility";
@@ -59,7 +63,7 @@ describe("system-agent TUI operations", () => {
       { kind: "open-tui", agentId: "work" },
       runtime,
       {
-        deps: { runTui, loadOverview: async () => overview },
+        deps: { loadOverview: async () => overview },
       },
     );
     expect(runTui).not.toHaveBeenCalled();
@@ -71,15 +75,15 @@ describe("system-agent TUI operations", () => {
 
   it("returns from the agent TUI back to OpenClaw", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
+    vi.mocked(runTui).mockResolvedValue({
       exitReason: "return-to-system-agent" as const,
       systemAgentMessage: "restart gateway",
-    }));
+    });
 
     const result = await executeSystemAgentOperation(
       { kind: "open-tui", agentId: "work" },
       runtime,
-      { deps: { runTui, loadOverview: async () => createOverview(false) } },
+      { deps: { loadOverview: async () => createOverview(false) } },
     );
 
     expect(runTui).toHaveBeenCalledWith({
@@ -100,7 +104,7 @@ describe("system-agent TUI operations", () => {
 
   it("connects a fresh hatch to the reachable Gateway", async () => {
     const { runtime } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({ exitReason: "exit" as const }));
+    vi.mocked(runTui).mockResolvedValue({ exitReason: "exit" });
 
     const overview = createOverview(true);
     overview.defaultModel = "fixture/primary";
@@ -110,7 +114,7 @@ describe("system-agent TUI operations", () => {
     await executeSystemAgentOperation(
       { kind: "open-tui", agentId: "work", agentDraft: "hatch" },
       runtime,
-      { deps: { runTui, loadOverview: async () => overview } },
+      { deps: { loadOverview: async () => overview } },
     );
 
     expect(runTui).toHaveBeenCalledWith({
@@ -124,12 +128,12 @@ describe("system-agent TUI operations", () => {
 
   it("re-enters the OpenClaw shell when the agent TUI returns without a request", async () => {
     const { runtime, lines } = createSystemAgentTestRuntime();
-    const runTui = vi.fn(async () => ({
+    vi.mocked(runTui).mockResolvedValue({
       exitReason: "return-to-system-agent" as const,
-    }));
+    });
 
     const result = await executeSystemAgentOperation({ kind: "open-tui" }, runtime, {
-      deps: { runTui, loadOverview: async () => createOverview(false) },
+      deps: { loadOverview: async () => createOverview(false) },
     });
 
     expect(result).toMatchObject({

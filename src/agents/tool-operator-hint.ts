@@ -20,7 +20,6 @@ export function withToolOperatorHint<E>(error: E, hint: string): E {
   return error;
 }
 
-/** Read operator-facing remediation text from a tool failure, when one was attached. */
 export function readToolOperatorHint(error: unknown): string | undefined {
   if (!(error instanceof Error)) {
     return undefined;

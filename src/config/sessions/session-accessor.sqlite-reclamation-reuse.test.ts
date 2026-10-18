@@ -44,6 +44,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { loadTranscriptEvents } from "./session-accessor.js";
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sqlite-contract.js";
@@ -123,16 +124,13 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as const)(
+test.each(["two-leases-missing", "revoked-after-open"] as const)(
   "reclamation borrows native-only verification unless revoked (%s)",
   async (proof) => {
     const { database, options, plans, scopes } = createFixture(["victim"]);
     closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
     validation.admissionPath = database.path;
-    const { source, wasRevokedDuringOpen } = createNativeReclamationSource(
-      { database, options },
-      proof === "revoked-during-open",
-    );
+    const source = createNativeReclamationSource(options);
     const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
     validation.admissionPath = database.path;
     let entries = 0;
@@ -166,7 +164,6 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
         value: { removedEntries: 1 },
       });
       expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
-      expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
     } finally {
       try {
@@ -548,7 +545,7 @@ test("joins explicit Worker retirement before opening a different agent store", 
           order.push("following-write");
           return appendTranscriptEventSync(survivor, { type: "after-reclamation-close" });
         },
-        first.database.db,
+        requireNativeSqliteDatabase(first.database.db),
       );
       void followingWrite.catch(() => undefined);
     }

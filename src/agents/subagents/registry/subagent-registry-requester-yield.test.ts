@@ -23,6 +23,7 @@ import {
   saveSubagentRegistryChangesToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const REQUESTER = "agent:main:main";
 const REQUESTER_TURN = "run-requester";
@@ -361,20 +362,37 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
 });
 
 describe("settleRequesterTurnAfterSessionSpawns", () => {
-  it("commits the wake and requester release in one durable write", async () => {
-    const child = makeRun("atomic-transfer");
-    const runs = new Map([[child.runId, child]]);
-    const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
+  it.each(["yield intent", "cohort release"] as const)(
+    "keeps a selected child's current requester turn at %s",
+    async (kind) => {
+      const child = makeRun("run-child");
+      const runs = new Map([[child.runId, child]]);
+      const commit = createRequesterInitialTransferFixture(runs);
+      const transfer: Parameters<
+        typeof settleRequesterTurnAfterSessionSpawns
+      >[0]["transfer"] = async (params) => {
+        runs.set(
+          child.runId,
+          copySubagentRunRuntimeOwner(child, { ...child, requesterTurnRunId: "run-other" }),
+        );
+        await commit(params);
+      };
+      const operation =
+        kind === "yield intent"
+          ? markRequesterTurnYieldedInRuns({
+              preparedAuthority: null,
+              requesterSessionKey: REQUESTER,
+              requesterTurnRunId: REQUESTER_TURN,
+              runs,
+              transfer,
+            })
+          : settleRuns([child], { runs, transfer });
 
-    expect(await settleRuns([child], { runs })).toBe(true);
-
-    expect(write).toHaveBeenCalledOnce();
-    expect(loadSubagentRegistryFromSqlite().get(child.runId)).toMatchObject({
-      requesterTurnRunId: undefined,
-      requesterTurnYielded: undefined,
-      requesterSettleWake: { status: "pending", requesterYieldBatch: true },
-    });
-  });
+      await expect(operation).rejects.toThrow(/Requester (child changed its turn|spawn receipt)/);
+      expect(runs.get(child.runId)?.requesterTurnRunId).toBe("run-other");
+      expect(runs.get(child.runId)?.requesterSettleWake).toBeUndefined();
+    },
+  );
 
   function nestedRequester(delivery: "pending" | "delivered" = "delivered"): SubagentRunRecord {
     return {
@@ -651,7 +669,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         calls.push("persist");
       };
       const schedule = vi.fn(() => calls.push("schedule"));
+      const write = vi.spyOn(stateWorker, "runOpenClawStateWorkerOperation");
       expect(await settleRuns(entries, { runs, beforeWrite, schedule })).toBe(true);
+      expect(write).toHaveBeenCalledOnce();
       const batchRunIds = entries.map((entry) => entry.runId).toSorted();
       for (const entry of entries) {
         expect(runs.get(entry.runId)!.requesterSettleWake).toEqual({
@@ -667,9 +687,11 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
         expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
         expect(runs.get(entry.runId)!.retireAfterRequesterTurn).toBeUndefined();
       }
-      expect(
-        loadSubagentRegistryFromSqlite().get(first.runId)?.requesterSettleWake?.batchRunIds,
-      ).toEqual(batchRunIds);
+      expect(loadSubagentRegistryFromSqlite().get(first.runId)).toMatchObject({
+        requesterTurnRunId: undefined,
+        requesterTurnYielded: undefined,
+        requesterSettleWake: { status: "pending", requesterYieldBatch: true, batchRunIds },
+      });
       expect(calls).toEqual(
         kind === "running" ? ["persist", "persist"] : ["persist", "persist", "schedule"],
       );

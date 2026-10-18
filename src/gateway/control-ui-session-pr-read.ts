@@ -29,6 +29,8 @@ type SelectedSession = Pick<
 >;
 
 export type ControlUiSessionPrTarget = {
+  sessionId?: string;
+  lifecycleRevision?: string;
   params: { sessionKey: string; agentId: string };
   identity: string;
   readSource: { agentId: string; path: string };
@@ -70,6 +72,8 @@ export function resolveControlUiSessionPrTarget(
     source = resolveSessionWorkspaceRoots(cfg, agentId, entry).diffCwd ?? null;
   }
   return {
+    sessionId: entry.sessionId,
+    lifecycleRevision: entry.lifecycleRevision,
     params: { sessionKey: canonicalKey, agentId },
     githubHost,
     readSource,

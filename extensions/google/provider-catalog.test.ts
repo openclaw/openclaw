@@ -30,6 +30,19 @@ describe("google provider catalog", () => {
       thinkingLevelMap: { minimal: null },
       compat: { codeMode: "preferred" },
     });
+    expect(
+      buildGoogleStaticCatalogProvider().models.find((model) => model.id === "gemini-3.8-flash"),
+    ).toEqual({
+      id: "gemini-3.8-flash",
+      name: "Gemini 3.8 Flash",
+      reasoning: true,
+      input: ["text", "image", "video"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 65_536,
+      thinkingLevelMap: { minimal: null },
+      compat: { codeMode: "preferred" },
+    });
   });
 
   it("builds the authenticated text catalog from Google models.list metadata", async () => {
@@ -82,6 +95,14 @@ describe("google provider catalog", () => {
                     inputTokenLimit: 1_048_576,
                     outputTokenLimit: 65_536,
                     supportedGenerationMethods: ["generateContent"],
+                    thinking: true,
+                  },
+                  {
+                    name: "models/gemini-3.8-flash",
+                    displayName: "Gemini 3.8 Flash",
+                    inputTokenLimit: 1_048_576,
+                    outputTokenLimit: 65_536,
+                    supportedGenerationMethods: ["generateContent", "createCachedContent"],
                     thinking: true,
                   },
                   {
@@ -146,6 +167,16 @@ describe("google provider catalog", () => {
       expect.objectContaining({
         id: "gemini-3.7-flash",
         name: "Gemini 3.7 Flash",
+        reasoning: true,
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+        input: ["text", "image", "video"],
+        compat: { codeMode: "preferred" },
+        thinkingLevelMap: { minimal: null },
+      }),
+      expect.objectContaining({
+        id: "gemini-3.8-flash",
+        name: "Gemini 3.8 Flash",
         reasoning: true,
         contextWindow: 1_048_576,
         maxTokens: 65_536,

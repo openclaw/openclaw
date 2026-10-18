@@ -1,18 +1,25 @@
 import { createHash } from "node:crypto";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.entry.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
+import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { createGatewayWorkerPlacementChangePublisher } from "../server-worker-placement-change-events.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
@@ -42,6 +49,9 @@ describe("worker placement idle suspension", () => {
       reclaim?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["dispatch"]["reclaim"];
       reportChanges?: Parameters<typeof createWorkerPlacementIdleSweep>[0]["reportChanges"];
       isPlacementOperationInFlight?: (sessionId: string) => boolean;
+      loadSessionRuntime?: Parameters<
+        typeof createWorkerPlacementIdleSweep
+      >[0]["loadSessionRuntime"];
       getSessionWorkAdmissionCheck?: (identity: {
         sessionId: string;
         sessionKey: string;
@@ -77,6 +87,7 @@ describe("worker placement idle suspension", () => {
         },
       }),
       isPlacementOperationInFlight,
+      loadSessionRuntime: options.loadSessionRuntime,
       ...(options.getSessionWorkAdmissionCheck
         ? { getSessionWorkAdmissionCheck: options.getSessionWorkAdmissionCheck }
         : {}),
@@ -176,6 +187,60 @@ describe("worker placement idle suspension", () => {
     expect(info).toHaveBeenCalledOnce();
     expect(info).toHaveBeenCalledWith(expect.stringContaining(REQUEST.sessionKey));
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("cancels idle session preparation without waiting for a durable writer", async ({
+    signal,
+  }) => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: path.dirname(database.path) };
+    await upsertSessionEntryCore(
+      { ...REQUEST, env },
+      { sessionId: REQUEST.sessionId, updatedAt: 1 },
+    );
+    const sessionDatabase = openOpenClawAgentDatabase({ agentId: REQUEST.agentId, env });
+    await closeOpenClawAgentDatabaseByPathAsync(sessionDatabase.path, REQUEST.agentId);
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const controller = new AbortController();
+    let writer: Promise<void> | undefined;
+    let writerSettled = false;
+    const { harness, idleSweep, info, warn } = await createIdleFixture({
+      loadSessionRuntime: async () => {
+        writer = runWithSqliteDatabaseAdmissionTurn(
+          [],
+          () =>
+            release.promise.then(() => {
+              writerSettled = true;
+            }),
+          [path.dirname(sessionDatabase.path)],
+        );
+        return {
+          resolveGatewaySessionStoreTargetInWorker(params) {
+            const reading = resolveGatewaySessionStoreTargetInWorker({ ...params, env });
+            entered.resolve();
+            return reading;
+          },
+        };
+      },
+    });
+    await harness.service.dispatch(REQUEST);
+    nowMs += 60_000;
+    const sweeping = idleSweep.sweep(controller.signal);
+    try {
+      await withinTest(entered.promise, signal);
+      controller.abort(new Error("idle preparation stopped"));
+      await withinTest(sweeping, signal);
+      expect(writerSettled).toBe(false);
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await Promise.allSettled([writer, sweeping]);
+      await closeOpenClawAgentDatabaseByPathAsync(sessionDatabase.path, REQUEST.agentId);
+    }
+    expect(writerSettled).toBe(true);
   });
 
   it("starts the idle clock at the latest authoritative turn-claim release", async () => {
@@ -337,11 +402,14 @@ describe("worker placement idle suspension", () => {
     expect(warn).not.toHaveBeenCalled();
     if (getSessionWorkAdmissionCheck) {
       expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-      expect(getSessionWorkAdmissionCheck).toHaveBeenCalledExactlyOnceWith({
-        sessionId: REQUEST.sessionId,
-        sessionKey: REQUEST.sessionKey,
-        agentId: REQUEST.agentId,
-      });
+      expect(getSessionWorkAdmissionCheck).toHaveBeenCalledExactlyOnceWith(
+        {
+          sessionId: REQUEST.sessionId,
+          sessionKey: REQUEST.sessionKey,
+          agentId: REQUEST.agentId,
+        },
+        undefined,
+      );
     }
   });
 

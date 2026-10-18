@@ -3,20 +3,13 @@ import {
   isGoogleGemini3ThinkingLevelModel,
 } from "@openclaw/ai/internal/google-model-family";
 import { googleFlashSupportsMinimalThinking } from "@openclaw/ai/transports";
+import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
 /** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
-export type GoogleThinkingInputLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "adaptive"
-  | "high"
-  | "max"
-  | "xhigh";
+export type GoogleThinkingInputLevel = ModelThinkingLevel | "adaptive";
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."

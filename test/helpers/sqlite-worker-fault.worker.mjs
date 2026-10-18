@@ -53,7 +53,13 @@ const iterate = StatementSync.prototype.iterate;
 StatementSync.prototype.iterate = function* (...args) {
   const restore = install(this);
   try {
-    yield* Reflect.apply(iterate, this, args);
+    const iterator = Reflect.apply(iterate, this, args);
+    try {
+      yield* iterator;
+    } finally {
+      // yield* does not close its delegate when next() throws; reset the native statement.
+      iterator.return?.();
+    }
   } finally {
     restore();
   }

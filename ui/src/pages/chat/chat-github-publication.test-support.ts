@@ -1,15 +1,15 @@
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   type GitHubPublicationOptions,
   type GitHubPublicationPresentationBinding,
-} from "../../lib/sessions/github-publication-controller.ts";
+} from "../../lib/sessions/github-publication-owner.ts";
 
 type GitHubPublicationScope = Parameters<GitHubPublicationPresentationBinding["sync"]>[0] & {
   client: Pick<GatewayBrowserClient, "request">;
   key: string;
-  target: ConstructorParameters<typeof GitHubPublicationController>[0]["target"];
+  target: ConstructorParameters<typeof GitHubPublicationOwner>[0]["target"];
 };
 
 export const shared = { source: "system-configured" as const, accountId: 1, login: "system-bot" };
@@ -71,7 +71,7 @@ export function setup(initialOptions = options) {
   const changed = vi.fn();
   let current = scope;
   const create = (owner: GitHubPublicationScope) =>
-    new GitHubPublicationController({
+    new GitHubPublicationOwner({
       client: owner.client,
       target: owner.target,
       isCurrent: () => current.key === owner.key && current.isCurrent(),
@@ -80,7 +80,8 @@ export function setup(initialOptions = options) {
       unbound: () => {},
     });
   let operation = create(scope);
-  let binding = operation.bind(changed);
+  let binding = operation.bind();
+  binding.subscribe(changed);
   binding.sync(scope);
   const controller = {
     view: () => binding.view(),
@@ -91,7 +92,8 @@ export function setup(initialOptions = options) {
         operation.reset();
         current = next;
         operation = create(next);
-        binding = operation.bind(changed);
+        binding = operation.bind();
+        binding.subscribe(changed);
       } else {
         current = next;
       }

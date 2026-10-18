@@ -153,6 +153,7 @@ function gitExecutionArgv(
 export type GitCommandOptions = Pick<
   CommandOptions,
   | "timeoutMs"
+  | "noOutputTimeoutMs"
   | "baseEnv"
   | "env"
   | "input"
@@ -167,7 +168,7 @@ export type GitCommandOptions = Pick<
   /** Yield CPU to foreground Gateway work for content-heavy background reads. */
   lowerPriority?: boolean;
   operation?: GitProcessOperation;
-  /** An admitted destructive operation must settle without the generic Git deadline. */
+  /** Settle without the generic absolute deadline; an idle deadline may still apply. */
   waitForExit?: boolean;
   /** Recheck caller authority immediately before each attempt. */
   beforeRun?: () => void;

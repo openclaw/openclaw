@@ -429,6 +429,7 @@ export async function dispatchGatewayMethodInProcess<T>(
               captureExternalSessionCommitGuard(options?.sessionMutationCommitGuard),
             ]),
             privateCompletion: options?.privateCompletion,
+            replyExpectation: options?.replyExpectation,
             settleWakeReplay: options?.settleWakeReplay,
             cancelOnDeadline: options?.cancelOnDeadline,
             expectFinal: options?.expectFinal,

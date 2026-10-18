@@ -244,11 +244,11 @@
     },
     "codeExecution.enabled": {
       "label": "Enable Code Execution",
-      "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
+      "help": "Expose code_execution on active xAI models; true opts in when the active provider is known non-xAI, false disables, and a missing active provider keeps the tool disabled. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.enabled": {
       "label": "Enable X Search",
-      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and missing provider fails closed. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
+      "help": "Expose x_search on active xAI models; true opts in when the active provider is known non-xAI, false disables, and a missing active provider keeps the tool disabled. Requires xAI auth; xAI bills $5/1,000 calls plus model tokens."
     },
     "xSearch.model": {
       "label": "X Search Model",

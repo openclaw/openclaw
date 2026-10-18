@@ -41,6 +41,7 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
   }
 
   const { attempt } = input;
+  let localRoots: readonly string[] | undefined;
   const result = await detectAndLoadPromptImages({
     prompt: input.prompt,
     workspaceDir: input.effectiveWorkspace,
@@ -53,9 +54,15 @@ export async function prepareEmbeddedAttemptPromptExecution(input: {
     maxBytes: MAX_IMAGE_BYTES,
     maxDimensionPx: resolveImageSanitizationLimits(attempt.config).maxDimensionPx,
     workspaceOnly: input.effectiveFsWorkspaceOnly,
-    localRoots: input.effectiveFsWorkspaceOnly
-      ? undefined
-      : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.mediaOwnerAgentId),
+    // The loader reads these only when hydrating a file, not for text or inline images.
+    get localRoots() {
+      return input.effectiveFsWorkspaceOnly
+        ? undefined
+        : (localRoots ??= getAgentScopedMediaLocalRoots(
+            attempt.config ?? {},
+            input.mediaOwnerAgentId,
+          ));
+    },
     sandbox:
       input.sandbox?.enabled && input.sandbox.fsBridge
         ? { root: input.sandbox.workspaceDir, bridge: input.sandbox.fsBridge }

@@ -7,9 +7,10 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { clearCommandLane, enqueueCommandInLane } from "../../process/command-queue.js";
 import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
-import type { PreparedReplyRunContext } from "./get-reply-run-context.js";
+import { prepareReplyRunContext } from "./get-reply-run-context.js";
+import { finalizeInboundContext } from "./inbound-context.js";
 import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
-import { buildReplyPromptEnvelope } from "./prompt-prelude.js";
+import { prepareReplyConversation } from "./prompt-session-context.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun } from "./queue/enqueue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
@@ -48,107 +49,75 @@ vi.mock("./get-reply-run-helpers.js", async (importOriginal) => ({
   }),
 }));
 
-function createAdmissionFixture() {
+async function createAdmissionFixture() {
   const sessionKey = "agent:main:slack:channel:room:thread:100.1";
   const sessionId = "session";
   const entry: SessionEntry = { sessionId, updatedAt: 1 };
-  const ctx = { SessionKey: sessionKey, Provider: "slack", ChatType: "channel" };
   const body = "Use the revised request";
-  const context: PreparedReplyRunContext = {
-    kind: "ready",
-    params: {
-      ctx,
-      sessionCtx: ctx,
-      conversation: { fields: ctx, group: {} },
-      cfg: {},
-      agentId: "main",
-      agentDir: "/tmp/agent",
+  const ctx = finalizeInboundContext({
+    SessionKey: sessionKey,
+    Provider: "slack",
+    ChatType: "channel",
+    Body: body,
+    RawBody: body,
+    CommandBody: body,
+    BodyStripped: body,
+  });
+  const params: Parameters<typeof prepareReplyRunContext>[0] = {
+    ctx,
+    sessionCtx: ctx,
+    conversation: prepareReplyConversation({ ctx, sessionEntry: entry }),
+    sessionEntry: entry,
+    cfg: {},
+    agentId: "main",
+    agentDir: "/tmp/agent",
+    agentCfg: {},
+    sessionCfg: {},
+    commandAuthorized: true,
+    command: {
+      surface: "slack",
+      channel: "slack",
+      ownerList: [],
+      senderIsOwner: false,
+      isAuthorizedSender: true,
+      rawBodyNormalized: body,
+      commandBodyNormalized: body,
+    },
+    allowTextCommands: true,
+    directives: parseInlineSessionDirectives(body),
+    defaultActivation: "always",
+    modelState: createModelSelectionStateFixture({
       agentCfg: {},
-      sessionCfg: {},
-      commandAuthorized: true,
-      command: {
-        surface: "slack",
-        channel: "slack",
-        ownerList: [],
-        senderIsOwner: false,
-        isAuthorizedSender: true,
-        rawBodyNormalized: body,
-        commandBodyNormalized: body,
-      },
-      allowTextCommands: true,
-      directives: parseInlineSessionDirectives(body),
-      defaultActivation: "always",
-      modelState: createModelSelectionStateFixture({
-        agentCfg: {},
-        provider: "anthropic",
-        model: "claude",
-      }),
       provider: "anthropic",
       model: "claude",
-      typing: createTypingController({}),
-      defaultModel: "claude",
-      timeoutMs: 30_000,
-      isNewSession: false,
-      resetTriggered: false,
-      systemSent: true,
-      sessionKey,
-      sessionId,
-      storePath: "/tmp/agent/sessions/sessions.json",
-      sessionStore: { [sessionKey]: entry },
-      workspaceDir: "/tmp/workspace",
-      abortedLastRun: false,
-      resolvedThinkLevel: "off",
-      resolvedVerboseLevel: "off",
-      resolvedReasoningLevel: "off",
-      resolvedElevatedLevel: "off",
-      elevatedEnabled: false,
-      elevatedAllowed: false,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-    },
-    runtimePolicySessionKey: sessionKey,
-    isHeartbeat: false,
-    explicitThinkingLevelOverride: undefined,
-    effectiveQueueMode: undefined,
-    promptSessionCtx: ctx,
-    inboundEventKind: undefined,
-    sourceReplyDeliveryMode: undefined,
-    silentReplyPromptMode: "none",
-    fullAccessState: { available: false },
-    isFirstTurnInSession: false,
-    extraSystemPromptParts: [],
-    sourceConversationContextByMode: { automatic: "", message_tool_only: "" },
-    sourceConversationContextPromptOffset: undefined,
-    extraSystemPromptStatic: "",
-    cliSessionBindingFacts: { extraSystemPromptStatic: "" },
-    baseBodyTrimmedRaw: body,
-    effectiveResetTriggered: false,
-    isBareSessionReset: false,
-    shouldInjectGroupIntro: false,
-    typingMode: "never",
-    isMainSession: false,
-    terminalReplyExpectation: "optional",
-    sessionEntry: entry,
-    traceRunPhase: async <T>(_name: string, run: () => T | Promise<T>) => await run(),
-    prefixedBodyBase: body,
-    hasUserBody: true,
+    }),
+    provider: "anthropic",
+    model: "claude",
+    typing: createTypingController({}),
+    defaultModel: "claude",
+    timeoutMs: 30_000,
+    isNewSession: false,
+    resetTriggered: false,
+    systemSent: true,
+    sessionKey,
+    sessionId,
+    storePath: "/tmp/agent/sessions/sessions.json",
+    sessionStore: { [sessionKey]: entry },
     workspaceDir: "/tmp/workspace",
-    skillsWorkspaceDir: "/tmp/workspace",
-    useFastReplyRuntime: false,
-    thinkingRuntime: "embedded",
-    buildPromptBodies: (additions) =>
-      buildReplyPromptEnvelope({
-        ctx,
-        sessionCtx: ctx,
-        baseBody: body,
-        hasUserBody: true,
-        inboundUserContext: "",
-        isBareSessionReset: false,
-        startupAction: "new",
-        ...additions,
-      }),
-    refreshInboundContextAfterAdmissionWait: () => {},
+    abortedLastRun: false,
+    resolvedThinkLevel: "off",
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolvedElevatedLevel: "off",
+    elevatedEnabled: false,
+    elevatedAllowed: false,
+    blockStreamingEnabled: false,
+    resolvedBlockStreamingBreak: "message_end",
   };
+  const context = await prepareReplyRunContext(params);
+  if (context.kind !== "ready") {
+    throw new Error("Expected prepared reply context");
+  }
   return { context, entry, sessionKey, sessionId };
 }
 
@@ -156,7 +125,7 @@ afterEach(() => vi.clearAllMocks());
 
 describe("prepared reply transcript identity", () => {
   it("carries an inherited thinking request through admission to candidate selection", async () => {
-    const { context, entry } = createAdmissionFixture();
+    const { context, entry } = await createAdmissionFixture();
     entry.thinkingLevel = "high";
     const catalog = [{ provider: "fixture", id: "basic", name: "Basic", reasoning: false }];
     const result = await prepareReplyRunAdmission({
@@ -185,7 +154,7 @@ describe("prepared reply transcript identity", () => {
   ])(
     "interrupt clears only owned work for $agentId/$sessionKey",
     async ({ sessionKey, agentId }) => {
-      const { context, entry, sessionId } = createAdmissionFixture();
+      const { context, entry, sessionId } = await createAdmissionFixture();
       const lane = resolveEmbeddedSessionLane(sessionKey ?? sessionId);
       const entered = createDeferred();
       const release = createDeferred();
@@ -267,7 +236,7 @@ describe("prepared reply transcript identity", () => {
   it.each(["steer", "followup"] as const)(
     "preserves %s admission and transcript authority despite an older queued followup",
     async (mode) => {
-      const { context, sessionKey, sessionId } = createAdmissionFixture();
+      const { context, sessionKey, sessionId } = await createAdmissionFixture();
       const older = createQueueTestRun({ prompt: "Earlier followup", messageId: `older-${mode}` });
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
       operation.setPhase("running");
@@ -314,7 +283,7 @@ describe("prepared reply transcript identity", () => {
   it.each([false, true])(
     "keeps caller-only model auth selection off the shared session (fast=%s)",
     async (fast) => {
-      const { context, entry } = createAdmissionFixture();
+      const { context, entry } = await createAdmissionFixture();
       entry.authProfileOverride = "fixture:shared";
       entry.authProfileOverrideSource = "user";
       vi.mocked(resolveSessionAuthSelection).mockImplementationOnce(async (params) => {

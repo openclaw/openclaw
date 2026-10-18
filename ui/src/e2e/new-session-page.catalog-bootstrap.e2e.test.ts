@@ -1,4 +1,5 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol/frame-guards";
 import { expect, it } from "vitest";
 import {
   controlUiBundledGatewayUrl,
@@ -56,6 +57,7 @@ suite.define(() => {
       };
       const older = { provider: "fixture", id: "older", name: "Older model", available: true };
       const gateway = await installMockGateway(page, {
+        connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
         defaultAgentId: "alpha",
         agentModel: "fixture/current",
         heldMethods: ["models.list"],
@@ -134,6 +136,7 @@ suite.define(() => {
     const current = { provider: "fixture", id: "current", name: "Current model", available: true };
     const older = { provider: "fixture", id: "older", name: "Older model", available: true };
     const gateway = await installMockGateway(page, {
+      connectCapabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT],
       defaultAgentId: "alpha",
       agentModel: "fixture/current",
       heldMethods: ["models.list"],

@@ -36,10 +36,18 @@ export function registerGatewayCallDispatchPreparationTests(
       error:
         /does not support required capability "gateway-restart-target-safe-v1".*update or restart the active gateway/i,
     },
+    {
+      method: "agent",
+      requiredMethods: undefined,
+      requiredCapabilities: [GATEWAY_SERVER_CAPS.AGENT_SESSION_ID_CREATE],
+      error:
+        /does not support required capability "agent-session-id-create-v1".*update or restart the active gateway/i,
+    },
   ])("requires supported features before calling $method", async ({ error, ...options }) => {
     const harness = setup();
     harness.setFeatures(["health"], []);
     await expect(harness.call(options)).rejects.toThrow(error);
+    expect(harness.request()).toBeNull();
   });
 
   it.each([

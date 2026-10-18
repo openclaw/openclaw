@@ -1,4 +1,3 @@
-// Local embedded Gateway request context.
 // Lets local agent paths reuse Gateway server methods without starting a server.
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -63,6 +62,8 @@ const unavailableCron: GatewayCronServiceContract = {
   quiesceJobs: cronUnavailable,
   run: cronUnavailable,
   enqueueRun: cronUnavailable,
+  readEventSources: cronUnavailable,
+  runEvent: cronUnavailable,
   waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,

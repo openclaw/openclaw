@@ -310,6 +310,13 @@ export class BrokerResourceClaims {
     return this.sealPromise;
   }
 
+  /** The broker reported refused initialization and its process and pipes have joined. */
+  closeBeforeStartup(): void {
+    for (const claim of this.claims.values()) {
+      this.receive({ type: "resource-closed", id: claim.attachment.id, requestId: 0 });
+    }
+  }
+
   fail(error: Error): void {
     this.failure ??= error;
     const failed = [...this.claims.values()].filter((claim) => this.rejectClaim(claim, error));

@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
@@ -114,21 +113,6 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
 };
-
-function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
-  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
-    return value;
-  }
-  const object = value as object;
-  if (seen.has(object)) {
-    return value;
-  }
-  seen.add(object);
-  for (const child of Object.values(object)) {
-    deepFreezeHookValue(child, seen);
-  }
-  return Object.freeze(value);
-}
 
 type HookEvent<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[0];
 type HookContext<K extends PluginHookName> = Parameters<PluginHookHandlerMap[K]>[1];
@@ -257,9 +241,6 @@ export function createHookRunner(
     ...DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK,
     ...options.modifyingHookTimeoutMsByHook,
   };
-  // Prompt-build hooks may start nested agent runs through any caller. The
-  // mutable token lets detached descendants dispatch after the outer run settles.
-  const beforePromptBuildDispatch = new AsyncLocalStorage<{ active: boolean }>();
   const runtimeDecisionScopeId = randomUUID();
   let runtimeDecisionOrdinal = 0;
 
@@ -426,9 +407,9 @@ export function createHookRunner(
   });
 
   const mergeBeforeAgentFinalize = (
-    acc: PluginHookBeforeAgentFinalizeResult | undefined,
+    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
     next: PluginHookBeforeAgentFinalizeResult,
-  ): PluginHookBeforeAgentFinalizeResult => {
+  ): BeforeAgentFinalizeResultWithRetryCandidates => {
     const normalizeRetry = (
       retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
     ): BeforeAgentFinalizeRetry | undefined => {
@@ -441,22 +422,6 @@ export function createHookRunner(
         instruction,
       };
     };
-    const readRetryCandidates = (
-      result: PluginHookBeforeAgentFinalizeResult | undefined,
-    ): BeforeAgentFinalizeRetry[] => {
-      if (!result || result.action !== "revise") {
-        return [];
-      }
-      const candidateList = (result as BeforeAgentFinalizeResultWithRetryCandidates)
-        .retryCandidates;
-      if (Array.isArray(candidateList) && candidateList.length > 0) {
-        return candidateList
-          .map(normalizeRetry)
-          .filter((retry): retry is BeforeAgentFinalizeRetry => retry !== undefined);
-      }
-      const retry = normalizeRetry(result.retry);
-      return retry ? [retry] : [];
-    };
     if (acc?.action === "finalize") {
       return acc;
     }
@@ -464,9 +429,13 @@ export function createHookRunner(
       return { action: "finalize", reason: next.reason };
     }
     if (acc?.action === "revise" && next.action === "revise") {
-      const retryCandidates = [...readRetryCandidates(acc), ...readRetryCandidates(next)];
+      const nextRetry = normalizeRetry(next.retry);
+      const retryCandidates = [
+        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
+        ...(nextRetry ? [nextRetry] : []),
+      ];
       const retry = retryCandidates[0];
-      const result: PluginHookBeforeAgentFinalizeResult = {
+      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
         action: "revise",
         reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
         ...(retry ? { retry } : {}),
@@ -663,11 +632,6 @@ export function createHookRunner(
     (event: HookEvent<K>, ctx: HookContext<K>) =>
       runClaimingHook<K, HookResult<K>>(hookName, event, ctx);
 
-  const bindFrozenVoidHook =
-    <K extends PluginHookName>(hookName: K) =>
-    (event: HookEvent<K>, ctx: HookContext<K>) =>
-      runVoidHook(hookName, deepFreezeHookValue(structuredClone(event)), ctx);
-
   /**
    * Handlers are executed sequentially in priority order, and results are merged.
    */
@@ -841,19 +805,9 @@ export function createHookRunner(
     event: PluginHookBeforePromptBuildEvent,
     ctx: PluginHookAgentContext,
   ): Promise<PluginHookBeforePromptBuildResult | undefined> {
-    if (beforePromptBuildDispatch.getStore()?.active) {
-      return undefined;
-    }
-    const token = { active: true };
-    return await beforePromptBuildDispatch.run(token, async () => {
-      try {
-        return await runModifyingHook("before_prompt_build", event, ctx, {
-          mergeResults: mergeBeforePromptBuild,
-          includeRegistration: (registration) => registration.requiresToolAuthority !== true,
-        });
-      } finally {
-        token.active = false;
-      }
+    return runModifyingHook("before_prompt_build", event, ctx, {
+      mergeResults: mergeBeforePromptBuild,
+      includeRegistration: (registration) => registration.requiresToolAuthority !== true,
     });
   }
 
@@ -1134,7 +1088,7 @@ export function createHookRunner(
     runBeforeAgentFinalize: async (
       event: HookEvent<"before_agent_finalize">,
       ctx: HookContext<"before_agent_finalize">,
-    ) =>
+    ): Promise<BeforeAgentFinalizeResultWithRetryCandidates | undefined> =>
       runModifyingHook("before_agent_finalize", withAgentRunId(event, ctx), ctx, {
         mergeResults: mergeBeforeAgentFinalize,
       }),
@@ -1220,7 +1174,7 @@ export function createHookRunner(
     }),
     runCronReconciled: bindVoidHook("cron_reconciled"),
     runCronChanged: bindVoidHook("cron_changed"),
-    runSkillChanged: bindFrozenVoidHook("skill_changed"),
+    runSkillChanged: bindVoidHook("skill_changed"),
     runBeforeInstall: bindModifyingHook("before_install", {
       mergeResults: (acc, next) => {
         const findings = [...(acc?.findings ?? []), ...(next.findings ?? [])];

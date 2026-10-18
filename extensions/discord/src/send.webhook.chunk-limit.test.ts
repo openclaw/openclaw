@@ -84,13 +84,8 @@ describe("Discord webhook delivery", () => {
     });
   });
 
-  it.each([
-    {
-      label: "mentions outside multiline and unterminated code",
-      text: "Example: `first\n@alice`\nPlease review @alice then `notify @alice",
-      expected: "Example: `first\n@alice`\nPlease review <@123456789> then `notify @alice",
-    },
-  ])("preserves $label through bound-thread persona delivery", async ({ text, expected }) => {
+  it("resolves punctuated mentions outside code through bound-thread persona delivery", async () => {
+    const text = "Example: `first\n@alice.`\nPlease review @alice. then `notify @alice.";
     mockDiscordBoundThreadManager(hoisted);
     await withWebhookServer(accepted, async (contents) => {
       await discordOutbound.sendText?.({
@@ -106,7 +101,9 @@ describe("Discord webhook delivery", () => {
         threadId: "thread-1",
         text,
       });
-      expect(contents).toEqual([expected]);
+      expect(contents).toEqual([
+        "Example: `first\n@alice.`\nPlease review <@123456789>. then `notify @alice.",
+      ]);
       expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
     });
   });

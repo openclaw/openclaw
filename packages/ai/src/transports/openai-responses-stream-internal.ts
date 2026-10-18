@@ -108,7 +108,7 @@ export async function processResponsesStream<TApi extends Api>(
         contentIndex: blocks.length,
         outputIndex: readResponsesOutputIndex(event),
       };
-      terminal.recordReasoningReplayReadiness(slot.contentIndex, false);
+      terminal.recordPendingReasoning(slot.contentIndex);
     } else if (item.type === "message") {
       const collapseCandidate = lastTextBlock;
       const block = collapseCandidate ? null : createTextBlock(item, "");
@@ -508,10 +508,6 @@ export async function processResponsesStream<TApi extends Api>(
           outputSlot.block.thinkingSignature = JSON.stringify(
             normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
           );
-          terminal.recordReasoningReplayReadiness(
-            outputSlot.contentIndex,
-            Boolean(item.encrypted_content),
-          );
           outputs.set(
             item,
             outputSlot.contentIndex,
@@ -672,7 +668,6 @@ export async function processResponsesStream<TApi extends Api>(
           const completeToolCall =
             event.type === "response.completed" ? prepareTerminalToolCalls(items) : undefined;
           terminal.recoverTerminalOutput(items, completeToolCall);
-          terminal.releaseDeferredToolCompletions();
         }
         terminalResponse = event.type === "response.completed" ? event.response : null;
         if (
@@ -719,5 +714,7 @@ export async function processResponsesStream<TApi extends Api>(
         delete block.partialJson;
       }
     }
+    // Completed calls survive interrupted streams, using item.done reasoning if no terminal arrived.
+    terminal.releaseDeferredToolCompletions();
   }
 }

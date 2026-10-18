@@ -10,7 +10,10 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../config-revision.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
@@ -42,6 +45,7 @@ import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import type {
   CronAddOptions,
   CronAddResult,
+  CronRemoveOptions,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -63,7 +67,7 @@ const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session clean
 export async function quiesceJobs(
   state: CronServiceState,
   jobs: readonly { id: string; revision: string }[],
-  commitGuard: () => void,
+  commitGuard: (cancel: () => void) => void | Promise<void>,
 ): Promise<void> {
   await locked(state, async () => {
     await ensureLoadedForOperation(state);
@@ -73,10 +77,18 @@ export async function quiesceJobs(
         throw new Error(`Cron job ${expected.id} changed before cancellation.`);
       }
     }
-    commitGuard();
-    for (const job of jobs) {
-      requestActiveCronJobCancellation(job.id, "Claw agent removal.");
-    }
+    let cancelled = false;
+    const cancel = () => {
+      if (cancelled) {
+        return;
+      }
+      cancelled = true;
+      for (const job of jobs) {
+        requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+      }
+    };
+    await commitGuard(cancel);
+    cancel();
   });
 }
 
@@ -127,6 +139,7 @@ export async function add(
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
+        inferenceBinding: opts?.inferenceBinding,
         sourceConversation: opts?.sourceConversation,
         skillLibrarySelections: opts?.skillLibrarySelections,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
@@ -270,6 +283,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
@@ -339,11 +353,7 @@ export async function updateWithPrecondition(
 }
 
 /** Removes a cron job through its worker owner before canceling and cleaning up host work. */
-export async function remove(
-  state: CronServiceState,
-  id: string,
-  opts?: { systemOwned?: boolean; commitGuard?: () => void },
-) {
+export async function remove(state: CronServiceState, id: string, opts?: CronRemoveOptions) {
   const source = captureCronJobMutationSource(state);
   let sessionCleanup:
     | {
@@ -371,6 +381,15 @@ export async function remove(
     if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
       throw new Error("system-owned monitor jobs cannot be removed by cron clients");
     }
+    if (opts?.expectedConfigRevision !== undefined) {
+      const actualConfigRevision = resolveCronJobConfigRevision(removedJob);
+      if (actualConfigRevision !== opts.expectedConfigRevision) {
+        throw new CronJobConfigRevisionConflictError(
+          opts.expectedConfigRevision,
+          actualConfigRevision,
+        );
+      }
+    }
     source.assertCurrent();
     opts?.commitGuard?.();
 
@@ -383,6 +402,9 @@ export async function remove(
       source,
       method: "cron.remove",
       assertCurrent: opts?.commitGuard,
+      ...(opts?.expectedConfigRevision !== undefined
+        ? { expectedJob: { id, configRevision: opts.expectedConfigRevision } }
+        : {}),
       jobMutation: { kind: "remove", ids: [id], systemOwned: opts?.systemOwned },
       jobMutationSnapshot: {
         nowMs: state.deps.nowMs(),

@@ -5,24 +5,23 @@ import {
   MEMORY_EMBEDDING_CACHE_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
+import { memorySchemaSource } from "./memory-schema-catalog.js";
+import * as provenanceSchema from "./memory-schema-provenance.js";
+import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
+import { memoryTextSearchSchema } from "./memory-search-schema.js";
+import { admitStoreSearch } from "./openclaw-runtime-kysely.js";
 import {
   backfillMemoryPathFtsRows,
   dropDisabledMemoryFts,
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
-  ensureMemoryChunkFtsSchema,
-  ensureMemoryPathFtsSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNKS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
   reconcileMemoryChunkFtsRows,
-} from "./memory-schema-fts.js";
-import * as provenanceSchema from "./memory-schema-provenance.js";
-import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
-import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
-import {
   canReuseSqliteSchemaInTransaction,
   getSqliteDatabaseAdmission,
   migrateSqliteSchemaToStrict,
@@ -57,7 +56,7 @@ export {
   MEMORY_PATH_FTS_TRIGGER_DEFINITIONS,
   MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS,
   rebuildMemoryChunkFts,
-} from "./memory-schema-fts.js";
+} from "./openclaw-runtime-sqlite.js";
 export {
   ensureMemoryChunkProvenance,
   MEMORY_INDEX_CHUNK_PROVENANCE_TABLE,
@@ -443,18 +442,6 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateMemoryIndexSourcesIdentity(params.db);
   params.db.exec(`
-    ${[MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE]
-      .flatMap((table) =>
-        ["insert", "update", "delete"].map(
-          (event) => `CREATE TRIGGER IF NOT EXISTS ${table}_revision_after_${event}
-            AFTER ${event.toUpperCase()} ON ${table}
-            BEGIN
-              UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-            END;`,
-        ),
-      )
-      .join("\n")}
-
     CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
@@ -479,26 +466,36 @@ export function ensureMemoryIndexSchema(params: {
   const migrateStrict = params.db.isTransaction
     ? migrateSqliteSchemaToStrictInTransaction
     : migrateSqliteSchemaToStrict;
+  const includeEmbeddingCache = params.cacheEnabled || tableExists(params.db, embeddingCacheTable);
   migrateStrict(
     params.db,
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
-      includeEmbeddingCache: params.cacheEnabled || tableExists(params.db, embeddingCacheTable),
+      includeEmbeddingCache,
     }),
-    { databaseLabel: "memory index" },
+    {
+      databaseLabel: "memory index",
+      expectedSchema: memorySchemaSource(
+        buildMemoryIndexStrictSchema({
+          embeddingCacheTable: MEMORY_EMBEDDING_CACHE_TABLE,
+          includeEmbeddingCache,
+        }),
+        embeddingCacheTable,
+      ),
+    },
   );
 
   let ftsAvailable = false;
   let ftsError: string | undefined;
   if (params.ftsEnabled) {
     try {
-      const tokenizeClause = tokenizer === "trigram" ? `, tokenize='trigram case_sensitive 0'` : "";
-      ensureMemoryChunkFtsSchema({ db: params.db, ftsTable, tokenizeClause });
+      const search = memoryTextSearchSchema(tokenizer);
       // Deprecated custom FTS tables preserve their body-only contract. The
       // canonical index owns the separate path table and its source triggers.
-      if (ftsTable === MEMORY_INDEX_FTS_TABLE) {
-        ensureMemoryPathFtsSchema({ db: params.db, tokenizeClause });
+      if (ftsTable !== MEMORY_INDEX_FTS_TABLE) {
+        search.text = { body: { ...search.text!.body!, table: ftsTable } };
       }
+      admitStoreSearch(params.db, search, { extension: "memory.text" });
       ftsAvailable = true;
     } catch (err) {
       if (ftsTable === MEMORY_INDEX_FTS_TABLE) {

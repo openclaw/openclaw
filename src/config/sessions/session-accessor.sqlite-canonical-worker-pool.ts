@@ -3,6 +3,7 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { observeWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -10,7 +11,10 @@ import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-agent
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
-import type { SqliteMutationWorkerTransport } from "./session-accessor.sqlite-worker-transport.js";
+import type {
+  SqliteMutationWorkerTransport,
+  WorkerCleanup,
+} from "./session-accessor.sqlite-worker-transport.js";
 
 type DatabaseOptions = SqliteSessionReclamationPlan["databaseOptions"];
 const log = createSubsystemLogger("session-sqlite");
@@ -25,10 +29,13 @@ export type SqliteCanonicalValidationTaskMessage = {
   operationId: number;
 };
 export type SqliteCanonicalValidationTaskResult =
-  | { status: "closed" }
+  | { status: "closed"; cleanup: WorkerCleanup }
   | { status: "failed"; error: string };
 export type CanonicalWorkerPool = {
-  pool: WorkerTaskPool<SqliteCanonicalValidationWorkerTask, SqliteCanonicalValidationTaskResult>;
+  pool: WorkerTaskPool<
+    SqliteCanonicalValidationWorkerTask,
+    Extract<SqliteCanonicalValidationTaskResult, { status: "closed" }>
+  >;
   closed: boolean;
   failure?: Error;
   close: () => Promise<void>;
@@ -53,7 +60,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
   const execution: CanonicalWorkerPool = {
     pool: new WorkerTaskPool<
       SqliteCanonicalValidationWorkerTask,
-      SqliteCanonicalValidationTaskResult
+      Extract<SqliteCanonicalValidationTaskResult, { status: "closed" }>
     >({
       workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive),
       workerOptions: {
@@ -66,7 +73,7 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
       maxWorkers: AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
       // The startup scope joins native workers after its database tasks close.
       idleTimeoutMs: 0,
-      validateResult: (result) => {
+      validateResult: (result: SqliteCanonicalValidationTaskResult) => {
         // Failed mutation/close replies retire the native slot before rejecting its task.
         if (result.status !== "closed") {
           throw new Error(result.error);
@@ -123,6 +130,7 @@ export async function startCanonicalValidationTask(
   let active = true;
   let custodyReleased = false;
   channel.on("message", (message: SqliteCanonicalValidationTaskMessage) => {
+    observeWorkerMessage(message, "from_worker", "sqlite_reply");
     if (message.type === "ready") {
       ready.resolve(message);
     }
@@ -141,7 +149,7 @@ export async function startCanonicalValidationTask(
         },
       },
     )
-    .then(() => undefined)
+    .then((result) => result.cleanup)
     .catch((error: unknown) => {
       execution.closed = true;
       execution.failure ??= toStringifiedError(error);
@@ -164,7 +172,6 @@ export async function startCanonicalValidationTask(
       threadId: started.threadId,
       initialOperationId: started.operationId,
       completion,
-      custodyReleased: () => custodyReleased,
       terminate: async () => {
         // This controller belongs to one task, never to its reused native slot.
         if (active) {

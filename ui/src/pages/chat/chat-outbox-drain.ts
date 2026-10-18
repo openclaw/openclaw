@@ -156,7 +156,6 @@ async function reconcileStoredChatOutboxHead(
   } catch (error) {
     if (isCurrent()) {
       surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
-      host.requestUpdate?.();
     }
     return "blocked";
   }
@@ -608,7 +607,7 @@ export async function resumeStoredChatOutboxes(
     return;
   }
   // Refresh credential ownership; callers own frame-coalesced rendering.
-  chatOutboxOwner(host).syncHost(host, { requestUpdate: false });
+  chatOutboxOwner(host).syncHost(host, { notify: false });
   const eventScope = event ? readSessionChangedEvent(event.payload) : undefined;
   if (event && !eventScope) {
     return;

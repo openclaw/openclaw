@@ -459,16 +459,16 @@ export async function ensureSessionWorkspaceForPlacement(params: {
   signal?: AbortSignal;
   onCommitted?: () => void;
   canPrepare: () => boolean;
-}): Promise<void> {
+}): Promise<SessionEntry> {
   const { target, entry } = params;
-  await runExclusiveSessionLifecycleMutation("placement-dispatch", {
+  return await runExclusiveSessionLifecycleMutation("placement-dispatch", {
     scope: target.storePath,
     identities: [target.canonicalKey, entry.sessionId, ...target.storeKeys],
     signal: params.signal,
     run: async () => {
       params.assertCurrent();
       if (!params.canPrepare()) {
-        return;
+        return entry;
       }
       if (entry.worktree || entry.repositoryWorkspaceId) {
         const resolved = await resolveWorkerPlacementSessionTarget({
@@ -485,7 +485,7 @@ export async function ensureSessionWorkspaceForPlacement(params: {
         });
         resolved[Symbol.dispose]();
         params.assertCurrent();
-        return;
+        return entry;
       }
       if (entry.pendingWorktree || entry.pendingProjectGitUrl) {
         throw new Error("The session workspace must finish preparation before worker setup.");
@@ -506,7 +506,7 @@ export async function ensureSessionWorkspaceForPlacement(params: {
       if (!prepared.ok) {
         throw new Error(prepared.error.message);
       }
-      const bound = await commitPreparedSessionWorkspace({
+      return await commitPreparedSessionWorkspace({
         prepared: prepared.value,
         onCommitted: params.onCommitted,
         target: { ...target, sessionKey: target.canonicalKey },
@@ -526,7 +526,6 @@ export async function ensureSessionWorkspaceForPlacement(params: {
         },
         missingSessionMessage: "Session disappeared during worker setup.",
       });
-      Object.assign(entry, bound);
     },
   });
 }

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as embeddedAgent from "../../agents/embedded-agent.js";
 import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
@@ -7,6 +8,7 @@ import {
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runSetupInferenceTurn } from "../../system-agent/setup-inference-turn.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { WizardSession } from "../../wizard/session.js";
 import {
   captureGatewayDeviceRevocation,
   invalidateGatewayDeviceRevocation,
@@ -17,9 +19,18 @@ import {
   createOperatorClient,
 } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createWizardSessionTracker } from "../server-wizard-sessions.js";
-import { whenAdmittedWizardSessionSettled } from "./setup-admission.js";
+import {
+  createAdmittedWizardSession,
+  whenAdmittedWizardSessionSettled,
+} from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+import { publishWizardLoginSession, startWizardLogin } from "./wizard-login.js";
 import { wizardHandlers } from "./wizard.js";
+
+// mock-isolation: Authority probes exercise the live request scope, not a model runtime.
+vi.mock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
+
+afterEach(() => vi.restoreAllMocks());
 
 it.each([
   { revoked: false, progress: false },
@@ -39,6 +50,38 @@ it.each([
       const continueProbe = createDeferredCore();
       let captureError: unknown;
       let probe: Awaited<ReturnType<typeof runSetupInferenceTurn>> | undefined;
+      vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(async () => {
+        if (revoked) {
+          invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
+        }
+        const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "probe scope");
+        try {
+          const captured = expectDefined(
+            await captureGatewayOperatorRunAuthority({
+              client: scope.client ?? null,
+              context,
+              hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
+            }),
+            "probe operator authority",
+          );
+          try {
+            captured.authority.assertCurrent();
+          } finally {
+            captured.release();
+          }
+        } catch (error) {
+          captureError = error;
+          console.info("setup-inference authority capture:", error);
+          throw error;
+        }
+        return {
+          payloads: [{ text: "OK" }],
+          meta: {
+            durationMs: 1,
+            executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.6-sol" },
+          },
+        };
+      });
       context.wizardRunner = async (_opts, _runtime, prompter) => {
         await prompter.confirm({ message: "Verify saved sign-in?" });
         if (progress) {
@@ -57,42 +100,6 @@ it.each([
             agentDir: state.agentDir(),
             sourceConfig: config,
             runConfig: config,
-          },
-          deps: {
-            createTempDir: async () => state.workspaceDir,
-            removeTempDir: async () => {},
-            runEmbeddedAgent: async () => {
-              if (revoked) {
-                invalidateGatewayDeviceRevocation(context, "wizard-device", "operator");
-              }
-              const scope = expectDefined(getPluginRuntimeGatewayRequestScope(), "probe scope");
-              try {
-                const captured = expectDefined(
-                  await captureGatewayOperatorRunAuthority({
-                    client: scope.client ?? null,
-                    context,
-                    hasCurrentClientAuthority: scope.hasCurrentClientAuthority,
-                  }),
-                  "probe operator authority",
-                );
-                try {
-                  captured.authority.assertCurrent();
-                } finally {
-                  captured.release();
-                }
-              } catch (error) {
-                captureError = error;
-                console.info("setup-inference authority capture:", error);
-                throw error;
-              }
-              return {
-                payloads: [{ text: "OK" }],
-                meta: {
-                  durationMs: 1,
-                  executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.6-sol" },
-                },
-              };
-            },
           },
         });
         if (!probe.ok) {
@@ -172,6 +179,77 @@ it.each([
         session.cancel();
         await whenAdmittedWizardSessionSettled(session);
       }
+    });
+  },
+);
+
+it.each(["admission", "publication"])(
+  "releases login setup when its connection closes before %s",
+  async (phase) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const connection = new AbortController();
+      const client = createOperatorClient({
+        profileId: "login-owner",
+        scopes: ["operator.admin"],
+      });
+      client.connectionSignal = connection.signal;
+      const context = createContext();
+      Object.assign(context, createWizardSessionTracker());
+      const respond = vi.fn();
+      const createSession = vi.fn(
+        () =>
+          new WizardSession(async (prompter) => {
+            await prompter.confirm({ message: "Continue setup?" });
+          }),
+      );
+      const params = {
+        client,
+        context,
+        sessionId: "disconnected-login",
+        respond,
+        assertCurrent: vi.fn(),
+        createSession,
+      };
+      if (phase === "admission") {
+        connection.abort(new Error("Connection closed before admission"));
+        try {
+          await expect(startWizardLogin(params)).rejects.toThrow(
+            "Connection closed before admission",
+          );
+        } finally {
+          for (const session of context.wizardSessions.values()) {
+            session.cancel();
+            await whenAdmittedWizardSessionSettled(session);
+          }
+        }
+        expect(createSession).not.toHaveBeenCalled();
+      } else {
+        const session = expectDefined(
+          await createAdmittedWizardSession(createSession),
+          "admitted login session",
+        );
+        try {
+          connection.abort(new Error("Connection closed before publication"));
+          await publishWizardLoginSession({ ...params, session });
+          expect(session.signal.aborted).toBe(true);
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({
+              message: "Login is no longer available on this connection.",
+            }),
+          );
+        } finally {
+          session.cancel();
+          await whenAdmittedWizardSessionSettled(session);
+        }
+      }
+      expect(context.wizardSessions.size).toBe(0);
+      const replacement = expectDefined(
+        await createAdmittedWizardSession(() => new WizardSession(async () => {})),
+        "replacement setup admission",
+      );
+      await whenAdmittedWizardSessionSettled(replacement);
     });
   },
 );

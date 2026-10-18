@@ -1,9 +1,5 @@
 import path from "node:path";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { captureRuntimeConfigAsyncReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
@@ -28,13 +24,6 @@ import {
   IMESSAGE_UPDATE_COMMAND,
   isAutoManagedIMessageCliPath,
 } from "./setup-core.js";
-
-// Re-export for backwards compatibility
-export { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
-export {
-  getCachedIMessagePrivateApiStatus,
-  imessageRpcSupportsMethod,
-} from "./private-api-status.js";
 
 export type IMessageProbe = BaseProbeResult & {
   fatal?: boolean;
@@ -71,29 +60,21 @@ function cacheIMessagePrivateApiStatus(
   cliPath: string,
   status: NonNullable<IMessageProbe["privateApi"]>,
 ): void {
-  if (status.available) {
-    setCachedIMessagePrivateApiStatus(cliPath, status, 0);
-    return;
-  }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(PRIVATE_API_NEGATIVE_TTL_MS);
-  if (expiresAt !== undefined) {
-    setCachedIMessagePrivateApiStatus(cliPath, status, expiresAt);
-  }
+  setCachedIMessagePrivateApiStatus(
+    cliPath,
+    status,
+    status.available ? 0 : Date.now() + PRIVATE_API_NEGATIVE_TTL_MS,
+  );
 }
 
 function setCachedRpcSupport(cliPath: string, result: RpcSupportResult): void {
-  const expiresAt = resolveExpiresAtMsFromDurationMs(RPC_SUPPORT_CACHE_TTL_MS);
-  if (expiresAt === undefined) {
-    return;
-  }
-  rpcSupportCache.set(cliPath, { result, expiresAt });
+  rpcSupportCache.set(cliPath, { result, expiresAt: Date.now() + RPC_SUPPORT_CACHE_TTL_MS });
 }
 
 async function probeRpcSupport(cliPath: string, timeoutMs: number): Promise<RpcSupportResult> {
   const cached = rpcSupportCache.get(cliPath);
   if (cached) {
-    const now = asDateTimestampMs(Date.now());
-    if (now !== undefined && cached.expiresAt > now) {
+    if (cached.expiresAt > Date.now()) {
       return cached.result;
     }
     rpcSupportCache.delete(cliPath);

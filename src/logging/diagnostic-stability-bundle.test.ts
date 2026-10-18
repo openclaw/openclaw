@@ -427,6 +427,17 @@ describe("diagnostic stability bundles", () => {
             external: 1024,
             arrayBuffers: 512,
             sampleAgeMs: 20,
+            retainedData: [
+              {
+                structure: "catalog-source",
+                entries: 100,
+                approximateBytes: 512,
+                generations: 1,
+                providers: 2,
+                accounts: 3,
+                truncated: true,
+              },
+            ],
           },
         ],
         workerMemoryMissing: [
@@ -474,6 +485,17 @@ describe("diagnostic stability bundles", () => {
           external: 1024,
           arrayBuffers: 512,
           sampleAgeMs: 20,
+          retainedData: [
+            {
+              structure: "catalog-source",
+              entries: 100,
+              approximateBytes: 512,
+              generations: 1,
+              providers: 2,
+              accounts: 3,
+              truncated: true,
+            },
+          ],
         },
       ],
       workerMemoryMissing: [{ script: "other", threadId: 3, reason: "stale" }],
@@ -523,6 +545,32 @@ describe("diagnostic stability bundles", () => {
             heapUsedBytes: 1536,
             externalBytes: 128,
             arrayBuffersBytes: 64,
+            workerHeaps: [
+              {
+                script: "prepared-model-catalog.worker.js",
+                heapUsed: 512,
+                heapTotal: 1024,
+                retainedData: [
+                  {
+                    structure: "catalog-config",
+                    entries: 1,
+                    approximateBytes: 256,
+                    stringBytes: 128,
+                    objects: 2,
+                    providers: 2,
+                    accounts: 3,
+                    truncated: false,
+                    credentials: "catalog-credential-secret",
+                    modelKeys: ["private-model-key"],
+                  },
+                  {
+                    structure: "private-provider-name",
+                    entries: 1,
+                    approximateBytes: 100,
+                  },
+                ],
+              },
+            ],
           },
           topSessionFiles: [
             {
@@ -617,6 +665,25 @@ describe("diagnostic stability bundles", () => {
       "agents/<agent>/sessions/<session>.jsonl",
     );
     expect(result.bundle.evidence?.memoryPressure).toMatchObject(retainedRuntimeEvidence);
+    expect(result.bundle.evidence?.memoryPressure?.memory?.workerHeaps?.[0]?.retainedData).toEqual([
+      {
+        structure: "catalog-config",
+        entries: 1,
+        approximateBytes: 256,
+        stringBytes: 128,
+        objects: 2,
+        providers: 2,
+        accounts: 3,
+        truncated: false,
+      },
+    ]);
+    for (const secret of [
+      "catalog-credential-secret",
+      "private-model-key",
+      "private-provider-name",
+    ]) {
+      expect(JSON.stringify(result.bundle)).not.toContain(secret);
+    }
     expect(result.bundle.evidence?.memoryPressure).toMatchObject({
       thresholdBytes: 0,
       rssGrowthBytes: -1,
@@ -700,6 +767,58 @@ describe("diagnostic stability bundles", () => {
     expect(result.status === "failed" ? String(result.error) : "").toContain(
       "Unsupported stability bundle version",
     );
+  });
+
+  it.each([
+    {
+      name: "legacy bundle without build identity",
+      identity: {},
+      expected: {},
+    },
+    {
+      name: "public version metadata and maximum generated build id",
+      identity: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+      expected: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+    },
+    {
+      name: "unsafe imported identity",
+      identity: {
+        openclawVersion: "version\nsecret",
+        buildId: "/private/build",
+        commit: "not-a-commit",
+      },
+      expected: {},
+    },
+    {
+      name: "overlong imported identity",
+      identity: {
+        openclawVersion: "v".repeat(257),
+        buildId: "b".repeat(97),
+        commit: "a".repeat(41),
+      },
+      expected: {},
+    },
+  ])("preserves only recorded safe build identity: $name", ({ identity, expected }) => {
+    const file = path.join(tempDir, "imported.json");
+    const bundle = createImportedBundle();
+    const originalProcess = bundle.process as Record<string, unknown>;
+    bundle.process = { ...originalProcess, ...identity };
+    fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      throw new Error("Expected readable stability bundle");
+    }
+    expect(result.bundle.process).toEqual({ ...originalProcess, ...expected });
   });
 
   it("rejects oversized bundle files before reading them", () => {

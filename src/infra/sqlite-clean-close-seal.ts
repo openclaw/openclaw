@@ -39,9 +39,8 @@ function hasNoJournal(pathname: string): boolean {
 /** The caller supplies fstat from its retained descriptor; closing a new one can release SQLite locks. */
 export function readSqliteCleanCloseSeal(
   pathname: string,
-  schemaIdentity: string,
   file: BigIntStats,
-): SealProof | undefined {
+): (SealProof & { schemaIdentity: string }) | undefined {
   try {
     const sealPath = `${pathname}.seal`;
     if (!fs.lstatSync(sealPath).isFile()) {
@@ -59,7 +58,7 @@ export function readSqliteCleanCloseSeal(
     if (
       !isRecord(payload) ||
       payload.version !== 1 ||
-      payload.schemaIdentity !== schemaIdentity ||
+      typeof payload.schemaIdentity !== "string" ||
       typeof payload.verifiedAt !== "number" ||
       !Number.isSafeInteger(payload.verifiedAt) ||
       !("facts" in payload) ||
@@ -76,7 +75,11 @@ export function readSqliteCleanCloseSeal(
     ) {
       return undefined;
     }
-    return { verifiedAt: payload.verifiedAt, facts: payload.facts };
+    return {
+      schemaIdentity: payload.schemaIdentity,
+      verifiedAt: payload.verifiedAt,
+      facts: payload.facts,
+    };
   } catch {
     // Torn writes and unreadable seals fall back to the ordinary full validation.
     return undefined;

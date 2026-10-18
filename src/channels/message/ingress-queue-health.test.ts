@@ -5,7 +5,7 @@ import * as sqliteQueries from "../../infra/kysely-sync.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { INGRESS_CLAIM_LEASE_MS } from "./ingress-claim-owner.js";
 import {
-  countChannelIngressQueuePressure,
+  countChannelIngressQueueHealth,
   countFailedChannelIngressQueueEntries,
 } from "./ingress-queue-health.js";
 import { createChannelIngressQueue, type ChannelIngressQueue } from "./ingress-queue.js";
@@ -34,7 +34,10 @@ describe("channel ingress queue health", () => {
       { layout: "state-only", prefix: "openclaw-ingress-health-absent-", applyEnv: false },
       async ({ stateDir }) => {
         expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
-        expect(await countChannelIngressQueuePressure(stateDir)).toEqual([]);
+        expect(await countChannelIngressQueueHealth(stateDir)).toEqual({
+          failed: [],
+          pressure: [],
+        });
         expect(await fs.readdir(stateDir)).toEqual([]);
       },
     );
@@ -154,8 +157,8 @@ describe("channel ingress queue health", () => {
             throw new Error("Ingress health must not query SQLite on the calling thread");
           });
         try {
-          expect(await countFailedChannelIngressQueueEntries(stateDir)).toEqual([]);
-          const pressure = await countChannelIngressQueuePressure(stateDir);
+          const { failed, pressure } = await countChannelIngressQueueHealth(stateDir);
+          expect(failed).toEqual([]);
           expect(pressure).toEqual([
             {
               channelId: "telegram",

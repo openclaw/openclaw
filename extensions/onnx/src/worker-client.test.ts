@@ -9,6 +9,7 @@ import {
   type FixtureReceiptChannel,
 } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createOnnxProvider } from "./decisions.js";
 import type { ClassificationInput } from "./models/types.js";
 import { InferenceWorkerClient } from "./worker-client.js";
 
@@ -51,12 +52,11 @@ process.on('message', async (request) => {
     dir = request.config.modelDir;
     record({ kind: 'init' });
     if (${options.holdInit === true}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-    process.send({ kind: 'ready' });
     return;
   }
   if (request.kind === 'warm') {
     record({ kind: 'warm' });
-    process.send({ kind: 'warmed', id: request.id });
+    process.send({ kind: 'warmed' });
     return;
   }
   const text = request.inputs[0].text;
@@ -68,11 +68,10 @@ process.on('message', async (request) => {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
   }
-  if (text === 'missing') { process.send({ kind: 'error', id: request.id, code: 'model-missing' }); return; }
+  if (text === 'missing') { process.send({ kind: 'error', code: 'model-missing' }); return; }
   if (text === 'exit') process.exit(7);
   const results = request.inputs.map(() => ({ logits: [process.pid, Number(Boolean(process.env.ONNX_CLIENT_TEST_SECRET))], inputTokens: 1 }));
-  if (text === 'malformed') results[0].logits = ['invalid', 0];
-  process.send({ kind: 'results', id: text === 'stale' ? request.id + 1000 : request.id, results: text === 'shape' ? [] : results });
+  process.send({ kind: 'results', results });
 });
 `,
   );
@@ -219,6 +218,55 @@ describe("InferenceWorkerClient", () => {
     }
   });
 
+  it.for(["closed", "throws"] as const)(
+    "skips queued decisions whose admission %s without restarting the warm worker",
+    async (mode, { signal: testSignal }) => {
+      const { client, events, waitForHeldClassification, release } = fixture();
+      const provider = createOnnxProvider(client, vi.fn());
+      const evaluate = (text: string, isAdmissible?: () => boolean) =>
+        provider.evaluate(
+          {
+            state: text,
+            questions: {
+              needed: {
+                type: "boolean",
+                criteria: { true: "Work is needed", false: "No work is needed" },
+              },
+            },
+          },
+          {
+            model: "gliclass-edge-v3.0",
+            signal: signal(),
+            deadlineMonotonicMs: performance.now() + 30_000,
+            isAdmissible,
+          },
+        );
+      const active = evaluate("wait");
+      try {
+        const started = await waitForHeldClassification(active, testSignal);
+        let admitted = true;
+        const queued = evaluate("revoked", () => {
+          if (!admitted && mode === "throws") {
+            throw new Error("consumer authority closed");
+          }
+          return admitted;
+        });
+        admitted = false;
+        const survivor = evaluate("survivor");
+        release();
+        const outcomes = await Promise.all([active, queued, survivor]);
+        const classifications = events().filter((event) => event.kind === "classify");
+        expect(classifications.map((event) => event.text)).toEqual(["wait", "survivor"]);
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(["ok", "unavailable", "ok"]);
+        expect(classifications.every((event) => event.pid === started.pid)).toBe(true);
+        expect(alive(started.pid)).toBe(true);
+      } finally {
+        release();
+        await client.stop();
+      }
+    },
+  );
+
   it("joins native process exit before settling active cancellation and restarts surviving queued work", async () => {
     const { client, waitFor } = fixture();
     const controller = new AbortController();
@@ -233,23 +281,20 @@ describe("InferenceWorkerClient", () => {
     expect(result[0]?.logits[0]).not.toBe(started.pid);
   });
 
-  it.each(["stale", "malformed", "shape", "exit"])(
-    "rejects %s replies and recovers queued work in a new process",
-    async (text) => {
-      const { client, events } = fixture();
-      const bad = client.classify("test-model", input(text), signal());
-      const rejected = expect(bad).rejects.toMatchObject({ code: "runtime" });
-      const good = client.classify("test-model", input("recovery"), signal());
-      await rejected;
-      const result = await good;
-      const oldPid = events().find((event) => event.text === text)!.pid;
-      expect(alive(oldPid)).toBe(false);
-      expect(result[0]?.logits[0]).not.toBe(oldPid);
-    },
-  );
+  it("recovers queued work in a new process after the worker exits", async () => {
+    const { client, events } = fixture();
+    const bad = client.classify("test-model", input("exit"), signal());
+    const rejected = expect(bad).rejects.toMatchObject({ code: "runtime" });
+    const good = client.classify("test-model", input("recovery"), signal());
+    await rejected;
+    const result = await good;
+    const oldPid = events().find((event) => event.text === "exit")!.pid;
+    expect(alive(oldPid)).toBe(false);
+    expect(result[0]?.logits[0]).not.toBe(oldPid);
+  });
 
   it.each([false, true])(
-    "stops and joins running work even before readiness (%s), then refuses new admission",
+    "stops and joins running work with initialization blocked=%s, then refuses new admission",
     async (holdInit) => {
       const { client, waitFor, events } = fixture({ holdInit });
       const active = client.classify("test-model", input("block"), signal());

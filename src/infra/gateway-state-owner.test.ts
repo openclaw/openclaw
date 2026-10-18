@@ -15,6 +15,7 @@ import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
@@ -352,6 +353,32 @@ describe("Gateway state ownership", () => {
     },
   );
 
+  it("reports a read-detected owner loss with one restart instruction", async () => {
+    await withTempDir("openclaw-owner-read-loss-", async (root) => {
+      const databasePath = path.join(root, "state", "openclaw.sqlite");
+      const owner = acquireGatewayStateOwner({
+        databasePath,
+        payload: {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          role: "gateway",
+        },
+      });
+      const original = fs.readFileSync(owner.path);
+      try {
+        fs.writeFileSync(owner.path, "replacement");
+        // The read assertion is the first to observe the replacement, so it records the loss.
+        expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
+          /lock removed\/replaced; restart the Gateway\.$/u,
+        );
+      } finally {
+        fs.writeFileSync(owner.path, original);
+        owner.release();
+      }
+    });
+  });
+
   it("blocks a foreign ordinary writer while a standalone schema lease owns state", async () => {
     await withTempDir("openclaw-schema-foreign-write-", async (root) => {
       const options = { env: { OPENCLAW_STATE_DIR: root } };
@@ -615,6 +642,8 @@ describe("Gateway state ownership", () => {
             fs.writeFileSync(pathname, raw);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
             expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+            const recovered = acquireGatewayStateOwner({ databasePath });
+            recovered.release();
           } else {
             for (const role of [undefined, "gateway", "agent-embedded"] as const) {
               fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));

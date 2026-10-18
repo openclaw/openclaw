@@ -16,6 +16,7 @@ import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import {
   readRetainedSessionEntryFacts,
   retainSessionEntryReadFacts,
@@ -27,13 +28,9 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-type SessionAdmissionEntryIdentity = Readonly<
-  Pick<SessionEntry, "sessionId" | "lifecycleRevision">
->;
-export type SessionAdmissionTransition = Readonly<{
-  previous?: SessionAdmissionEntryIdentity;
-  current: SessionAdmissionEntryIdentity;
-}>;
+export type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
+
+type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
 
 type ActorSessionAdmissionClaim = {
   kind: "worker" | "memory";
@@ -302,15 +299,6 @@ export async function loadSessionEntryForAdmission(
                       { expectedIdentity, requestedPath: storePath },
                     );
                     try {
-                      // Borrow this prepared generation only; never open a replacement at the path.
-                      const next = successor.capturePreparedGenerationClaim();
-                      if (
-                        !next ||
-                        next.identity !== generation.identity ||
-                        next.incarnation !== generation.incarnation
-                      ) {
-                        throw new Error("Session transition changed its native generation");
-                      }
                       generation.assertCurrent();
                       assertOwnerCurrent();
                       return createClaim(successor, {

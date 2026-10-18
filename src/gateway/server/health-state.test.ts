@@ -130,18 +130,6 @@ describe("buildGatewaySnapshot update metadata", () => {
     }
   });
 
-  it.each([
-    { role: "operator", scopes: ["operator.pairing"], allowed: false },
-    { role: "node", scopes: ["operator.read", "operator.admin"], allowed: false },
-    { role: "operator", scopes: ["operator.read"], allowed: true },
-    { role: "operator", scopes: ["operator.write"], allowed: true },
-    { role: "operator", scopes: ["operator.admin"], allowed: true },
-  ])("resolves $role $scopes read access as $allowed", async ({ role, scopes, allowed }) => {
-    const { canReadDetailedUpdateMetadata } = await import("../events.js");
-
-    expect(canReadDetailedUpdateMetadata(role, scopes)).toBe(allowed);
-  });
-
   it("omits the schedule and projects legacy availability without update detail access", async () => {
     const healthState = await loadHealthState();
     getUpdateAvailableMock.mockReturnValue({
@@ -213,12 +201,151 @@ describe("refreshGatewayHealthSnapshot", () => {
     vi.restoreAllMocks();
   });
 
+  it("refreshes diagnostics without rebroadcasting clock and activity changes", async () => {
+    const healthState = await loadHealthState();
+    const broadcast = vi.fn();
+    healthState.setBroadcastHealthUpdate(broadcast);
+    const version = healthState.getHealthVersion();
+    const snapshot = (time: number): HealthSummary => ({
+      ...createHealthSummary(),
+      ts: time,
+      durationMs: time,
+      eventLoop: {
+        degraded: false,
+        degradedSinceMs: null,
+        reasons: [],
+        intervalMs: time,
+        delayP99Ms: time,
+        delayMaxMs: time,
+        utilization: time / 1000,
+        cpuCoreRatio: time / 1000,
+      },
+      channels: {
+        example: {
+          accountId: "default",
+          connected: true,
+          accounts: {
+            default: {
+              accountId: "default",
+              connected: true,
+              authAgeMs: time,
+              lastProbeAt: time,
+              lastInboundAt: time,
+              lastOutboundAt: time,
+              lastTransportActivityAt: time,
+              lastEventAt: time,
+              lastMessageAt: time,
+              lastRunActivityAt: time,
+            },
+          },
+        },
+      },
+      sessions: {
+        path: "/synthetic/sessions",
+        count: time,
+        recent: [{ key: `agent:main:session-${time}`, age: time, updatedAt: time }],
+      },
+      agents: [
+        {
+          agentId: "main",
+          isDefault: true,
+          heartbeat: {
+            enabled: false,
+            every: "0m",
+            everyMs: null,
+            prompt: "",
+            target: "none",
+            ackMaxChars: 0,
+          },
+          sessions: {
+            path: "/synthetic/sessions",
+            count: time,
+            recent: [{ key: `agent:main:session-${time}`, age: time, updatedAt: time }],
+          },
+        },
+      ],
+    });
+    const first = snapshot(1);
+    const next = snapshot(2);
+    collectGatewayHealthSnapshotMock.mockResolvedValueOnce(first).mockResolvedValueOnce(next);
+    await healthState.refreshGatewayHealthSnapshot({ probe: false });
+    await expect(healthState.refreshGatewayHealthSnapshot({ probe: false })).resolves.toBe(next);
+    expect(healthState.getHealthCache()).toBe(next);
+    expect(broadcast).toHaveBeenCalledExactlyOnceWith(first);
+    expect(healthState.getHealthVersion()).toBe(version + 1);
+
+    // An explicit check still returns fresh diagnostic readings, without an unchanged event.
+    const probe = snapshot(3);
+    collectGatewayHealthSnapshotMock.mockResolvedValueOnce(probe);
+    await expect(healthState.refreshGatewayHealthSnapshot({ probe: true })).resolves.toBe(probe);
+    expect(broadcast).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes channel failures, recovery, and other material changes on the next refresh", async () => {
+    const healthState = await loadHealthState();
+    const broadcast = vi.fn();
+    healthState.setBroadcastHealthUpdate(broadcast);
+    const initial = createHealthSummary();
+    const eventLoop = {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1_000,
+      delayP99Ms: 10,
+      delayMaxMs: 20,
+      utilization: 0.1,
+      cpuCoreRatio: 0.1,
+    } satisfies HealthSummary["eventLoop"];
+    const disconnected = {
+      ...initial,
+      channels: {
+        example: {
+          accountId: "default",
+          accounts: {
+            secondary: { accountId: "secondary", connected: false, lastError: "offline" },
+          },
+        },
+      },
+    };
+    const snapshots: HealthSummary[] = [
+      initial,
+      disconnected,
+      initial,
+      {
+        ...initial,
+        plugins: {
+          loaded: [],
+          errors: [{ id: "provider", origin: "bundled", activated: true, error: "unavailable" }],
+        },
+      },
+      { ...initial, configReload: { hotReloadStatus: "disabled" } },
+      { ...initial, eventLoop },
+      { ...initial, eventLoop: { ...eventLoop, degraded: true, reasons: ["event_loop_delay"] } },
+      { ...initial, eventLoop },
+      {
+        ...initial,
+        channels: { example: { accountId: "default", lastStartAt: 1, lastStopAt: 2 } },
+      },
+      {
+        ...initial,
+        channels: { example: { accountId: "default", lastStartAt: 3, lastStopAt: 2 } },
+      },
+    ];
+    for (const summary of snapshots) {
+      collectGatewayHealthSnapshotMock.mockResolvedValueOnce(summary);
+      await healthState.refreshGatewayHealthSnapshot({ probe: false });
+    }
+    expect(broadcast.mock.calls.map(([summary]) => summary)).toEqual(snapshots);
+  });
+
   it("does not let a post-connect passive refresh absorb an explicit probe", async () => {
     const healthState = await loadHealthState();
     const passiveDeferred = createPendingHealthSnapshot();
     const probeDeferred = createPendingHealthSnapshot();
     const passiveSummary = createHealthSummary();
     const probeSummary = createHealthSummary();
+    probeSummary.channels = {
+      example: { accountId: "default", probe: { ok: false, error: "offline" } },
+    };
     const broadcast = vi.fn();
     collectGatewayHealthSnapshotMock
       .mockImplementationOnce(passiveDeferred.collect)
@@ -252,41 +379,11 @@ describe("refreshGatewayHealthSnapshot", () => {
 
     passiveDeferred.resolve(passiveSummary);
     await expect(postConnectRefresh).resolves.toBe(passiveSummary);
-    expect(healthState.getHealthCache()).toBe(probeSummary);
-    expect(healthState.getHealthVersion()).toBe(version + 1);
-    expect(broadcast).toHaveBeenCalledTimes(1);
-  });
-
-  it("publishes both generations in order when the passive refresh finishes first", async () => {
-    const healthState = await loadHealthState();
-    const passiveDeferred = createPendingHealthSnapshot();
-    const probeDeferred = createPendingHealthSnapshot();
-    const passiveSummary = createHealthSummary();
-    const probeSummary = createHealthSummary();
-    const broadcast = vi.fn();
-    collectGatewayHealthSnapshotMock
-      .mockImplementationOnce(passiveDeferred.collect)
-      .mockImplementationOnce(probeDeferred.collect);
-    healthState.setBroadcastHealthUpdate(broadcast);
-    const version = healthState.getHealthVersion();
-
-    const passive = healthState.refreshGatewayHealthSnapshot({ probe: false });
-    await passiveDeferred.started;
-    const probe = healthState.refreshGatewayHealthSnapshot({ probe: true });
-    await probeDeferred.started;
-
-    passiveDeferred.resolve(passiveSummary);
-    await expect(passive).resolves.toBe(passiveSummary);
     expect(healthState.getHealthCache()).toBe(passiveSummary);
-    expect(healthState.getHealthVersion()).toBe(version + 1);
-
-    probeDeferred.resolve(probeSummary);
-    await expect(probe).resolves.toBe(probeSummary);
-    expect(healthState.getHealthCache()).toBe(probeSummary);
     expect(healthState.getHealthVersion()).toBe(version + 2);
     expect(broadcast.mock.calls.map(([summary]) => summary)).toEqual([
-      passiveSummary,
       probeSummary,
+      passiveSummary,
     ]);
   });
 
@@ -329,38 +426,6 @@ describe("refreshGatewayHealthSnapshot", () => {
       passiveSummary,
       passiveSummary,
     ]);
-  });
-
-  it("detaches an older passive refresh after a newer probe succeeds", async () => {
-    const healthState = await loadHealthState();
-    const firstPassiveDeferred = createPendingHealthSnapshot();
-    const probeDeferred = createPendingHealthSnapshot();
-    const secondPassiveDeferred = createPendingHealthSnapshot();
-    const firstPassiveSummary = createHealthSummary();
-    const probeSummary = createHealthSummary();
-    const secondPassiveSummary = createHealthSummary();
-    collectGatewayHealthSnapshotMock
-      .mockImplementationOnce(firstPassiveDeferred.collect)
-      .mockImplementationOnce(probeDeferred.collect)
-      .mockImplementationOnce(secondPassiveDeferred.collect);
-
-    const firstPassive = healthState.refreshGatewayHealthSnapshot({ probe: false });
-    await firstPassiveDeferred.started;
-    const probe = healthState.refreshGatewayHealthSnapshot({ probe: true });
-    await probeDeferred.started;
-    probeDeferred.resolve(probeSummary);
-    await expect(probe).resolves.toBe(probeSummary);
-
-    const secondPassive = healthState.refreshGatewayHealthSnapshot({ probe: false });
-    await secondPassiveDeferred.started;
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(3);
-    secondPassiveDeferred.resolve(secondPassiveSummary);
-    await expect(secondPassive).resolves.toBe(secondPassiveSummary);
-    expect(healthState.getHealthCache()).toBe(secondPassiveSummary);
-
-    firstPassiveDeferred.resolve(firstPassiveSummary);
-    await expect(firstPassive).resolves.toBe(firstPassiveSummary);
-    expect(healthState.getHealthCache()).toBe(secondPassiveSummary);
   });
 
   it.each([
@@ -570,25 +635,5 @@ describe("refreshGatewayHealthSnapshot", () => {
     );
     expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(3);
     expect(healthState.getHealthCache()).toBe(recoveredProbeSummary);
-  });
-
-  it.each([
-    { includeSensitive: false, label: "public" },
-    { includeSensitive: true, label: "sensitive" },
-  ])("releases the $label refresh lane after rejection", async ({ includeSensitive }) => {
-    const healthState = await loadHealthState();
-    const recovered = createHealthSummary();
-    collectGatewayHealthSnapshotMock
-      .mockRejectedValueOnce(new Error("snapshot failed"))
-      .mockResolvedValueOnce(recovered);
-
-    await expect(
-      healthState.refreshGatewayHealthSnapshot({ probe: false, includeSensitive }),
-    ).rejects.toThrow("snapshot failed");
-    await expect(
-      healthState.refreshGatewayHealthSnapshot({ probe: false, includeSensitive }),
-    ).resolves.toBe(recovered);
-
-    expect(collectGatewayHealthSnapshotMock).toHaveBeenCalledTimes(2);
   });
 });

@@ -2,6 +2,8 @@ import type { GatewaySessionRow } from "../../../api/types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { agentRunFrameActiveStatusParts, chatItemGroups } from "../chat-agent-run-grouping.ts";
+import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
+import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
   type buildCachedChatItems,
@@ -25,7 +27,7 @@ import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 
-type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
+type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = {
   searchActive: boolean;
@@ -237,7 +239,9 @@ export function projectTranscriptChain(
     ),
     options,
   );
-  const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
+  const collapsedItems = options.searchActive
+    ? frames
+    : coalesceSystemEvents(coalesceInterSessionUpdates(frames));
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
     // A handoff boundary only shapes the grouping above; it has no row of its own.

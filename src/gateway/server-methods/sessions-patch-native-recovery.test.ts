@@ -1,22 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
+import type * as ModelRuntimeNormalization from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
+import type * as SessionsShared from "./sessions-shared.js";
 
 const releaseSelections: Array<() => void> = [];
 afterEach(() => releaseSelections.splice(0).forEach((release) => release()));
-
-async function prepareSessionPatchRuntimeSelection(
-  params: Parameters<typeof prepareRuntimeSelection>[0],
-) {
-  const result = await prepareRuntimeSelection(params);
-  if (result.ok && result.release) {
-    releaseSelections.push(result.release);
-  }
-  return result;
-}
 
 const preparation = vi.hoisted(() => {
   const validate = vi.fn((): string | undefined => undefined);
@@ -37,11 +30,12 @@ const preparation = vi.hoisted(() => {
     })),
   };
 });
-vi.mock("../../auto-reply/reply/model-runtime-normalization.js", () => ({
+vi.mock("../../auto-reply/reply/model-runtime-normalization.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof ModelRuntimeNormalization>()),
   prepareModelSelectionRuntime: preparation.prepare,
 }));
 vi.mock("./sessions-shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./sessions-shared.js")>()),
+  ...(await importOriginal<typeof SessionsShared>()),
   prepareSessionWorkerPlacementPatchValidation: async () => ({
     validate: () => undefined,
     release() {},
@@ -63,15 +57,32 @@ const original: SessionEntry = {
   modelOverride: "model",
 };
 const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
-function prepare(entry: SessionEntry, callerCanConsent = true, config = cfg) {
-  return prepareSessionPatchRuntimeSelection({
+const nodeTools = { exec: { host: "node" } } as const;
+function agentConfig<T extends AgentEntryConfig>(entry: T) {
+  return { ...cfg, agents: { ...cfg.agents, entries: { main: entry } } };
+}
+function unrestricted(overrides: Partial<SessionEntry> = {}): SessionEntry {
+  return { ...original, permissionMode: "full", sandboxMode: "off", ...overrides };
+}
+async function prepare(
+  entry: SessionEntry,
+  callerCanConsent = true,
+  config: OpenClawConfig = cfg,
+  overrides: Partial<Parameters<typeof prepareRuntimeSelection>[0]> = {},
+) {
+  const result = await prepareRuntimeSelection({
     cfg: config,
     agentId: "main",
     patch: { key, model },
     entry,
     expectedEntry: original,
     callerCanConsent,
+    ...overrides,
   });
+  if (result.ok && result.release) {
+    releaseSelections.push(result.release);
+  }
+  return result;
 }
 
 it.each([
@@ -79,12 +90,7 @@ it.each([
   { reason: "workspace-only", tools: { fs: { workspaceOnly: true } } },
   { reason: "tool-policy", tools: { deny: ["exec"] } },
 ])("offers chat-bound recovery for optional $reason", async ({ tools, reason }) => {
-  const entry: SessionEntry = {
-    ...original,
-    ...(tools
-      ? { agentRuntimeOverride: "native-fixture", permissionMode: "full", sandboxMode: "off" }
-      : {}),
-  };
+  const entry = tools ? unrestricted({ agentRuntimeOverride: "native-fixture" }) : { ...original };
   const config = tools ? { tools } : cfg;
   expect(await prepare(entry, true, config)).toMatchObject({
     ok: false,
@@ -105,162 +111,102 @@ it.each([
     },
   });
   if (tools) {
-    expect(
-      (await prepare({ ...entry, nativeRuntimeConsent: "native-fixture" }, true, config)).ok,
-    ).toBe(true);
-    expect(
-      (await prepare({ ...entry, nativeRuntimeConsent: "different-runtime" }, true, config)).ok,
-    ).toBe(false);
+    for (const consent of ["native-fixture", "different-runtime"]) {
+      expect((await prepare({ ...entry, nativeRuntimeConsent: consent }, true, config)).ok).toBe(
+        consent === "native-fixture",
+      );
+    }
   }
+});
+
+it("applies remembered native permissions on selection without creating per-chat consent", async () => {
+  const config = agentConfig({ nativeRuntimeConsent: ["native-fixture"] });
+  const entry = { ...original };
+  expect((await prepare(entry, true, config)).ok).toBe(true);
+  expect(entry).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
+  expect(entry).not.toHaveProperty("nativeRuntimeConsent");
+  expect((await prepare({ ...original, sandbox: "required" }, true, config)).ok).toBe(false);
+  expect((await prepare({ ...original }, false, config)).ok).toBe(false);
+  config.agents.entries.main.nativeRuntimeConsent = [];
+  expect((await prepare({ ...original }, true, config)).ok).toBe(false);
 });
 
 it.each([
-  { label: "non-admin", entry: original, admin: false, config: cfg, reason: "sandbox" },
-  {
-    label: "mandatory sandbox",
-    entry: { ...original, sandbox: "required" as const, sandboxMode: "off" as const },
-    admin: true,
-    config: cfg,
-    reason: "sandbox-required",
-  },
-  {
-    label: "globally configured node",
-    entry: original,
-    admin: true,
-    config: { ...cfg, tools: { exec: { host: "node" as const } } },
-    reason: "remote-execution",
-  },
-  {
-    label: "agent-configured node",
-    entry: original,
-    admin: true,
-    config: {
-      ...cfg,
-      agents: { ...cfg.agents, entries: { main: { tools: { exec: { host: "node" as const } } } } },
-    },
-    reason: "remote-execution",
-  },
-])("does not offer an escape from $label", async ({ entry, admin, config, reason }) => {
-  const result = await prepare({ ...entry }, admin, config);
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    throw new Error("Expected native refusal");
-  }
-  expect(result.error.details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
-  expect(result.error.details).not.toHaveProperty("recovery");
-});
-
-it.each([
-  { label: "the same model and auth profile", patch: {}, entry: {}, preserved: true },
-  {
-    label: "a different model",
-    patch: { model: "fixture/other@fixture:selected" },
-    entry: { modelOverride: "other" },
-    preserved: false,
-  },
-  {
-    label: "a different auth profile",
-    patch: { model: `${model}@fixture:other` },
-    entry: { authProfileOverride: "fixture:other" },
-    preserved: false,
-  },
-  {
-    label: "an explicit runtime",
-    patch: { agentRuntime: "native-fixture" },
-    entry: {},
-    preserved: false,
-  },
-  {
-    label: "a cleared runtime",
-    patch: { agentRuntime: null },
-    entry: { agentRuntimeOverride: undefined },
-    preserved: false,
-  },
-  {
-    label: "a native consent grant",
-    patch: { nativeRuntimeConsent: "native-fixture" },
-    entry: {},
-    preserved: false,
-  },
-] satisfies {
-  label: string;
-  patch: Partial<SessionsPatchParams>;
-  entry: Partial<SessionEntry>;
-  preserved: boolean;
-}[])("handles $label when runtime preparation is unavailable", async (testCase) => {
-  const message = "A runtime is not available. Refresh the model catalog and choose again.";
-  preparation.prepare.mockResolvedValue({ status: "rejected", reason: "invalid-runtime", message });
-  const expectedEntry: SessionEntry = {
-    ...original,
-    permissionMode: "full",
-    sandboxMode: "off",
-    authProfileOverride: "fixture:selected",
-    agentRuntimeOverride: "native-fixture",
-  };
-  const entry: SessionEntry = { ...expectedEntry, ...testCase.entry };
-  const result = await prepareSessionPatchRuntimeSelection({
-    cfg,
-    agentId: "main",
-    patch: { key, model: `${model}@fixture:selected`, ...testCase.patch },
-    entry,
-    expectedEntry,
-    callerCanConsent: true,
-  });
-
-  if (testCase.preserved) {
-    expect(result.ok).toBe(true);
-    expect(entry.agentRuntimeOverride).toBe("native-fixture");
-    if (!result.ok) {
-      throw new Error("Expected the existing selection to be preserved");
+  ["non-admin", {}, false, cfg, "sandbox"],
+  ["mandatory sandbox", { sandbox: "required", sandboxMode: "off" }, true, cfg, "sandbox-required"],
+  ["global node", {}, true, { ...cfg, tools: nodeTools }, "remote-execution"],
+  ["agent node", {}, true, agentConfig({ tools: nodeTools }), "remote-execution"],
+] satisfies [string, Partial<SessionEntry>, boolean, OpenClawConfig, string][])(
+  "does not offer an escape from %s",
+  async (_label, overrides, admin, config, reason) => {
+    const result = await prepare({ ...original, ...overrides }, admin, config);
+    if (result.ok) {
+      throw new Error("Expected native refusal");
     }
-    expect(result.validate?.()).toBeUndefined();
-  } else {
-    expect(result).toMatchObject({ ok: false, error: { message } });
-  }
-});
-
-it.each([false, true])(
-  "accepts an unrestricted local candidate (dormant node=%s)",
-  async (node) => {
-    const result = await prepare(
-      {
-        ...original,
-        sandboxMode: "off",
-        permissionMode: "full",
-        ...(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
-      },
-      true,
-      node ? { tools: { exec: { host: "node" } } } : cfg,
-    );
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("Expected recovery selection");
-    }
-    expect(result.validate?.()).toBeUndefined();
-    preparation.validate.mockReturnValue("Runtime owner changed");
-    expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
-    expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
+    expect(result.error.details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
+    expect(result.error.details).not.toHaveProperty("recovery");
   },
 );
 
-it.each([false, true])(
-  "defers optional creation restrictions but preserves mandatory sandbox=%s",
-  async (mandatory) => {
-    const entry: SessionEntry = {
-      ...original,
-      ...(mandatory ? { sandbox: "required" as const } : {}),
-    };
-    const result = await prepareSessionPatchRuntimeSelection({
-      cfg,
-      agentId: "main",
-      patch: { key, model },
-      entry,
+it.each([
+  [{}, {}, true],
+  [{ model: "fixture/other@fixture:selected" }, { modelOverride: "other" }, false],
+  [{ model: `${model}@fixture:other` }, { authProfileOverride: "fixture:other" }, false],
+  [{ agentRuntime: "native-fixture" }, {}, false],
+  [{ agentRuntime: null }, { agentRuntimeOverride: undefined }, false],
+  [{ nativeRuntimeConsent: "native-fixture" }, {}, false],
+] satisfies [Partial<SessionsPatchParams>, Partial<SessionEntry>, boolean][])(
+  "preserves only unchanged selections when preparation is unavailable (patch %j)",
+  async (patch, overrides, preserved) => {
+    const message = "A runtime is not available. Refresh the model catalog and choose again.";
+    preparation.prepare.mockResolvedValue({
+      status: "rejected",
+      reason: "invalid-runtime",
+      message,
     });
-    expect(result.ok).toBe(!mandatory);
-    expect(entry.nativeRuntimeConsent).toBeUndefined();
-    if (!result.ok) {
-      expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
-      expect(result.error.details).not.toHaveProperty("recovery");
+    const expectedEntry = unrestricted({
+      authProfileOverride: "fixture:selected",
+      agentRuntimeOverride: "native-fixture",
+    });
+    const entry: SessionEntry = { ...expectedEntry, ...overrides };
+    const result = await prepare(entry, true, cfg, {
+      patch: { key, model: `${model}@fixture:selected`, ...patch },
+      expectedEntry,
+    });
+    if (preserved) {
+      expect(entry.agentRuntimeOverride).toBe("native-fixture");
+      if (!result.ok) {
+        throw new Error("Expected the existing selection to be preserved");
+      }
+      expect(result.validate?.()).toBeUndefined();
+    } else {
+      expect(result).toMatchObject({ ok: false, error: { message } });
     }
   },
 );
+
+it.each([false, true])("validates local selection (dormant node=%s)", async (node) => {
+  const result = await prepare(
+    unrestricted(node ? { execHost: "gateway", execNode: "dormant-node" } : {}),
+    true,
+    node ? { tools: { exec: { host: "node" } } } : cfg,
+  );
+  if (!result.ok) {
+    throw new Error("Expected recovery selection");
+  }
+  expect(result.validate?.()).toBeUndefined();
+  preparation.validate.mockReturnValue("Runtime owner changed");
+  expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
+  expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
+});
+
+it.each([false, true])("preserves mandatory sandbox=%s at creation", async (mandatory) => {
+  const entry = mandatory ? { ...original, sandbox: "required" as const } : { ...original };
+  const result = await prepare(entry, false, cfg, { expectedEntry: undefined });
+  expect(result.ok).toBe(!mandatory);
+  expect(entry.nativeRuntimeConsent).toBeUndefined();
+  if (!result.ok) {
+    expect(result.error.details).toMatchObject({ reason: "sandbox-required" });
+    expect(result.error.details).not.toHaveProperty("recovery");
+  }
+});

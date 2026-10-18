@@ -12,7 +12,6 @@ import {
   wrapToolMemoryFlushAppendOnlyWrite,
 } from "./agent-tools.read.js";
 import { expectReadWriteEditTools, getTextContent } from "./test-helpers/agent-tools-fs-helpers.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 vi.mock("../infra/shell-env.js", async () => {
   const mod =
@@ -26,8 +25,7 @@ describe("memory filesystem policy", () => {
   let tmpDir: string;
   let workspaceDir: string;
 
-  const readTool = () =>
-    createOpenClawReadTool(createReadTool(workspaceDir) as unknown as AnyAgentTool);
+  const readTool = () => createOpenClawReadTool(createReadTool(workspaceDir));
   const memoryWriteTool = (relativePath: string) =>
     wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(workspaceDir), {
       root: workspaceDir,

@@ -1,4 +1,5 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import {
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
@@ -24,6 +25,7 @@ type ReconciliationOptions = UpdateRunLedgerOptions & {
 function prepareReconciliation(options: ReconciliationOptions) {
   const captured = {
     ...options,
+    signal: options.signal ?? getAsyncWorkSignal(),
     env: cloneEnvWithPlatformSemantics(options.env ?? process.env),
     ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
   };
@@ -84,6 +86,7 @@ async function reconcileCandidates(
       }),
     {
       existingOnly: true,
+      signal: options.signal,
       assertCurrent,
       createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
         context.admission.databasePath,

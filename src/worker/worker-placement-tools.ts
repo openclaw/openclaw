@@ -55,7 +55,9 @@ export function createWorkerPlacementTools(params: {
         : undefined,
       config: WORKER_TOOL_CONFIG,
       // The Gateway secret store is not delegated to the worker's scratch state.
-      preparedStoreEnvironment: Object.freeze({}),
+      preparedStoreEnvironment: {},
+      // Synthetic worker keys have no lineage in the Gateway's session database.
+      preparedSubagentExecution: false,
       ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,

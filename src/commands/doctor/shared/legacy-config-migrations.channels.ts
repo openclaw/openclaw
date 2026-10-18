@@ -16,22 +16,6 @@ type ThreadBindingMigrationParams = {
   changes: string[];
 };
 
-function resolveMigratedSpawnSessions(
-  threadBindings: Record<string, unknown>,
-): boolean | undefined {
-  const subagent = threadBindings.spawnSubagentSessions;
-  const acp = threadBindings.spawnAcpSessions;
-  const subagentBool = typeof subagent === "boolean" ? subagent : undefined;
-  const acpBool = typeof acp === "boolean" ? acp : undefined;
-  if (subagentBool === undefined) {
-    return acpBool;
-  }
-  if (acpBool === undefined) {
-    return subagentBool;
-  }
-  return subagentBool && acpBool;
-}
-
 function migrateThreadBindingsSpawnSessionsForPath(params: ThreadBindingMigrationParams): void {
   const threadBindings = getRecord(params.owner.threadBindings);
   if (!threadBindings || !hasLegacyThreadBindingSpawnSplit(threadBindings)) {
@@ -39,9 +23,12 @@ function migrateThreadBindingsSpawnSessionsForPath(params: ThreadBindingMigratio
   }
 
   const hadSpawnSessions = threadBindings.spawnSessions !== undefined;
-  const resolved = resolveMigratedSpawnSessions(threadBindings);
   const oldSubagent = threadBindings.spawnSubagentSessions;
   const oldAcp = threadBindings.spawnAcpSessions;
+  const legacyFlags = [oldSubagent, oldAcp].filter(
+    (flag): flag is boolean => typeof flag === "boolean",
+  );
+  const resolved = legacyFlags.length > 0 ? legacyFlags.every((flag) => flag) : undefined;
   delete threadBindings.spawnSubagentSessions;
   delete threadBindings.spawnAcpSessions;
   if (!hadSpawnSessions && resolved !== undefined) {
@@ -68,22 +55,16 @@ function migrateThreadBindingsSpawnSessionsForPath(params: ThreadBindingMigratio
 }
 
 function hasLegacyThreadBindingInAnyChannel(value: unknown): boolean {
-  const channels = getRecord(value);
-  if (!channels) {
-    return false;
-  }
-  return Object.values(channels).some((entry) => {
-    const channel = getRecord(entry);
-    if (!channel) {
-      return false;
+  let matched = false;
+  for (const channelId of Object.keys(getRecord(value) ?? {})) {
+    visitChannelEntries({ channels: value }, channelId, (owner) => {
+      matched ||= hasLegacyThreadBindingSpawnSplit(owner.threadBindings);
+    });
+    if (matched) {
+      return true;
     }
-    return (
-      hasLegacyThreadBindingSpawnSplit(channel.threadBindings) ||
-      Object.values(getRecord(channel.accounts) ?? {}).some((account) =>
-        hasLegacyThreadBindingSpawnSplit(getRecord(account)?.threadBindings),
-      )
-    );
-  });
+  }
+  return false;
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_CHANNELS: LegacyConfigMigrationSpec[] = [

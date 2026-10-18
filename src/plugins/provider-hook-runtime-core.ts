@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { attachModelProviderLocalServiceReconciler } from "../agents/provider-local-service-reconcile.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
+import { pluginProviderAuthUnavailable, resolveProviderAuthScope } from "./provider-auth-scope.js";
 import {
   hasConfiguredModelProvider,
   resolveModelCatalogScope,
@@ -167,6 +168,12 @@ export function createProviderHookRuntime(
       skipIfLoadInFlight: true,
     });
     const plugin = resolveSelectedProvider(selection, params.provider, ownerRefs);
+    if (plugin && (plugin.authScope ?? "agent") !== resolveProviderAuthScope(params)) {
+      throw pluginProviderAuthUnavailable(
+        params.provider,
+        "runtime and static credential scope differ",
+      );
+    }
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),

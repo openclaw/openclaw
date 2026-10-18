@@ -83,7 +83,6 @@ export {
 } from "./workspace-bootstrap-policy.js";
 export {
   getWorkspaceFileSourceRelativePath,
-  workspaceFileSourceIdentitiesMatch,
   workspaceFilesShareSourceIdentity,
 } from "./workspace-file-read.js";
 export { WORKSPACE_VANISHED_ERROR_CODE } from "./workspace-state-identity.js";
@@ -487,7 +486,7 @@ export async function isWorkspaceSetupCompleted(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<boolean> {
   const state = (await readCanonicalWorkspaceStateSnapshot(dir, options)).setup;
-  return typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0;
+  return Boolean(state.setupCompletedAt);
 }
 
 export async function resolveWorkspaceBootstrapStatus(
@@ -1085,7 +1084,7 @@ async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
 ): Promise<string[]> {
-  if (!getAgentWorkspaceAccess(workspaceDir) && typeof fs.glob === "function") {
+  if (!getAgentWorkspaceAccess(workspaceDir)) {
     try {
       const matches: string[] = [];
       for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
@@ -1095,10 +1094,6 @@ async function resolveExtraBootstrapPatternPaths(
     } catch {
       // Fall through to the local matcher before treating the pattern as literal.
     }
-  }
-
-  if (typeof path.matchesGlob !== "function") {
-    return [pattern];
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);

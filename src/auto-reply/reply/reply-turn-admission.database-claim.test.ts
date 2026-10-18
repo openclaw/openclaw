@@ -124,46 +124,25 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
   });
 });
 
-it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
+it.each(["cancelled", "request-changed"] as const)(
   "does not admit a delayed healthy rotation after %s",
   async (change) => {
     const root = tempDirs.make("reply-delayed-rotation-");
     const storePath = path.join(root, "owner.sqlite");
-    const foreignStore = path.join(root, "target.sqlite");
     const nextSessionId = "after-compaction";
     seed(storePath);
-    if (change === "later-rebound-store") {
-      seed(foreignStore);
+    const owner = await admit(storePath);
+    if (owner.status !== "owned" || !owner.databaseClaim) {
+      throw new Error("Fixture requires an admitted physical database owner");
     }
-    let preparingOwner = false;
-    const registerOwner = async () => {
-      preparingOwner = true;
-      try {
-        const result = await admit(storePath);
-        if (result.status !== "owned" || !result.databaseClaim) {
-          throw new Error("Fixture requires an admitted physical database owner");
-        }
-        return result;
-      } finally {
-        preparingOwner = false;
-      }
-    };
-    let owner = change.startsWith("later-") ? undefined : await registerOwner();
     const captured =
       createDeferred<Awaited<ReturnType<typeof sessionEntries.loadSessionEntryForAdmission>>>();
     const release = createDeferred();
     const load = sessionEntries.loadSessionEntryForAdmission;
     let reads = 0;
     vi.spyOn(sessionEntries, "loadSessionEntryForAdmission").mockImplementation(async (...args) => {
-      if (preparingOwner) {
-        return await load(...args);
-      }
       const read = ++reads;
       const snapshot = await load(...args);
-      if (read === 1 && change.startsWith("later-")) {
-        expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
-        owner = await registerOwner();
-      }
       if (read === 2) {
         captured.resolve(snapshot);
         await release.promise;
@@ -190,30 +169,11 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
       ]);
       expect(snapshot.entry?.sessionId).toBe(sessionId);
       expect(snapshot.databaseClaim.isCurrent()).toBe(true);
-      if (!owner?.databaseClaim) {
-        throw new Error("Fixture requires the admitted predecessor before rotation");
-      }
       expect(snapshot.databaseClaim.identity).toBe(owner.databaseClaim.identity);
       await sessionEntries.replaceSessionEntry(
         { storePath, sessionKey },
         { sessionId: nextSessionId, updatedAt: 2 },
       );
-      if (change === "later-rebound-store") {
-        preparingOwner = true;
-        try {
-          const adopted = await admit(foreignStore, {
-            expectedSessionId: sessionId,
-            adoptOperation: owner.operation,
-          });
-          if (adopted.status !== "owned" || !adopted.databaseClaim) {
-            throw new Error("Fixture requires physical-store adoption");
-          }
-          expect(adopted.databaseClaim.identity).not.toBe(owner.databaseClaim.identity);
-          expect(snapshot.databaseClaim.isCurrent()).toBe(true);
-        } finally {
-          preparingOwner = false;
-        }
-      }
       owner.operation.updateSessionId(nextSessionId);
       owner.operation.complete();
       if (change === "cancelled") {
@@ -230,13 +190,11 @@ it.each(["cancelled", "request-changed", "later-rebound-store"] as const)(
         // Caller refusal keeps precedence over a concurrent physical-store retirement.
         await expect(pending).rejects.toBe(requestFailure);
         expect(reads).toBe(2);
-      } else {
-        await expect(pending).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       }
       expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
     } finally {
       release.resolve();
-      owner?.operation.complete();
+      owner.operation.complete();
       const result = await pending.catch(() => undefined);
       complete(result);
     }

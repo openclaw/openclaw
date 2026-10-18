@@ -13,16 +13,14 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatCliCommand } from "../../src/cli/command-format.js";
-import {
-  readSessionArchiveContentSync,
-  stripSessionArchiveCompressionSuffix,
-} from "../../src/config/sessions/archive-compression.js";
+import { readSessionArchiveContentSync } from "../../src/config/sessions/archive-compression.js";
 import { formatSqliteSessionFileMarker } from "../../src/config/sessions/legacy-sqlite-marker.js";
 import {
   appendTranscriptMessage,
   type TranscriptEvent,
 } from "../../src/config/sessions/session-accessor.js";
 import { importSqliteSessionRows } from "../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../../src/config/sessions/transcript-file-names.js";
 import type { SessionEntry } from "../../src/config/sessions/types.js";
 import { isGatewayProtocolResponseError } from "../../src/gateway/client.js";
 import {
@@ -2093,7 +2091,7 @@ async function inventoryFile(filePath: string, relativeRoot: string) {
 function parseArchiveArtifactName(
   fileName: string,
 ): { archiveReason: "bak" | "deleted" | "reset"; archiveSessionId: string } | undefined {
-  const normalized = stripSessionArchiveCompressionSuffix(fileName);
+  const normalized = path.basename(fileName, SESSION_ARCHIVE_ZSTD_SUFFIX);
   for (const archiveReason of ["deleted", "reset", "bak"] as const) {
     const marker = `.jsonl.${archiveReason}.`;
     const index = normalized.lastIndexOf(marker);

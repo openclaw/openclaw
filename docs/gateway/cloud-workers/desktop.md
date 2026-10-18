@@ -56,13 +56,19 @@ machine is disposable: save required outputs before stopping it. Attaching a
 machine does not automatically synchronize the primary workspace; the agent
 must copy the required files or prepare the project on the machine.
 
+The machine's effective total TTL still bounds desktop use. OpenClaw heartbeats
+the effective idle window while it owns the worker, but desktop input, open
+viewers, and those heartbeats do not extend total lifetime. `keep` does not make
+the desktop persistent. Save required outputs before expiry; see
+[lease lifetime](/gateway/cloud-workers#lease-lifetime).
+
 If stopping a conversation environment fails, cleanup retries with exponential
 backoff from 30 seconds to five minutes, on the next reconciliation sweep.
 After ten attempts or one hour, whichever comes first, cleanup is parked for
 the rest of that Gateway process. Environment status reports an error with the
 lease ID, last failure, and recovery instructions; the lease stays owned and
 blocks replacement until cleanup is confirmed. For Crabbox, inspect it with
-`crabbox leases list` and run `crabbox stop <lease>` as needed, then retry Stop
+`crabbox inspect --id <lease> --json` and run `crabbox stop <lease>` as needed, then retry Stop
 in the conversation. An explicit Stop or Gateway restart starts a fresh retry
 budget. A text-only 404 from Crabbox is an unknown cleanup outcome, not proof
 that the lease was released.

@@ -7,7 +7,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import type { OpenClawConfig } from "../../config/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { getUserProfileDisplay } from "../../state/user-profile-list.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -21,6 +22,7 @@ import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-cli
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
 import { prepareGatewayConnectOperatorAccess } from "../server/ws-connection/connect-operator-access.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import type * as SessionStore from "../session-utils-store-worker.js";
 import { sessionsGitHubHandlers } from "./sessions-github.js";
 import type {
   GatewayClient,
@@ -30,10 +32,7 @@ import type {
 
 const mocks = vi.hoisted(() => ({
   caller: vi.fn(),
-  loadSession:
-    vi.fn<
-      typeof import("../session-utils-store-worker.js").loadGatewaySessionEntryReadOnlyInWorker
-    >(),
+  loadSession: vi.fn<typeof SessionStore.loadGatewaySessionEntryReadOnlyInWorker>(),
   request: vi.fn<GitHubPublicationCoordinator["requestForSessionV2"]>(),
 }));
 
@@ -42,30 +41,47 @@ vi.mock("../../agents/tools/gateway-caller-context.js", async (importOriginal) =
   getGatewayToolCallerIdentity: mocks.caller,
 }));
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
+  ...(await importOriginal<typeof SessionStore>()),
   loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSession,
 }));
 
-async function useRealSessionReads() {
-  const { loadGatewaySessionEntryReadOnlyInWorker } = await vi.importActual<
-    typeof import("../session-utils-store-worker.js")
-  >("../session-utils-store-worker.js");
-  mocks.loadSession.mockImplementation(loadGatewaySessionEntryReadOnlyInWorker);
+async function withRealSessions(config: OpenClawConfig, run: () => Promise<void>) {
+  await withOpenClawTestState(
+    { scenario: "minimal", prepareProfileCatalog: true },
+    async (state) => {
+      await state.writeConfig(config);
+      await captureRuntimeConfigAsyncReader()();
+      mocks.caller.mockReturnValue(undefined);
+      const real = await vi.importActual<typeof SessionStore>("../session-utils-store-worker.js");
+      mocks.loadSession.mockImplementation(real.loadGatewaySessionEntryReadOnlyInWorker);
+      await run();
+    },
+  );
 }
 
 const expectedSystemRequester = {
   version: 2,
   signal: expect.any(AbortSignal),
   prepareSource: expect.any(Function),
-  snapshot: {
-    version: 1,
-    actor: { kind: "system" },
-    scopes: ["operator.admin"],
-    grant: null,
-  },
+  snapshot: { version: 1, actor: { kind: "system" }, scopes: ["operator.admin"], grant: null },
   assertCurrent: expect.any(Function),
   assertInvocationCurrent: expect.any(Function),
 };
+const acceptedPublication = {
+  requestId: "publication-1",
+  status: "requested",
+  message: "Publication was accepted.",
+} as const;
+const callerSession = "agent:main:dashboard:task";
+function expectPublication(overrides: Record<string, unknown> = {}) {
+  expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
+    sessionKey: callerSession,
+    agentId: "main",
+    expectedRunId: "run-1",
+    requester: expectedSystemRequester,
+    ...overrides,
+  });
+}
 
 async function invoke(
   params: Record<string, unknown>,
@@ -91,18 +107,15 @@ async function invoke(
       }),
     req: { type: "req", id: "req-publication", method: "sessions.github.publish", params },
     isWebchatConnect: () => false,
-    ...(options.sessionMutationAuthorization
-      ? { sessionMutationAuthorization: options.sessionMutationAuthorization }
-      : {}),
+    sessionMutationAuthorization: options.sessionMutationAuthorization,
   };
-  if (options.registered) {
-    await handleGatewayRequest(request);
-  } else {
-    await expectDefined(
-      sessionsGitHubHandlers["sessions.github.publish"],
-      "sessions.github.publish handler",
-    )(request);
-  }
+  const handler = options.registered
+    ? handleGatewayRequest
+    : expectDefined(
+        sessionsGitHubHandlers["sessions.github.publish"],
+        "sessions.github.publish handler",
+      );
+  await handler(request);
   return respond;
 }
 
@@ -112,11 +125,11 @@ describe("sessions.github.publish", () => {
     setRuntimeConfigSnapshot({});
     mocks.caller.mockReturnValue({
       agentId: "main",
-      sessionKey: "agent:main:dashboard:task",
+      sessionKey: callerSession,
       operationalRunInstance: { runId: "run-1" },
     });
     mocks.loadSession.mockImplementation(async ({ cfg }) => {
-      const canonicalKey = "agent:main:dashboard:task";
+      const canonicalKey = callerSession;
       const entry = { sessionId: "session-1", updatedAt: 1 };
       return {
         cfg,
@@ -131,59 +144,39 @@ describe("sessions.github.publish", () => {
     });
     mocks.request.mockReset().mockImplementation(async ({ requester }) => {
       expect(() => requester.assertCurrent()).not.toThrow();
-      return {
-        requestId: "publication-1",
-        status: "requested",
-        message: "Publication was accepted.",
-      };
+      return acceptedPublication;
     });
   });
 
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
+  afterEach(clearRuntimeConfigSnapshot);
+
+  it("uses host-owned caller identity", async () => {
+    const respond = await invoke({ idempotencyKey: "tool-call-1", title: "Publish the fix" });
+
+    expectPublication({
+      idempotencyKey: "tool-call-1",
+      title: "Publish the fix",
+    });
+    expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
   });
 
-  it.each([undefined])(
-    "uses host-owned caller identity with requested owner %s",
-    async (agentId) => {
-      const respond = await invoke({
-        idempotencyKey: "tool-call-1",
-        title: "Publish the fix",
-        ...(agentId ? { agentId } : {}),
-      });
+  it.each([
+    { agentId: "research" },
+    { sessionKey: "agent:research:main" },
+    { repository: "openclaw/openclaw", branch: "main", token: "secret" },
+  ])("rejects caller-supplied authority %j", async (target) => {
+    const respond = await invoke({ idempotencyKey: "conflicting-owner", ...target });
 
-      expect(mocks.request).toHaveBeenCalledWith({
-        idempotencyKey: "tool-call-1",
-        title: "Publish the fix",
-        sessionKey: "agent:main:dashboard:task",
-        agentId: "main",
-        expectedRunId: "run-1",
-        requester: expectedSystemRequester,
-      });
-      expect(respond).toHaveBeenCalledWith(true, {
-        requestId: "publication-1",
-        status: "requested",
-        message: "Publication was accepted.",
-      });
-    },
-  );
+    expect(mocks.request).not.toHaveBeenCalled();
+    expect(mocks.loadSession).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
 
-  it.each([{ agentId: "research" }, { sessionKey: "agent:research:main" }])(
-    "rejects a conflicting tool caller target %j",
-    async (target) => {
-      const respond = await invoke({ idempotencyKey: "conflicting-owner", ...target });
-
-      expect(mocks.request).not.toHaveBeenCalled();
-      expect(mocks.loadSession).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "INVALID_REQUEST" }),
-      );
-    },
-  );
-
-  it.each(["fresh", "wrong-key", "ordinary"])(
+  it.each(["fresh", "wrong-key", "existing", "lookup-failed", "ordinary"])(
     "forwards only the exact owner's %s selection rejection fact",
     async (mode) => {
       const key = "publication-selection";
@@ -212,108 +205,73 @@ describe("sessions.github.publish", () => {
     },
   );
 
-  it("rejects caller-supplied repository authority at the protocol boundary", async () => {
-    const respond = await invoke({
-      idempotencyKey: "tool-call-1",
-      repository: "openclaw/openclaw",
-      branch: "main",
-      token: "secret",
-    });
-
-    expect(mocks.request).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "INVALID_REQUEST" }),
-    );
-  });
-
   it.each(["admitted", "unprepared"] as const)(
     "preserves %s operator authority through the registered publication handler",
     async (source) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async (state) => {
-          await state.writeConfig({
-            gateway: {
-              roles: {
-                definitions: {
-                  staff: {
-                    scopes: ["operator.read", "operator.write"],
-                    agents: ["main"],
-                    sessions: { others: "write" },
-                  },
-                },
-                default: "staff",
+      const config: OpenClawConfig = {
+        gateway: {
+          roles: {
+            definitions: {
+              staff: {
+                scopes: ["operator.read", "operator.write"],
+                agents: ["main"],
+                sessions: { others: "write" },
               },
             },
-          });
-          await captureRuntimeConfigAsyncReader()();
-          const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
-          const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey: "agent:main:main" },
-            {
-              sessionId: "session-main",
-              updatedAt: 1,
-              ...buildSessionCreationStamp({
-                via: "operator",
-                actor: { type: "human", source: "profile", id: creator.id },
-              }),
-            },
-          );
-          const client = createOperatorWsClient({ scopes: ["operator.write"] });
-          client.authenticatedUserProfile = {
-            profileId: profile.id,
-            displayName: profile.displayName,
-            avatarRevision: getUserProfileDisplay(profile.id).avatarRevision,
-            hasAvatar: false,
-            updatedAt: profile.updatedAt,
-          };
-          if (source === "admitted") {
-            prepareGatewayConnectOperatorAccess(client);
-          }
-          mocks.caller.mockReturnValue(undefined);
-          await useRealSessionReads();
-
-          const respond = await invoke(
-            { sessionKey: "main", idempotencyKey: "operator-publication-1" },
-            { client, registered: true },
-          );
-
-          if (source === "unprepared") {
-            expect(mocks.request).not.toHaveBeenCalled();
-            expect(respond).toHaveBeenCalledWith(false, undefined, {
-              code: "UNAVAILABLE",
-              message: new GitHubPublicationRequesterUnavailableError().message,
-            });
-            return;
-          }
-          expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
-            sessionKey: "agent:main:main",
-            idempotencyKey: "operator-publication-1",
-            agentId: "main",
-            requester: {
-              version: 2,
-              signal: expect.any(AbortSignal),
-              prepareSource: expect.any(Function),
-              snapshot: {
-                version: 1,
-                actor: { kind: "operator", profileId: profile.id },
-                scopes: ["operator.write"],
-                grant: null,
-              },
-              assertCurrent: expect.any(Function),
-              assertInvocationCurrent: expect.any(Function),
-            },
-          });
-          expect(respond).toHaveBeenCalledWith(true, {
-            requestId: "publication-1",
-            status: "requested",
-            message: "Publication was accepted.",
-          });
+            default: "staff",
+          },
         },
-      );
+      };
+      await withRealSessions(config, async () => {
+        const profile = await ensureCanonicalUserProfileForEmail("publisher@example.test");
+        const creator = await ensureCanonicalUserProfileForEmail("session-creator@example.test");
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey: "agent:main:main" },
+          {
+            sessionId: "session-main",
+            updatedAt: 1,
+            createdActor: { type: "human", source: "profile", id: creator.id },
+          },
+        );
+        const client = createOperatorWsClient({ scopes: ["operator.write"] });
+        client.authenticatedUserProfile = {
+          profileId: profile.id,
+          displayName: profile.displayName,
+          avatarRevision: getUserProfileDisplay(profile.id).avatarRevision,
+          hasAvatar: false,
+          updatedAt: profile.updatedAt,
+        };
+        if (source === "admitted") {
+          prepareGatewayConnectOperatorAccess(client);
+        }
+        const respond = await invoke(
+          { sessionKey: "main", idempotencyKey: "operator-publication-1" },
+          { client, registered: true },
+        );
+
+        if (source === "unprepared") {
+          expect(mocks.request).not.toHaveBeenCalled();
+          expect(respond).toHaveBeenCalledWith(false, undefined, {
+            code: "UNAVAILABLE",
+            message: new GitHubPublicationRequesterUnavailableError().message,
+          });
+          return;
+        }
+        expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
+          sessionKey: "agent:main:main",
+          idempotencyKey: "operator-publication-1",
+          agentId: "main",
+          requester: {
+            ...expectedSystemRequester,
+            snapshot: {
+              ...expectedSystemRequester.snapshot,
+              actor: { kind: "operator", profileId: profile.id },
+              scopes: ["operator.write"],
+            },
+          },
+        });
+        expect(respond).toHaveBeenCalledWith(true, acceptedPublication);
+      });
     },
   );
 
@@ -324,29 +282,24 @@ describe("sessions.github.publish", () => {
   ])(
     "publishes %s from the actual %s store with %s ownership",
     async (sessionKey, expectedAgent, ownership, requestedAgentId) => {
-      await withOpenClawTestState(
-        { scenario: "minimal", prepareProfileCatalog: true },
-        async (state) => {
-          await state.writeConfig({
-            session: { scope: "global" },
-            agents:
-              ownership === "configured"
-                ? {
-                    ownership: "explicit",
-                    defaults: { systemAgent: { agentId: "ops" } },
-                    entries: { ops: {}, research: {} },
-                  }
-                : { ownership: "explicit", entries: { ops: {}, research: {} } },
-          });
-          await captureRuntimeConfigAsyncReader()();
+      await withRealSessions(
+        {
+          session: { scope: "global" },
+          agents: {
+            ownership: "explicit",
+            entries: { ops: {}, research: {} },
+            ...(ownership === "configured"
+              ? { defaults: { systemAgent: { agentId: "ops" } } }
+              : {}),
+          },
+        },
+        async () => {
           for (const agentId of ["ops", "research"]) {
             await upsertSessionEntryCore(
               { agentId, sessionKey: "global" },
               { sessionId: `global-${agentId}`, updatedAt: 1 },
             );
           }
-          mocks.caller.mockReturnValue(undefined);
-          await useRealSessionReads();
           const respond = await invoke({
             sessionKey,
             idempotencyKey: "global-publication",
@@ -368,13 +321,12 @@ describe("sessions.github.publish", () => {
   );
 
   it("rejects a publication whose session authorization changes while verification waits", async () => {
-    let resolveRequest: ((value: Awaited<ReturnType<typeof mocks.request>>) => void) | undefined;
-    mocks.request.mockImplementationOnce(
-      async () =>
-        await new Promise((resolve) => {
-          resolveRequest = resolve;
-        }),
-    );
+    const request = createDeferredCore<Awaited<ReturnType<typeof mocks.request>>>();
+    const entered = createDeferredCore();
+    mocks.request.mockImplementationOnce(() => {
+      entered.resolve();
+      return request.promise;
+    });
     let authorized = true;
     const changed = new SessionMutationAuthorizationChangedError(
       errorShape(ErrorCodes.INVALID_REQUEST, "session participation changed"),
@@ -389,29 +341,19 @@ describe("sessions.github.publish", () => {
     };
 
     const pending = invoke(
-      { sessionKey: "agent:main:dashboard:task", idempotencyKey: "publication-revoked" },
+      { sessionKey: callerSession, idempotencyKey: "publication-revoked" },
       { sessionMutationAuthorization: authorization },
     );
-    await vi.waitFor(() => expect(resolveRequest).toBeTypeOf("function"));
+    await entered.promise;
     const requester = expectDefined(mocks.request.mock.calls[0], "publication request")[0]
       .requester;
     expect(requester.snapshot).toEqual(expectedSystemRequester.snapshot);
     expect(() => requester.assertCurrent()).not.toThrow();
     authorized = false;
     expect(() => requester.assertCurrent()).toThrow(GitHubPublicationRequesterUnavailableError);
-    resolveRequest?.({
-      requestId: "publication-revoked",
-      status: "requested",
-      message: "Publication was accepted.",
-    });
+    request.resolve({ ...acceptedPublication, requestId: "publication-revoked" });
 
     await expect(pending).rejects.toBe(changed);
-    expect(mocks.request).toHaveBeenCalledExactlyOnceWith({
-      sessionKey: "agent:main:dashboard:task",
-      idempotencyKey: "publication-revoked",
-      agentId: "main",
-      expectedRunId: "run-1",
-      requester,
-    });
+    expectPublication({ idempotencyKey: "publication-revoked", requester });
   });
 });

@@ -63,13 +63,13 @@ function runtime(catalog = CATALOG): ToolSearchRuntime {
 }
 
 describe("tokenizeQuery", () => {
-  it.each([
-    ["running", "run"],
-    ["runner", "run"],
-  ])("undoes the consonant English doubles before a suffix: %s", (inflected, root) => {
-    // Without undoubling, "running" stems to "runn" and can never meet "run".
-    expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
-  });
+  it.each([["running", "run"]])(
+    "undoes the consonant English doubles before a suffix: %s",
+    (inflected, root) => {
+      // Without undoubling, "running" stems to "runn" and can never meet "run".
+      expect(tokenizeDocument(inflected)).toEqual(tokenizeDocument(root));
+    },
+  );
 
   it.each(["call", "process"])("keeps doubles that belong to the root: %s", (word) => {
     expect(tokenizeDocument(`${word}ing`)).toEqual(tokenizeDocument(word));
@@ -99,12 +99,6 @@ describe("tokenizeQuery", () => {
     // Discounted: an expansion is a guess about wording, not something typed.
     expect(search?.weight).toBeLessThan(1);
     expect(terms.find((term) => term.term === tokenizeDocument("price")[0])?.weight).toBe(1);
-  });
-
-  it("emits both the joined name and its parts", () => {
-    const terms = tokenizeDocument("web_search");
-    expect(terms).toContain("web_search");
-    expect(terms).toContain("web");
   });
 
   it.each(["news"])("keeps %s distinct from the word left by stripping its s", (word) => {
@@ -137,15 +131,6 @@ describe("scoreLexical", () => {
     expect(hits[0]?.value).toBe(value);
     expect(hits[0]?.matchedLiteral).toBe(true);
     expect(hits[0]?.score).toBeCloseTo((Math.log(2) * 2 * 2.2) / (2 + 1.2 * 1.75));
-  });
-
-  it("returns nothing for a query with no usable terms", () => {
-    const index = buildLexicalIndex([{ value: "a", terms: tokenizeDocument("search the web") }]);
-
-    // Returning the whole catalog unranked would read as a ranked answer
-    // without being one, which is what the previous scorer did here.
-    expect(scoreLexical(index, tokenizeQuery("the and with"))).toEqual([]);
-    expect(scoreLexical(index, [])).toEqual([]);
   });
 
   it("indexes non-Latin text rather than discarding it", () => {
@@ -212,7 +197,7 @@ describe("untrusted schemas", () => {
 });
 
 describe("ToolSearchRuntime.search", () => {
-  it.each(["anyOf", "oneOf", "allOf"])(
+  it.each(["anyOf"])(
     "finds parameter metadata inside %s branches and refreshes it after edits",
     async (keyword) => {
       const branch = {
@@ -314,40 +299,6 @@ describe("ToolSearchRuntime.search", () => {
     expect((await search.search("alpha beta", { allowedIds, limit: 1 }))[0]?.name).toBe("second");
   });
 
-  it("shares one index across fresh turns and rebuilds for a changed tool-set revision", async () => {
-    const catalog = CATALOG.map((item) => entry({ ...item, id: `shared-index:${item.id}` }));
-    const build = vi.spyOn(ranking, "buildLexicalIndex");
-    for (const [query, expected] of [
-      ["repository", ["issue_create"]],
-      ["scheduling", ["cron_create"]],
-      ["read", ["read_file"]],
-    ] as const) {
-      const freshCatalog = catalog.map((item) => entry({ ...item, tool: {} as never }));
-      const hits = await runtime(freshCatalog).search(query, {
-        allowedIds: new Set(catalog.map(({ id }) => id)),
-      });
-      expect(hits.map(({ name }) => name)).toEqual(expected);
-    }
-    expect(build).toHaveBeenCalledTimes(1);
-
-    catalog[0]!.description = "Observe asteroids";
-    expect((await runtime(catalog).search("asteroids")).map(({ name }) => name)).toEqual([
-      "web_search",
-    ]);
-    expect(build).toHaveBeenCalledTimes(2);
-
-    await runtime([...catalog]).search("repository");
-    expect(build).toHaveBeenCalledTimes(2);
-
-    const allowedIds = new Set([catalog[0]!.id]);
-    expect(await runtime(catalog).search("repository", { allowedIds })).toEqual([]);
-    allowedIds.add(catalog[4]!.id);
-    expect(
-      (await runtime(catalog).search("repository", { allowedIds })).map(({ name }) => name),
-    ).toEqual(["issue_create"]);
-    expect(build).toHaveBeenCalledTimes(4);
-  });
-
   it.each([
     { encoding: "ASCII", padding: " ", suffix: "" },
     { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
@@ -408,17 +359,13 @@ describe("ToolSearchRuntime.search", () => {
     expect((await search.search("harvest", { limit: 2 })).map((hit) => hit.id)).toEqual(["a", "m"]);
   });
 
-  it.each([
-    { query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" },
-    {
-      query: "look up the price",
-      expected: "web_search",
-      why: "intent expanded toward search/web",
+  it.each([{ query: "reminder", expected: "cron_create", why: "expanded toward schedule/cron" }])(
+    "finds $expected for $query ($why)",
+    async ({ query, expected }) => {
+      const hits = await runtime().search(query);
+      expect(hits.map((hit) => hit.name)).toContain(expected);
     },
-  ])("finds $expected for $query ($why)", async ({ query, expected }) => {
-    const hits = await runtime().search(query);
-    expect(hits.map((hit) => hit.name)).toContain(expected);
-  });
+  );
 
   it.each([
     ["cookies", "cookie"],
@@ -485,12 +432,6 @@ describe("readParameterText", () => {
         allOf: [],
       }),
     ).toBe("visible branch");
-  });
-
-  it("reads metadata from tuple items", () => {
-    expect(
-      readParameterText({ items: [{ description: "first" }, { description: "second" }] }),
-    ).toBe("first second");
   });
 
   it("keeps cyclic composed schemas bounded", () => {

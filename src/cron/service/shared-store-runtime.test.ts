@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
 import { type ChildProcess, spawn } from "node:child_process";
 import { once } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createBoundedChildOutput } from "../../../test/helpers/bounded-child-output.js";
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.js";
 import {
@@ -13,7 +14,8 @@ import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-s
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronJobsStoreChanges, saveCronStore } from "../store.js";
-import type { CronJob } from "../types.js";
+import type { CronJobCreate } from "../types.js";
+import type { CronServiceDeps } from "./state.js";
 import * as serviceStore from "./store.js";
 
 const { makeStorePath } = createCronStoreHarness({ prefix: "cron-shared-runtime-" });
@@ -25,11 +27,12 @@ const children = new Set<ChildProcess>();
 afterEach(async () => {
   await Promise.all([...children].map((child) => stopChildProcess(child, 1_000)));
   children.clear();
+  vi.restoreAllMocks();
 });
 
 const log = { debug() {}, info() {}, warn() {}, error() {} };
 
-function createDisabledService(storePath: string): CronService {
+function createDisabledService(storePath: string, extra: Partial<CronServiceDeps> = {}) {
   return new CronService({
     scheduler: createTestGatewayScheduler(),
     cronEnabled: false,
@@ -37,35 +40,23 @@ function createDisabledService(storePath: string): CronService {
     log,
     enqueueSystemEvent() {},
     requestHeartbeat() {},
-    async runIsolatedAgentJob() {
-      return { status: "ok" as const, summary: "unused" };
-    },
+    runIsolatedAgentJob: async () => ({ status: "ok", summary: "unused" }),
+    ...extra,
   });
 }
 
-async function addCanary(cron: CronService, suffix: string): Promise<CronJob> {
-  return await cron.add({
-    name: `canary-${suffix}`,
+function addJob(cron: CronService, name: string, target = false) {
+  return cron.add({
+    name,
     enabled: true,
-    schedule: {
-      kind: "every",
-      everyMs: 86_400_000,
-      anchorMs: Date.now() + 86_400_000,
-    },
-    sessionTarget: "isolated",
+    schedule: target
+      ? { kind: "cron", expr: "0 6 * * *", tz: "UTC" }
+      : { kind: "every", everyMs: 86_400_000, anchorMs: Date.now() + 86_400_000 },
+    sessionTarget: target ? "main" : "isolated",
     wakeMode: "next-heartbeat",
-    payload: { kind: "agentTurn", message: "run canary" },
-  });
-}
-
-async function addTarget(cron: CronService, suffix: string): Promise<CronJob> {
-  return await cron.add({
-    name: `target-${suffix}`,
-    enabled: true,
-    schedule: { kind: "cron", expr: "0 6 * * *", tz: "UTC" },
-    sessionTarget: "main",
-    wakeMode: "next-heartbeat",
-    payload: { kind: "systemEvent", text: "target" },
+    payload: target
+      ? { kind: "systemEvent", text: "target" }
+      : { kind: "agentTurn", message: "run canary" },
   });
 }
 
@@ -82,9 +73,7 @@ for (const run of runs) {
     log,
     enqueueSystemEvent() {},
     requestHeartbeat() {},
-    async runIsolatedAgentJob() {
-      return { status: "ok", summary: "scheduler child completed" };
-    },
+    runIsolatedAgentJob: async () => ({ status: "ok", summary: "scheduler child completed" }),
   });
   try {
     await cron.start();
@@ -98,11 +87,15 @@ for (const run of runs) {
 }
 `;
 
-function spawnSchedulerChild(script: string, runs: unknown) {
-  const startedAt = performance.now();
+async function runSchedulerChild(runs: Array<{ storePath: string; jobId: string }>) {
   const child = spawn(
     process.execPath,
-    [...resolveRuntimeWorkerArgv(serviceUrl).slice(0, -1), "--input-type=module", "--eval", script],
+    [
+      ...resolveRuntimeWorkerArgv(serviceUrl).slice(0, -1),
+      "--input-type=module",
+      "--eval",
+      schedulerChildScript,
+    ],
     {
       cwd: process.cwd(),
       env: { ...process.env, OPENCLAW_CRON_SHARED_STORE_RUNS: JSON.stringify(runs) },
@@ -112,156 +105,96 @@ function spawnSchedulerChild(script: string, runs: unknown) {
   children.add(child);
   const stderr = createBoundedChildOutput();
   child.stderr?.on("data", stderr.append);
-  const closed = once(child, "close");
-  const assertCompleted = () => {
-    expect(
-      { code: child.exitCode, signal: child.signalCode, stderr: stderr.text() },
-      `Scheduler child closed after ${Math.round(performance.now() - startedAt)}ms`,
-    ).toEqual({ code: 0, signal: null, stderr: "" });
-  };
-  return { child, closed, stderr, assertCompleted };
+  await once(child, "close");
+  expect([child.exitCode, child.signalCode, stderr.text()]).toEqual([0, null, ""]);
 }
 
-async function runSchedulerChild(runs: Array<{ storePath: string; jobId: string }>) {
-  const { closed, assertCompleted } = spawnSchedulerChild(schedulerChildScript, runs);
-  await closed;
-  assertCompleted();
+const readJob = async (storePath: string, id: string) =>
+  (await loadCronStore(storePath)).jobs.find((job) => job.id === id);
+
+async function seedTarget(suffix: string) {
+  const { storePath } = await makeStorePath();
+  const cron = createDisabledService(storePath);
+  const target = await addJob(cron, suffix, true);
+  cron.stop();
+  return { storePath, target };
 }
 
-describe("scheduler-disabled shared-store mutations", () => {
-  it("cannot overwrite runtime committed by a scheduler process", async () => {
-    const cases = await Promise.all(
-      ["add", "update", "remove", "same-job-update", "state-update"].map(async (operation) => {
-        const { storePath } = await makeStorePath();
-        const cron = createDisabledService(storePath);
-        await cron.start();
-        const canary = await addCanary(cron, operation);
-        const target = ["update", "remove"].includes(operation)
-          ? await addTarget(cron, operation)
-          : undefined;
-        return { canary, cron, operation, storePath, target };
-      }),
+async function rewritePeer(storePath: string, id: string, patch: Partial<CronJobCreate>) {
+  const store = await loadCronStore(storePath);
+  const job = store.jobs.find((candidate) => candidate.id === id);
+  assert(job, "missing peer target");
+  Object.assign(job, patch);
+  await saveCronStore(storePath, store);
+}
+
+it("cannot overwrite runtime committed by a scheduler process", async () => {
+  const cases = await Promise.all(
+    ["add", "update", "remove", "same-job-update", "state-update"].map(async (operation) => {
+      const { storePath } = await makeStorePath();
+      const cron = createDisabledService(storePath);
+      await cron.start();
+      const canary = await addJob(cron, `canary-${operation}`);
+      const target = ["update", "remove"].includes(operation)
+        ? await addJob(cron, operation, true)
+        : undefined;
+      return { canary, cron, operation, storePath, target };
+    }),
+  );
+
+  await closeOpenClawStateDatabaseAsync();
+  await runSchedulerChild(cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })));
+
+  for (const { storePath, canary, cron, operation, target } of cases) {
+    const before = await readJob(storePath, canary.id);
+    expect(before?.state).toMatchObject({ lastStatus: "ok", lastRunAtMs: expect.any(Number) });
+    if (operation === "add") {
+      const added = await addJob(cron, "added", true);
+      expect(await readJob(storePath, added.id)).toBeDefined();
+    } else if (operation === "update" && target) {
+      await cron.updateWithPrecondition(target.id, { name: "target-updated" }, () => {});
+      expect((await readJob(storePath, target.id))?.name).toBe("target-updated");
+    } else if (operation === "same-job-update") {
+      await cron.update(canary.id, { name: "canary-updated" });
+    } else if (operation === "state-update") {
+      await cron.update(canary.id, { state: { consecutiveErrors: 7 } });
+    } else if (target) {
+      await cron.remove(target.id);
+      expect(await readJob(storePath, target.id)).toBeUndefined();
+    }
+    const after = await readJob(storePath, canary.id);
+    expect(after?.state).toEqual(
+      operation === "state-update" ? { ...before?.state, consecutiveErrors: 7 } : before?.state,
     );
-
-    await closeOpenClawStateDatabaseAsync();
-    await runSchedulerChild(
-      cases.map(({ canary, storePath }) => ({ jobId: canary.id, storePath })),
-    );
-
-    for (const testCase of cases) {
-      const before = (await loadCronStore(testCase.storePath)).jobs.find(
-        (job) => job.id === testCase.canary.id,
-      );
-      expect(before?.state.lastStatus).toBe("ok");
-      expect(before?.state.lastRunAtMs).toEqual(expect.any(Number));
-
-      if (testCase.operation === "add") {
-        const added = await addTarget(testCase.cron, "added");
-        expect(
-          (await loadCronStore(testCase.storePath)).jobs.some((job) => job.id === added.id),
-        ).toBe(true);
-      } else if (testCase.operation === "update" && testCase.target) {
-        await testCase.cron.updateWithPrecondition(
-          testCase.target.id,
-          { name: "target-updated" },
-          () => {},
-        );
-        expect(
-          (await loadCronStore(testCase.storePath)).jobs.find(
-            (job) => job.id === testCase.target?.id,
-          )?.name,
-        ).toBe("target-updated");
-      } else if (testCase.operation === "same-job-update") {
-        await testCase.cron.update(testCase.canary.id, { name: "canary-updated" });
-      } else if (testCase.operation === "state-update") {
-        await testCase.cron.update(testCase.canary.id, { state: { consecutiveErrors: 7 } });
-      } else if (testCase.target) {
-        await testCase.cron.remove(testCase.target.id);
-        expect(
-          (await loadCronStore(testCase.storePath)).jobs.some(
-            (job) => job.id === testCase.target?.id,
-          ),
-        ).toBe(false);
-      }
-
-      const after = (await loadCronStore(testCase.storePath)).jobs.find(
-        (job) => job.id === testCase.canary.id,
-      );
-      expect(after?.state).toEqual(
-        testCase.operation === "state-update"
-          ? { ...before?.state, consecutiveErrors: 7 }
-          : before?.state,
-      );
-      testCase.cron.stop();
-    }
-  }, 90_000);
-
-  it("rejects a stale config mutation instead of overwriting its peer", async () => {
-    const { storePath } = await makeStorePath();
-    const seed = createDisabledService(storePath);
-    const target = await addTarget(seed, "config-conflict");
-    seed.stop();
-
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      cronEnabled: false,
-      storePath,
-      log,
-      enqueueSystemEvent() {},
-      requestHeartbeat() {},
-      async runIsolatedAgentJob() {
-        return { status: "ok" as const, summary: "unused" };
-      },
-      async listConfiguredChannels() {
-        return [];
-      },
-    });
-    const persist = serviceStore.persistCronJobMutation;
-    const admission = vi
-      .spyOn(serviceStore, "persistCronJobMutation")
-      .mockImplementationOnce(async (params) => {
-        const peerStore = await loadCronStore(storePath);
-        const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
-        if (!peerTarget) {
-          throw new Error("missing peer target");
-        }
-        peerTarget.name = "peer-update";
-        await saveCronStore(storePath, peerStore);
-        return persist(params);
-      });
-    try {
-      await expect(
-        cron.update(target.id, {
-          delivery: { mode: "webhook", to: "https://example.com/cron" },
-        }),
-      ).rejects.toThrow("changed after it was read");
-    } finally {
-      admission.mockRestore();
-    }
-    const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
-    expect(persisted?.name).toBe("peer-update");
-    expect(persisted?.delivery).toBeUndefined();
     cron.stop();
-  });
+  }
+}, 90_000);
 
-  it("rejects deleting a row whose config a peer rewrote", async () => {
-    const { storePath } = await makeStorePath();
-    const cron = createDisabledService(storePath);
-    const target = await addTarget(cron, "delete-conflict");
-    cron.stop();
-    const baseline = await loadCronStore(storePath);
-    const peerStore = structuredClone(baseline);
-    const peerTarget = peerStore.jobs.find((job) => job.id === target.id);
-    if (!peerTarget) {
-      throw new Error("missing peer delete target");
-    }
-    peerTarget.description = "peer rewrite";
-    await saveCronStore(storePath, peerStore);
-
-    await expect(
-      saveCronJobsStoreChanges(storePath, baseline, { version: 1, jobs: [] }),
-    ).rejects.toThrow("changed after it was read");
-    const persisted = (await loadCronStore(storePath)).jobs.find((job) => job.id === target.id);
-    expect(persisted?.description).toBe("peer rewrite");
+it("rejects a stale config mutation instead of overwriting its peer", async () => {
+  const { storePath, target } = await seedTarget("config-conflict");
+  const cron = createDisabledService(storePath, { listConfiguredChannels: async () => [] });
+  const persist = serviceStore.persistCronJobMutation;
+  vi.spyOn(serviceStore, "persistCronJobMutation").mockImplementationOnce(async (params) => {
+    await rewritePeer(storePath, target.id, { name: "peer-update" });
+    return persist(params);
   });
+  await expect(
+    cron.update(target.id, {
+      delivery: { mode: "webhook", to: "https://example.com/cron" },
+    }),
+  ).rejects.toThrow("changed after it was read");
+  const persisted = await readJob(storePath, target.id);
+  expect(persisted?.name).toBe("peer-update");
+  expect(persisted?.delivery).toBeUndefined();
+  cron.stop();
+});
+
+it("rejects deleting a row whose config a peer rewrote", async () => {
+  const { storePath, target } = await seedTarget("delete-conflict");
+  const baseline = await loadCronStore(storePath);
+  await rewritePeer(storePath, target.id, { description: "peer rewrite" });
+  await expect(
+    saveCronJobsStoreChanges(storePath, baseline, { version: 1, jobs: [] }),
+  ).rejects.toThrow("changed after it was read");
+  expect((await readJob(storePath, target.id))?.description).toBe("peer rewrite");
 });

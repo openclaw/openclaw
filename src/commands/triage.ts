@@ -404,16 +404,27 @@ export async function triageCommand(
     }
     let claudeSafeMode = false;
     if (handoff.agent === "claude") {
-      const { probeClaudeSafeMode } = await import("./triage-claude.js");
-      const probe = await probeClaudeSafeMode({
-        argv: [handoff.program.command, ...handoff.program.leadingArgv],
-        env: targetEnv,
-        signal: options.recovery?.signal,
-        ...agentOptions,
-      });
-      if (!probe.ok) {
+      const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
+      try {
+        const help = await runUtf8CommandWithTimeout(
+          [handoff.program.command, ...handoff.program.leadingArgv, "--help"],
+          {
+            env: targetEnv,
+            signal: options.recovery?.signal,
+            ...agentOptions,
+            timeoutMs: 10_000,
+            killProcessTree: true,
+            outputCapture: "tail",
+            maxOutputBytes: 64 * 1024,
+          },
+        );
+        claudeSafeMode =
+          help.termination === "exit" &&
+          help.code === 0 &&
+          `${help.stdout}\n${help.stderr}`.includes("--safe-mode");
+      } catch (error) {
         runtime.error(
-          `Failed to check Claude safe-mode support: ${triageCollectionError(probe.error, redaction)}`,
+          `Failed to check Claude safe-mode support: ${triageCollectionError(error, redaction)}`,
         );
         runtime.log(`Run manually: ${handoffCommands.external.claude}`);
         exitCliAfterOutput(runtime, 1);
@@ -421,7 +432,6 @@ export async function triageCommand(
       if (!isCurrent()) {
         return;
       }
-      claudeSafeMode = probe.supported;
       if (!claudeSafeMode) {
         runtime.log(
           "Claude --safe-mode unavailable; running claude -p with normal customization settings.",

@@ -83,7 +83,10 @@ import type {
   WorkerPlacementRuntimeInstallReader,
   WorkerSessionPlacementReader,
 } from "../worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementRetirementService } from "../worker-environments/placement-store.js";
+import type {
+  WorkerSessionPlacementRetirementService,
+  WorkerSessionPlacementStore,
+} from "../worker-environments/placement-store.js";
 import type {
   WorkerEnvironmentServiceContract,
   WorkerPlacementDispatchContract,
@@ -388,6 +391,7 @@ type GatewayTransportContext = {
   unsubscribeSessionMessageEvents: SessionMessageSubscriberRegistry["unsubscribe"];
   unsubscribeAllSessionEvents: (connId: string) => void;
   getSessionEventSubscriberConnIds: () => ReadonlySet<string>;
+  getSessionMessageSubscriberConnIds?: (sessionKey: string) => ReadonlySet<string>;
   registerToolEventRecipient: (runId: string, connId: string) => void;
 };
 
@@ -413,7 +417,8 @@ type GatewayResidentBridgeContext = {
   gatewayComputerService?: import("../desktop/computer-service.js").GatewayComputerService;
   /** Durable per-session worker placement; absent only from lightweight in-process contexts. */
   workerSessionPlacementService?: WorkerSessionPlacementReader &
-    Partial<WorkerSessionPlacementRetirementService>;
+    Partial<WorkerSessionPlacementRetirementService> &
+    Partial<Pick<WorkerSessionPlacementStore, "withWorkspaceExclusion">>;
   /** Process-local health samples fenced to the exact active placement owner. */
   workerPlacementDiskSpaceReader?: WorkerPlacementDiskSpaceReader;
   /** Process-current paired-device runner proof for active placement projection. */
@@ -480,6 +485,8 @@ export type GatewayRequestContext = GatewayKernelContext &
 export type GatewayRequestOptions = {
   /** Transport can forward trusted worker JSON without materializing it. */
   acceptsSerializedJson?: boolean;
+  /** Transport can reuse worker-produced raw deflate with the default 15-bit window. */
+  acceptsDeflatedSegments?: boolean;
   req: RequestFrame;
   client: GatewayClient | null;
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
@@ -493,7 +500,7 @@ export type GatewayRequestOptions = {
   /**
    * In-process Gateway lifetime guard composed into durable session mutations.
    * @deprecated For approval persistence use api.runtime.gateway.request with host-bound authority;
-   * opaque approval commit callbacks are removed in the next Plugin SDK major.
+   * opaque approval commit callbacks are removed after an announced ordinary stable release window.
    */
   sessionMutationCommitGuard?: () => void;
   /** In-process caller lifetime; never serialized into a Gateway request frame. */

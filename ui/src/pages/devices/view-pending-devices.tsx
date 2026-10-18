@@ -85,7 +85,7 @@ function PendingDevice(props: {
     () => normalizeOptionalString(props.req.displayName) || props.req.deviceId,
   );
   const age = createMemo(() =>
-    typeof props.req.ts === "number" ? formatRelativeTimestamp(props.req.ts) : t("common.na"),
+    props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
   );
   const approval = createMemo(() => resolvePendingDeviceApprovalState(props.req, props.paired));
   const repair = createMemo(() =>
@@ -112,14 +112,14 @@ function PendingDevice(props: {
       <div class="settings-row__control">
         <button
           class="btn btn--sm"
-          disabled={!props.devices.canManagePairing}
+          disabled={!props.devices.connected || !props.devices.canManagePairing}
           onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
         >
           {t("devices.inventory.approve")}
         </button>
         <button
           class="btn btn--sm"
-          disabled={!props.devices.canManagePairing}
+          disabled={!props.devices.connected || !props.devices.canManagePairing}
           onClick={() => props.devices.onDeviceReject(props.req.requestId)}
         >
           {t("devices.inventory.reject")}

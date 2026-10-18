@@ -11,12 +11,15 @@ vi.mock("./kill-tree.js", async (importOriginal) => ({
 import { runRespawnChildWithSignalBridge } from "./respawn-child-runner.js";
 
 const runs: Array<{ child: ChildProcess; completion: Promise<number> }> = [];
+const ttyStreams = [process.stdin, process.stdout].map((stream) => ({
+  stream,
+  descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+}));
 let killProcess: MockInstance<typeof process.kill>;
 function start(
   options: {
     pid?: number;
     detached?: boolean;
-    terminal?: boolean;
     onError?: (error: unknown) => void | Promise<void>;
   } = {},
 ) {
@@ -31,7 +34,6 @@ function start(
     args: ["/repo/openclaw/dist/entry.js"],
     env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
     detachForProcessTree: options.detached,
-    stdioIsTerminal: options.terminal ?? false,
     runtime: {
       spawn: childProcess.spawn,
       attachChildProcessBridge: (_child, bridgeOptions) => {
@@ -54,6 +56,9 @@ function start(
 }
 
 beforeEach(() => {
+  for (const { stream } of ttyStreams) {
+    Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
+  }
   signalProcessTreeMock.mockReset();
   killProcess = vi.spyOn(process, "kill").mockReturnValue(true);
 });
@@ -64,6 +69,13 @@ afterEach(async () => {
   await Promise.all(runs.splice(0).map((run) => run.completion));
   vi.useRealTimers();
   vi.restoreAllMocks();
+  for (const { stream, descriptor } of ttyStreams) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
 });
 
 describe("runRespawnChildWithSignalBridge", () => {

@@ -164,6 +164,7 @@ it("keeps projection reads outside borrowed startup admission and admits complet
         await projection.ensureMaterialized();
         expect(projection.snapshot(query).row).toBeNull();
         expect(listOpenClawAgentDatabasesForTest().some((db) => db.path === path)).toBe(false);
+        projection.snapshot(unaffected);
         beforeRecovery = projection.materializedCount;
       });
       await projection.ensureMaterialized();

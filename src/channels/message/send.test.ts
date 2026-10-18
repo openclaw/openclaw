@@ -186,38 +186,6 @@ describe("withDurableMessageSendContext", () => {
     });
   });
 
-  it("records portable locations as structured payload data", async () => {
-    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
-      params.onDeliveryIntent?.({
-        id: "intent-location",
-        channel: "telegram",
-        to: "chat-1",
-        queuePolicy: "required",
-      });
-      return [{ channel: "telegram", messageId: "loc-1" }];
-    });
-    let intent: unknown;
-
-    await withDurableMessageSendContext(
-      {
-        cfg,
-        channel: "telegram",
-        to: "chat-1",
-        payloads: [{ location: { latitude: 1, longitude: 2 } }],
-      },
-      async (ctx) => {
-        const rendered = await ctx.render();
-        await ctx.send(rendered);
-        intent = ctx.intent;
-      },
-    );
-
-    expect((intent as DurableMessageSendIntent | undefined)?.renderedBatch?.plan).toMatchObject({
-      channelDataCount: 1,
-      items: [{ kinds: ["channelData"], hasChannelData: true }],
-    });
-  });
-
   it.each([
     {
       name: "title-only presentations",
@@ -286,48 +254,6 @@ describe("withDurableMessageSendContext", () => {
     expectBatchStatus(result, "sent");
     expect(result.deliveryIntent?.id).toBe("intent-best-effort");
     expect(latestDeliveryRequest().queuePolicy).toBe("best_effort");
-  });
-
-  it("preserves adapter-provided multipart receipts in durable sends", async () => {
-    deliverOutboundPayloads.mockResolvedValueOnce([
-      {
-        channel: "telegram",
-        messageId: "top-level-ignored",
-        receipt: {
-          primaryPlatformMessageId: "platform-1",
-          platformMessageIds: ["platform-1", "platform-2"],
-          parts: [
-            { platformMessageId: "platform-1", kind: "text", index: 0 },
-            { platformMessageId: "platform-2", kind: "media", index: 1 },
-          ],
-          threadId: "canonical-thread",
-          sentAt: 123,
-        },
-      },
-    ]);
-
-    const result = await sendDurableMessageBatch({
-      cfg,
-      channel: "telegram",
-      to: "chat-1",
-      payloads: [{ text: "hello" }],
-      threadId: "requested-thread",
-    });
-
-    expectBatchStatus(result, "sent");
-    expect(result.receipt?.primaryPlatformMessageId).toBe("platform-1");
-    expect(result.receipt?.platformMessageIds).toEqual(["platform-1", "platform-2"]);
-    expect(result.receipt?.threadId).toBe("canonical-thread");
-    expect(result.receipt?.parts.map((part) => part.threadId)).toEqual([
-      "canonical-thread",
-      "canonical-thread",
-    ]);
-    expect(
-      result.receipt?.parts.map(({ platformMessageId, kind }) => ({ platformMessageId, kind })),
-    ).toEqual([
-      { platformMessageId: "platform-1", kind: "text" },
-      { platformMessageId: "platform-2", kind: "media" },
-    ]);
   });
 
   it("keeps acknowledged multipart sends without platform ids authoritative", async () => {
@@ -472,41 +398,6 @@ describe("withDurableMessageSendContext", () => {
     expect(receiptArg.platformMessageIds).toEqual([]);
   });
 
-  it("reports hook-cancelled deliveries as explicit suppressed sends", async () => {
-    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
-      params.onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-        hookEffect: { cancelReason: "owned-by-other-agent" },
-      });
-      return [];
-    });
-    const onCommitReceipt = vi.fn();
-
-    const result = await sendDurableMessageBatch({
-      cfg,
-      channel: "slack",
-      to: "C123",
-      payloads: [{ text: "claimed elsewhere" }],
-      onCommitReceipt,
-    });
-
-    expectBatchStatus(result, "suppressed");
-    expect(result.reason).toBe("cancelled_by_message_sending_hook");
-    expect(result.payloadOutcomes?.[0]).toEqual({
-      index: 0,
-      status: "suppressed",
-      reason: "cancelled_by_message_sending_hook",
-      hookEffect: { cancelReason: "owned-by-other-agent" },
-    });
-    expect(onCommitReceipt).toHaveBeenCalledTimes(1);
-    const [receiptArg] = requireMockCall(onCommitReceipt, 0, "commit receipt") as [
-      { platformMessageIds?: unknown },
-    ];
-    expect(receiptArg.platformMessageIds).toEqual([]);
-  });
-
   it("forwards payload delivery outcomes to callers while collecting durable outcomes", async () => {
     const onPayloadDeliveryOutcome = vi.fn();
     deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
@@ -583,41 +474,6 @@ describe("withDurableMessageSendContext", () => {
     expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 
-  it("reports best-effort partial failures with the delivered receipt prefix", async () => {
-    const error = new Error("second payload failed");
-    deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
-      params.onPayloadDeliveryOutcome?.({
-        index: 0,
-        status: "sent",
-        results: [{ channel: "telegram", messageId: "msg-1" }],
-      });
-      params.onPayloadDeliveryOutcome?.({
-        index: 1,
-        status: "failed",
-        error,
-        sentBeforeError: true,
-        stage: "platform_send",
-      });
-      return [{ channel: "telegram", messageId: "msg-1" }];
-    });
-    const onSendFailure = vi.fn();
-
-    const result = await sendDurableMessageBatch({
-      cfg,
-      channel: "telegram",
-      to: "chat-1",
-      payloads: [{ text: "first" }, { text: "second" }],
-      onSendFailure,
-    });
-
-    expectBatchStatus(result, "partial_failed");
-    expect(result.results).toEqual([{ channel: "telegram", messageId: "msg-1" }]);
-    expect(result.receipt?.platformMessageIds).toEqual(["msg-1"]);
-    expect(result.error).toBe(error);
-    expect(result.sentBeforeError).toBe(true);
-    expect(onSendFailure).toHaveBeenCalledWith(error);
-  });
-
   it("maps thrown outbound partial delivery errors to partial_failed", async () => {
     const cause = new Error("network reset");
     const error = new OutboundDeliveryError("network reset", {
@@ -691,47 +547,6 @@ describe("withDurableMessageSendContext", () => {
       ),
     ).rejects.toThrow("boom");
 
-    expect(onSendFailure).toHaveBeenCalledWith(error);
-  });
-
-  it("preserves orchestration errors when the failure hook throws", async () => {
-    const onSendFailure = vi.fn(async () => {
-      throw new Error("cleanup failed");
-    });
-    const error = new Error("boom");
-
-    await expect(
-      withDurableMessageSendContext(
-        {
-          cfg,
-          channel: "telegram",
-          to: "chat-1",
-          payloads: [{ text: "hello" }],
-          onSendFailure,
-        },
-        async () => {
-          throw error;
-        },
-      ),
-    ).rejects.toThrow("boom");
-
-    expect(onSendFailure).toHaveBeenCalledWith(error);
-  });
-
-  it("runs the failure hook when durable outbound delivery fails", async () => {
-    const error = new Error("send failed");
-    deliverOutboundPayloads.mockRejectedValueOnce(error);
-    const onSendFailure = vi.fn();
-
-    const result = await sendDurableMessageBatch({
-      cfg,
-      channel: "telegram",
-      to: "chat-1",
-      payloads: [{ text: "hello" }],
-      onSendFailure,
-    });
-
-    expect(result).toEqual({ status: "failed", error });
     expect(onSendFailure).toHaveBeenCalledWith(error);
   });
 

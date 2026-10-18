@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combined-store-gateway.native.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
@@ -18,6 +18,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -105,9 +106,11 @@ describe("global session lookup ownership", () => {
         { sessionId: "retained-alias", updatedAt: 1 },
       );
       await resolveGatewaySessionStoreTargetWithStoreAsync({ cfg, key: "agent:main:global" });
-      openOpenClawAgentDatabase({ agentId: "main" })
-        .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-        .run("{", "global");
+      await runOpenClawAgentWriteAdmission({ agentId: "main" }, () => {
+        openOpenClawAgentDatabase({ agentId: "main" })
+          .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+          .run("{", "global");
+      });
 
       await expect(
         resolveGatewaySessionStoreTargetInWorker({
@@ -306,6 +309,7 @@ describe("global session lookup ownership", () => {
             sessionId: agentId + "-global",
           }),
           undefined,
+          expect.any(Function),
           expect.any(Function),
         );
       }

@@ -11,7 +11,7 @@ import { filterToolsByMessageProvider } from "../agents/agent-tools.message-prov
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
-import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descriptors.js";
+import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
@@ -25,6 +25,7 @@ import {
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
 import {
@@ -50,7 +51,7 @@ import {
 import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
 import {
   hasSessionControlAuthority,
-  prepareSandboxSessionRename,
+  prepareSandboxSessionTools,
 } from "../agents/tools/sessions-operator-authority.js";
 import type { SkillWorkshopRunOptions } from "../agents/tools/skill-workshop-tool-factory.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
@@ -61,6 +62,7 @@ import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing
 import { loadExecApprovalsReadOnlyAsync } from "../infra/exec-approvals-store.js";
 import { resolveExactExecModeFromPolicy } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
@@ -89,6 +91,8 @@ export async function resolveGatewayScopedTools(
     /** Workspace from the invocation owner's exact session read. */
     preparedSessionWorkspaceDir?: string;
     messageActionTurnCapability?: string;
+    /** Host-minted audience from a run-bound loopback grant; ignored on other surfaces. */
+    memoryAudience?: MemoryAudience;
     authProfileStore?: AuthProfileStore;
     agentDir?: string;
     onYield?: (message: string, acknowledgment?: string) => Promise<void> | void;
@@ -224,7 +228,7 @@ export async function resolveGatewayScopedTools(
   const preparedSandboxPolicy = sandboxRuntime.sandboxed ? sandboxRuntime.toolPolicy : undefined;
   const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionRename({
+    prepareSandboxSessionTools({
       policy: preparedSandboxPolicy,
       senderIsOwner:
         surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
@@ -339,6 +343,7 @@ export async function resolveGatewayScopedTools(
     sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     currentMessageId: params.currentMessageId,
+    currentConversationOrigin: params.currentConversationOrigin,
     currentInboundAudio: params.currentInboundAudio,
     sessionId: params.sessionId,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
@@ -378,6 +383,7 @@ export async function resolveGatewayScopedTools(
       : undefined,
     assertInputCommitAllowed: params.assertInputCommitAllowed,
     assertInvocationCurrent,
+    memoryAudience: surface === "loopback" ? params.memoryAudience : undefined,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,
@@ -397,6 +403,9 @@ export async function resolveGatewayScopedTools(
       : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
+    questionInputMode: resolveConversationQuestionInputMode({
+      messageProvider: params.messageProvider,
+    }),
     gatewayCallerAccountId: gatewayCaller.accountId,
     gatewayCallerChannel: gatewayCaller.channel,
     gatewayCallerLocal: gatewayCaller.local,

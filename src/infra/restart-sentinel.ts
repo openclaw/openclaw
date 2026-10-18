@@ -14,6 +14,9 @@ import { resolveRuntimeServiceCommit, resolveRuntimeServiceVersion } from "../ve
 import { formatErrorMessage } from "./errors.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import type {
+  ManagedHandoffSentinelIdentity,
+  ManagedHandoffSentinelOutcome,
+  ManagedHandoffSentinelOutcomeResult,
   RestartSentinel,
   RestartSentinelPayload,
   RestartSentinelRowState,
@@ -58,6 +61,7 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
   context: OpenClawStateWorkerContext,
   assertProducerCurrent?: () => void,
   decodeCommit?: (value: unknown) => RestartSentinelWorkerOperations[Key]["output"] | undefined,
+  existingOnly = false,
 ): Promise<RestartSentinelWorkerOperations[Key]["output"]> {
   const captured = structuredClone(command);
   const assertCurrent = () => {
@@ -74,8 +78,9 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
     try {
       const result = await runOpenClawStateWorkerOperation(
         context,
-        (scope) => scope.execute(captured),
+        async (scope) => ({ value: await scope.execute(captured) }),
         {
+          existingOnly,
           assertCurrent,
           createAdmission: (operation) => {
             const retained = createAdmission(operation);
@@ -85,7 +90,10 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
         },
       );
       context.admission.assertCurrent();
-      return result;
+      if (!result) {
+        throw new Error("Restart sentinel database is unavailable");
+      }
+      return result.value;
     } catch (error) {
       context.admission.assertCurrent();
       // The admission belongs to this command; committed facts survive a lost ordinary reply.
@@ -103,6 +111,40 @@ async function runRestartSentinelOperation<Key extends keyof RestartSentinelWork
       throw error;
     }
   }
+}
+
+export async function inspectManagedHandoffSentinel(
+  input: ManagedHandoffSentinelIdentity,
+  env: NodeJS.ProcessEnv = process.env,
+  assertCurrent?: () => void,
+): Promise<{ sentinel: RestartSentinel | null; revision: number | null }> {
+  const context = captureOpenClawStateWorkerContext({ env });
+  assertCurrent?.();
+  const reply = await executeExistingOpenClawStateRead(
+    { env: context.environment, path: context.admission.databasePath },
+    { type: "restartSentinel.managedHandoffInspect", input },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  assertCurrent?.();
+  if (!reply) {
+    throw new Error("Managed handoff sentinel inspection is unavailable");
+  }
+  return reply.snapshot;
+}
+
+export function recordManagedHandoffSentinelOutcome(
+  input: ManagedHandoffSentinelOutcome,
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+): Promise<ManagedHandoffSentinelOutcomeResult> {
+  return runRestartSentinelOperation(
+    { type: "restartSentinel.managedHandoffOutcome", input },
+    captureOpenClawStateWorkerContext({ env }),
+    assertCurrent,
+    undefined,
+    true,
+  );
 }
 
 export async function writeRestartSentinel(
@@ -168,44 +210,6 @@ export function completeUpdateFailureReportReceiptCleanup(
 ): Promise<boolean> {
   return runRestartSentinelOperation(
     { type: "restartSentinel.completeCleanup", input: { attemptId, reservationId } },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function claimUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    {
-      type: "restartSentinel.claimSweep",
-      input: { attemptId, expectedReservationId, sweepOwnerId, sweepGeneration },
-    },
-    context,
-    undefined,
-    decodeUpdateFailureReportMutation,
-  );
-}
-
-export function releaseUpdateFailureReportArtifactSweep(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  return runRestartSentinelOperation(
-    {
-      type: "restartSentinel.releaseSweep",
-      input: { attemptId, expectedReservationId, sweepOwnerId, sweepGeneration },
-    },
     context,
     undefined,
     decodeUpdateFailureReportMutation,
@@ -283,23 +287,6 @@ export async function readUpdateFailureReportReceipt(
   );
   context.admission.assertCurrent();
   return reply?.receipt ?? null;
-}
-
-export async function hasUpdateFailureReportArtifactSweepLease(
-  attemptId: string,
-  expectedReservationId: string,
-  sweepOwnerId: string,
-  sweepGeneration: string,
-  env: NodeJS.ProcessEnv = process.env,
-  context = captureOpenClawStateWorkerContext({ env }),
-): Promise<boolean> {
-  const receipt = await readUpdateFailureReportReceipt(attemptId, env, context);
-  return (
-    receipt?.artifactSweep === "pending" &&
-    receipt.reservationId === expectedReservationId &&
-    receipt.sweepOwnerId === sweepOwnerId &&
-    receipt.sweepGeneration === sweepGeneration
-  );
 }
 
 /** Publish an outcome only while its producer and the captured notification are unchanged. */
