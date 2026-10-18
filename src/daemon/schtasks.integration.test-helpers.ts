@@ -227,8 +227,6 @@ export async function proveNativeStartupFallbackLaunch(params: {
     missingExecutableError,
     missingScriptError,
     deniedReadError,
-    existenceCheckIgnoredAcl: true,
-    completedAfterLauncherExit: true,
   };
 }
 

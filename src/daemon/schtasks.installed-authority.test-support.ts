@@ -235,7 +235,6 @@ export async function inspectInstalledTaskAuthority(params: {
           admission: retained.serviceUpdateVerdict,
           boundary: "maintenance retained admission; no native enable requested",
           change: "serial owned launcher/sourcePath change within the admitted package root",
-          sameRootRefreshAllowed: true,
           ...(await observeRefusal(
             () => inspect(retained),
             "Gateway service definition changed after database admission; retry against its current configuration.",

@@ -179,12 +179,6 @@ async function withInstalledStartupEntries(
     sourcePaths,
     sourceSha256: sourceHashes,
     startupEntryPaths: startupPaths,
-    taskDefinitionsRestored: true,
-    startupEntriesRemoved: true,
-    launcherExecutionRequested: false,
-    launcherScope: installedHiddenLauncher
-      ? "CMD wrapper uses the maintained renderer; gateway CMD and VBS bytes come from the installed fixture."
-      : "CMD and VBS Startup wrappers use the maintained renderers; gateway CMD bytes come from the unattended installed fixture.",
   };
 }
 
@@ -407,8 +401,6 @@ export async function inspectInstalledStartupAliasBuildRefusal(params: {
       return {
         ...refusal,
         aliasPath,
-        canonicalStartupEntriesAbsent: true,
-        peerTaskAbsentDuringRefusal: true,
         peerPid: expectedPeer.service.runtime.pid,
         scope:
           "Alias-only Startup live-dist refusal using the existing peer process; no logon launch, replacement process, successful build, or protected-update claim.",

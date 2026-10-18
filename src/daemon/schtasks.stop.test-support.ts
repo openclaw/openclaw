@@ -19,7 +19,6 @@ const readWindowsProcessStartTimeSync = vi.hoisted(() =>
   vi.fn<typeof import("../infra/windows-process-start.js").readWindowsProcessStartTimeSync>(),
 );
 type SpawnSyncResult = ReturnType<typeof spawnSyncResult>;
-// Used during vi.hoisted initialization as well as by individual probe fixtures.
 export function spawnSyncResult(stdout: string, status = 0) {
   return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null };
 }
@@ -43,15 +42,12 @@ vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
   readWindowsProcessStartTimeSync,
 }));
-vi.mock("../utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../utils.js")>("../utils.js");
-  return {
-    ...actual,
-    sleep: async (ms: number) => {
-      timeState.now += ms;
-    },
-  };
-});
+vi.mock("../utils.js", async (original) => ({
+  ...(await original<typeof import("../utils.js")>()),
+  sleep: async (ms: number) => {
+    timeState.now += ms;
+  },
+}));
 
 export const {
   resolveTaskScriptPath,
@@ -129,17 +125,14 @@ export function scheduledTaskProbeResult(
 }
 
 export function mockWindowsTaskkillSuccess() {
-  // Route process-control probes so verified owners terminate cleanly: taskkill
-  // succeeds and the follow-up tasklist probe reports the PID as gone.
-  spawnSync.mockImplementation((exe: unknown, args) => {
-    const exeText = String(exe);
+  spawnSync.mockImplementation((exe, args) => {
     if (args?.includes("-EncodedCommand")) {
       return scheduledTaskProbeResult();
     }
-    if (/taskkill\.exe$/i.test(exeText)) {
+    if (/taskkill\.exe$/i.test(exe)) {
       return spawnSyncResult("");
     }
-    if (/tasklist\.exe$/i.test(exeText)) {
+    if (/tasklist\.exe$/i.test(exe)) {
       const pid = Number(args?.find((arg) => arg.startsWith("PID eq "))?.slice(7));
       const gone =
         taskkillPids().includes(pid) || fixture.schtasksCalls.some(([action]) => action === "/End");
@@ -154,9 +147,8 @@ export function taskkillPids(): number[] {
   return spawnSync.mock.calls
     .filter(([exe]) => /taskkill\.exe$/i.test(exe))
     .map(([, args]) => {
-      const list = (args as string[] | undefined) ?? [];
-      const index = list.findIndex((arg) => arg.toUpperCase() === "/PID");
-      return index >= 0 ? Number.parseInt(list[index + 1] ?? "", 10) : Number.NaN;
+      const index = args?.findIndex((arg) => arg.toUpperCase() === "/PID") ?? -1;
+      return index >= 0 ? Number.parseInt(args?.[index + 1] ?? "", 10) : Number.NaN;
     })
     .filter((pid) => Number.isFinite(pid));
 }

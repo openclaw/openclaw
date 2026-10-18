@@ -121,13 +121,17 @@ function startTask(
   return startScheduledTask({ env, stdout: new PassThrough(), ...options });
 }
 
-async function fixture(kind = "gateway") {
+async function fixture(
+  kind = "gateway",
+  packageName = "openclaw",
+  args = kind === "node" ? "node run" : "gateway",
+) {
   const root = temporary.make("schtasks-start-");
-  const entry = await packageEntry(path.join(root, "package"));
+  const entry = await packageEntry(path.join(root, "package"), packageName);
   native.scriptPath = "C:\\fixture\\gateway.cmd";
   const file = path.join(root, "gateway.cmd");
   native.files.set(native.scriptPath, file);
-  await writeLauncher(file, nodeCommand(entry, kind === "node" ? "node run" : "gateway"));
+  await writeLauncher(file, nodeCommand(entry, args));
   native.taskName = kind === "node" ? "OpenClaw Node" : "OpenClaw Gateway";
   const env: Record<string, string> = {
     USERPROFILE: root,
@@ -230,20 +234,14 @@ it("preserves native Run with missing policy metadata (enabled=true)", async () 
   expect(native.calls.some((args) => args[0] === "/Change")).toBe(false);
 });
 
-it.each(["foreign entrypoint filename", "wrong profile", "multiple commands"])(
+it.each([
+  ["foreign entrypoint filename", "unrelated", "gateway"],
+  ["wrong profile", "openclaw", "--profile other gateway"],
+  ["multiple commands", "openclaw", "gateway\r\necho additional-command"],
+])(
   "does not enable or run an unverified selected task (%s)",
-  async (kind) => {
-    const { env, file, root, entry } = await fixture();
-    if (kind === "foreign entrypoint filename") {
-      const foreignEntry = await packageEntry(path.join(root, "foreign"), "unrelated");
-      await writeLauncher(file, nodeCommand(foreignEntry));
-    } else {
-      const program =
-        kind === "wrong profile"
-          ? nodeCommand(entry, "--profile other gateway")
-          : `${nodeCommand(entry)}\r\necho additional-command`;
-      await writeLauncher(file, program);
-    }
+  async (_kind, packageName, program) => {
+    const { env } = await fixture("gateway", packageName, program);
     await expect(startTask(env)).rejects.toThrow();
     expect(native.calls.filter((args) => args[0] === "/Change" || args[0] === "/Run")).toEqual([]);
     expect(native.enabled).toBe(false);

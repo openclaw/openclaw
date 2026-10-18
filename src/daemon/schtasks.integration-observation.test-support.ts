@@ -197,11 +197,11 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     const commandLine = (entry.CommandLine ?? "").replaceAll("/", "\\").toLowerCase();
     return normalizedNeedles.some((needle) => commandLine.includes(needle));
   });
-  const matchingPids = new Set(
-    matching
-      .map((entry) => entry.ProcessId)
-      .filter((pid): pid is number => typeof pid === "number"),
-  );
+  const ids = (key: "ProcessId" | "ParentProcessId") =>
+    new Set(
+      matching.map((entry) => entry[key]).filter((pid): pid is number => typeof pid === "number"),
+    );
+  const matchingPids = ids("ProcessId");
   // Anchors and console hosts need not carry fixture paths in argv. Expand only
   // descendants of matching processes; context parents must not admit unrelated siblings.
   let descendantsAdded: boolean;
@@ -219,11 +219,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
       }
     }
   } while (descendantsAdded);
-  const parentPids = new Set(
-    matching
-      .map((entry) => entry.ParentProcessId)
-      .filter((pid): pid is number => typeof pid === "number"),
-  );
+  const parentPids = ids("ParentProcessId");
   const processes = entries.filter(
     (entry) =>
       matching.includes(entry) ||

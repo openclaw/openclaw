@@ -11,7 +11,11 @@ import { readWindowsProcessArgsSync } from "../infra/windows-port-pids.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { getFreePort } from "../test-utils/ports.js";
-import * as layout from "./schtasks-layout.js";
+import {
+  buildTaskScript,
+  encodeWindowsLauncherScript,
+  readScheduledTaskCommand as readCommand,
+} from "./schtasks-layout.js";
 import {
   resolveScheduledTaskOwnedGatewayPids,
   terminateScheduledTaskGatewayListeners,
@@ -37,8 +41,7 @@ function observeChild(child: ChildProcess, children: LaunchedChild[], rejectErro
   return launched;
 }
 
-const encodeCmd = (content: string) =>
-  layout.encodeWindowsLauncherScript({ format: "cmd", content });
+const encodeCmd = (content: string) => encodeWindowsLauncherScript({ format: "cmd", content });
 
 const launchCapture = vi.hoisted(() => ({
   observe: undefined as ((child: ChildProcess, options?: SpawnOptions) => void) | undefined,
@@ -57,19 +60,14 @@ vi.mock("node:child_process", async (importOriginal) => {
 
 describe.skipIf(process.platform !== "win32")("Windows launcher redirection ownership", () => {
   it.each([
-    { message: "a >b & c", normalized: true },
-    { message: "quoted expansion", normalized: true, target: '"%CD%\\gateway output.log"' },
-    { message: 'a "q" >b', normalized: false },
-    { message: "comma target", normalized: false, extraArgument: ",extra" },
-    {
-      message: "unquoted expansion",
-      normalized: false,
-      extraArgument: "output.log",
-      target: "%OPENCLAW_TEST_LOG_PATH%",
-    },
-  ])(
-    "checks real cmd and CIM argv for $message",
-    async ({ message, normalized, extraArgument = "", target = "" }) => {
+    ["a >b & c", true],
+    ["quoted expansion", true, "", '"%CD%\\gateway output.log"'],
+    ['a "q" >b', false],
+    ["comma target", false, ",extra"],
+    ["unquoted expansion", false, "output.log", "%OPENCLAW_TEST_LOG_PATH%"],
+  ] satisfies [string, boolean, string?, string?][])(
+    "checks real cmd and CIM argv for %s",
+    async (message, normalized, extraArgument = "", target = "") => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw launcher proof "));
       const scriptPath = path.join(dir, "gateway.cmd");
       const childPath = path.join(dir, "gateway-child.cjs");
@@ -129,17 +127,15 @@ server.listen(port, "127.0.0.1", () => {
         message,
       ];
       const content =
-        layout
-          .buildTaskScript({
-            programArguments,
-            workingDirectory: dir,
-            environment: {
-              OPENCLAW_TEST_LAUNCHER_VALUE: "retained",
-              OPENCLAW_TEST_LOG_PATH: "gateway.log output.log",
-              NODE_OPTIONS: "",
-            },
-          })
-          .trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
+        buildTaskScript({
+          programArguments,
+          workingDirectory: dir,
+          environment: {
+            OPENCLAW_TEST_LAUNCHER_VALUE: "retained",
+            OPENCLAW_TEST_LOG_PATH: "gateway.log output.log",
+            NODE_OPTIONS: "",
+          },
+        }).trimEnd() + ` >> ${redirectTarget} 2>&1\r\n`;
       const originalBytes = encodeCmd(content);
       await fs.writeFile(scriptPath, originalBytes);
       const env = { OPENCLAW_TASK_SCRIPT: scriptPath };
@@ -181,11 +177,11 @@ server.listen(port, "127.0.0.1", () => {
         ),
       ).toEqual(observed.argv);
       if (!normalized) {
-        await expect(
-          layout.readScheduledTaskCommand(env, { requireEffective: true }),
-        ).rejects.toThrow("Effective Scheduled Task service command could not be inspected.");
+        await expect(readCommand(env, { requireEffective: true })).rejects.toThrow(
+          "Effective Scheduled Task service command could not be inspected.",
+        );
       }
-      const installed = await layout.readScheduledTaskCommand(env, {
+      const installed = await readCommand(env, {
         requireEffective: normalized,
       });
       expect(installed?.workingDirectory).toBe(dir);
@@ -310,9 +306,9 @@ fs.renameSync(file + ".tmp", file);
     const scriptPath = path.join(dir, "gateway.cmd");
     await fs.writeFile(
       scriptPath,
-      layout.encodeWindowsLauncherScript({
+      encodeWindowsLauncherScript({
         format: "cmd",
-        content: layout.buildTaskScript({
+        content: buildTaskScript({
           programArguments: [process.execPath, childPath, reportPath],
           workingDirectory: dir,
           environment: {
