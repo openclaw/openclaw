@@ -32,23 +32,17 @@ import {
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
+afterEach(closeOpenClawStateDatabaseForTest);
 
-async function seedSession(
-  sessionKey: string,
-  sessionId: string,
-  fields: Partial<SessionEntry> = {},
-) {
+async function seedSession(key: string, id: string, fields: Partial<SessionEntry> = {}) {
   const { storePath } = await createSessionStoreDir();
-  const scope = { agentId: "main", sessionKey, storePath };
-  const write = (id: string, overrides: Partial<SessionEntry>) =>
-    writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(id, overrides) } });
+  const scope = { agentId: "main", sessionKey: key, storePath };
+  const write = (nextId: string, overrides: Partial<SessionEntry>) =>
+    writeSessionStore({ entries: { [key]: sessionStoreEntry(nextId, overrides) } });
   if (fields.incognito) {
-    await replaceSessionEntry(scope, sessionStoreEntry(sessionId, fields));
+    await replaceSessionEntry(scope, sessionStoreEntry(id, fields));
   } else {
-    await write(sessionId, fields);
+    await write(id, fields);
   }
   return { scope, read: () => loadSessionEntry(scope), write };
 }
@@ -73,30 +67,31 @@ async function resetFromCaller(key: string, current: () => boolean) {
   const work = new AsyncWorkScope();
   // The RPC deadline does not cancel accepted work; authority tests control that clock.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  try {
-    return await work.run(() =>
-      resources.run(() =>
-        withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
-          withGatewayToolCallerIdentity(
-            {
-              agentId: "main",
-              sessionKey: "agent:main:reset-requester",
-              operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
-              receiptAuthority: current,
-            },
-            () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
-          ),
+  await using _ = {
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await work.runWhenIdle(() => resources.close());
+      } finally {
+        vi.useRealTimers();
+        await work.drain();
+      }
+    },
+  };
+  return await work.run(() =>
+    resources.run(() =>
+      withLocalGatewayRequestScope({ deps: {} as CliDeps, getRuntimeConfig }, () =>
+        withGatewayToolCallerIdentity(
+          {
+            agentId: "main",
+            sessionKey: "agent:main:reset-requester",
+            operationalRunInstance: { instanceId: "reset-instance", runId: "reset-run" },
+            receiptAuthority: current,
+          },
+          () => callAgentToolGatewayRequest({ method: "sessions.reset", params: { key } }),
         ),
       ),
-    );
-  } finally {
-    try {
-      await work.runWhenIdle(() => resources.close());
-    } finally {
-      vi.useRealTimers();
-      await work.drain();
-    }
-  }
+    ),
+  );
 }
 
 test.each(["normal", "incognito", "replacement"])(
@@ -236,43 +231,35 @@ test.each(["admission", "interrupt", "drain"] as const)(
         replaced = true;
         replaceSessionEntrySync(scope, sessionStoreEntry(replacementSessionId));
       }
+      return { ok: true as const, value: {} };
     };
-    try {
-      const { performGatewaySessionReset } = await import("./session-reset-service.js");
-      const reset =
-        point === "admission"
-          ? await directSessionReq("sessions.reset", {
-              key: sessionKey,
-              expectedSessionId: "sess-stale",
-            })
-          : await performGatewaySessionReset({
-              key: sessionKey,
-              reason: "reset",
-              commandSource: "gateway:sessions.reset",
-              workerPlacementContext: {},
-              expectedSessionId: observedSessionId,
-              assertCurrent: point === "interrupt" ? replace : undefined,
-              prepareLifecycle:
-                point === "drain"
-                  ? async () => {
-                      replace();
-                      return { ok: true, value: {} };
-                    }
-                  : undefined,
-            });
-      expect(reset).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
-      });
-      if (point === "interrupt") {
-        expect(replaced).toBe(true);
-      }
-      if (admission) {
-        expect(interrupted).toBe(false);
-      }
-      expect(read()?.sessionId).toBe(replacementSessionId);
-    } finally {
-      admission?.release();
+    using _ = { [Symbol.dispose]: () => admission?.release() };
+    const { performGatewaySessionReset } = await import("./session-reset-service.js");
+    const reset =
+      point === "admission"
+        ? await directSessionReq("sessions.reset", {
+            key: sessionKey,
+            expectedSessionId: "sess-stale",
+          })
+        : await performGatewaySessionReset({
+            key: sessionKey,
+            reason: "reset",
+            commandSource: "gateway:sessions.reset",
+            workerPlacementContext: {},
+            expectedSessionId: observedSessionId,
+            assertCurrent: point === "interrupt" ? replace : undefined,
+            prepareLifecycle: point === "drain" ? async () => replace() : undefined,
+          });
+    expect(reset).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", details: { reason: "session-changed" } },
+    });
+    if (point === "interrupt") {
+      expect(replaced).toBe(true);
     }
+    if (admission) {
+      expect(interrupted).toBe(false);
+    }
+    expect(read()?.sessionId).toBe(replacementSessionId);
   },
 );

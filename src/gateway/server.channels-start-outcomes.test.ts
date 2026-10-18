@@ -1,4 +1,3 @@
-/** Channel recovery replies preserve decisions from the real account lifecycle owner. */
 import { randomUUID } from "node:crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -59,28 +58,17 @@ function installChannel(
   setTestPluginRegistry(createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]));
 }
 
-function expectStarted(
-  response: unknown,
-  accountId: string,
-  outcome: { status: string; reason?: string },
-) {
+function expectStarted(response: unknown, accountId: string, retryReason?: string) {
+  const outcome =
+    retryReason === undefined ? { status: "handed-off" } : { status: "retry", reason: retryReason };
   expect(response).toMatchObject({ ok: true, payload: { accountId, started: true, outcome } });
 }
 
 async function startActiveAccount(ws: WebSocket, accountId: string) {
   const id = randomUUID();
-  const response = onceMessage<Awaited<ReturnType<typeof rpcReq>>>(
-    ws,
-    (value) => value?.type === "res" && value.id === id,
-  );
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method: "channels.start",
-      params: { channel: "telegram", accountId },
-    }),
-  );
+  const response = onceMessage(ws, (value) => value?.type === "res" && value.id === id);
+  const params = { channel: "telegram", accountId };
+  ws.send(JSON.stringify({ type: "req", id, method: "channels.start", params }));
   return await response;
 }
 
@@ -163,13 +151,13 @@ it("starts config-backed accounts manually while breaker suppression remains act
       const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       const start = (accountId: string) => startActiveAccount(ws, accountId);
       try {
-        expectStarted(await start("plaintext"), "plaintext", { status: "handed-off" });
+        expectStarted(await start("plaintext"), "plaintext");
         await vi.waitFor(() => expect(startAccount).toHaveBeenCalledOnce());
         expect(startAccount.mock.calls[0]?.[0]).toMatchObject({
           accountId: "plaintext",
           account: { token: "plaintext-channel-token" },
         });
-        expectStarted(await start("resolved"), "resolved", { status: "handed-off" });
+        expectStarted(await start("resolved"), "resolved");
         await expect(start("unavailable")).resolves.toMatchObject({
           ok: false,
           error: { code: "UNAVAILABLE" },
@@ -186,10 +174,8 @@ it("reports skips and in-flight ownership while manual recovery bypasses the bre
   await withEnvAsync(
     { OPENCLAW_SKIP_CHANNELS: undefined, OPENCLAW_SKIP_PROVIDERS: undefined },
     async () => {
-      const stopEntered = createDeferred();
-      const releaseStop = createDeferred();
-      const firstStart = createDeferred();
-      const secondStart = createDeferred();
+      const [stopEntered, releaseStop] = [createDeferred(), createDeferred()] as const;
+      const [firstStart, secondStart] = [createDeferred(), createDeferred()] as const;
       const starts = [firstStart, secondStart];
       const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
         starts.shift()?.resolve();
@@ -250,23 +236,20 @@ it("reports skips and in-flight ownership while manual recovery bypasses the bre
           error: { code: "UNAVAILABLE" },
         });
         expect(startAccount).not.toHaveBeenCalled();
-        expectStarted(await start(), "healthy", { status: "handed-off" });
+        expectStarted(await start(), "healthy");
         await firstStart.promise;
-        expectStarted(await start(), "healthy", { status: "retry", reason: "task-owned" });
+        expectStarted(await start(), "healthy", "task-owned");
         expect(startAccount).toHaveBeenCalledOnce();
         const stopping = rpcReq(ws, "channels.stop", {
           channel: "telegram",
           accountId: "healthy",
         });
         await stopEntered.promise;
-        expectStarted(await start("healthy"), "healthy", {
-          status: "retry",
-          reason: "stop-in-flight",
-        });
+        expectStarted(await start("healthy"), "healthy", "stop-in-flight");
         expect(startAccount).toHaveBeenCalledOnce();
         releaseStop.resolve();
         expect(await stopping).toMatchObject({ ok: true, payload: { stopped: true } });
-        expectStarted(await start("healthy"), "healthy", { status: "handed-off" });
+        expectStarted(await start("healthy"), "healthy");
         await secondStart.promise;
         expect(startAccount).toHaveBeenCalledTimes(2);
       } finally {
