@@ -8,6 +8,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { incomingCall, pendingDial } from "./fixtures.test-support.js";
 
 const isolation = vi.hoisted(() => ({
   port: 0,
@@ -63,44 +64,20 @@ const openStore = () =>
 
 class WireHelper {
   readonly actions: Array<Record<string, unknown>> = [];
-  private frames: Array<Record<string, unknown>> = [];
-  private waiting: ((frame: Record<string, unknown>) => void) | undefined;
+  private readonly lines: ReturnType<typeof createInterface>;
   private epoch = "";
   private key = "";
   private sent = 0;
   private received = 0;
-  private serving = false;
 
   constructor(readonly socket: net.Socket) {
     socket.setEncoding("utf8");
-    createInterface({ input: socket }).on("line", (line) => {
-      const frame = JSON.parse(line) as Record<string, unknown>;
-      if (this.serving) {
-        const payload = this.decode(frame);
-        this.actions.push(payload);
-        this.send({
-          transactionId: payload.transactionId,
-          ...(payload.action === "find-outgoing-call"
-            ? { found: true, call_uuid: "recovered-call" }
-            : { found: false, cancelled: true, tombstoned: true }),
-        });
-      } else if (this.waiting) {
-        const resolve = this.waiting;
-        this.waiting = undefined;
-        resolve(frame);
-      } else {
-        this.frames.push(frame);
-      }
-    });
+    this.lines = createInterface({ input: socket });
   }
 
-  private read(): Promise<Record<string, unknown>> {
-    const frame = this.frames.shift();
-    return frame
-      ? Promise.resolve(frame)
-      : new Promise((resolve) => {
-          this.waiting = resolve;
-        });
+  private async read(): Promise<Record<string, unknown>> {
+    const [line] = await once(this.lines, "line");
+    return JSON.parse(line) as Record<string, unknown>;
   }
 
   private decode(frame: Record<string, unknown>) {
@@ -140,38 +117,23 @@ class WireHelper {
       `${JSON.stringify({ event: "client-finish", connection_epoch: this.epoch, proof: mac(this.key, `client-finish\n${this.epoch}`) })}\n`,
     );
     expect(this.decode(await this.read())).toEqual({ event: "session-ready" });
-    this.serving = true;
+    // Handshake replies are lockstep; commands start only after this acknowledgement.
+    this.lines.on("line", (line) => {
+      const payload = this.decode(JSON.parse(line) as Record<string, unknown>);
+      this.actions.push(payload);
+      this.send({
+        transactionId: payload.transactionId,
+        ...(payload.action === "find-outgoing-call"
+          ? { found: true, call_uuid: "recovered-call" }
+          : { found: false, cancelled: true, tombstoned: true }),
+      });
+    });
     this.send({ event: "session-ready-ack" });
   }
 }
 
-function call(status = 4, overrides: Record<string, unknown> = {}) {
-  return {
-    event: "ft-call-status-changed",
-    data: {
-      call_uuid: "recovered-call",
-      call_status: status,
-      has_ended: status === 6,
-      is_outgoing: false,
-      is_sending_audio: false,
-      handle: { value: "owner@example.com" },
-      transport: {
-        kind: "facetime",
-        classifier_version: "tu-provider-v1",
-        service: 2,
-        facetime_transport_type: 1,
-        provider_classified: true,
-        provider_is_facetime: true,
-        provider_is_telephony: false,
-        is_using_baseband: false,
-        is_wifi_call: false,
-        is_voip: true,
-        is_emergency: false,
-      },
-      ...overrides,
-    },
-  };
-}
+const call = (status = 4, overrides: Record<string, unknown> = {}) =>
+  incomingCall(status, { call_uuid: "recovered-call", ...overrides });
 
 describe("FaceTime production authority boundary", () => {
   let ownedRuntime: FaceTimeRuntime | undefined;
@@ -247,26 +209,21 @@ describe("FaceTime production authority boundary", () => {
   });
 
   it.each([
-    {
-      name: "unlisted ringing caller",
-      status: 4,
-      data: { handle: { value: "unlisted@example.com" } },
-    },
-    {
-      name: "active cellular transport",
-      status: 1,
-      data: {
+    ["unlisted ringing caller", call(4, { handle: { value: "unlisted@example.com" } })],
+    [
+      "active cellular transport",
+      call(1, {
         transport: {
           ...call().data.transport,
           kind: "cellular",
           provider_is_facetime: false,
           provider_is_telephony: true,
         },
-      },
-    },
-  ])("rejects $name before capture or native media commands", async ({ status, data }) => {
+      }),
+    ],
+  ] as const)("rejects %s before capture or native media commands", async (_name, event) => {
     const { runtime, peer } = await start();
-    peer.send(call(status, data));
+    peer.send(event);
     await vi.waitFor(() =>
       expect(log.info).toHaveBeenCalledWith(expect.stringContaining("ignored unauthorized")),
     );
@@ -278,20 +235,19 @@ describe("FaceTime production authority boundary", () => {
   it.each(["cancelled", "revoked"] as const)(
     "rejects a %s persisted dial after runtime recovery",
     async (reason) => {
-      await new PendingFaceTimeDialStore(openStore()).save({
-        version: 1,
-        ownerEpoch: 1,
-        dialID: "persisted-dial",
-        handle: "owner@example.com",
-        mode: "audio",
-        delivery: reason === "cancelled" ? "cancelling" : "accepted",
-        requestedAt: "2026-09-19T12:00:00.000Z",
-        callUUID: "recovered-call",
-      });
+      const store = new PendingFaceTimeDialStore(openStore());
+      await store.save(
+        pendingDial({
+          dialID: "persisted-dial",
+          delivery: reason === "cancelled" ? "cancelling" : "accepted",
+          requestedAt: "2026-09-19T12:00:00.000Z",
+          callUUID: "recovered-call",
+        }),
+      );
       const { runtime, peer } = await start(
         reason === "revoked" ? ["replacement@example.com"] : undefined,
       );
-      const recovered = await new PendingFaceTimeDialStore(openStore()).load();
+      const recovered = await store.load();
       expect(recovered?.ownerEpoch).toBe(2);
       // Recovery only reports recovered-call. A cancellation for this new alias
       // proves the injected event was processed, not just background recovery.
@@ -309,7 +265,7 @@ describe("FaceTime production authority boundary", () => {
           }),
         ),
       );
-      const cancelled = await new PendingFaceTimeDialStore(openStore()).load();
+      const cancelled = await store.load();
       expect(cancelled?.delivery).toBe("cancelling");
       expect(cancelled?.callUUIDAliases).toContain("late-active-call");
       expect((await runtime.status()).calls).toEqual([]);
@@ -321,9 +277,7 @@ describe("FaceTime production authority boundary", () => {
       ).toBe(true);
       // A native ended event settles this synthetic carrier before fixture shutdown.
       peer.send(call(6, lateIdentity));
-      await vi.waitFor(async () =>
-        expect(await new PendingFaceTimeDialStore(openStore()).load()).toBeUndefined(),
-      );
+      await vi.waitFor(async () => expect(await store.load()).toBeUndefined());
     },
   );
 });

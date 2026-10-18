@@ -46,16 +46,17 @@ describe("FaceTime native audio bridge", () => {
       processes.push(process);
       return process;
     });
+    const callbacks = { onInputAudio: vi.fn(), onPlaybackDrained: vi.fn() };
     activePump = startFaceTimeAudioPump({
       captureBinary: "/capture",
       logger: console,
-      onInputAudio() {},
+      ...callbacks,
       ...overrides,
     });
     function processFor(command: string) {
       return processes[spawn.mock.calls.findIndex(([binary]) => binary.endsWith(command))];
     }
-    return { pump: activePump, processes, spawn, processFor };
+    return { pump: activePump, processes, spawn, processFor, ...callbacks };
   }
   beforeEach(() => {
     spawnMock.mockReset();
@@ -66,8 +67,7 @@ describe("FaceTime native audio bridge", () => {
     vi.useRealTimers();
   });
   it("publishes suppression and route readiness from assembled native lines", async () => {
-    const onInputAudio = vi.fn();
-    const { pump, processes, spawn } = createPump({ onInputAudio });
+    const { pump, processes, spawn, onInputAudio } = createPump();
 
     expect(spawn.mock.calls[0]?.[0]).toBe("/capture");
     expect(spawn.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
@@ -101,8 +101,7 @@ describe("FaceTime native audio bridge", () => {
   });
 
   it("reports playback drain after the separate output process should be audible", async () => {
-    const onPlaybackDrained = vi.fn();
-    const { pump, processes, spawn, processFor } = createPump({ onPlaybackDrained });
+    const { pump, processes, spawn, processFor, onPlaybackDrained } = createPump();
 
     const audio = Buffer.alloc(4_800, 4);
     pump.writeOutputAudio(audio, { itemId: "greeting" });
@@ -149,24 +148,31 @@ describe("FaceTime native audio bridge", () => {
     expectProgress();
   });
 
-  it("invalidates stale drain callbacks when barge-in clears playback", async () => {
-    const onPlaybackDrained = vi.fn();
-    const { pump, processes, spawn } = createPump({ onPlaybackDrained });
-    pump.writeOutputAudio(Buffer.alloc(480), { itemId: "interrupted" });
-    pump.finishOutputAudio();
-    pump.clearOutputAudio();
-    const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
-    const outputIndices = spawn.mock.calls.flatMap((call, index) =>
-      call[0].endsWith("sox") ? [index] : [],
-    );
-    expect(processes[captureIndex]?.kills).toEqual([]);
-    expect(outputIndices).toHaveLength(2);
-    expect(processes[outputIndices[0] ?? -1]?.kills).toEqual(["SIGKILL"]);
-    await vi.advanceTimersByTimeAsync(200);
-    expect(onPlaybackDrained).not.toHaveBeenCalled();
-    expect(pump.queuedAudioFrames()).toBe(0);
-    expectProgress();
-  });
+  it.each(["barge-in", "suspend"] as const)(
+    "clears %s playback without stale drain or failure callbacks",
+    async (action) => {
+      const onError = vi.fn(async () => false);
+      const { pump, processes, spawn, onPlaybackDrained } = createPump({ onError });
+      pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "interrupted" });
+      pump.finishOutputAudio();
+      if (action === "barge-in") {
+        pump.clearOutputAudio();
+      } else {
+        await pump.suspendMedia();
+      }
+      const outputIndices = spawn.mock.calls.flatMap((call, index) =>
+        call[0].endsWith("sox") ? [index] : [],
+      );
+      expect(processes[0]?.kills).toEqual([]);
+      expect(outputIndices).toHaveLength(action === "barge-in" ? 2 : 1);
+      expect(processes[outputIndices[0] ?? -1]?.kills).toEqual(["SIGKILL"]);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(onPlaybackDrained).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+      expect(pump.queuedAudioFrames()).toBe(0);
+      expectProgress();
+    },
+  );
 
   it("reports capture-process death as immediate suppression loss", () => {
     const onSuppressionLost = vi.fn();
@@ -178,19 +184,6 @@ describe("FaceTime native audio bridge", () => {
     processes[0]?.emit("exit", 1, null);
     expect(pump.processOutputSuppressed()).toBe(false);
     expect(onSuppressionLost).toHaveBeenCalledOnce();
-  });
-
-  it("does not report intentional media suspension as a playback failure", async () => {
-    const onError = vi.fn(async () => false);
-    const { pump, processes } = createPump({ onError });
-
-    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "suspended" });
-    await pump.suspendMedia();
-
-    expect(processes[1]?.kills).toEqual(["SIGKILL"]);
-    expect(onError).not.toHaveBeenCalled();
-    expect(processes[0]?.kills).toEqual([]);
-    expectProgress();
   });
 
   it("strips credential-shaped environment variables from native children", async () => {

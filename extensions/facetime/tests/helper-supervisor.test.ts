@@ -16,6 +16,9 @@ const completed: CommandResult = {
 };
 const injection = ["/bin/bash", "/tmp/facetime/scripts/inject-helper.sh", "--app", "FaceTime"];
 const cancellable = { timeoutMs: 120_000, killProcessTree: true, signal: expect.any(AbortSignal) };
+const processExited = () => {
+  throw Object.assign(new Error("process exited"), { code: "ESRCH" });
+};
 
 describe("FaceTime helper supervisor", () => {
   let activeSupervisor: FaceTimeHelperSupervisor;
@@ -106,23 +109,9 @@ describe("FaceTime helper supervisor", () => {
     });
   });
 
-  it("waits for a stale helper process to exit before reinjecting", async () => {
-    const { supervisor, run } = createSupervisor();
-    supervisor.start();
-    supervisor.stale("com.apple.FaceTime", 1234);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(run).not.toHaveBeenCalled();
-    expectStatus({ stale: true, staleProcessId: 1234 });
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
-    });
-    await vi.advanceTimersByTimeAsync(2_001);
-    expect(run).toHaveBeenCalledWith(injection, expect.objectContaining(cancellable));
-  });
-
-  it("warns once while stale helper processes keep reconnecting", () => {
+  it("warns once per stale episode and waits for process exit before reinjecting", async () => {
     onlyFaceTimeInstalled();
-    const { supervisor, logger } = createSupervisor();
+    const { supervisor, logger, run } = createSupervisor();
     supervisor.start();
     supervisor.stale("com.apple.FaceTime", 1234);
     supervisor.stale("com.apple.FaceTime", 1234);
@@ -138,14 +127,18 @@ describe("FaceTime helper supervisor", () => {
     supervisor.connected("com.apple.FaceTime");
     supervisor.stale("com.apple.FaceTime", 9012);
     expect(logger.warn).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(run).not.toHaveBeenCalled();
+    expectStatus({ stale: true, staleProcessId: 9012 });
+    vi.mocked(process.kill).mockImplementation(processExited);
+    await vi.advanceTimersByTimeAsync(2_001);
+    expect(run).toHaveBeenCalledWith(injection, expect.objectContaining(cancellable));
   });
 
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
     const { promise, resolve } = Promise.withResolvers<CommandResult>();
     onlyFaceTimeInstalled();
-    vi.spyOn(process, "kill").mockImplementation(() => {
-      throw Object.assign(new Error("process exited"), { code: "ESRCH" });
-    });
+    vi.mocked(process.kill).mockImplementation(processExited);
     const { supervisor, run } = createSupervisor();
     run.mockReturnValueOnce(promise);
     supervisor.start();
@@ -160,19 +153,19 @@ describe("FaceTime helper supervisor", () => {
 
   it("aborts and joins in-flight LLDB injection before stop completes", async () => {
     let injectionSignal: AbortSignal | undefined;
+    const { promise, resolve } = Promise.withResolvers<CommandResult>();
     const { supervisor, run } = createSupervisor();
     run.mockImplementation(async (_argv, options) => {
       if (typeof options === "number" || !options.signal) {
         throw new Error("injection must be cancellable");
       }
       injectionSignal = options.signal;
-      return await new Promise<CommandResult>((resolve) => {
-        options.signal?.addEventListener(
-          "abort",
-          () => resolve({ ...completed, code: 1, stderr: "aborted" }),
-          { once: true },
-        );
-      });
+      options.signal.addEventListener(
+        "abort",
+        () => resolve({ ...completed, code: 1, stderr: "aborted" }),
+        { once: true },
+      );
+      return await promise;
     });
     supervisor.start();
     await vi.advanceTimersByTimeAsync(6_000);

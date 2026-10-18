@@ -4,6 +4,8 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, expect, vi } from "vitest";
+import { incomingCall, pendingDial } from "./fixtures.test-support.js";
+export { incomingCall } from "./fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   helperParams: undefined as
@@ -53,20 +55,15 @@ vi.mock("../src/helper-supervisor.js", () => ({
     start() {}
     stop() {}
     status() {
-      const connected = new Set(mocks.helper.connectedHelperBundles);
-      return [
-        {
-          target: "FaceTime",
-          connected:
-            connected.has("com.apple.FaceTime") ||
-            connected.has("com.apple.FaceTime.FTConversationService"),
-        },
-        {
-          target: "Phone",
-          connected:
-            connected.has("com.apple.mobilephone") || connected.has("com.apple.TelephonyUtilities"),
-        },
-      ];
+      return (
+        [
+          ["FaceTime", "com.apple.FaceTime", "com.apple.FaceTime.FTConversationService"],
+          ["Phone", "com.apple.mobilephone", "com.apple.TelephonyUtilities"],
+        ] as const
+      ).map(([target, ...bundles]) => ({
+        target,
+        connected: bundles.some((bundle) => mocks.helper.connectedHelperBundles.includes(bundle)),
+      }));
     }
     connected() {}
     disconnected() {}
@@ -121,47 +118,42 @@ export const mutedResult = (outcome: string, muted: boolean) => ({
   muted,
   is_uplink_muted: muted,
 });
-export function helperResult<T>(
+export const helperResult = <T>(
   helperResults: T[],
   topologyComplete = true,
   topologyGeneration = 1,
-) {
-  return {
-    helpersContacted: helperResults.length,
-    topologyGeneration,
-    topologyComplete,
-    helperResults,
-  };
-}
+) => ({
+  helpersContacted: helperResults.length,
+  topologyGeneration,
+  topologyComplete,
+  helperResults,
+});
 
-export function completeAction(owner: Record<string, unknown>) {
-  return { ...helperResult([owner, { outcome: "absent", found: false }]), ...owner };
-}
+export const completeAction = (owner: Record<string, unknown>) => ({
+  ...helperResult([owner, { outcome: "absent", found: false }]),
+  ...owner,
+});
 
-export function completeSharedAction(owner: Record<string, unknown>) {
-  return {
-    ...helperResult([
-      { ...owner, helperBundleIdentifier: "com.apple.FaceTime" },
-      { ...owner, helperBundleIdentifier: "com.apple.mobilephone" },
-    ]),
-    ...owner,
-  };
-}
+export const completeSharedAction = (owner: Record<string, unknown>) => ({
+  ...helperResult([
+    { ...owner, helperBundleIdentifier: "com.apple.FaceTime" },
+    { ...owner, helperBundleIdentifier: "com.apple.mobilephone" },
+  ]),
+  ...owner,
+});
 
-export function completeAbsence() {
-  return helperResult([
+export const completeAbsence = () =>
+  helperResult([
     { outcome: "absent", found: false },
     { outcome: "absent", found: false },
   ]);
-}
 
-export function emptyState() {
-  return createPluginStateKeyedStoreV2ForTests<unknown>(
+export const emptyState = () =>
+  createPluginStateKeyedStoreV2ForTests<unknown>(
     "facetime",
     { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
     { assertCurrent() {} },
   );
-}
 
 export function expectNotCalled(...functions: unknown[]) {
   for (const fn of functions) {
@@ -171,21 +163,12 @@ export function expectNotCalled(...functions: unknown[]) {
 
 export async function pendingDialState(overrides: Record<string, unknown> = {}) {
   const store = emptyState();
-  await store.register("active", {
-    dialID: "approved-dial",
-    version: 1,
-    ownerEpoch: 1,
-    handle: "owner@example.com",
-    mode: "audio",
-    delivery: "accepted",
-    requestedAt: "2026-08-17T12:00:00.000Z",
-    ...overrides,
-  });
+  await store.register("active", { ...pendingDial(), ...overrides });
   return store;
 }
 
-export function pendingDialCarrierResult() {
-  return helperResult([
+export const pendingDialCarrierResult = () =>
+  helperResult([
     {
       found: true,
       call_uuid: "approved-call",
@@ -194,70 +177,48 @@ export function pendingDialCarrierResult() {
     },
     { found: false, helperBundleIdentifier: "com.apple.mobilephone" },
   ]);
-}
 
-export function pendingDialCancellationResult(callUUID?: string) {
-  return {
-    helpersContacted: 2,
-    helperResults: [
-      {
-        helperBundleIdentifier: "com.apple.FaceTime",
-        cancelled: true,
-        tombstoned: true,
-        found: false,
-        ...(callUUID ? { call_uuid: callUUID } : {}),
-      },
-      { helperBundleIdentifier: "com.apple.mobilephone", cancelled: false, found: false },
-    ],
-  };
-}
-
-export function incomingCall(status = 4, overrides: Record<string, unknown> = {}) {
-  return {
-    event: "ft-call-status-changed",
-    data: {
-      call_uuid: "call-1",
-      call_status: status,
-      has_ended: status === 6,
-      is_outgoing: false,
-      is_sending_audio: false,
-      handle: { value: "owner@example.com" },
-      transport: {
-        kind: "facetime",
-        classifier_version: "tu-provider-v1",
-        service: 2,
-        facetime_transport_type: 1,
-        provider_classified: true,
-        provider_is_facetime: true,
-        provider_is_telephony: false,
-        is_using_baseband: false,
-        is_wifi_call: false,
-        is_voip: true,
-        is_emergency: false,
-      },
-      ...overrides,
+export const pendingDialCancellationResult = (callUUID?: string) => ({
+  helpersContacted: 2,
+  helperResults: [
+    {
+      helperBundleIdentifier: "com.apple.FaceTime",
+      cancelled: true,
+      tombstoned: true,
+      found: false,
+      ...(callUUID ? { call_uuid: callUUID } : {}),
     },
-  };
-}
+    { helperBundleIdentifier: "com.apple.mobilephone", cancelled: false, found: false },
+  ],
+});
 
-export function dialReply(call_uuid = "outbound-call", extra: Record<string, unknown> = {}) {
-  return {
-    call_uuid,
-    muted: true,
-    is_uplink_muted: true,
-    transport: incomingCall().data.transport,
-    ...extra,
-  };
-}
+export const outgoingCall = (
+  callUUID: string,
+  status = 1,
+  identity: { dial_id?: string; is_sending_audio?: boolean } = {},
+) => incomingCall(status, { call_uuid: callUUID, is_outgoing: true, ...identity });
 
-export async function createRuntime(
+export const endedCall = (callUUID: string, identity: { dial_id?: string } = {}) => ({
+  event: "ft-call-status-changed",
+  data: { call_uuid: callUUID, call_status: 6, has_ended: true, is_outgoing: true, ...identity },
+});
+
+export const dialReply = (call_uuid = "outbound-call", extra: Record<string, unknown> = {}) => ({
+  call_uuid,
+  muted: true,
+  is_uplink_muted: true,
+  transport: incomingCall().data.transport,
+  ...extra,
+});
+
+export const createRuntime = (
   state: PluginStateKeyedStore<unknown, 2> = emptyState(),
   ownerHandles = ["owner@example.com"],
   storeOpeners?: {
     openKeyedStoreV2: () => PluginStateKeyedStore<unknown, 2>;
   },
-) {
-  return await createFaceTimeRuntime({
+) =>
+  createFaceTimeRuntime({
     config: resolveFaceTimeConfig({ ownerHandles }),
     fullConfig: {} as never,
     runtime: {
@@ -269,13 +230,15 @@ export async function createRuntime(
     logger: { info: vi.fn(), warn: mocks.warn, debug: vi.fn(), error: vi.fn() },
     pluginRoot: "/plugin",
   });
-}
 
 export function createTalkDriver(params: {
   readyForAudio?: () => Promise<void>;
   order?: string[];
 }) {
   let realtimeActive = false;
+  const deactivate = async () => {
+    realtimeActive = false;
+  };
   return {
     callUUID: "call-1",
     recentTalkEvents: [],
@@ -289,12 +252,8 @@ export function createTalkDriver(params: {
     activate: vi.fn(() => {
       params.order?.push("activate");
     }),
-    suspendMedia: vi.fn(async () => {
-      realtimeActive = false;
-    }),
-    close: vi.fn(async () => {
-      realtimeActive = false;
-    }),
+    suspendMedia: vi.fn(deactivate),
+    close: vi.fn(deactivate),
   };
 }
 
