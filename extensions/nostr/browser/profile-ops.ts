@@ -1,27 +1,21 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { NostrProfile } from "../../api/types.ts";
-import { fetchWithControlUiAuth, readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import type { ControlUiChannelSettingsContext } from "openclaw/plugin-sdk/control-ui";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { NostrProfile } from "./types.ts";
 
 const NOSTR_PROFILE_REQUEST_TIMEOUT_MS = 30_000;
 
 type NostrProfileRequest = {
   accountId: string;
-  authCandidates: readonly string[];
-  isCurrent: () => boolean;
+  context: ControlUiChannelSettingsContext;
+  signal: AbortSignal;
 };
 
 async function requestNostrProfile(
   auth: NostrProfileRequest,
   method: "PUT" | "POST",
   body: unknown,
-  suffix = "",
+  suffix: readonly string[] = [],
 ) {
-  const init = {
-    method,
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  };
   const controller = new AbortController();
   const timeout = setTimeout(
     () =>
@@ -31,19 +25,22 @@ async function requestNostrProfile(
     NOSTR_PROFILE_REQUEST_TIMEOUT_MS,
   );
   try {
-    const response = await fetchWithControlUiAuth(
-      `/api/channels/nostr/${encodeURIComponent(auth.accountId)}/profile${suffix}`,
-      { ...init, signal: controller.signal },
-      auth.authCandidates,
-      auth.isCurrent,
-    );
-    return await readControlUiJsonResponse(response, controller.signal);
+    return await auth.context.request({
+      accountId: auth.accountId,
+      path: ["profile", ...suffix],
+      method,
+      body,
+      signal: AbortSignal.any([auth.signal, controller.signal]),
+    });
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export function parseValidationErrors(details: unknown): Record<string, string> {
+export function parseValidationErrors(
+  details: unknown,
+  formatExternalText: (text: string) => string,
+): Record<string, string> {
   if (!Array.isArray(details)) {
     return {};
   }
@@ -59,7 +56,7 @@ export function parseValidationErrors(details: unknown): Record<string, string> 
     const field = rawField.trim();
     const message = rest.join(":").trim();
     if (field && message) {
-      errors[field] = formatUiExternalText(message);
+      errors[field] = formatExternalText(message);
     }
   }
   return errors;
@@ -84,7 +81,7 @@ function isNostrProfile(value: unknown): value is NostrProfile {
 }
 
 export async function importNostrProfile(params: NostrProfileRequest) {
-  const result = await requestNostrProfile(params, "POST", { autoMerge: true }, "/import");
+  const result = await requestNostrProfile(params, "POST", { autoMerge: true }, ["import"]);
   return {
     ...result,
     data: result.data && {

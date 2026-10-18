@@ -1885,9 +1885,15 @@ importers:
 
   extensions/nostr:
     dependencies:
+      '@solidjs/web':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14(solid-js@2.0.0-rc.14)
       nostr-tools:
         specifier: 2.25.2
         version: 2.25.2(typescript@7.1.0-dev.20260928.1)
+      solid-js:
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
       zod:
         specifier: 4.6.5
         version: 4.6.5
@@ -1895,6 +1901,12 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+      '@solidjs/compiler':
+        specifier: 2.0.0-rc.14
+        version: 2.0.0-rc.14
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       openclaw:
         specifier: workspace:*
         version: link:../..

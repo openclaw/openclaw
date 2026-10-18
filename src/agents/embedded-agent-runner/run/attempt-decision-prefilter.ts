@@ -1,7 +1,10 @@
 import { createRuntimeConfigReader } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { evaluateDecisionV2InRegistry } from "../../../decisions/runtime.js";
-import type { DecisionAnswerV2 } from "../../../decisions/types-v2.js";
+import {
+  evaluateDecisionV2Operation,
+  completeDecisionEvaluation,
+} from "../../../decisions/runtime.js";
+import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
 import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { isDecisionAssistanceEligible } from "../../decision-assistance.js";
 import { resolveDecisionModelSetting } from "../../decision-model-setting.js";
@@ -105,7 +108,7 @@ export async function evaluateAttemptDecisionToolPrefilter(
       currentSelection?.model === selection?.model
     );
   };
-  const outcome = await evaluateDecisionV2InRegistry(
+  const evaluation = await evaluateDecisionV2Operation(
     {
       state: {
         type: "json",
@@ -158,8 +161,17 @@ export async function evaluateAttemptDecisionToolPrefilter(
   );
   params.signal.throwIfAborted();
   params.assertActive();
+  const result = projectPrefilterResult(evaluation.outcome, context.facts);
+  completeDecisionEvaluation(evaluation);
+  return result;
+}
+
+function projectPrefilterResult(
+  outcome: DecisionOutcomeV2,
+  context: DecisionContextFacts,
+): DecisionPrefilterResult {
   const facts = {
-    context: context.facts,
+    context,
   };
   if (outcome.status === "unavailable") {
     return { shouldPruneTools: false, status: "unavailable", reason: outcome.reason, ...facts };

@@ -5,6 +5,12 @@ import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../infra/diagnostic-otel-listener-provenance.js";
 import { runPluginRegisterSyncInRegistry } from "../plugins/loader-module-runtime.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -46,6 +52,7 @@ vi.mock("../agents/decision-inference.js", () => ({
 
 const richer = decisionBatchV1ToV2(batch)!;
 afterEach(() => {
+  resetDiagnosticEventsForTest();
   resetPluginRuntimeStateForTest();
   clearRuntimeConfigSnapshot();
 });
@@ -117,6 +124,15 @@ it.each([1, 2] as const)(
       },
     }));
     const host = version === 1 ? registered(evaluate) : native(evaluate);
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event) => {
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
+      }),
+    );
+    onTestFinished(stop);
     setRuntimeConfigSnapshot(selected);
     const result = await evaluateAttemptDecisionToolPrefilter({
       config: selected,
@@ -127,6 +143,16 @@ it.each([1, 2] as const)(
       signal: new AbortController().signal,
     });
     expect(evaluate).toHaveBeenCalledOnce();
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "model.usage",
+        provider: "fixture",
+        model: "fixture-v1",
+        agentId: "main",
+        usage: { input: 4, output: 2 },
+        ...(version === 2 ? { costUsd: 0 } : {}),
+      }),
+    ]);
     expect(result).toMatchObject({
       shouldPruneTools: true,
       status: "proposed",

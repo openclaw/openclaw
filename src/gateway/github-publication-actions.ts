@@ -405,6 +405,9 @@ export async function performSessionGitHubAction(options: Options): Promise<void
                 : {
                     sha: params.expectedHeadCommit,
                     merge_method: params.action === "merge" ? params.mergeMethod : undefined,
+                    ...(params.action === "merge" && params.mergeMethod === "squash"
+                      ? { commit_title: before.title }
+                      : {}),
                     ...(attribution?.attribution?.trailers.length
                       ? { commit_message: attribution.attribution.trailers.join("\n") }
                       : {}),
