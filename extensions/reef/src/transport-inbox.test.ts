@@ -120,10 +120,7 @@ it("retains the previous cursor when asynchronous persistence fails", async () =
   const client = createClient(async (input) => {
     const after = Number(parseRequestUrl(input).searchParams.get("after"));
     requestedAfter.push(after);
-    return Response.json({
-      entries: after === 7 ? [receiptEntry(8)] : [],
-      cursor: 8,
-    });
+    return Response.json({ entries: after === 7 ? [receiptEntry(8)] : [], cursor: 8 });
   });
   const { inbox } = trackedInbox(client, undefined, {
     initialCursor: 7,
@@ -172,8 +169,7 @@ it("retries a parked live entry after a later separate frame completes", async (
   const socket = f.sockets[0]!;
   socket.emit("open");
   await vi.advanceTimersByTimeAsync(0);
-  expect(requestedAfter).toEqual([7]);
-  expect(attempts).toEqual([]);
+  expect({ requestedAfter, attempts }).toEqual({ requestedAfter: [7], attempts: [] });
 
   const notify = async (seq: number) => {
     const entry = receiptEntry(seq);
@@ -182,13 +178,10 @@ it("retries a parked live entry after a later separate frame completes", async (
     await vi.advanceTimersByTimeAsync(0);
   };
   await notify(8);
-  expect(attempts).toEqual([8]);
-  expect(f.persisted).toEqual([]);
+  expect([attempts, f.persisted]).toEqual([[8], []]);
 
   await notify(9);
-  expect(completed).toEqual([9]);
-  expect(socket.closed).toBe(false);
-  expect(f.errors).toEqual([]);
+  expect([completed, socket.closed, f.errors]).toEqual([[9], false, []]);
   // Continue through recovery even if the earlier frame's cursor barrier was lost.
   expect.soft(f.persisted).toEqual([]);
 
@@ -371,6 +364,5 @@ it("surfaces catch-up failures to channel diagnostics", async () => {
   sockets[0]!.emit("open");
   await running;
 
-  expect(states).toEqual(["connected", "disconnected"]);
-  expect(errors).toEqual(["relay catch-up failed"]);
+  expect([states, errors]).toEqual([["connected", "disconnected"], ["relay catch-up failed"]]);
 });

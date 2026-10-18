@@ -2,17 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
-import type {
-  OpenAsyncKeyedStoreOptions,
-  OpenKeyedStoreOptions,
-} from "openclaw/plugin-sdk/plugin-state-runtime";
-import {
-  createPluginStateKeyedStoreForTests as openStore,
-  createPluginStateKeyedStoreV2ForTests as openStoreV2,
-  createPluginStateSyncKeyedStoreForTests as openSyncStore,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { setReefRuntime } from "./runtime.js";
 import { reefSetupWizard } from "./setup.js";
@@ -23,6 +13,7 @@ import {
   loadReefIdentityBinding,
   reserveReefIdentityBinding,
 } from "./state.js";
+import { createRuntime } from "./state.test-support.js";
 import { ReefRelayError, ReefTransportClient } from "./transport.js";
 
 function createPrompter(handle = "molty", complete: boolean | "oauth" = false, accepted = false) {
@@ -82,15 +73,7 @@ afterEach(() => {
 });
 
 function installRuntime() {
-  const runtime = createPluginRuntimeMock();
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  const authority = { assertCurrent() {} };
-  runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
-    openSyncStore<T>("reef", { ...options, env });
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    openStore<T>("reef", { ...options, env });
-  runtime.state.openKeyedStoreV2 = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    openStoreV2<T>("reef", { ...options, env }, authority);
+  const runtime = createRuntime(stateDir);
   runtime.state.resolveStateDir = () => stateDir;
   setReefRuntime(runtime);
   return runtime;
@@ -173,10 +156,9 @@ it.each(
   ),
 )(
   "configures OAuth with $name (accepted: $accepted)",
-  async ({ cfg: input, outcome, rejection, accepted }) => {
+  async ({ cfg: original, outcome, rejection, accepted }) => {
     const { runtime, prompter } = await oauthFixture(accepted);
-    const cfg = structuredClone(input);
-    const original = structuredClone(cfg);
+    const cfg = structuredClone(original);
     const configuring = configure(cfg, prompter);
     if (outcome === "reject" || (outcome === "confirm" && !accepted)) {
       await expect(configuring).rejects.toThrow(
