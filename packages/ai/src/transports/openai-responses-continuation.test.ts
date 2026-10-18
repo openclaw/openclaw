@@ -1,3 +1,4 @@
+import { hash } from "node:crypto";
 import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
@@ -6,6 +7,8 @@ import {
   claimOpenAIResponsesHttpContinuation,
   recordResponsesContinuationState,
   resolveResponsesContinuationRequest as resolve,
+  responsesContinuationPrefixFingerprint,
+  responsesContinuationRequestFingerprint,
   type ResponsesContinuationRequest,
   type ResponsesContinuationState,
 } from "./openai-responses-continuation.js";
@@ -165,6 +168,58 @@ afterEach(() => {
 });
 
 describe("OpenAI Responses continuation", () => {
+  it("preserves persisted request and prefix hashes across JSON normalization and key order", () => {
+    const text = `${"x".repeat(17_000)}🦞 café e\u0301 \ud800\n`;
+    const encodedText = JSON.stringify(text);
+    const toJSON = vi.fn(() => ({ z: true, omitted: undefined, text, a: Infinity }));
+    const request = {
+      store: true,
+      provider_options: { toJSON },
+      model: "fixture-model",
+      metadata: { openclaw_turn_id: "turn-1", stable: "yes", openclaw_turn_attempt: "1" },
+      input: [firstUser],
+      tools: [],
+      instructions: "current instructions",
+      previous_response_id: "resp_previous",
+      omitted: undefined,
+    };
+    const requestHash = hash(
+      "sha256",
+      `{"metadata":{"stable":"yes"},"model":"fixture-model","provider_options":{"a":null,"text":${encodedText},"z":true},"store":true}`,
+    );
+    expect(responsesContinuationRequestFingerprint(request)).toBe(requestHash);
+    expect(toJSON).toHaveBeenCalledOnce();
+    expect(
+      responsesContinuationRequestFingerprint({
+        model: "fixture-model",
+        metadata: { stable: "yes" },
+        provider_options: { a: null, text, z: true },
+        store: true,
+      }),
+    ).toBe(requestHash);
+    expect(responsesContinuationRequestFingerprint({ ...request, store: false })).not.toBe(
+      requestHash,
+    );
+
+    const content = vi.fn(() => [{ type: "input_text", text, omitted: undefined }]);
+    const input = [{ type: "message", role: "user", content: { toJSON: content } }];
+    const prefixHash = hash(
+      "sha256",
+      `[{"content":[{"text":${encodedText},"type":"input_text"}],"role":"user","type":"message"},{"content":[{"text":"answer","type":"output_text"}],"phase":"final_answer","role":"assistant","type":"message"}]`,
+    );
+    expect(responsesContinuationPrefixFingerprint(input, [assistantOutput])).toBe(prefixHash);
+    expect(content).toHaveBeenCalledOnce();
+    expect(
+      responsesContinuationPrefixFingerprint([
+        { content: [{ text, type: "input_text" }], role: "user", type: "message" },
+        assistantOutput,
+      ]),
+    ).toBe(prefixHash);
+    expect(
+      responsesContinuationPrefixFingerprint([userInput(`${text}changed`)], [assistantOutput]),
+    ).not.toBe(prefixHash);
+  });
+
   it("matches JSON wire semantics and provider-only assistant replay metadata", () => {
     const continued = resolve(continuationState(), nextRequest());
     expect(continued).toMatchObject({

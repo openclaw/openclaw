@@ -34,10 +34,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "./attempt.model-diagnostic-events.js";
-import {
-  createModelObserver,
-  createModelPromptStats,
-} from "./attempt.model-diagnostic-observation.js";
+import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
 
 function wrap(
   streamFn: StreamFn,
@@ -459,7 +456,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
       small: "short",
       large: (
         Array.from({ length: 32 }, (_, code) => String.fromCharCode(code)).join("") +
-        '"\\日本語 café 🦞\ud800x\udfff'
+        '"\\日本語 café 🦞\ud800x\udfff\ud800\ud800\udfff\udfff /\u2028\u2029'
       ).repeat(128),
       omitted: undefined,
       array: [undefined, Number.NaN, Symbol("omitted")],
@@ -468,11 +465,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     };
     const messages = [{ role: "user" as const, content: "fixture", timestamp: 0, extra: value }];
     const tools = [{ name: "fixture", description: "fixture", parameters: Type.Object({}, value) }];
-    const measurePromptStats = createModelPromptStats();
     const observer = createModelObserver({
       streamContext: { messages, tools },
       capturePromptStats: true,
-      measurePromptStats,
     });
     observer.assignRequestPayloadBytes(value);
     observer.observeResponseChunk(Date.now(), value);
@@ -485,14 +480,17 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     });
     for (const text of ["changed 漢字\ud800".repeat(512), "short"]) {
       value.large = text;
-      expect(measurePromptStats({ messages, tools })).toMatchObject({
+      expect(
+        createModelObserver({ streamContext: { messages, tools }, capturePromptStats: true })
+          .promptStats,
+      ).toMatchObject({
         inputMessagesChars: JSON.stringify(messages).length,
         toolDefinitionsChars: JSON.stringify(tools).length,
       });
     }
   });
 
-  it("reuses prompt text sizes across appends while observing rewrites and compaction", async () => {
+  it("measures prompt sizes across appends, rewrites, and compaction", async () => {
     setDiagnosticsEnabledForProcess(true);
     const first = { role: "user" as const, content: 'prefix "漢字"\n'.repeat(512), timestamp: 1 };
     const second = { role: "user" as const, content: "append 🦞\n".repeat(512), timestamp: 2 };
@@ -520,25 +518,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
           toolDefinitionsChars: 2,
           totalChars: inputMessagesChars + 8,
         });
-        const stringify = vi.spyOn(JSON, "stringify");
-        try {
-          await wrapped({} as never, context);
-          // Unchanged prefix text must not be encoded again on an append.
-          if (
-            messages.length === 2 &&
-            messages[0] === first &&
-            first.content.startsWith("prefix")
-          ) {
-            expect(stringify.mock.calls.filter(([value]) => value === first.content)).toHaveLength(
-              0,
-            );
-            expect(stringify.mock.calls.filter(([value]) => value === second.content)).toHaveLength(
-              1,
-            );
-          }
-        } finally {
-          stringify.mockRestore();
-        }
+        await wrapped({} as never, context);
       }
     });
     expect(
@@ -567,7 +547,7 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
 
     expect(observer.promptStats?.inputMessagesChars).toBe(expectedChars);
     expect(observer.sizeTimingFields().requestPayloadBytes).toBe(expectedBytes);
-    expect(largestJsonString).toBeLessThan(64 * 1024);
+    expect(largestJsonString).toBeLessThan(8 * 1024);
   });
 
   it("orders semantic results between repeated request observations", async () => {
@@ -882,27 +862,67 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents stream proxy", () => {
     },
   );
 
-  it("skips prompt stat computation when diagnostics are disabled", async () => {
-    setDiagnosticsEnabledForProcess(false);
-    let promptInspected = false;
-    const streamContext = {
-      systemPrompt: "system",
-      get messages() {
-        promptInspected = true;
-        return [{ role: "user", content: "x", timestamp: 1 }];
-      },
-      get tools() {
-        promptInspected = true;
-        return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
-      },
-    };
-    const wrapped = wrap((() =>
-      completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
+  it.each(["disabled", "unobserved", "unrelated"] as const)(
+    "skips prompt stat computation when diagnostics are %s",
+    async (mode) => {
+      resetDiagnosticEventsForTest();
+      setDiagnosticsEnabledForProcess(mode !== "disabled");
+      if (mode === "unrelated") {
+        onInternalDiagnosticEvent(() => {}, { include: ["model.usage"] });
+      }
+      let promptInspected = false;
+      const streamContext = {
+        systemPrompt: "system",
+        get messages() {
+          promptInspected = true;
+          return [{ role: "user", content: "x", timestamp: 1 }];
+        },
+        get tools() {
+          promptInspected = true;
+          return [{ name: "lookup", description: "d", parameters: { type: "object" } }];
+        },
+      };
+      const wrapped = wrap((() =>
+        completedChunks({ type: "text_delta", delta: "ok" })) as unknown as StreamFn);
 
-    await drain(
-      wrapped({} as never, streamContext as never, {} as never) as AsyncIterable<unknown>,
-    );
+      await (await wrapped({} as never, streamContext as never, {})).result();
 
-    expect(promptInspected).toBe(false);
-  });
+      expect(promptInspected).toBe(false);
+    },
+  );
+
+  it.each(["model.call.started", "model.call.completed", "model.call.error"] as const)(
+    "preserves prompt stats for a listener interested only in %s",
+    async (type) => {
+      resetDiagnosticEventsForTest();
+      const events: DiagnosticEventPayload[] = [];
+      onTrustedInternalDiagnosticEvent((event) => events.push(event), { includeTrusted: [type] });
+      const wrapped = wrap(() => {
+        if (type === "model.call.error") {
+          throw new Error("synthetic provider failure");
+        }
+        const stream = createAssistantMessageEventStream();
+        stream.end(makeAssistantMessageFixture({ stopReason: "stop", errorMessage: undefined }));
+        return stream;
+      });
+      const context = { messages: [], systemPrompt: "system" };
+      if (type === "model.call.error") {
+        expect(() => wrapped({} as never, context)).toThrow("synthetic provider failure");
+      } else {
+        await (await wrapped({} as never, context)).result();
+      }
+      await waitForDiagnosticEventsDrained();
+      expect(events).toEqual([
+        expect.objectContaining({
+          type,
+          promptStats: {
+            inputMessagesCount: 0,
+            inputMessagesChars: 2,
+            systemPromptChars: 6,
+            totalChars: 8,
+          },
+        }),
+      ]);
+    },
+  );
 });
