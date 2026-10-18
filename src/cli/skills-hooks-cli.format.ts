@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTable,
@@ -38,8 +39,11 @@ export function formatCliRequirements(
   if (populated.length === 0) {
     return [];
   }
-  const formatStatus = (value: string, satisfied: boolean) =>
-    satisfied ? theme.success(`✓ ${value}`) : theme.error(`✗ ${value}`);
+  const formatStatus = (value: string, satisfied: boolean) => {
+    // Requirement values come from the skill or hook manifest, so they carry its untrusted bytes.
+    const text = sanitizeTerminalText(value);
+    return satisfied ? theme.success(`✓ ${text}`) : theme.error(`✗ ${text}`);
+  };
   return [
     "",
     theme.heading("Requirements:"),

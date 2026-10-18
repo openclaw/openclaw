@@ -8,6 +8,7 @@ import {
   decorativeEmoji,
   decorativePrefix,
 } from "../../packages/terminal-core/src/decorative-emoji.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   resolveAgentWorkspaceDir,
@@ -84,10 +85,13 @@ const HOOK_REQUIREMENT_GROUPS = [
 ] as const;
 
 function formatHookMissingRequirements(hook: HookStatusEntry, itemLimit?: number): string[] {
-  const formatEntries = (entries: string[]) =>
-    itemLimit === undefined
-      ? entries.join(", ")
-      : summarizeStringEntries({ entries, limit: itemLimit });
+  const formatEntries = (entries: string[]) => {
+    // Requirement entries come from the hook manifest, so they carry its untrusted bytes.
+    const sanitized = entries.map(sanitizeTerminalText);
+    return itemLimit === undefined
+      ? sanitized.join(", ")
+      : summarizeStringEntries({ entries: sanitized, limit: itemLimit });
+  };
   return HOOK_REQUIREMENT_GROUPS.filter(([key]) => hook.missing[key].length > 0).map(
     ([key]) => `${key}: ${formatEntries(hook.missing[key])}`,
   );
@@ -143,13 +147,15 @@ function formatHooksList(report: HookStatusReport, opts: HooksListOptions): stri
     sourceColumn: { key: "Source", header: "Source", minWidth: 12, flex: true },
     verbose: opts.verbose,
     rows: hooks.map((hook) => {
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      const name = theme.command(hook.name);
+      const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
+      const name = theme.command(sanitizeTerminalText(hook.name));
       return {
         Status: formatHookStatus(hook),
         Hook: emoji ? `${emoji} ${name}` : name,
-        Description: theme.muted(hook.description),
-        Source: hook.managedByPlugin ? `plugin:${hook.pluginId ?? "unknown"}` : hook.source,
+        Description: theme.muted(sanitizeTerminalText(hook.description)),
+        Source: hook.managedByPlugin
+          ? `plugin:${sanitizeTerminalText(hook.pluginId ?? "unknown")}`
+          : sanitizeTerminalText(hook.source),
         Missing: opts.verbose ? theme.warn(formatHookMissingSummary(hook)) : "",
       };
     }),
@@ -181,27 +187,27 @@ function formatHookInfo(
     );
   }
 
-  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
   const lines = [
-    `${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${formatHookStatus(hook, true)}`,
+    `${emoji ? `${emoji} ` : ""}${theme.heading(sanitizeTerminalText(hook.name))} ${formatHookStatus(hook, true)}`,
     "",
-    hook.description,
+    sanitizeTerminalText(hook.description),
     "",
     theme.heading("Details:"),
-    `${theme.muted("  Source:")} ${hook.source}${hook.managedByPlugin ? ` (${hook.pluginId ?? "unknown"})` : ""}`,
-    `${theme.muted("  Path:")} ${shortenHomePath(hook.filePath)}`,
-    `${theme.muted("  Handler:")} ${shortenHomePath(hook.handlerPath)}`,
+    `${theme.muted("  Source:")} ${sanitizeTerminalText(hook.source)}${hook.managedByPlugin ? ` (${sanitizeTerminalText(hook.pluginId ?? "unknown")})` : ""}`,
+    `${theme.muted("  Path:")} ${sanitizeTerminalText(shortenHomePath(hook.filePath))}`,
+    `${theme.muted("  Handler:")} ${sanitizeTerminalText(shortenHomePath(hook.handlerPath))}`,
   ];
   if (hook.homepage) {
-    lines.push(`${theme.muted("  Homepage:")} ${hook.homepage}`);
+    lines.push(`${theme.muted("  Homepage:")} ${sanitizeTerminalText(hook.homepage)}`);
   }
   if (hook.events.length > 0) {
-    lines.push(`${theme.muted("  Events:")} ${hook.events.join(", ")}`);
+    lines.push(`${theme.muted("  Events:")} ${hook.events.map(sanitizeTerminalText).join(", ")}`);
   }
   if (hook.unknownEvents.length > 0) {
     lines.push(
       theme.warn(
-        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.join(", ")}`,
+        `  ⚠ Event${hook.unknownEvents.length === 1 ? "" : "s"} not emitted by core (likely typo): ${hook.unknownEvents.map(sanitizeTerminalText).join(", ")}`,
       ),
     );
   }
@@ -256,8 +262,10 @@ function formatHooksCheck(report: HookStatusReport, opts: HooksReportOptions): s
       if (hook.blockedReason && hook.blockedReason !== "missing requirements") {
         reasons.unshift(hook.blockedReason);
       }
-      const emoji = hook.emoji ?? decorativeEmoji("🔗");
-      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
+      const emoji = sanitizeTerminalText(hook.emoji ?? decorativeEmoji("🔗"));
+      lines.push(
+        `  ${emoji ? `${emoji} ` : ""}${sanitizeTerminalText(hook.name)} - ${reasons.join("; ")}`,
+      );
     }
   }
 

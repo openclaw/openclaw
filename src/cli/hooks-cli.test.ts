@@ -147,6 +147,46 @@ describe("hooks cli formatting", () => {
     }
   });
 
+  it("strips terminal control sequences from hook manifest metadata", async () => {
+    const hostile = {
+      name: "Evil \u001b[31mRED\u001b[0m\u0007Hook",
+      description: "Desc \u001b[2Jwiped\u0007 tail",
+      emoji: "\u001b[2K",
+      homepage: "https://example.com/\u001b[2Jdocs",
+      events: ["command:\u001b[31mnew"],
+      unknownEvents: ["command:\u0007nwe"],
+      requirements: {
+        ...hook.requirements,
+        env: ["DEMO_\u001b[2JHOOK_TOKEN"],
+      },
+      missing: {
+        ...hook.missing,
+        env: ["DEMO_\u001b[2JHOOK_TOKEN"],
+      },
+    };
+
+    const listed = await list(hostile);
+    expect(listed).toContain("Evil REDHook");
+    expect(listed).toContain("Desc wiped tail");
+    expect(listed).toContain("DEMO_HOOK_TOKEN");
+    expect(listed).not.toContain("\u001b");
+    expect(listed).not.toContain("\u0007");
+
+    const detailed = await info(hostile);
+    expect(detailed).toContain("Evil REDHook");
+    expect(detailed).toContain("https://example.com/docs");
+    expect(detailed).toContain("command:new");
+    expect(detailed).toContain("command:nwe");
+    expect(detailed).toContain("DEMO_HOOK_TOKEN");
+    expect(detailed).not.toContain("\u001b");
+    expect(detailed).not.toContain("\u0007");
+
+    const checked = await runHooksReport(withHook({ ...hostile, loadable: false }), ["check"]);
+    expect(checked).toContain("Evil REDHook");
+    expect(checked).not.toContain("\u001b");
+    expect(checked).not.toContain("\u0007");
+  });
+
   it("classifies eventless hooks as not eligible in JSON check output", async () => {
     const output = JSON.parse(await runHooksReport(eventless, ["check", "--json"]));
 
