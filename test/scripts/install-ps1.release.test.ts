@@ -56,7 +56,12 @@ function createFailingNodeFixture(source: string): string {
   ].join("\n");
 }
 
-function createNativeUpgradeEnvironment(root: string, usableCommand: boolean): NodeJS.ProcessEnv {
+function createNativeUpgradeEnvironment(
+  root: string,
+  usableCommand: boolean,
+  gatewayStatusExitCode = 0,
+  gatewayRpcOk = true,
+): NodeJS.ProcessEnv {
   const bin = join(root, "bin");
   mkdirSync(bin, { recursive: true });
   const commandPath = join(root, "command.cjs");
@@ -97,10 +102,12 @@ if (kind === "git" && args.join(" ") === "--version") {
     console.log(JSON.stringify({ service: { loaded: true } }));
   } else if (args.join(" ") === "--version") {
     console.log("2026.9.19");
+  } else if (["gateway status --json", "gateway status --json --require-rpc"].includes(args.join(" "))) {
+    // Status diagnostics can succeed with a failed RPC unless the caller requires it.
+    console.log(JSON.stringify({ rpc: { ok: ${gatewayRpcOk} } }));
+    process.exit(${gatewayStatusExitCode} || (!${gatewayRpcOk} && args.includes("--require-rpc") ? 1 : 0));
   } else if (![
     "gateway install --force",
-    "gateway restart",
-    "gateway status --json",
     "doctor --fix --non-interactive",
   ].includes(args.join(" "))) {
     throw new Error("Unexpected OpenClaw command: " + args.join(" "));
@@ -1854,7 +1861,7 @@ try {
   });
 
   (process.platform === "win32" ? it : it.skip)(
-    "reports native upgrade PATH failures without losing caller or service/Doctor ordering",
+    "preserves native upgrade failures, RPC readiness, and service/Doctor ordering",
     () => {
       expect(bootstrapShells).toContain("powershell");
       for (const engine of bootstrapShells) {
@@ -1906,10 +1913,20 @@ try {
         const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
         expect(preflight.error, prerequisite).toBeUndefined();
         expect(preflight.status, prerequisite).toBe(0);
-        for (const usableCommand of [false, true]) {
+        for (const { usableCommand, gatewayStatusExitCode, gatewayRpcOk } of [
+          { usableCommand: false, gatewayStatusExitCode: 0, gatewayRpcOk: true },
+          { usableCommand: true, gatewayStatusExitCode: 0, gatewayRpcOk: false },
+          { usableCommand: true, gatewayStatusExitCode: 0, gatewayRpcOk: true },
+          { usableCommand: true, gatewayStatusExitCode: 17, gatewayRpcOk: true },
+        ]) {
           for (const mode of ["file", "scriptblock"]) {
             const root = harness.createTempDir("openclaw-native-upgrade-é-");
-            const env = createNativeUpgradeEnvironment(root, usableCommand);
+            const env = createNativeUpgradeEnvironment(
+              root,
+              usableCommand,
+              gatewayStatusExitCode,
+              gatewayRpcOk,
+            );
             const scriptPath = join(root, "install.ps1");
             writeFileSync(scriptPath, source);
             const command = [
@@ -1944,7 +1961,7 @@ try {
               timeout: 60_000,
             });
             const output = `${result.stdout}\n${result.stderr}`;
-            const label = `${engine} ${mode} usable=${usableCommand}: ${output}`;
+            const label = `${engine} ${mode} usable=${usableCommand} gatewayStatusExit=${gatewayStatusExitCode} rpcOk=${gatewayRpcOk}: ${output}`;
             expect(result.error, label).toBeUndefined();
             expect(result.status, label).toBe(!usableCommand && mode === "file" ? 1 : 0);
             expect(output, label).toContain("Existing OpenClaw installation detected");
@@ -1963,11 +1980,19 @@ try {
             if (usableCommand) {
               expect(output, label).toContain("Upgrade complete.");
               expect(output, label).not.toContain("CAUGHT_CANONICAL_INSTALL_FAILURE");
+              if (gatewayStatusExitCode !== 0 || !gatewayRpcOk) {
+                expect(output, label).toContain(
+                  "[!] Gateway service status check failed; continuing. Run: openclaw gateway status --json --require-rpc",
+                );
+                expect(output, label).not.toContain("[OK] Gateway service refreshed");
+              } else {
+                expect(output, label).toContain("[OK] Gateway service refreshed");
+                expect(output, label).not.toContain("Gateway service status check failed");
+              }
               expect(cliCalls, label).toEqual([
                 "daemon status --json",
                 "gateway install --force",
-                "gateway restart",
-                "gateway status --json",
+                "gateway status --json --require-rpc",
                 "doctor --fix --non-interactive",
                 "--version",
               ]);
