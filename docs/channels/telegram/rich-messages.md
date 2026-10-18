@@ -35,7 +35,7 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     This keeps model text away from Telegram's rich-Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text splits automatically across Telegram's limits. Tables over the 20-column limit fall back to a code block.
 
-    The authoring contract asks for Markdown for ordinary lists, bold, italic, inline code, and links, and reserves HTML islands for what Markdown cannot express (checkbox tasks, `<details>`, tables with caption/span attributes, `tg-*` islands, block media). Control UI deliberately escapes authored HTML, so a reply written with `<ul>`/`<li>` renders as literal tags there even though Telegram renders it natively.
+    The authoring contract asks for Markdown for ordinary lists, including checkbox tasks, bold, italic, inline code, and links, and reserves HTML islands for what Markdown cannot express (`<details>`, tables with caption/span attributes, `tg-*` islands, block media). Control UI deliberately escapes authored HTML, so a reply written with `<ul>`/`<li>` renders as literal tags there even though Telegram renders it natively.
 
     A table followed by a quote, list, heading, code block, or paragraph stays a separate block. Tables authored inside a quote or list stay inside that container, including when they are its final content.
 
