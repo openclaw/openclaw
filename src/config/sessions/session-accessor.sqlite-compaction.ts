@@ -140,6 +140,7 @@ function persistCompactionBoundary(
             }
           : undefined,
         undefined,
+        // Catching an inner failure and continuing requires a savepoint on PostgreSQL.
         database,
       );
       const committed = requireTranscriptEventAppendSnapshot(
