@@ -575,7 +575,7 @@ export type StatusSummary = Omit<
     };
     eventLoop?: NonNullable<SystemInfoResult["eventLoop"]>;
     processMemory?: NonNullable<SystemInfoResult["processMemory"]>;
-    pluginReload?: GatewayPluginReloadStatus & { newRunsBlocked: boolean };
+    pluginReload?: GatewayPluginReloadStatus;
     degradedSecretOwners?: Array<
       Omit<
         NonNullable<GatheredStatusSummary["degradedSecretOwners"]>[number],

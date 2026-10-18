@@ -33,7 +33,7 @@ installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
 
-it("serves active model and chat metadata throughout an admitted plugin call drain", async (ctx) => {
+it("reports plugin reload status and serves metadata throughout an admitted call drain", async (ctx) => {
   const { signal } = ctx;
   const fixture = await prepareInstanceBindingFixture(tempDirs.make("openclaw-drain-readers-"));
   const entered = createDeferredCore();
@@ -82,6 +82,14 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
           return { method, durationMs: performance.now() - start, payload: response.payload };
         }),
       );
+    const readReloadStatus = async () => {
+      const response = await rpcReq<{ pluginReload?: unknown }>(connected, "status", {
+        includeChannelSummary: false,
+      });
+      expect(response.ok).toBe(true);
+      return response.payload?.pluginReload;
+    };
+    expect(await readReloadStatus()).toBeUndefined();
     const before = await reads();
     const registry = getActivePluginRegistry();
     const record = registry?.plugins.find((plugin) => plugin.id === "instance-binding-probe");
@@ -172,6 +180,12 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
       ),
       signal,
     );
+    expect(await readReloadStatus()).toMatchObject({
+      phase: "reloading",
+      pluginIds: ["instance-binding-probe"],
+      deadlineAtMs: expect.any(Number),
+      reason: expect.stringContaining("new agent runs wait"),
+    });
     expect(instance.acceptingCalls).toBe(false);
     const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
@@ -185,6 +199,7 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     });
     expect(getActivePluginRegistry()).toBe(registry);
     expect(instance.acceptingCalls).toBe(true);
+    expect(await readReloadStatus()).toBeUndefined();
     const after = await reads();
     expect(after.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));
     console.info(
@@ -206,93 +221,6 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
     }
     socket?.close();
     await server.close({ reason: "plugin drain reader fixture complete" });
-    clearInstanceBindingProbeCoordinators();
-    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-  }
-}, 60_000);
-
-it("reports a parked plugins.reload --wait in status until the held call finishes", async (ctx) => {
-  // #173061: the wait blocked new agent runs while status still looked healthy.
-  const { signal } = ctx;
-  const fixture = await prepareInstanceBindingFixture(tempDirs.make("openclaw-reload-status-"));
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  fixture.coordinator.heldCall = { entered: entered.resolve, completion: release.promise };
-  const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-  const server = await startTestGatewayServer(claim, {
-    auth: { mode: "none" },
-    controlUiEnabled: false,
-    sidecarStartup: "start",
-  });
-  let socket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
-  let held: ReturnType<typeof rpcReq> | undefined;
-  let reloading: ReturnType<typeof rpcReq> | undefined;
-  let observation: { mockRestore: () => void } | undefined;
-  try {
-    await server.startupSettled;
-    socket = await connectWebchatClient({ port: claim.port, scopes: ["operator.admin"] });
-    const connected = socket;
-    const readPluginReload = async () => {
-      const response = await rpcReq<{ pluginReload?: unknown }>(connected, "status", {
-        includeChannelSummary: false,
-      });
-      expect(response.ok, JSON.stringify(response)).toBe(true);
-      return response.payload?.pluginReload;
-    };
-    expect(await readPluginReload()).toBeUndefined();
-    const record = getActivePluginRegistry()?.plugins.find(
-      (plugin) => plugin.id === "instance-binding-probe",
-    );
-    assert(record);
-    const instance = getPluginInstance(record);
-    assert(instance);
-    const parked = createDeferredCore();
-    const wait = instance.waitForRetainedWork.bind(instance);
-    observation = vi.spyOn(instance, "waitForRetainedWork").mockImplementation((...args) => {
-      const pending = wait(...args);
-      if (args[1]?.includeCalls) {
-        parked.resolve();
-      }
-      return pending;
-    });
-    held = rpcReq(connected, "instanceBinding.hold", {}, 120_000);
-    await withinTest(
-      awaitGateBeforeSettlement(entered.promise, held, "held plugin call settled before entry"),
-      signal,
-    );
-    const startedBeforeMs = Date.now();
-    reloading = rpcReq(
-      connected,
-      "plugins.reload",
-      { plugins: [{ pluginId: "instance-binding-probe" }], waitForDrain: true },
-      120_000,
-    );
-    await withinTest(
-      awaitGateBeforeSettlement(parked.promise, reloading, "plugins.reload settled before parking"),
-      signal,
-    );
-    const pending = await readPluginReload();
-    expect(pending).toEqual({
-      phase: "reloading",
-      pluginIds: ["instance-binding-probe"],
-      startedAtMs: expect.any(Number),
-      reason:
-        "Plugin replacement queued behind 1 admitted work item(s) for plugin instance-binding-probe; waiting until they finish or the request is cancelled.",
-      newRunsBlocked: true,
-    });
-    const { startedAtMs } = pending as { startedAtMs: number };
-    expect(startedAtMs).toBeGreaterThanOrEqual(startedBeforeMs);
-    expect(startedAtMs).toBeLessThanOrEqual(Date.now());
-    release.resolve();
-    expect((await held).ok).toBe(true);
-    expect(await reloading).toMatchObject({ ok: true });
-    expect(await readPluginReload()).toBeUndefined();
-  } finally {
-    release.resolve();
-    await Promise.allSettled([held, reloading]);
-    observation?.mockRestore();
-    socket?.close();
-    await server.close({ reason: "plugin reload status fixture complete" });
     clearInstanceBindingProbeCoordinators();
     delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
   }

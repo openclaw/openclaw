@@ -61,7 +61,6 @@ export function createGatewayPluginRuntimeGeneration(params: {
       }
       const reservation = { claim: createClaim(), settled: createDeferredCore() };
       const previousReloadStatus = reloadStatus;
-      let startedAtMs: number | undefined;
       latestReservation = reservation.claim;
       pending = reservation;
       const settle = (accepted: boolean) => {
@@ -80,9 +79,7 @@ export function createGatewayPluginRuntimeGeneration(params: {
         reject: () => settle(false),
         setReloadStatus: (status: GatewayPluginReloadStatus | undefined) => {
           if (latestReservation === reservation.claim) {
-            // Later stage reports keep the first start so status age covers the whole wait.
-            startedAtMs ??= Date.now();
-            reloadStatus = status && { ...status, startedAtMs };
+            reloadStatus = status;
           }
         },
         finishReload: (

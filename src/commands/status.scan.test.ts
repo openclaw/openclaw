@@ -145,8 +145,6 @@ describe("status scans", () => {
       pluginReload: {
         phase: "reloading",
         pluginIds: ["composio"],
-        startedAtMs: 1_000,
-        newRunsBlocked: true,
       },
     };
     const liveChannelStatus = { ok: true, accounts: [] };

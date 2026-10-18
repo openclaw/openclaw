@@ -134,6 +134,7 @@ describe("plugin drain recovery", () => {
               new Set(["codex"]),
               [instance],
               new PluginHostCleanupTimeoutError("plugin codex admitted work"),
+              60_000,
             ),
           );
         }

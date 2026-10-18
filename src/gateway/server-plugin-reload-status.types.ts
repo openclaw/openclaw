@@ -2,7 +2,6 @@
 export type GatewayPluginReloadStatus = Readonly<{
   phase: "reloading" | "recovering" | "failed";
   pluginIds: string[];
-  startedAtMs?: number;
   deadlineAtMs?: number;
   reason?: string;
 }>;

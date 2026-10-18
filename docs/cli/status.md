@@ -265,15 +265,13 @@ If local session state requires Doctor, status prints any installation drift to 
 ## Plugin reload
 
 While the Gateway replaces plugins, status shows a **Plugin reload** overview
-row and JSON includes `pluginReload`: `phase` (`reloading`, `recovering`, or
-`failed`), `pluginIds`, `startedAtMs` (omitted for `failed`), optional
-`deadlineAtMs` and `reason`, and `newRunsBlocked`. While `newRunsBlocked` is
-true, new agent runs, including isolated automation runs, wait for the
-replacement. A reload started with
-[`openclaw plugins reload <id> --wait`](/cli/plugins/uninstall-and-update) has
-no drain deadline; stop the waiting `openclaw plugins reload --wait` (Ctrl+C or
-end its process) to cancel it. A `failed` entry stays until a later reload of
-that plugin succeeds or the Gateway restarts.
+row naming the plugins, phase, and waiting or failure reason. JSON includes the
+owner's `pluginReload` record: `phase` (`reloading`, `recovering`, or `failed`),
+`pluginIds`, and optional `deadlineAtMs` and `reason`. New agent runs wait during
+replacement. Ordinary drains have a shared 60-second budget;
+[`plugins reload --wait`](/cli/plugins/uninstall-and-update) extends it to ten
+minutes and can be cancelled with Ctrl+C. A failed replacement stays visible
+until a later reload of that plugin succeeds or the Gateway restarts.
 
 ## Secrets
 
