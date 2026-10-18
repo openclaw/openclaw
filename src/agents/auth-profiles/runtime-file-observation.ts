@@ -9,7 +9,7 @@ import {
   refreshAuthProfileFileState,
   registerAuthProfileFileChangeListener,
 } from "./file-state.js";
-import type { createRuntimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
+import type { runtimeAuthProfileRowsCache } from "./runtime-persisted-rows.js";
 import type { OwnedRuntimeSnapshot } from "./runtime-snapshot-selection.js";
 import type { AuthProfileStore } from "./types.js";
 
@@ -20,7 +20,7 @@ export function createRuntimeAuthProfileFileObservation({
   invalidatePaths,
 }: {
   snapshots: ReadonlyMap<string, OwnedRuntimeSnapshot>;
-  rowsCache: ReturnType<typeof createRuntimeAuthProfileRowsCache>;
+  rowsCache: typeof runtimeAuthProfileRowsCache;
   invalidatePaths: (
     paths: readonly string[],
     isCurrent?: (databasePath: string) => boolean,

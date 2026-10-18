@@ -94,7 +94,7 @@ export async function selectUpdateRepairInference(params: {
     const selected = await verifySystemAgentInferenceWithFallback({
       requestingAgentId: owner,
       runtime: params.runtime,
-      deps: { readConfig: async () => params.config },
+      config: params.config,
       routePolicy: {
         expand: async (base) => {
           // Execution aliases identify the runner, not the configured model provider.

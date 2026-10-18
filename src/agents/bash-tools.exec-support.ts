@@ -1,8 +1,6 @@
-import type { ExecHost } from "../infra/exec-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import { EXEC_RETENTION_CAP_NOTE, renderExecOutputText } from "./bash-tools.exec-output.js";
-import type { ExecToolArgs } from "./bash-tools.exec-request-preparation.js";
 import { resolveExecTarget } from "./bash-tools.exec-runtime.js";
 import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type {
@@ -94,15 +92,16 @@ export function resolveExecElevatedMode(
   return elevated?.enabled && elevated.allowed && !defaults?.sandboxRequired ? defaultMode : "off";
 }
 
-export function createExecHostResolver(defaults?: ExecToolDefaults) {
-  return (params: ExecToolArgs): ExecHost => {
-    const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
-    return resolveExecTarget({
-      configuredTarget: defaults?.host,
-      requestedTarget: resolveRequestedExecTarget(params),
-      elevatedRequested: elevatedMode !== "off",
-      sandboxAvailable: Boolean(defaults?.sandbox),
-      sandboxRequired: defaults?.sandboxRequired,
-    }).effectiveHost;
-  };
+export function resolveExecHost(
+  params: { elevated?: boolean; host?: string; node?: string },
+  defaults?: ExecToolDefaults,
+) {
+  const elevatedMode = resolveExecElevatedMode(defaults, params.elevated);
+  return resolveExecTarget({
+    configuredTarget: defaults?.host,
+    requestedTarget: resolveRequestedExecTarget(params),
+    elevatedRequested: elevatedMode !== "off",
+    sandboxAvailable: Boolean(defaults?.sandbox),
+    sandboxRequired: defaults?.sandboxRequired,
+  }).effectiveHost;
 }

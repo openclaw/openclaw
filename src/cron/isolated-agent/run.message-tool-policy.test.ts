@@ -1,5 +1,5 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import {
   buildDefaultTestCliBackend,
@@ -235,10 +235,12 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           },
           "CLI run params",
         );
-        const [{ buildCliMcpGrantContext }, { createMessageTool }] = await Promise.all([
-          import("../../agents/cli-runner/mcp-grant-context.js"),
-          import("../../agents/tools/message-tool-execution.js"),
-        ]);
+        const [{ buildCliMcpGrantContext }, { createMessageTool }, messageActionRunner] =
+          await Promise.all([
+            import("../../agents/cli-runner/mcp-grant-context.js"),
+            import("../../agents/tools/message-tool-execution.js"),
+            import("../../infra/outbound/message-action-runner.js"),
+          ]);
         const grant = buildCliMcpGrantContext({
           run: runParams as never,
           config: {},
@@ -247,13 +249,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
           modelProvider: "openai",
           modelId: "gpt-5.4",
         });
-        const tool = createMessageTool({
-          agentAccountId: grant.accountId,
-          currentChannelProvider: grant.messageProvider,
-          requireExplicitTarget: grant.requireExplicitMessageTarget,
-          preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
-          getRuntimeConfig: () => ({}),
-          runMessageAction: async (input) => {
+        const action = vi
+          .spyOn(messageActionRunner, "runMessageAction")
+          .mockImplementation(async (input) => {
             messageActionInput = requireRecord(input, "message action input");
             return {
               kind: "send",
@@ -264,14 +262,24 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
               payload: {},
               dryRun: false,
             };
-          },
-        });
-        await tool.execute("call-1", {
-          action: "send",
-          channel: "telegram",
-          target: "123",
-          message: "done",
-        });
+          });
+        try {
+          const tool = createMessageTool({
+            config: {},
+            agentAccountId: grant.accountId,
+            currentChannelProvider: grant.messageProvider,
+            requireExplicitTarget: grant.requireExplicitMessageTarget,
+            preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+          });
+          await tool.execute("call-1", {
+            action: "send",
+            channel: "telegram",
+            target: "123",
+            message: "done",
+          });
+        } finally {
+          action.mockRestore();
+        }
         return messageResult([{ tool: "message", provider: "telegram", to: "123" }]);
       });
       const result = await runCronIsolatedAgentTurn(

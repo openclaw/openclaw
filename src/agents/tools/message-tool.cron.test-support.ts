@@ -103,13 +103,6 @@ export async function withCronMessageRun<T>(
               agentAccountId: "default",
               messageActionTurnCapability,
               admitScheduledInvocation: invocationPolicy.admit,
-              getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-              resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-                resolvedConfig: config,
-                diagnostics: [],
-                targetStatesByPath: {},
-                hadUnresolvedTargets: false,
-              }),
             });
             catalog.push(tool);
             return tool;

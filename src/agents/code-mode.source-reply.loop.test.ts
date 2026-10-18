@@ -248,13 +248,6 @@ describe("Code Mode explicit source-reply completion", () => {
         sessionId: scope.sessionId,
         agentId: scope.agentId,
         runId: harness.runId,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async () => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
       });
       const executeSource = source.execute;
       const sourceSpy = vi.spyOn(source, "execute").mockImplementation(async (...args) => {

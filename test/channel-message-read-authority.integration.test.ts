@@ -8,6 +8,7 @@ import { wrapToolWithGatewayCallerIdentity } from "../src/agents/tools/gateway-c
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelMessageActionContext } from "../src/channels/plugins/types.js";
+import * as commandSecretGateway from "../src/cli/command-secret-gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
@@ -157,15 +158,6 @@ function registerProvider(
   return record;
 }
 
-function commandSecrets(config: ChannelMessageActionContext["cfg"]) {
-  return {
-    resolvedConfig: config,
-    diagnostics: [],
-    targetStatesByPath: {},
-    hadUnresolvedTargets: false,
-  };
-}
-
 function confineProviderFetch(channel: "discord" | "slack", baseUrl: string): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -196,6 +188,7 @@ function confineProviderFetch(channel: "discord" | "slack", baseUrl: string): vo
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
   resetPluginRuntimeStateForTest();
@@ -347,20 +340,21 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
       if (usesMessageTool) {
         setRuntimeConfigSnapshot(actionContext.cfg, actionContext.cfg);
       }
+      if (usesMessageTool && mode === "tool-run-preparation-revoked") {
+        vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementationOnce(
+          async ({ config }) => {
+            run!.revoke();
+            return {
+              resolvedConfig: config,
+              diagnostics: [],
+              targetStatesByPath: {},
+              hadUnresolvedTargets: false,
+            };
+          },
+        );
+      }
       const messageTool = usesMessageTool
-        ? run!.wrapTool(
-            createMessageTool({
-              ...run!.toolOptions,
-              config: actionContext.cfg,
-              getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-              resolveCommandSecretRefsViaGateway: async ({ config }) => {
-                if (mode === "tool-run-preparation-revoked") {
-                  run!.revoke();
-                }
-                return commandSecrets(config);
-              },
-            }),
-          )
+        ? run!.wrapTool(createMessageTool({ ...run!.toolOptions, config: actionContext.cfg }))
         : undefined;
       const invocation = messageTool
         ? messageTool.execute("read-context", {
@@ -497,8 +491,6 @@ async function withSlackMetadataHarness(
       createMessageTool({
         ...run.toolOptions,
         config: cfg,
-        getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => commandSecrets(config),
       }),
     );
     await exercise({

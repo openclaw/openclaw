@@ -23,7 +23,7 @@ const config: OpenClawConfig = {
   },
 };
 type FallbackFixture = {
-  readConfig: () => Promise<OpenClawConfig>;
+  config: OpenClawConfig;
   resolveRoute?: typeof inferenceRoute.resolveSystemAgentConfiguredRouteFromConfig;
   hasAuth?: typeof modelAuth.hasAvailableAuthForProvider;
   verify?: (
@@ -50,14 +50,14 @@ function mockFallback(fixture: FallbackFixture) {
       .mockImplementation(fixture.verify);
     onTestFinished(() => verify.mockRestore());
   }
-  return { readConfig: fixture.readConfig };
+  return fixture.config;
 }
 
 const verifyConfigured = (fixture: FallbackFixture) =>
   verifySystemAgentInferenceWithFallback({
     requestingAgentId: "requester",
     runtime,
-    deps: mockFallback(fixture),
+    config: mockFallback(fixture),
   });
 const success = (modelRef: string) => ({ ok: true, modelRef, latencyMs: 1, binding: {} }) as never;
 
@@ -98,7 +98,7 @@ async function verifyAfterFailure(
   const attempts: Array<string | undefined> = [];
   const cfg = fallbackConfig(["requester", "alpha-other", ...(includeBeta ? ["beta"] : [])]);
   const result = await verifyConfigured({
-    readConfig: async () => cfg,
+    config: cfg,
     resolveRoute: async (_cfg, agentId) => route(agentId, agentId === "beta" ? "beta" : "alpha"),
     hasAuth: async () => true,
     verify: async ({ agentId }) => {
@@ -115,8 +115,8 @@ describe("system-agent inference fallback", () => {
   it("does not claim providers are unconfigured when no route can be verified", async () => {
     const result = await verifySystemAgentInferenceWithFallback({
       runtime,
-      deps: mockFallback({
-        readConfig: async () => ({}),
+      config: mockFallback({
+        config: {},
         resolveRoute: async () => null,
       }),
     });
@@ -139,8 +139,8 @@ describe("system-agent inference fallback", () => {
 
     const result = await verifySystemAgentInferenceWithFallback({
       runtime,
-      deps: mockFallback({
-        readConfig: async () => config,
+      config: mockFallback({
+        config,
         resolveRoute: async (_cfg, agentId) =>
           route(agentId, agentId === "requester" ? "zeta" : agentId),
         hasAuth: async () => true,
@@ -157,8 +157,8 @@ describe("system-agent inference fallback", () => {
     const result = await verifySystemAgentInferenceWithFallback({
       requestingAgentId: "requester",
       runtime,
-      deps: mockFallback({
-        readConfig: async () => ({}),
+      config: mockFallback({
+        config: {},
         resolveRoute: async (_cfg, agentId) => route(agentId, agentId),
         hasAuth: async () => true,
         verify: async ({ agentId }) => {
@@ -179,8 +179,8 @@ describe("system-agent inference fallback", () => {
     await verifySystemAgentInferenceWithFallback({
       requestingAgentId: "requester",
       runtime,
-      deps: mockFallback({
-        readConfig: async () => config,
+      config: mockFallback({
+        config,
         resolveRoute: async (_cfg, agentId) =>
           route(agentId, agentId === "requester" ? "zeta" : agentId),
         hasAuth: async ({ provider }) => provider !== "alpha",
@@ -199,7 +199,7 @@ describe("system-agent inference fallback", () => {
     const duplicateProviderConfig = fallbackConfig(["requester", "alpha-bad", "alpha-good"]);
 
     const result = await verifyConfigured({
-      readConfig: async () => duplicateProviderConfig,
+      config: duplicateProviderConfig,
       resolveRoute: async (_cfg, agentId) =>
         route(agentId, agentId === "requester" ? "zeta" : "alpha"),
       hasAuth: async ({ agentDir }) => agentDir?.endsWith("alpha-good") === true,
@@ -239,8 +239,7 @@ describe("system-agent inference fallback", () => {
     );
 
     const result = await verifyConfigured({
-      readConfig: async () =>
-        fallbackConfig(["requester", "beta", "alpha"], { agentId: "requester" }),
+      config: fallbackConfig(["requester", "beta", "alpha"], { agentId: "requester" }),
       resolveRoute: async (_cfg, agentId) =>
         route(agentId, agentId === "requester" ? "zeta" : agentId),
       hasAuth: async () => true,

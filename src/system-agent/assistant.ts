@@ -62,7 +62,6 @@ export async function planSystemAgentCommand(params: {
   history?: SystemAgentAssistantTurn[];
   pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
   if (!input) {
@@ -79,7 +78,6 @@ export async function planSystemAgentCommand(params: {
     systemPrompt: SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
     runIdPrefix: "openclaw-planner",
     verifiedInference: params.verifiedInference,
-    deps: params.deps,
     responseFormat: SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA,
   });
   const parsed = parseSystemAgentAssistantPlanText(result?.text);

@@ -92,7 +92,6 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { hasSessionControlAuthority } from "./tools/sessions-operator-authority.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
-import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSessionsTool } from "./tools/sessions-tool.js";
 import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
@@ -325,7 +324,6 @@ function* createOpenClawToolsSteps(
                   supportsImages: options.modelHasVision === true,
                 }
               : undefined,
-          deferAutoModelResolution: true,
         })
       : null;
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
@@ -617,28 +615,7 @@ function* createOpenClawToolsSteps(
       agentId: sessionAgentId,
       sessionReadScopeKey: options?.sessionReadScopeKey,
     }),
-    ...(embedded
-      ? []
-      : [
-          ...createHostedConversationTools(options, sessionAgentId),
-          // Keep the in-process caller so materialized agent roots retain their creation stamp.
-          createSessionsSendTool({
-            ...options,
-            requesterTurnRunId: options?.runId,
-            agentId: sessionAgentId,
-            // Match sessions_spawn: spawned children record the durable run
-            // session as spawnedBy, so the parent check must use the same key.
-            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
-            agentSessionId: options?.sessionId,
-            requesterOrigin: {
-              channel: options?.agentChannel,
-              accountId: options?.agentAccountId,
-              to: options?.currentMessagingTarget ?? options?.currentChannelId ?? options?.agentTo,
-              threadId: options?.currentThreadTs ?? options?.agentThreadId,
-            },
-            config: sessionConfig,
-          }),
-        ]),
+    ...(embedded ? [] : createHostedConversationTools(options, sessionAgentId, sessionConfig)),
     !embedded || options?.allowGatewaySubagentBinding === true
       ? createSessionsSpawnTool({
           ...options,

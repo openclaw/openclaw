@@ -118,7 +118,6 @@ it("resolves deferred model config before loading PDFs", async () => {
   const load = vi.spyOn(webMedia, "loadWebMediaRaw");
   const pdf = tool({
     config: { agents: { defaults: { model: { primary: FALLBACK } } } },
-    deferAutoModelResolution: true,
   });
   expect(resolve).not.toHaveBeenCalled();
   await expect(pdf.execute("pdf", { pdf: "/tmp/doc.pdf" })).rejects.toThrow(

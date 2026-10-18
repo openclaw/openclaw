@@ -20,6 +20,7 @@ import {
   resolveMessageActionTurnCapability as capability,
   revokeMessageActionTurnCapability as revoke,
 } from "../../gateway/message-action-turn-capability.js";
+import * as messageActionRunner from "../../infra/outbound/message-action-runner.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createReplyOperation } from "../../sessions/session-controller.js";
@@ -69,7 +70,7 @@ let runId: string;
 let index = 0;
 let sourceCurrent: boolean;
 const broadcast = vi.fn();
-const external = vi.fn<NonNullable<ToolOptions["runMessageAction"]>>();
+const external = vi.fn<typeof messageActionRunner.runMessageAction>();
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ scenario: "minimal" });
@@ -88,6 +89,7 @@ beforeEach(async () => {
   setRuntimeConfigSnapshot(config);
   sourceCurrent = true;
   broadcast.mockClear();
+  vi.spyOn(messageActionRunner, "runMessageAction").mockImplementation(external);
   external.mockReset().mockResolvedValue({
     kind: "action",
     action: "react",
@@ -188,14 +190,6 @@ function tool(overrides: ToolOptions = {}) {
     runId,
     currentChannelProvider: "webchat",
     messageActionTurnCapability: token,
-    runMessageAction: external,
-    getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-    resolveCommandSecretRefsViaGateway: async ({ config: inputConfig }) => ({
-      resolvedConfig: inputConfig,
-      diagnostics: [],
-      targetStatesByPath: {},
-      hadUnresolvedTargets: false,
-    }),
     ...overrides,
   });
 }
