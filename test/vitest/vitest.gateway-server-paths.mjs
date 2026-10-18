@@ -71,6 +71,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-availability.worker.test.ts",
   "src/gateway/github-publication-boundaries.test.ts",
   "src/gateway/github-publication-deferred-profile.test.ts",
+  "src/gateway/github-publication-draft.test.ts",
   "src/gateway/github-publication-git-index.test.ts",
   "src/gateway/github-publication-history.test.ts",
   "src/gateway/github-publication-hooks.test.ts",

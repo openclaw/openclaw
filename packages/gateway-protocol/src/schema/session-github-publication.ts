@@ -46,6 +46,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
+  draft: Type.Optional(Type.Boolean()),
   selection: Type.Optional(GitHubPublicationSelectionSchema),
 });
 
