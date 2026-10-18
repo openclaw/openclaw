@@ -21,59 +21,48 @@ import {
 
 describe("Mattermost monitor context", () => {
   it.each([
-    {
-      kind: "direct",
-      threadRootId: "root",
-      replyToId: "interaction:post:approve",
-      expected: "root",
-    },
-    { kind: "channel", threadRootId: undefined, replyToId: "other-post", expected: "other-post" },
-    {
-      kind: "direct",
-      threadRootId: undefined,
-      replyToId: "interaction:post:approve",
-      expected: undefined,
-    },
-  ] as const)("resolves $kind interaction reply $replyToId with root $threadRootId", (row) => {
-    const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
-      postId: "post",
-      actionId: "approve",
-    });
-    expect(interactionMessageSid).toBe("interaction:post:approve");
-    expect(
-      resolveMattermostInteractionReplyRootId({
-        ...row,
-        interactionMessageSid,
-        sourcePostId: "post",
-      }),
-    ).toBe(row.expected);
-  });
-
-  it.each([{ kind: "direct", replyToMode: "first", parentSessionKey: undefined }] as const)(
-    "starts $kind threads with the appropriate parent session",
-    (row) => {
-      expect(
-        resolveMattermostThreadSessionContext({
-          ...row,
-          baseSessionKey: "base",
-          postId: "post",
-        }),
-      ).toEqual({
-        effectiveReplyToId: "post",
-        sessionKey: "base:thread:post",
-        parentSessionKey: row.parentSessionKey,
+    ["direct", "root", "interaction:post:approve", "root"],
+    ["channel", undefined, "other-post", "other-post"],
+    ["direct", undefined, "interaction:post:approve", undefined],
+  ] as const)(
+    "resolves %s interaction with root %s and reply %s",
+    (kind, threadRootId, replyToId, expected) => {
+      const interactionMessageSid = buildMattermostButtonInteractionMessageSid({
+        postId: "post",
+        actionId: "approve",
       });
+      expect(interactionMessageSid).toBe("interaction:post:approve");
+      expect(
+        resolveMattermostInteractionReplyRootId({
+          kind,
+          threadRootId,
+          replyToId,
+          interactionMessageSid,
+          sourcePostId: "post",
+        }),
+      ).toBe(expected);
     },
   );
+
+  it("starts direct threads without a parent session", () => {
+    expect(
+      resolveMattermostThreadSessionContext({
+        kind: "direct",
+        replyToMode: "first",
+        baseSessionKey: "base",
+        postId: "post",
+      }),
+    ).toEqual({
+      effectiveReplyToId: "post",
+      sessionKey: "base:thread:post",
+      parentSessionKey: undefined,
+    });
+  });
 
   it("disables tool progress when streaming is off", () => {
     const resolvedAccount = resolveMattermostAccount({
       cfg: {
-        channels: {
-          mattermost: {
-            streaming: { mode: "off", progress: { toolProgress: true } },
-          },
-        },
+        channels: { mattermost: { streaming: { mode: "off", progress: { toolProgress: true } } } },
       },
       accountId: "default",
     });
@@ -115,12 +104,9 @@ describe("Mattermost monitor context", () => {
     ).toBe("interaction:post:select:openai/gpt-5");
   });
 
-  it.each([{ data: { channel_id: "channel" }, expected: "channel" }])(
-    "resolves reaction channel without a broadcast: $expected",
-    ({ data, expected }) => {
-      expect(resolveMattermostReactionChannelId({ data })).toBe(expected);
-    },
-  );
+  it("resolves reaction channel without a broadcast", () => {
+    expect(resolveMattermostReactionChannelId({ data: { channel_id: "channel" } })).toBe("channel");
+  });
 });
 
 function account(config: ResolvedMattermostAccount["config"]): ResolvedMattermostAccount {
@@ -143,43 +129,37 @@ const command = {
   storeAllowFrom: [],
   allowTextCommands: true,
   hasControlCommand: true,
+  senderId: "trusted-user",
+  senderName: "Trusted User",
 };
 const inbound = {
   cfg: {},
   senderId: "trusted-user",
   senderName: "Trusted User",
   channelId: "chan-1",
-  groupPolicy: "allowlist",
+  groupPolicy: "allowlist" as const,
   storeAllowFrom: ["user:attacker"],
   allowTextCommands: false,
   hasControlCommand: false,
-} as const;
+};
 
 describe("mattermost monitor authz", () => {
   beforeEach(() => setMattermostRuntime(createPluginRuntimeMock()));
 
   it.each([
-    {
-      kind: "direct",
-      config: { allowFrom: ["@trusted-user"], groupAllowFrom: ["@group-owner"] },
-      expected: ["trusted-user", "attacker"],
-    },
-    {
-      kind: "channel",
-      config: { allowFrom: ["@trusted-user"], groupAllowFrom: ["@group-owner"] },
-      expected: ["group-owner"],
-    },
-    { kind: "channel", config: { allowFrom: ["@trusted-user"] }, expected: ["trusted-user"] },
+    ["direct", ["@group-owner"], ["trusted-user", "attacker"]],
+    ["channel", ["@group-owner"], ["group-owner"]],
+    ["channel", undefined, ["trusted-user"]],
   ] as const)(
-    "isolates $kind admission from unrelated pairing and group entries: $expected",
-    async ({ kind, config, expected }) => {
+    "isolates %s admission with group list %s",
+    async (kind, groupAllowFrom, expected) => {
       const resolved = await resolveMattermostMonitorInboundAccess({
         ...inbound,
         storeAllowFrom: [...inbound.storeAllowFrom],
         kind,
         account: account({
-          allowFrom: [...config.allowFrom],
-          ...(config.groupAllowFrom ? { groupAllowFrom: [...config.groupAllowFrom] } : {}),
+          allowFrom: ["@trusted-user"],
+          ...(groupAllowFrom ? { groupAllowFrom: [...groupAllowFrom] } : {}),
         }),
       });
       expect(
@@ -199,33 +179,29 @@ describe("mattermost monitor authz", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(access.ingress.decision).toBe("block");
-    expect(access.commandAccess.authorized).toBe(false);
+    expect(access).toMatchObject({
+      ingress: { decision: "block" },
+      commandAccess: { authorized: false },
+    });
   });
 
-  it.each([
-    {
-      senderId: "attacker",
-      result: { ok: false, denyReason: "unauthorized", commandAuthorized: false },
-    },
-  ])("authorizes group commands by sender: $senderId", async ({ senderId, result }) => {
+  it("denies unauthorized group command senders", async () => {
     expect(
       await authorizeMattermostCommandInvocation({
         ...command,
         account: account({ groupPolicy: "allowlist", allowFrom: ["trusted-user"] }),
-        senderId,
-        senderName: senderId,
+        senderId: "attacker",
+        senderName: "attacker",
       }),
-    ).toMatchObject(result);
+    ).toMatchObject({ ok: false, denyReason: "unauthorized", commandAuthorized: false });
   });
 
   it("denies commands without trusted channel type", async () => {
-    const unknownChannel = { id: "dm-1", name: "", display_name: "" };
     expect(
       await authorizeMattermostCommandInvocation({
         ...command,
         channelId: "dm-1",
-        channelInfo: unknownChannel,
+        channelInfo: { id: "dm-1", name: "", display_name: "" },
         account: account({
           dmPolicy: "allowlist",
           groupPolicy: "open",
@@ -242,13 +218,10 @@ describe("mattermost monitor authz", () => {
   });
 
   it("authorizes group senders through static access groups", async () => {
-    const groupChannel = { ...channelInfo, type: "g" };
     expect(
       await authorizeMattermostCommandInvocation({
         ...command,
-        channelInfo: groupChannel,
-        senderId: "trusted-user",
-        senderName: "Trusted User",
+        channelInfo: { ...channelInfo, type: "g" },
         account: account({ groupPolicy: "allowlist", groupAllowFrom: ["accessGroup:oncall"] }),
         cfg: {
           accessGroups: {
@@ -278,7 +251,9 @@ describe("mattermost monitor authz", () => {
       eventKind: "reaction",
       mayPair: false,
     });
-    expect(access.ingress.decision).toBe("block");
-    expect(access.ingress.reasonCode).toBe("event_pairing_not_allowed");
+    expect(access.ingress).toMatchObject({
+      decision: "block",
+      reasonCode: "event_pairing_not_allowed",
+    });
   });
 });

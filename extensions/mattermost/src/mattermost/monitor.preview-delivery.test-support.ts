@@ -6,7 +6,7 @@ import type { OpenClawConfig, ReplyPayload } from "./runtime-api.js";
 
 type DraftStream = ReturnType<typeof import("./draft-stream.js").createMattermostDraftStream>;
 
-function createFinalDraft<T extends Partial<Omit<DraftStream, "deleteCurrentMessage">>>(
+export function createFinalDraft<T extends Partial<Omit<DraftStream, "deleteCurrentMessage">>>(
   overrides: T,
 ) {
   return {
@@ -57,179 +57,146 @@ export function registerMattermostPreviewDeliveryTests(harness: {
   ): OpenClawConfig => ({
     channels: { mattermost: { ...testConfig.channels?.mattermost, streaming, responsePrefix } },
   });
-  it.each([{ toolProgress: false, mode: "progress" }] as const)(
-    "keeps Mattermost $mode progress with tools $toolProgress and no label",
-    async ({ toolProgress, mode }) => {
-      let previewPostId: string | undefined = "preview-progress";
-      let visiblePreviewText: string | undefined;
-      const draftStream = {
-        update: vi.fn((text: string) => {
-          visiblePreviewText = text;
-        }),
-        flush: vi.fn(async () => {}),
-        postId: vi.fn(() => previewPostId),
-        clear: vi.fn(async () => {
-          previewPostId = undefined;
-          visiblePreviewText = undefined;
-        }),
-        discardPending: vi.fn(async () => {}),
-        seal: vi.fn(async () => {}),
-        deleteCurrentMessage: vi.fn(async () => {}),
-        forceNewMessage: vi.fn(async () => {}),
-        stop: vi.fn(async () => {}),
+  const dispatcher = () =>
+    mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
+  it("keeps Mattermost progress with tools disabled and no label", async () => {
+    let previewPostId: string | undefined = "preview-progress";
+    let visiblePreviewText: string | undefined;
+    const draftStream = {
+      update: vi.fn((text: string) => {
+        visiblePreviewText = text;
+      }),
+      flush: vi.fn(async () => {}),
+      postId: vi.fn(() => previewPostId),
+      clear: vi.fn(async () => {
+        previewPostId = undefined;
+        visiblePreviewText = undefined;
+      }),
+      discardPending: vi.fn(async () => {}),
+      seal: vi.fn(async () => {}),
+      deleteCurrentMessage: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+    };
+    mockState.createMattermostDraftStream.mockReturnValue(draftStream);
+    const progressConfig = withStreaming({
+      mode: "progress",
+      progress: { label: false, toolProgress: false },
+    });
+    mockState.runtimeCore = createRuntimeCore(progressConfig);
+    let firstPlanRetractionDeletes = 0;
+    let resumedProgress: string | undefined;
+    let secondPlanRetractionDeletes = 0;
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      const startTool = async (toolCallId: string, name: string) => {
+        const event = { toolCallId, name, phase: "start" as const };
+        await params.replyOptions?.onItemEvent?.(projectAgentToolActivity(event));
+        await params.replyOptions?.onToolStart?.(event);
       };
-      mockState.createMattermostDraftStream.mockReturnValue(draftStream);
-      const progressConfig = withStreaming({ mode, progress: { label: false, toolProgress } });
-      mockState.runtimeCore = createRuntimeCore(progressConfig);
-      let firstPlanRetractionDeletes = 0;
-      let resumedProgress: string | undefined;
-      let retractedProgress: string | undefined;
-      let secondPlanRetractionDeletes = 0;
-      mockState.dispatchInboundMessage.mockImplementation(async (params) => {
-        await params.replyOptions?.onPlanUpdate?.({
-          phase: "update",
-          steps: [{ step: "Inspect", status: "in_progress" }],
-        });
-        await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-        firstPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
-        await params.replyOptions?.onPlanUpdate?.({
-          phase: "update",
-          steps: [{ step: "Resume", status: "in_progress" }],
-        });
-        params.replyOptions?.onAssistantMessageStart?.();
-        await params.replyOptions?.onItemEvent?.({
-          itemId: "card-rejected",
-          kind: "tool",
-          name: "progress_card",
-          phase: "end",
-          status: "blocked",
-        });
-        params.replyOptions?.onAssistantMessageStart?.();
-        await params.replyOptions?.onItemEvent?.(
-          projectAgentToolActivity({ toolCallId: "exec-boundary", name: "exec", phase: "start" }),
-        );
-        await params.replyOptions?.onToolStart?.({
-          toolCallId: "exec-boundary",
-          name: "exec",
-          phase: "start",
-        });
-        resumedProgress = draftStream.update.mock.calls.at(-1)?.[0];
-        params.replyOptions?.onAssistantMessageStart?.();
-        await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-        retractedProgress = draftStream.update.mock.calls.at(-1)?.[0];
-        secondPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
-        await params.replyOptions?.onItemEvent?.(
-          projectAgentToolActivity({ toolCallId: "read-1", name: "read", phase: "start" }),
-        );
-        await params.replyOptions?.onToolStart?.({
-          toolCallId: "read-1",
-          name: "read",
-          phase: "start",
-        });
-        params.replyOptions?.onAssistantMessageStart?.();
-        params.replyOptions?.onReasoningEnd?.();
-        await params.replyOptions?.onItemEvent?.(
-          projectAgentToolActivity({ toolCallId: "exec-1", name: "exec", phase: "start" }),
-        );
-        await params.replyOptions?.onToolStart?.({
-          toolCallId: "exec-1",
-          name: "exec",
-          phase: "start",
-        });
-        await params.replyOptions?.onItemEvent?.({
-          itemId: "tool:read-1",
-          kind: "tool",
-          name: "read",
-          status: "completed",
-          progressText: "done",
-        });
-        await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
-        await params.replyOptions?.onReasoningEnd?.();
-        await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
-        await params.replyOptions?.onItemEvent?.({
-          itemId: "tool:read-1",
-          kind: "tool",
-          name: "read",
-          status: "completed",
-          progressText: "done",
-        });
-        await params.replyOptions?.onItemEvent?.({
-          itemId: "tool:failed-1",
-          kind: "tool",
-          name: "exec",
-          status: "failed",
-        });
-        await params.replyOptions?.onPlanUpdate?.({
-          phase: "update",
-          explanation: "1/2 complete",
-          steps: [
-            { step: "Inspect", status: "completed" },
-            { step: "Patch", status: "in_progress" },
-          ],
-        });
-        await params.replyOptions?.onPlanUpdate?.({
-          phase: "update",
-          explanation: "Progress updated",
-          steps: [],
-        });
-        await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
-        await params.replyOptions?.onObservedReplyDelivery?.();
-        await params.replyOptions?.onItemEvent?.({
-          itemId: "tool:late",
-          kind: "tool",
-          name: "exec",
-          status: "running",
-          progressText: "late progress",
-        });
-        expect(previewPostId).toBeUndefined();
-        expect(visiblePreviewText).toBeUndefined();
-        mockState.abortController?.abort();
+      await params.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [{ step: "Inspect", status: "in_progress" }],
       });
+      await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+      firstPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
+      await params.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        steps: [{ step: "Resume", status: "in_progress" }],
+      });
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "card-rejected",
+        kind: "tool",
+        name: "progress_card",
+        phase: "end",
+        status: "blocked",
+      });
+      params.replyOptions?.onAssistantMessageStart?.();
+      await startTool("exec-boundary", "exec");
+      resumedProgress = draftStream.update.mock.calls.at(-1)?.[0];
+      params.replyOptions?.onAssistantMessageStart?.();
+      await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+      secondPlanRetractionDeletes = draftStream.deleteCurrentMessage.mock.calls.length;
+      await startTool("read-1", "read");
+      params.replyOptions?.onAssistantMessageStart?.();
+      params.replyOptions?.onReasoningEnd?.();
+      await startTool("exec-1", "exec");
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool:read-1",
+        kind: "tool",
+        name: "read",
+        status: "completed",
+        progressText: "done",
+      });
+      await params.replyOptions?.onReasoningStream?.({ text: "Thinking" });
+      await params.replyOptions?.onReasoningEnd?.();
+      await params.replyOptions?.onReasoningStream?.({ text: "Checking" });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool:read-1",
+        kind: "tool",
+        name: "read",
+        status: "completed",
+        progressText: "done",
+      });
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool:failed-1",
+        kind: "tool",
+        name: "exec",
+        status: "failed",
+      });
+      await params.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "1/2 complete",
+        steps: [
+          { step: "Inspect", status: "completed" },
+          { step: "Patch", status: "in_progress" },
+        ],
+      });
+      await params.replyOptions?.onPlanUpdate?.({
+        phase: "update",
+        explanation: "Progress updated",
+        steps: [],
+      });
+      await params.replyOptions?.onPlanUpdate?.({ phase: "update", steps: [] });
+      await params.replyOptions?.onObservedReplyDelivery?.();
+      await params.replyOptions?.onItemEvent?.({
+        itemId: "tool:late",
+        kind: "tool",
+        name: "exec",
+        status: "running",
+        progressText: "late progress",
+      });
+      expect(previewPostId).toBeUndefined();
+      expect(visiblePreviewText).toBeUndefined();
+      mockState.abortController?.abort();
+    });
 
-      await receivePost({ id: "post-progress", message: "run this" }, progressConfig);
+    await receivePost({ id: "post-progress", message: "run this" }, progressConfig);
 
-      const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-      expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
-      expect(firstPlanRetractionDeletes).toBe(1);
-      expect(resumedProgress).toContain("▸ Resume");
-      if (toolProgress) {
-        expect(resumedProgress).toContain("blocked");
-        expect(resumedProgress).toContain("Exec");
-        expect(retractedProgress).not.toContain("Resume");
-        expect(retractedProgress).toContain("blocked");
-        expect(secondPlanRetractionDeletes).toBe(1);
-      } else {
-        expect(resumedProgress).not.toContain("blocked");
-        expect(resumedProgress).not.toContain("Exec");
-        expect(secondPlanRetractionDeletes).toBe(2);
-      }
-      const updates = draftStream.update.mock.calls.map((call) => call[0]);
-      if (toolProgress) {
-        expect(updates.at(-1)).toContain("Read");
-        expect(updates.at(-1)).toContain("done");
-        expect(updates.at(-1)).toContain("failed");
-      } else {
-        expect(updates[0]).toBe("▸ Inspect");
-        expect(updates.at(-1)).not.toContain("Read");
-        expect(updates.at(-1)).not.toContain("done");
-        expect(updates.join("\n")).not.toContain("failed");
-      }
-      if (mode === "progress") {
-        expect(updates.at(-1)).toContain("Checking");
-      }
-      expect(updates.at(-1)).not.toContain("ThinkingChecking");
-      expect(updates.some((text) => text.includes("1/2 complete"))).toBe(true);
-      expect(updates.some((text) => text.includes("✅ Inspect"))).toBe(true);
-      expect(updates.some((text) => text.includes("▸ Patch"))).toBe(true);
-      expect(updates.some((text) => text.includes("Progress updated"))).toBe(true);
-      expect(updates.join("\n")).not.toContain("<progress");
-    },
-  );
+    const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
+    expect(replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+    expect(firstPlanRetractionDeletes).toBe(1);
+    expect(resumedProgress).toContain("▸ Resume");
+    expect(resumedProgress).not.toContain("blocked");
+    expect(resumedProgress).not.toContain("Exec");
+    expect(secondPlanRetractionDeletes).toBe(2);
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates[0]).toBe("▸ Inspect");
+    expect(updates.at(-1)).not.toContain("Read");
+    expect(updates.at(-1)).not.toContain("done");
+    expect(updates.join("\n")).not.toContain("failed");
+    expect(updates.at(-1)).toContain("Checking");
+    expect(updates.at(-1)).not.toContain("ThinkingChecking");
+    expect(updates.some((text) => text.includes("1/2 complete"))).toBe(true);
+    expect(updates.some((text) => text.includes("✅ Inspect"))).toBe(true);
+    expect(updates.some((text) => text.includes("▸ Patch"))).toBe(true);
+    expect(updates.some((text) => text.includes("Progress updated"))).toBe(true);
+    expect(updates.join("\n")).not.toContain("<progress");
+  });
 
   it("finalizes only the current block when the terminal reply is cumulative", async () => {
     const blockConfig = withStreaming({ mode: "block" }, "[bot]");
-    const runtimeCore = createRuntimeCore(blockConfig);
-    mockState.runtimeCore = runtimeCore;
+    mockState.runtimeCore = createRuntimeCore(blockConfig);
     mockState.updateMattermostPost.mockRejectedValueOnce(new Error("edit failed"));
     const forceNewMessage = vi.fn(async () => {});
     const updateAssistantText = vi.fn();
@@ -252,22 +219,11 @@ export function registerMattermostPreviewDeliveryTests(harness: {
       await params.replyOptions?.onPartialReply?.({ text: "First block" });
       await params.replyOptions?.onAssistantMessageStart?.();
       await params.replyOptions?.onPartialReply?.({ text: "Second block" });
-      const dispatcherOptions =
-        mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
-      await dispatcherOptions?.deliver(
-        { text: "[bot] First block\n\nSecond block" },
-        { kind: "final" },
-      );
+      await dispatcher()?.deliver({ text: "[bot] First block\n\nSecond block" }, { kind: "final" });
       mockState.abortController?.abort();
     });
 
-    await receivePost(
-      {
-        id: "post-cumulative-final",
-        message: "stream two blocks",
-      },
-      blockConfig,
-    );
+    await receivePost({ id: "post-cumulative-final", message: "stream two blocks" }, blockConfig);
 
     expect(forceNewMessage).toHaveBeenCalledTimes(1);
     expect(updateAssistantText).toHaveBeenNthCalledWith(1, "[bot] First block");
@@ -283,58 +239,48 @@ export function registerMattermostPreviewDeliveryTests(harness: {
     );
   });
 
-  it.each([true])(
-    "records confirmed-preview participation when cleanup fails: %s",
-    async (cleanupFails) => {
-      const blockConfig = withStreaming({ mode: "block" });
-      mockState.runtimeCore = createRuntimeCore(blockConfig);
-      mockState.createMattermostDraftStream.mockReturnValue(
-        createFinalDraft({
-          discardPending: vi.fn(async () => {
-            if (cleanupFails) {
-              throw new Error("preview cleanup failed");
-            }
-          }),
-          resolveFinalText: vi.fn(() => ({
-            kind: "already-delivered" as const,
-            publishedParts: [{ messageId: "preview-sealed", content: "Only block" }],
-          })),
+  it("records confirmed-preview participation when cleanup fails", async () => {
+    const blockConfig = withStreaming({ mode: "block" });
+    mockState.runtimeCore = createRuntimeCore(blockConfig);
+    mockState.createMattermostDraftStream.mockReturnValue(
+      createFinalDraft({
+        discardPending: vi.fn(async () => {
+          throw new Error("preview cleanup failed");
         }),
-      );
-      mockState.dispatchInboundMessage.mockImplementation(async (params) => {
-        try {
-          await params.replyOptions?.onAssistantMessageStart?.();
-          await params.replyOptions?.onPartialReply?.({ text: "Only block" });
-          await params.replyOptions?.onAssistantMessageStart?.();
-          const dispatcherOptions =
-            mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
-          const delivered = dispatcherOptions?.deliver({ text: "Only block" }, { kind: "final" });
-          if (cleanupFails) {
-            await expect(delivered).rejects.toThrow("preview cleanup failed");
-          } else {
-            await delivered;
-          }
-        } finally {
-          mockState.abortController?.abort();
-        }
-      });
-      await receivePost(
-        {
-          id: "post-confirmed-preview",
-          message: "stream one block",
-          rootId: "thread-root-confirmed-preview",
-        },
-        blockConfig,
-      );
-      expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
-      expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
-        "default",
-        "chan-1",
-        "thread-root-confirmed-preview",
-        { agentId: "main" },
-      );
-    },
-  );
+        resolveFinalText: vi.fn(() => ({
+          kind: "already-delivered" as const,
+          publishedParts: [{ messageId: "preview-sealed", content: "Only block" }],
+        })),
+      }),
+    );
+    mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      try {
+        await params.replyOptions?.onAssistantMessageStart?.();
+        await params.replyOptions?.onPartialReply?.({ text: "Only block" });
+        await params.replyOptions?.onAssistantMessageStart?.();
+        await expect(
+          dispatcher()?.deliver({ text: "Only block" }, { kind: "final" }),
+        ).rejects.toThrow("preview cleanup failed");
+      } finally {
+        mockState.abortController?.abort();
+      }
+    });
+    await receivePost(
+      {
+        id: "post-confirmed-preview",
+        message: "stream one block",
+        rootId: "thread-root-confirmed-preview",
+      },
+      blockConfig,
+    );
+    expect(mockState.sendMessageMattermost).not.toHaveBeenCalled();
+    expect(mockState.recordMattermostThreadParticipation).toHaveBeenCalledWith(
+      "default",
+      "chan-1",
+      "thread-root-confirmed-preview",
+      { agentId: "main" },
+    );
+  });
 
   it("records participation when a later send step fails after a visible thread post", async () => {
     const progressConfig = withStreaming({ mode: "progress", progress: { toolProgress: true } });
@@ -360,10 +306,8 @@ export function registerMattermostPreviewDeliveryTests(harness: {
         };
       }) => {
         try {
-          const dispatcherOptions =
-            mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
           await expect(
-            dispatcherOptions?.deliver({ text: "Visible partial reply" }, { kind: "final" }),
+            dispatcher()?.deliver({ text: "Visible partial reply" }, { kind: "final" }),
           ).rejects.toThrow("bookkeeping failed");
           await dispatchParams.replyOptions?.onReasoningStream?.({ text: "late reasoning" });
         } finally {

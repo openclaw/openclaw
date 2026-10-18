@@ -1,4 +1,3 @@
-// Mattermost tests cover draft-preview delivery settlement.
 import { setImmediate } from "node:timers/promises";
 import {
   createChannelPartialDeliveryError,
@@ -46,13 +45,7 @@ function createConfirmedPreviewDelivery(messageId: string, content: string) {
   };
 }
 
-type DraftStreamMock = {
-  flush: () => Promise<void>;
-  postId: () => string | undefined;
-  clear: () => Promise<void>;
-  discardPending: () => Promise<void>;
-  seal: () => Promise<void>;
-};
+type DraftStreamMock = ReturnType<typeof createDraftStreamMock>;
 
 function createDraftStreamMock(postId: string | null | undefined = "preview-post-1") {
   return {
@@ -87,17 +80,29 @@ function createPreviewLifecycle(draftStream: DraftStreamMock) {
 
 type DraftDeliveryParams = Parameters<typeof deliverMattermostReplyWithDraftPreview>[0];
 
+let draftStream: ReturnType<typeof createDraftStreamMock>;
+let deliverFinal: ReturnType<typeof createDeliverFinalMock>;
+const nativeControls = () => ({
+  blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
+});
+const ttsPayload = () => ({
+  mediaUrl: "https://example.com/tts.mp3",
+  audioAsVoice: true,
+  spokenText: "Spoken answer",
+  ttsSupplement: { spokenText: "Spoken answer" },
+});
+
 function deliverDraftPreview(
-  params: Pick<DraftDeliveryParams, "payload" | "deliverPayload"> & {
-    draftStream: DraftStreamMock;
-  } & Partial<Omit<DraftDeliveryParams, "payload" | "deliverPayload">>,
+  params: Pick<DraftDeliveryParams, "payload"> & Partial<DraftDeliveryParams>,
 ) {
   return deliverMattermostReplyWithDraftPreview({
     info: { kind: "final" },
     kind: "channel",
     client: createMattermostClientMock(),
     resolvePreviewFinalText,
-    previewLifecycle: createPreviewLifecycle(params.draftStream),
+    previewLifecycle: createPreviewLifecycle(draftStream),
+    effectiveReplyToId: "thread-root-1",
+    deliverPayload: deliverFinal,
     logVerboseMessage: vi.fn(),
     ...params,
   });
@@ -105,21 +110,18 @@ function deliverDraftPreview(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  draftStream = createDraftStreamMock();
+  deliverFinal = createDeliverFinalMock();
   updateMattermostPostSpy.mockResolvedValue({ id: "patched" } as never);
 });
 
 describe("deliverMattermostReplyWithDraftPreview", () => {
   it("suppresses reasoning-prefixed finals before preview finalization", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
     const recordThreadParticipation = vi.fn();
 
     await deliverDraftPreview({
       payload: { text: "  \n > Reasoning:\n> _hidden_" } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
       recordThreadParticipation,
-      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).not.toHaveBeenCalled();
@@ -132,8 +134,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("records thread participation when a same-thread final finalizes the preview in place", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
     const recording = createDeferred<void>();
     const registered = createDeferred<void>();
     const recordThreadParticipation = vi.fn(() => {
@@ -144,10 +144,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
     const delivery = deliverDraftPreview({
       payload: { text: "All good" } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
       recordThreadParticipation,
-      deliverPayload: deliverFinal,
     }).finally(() => {
       settled = true;
     });
@@ -181,18 +178,11 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("delivers native value buttons instead of losing them in a preview edit", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-    const presentation = {
-      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
-    };
+    const presentation = nativeControls();
     const payload = { text: "Choose an option", presentation };
 
     await deliverDraftPreview({
       payload,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).toHaveBeenCalledExactlyOnceWith(payload);
@@ -201,19 +191,15 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("reports a final already published in a sealed preview generation", async () => {
-    const draftStream = createDraftStreamMock(null);
-    const deliverFinal = createDeliverFinalMock();
+    draftStream = createDraftStreamMock(null);
     const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
 
     const result = await deliverDraftPreview({
       payload: { text: "Already visible" },
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
       resolvePreviewFinalText: () => ({
         alreadyDelivered: true,
         confirmedDelivery,
       }),
-      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).not.toHaveBeenCalled();
@@ -226,19 +212,13 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("delivers unsent presentation controls after preview text was already published", async () => {
-    const draftStream = createDraftStreamMock(null);
-    const deliverFinal = createDeliverFinalMock();
+    const presentation = nativeControls();
+    draftStream = createDraftStreamMock(null);
     const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
-    const presentation = {
-      blocks: [{ type: "buttons" as const, buttons: [{ label: "Open", value: "open" }] }],
-    };
 
     const result = await deliverDraftPreview({
       payload: { text: "Already visible", presentation },
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
       resolvePreviewFinalText: () => ({ alreadyDelivered: true, confirmedDelivery }),
-      deliverPayload: deliverFinal,
     });
 
     expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({ text: "", presentation });
@@ -246,10 +226,10 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("still delivers media when the text is already published", async () => {
-    const draftStream = createDraftStreamMock(null);
+    draftStream = createDraftStreamMock(null);
     const confirmedDelivery = createConfirmedPreviewDelivery("sealed-post-1", "Already visible");
     const mediaReceipt = createMattermostReceipt("media-post-1", "media");
-    const deliverFinal = vi.fn(async () => ({
+    const deliverPayload = vi.fn(async () => ({
       outcome: "media" as const,
       messageIds: ["media-post-1"],
       receipt: mediaReceipt,
@@ -259,16 +239,14 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
     const result = await deliverDraftPreview({
       payload: { text: "Already visible", mediaUrl: "https://example.com/image.png" } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
+      deliverPayload,
       resolvePreviewFinalText: () => ({
         alreadyDelivered: true,
         confirmedDelivery,
       }),
-      deliverPayload: deliverFinal,
     });
 
-    expect(deliverFinal).toHaveBeenCalledExactlyOnceWith({
+    expect(deliverPayload).toHaveBeenCalledExactlyOnceWith({
       text: "",
       mediaUrl: "https://example.com/image.png",
     });
@@ -281,8 +259,6 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("keeps a finalized preview after a later warning when participation failed", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
     const previewLifecycle = createPreviewLifecycle(draftStream);
     const recordThreadParticipation = vi.fn(async () => {});
     recordThreadParticipation.mockRejectedValueOnce(new Error("participation failed"));
@@ -324,14 +300,11 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("preserves a completed normal send when preview cleanup fails", async () => {
-    const draftStream = createDraftStreamMock();
     draftStream.clear.mockRejectedValueOnce(new Error("preview cleanup failed"));
-    const deliverFinal = createDeliverFinalMock();
 
     const result = await deliverDraftPreview({
       payload: { text: "Already visible", replyToId: "reply-1" } as never,
-      draftStream,
-      deliverPayload: deliverFinal,
+      effectiveReplyToId: undefined,
     });
 
     expect(result).toMatchObject({
@@ -344,19 +317,8 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("keeps the preview and sends media-only for TTS supplement finals", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
-
     await deliverDraftPreview({
-      payload: {
-        mediaUrl: "https://example.com/tts.mp3",
-        audioAsVoice: true,
-        spokenText: "Spoken answer",
-        ttsSupplement: { spokenText: "Spoken answer" },
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      deliverPayload: deliverFinal,
+      payload: ttsPayload(),
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledWith(expect.anything(), "preview-post-1", {
@@ -364,18 +326,12 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
     expect(draftStream.discardPending).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(deliverFinal).toHaveBeenCalledWith({
-      mediaUrl: "https://example.com/tts.mp3",
-      audioAsVoice: true,
-      spokenText: "Spoken answer",
-      ttsSupplement: { spokenText: "Spoken answer" },
-    });
+    expect(deliverFinal).toHaveBeenCalledWith(ttsPayload());
   });
 
   it("retries an explicitly unsent TTS supplement through normal delivery", async () => {
-    const draftStream = createDraftStreamMock();
     let deliveryAttempt = 0;
-    const deliverFinal = vi.fn(async (payload: { text?: string }) => {
+    const deliverPayload = vi.fn(async (payload: { text?: string }) => {
       deliveryAttempt += 1;
       if (deliveryAttempt === 1) {
         return {
@@ -394,19 +350,12 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     });
 
     const result = await deliverDraftPreview({
-      payload: {
-        mediaUrl: "https://example.com/tts.mp3",
-        audioAsVoice: true,
-        spokenText: "Spoken answer",
-        ttsSupplement: { spokenText: "Spoken answer" },
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
-      deliverPayload: deliverFinal,
+      payload: ttsPayload(),
+      deliverPayload,
     });
 
-    expect(deliverFinal).toHaveBeenCalledTimes(2);
-    expect(deliverFinal.mock.calls[1]?.[0]).not.toHaveProperty("text");
+    expect(deliverPayload).toHaveBeenCalledTimes(2);
+    expect(deliverPayload.mock.calls[1]?.[0]).not.toHaveProperty("text");
     expect(result).toMatchObject({
       messageIds: ["patched", "supplement-post-1"],
       visibleReplySent: true,
@@ -415,9 +364,8 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("preserves the finalized preview receipt when its supplement fails after sending", async () => {
-    const draftStream = createDraftStreamMock();
     const mediaReceipt = createMattermostReceipt("media-post-1", "media");
-    const deliverFinal = vi.fn(async () => {
+    const deliverPayload = vi.fn(async () => {
       throw createChannelPartialDeliveryError(new Error("supplement bookkeeping failed"), {
         messageIds: ["media-post-1"],
         receipt: mediaReceipt,
@@ -429,15 +377,8 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
     let caught: unknown;
     try {
       await deliverDraftPreview({
-        payload: {
-          mediaUrl: "https://example.com/tts.mp3",
-          audioAsVoice: true,
-          spokenText: "Spoken answer",
-          ttsSupplement: { spokenText: "Spoken answer" },
-        } as never,
-        draftStream,
-        effectiveReplyToId: "thread-root-1",
-        deliverPayload: deliverFinal,
+        payload: ttsPayload(),
+        deliverPayload,
       });
     } catch (error: unknown) {
       caught = error;
@@ -455,36 +396,20 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   });
 
   it("falls back with visible text when TTS supplement preview finalization fails", async () => {
-    const draftStream = createDraftStreamMock();
-    const deliverFinal = createDeliverFinalMock();
     updateMattermostPostSpy.mockRejectedValueOnce(new Error("edit failed"));
 
     await deliverDraftPreview({
-      payload: {
-        mediaUrl: "https://example.com/tts.mp3",
-        audioAsVoice: true,
-        spokenText: "Spoken answer",
-        ttsSupplement: { spokenText: "Spoken answer" },
-      } as never,
-      draftStream,
-      effectiveReplyToId: "thread-root-1",
+      payload: ttsPayload(),
       resolvePreviewFinalText: (text) => ({
         editText: text?.trim(),
         deliveryText: "",
         alreadyDelivered: false,
       }),
-      deliverPayload: deliverFinal,
     });
 
     expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverFinal).toHaveBeenCalledWith({
-      text: "Spoken answer",
-      mediaUrl: "https://example.com/tts.mp3",
-      audioAsVoice: true,
-      spokenText: "Spoken answer",
-      ttsSupplement: { spokenText: "Spoken answer" },
-    });
+    expect(deliverFinal).toHaveBeenCalledWith({ ...ttsPayload(), text: "Spoken answer" });
   });
 });

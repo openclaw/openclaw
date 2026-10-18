@@ -30,6 +30,19 @@ vi.mock("./monitor-turn.js", () => ({ dispatchMattermostInboundTurn: dispatch })
 const undiciTimers: { reset: () => void } = createRequire(import.meta.url)(
   "undici/lib/util/timers.js",
 );
+const makePost = (id: string, message: string, create_at: number): MattermostPost => ({
+  id,
+  message,
+  create_at,
+  channel_id: "room",
+  user_id: "trusted",
+  ...(id === "root" ? {} : { root_id: "root" }),
+});
+type Handler = ReturnType<typeof createMattermostPostHandler>;
+const receive = (handler: Handler, post: MattermostPost, sender = "trusted") =>
+  handler(post as never, { data: { sender_name: sender } });
+const historyIds = (history: readonly { messageId?: string }[] | undefined) =>
+  history?.map((entry) => entry.messageId);
 
 describe("Mattermost server thread recovery through the post handler", () => {
   let directory: string;
@@ -61,29 +74,9 @@ describe("Mattermost server thread recovery through the post handler", () => {
     responseStatus = 200;
     responseError = undefined;
     posts = [
-      {
-        id: "root",
-        channel_id: "room",
-        user_id: "trusted",
-        message: "Next year France",
-        create_at: 10,
-      },
-      {
-        id: "reply",
-        root_id: "root",
-        channel_id: "room",
-        user_id: "trusted",
-        message: "remember that",
-        create_at: 20,
-      },
-      {
-        id: "current",
-        root_id: "root",
-        channel_id: "room",
-        user_id: "trusted",
-        message: "@bot where next year?",
-        create_at: 30,
-      },
+      makePost("root", "Next year France", 10),
+      makePost("reply", "remember that", 20),
+      makePost("current", "@bot where next year?", 30),
     ];
     server = createServer((request, response) => {
       void (async () => {
@@ -155,16 +148,13 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const account = resolveMattermostAccount({ cfg, accountId: "default" });
     const baseKey = `agent:main:mattermost:${kind}:room`;
     const sessionKey = `${baseKey}:thread:root`;
-    await upsertSessionEntry({
-      agentId: "main",
-      storePath: cfg.session?.store,
-      sessionKey,
-      entry: {
-        sessionId: "stored-session",
-        lifecycleRevision: "generation-1",
-        updatedAt: Date.now(),
-      },
-    });
+    const session = { agentId: "main", storePath: cfg.session?.store, sessionKey };
+    const rotate = (sessionId = "replacement", lifecycleRevision = "generation-2") =>
+      upsertSessionEntry({
+        ...session,
+        entry: { sessionId, lifecycleRevision, updatedAt: Date.now() },
+      });
+    await rotate("stored-session", "generation-1");
     const monitor = {
       cfg,
       account,
@@ -219,13 +209,6 @@ describe("Mattermost server thread recovery through the post handler", () => {
       currentPostId: "current",
       currentPostTimestamp: 30,
     };
-    const rotate = (sessionId = "replacement", lifecycleRevision = "generation-2") =>
-      upsertSessionEntry({
-        agentId: "main",
-        storePath: cfg.session?.store,
-        sessionKey,
-        entry: { sessionId, lifecycleRevision, updatedAt: Date.now() },
-      });
     return {
       handler: createMattermostPostHandler(monitor),
       monitor,
@@ -234,12 +217,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
       recover,
       turn,
       rotate,
-      remove: () =>
-        deleteSessionEntry({
-          agentId: "main",
-          storePath: cfg.session?.store,
-          sessionKey,
-        }),
+      remove: () => deleteSessionEntry(session),
     };
   }
 
@@ -249,18 +227,19 @@ describe("Mattermost server thread recovery through the post handler", () => {
     f.monitor.account.config.groupAllowFrom = ["trusted"];
     const handler = createMattermostPostHandler(f.monitor);
     const { entered, release } = holdResponse();
-    const pending = handler(posts[2]! as never, { data: { sender_name: "trusted" } });
+    const pending = receive(handler, posts[2]!);
     await entered.promise;
     for (let index = 0; index < 3; index++) {
-      await handler(
+      await receive(
+        handler,
         {
           ...posts[1]!,
           id: `later-${index}`,
           user_id: "denied",
           message: `later live fact ${index}`,
           create_at: 35 + index,
-        } as never,
-        { data: { sender_name: "denied" } },
+        },
+        "denied",
       );
     }
     release.resolve();
@@ -268,13 +247,8 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const first = dispatch.mock.calls[0]?.[1].ctxPayload;
     expect(first.Body).toContain("Next year France");
     expect(first.Body).not.toContain("later live fact");
-    expect(first.InboundHistory?.map((entry: { messageId: string }) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-    ]);
-    await handler({ ...posts[2]!, id: "next-turn", create_at: 40 } as never, {
-      data: { sender_name: "trusted" },
-    });
+    expect(historyIds(first.InboundHistory)).toEqual(["root", "reply"]);
+    await receive(handler, { ...posts[2]!, id: "next-turn", create_at: 40 });
     expect(dispatch.mock.calls[1]?.[1].ctxPayload.Body).toContain("later live fact");
     expect(requests).toHaveLength(1);
   });
@@ -284,23 +258,20 @@ describe("Mattermost server thread recovery through the post handler", () => {
     const newer = { ...posts[2]!, id: "newer-trigger", create_at: 50 };
     posts.push({ ...posts[1]!, id: "middle", create_at: 40 }, newer);
     const { entered, release } = holdResponse();
-    const first = f.handler(newer as never, { data: { sender_name: "trusted" } });
+    const first = receive(f.handler, newer);
     await entered.promise;
     const olderReady = createDeferred<void>();
     vi.mocked(f.monitor.core.channel.activity.record).mockImplementationOnce(() => {
       olderReady.resolve();
     });
-    const older = f.handler(posts[2]! as never, { data: { sender_name: "trusted" } });
+    const older = receive(f.handler, posts[2]!);
     await olderReady.promise;
     release.resolve();
     await Promise.all([first, older]);
     const context = dispatch.mock.calls.find(
       (call) => call[1].ctxPayload.MessageSid === "current",
     )?.[1].ctxPayload;
-    expect(context.InboundHistory?.map((entry: { messageId: string }) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-    ]);
+    expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
     expect(requests).toHaveLength(1);
   });
 
@@ -346,19 +317,16 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.get(f.sessionKey)?.[0]?.body).toBe("Next year France");
   });
 
-  it.each(["allowlist_quote"] as const)(
-    "uses shared ingress and %s visibility without pairing",
-    async (mode) => {
-      const f = await setup("channel");
-      f.monitor.groupPolicy = "allowlist";
-      f.monitor.account.config.allowFrom = ["trusted"];
-      f.monitor.cfg.channels!.mattermost!.contextVisibility = mode;
-      posts[1]!.user_id = "denied";
-      posts[1]!.message = "denied sender history";
-      await f.recover(f.turn);
-      expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual(["root"]);
-    },
-  );
+  it("uses shared ingress and allowlist_quote visibility without pairing", async () => {
+    const f = await setup("channel");
+    f.monitor.groupPolicy = "allowlist";
+    f.monitor.account.config.allowFrom = ["trusted"];
+    f.monitor.cfg.channels!.mattermost!.contextVisibility = "allowlist_quote";
+    posts[1]!.user_id = "denied";
+    posts[1]!.message = "denied sender history";
+    await f.recover(f.turn);
+    expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root"]);
+  });
 
   it("keeps directory lookup opt-in, bounded to one request, and failure-deny", async () => {
     const f = await setup("channel");
@@ -441,10 +409,7 @@ describe("Mattermost server thread recovery through the post handler", () => {
       { ...posts[1]!, id: "system", type: "system_join_channel" },
     );
     await f.recover(f.turn);
-    expect(f.histories.get(f.sessionKey)?.map((entry) => entry.messageId)).toEqual([
-      "root",
-      "reply",
-    ]);
+    expect(historyIds(f.histories.get(f.sessionKey))).toEqual(["root", "reply"]);
     const query = new URL(requests[0]!, baseUrl).searchParams;
     expect(query.get("fromPost")).toBe("current");
     expect(query.get("fromCreateAt")).toBe("30");
@@ -462,17 +427,12 @@ describe("Mattermost server thread recovery through the post handler", () => {
     expect(f.histories.size).toBe(0);
   });
 
-  it.each(["direct"] as const)(
-    "recovers cold %s thread context in chronological order, excluding the trigger",
-    async (kind) => {
-      const { handler } = await setup(kind);
-      await handler(posts[2]! as never, { data: { sender_name: "trusted" } });
-      const context = dispatch.mock.calls[0]?.[1].ctxPayload;
-      expect(
-        context.InboundHistory?.map((entry: { messageId: string }) => entry.messageId),
-      ).toEqual(["root", "reply"]);
-      expect(context.Body).toContain("Next year France");
-      expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
-    },
-  );
+  it("recovers cold direct thread context in chronological order, excluding the trigger", async () => {
+    const { handler } = await setup("direct");
+    await receive(handler, posts[2]!);
+    const context = dispatch.mock.calls[0]?.[1].ctxPayload;
+    expect(historyIds(context.InboundHistory)).toEqual(["root", "reply"]);
+    expect(context.Body).toContain("Next year France");
+    expect(requests.filter((url) => url.includes("/thread"))).toHaveLength(1);
+  });
 });

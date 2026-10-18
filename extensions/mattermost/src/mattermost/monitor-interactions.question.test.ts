@@ -2,22 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveOptionMock = vi.hoisted(() => vi.fn());
 const authorizeMock = vi.hoisted(() => vi.fn());
-type CapturedDispatch = (opts: never) => Promise<{
-  update?: { message: string; props?: Record<string, unknown> };
-  ephemeral_text?: string;
-} | null>;
-type CapturedAuthorize = (opts: never) => Promise<{
-  ok: boolean;
-  response?: { update?: unknown; ephemeral_text?: string };
-}>;
+type InteractionOptions = Parameters<
+  typeof import("./interactions.js").createMattermostInteractionHandler
+>[0];
 const createInteractionHandlerMock = vi.hoisted(() =>
-  vi.fn(
-    (_options: {
-      handleInteraction?: CapturedDispatch;
-      authorizeButtonClick?: CapturedAuthorize;
-    }) =>
-      async () => {},
-  ),
+  vi.fn((_options: InteractionOptions) => async () => {}),
 );
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn(() => () => {}));
 
@@ -43,10 +32,10 @@ const QUESTION_ID = "ask_0123456789abcdef0123456789abcdef";
 
 const resolveChannelInfoMock = vi.fn(async () => ({ id: "chan-1", type: "O" }));
 
-function captureDispatcher(overrides?: {
-  error?: (message: string) => void;
-  handleModelPickerInteraction?: ReturnType<typeof vi.fn>;
-}) {
+const error = vi.fn();
+const picker = vi.fn(async (): Promise<{ ephemeral_text: string } | null> => null);
+const denied = { ok: false, denyReason: "channel-no-allowlist", roomLabel: "#town-square" };
+function captureHandlers() {
   registerMattermostInteractions({
     monitor: {
       account: { accountId: "main" },
@@ -55,28 +44,23 @@ function captureDispatcher(overrides?: {
       core: { channel: { commands: { shouldHandleTextCommands: () => true } } },
       pairing: { readAllowFromStore: async () => [] },
       resources: { resolveChannelInfo: resolveChannelInfoMock },
-      runtime: { error: overrides?.error ?? vi.fn(), log: vi.fn() },
+      runtime: { error, log: vi.fn() },
       botUserId: "bot",
     },
     interactionPath: "/mattermost/interactions/main",
     allowedSourceIps: ["127.0.0.1"],
-    handleModelPickerInteraction:
-      overrides?.handleModelPickerInteraction ?? vi.fn(async () => null),
+    handleModelPickerInteraction: picker,
   } as never);
   const options = createInteractionHandlerMock.mock.calls[0]?.[0];
-  if (!options?.handleInteraction) {
-    throw new Error("registration did not supply a handleInteraction");
+  if (!options?.handleInteraction || !options.authorizeButtonClick) {
+    throw new Error("registration did not supply interaction handlers");
   }
-  return options.handleInteraction;
+  return { dispatch: options.handleInteraction, authorize: options.authorizeButtonClick };
 }
-
-function captureButtonAuthorizer() {
-  captureDispatcher();
-  const options = createInteractionHandlerMock.mock.calls[0]?.[0];
-  if (!options?.authorizeButtonClick) {
-    throw new Error("registration did not supply an authorizeButtonClick");
-  }
-  return options.authorizeButtonClick;
+let handlers: ReturnType<typeof captureHandlers>;
+function expectPrompt(response: Awaited<ReturnType<typeof handlers.dispatch>>, text: string) {
+  expect(response?.ephemeral_text).toBe(text);
+  expect(response?.update).toBeUndefined();
 }
 
 function questionInteraction(context: Record<string, unknown>) {
@@ -110,13 +94,14 @@ describe("mattermost question interactions", () => {
     authorizeMock.mockResolvedValue({ ok: true, roomLabel: "#town-square" });
     resolveChannelInfoMock.mockClear();
     createInteractionHandlerMock.mockClear();
+    error.mockReset();
+    picker.mockReset();
+    picker.mockResolvedValue(null);
+    handlers = captureHandlers();
   });
 
   it("submits the clicked option to the question Gateway and retires the prompt", async () => {
-    const picker = vi.fn(async () => null);
-    const response = await captureDispatcher({ handleModelPickerInteraction: picker })(
-      questionInteraction(questionContext),
-    );
+    const response = await handlers.dispatch(questionInteraction(questionContext));
 
     expect(resolveOptionMock).toHaveBeenCalledTimes(1);
     expect(resolveOptionMock.mock.calls[0]?.[0]).toMatchObject({
@@ -139,82 +124,65 @@ describe("mattermost question interactions", () => {
   });
 
   it("refuses a click current policy denies, before any Gateway I/O", async () => {
-    authorizeMock.mockResolvedValue({
-      ok: false,
-      denyReason: "channel-no-allowlist",
-      roomLabel: "#town-square",
-    });
+    authorizeMock.mockResolvedValue(denied);
 
-    const response = await captureDispatcher()(questionInteraction(questionContext));
+    const response = await handlers.dispatch(questionInteraction(questionContext));
 
     expect(resolveOptionMock).not.toHaveBeenCalled();
-    expect(response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
-    expect(response?.update).toBeUndefined();
+    expectPrompt(response, "OpenClaw ignored this action for #town-square.");
   });
 
-  // Mattermost re-issues an attachment's action ids whenever a response updates
-  // the post, and every button already rendered on it then fails as an invalid
-  // id. One outsider's refused click would otherwise retire the whole prompt.
+  // Updating a denied click would invalidate every rendered button for other users.
   it("leaves the post untouched when the transport refuses a click", async () => {
-    authorizeMock.mockResolvedValue({
-      ok: false,
-      denyReason: "channel-no-allowlist",
-      roomLabel: "#town-square",
-    });
+    authorizeMock.mockResolvedValue(denied);
 
-    const result = await captureButtonAuthorizer()({
+    const result = await handlers.authorize({
       payload: { channel_id: "chan-1", user_id: "mallory", user_name: "mallory" },
       post: { id: "post-1", message: "Which environment?", props: { attachments: [] } },
     } as never);
 
     expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected transport authorization to refuse the click");
+    }
     expect(result.response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
     expect(result.response?.update).toBeUndefined();
   });
 
   it("refuses a click whose access is lost while the Gateway read is in flight", async () => {
-    // The resolver hands back "denied" when the authorize hook it calls after the
-    // read says no; the prompt must survive that exactly like an entry denial.
+    // Re-check authority after the Gateway read, before its write.
     resolveOptionMock.mockImplementation(async (params: { authorize?: () => unknown }) => {
-      authorizeMock.mockResolvedValue({
-        ok: false,
-        denyReason: "channel-no-allowlist",
-        roomLabel: "#town-square",
-      });
+      authorizeMock.mockResolvedValue(denied);
       return (await params.authorize?.()) === false ? { status: "denied" } : { status: "answered" };
     });
 
-    const response = await captureDispatcher()(questionInteraction(questionContext));
+    const response = await handlers.dispatch(questionInteraction(questionContext));
 
-    expect(response?.ephemeral_text).toBe("OpenClaw ignored this action for #town-square.");
-    expect(response?.update).toBeUndefined();
+    expectPrompt(response, "OpenClaw ignored this action for #town-square.");
   });
 
   it("keeps the prompt when the question already reached a terminal state", async () => {
     // The resolver reports both an answered and an expired question this way.
     resolveOptionMock.mockResolvedValue({ status: "already-terminal", reason: "already-terminal" });
 
-    const response = await captureDispatcher()(questionInteraction(questionContext));
+    const response = await handlers.dispatch(questionInteraction(questionContext));
 
-    expect(response?.ephemeral_text).toBe("This question was already answered.");
-    expect(response?.update).toBeUndefined();
+    expectPrompt(response, "This question was already answered.");
   });
 
   it("keeps the prompt when the Gateway rejects the answer, and tells the clicker", async () => {
-    const error = vi.fn();
     resolveOptionMock.mockRejectedValue(new Error("gateway down"));
 
-    const response = await captureDispatcher({ error })(questionInteraction(questionContext));
+    const response = await handlers.dispatch(questionInteraction(questionContext));
 
-    expect(response?.ephemeral_text).toBe("Could not submit this answer.");
-    expect(response?.update).toBeUndefined();
+    expectPrompt(response, "Could not submit this answer.");
     expect(error).toHaveBeenCalledWith(expect.stringContaining("gateway down"));
   });
 
   it("still hands every other click to the model picker", async () => {
-    const picker = vi.fn(async () => ({ ephemeral_text: "picker" }));
+    picker.mockResolvedValue({ ephemeral_text: "picker" });
 
-    const response = await captureDispatcher({ handleModelPickerInteraction: picker })(
+    const response = await handlers.dispatch(
       questionInteraction({ callback_data: "deploy_approve" }),
     );
 
