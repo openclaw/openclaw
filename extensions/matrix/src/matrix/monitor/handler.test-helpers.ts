@@ -94,32 +94,6 @@ export function createMatrixHandlerTestHarness(options: MatrixHandlerTestHarness
       markDispatchIdle: () => {},
       markRunComplete: () => {},
     }));
-  const dispatchInboundMessageWithBufferedDispatcher = async ({
-    ctx,
-    cfg,
-    dispatcherOptions,
-    replyOptions,
-  }: Parameters<ReplyRuntime["dispatchInboundMessageWithBufferedDispatcher"]>[0]) => {
-    const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
-    try {
-      return await dispatchInboundMessage({
-        ctx,
-        cfg,
-        dispatcher: prepared.dispatcher,
-        replyOptions: { ...replyOptions, ...prepared.replyOptions },
-      });
-    } finally {
-      const dispatcher = prepared.dispatcher as {
-        markComplete?: () => void;
-        waitForIdle?: () => Promise<void>;
-      };
-      dispatcher.markComplete?.();
-      await dispatcher.waitForIdle?.();
-      await dispatcherOptions.onSettled?.();
-      prepared.markRunComplete();
-      prepared.markDispatchIdle();
-    }
-  };
   const runPrepared =
     options.runPrepared ??
     vi.fn<MatrixRunPreparedMockFn>(async (turn) => {
@@ -169,27 +143,41 @@ export function createMatrixHandlerTestHarness(options: MatrixHandlerTestHarness
       history: turn.history,
       admission: turn.admission,
       botLoopProtection: turn.botLoopProtection,
-      runDispatch: async () =>
-        await dispatchInboundMessageWithBufferedDispatcher({
-          ctx: turn.ctxPayload,
-          cfg: turn.cfg,
-          dispatcherOptions: {
-            ...turn.dispatcherOptions,
-            // Core resolves the plan's prepared payload before any delivery branch
-            // reads it; a harness that skips that step tests a different pipeline.
-            deliver: async (
-              payload: Parameters<typeof turn.delivery.deliver>[0],
-              info: Parameters<typeof turn.delivery.deliver>[1],
-            ) => {
-              const prepared = turn.delivery.preparePayload
-                ? await turn.delivery.preparePayload(payload, info)
-                : payload;
-              return prepared === null ? undefined : await turn.delivery.deliver(prepared, info);
-            },
-            onError: turn.delivery.onError,
+      runDispatch: async () => {
+        const dispatcherOptions = {
+          ...turn.dispatcherOptions,
+          // Match core: prepare before delivery, then drain before marking idle.
+          deliver: async (
+            payload: Parameters<typeof turn.delivery.deliver>[0],
+            info: Parameters<typeof turn.delivery.deliver>[1],
+          ) => {
+            const prepared = turn.delivery.preparePayload
+              ? await turn.delivery.preparePayload(payload, info)
+              : payload;
+            return prepared === null ? undefined : await turn.delivery.deliver(prepared, info);
           },
-          replyOptions: turn.replyOptions,
-        }),
+          onError: turn.delivery.onError,
+        };
+        const prepared = createReplyDispatcherWithTyping(dispatcherOptions);
+        try {
+          return await dispatchInboundMessage({
+            ctx: turn.ctxPayload,
+            cfg: turn.cfg,
+            dispatcher: prepared.dispatcher,
+            replyOptions: { ...turn.replyOptions, ...prepared.replyOptions },
+          });
+        } finally {
+          const dispatcher = prepared.dispatcher as {
+            markComplete?: () => void;
+            waitForIdle?: () => Promise<void>;
+          };
+          dispatcher.markComplete?.();
+          await dispatcher.waitForIdle?.();
+          await dispatcherOptions.onSettled?.();
+          prepared.markRunComplete();
+          prepared.markDispatchIdle();
+        }
+      },
     });
   };
   const dmPolicy = options.dmPolicy ?? "open";
@@ -319,10 +307,7 @@ export function createMatrixTextMessageEvent(params: {
   unsigned?: MatrixRawEvent["unsigned"];
 }): MatrixRawEvent {
   return createMatrixRoomMessageEvent({
-    eventId: params.eventId,
-    sender: params.sender,
-    originServerTs: params.originServerTs,
-    unsigned: params.unsigned,
+    ...params,
     content: {
       msgtype: "m.text",
       body: params.body,

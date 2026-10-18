@@ -1,7 +1,6 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import type { CoreConfig } from "../../types.js";
@@ -45,171 +44,164 @@ vi.mock("./replies.js", async (importOriginal) => ({
   deliverMatrixReplies: deliverMatrixRepliesMock,
 }));
 
-type DeliverFn = (
-  payload: ReplyPayload,
-  info: { kind: "tool" | "block" | "final" },
-) => Promise<unknown>;
+type DeliverFn = ReturnType<typeof createMatrixReplyDispatcher>["deliverReply"];
 
 const approvalButtons = {
   type: "buttons" as const,
   buttons: [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }],
 };
 
-describe("matrix monitor handler reply presentation", () => {
-  beforeEach(() => {
-    installMatrixMonitorTestRuntime();
-    vi.clearAllMocks();
-    deliverMatrixRepliesMock.mockReset().mockResolvedValue({
-      messageIds: ["$reply1"],
-      visibleReplySent: true,
-      content: "delivered",
-    });
+beforeEach(() => {
+  installMatrixMonitorTestRuntime();
+  vi.clearAllMocks();
+  deliverMatrixRepliesMock.mockReset().mockResolvedValue({
+    messageIds: ["$reply1"],
+    visibleReplySent: true,
+    content: "delivered",
   });
+});
 
-  it("applies the current acknowledgement scope without an account override", async () => {
-    const cfg: CoreConfig = {
-      messages: { ackReaction: "👀", ackReactionScope: "off" },
-      channels: {
-        matrix: {
-          dm: { allowFrom: ["*"] },
-          accounts: { ops: { ackReactionScope: undefined } },
-        },
+it("applies the current acknowledgement scope without an account override", async () => {
+  const cfg: CoreConfig = {
+    messages: { ackReaction: "👀", ackReactionScope: "off" },
+    channels: {
+      matrix: {
+        dm: { allowFrom: ["*"] },
+        accounts: { ops: { ackReactionScope: undefined } },
       },
-    };
-    let currentConfig = cfg;
-    const dispatchInboundMessage = vi.fn(async () => matrixDispatchResult());
-    const { handler } = createMatrixHandlerTestHarness({
-      cfg,
-      currentConfig: () => currentConfig,
-      shouldAckReaction,
-      dispatchInboundMessage,
-    });
-    for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
-      currentConfig = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
-      const eventId = `$reload-${index}`;
-      await handler("!room:example.org", createMatrixTextMessageEvent({ eventId, body: "hello" }));
-      const reactions = reactMatrixMessageMock.mock.calls.filter((call) => call[1] === eventId);
-      expect(reactions.some((call) => call[2] === "👀")).toBe(scope === "all");
-    }
-    expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
+    },
+  };
+  let currentConfig = cfg;
+  const dispatchInboundMessage = vi.fn(async () => matrixDispatchResult());
+  const { handler } = createMatrixHandlerTestHarness({
+    cfg,
+    currentConfig: () => currentConfig,
+    shouldAckReaction,
+    dispatchInboundMessage,
   });
+  for (const [index, scope] of (["off", "all", "off"] as const).entries()) {
+    currentConfig = { ...cfg, messages: { ...cfg.messages, ackReactionScope: scope } };
+    const eventId = `$reload-${index}`;
+    await handler("!room:example.org", createMatrixTextMessageEvent({ eventId, body: "hello" }));
+    const reactions = reactMatrixMessageMock.mock.calls.filter((call) => call[1] === eventId);
+    expect(reactions.some((call) => call[2] === "👀")).toBe(scope === "all");
+  }
+  expect(dispatchInboundMessage).toHaveBeenCalledTimes(3);
+});
 
-  it("resolves a reply's presentation before the room delivery reads it", async () => {
-    let deliver: DeliverFn | undefined;
-    const { handler } = createMatrixHandlerTestHarness({
-      streaming: "off",
-      createReplyDispatcherWithTyping: (params) => {
-        deliver = (params as { deliver: DeliverFn }).deliver;
-        return {
-          dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
-          replyOptions: {},
-          markDispatchIdle: () => {},
-          markRunComplete: () => {},
-        };
-      },
-      dispatchInboundMessage: vi.fn(async () => {
-        if (!deliver) {
-          throw new Error("missing room delivery callback");
-        }
-        await deliver(
-          {
-            presentation: {
-              blocks: [{ type: "text", text: "Deploy to production?" }, approvalButtons],
-            },
-          },
-          { kind: "final" },
-        );
-        return matrixDispatchResult(1);
-      }),
-    });
-    await handler(
-      "!room:example.org",
-      createMatrixTextMessageEvent({ eventId: "$msg1", body: "deploy?" }),
-    );
-
-    const reply = deliverMatrixRepliesMock.mock.calls[0]?.[0].replies[0];
-    expect(reply?.text).toContain("Deploy to production?");
-    expect(reply?.presentation).toBeUndefined();
-    expect(reply?.channelData?.matrix).toMatchObject({
-      extraContent: { "com.openclaw.presentation": { type: "message.presentation", version: 1 } },
-    });
-  });
-
-  it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
-    const context = {
-      cfg: { channels: { matrix: {} } },
-      client: {} as MatrixClient,
-      roomId: "!room:example.org",
-      accountId: "ops",
-      streaming: "partial" as const,
-      replyToMode: "off" as const,
-      logVerboseMessage: vi.fn(),
-    };
-    const draftController = await createMatrixDraftController({
-      ...context,
-      messageId: "$msg1",
-      previewToolProgressEnabled: false,
-    });
-    const draftStream = draftController.draftStream;
-    if (!draftStream) {
-      throw new Error("partial streaming must create a draft stream");
-    }
-    const finalizeLive = vi.spyOn(draftStream, "finalizeLive");
-    const typingCallbacks = createTypingCallbacks({
-      start: async () => {},
-      onStartError: vi.fn(),
-    });
-    const presentation = { blocks: [approvalButtons] };
-    try {
-      const payload =
-        kind === "controls"
-          ? await prepareMatrixReplyPayload({ presentation })
-          : { text: "answer" };
-      if (typeof payload.text !== "string") {
-        throw new Error("prepared reply must have visible text");
+it("resolves a reply's presentation before the room delivery reads it", async () => {
+  let deliver: DeliverFn | undefined;
+  const { handler } = createMatrixHandlerTestHarness({
+    streaming: "off",
+    createReplyDispatcherWithTyping: (params) => {
+      deliver = (params as { deliver: DeliverFn }).deliver;
+      return {
+        dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
+        replyOptions: {},
+        markDispatchIdle: () => {},
+        markRunComplete: () => {},
+      };
+    },
+    dispatchInboundMessage: vi.fn(async () => {
+      if (!deliver) {
+        throw new Error("missing room delivery callback");
       }
-      const previewText = kind === "controls" ? payload.text : "answer\n\nNO_REPLY";
-      draftController.onPartialReply(previewText);
-      await draftStream.flush();
-      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      expect(draftStream.matchesPreparedText(previewText)).toBe(true);
-
-      const { deliverReply } = createMatrixReplyDispatcher({
-        ...context,
-        draftStream,
-        draftController,
-        prefixOptions: { responsePrefixContextProvider: () => ({}) },
-        humanDelay: undefined,
-        typingCallbacks,
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        mediaLocalRoots: [],
-      });
-      const result = await deliverReply(payload, { kind: "final" });
-
-      const extraContent =
-        kind === "controls"
-          ? {
-              "com.openclaw.presentation": expect.objectContaining({
-                type: "message.presentation",
-                version: 1,
-                blocks: presentation.blocks,
-              }),
-            }
-          : undefined;
-      expect(editMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
-        context.roomId,
-        "$draft1",
-        payload.text,
-        expect.objectContaining(extraContent ? { extraContent } : {}),
+      await deliver(
+        {
+          presentation: {
+            blocks: [{ type: "text", text: "Deploy to production?" }, approvalButtons],
+          },
+        },
+        { kind: "final" },
       );
-      expect(finalizeLive).not.toHaveBeenCalled();
-      expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
-      expect(result).toMatchObject({ messageIds: ["$draft1"], visibleReplySent: true });
-    } finally {
-      await draftStream.discardPending();
-      draftController.cancelProgressDraft();
-      typingCallbacks.onCleanup?.();
-      finalizeLive.mockRestore();
-    }
+      return matrixDispatchResult(1);
+    }),
   });
+  await handler(
+    "!room:example.org",
+    createMatrixTextMessageEvent({ eventId: "$msg1", body: "deploy?" }),
+  );
+
+  const reply = deliverMatrixRepliesMock.mock.calls[0]?.[0].replies[0];
+  expect(reply?.text).toContain("Deploy to production?");
+  expect(reply?.presentation).toBeUndefined();
+  expect(reply?.channelData?.matrix).toMatchObject({
+    extraContent: { "com.openclaw.presentation": { type: "message.presentation", version: 1 } },
+  });
+});
+
+it.each(["controls", "answer"] as const)("edits a live preview for %s", async (kind) => {
+  const context = {
+    cfg: { channels: { matrix: {} } },
+    client: {} as MatrixClient,
+    roomId: "!room:example.org",
+    accountId: "ops",
+    streaming: "partial" as const,
+    replyToMode: "off" as const,
+    logVerboseMessage: vi.fn(),
+  };
+  const draftController = await createMatrixDraftController({
+    ...context,
+    messageId: "$msg1",
+    previewToolProgressEnabled: false,
+  });
+  const draftStream = draftController.draftStream;
+  if (!draftStream) {
+    throw new Error("partial streaming must create a draft stream");
+  }
+  const finalizeLive = vi.spyOn(draftStream, "finalizeLive");
+  const typingCallbacks = createTypingCallbacks({
+    start: async () => {},
+    onStartError: vi.fn(),
+  });
+  const presentation = { blocks: [approvalButtons] };
+  try {
+    const payload =
+      kind === "controls" ? await prepareMatrixReplyPayload({ presentation }) : { text: "answer" };
+    if (typeof payload.text !== "string") {
+      throw new Error("prepared reply must have visible text");
+    }
+    const previewText = kind === "controls" ? payload.text : "answer\n\nNO_REPLY";
+    draftController.onPartialReply(previewText);
+    await draftStream.flush();
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.matchesPreparedText(previewText)).toBe(true);
+
+    const { deliverReply } = createMatrixReplyDispatcher({
+      ...context,
+      draftStream,
+      draftController,
+      prefixOptions: { responsePrefixContextProvider: () => ({}) },
+      humanDelay: undefined,
+      typingCallbacks,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      mediaLocalRoots: [],
+    });
+    const result = await deliverReply(payload, { kind: "final" });
+
+    const extraContent =
+      kind === "controls"
+        ? {
+            "com.openclaw.presentation": expect.objectContaining({
+              type: "message.presentation",
+              version: 1,
+              blocks: presentation.blocks,
+            }),
+          }
+        : undefined;
+    expect(editMessageMatrixMock).toHaveBeenCalledExactlyOnceWith(
+      context.roomId,
+      "$draft1",
+      payload.text,
+      expect.objectContaining(extraContent ? { extraContent } : {}),
+    );
+    expect(finalizeLive).not.toHaveBeenCalled();
+    expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ messageIds: ["$draft1"], visibleReplySent: true });
+  } finally {
+    await draftStream.discardPending();
+    draftController.cancelProgressDraft();
+    typingCallbacks.onCleanup?.();
+    finalizeLive.mockRestore();
+  }
 });

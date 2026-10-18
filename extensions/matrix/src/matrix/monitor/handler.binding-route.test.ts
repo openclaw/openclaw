@@ -23,7 +23,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/session-binding-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { createMatrixMonitorEventsTestHarness } from "./events.test-helpers.js";
@@ -40,62 +40,44 @@ vi.mock("openclaw/plugin-sdk/acp-binding-runtime", () => ({
   ensureConfiguredAcpBindingReady: vi.fn(async () => ({ ok: true })),
 }));
 
-const cleanups: (() => Promise<void>)[] = [];
-async function cleanup() {
-  const next = cleanups.pop();
-  if (next) {
-    try {
-      await next();
-    } finally {
-      await cleanup();
-    }
-  }
-}
-afterEach(async () => {
-  await cleanup();
-  resetInboundDedupe();
-  bindingTesting.resetSessionBindingAdaptersForTests();
-  resetPluginRuntimeStateForTest();
-  vi.restoreAllMocks();
-});
-
 it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as const)(
   "preserves Matrix's prepared owner through a registered message: %s",
   async (scenario) => {
+    onTestFinished(() => {
+      resetInboundDedupe();
+      bindingTesting.resetSessionBindingAdaptersForTests();
+      resetPluginRuntimeStateForTest();
+      vi.restoreAllMocks();
+    });
     const state = await createOpenClawTestState({ label: "matrix-route-carry" });
-    cleanups.push(() => state.cleanup());
+    onTestFinished(() => state.cleanup());
     const roomId = "!route:example.org";
     const senderId = "@sender:example.org";
     const configured = scenario.startsWith("configured");
     const transition = scenario !== "configured-stable";
-    const bindings: OpenClawConfig["bindings"] = configured
-      ? [
-          {
-            type: "acp",
-            agentId: "configured",
-            match: {
-              channel: "matrix",
-              accountId: "ops",
-              peer: { kind: "channel", id: roomId },
-            },
-          },
-        ]
-      : undefined;
     const cfg: OpenClawConfig = {
       session: { store: state.path("sessions.json") },
       agents: {
         ownership: "explicit",
-        entries: {
-          main: { workspace: state.path("main-workspace") },
-          work: { workspace: state.path("work-workspace") },
-          configured: { workspace: state.path("configured-workspace") },
-        },
+        entries: Object.fromEntries(
+          ["main", "work", "configured"].map(
+            (id) => [id, { workspace: state.path(`${id}-workspace`) }] as const,
+          ),
+        ),
         defaults: { skipBootstrap: true, workspace: state.workspaceDir },
       },
       channels: { matrix: { dm: { policy: "open", allowFrom: ["*"] }, groupPolicy: "open" } },
       plugins: { enabled: true, allow: ["matrix"], entries: { matrix: { enabled: true } } },
       acp: { enabled: true, dispatch: { enabled: true } },
-      ...(bindings ? { bindings } : {}),
+      bindings: configured
+        ? [
+            {
+              type: "acp",
+              agentId: "configured",
+              match: { channel: "matrix", accountId: "ops", peer: { kind: "channel", id: roomId } },
+            },
+          ]
+        : undefined,
     };
     installMatrixMonitorTestRuntime({ cfg, stateDir: state.stateDir });
     const builder = createPluginRegistry({
@@ -103,7 +85,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
       runtime: createPluginRuntimeMock(),
       activateGlobalSideEffects: false,
     });
-    cleanups.push(() => disposePluginRegistryInstances(builder.registry));
+    onTestFinished(() => disposePluginRegistryInstances(builder.registry));
     const record = createPluginRecord({ id: "matrix", origin: "bundled", status: "loaded" });
     const api = builder.createApi(record, { config: cfg });
     builder.registry.plugins.push(record);
@@ -213,8 +195,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
       accountId: "ops",
       onRoomMessage: handler,
     });
-    cleanups.push(() => monitor.dispose());
-    cleanups.push(async () => {
+    onTestFinished(async () => {
       release.resolve();
       await monitor.flushTasks();
     });

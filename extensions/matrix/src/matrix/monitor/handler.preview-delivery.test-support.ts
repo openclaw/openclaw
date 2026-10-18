@@ -11,15 +11,7 @@ type PreviewDeliveryHarness = {
     dispatch: () => Promise<{
       deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<unknown>;
       onError: (error: unknown, info: { kind: string }) => void;
-      opts: Pick<
-        GetReplyOptions,
-        | "onPartialReply"
-        | "onItemEvent"
-        | "onObservedReplyDelivery"
-        | "onBlockReplyQueued"
-        | "onQueuedFollowupAdmitted"
-        | "onAssistantMessageStart"
-      >;
+      opts: GetReplyOptions;
       finish: () => Promise<void>;
     }>;
     redactEventMock: Mock;
@@ -48,14 +40,17 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
   function expectVisible(result: unknown, messageIds: string[], content: string) {
     expect(result).toMatchObject({ messageIds, visibleReplySent: true, content });
   }
+  async function showPreview(opts: GetReplyOptions, text: string, count: number) {
+    await opts.onPartialReply?.({ text });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(count);
+    });
+  }
   async function startPreview(text = "Visible preview", previewToolProgressEnabled = false) {
     const context = createStreamingHarness({ streaming: "partial", previewToolProgressEnabled });
     const turn = await context.dispatch();
     try {
-      await turn.opts.onPartialReply?.({ text });
-      await waitForMatrixState(() => {
-        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(1);
-      });
+      await showPreview(turn.opts, text, 1);
     } catch (error) {
       await turn.finish();
       throw error;
@@ -176,10 +171,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         messageId: "$draft2",
         roomId: "!room",
       });
-      await opts.onPartialReply?.({ text: "Next generation" });
-      await waitForMatrixState(() => {
-        expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
-      });
+      await showPreview(opts, "Next generation", 2);
       if (!retained) {
         await deliver({ text: "Second replacement", isError: true }, { kind: "final" });
       }
