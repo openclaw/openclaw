@@ -551,6 +551,13 @@ validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
 
+Closed entry operations whose callers discard the result can omit the returned
+entry from that candidate. Commit observers still receive their entry, and required
+publication facts and final authority checks remain unchanged. Exact-row queries
+share one retained row per connection, capped at 1 MiB of estimated string storage.
+A different query or observed admission revision retires that row; oversized rows
+remain readable without caching. Compiled queries survive payload eviction.
+
 Durable heartbeat outcome claims check the current row in their existing worker FIFO.
 Persistence and claims retain the agent executor directly, without opening a native
 database on the Gateway thread. Absent storage has no durable base session or outcome
