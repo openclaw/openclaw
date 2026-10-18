@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -10,31 +11,47 @@ import { createNoopLogger, installCronTestHooks } from "./service.test-harness.j
 import type { CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
+import type { CronJobCreate } from "./types.js";
 
 const BASE_TIME_ISO = "2026-01-15T13:55:00.000Z";
 const logger = createNoopLogger();
 
 installCronTestHooks({ logger, fakeTimers: false });
 
-function createService(params: {
-  scheduler: CronServiceDeps["scheduler"];
-  storePath: string;
-  enqueueSystemEvent?: CronServiceDeps["enqueueSystemEvent"];
-  requestHeartbeat?: CronServiceDeps["requestHeartbeat"];
-  runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
-  onEvent?: CronServiceDeps["onEvent"];
-}) {
+function createService(
+  params: Pick<CronServiceDeps, "scheduler" | "storePath"> &
+    Partial<
+      Pick<
+        CronServiceDeps,
+        "enqueueSystemEvent" | "requestHeartbeat" | "runIsolatedAgentJob" | "onEvent"
+      >
+    >,
+) {
   return new CronService({
-    scheduler: params.scheduler,
-    storePath: params.storePath,
     cronEnabled: true,
     log: logger,
-    enqueueSystemEvent: params.enqueueSystemEvent ?? vi.fn(),
-    requestHeartbeat: params.requestHeartbeat ?? vi.fn(),
-    runIsolatedAgentJob:
-      params.runIsolatedAgentJob ?? vi.fn(async () => ({ status: "ok" as const })),
-    ...(params.onEvent ? { onEvent: params.onEvent } : {}),
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...params,
   });
+}
+
+function mainJob(
+  id: string,
+  name: string,
+  schedule: CronJobCreate["schedule"],
+  text: string,
+): CronJobCreate {
+  return {
+    id,
+    name,
+    enabled: true,
+    schedule,
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "systemEvent", text },
+  };
 }
 
 describe("cron state contracts", () => {
@@ -47,81 +64,73 @@ describe("cron state contracts", () => {
         const clock = createGatewaySchedulerClock(baseTimeMs);
         const scheduler = createTestGatewayScheduler(clock.clock);
         const atMs = baseTimeMs + 1_000;
-        let resolveSystemEvent!: () => void;
-        const systemEventEnqueued = new Promise<void>((resolve) => {
-          resolveSystemEvent = resolve;
-        });
+        const systemEventEnqueued = createDeferred();
         const enqueueSystemEvent = vi.fn((text: string) => {
           if (text === "state contract fired") {
-            resolveSystemEvent();
+            systemEventEnqueued.resolve();
           }
         });
-        let resolveFinished!: () => void;
-        const finished = new Promise<void>((resolve) => {
-          resolveFinished = resolve;
-        });
+        const finished = createDeferred();
         const onEvent: CronServiceDeps["onEvent"] = (event) => {
           if (event.action === "finished" && event.jobId === "state-contract-at") {
-            resolveFinished();
+            finished.resolve();
           }
         };
         const requestHeartbeat = vi.fn();
+        const makeService = (extra: Pick<CronServiceDeps, "onEvent"> = {}) =>
+          createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat, ...extra });
         let first: CronService | undefined;
         let restarted: CronService | undefined;
         let reloaded: CronService | undefined;
 
         try {
-          first = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
+          first = makeService();
           await first.start();
 
+          const atSchedule = { kind: "at", at: new Date(atMs).toISOString() } as const;
+          const timezoneSchedule = {
+            kind: "cron",
+            expr: "0 9 * * *",
+            tz: "America/New_York",
+            staggerMs: 30_000,
+          } as const;
           const atJob = await first.add({
-            id: "state-contract-at",
-            name: "one-shot lifecycle",
-            enabled: true,
+            ...mainJob(
+              "state-contract-at",
+              "one-shot lifecycle",
+              atSchedule,
+              "state contract fired",
+            ),
             deleteAfterRun: false,
-            schedule: { kind: "at", at: new Date(atMs).toISOString() },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "state contract fired" },
           });
-          const everyJob = await first.add({
-            id: "state-contract-every",
-            name: "interval lifecycle",
-            enabled: true,
-            schedule: { kind: "every", everyMs: 60_000 },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "interval fired" },
-          });
-          const timezoneJob = await first.add({
-            id: "state-contract-timezone",
-            name: "timezone lifecycle",
-            enabled: true,
-            schedule: {
-              kind: "cron",
-              expr: "0 9 * * *",
-              tz: "America/New_York",
-              staggerMs: 30_000,
-            },
-            sessionTarget: "main",
-            wakeMode: "next-heartbeat",
-            payload: { kind: "systemEvent", text: "timezone fired" },
-          });
+          const everyJob = await first.add(
+            mainJob(
+              "state-contract-every",
+              "interval lifecycle",
+              { kind: "every", everyMs: 60_000 },
+              "interval fired",
+            ),
+          );
+          const timezoneJob = await first.add(
+            mainJob(
+              "state-contract-timezone",
+              "timezone lifecycle",
+              timezoneSchedule,
+              "timezone fired",
+            ),
+          );
 
           const updatedEvery = await first.update(everyJob.id, {
             name: "edited interval lifecycle",
             schedule: { kind: "every", everyMs: 120_000 },
           });
-          expect(updatedEvery.name).toBe("edited interval lifecycle");
-          expect(updatedEvery.schedule).toMatchObject({ kind: "every", everyMs: 120_000 });
+          expect(updatedEvery).toMatchObject({
+            name: "edited interval lifecycle",
+            schedule: { kind: "every", everyMs: 120_000 },
+          });
 
           const newYorkNineAm = Date.parse("2026-01-15T14:00:00.000Z");
-          expect(timezoneJob.schedule).toEqual({
-            kind: "cron",
-            expr: "0 9 * * *",
-            tz: "America/New_York",
-            staggerMs: 30_000,
-          });
+          expect(timezoneJob.schedule).toEqual(timezoneSchedule);
           expect(timezoneJob.state.nextRunAtMs).toBeGreaterThanOrEqual(newYorkNineAm);
           expect(timezoneJob.state.nextRunAtMs).toBeLessThan(newYorkNineAm + 30_000);
 
@@ -134,20 +143,14 @@ describe("cron state contracts", () => {
           first.stop();
           first = undefined;
 
-          restarted = createService({
-            scheduler,
-            storePath,
-            enqueueSystemEvent,
-            requestHeartbeat,
-            onEvent,
-          });
+          restarted = makeService({ onEvent });
           await restarted.start();
           const afterRestart = await restarted.list({ includeDisabled: true });
           expect(afterRestart).toEqual(
             expect.arrayContaining([
               expect.objectContaining({
                 id: atJob.id,
-                schedule: { kind: "at", at: new Date(atMs).toISOString() },
+                schedule: atSchedule,
               }),
               expect.objectContaining({
                 id: everyJob.id,
@@ -156,20 +159,15 @@ describe("cron state contracts", () => {
               }),
               expect.objectContaining({
                 id: timezoneJob.id,
-                schedule: {
-                  kind: "cron",
-                  expr: "0 9 * * *",
-                  tz: "America/New_York",
-                  staggerMs: 30_000,
-                },
+                schedule: timezoneSchedule,
               }),
             ]),
           );
 
           await clock.advanceBy(1_005);
           await restarted.status();
-          await systemEventEnqueued;
-          await finished;
+          await systemEventEnqueued.promise;
+          await finished.promise;
 
           expect(
             enqueueSystemEvent.mock.calls.filter(([text]) => text === "state contract fired"),
@@ -188,7 +186,7 @@ describe("cron state contracts", () => {
           restarted.stop();
           restarted = undefined;
 
-          reloaded = createService({ scheduler, storePath, enqueueSystemEvent, requestHeartbeat });
+          reloaded = makeService();
           await reloaded.start();
           expect(
             (await reloaded.list({ includeDisabled: true })).map((job) => job.id).toSorted(),
@@ -215,27 +213,28 @@ describe("cron state contracts", () => {
           summary: "isolated state contract completed",
         }));
         const events: Array<{ action: string; jobId: string }> = [];
-        let resolveFinished!: () => void;
-        const finished = new Promise<void>((resolve) => {
-          resolveFinished = resolve;
-        });
+        const finished = createDeferred();
         const onEvent: CronServiceDeps["onEvent"] = (event) => {
           events.push({ action: event.action, jobId: event.jobId });
           if (event.action === "finished") {
-            resolveFinished();
+            finished.resolve();
           }
         };
+        const makeService = (clock: typeof firstClock) =>
+          createService({
+            scheduler: createTestGatewayScheduler(clock.clock),
+            storePath,
+            runIsolatedAgentJob,
+            onEvent,
+          });
+        const history = (jobId: string) =>
+          readCronRunHistoryPageForTests({ storeKey: cronStoreKey(storePath), jobId });
         let first: CronService | undefined;
         let second: CronService | undefined;
         let restarted: CronService | undefined;
 
         try {
-          first = createService({
-            scheduler: createTestGatewayScheduler(firstClock.clock),
-            storePath,
-            runIsolatedAgentJob,
-            onEvent,
-          });
+          first = makeService(firstClock);
           await first.start();
           const job = await first.add({
             id: "state-contract-isolated-dedup",
@@ -249,28 +248,20 @@ describe("cron state contracts", () => {
             delivery: { mode: "none" },
           });
 
-          second = createService({
-            scheduler: createTestGatewayScheduler(secondClock.clock),
-            storePath,
-            runIsolatedAgentJob,
-            onEvent,
-          });
+          second = makeService(secondClock);
           await second.start();
 
           await Promise.all([firstClock.advanceBy(1_005), secondClock.advanceBy(1_005)]);
           await first.status();
           await second.status();
-          await finished;
+          await finished.promise;
 
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
           expect(
             events.filter((event) => event.jobId === job.id && event.action === "finished"),
           ).toHaveLength(1);
 
-          const initialHistory = readCronRunHistoryPageForTests({
-            storeKey: cronStoreKey(storePath),
-            jobId: job.id,
-          });
+          const initialHistory = history(job.id);
           expect(initialHistory.total).toBe(1);
           expect(initialHistory.entries).toEqual([
             expect.objectContaining({
@@ -288,26 +279,13 @@ describe("cron state contracts", () => {
           second.stop();
           second = undefined;
 
-          const reloadedHistory = readCronRunHistoryPageForTests({
-            storeKey: cronStoreKey(storePath),
-            jobId: job.id,
-          });
+          const reloadedHistory = history(job.id);
           expect(reloadedHistory.entries).toEqual([persistedEntry]);
 
-          restarted = createService({
-            scheduler: createTestGatewayScheduler(firstClock.clock),
-            storePath,
-            runIsolatedAgentJob,
-            onEvent,
-          });
+          restarted = makeService(firstClock);
           await restarted.start();
           expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-          expect(
-            readCronRunHistoryPageForTests({
-              storeKey: cronStoreKey(storePath),
-              jobId: job.id,
-            }).entries,
-          ).toEqual([persistedEntry]);
+          expect(history(job.id).entries).toEqual([persistedEntry]);
         } finally {
           first?.stop();
           second?.stop();

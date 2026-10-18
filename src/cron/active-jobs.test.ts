@@ -25,6 +25,21 @@ import {
 } from "./active-jobs.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
 
+function prepareAdmission(
+  runId: string,
+  operationalRunInstance = createOperationalRunInstanceRef(runId),
+) {
+  return prepareAgentRunAdmission({
+    cfg: {},
+    operationalRunInstance,
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
+    },
+  });
+}
+
 afterEach(() => {
   resetCronActiveJobs();
 });
@@ -94,18 +109,8 @@ describe("cron message action authority", () => {
     const controller = new AbortController();
     const runId = "shared-message-run";
     const expectedInstance = createOperationalRunInstanceRef(runId);
-    const prepare = (operationalRunInstance = createOperationalRunInstanceRef(runId)) =>
-      prepareAgentRunAdmission({
-        cfg: {},
-        operationalRunInstance,
-        facts: {
-          runId,
-          agentId: "main",
-          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-        },
-      });
-    const expected = prepare(expectedInstance);
-    const other = prepare();
+    const expected = prepareAdmission(runId, expectedInstance);
+    const other = prepareAdmission(runId);
     const assertCurrent = captureCronJobMessageActionAuthority({
       jobId,
       operationalRunInstance: expectedInstance,
@@ -134,18 +139,8 @@ describe("cron message action authority", () => {
         isMessageActionAuthorityCurrent: () => sourceCurrent,
       });
       const controller = new AbortController();
-      const prepare = () =>
-        prepareAgentRunAdmission({
-          cfg: {},
-          operationalRunInstance: createOperationalRunInstanceRef("message-run"),
-          facts: {
-            runId: "message-run",
-            agentId: "main",
-            ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-          },
-        });
-      const first = prepare();
-      const replacement = prepare();
+      const first = prepareAdmission("message-run");
+      const replacement = prepareAdmission("message-run");
       try {
         const admitted = await first.admit("embedded");
         bindCronJobAdmittedRun(marker, admitted, controller.signal);
@@ -208,24 +203,8 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       const jobId = "self-removing-job";
       const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true })!;
       const controller = new AbortController();
-      const admission = prepareAgentRunAdmission({
-        cfg: {},
-        operationalRunInstance: createOperationalRunInstanceRef("self-removal-run"),
-        facts: {
-          runId: "self-removal-run",
-          agentId: "main",
-          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-        },
-      });
-      const replacement = prepareAgentRunAdmission({
-        cfg: {},
-        operationalRunInstance: createOperationalRunInstanceRef("replacement-run"),
-        facts: {
-          runId: "replacement-run",
-          agentId: "main",
-          ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-        },
-      });
+      const admission = prepareAdmission("self-removal-run");
+      const replacement = prepareAdmission("replacement-run");
       try {
         const context = await admission.admit("embedded");
         bindCronJobAdmittedRun(marker, context, controller.signal);

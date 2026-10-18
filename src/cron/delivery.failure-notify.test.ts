@@ -1,5 +1,6 @@
 // Strict cron announcement transport tests cover scheduler-authorized alert delivery.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import * as deliveryQueue from "../infra/delivery-queue-sqlite.js";
 import {
   OutboundDeliveryError,
@@ -40,6 +41,15 @@ function send(overrides: Partial<Parameters<typeof sendCronAnnouncePayloadStrict
     payload: { text: "Automation failed" },
     abortSignal: new AbortController().signal,
     ...overrides,
+  });
+}
+
+function notDispatched(message: string) {
+  return new PlatformMessageNotDispatchedError(message, {
+    cause: Object.assign(new Error("connect ECONNREFUSED"), {
+      code: "ECONNREFUSED",
+      syscall: "connect",
+    }),
   });
 }
 
@@ -103,13 +113,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
   it("retries a proven not-dispatched failure through the notification sender", async () => {
     vi.useFakeTimers();
     const signal = new AbortController().signal;
-    const rejected = new PlatformMessageNotDispatchedError("connect ECONNREFUSED", {
-      cause: Object.assign(new Error("connect ECONNREFUSED"), {
-        code: "ECONNREFUSED",
-        syscall: "connect",
-      }),
-    });
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(rejected);
+    mocks.deliverOutboundPayloads.mockRejectedValueOnce(notDispatched("connect ECONNREFUSED"));
     const result = send({ abortSignal: signal });
     await vi.runAllTimersAsync();
     await expect(result).resolves.toEqual({
@@ -139,33 +143,25 @@ describe("sendCronAnnouncePayloadStrict", () => {
   });
 
   it("reports the first recipient result before later delivery work settles", async () => {
-    let releaseDelivery = () => {};
-    const pendingDelivery = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
-    let reportFirstResult = () => {};
-    const firstResult = new Promise<void>((resolve) => {
-      reportFirstResult = resolve;
-    });
+    const pendingDelivery = createDeferred();
+    const firstResult = createDeferred();
     const delivered = { channel: "telegram" as const, messageId: "delivered-first" };
     mocks.deliverOutboundPayloads.mockImplementationOnce(
       async (params: { onDeliveryResult?: (result: typeof delivered) => Promise<void> | void }) => {
         await params.onDeliveryResult?.(delivered);
-        reportFirstResult();
-        await pendingDelivery;
+        firstResult.resolve();
+        await pendingDelivery.promise;
         return [delivered];
       },
     );
     const onDeliveryAttempt = vi.fn();
-    const delivery = send({
-      onDeliveryAttempt,
-    });
+    const delivery = send({ onDeliveryAttempt });
 
-    await firstResult;
+    await firstResult.promise;
     try {
       expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
     } finally {
-      releaseDelivery();
+      pendingDelivery.resolve();
       await delivery;
     }
     expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
@@ -207,15 +203,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
   it.each(["raw-partial", "wrapped-partial", "failed-after-send"] as const)(
     "preserves recipient-reached evidence across a %s failure",
     async (failureKind) => {
-      const rejectedChunk = new PlatformMessageNotDispatchedError(
-        "second chunk was never dispatched",
-        {
-          cause: Object.assign(new Error("connect ECONNREFUSED"), {
-            code: "ECONNREFUSED",
-            syscall: "connect",
-          }),
-        },
-      );
+      const rejectedChunk = notDispatched("second chunk was never dispatched");
       const firstChunk = { channel: "telegram" as const, messageId: "already-delivered" };
       const deliveryError =
         failureKind === "wrapped-partial"
@@ -242,11 +230,7 @@ describe("sendCronAnnouncePayloadStrict", () => {
       );
       const onDeliveryAttempt = vi.fn();
 
-      await expect(
-        send({
-          onDeliveryAttempt,
-        }),
-      ).rejects.toThrow(deliveryError.message);
+      await expect(send({ onDeliveryAttempt })).rejects.toThrow(deliveryError.message);
 
       expect(onDeliveryAttempt).toHaveBeenLastCalledWith(true);
       expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();

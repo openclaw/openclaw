@@ -30,6 +30,21 @@ const { resetCronModelProviderPreflightCacheForTest } =
   await import("./isolated-agent/model-preflight.runtime.js");
 
 type ModelRef = { provider: string; model: string };
+const defaultModel = { provider: "openai", model: "gpt-5.4" };
+
+function expectOutcomes(outcomes: unknown[], fields: Record<string, unknown>) {
+  for (const outcome of outcomes) {
+    expect(outcome).toMatchObject(fields);
+  }
+}
+
+function diagnostic(source: string, severity: string, message: unknown, toolName?: string) {
+  return {
+    entries: expect.arrayContaining([
+      expect.objectContaining({ source, severity, message, ...(toolName ? { toolName } : {}) }),
+    ]),
+  };
+}
 
 function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error {
   const error = new Error(`Command lane "${lane}" task timed out after ${timeoutMs}ms`);
@@ -37,38 +52,18 @@ function makeCommandLaneTaskTimeoutError(lane: string, timeoutMs: number): Error
   return error;
 }
 
-function configFor(modelRef: ModelRef, localBaseUrl?: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        model: `${modelRef.provider}/${modelRef.model}`,
-      },
-    },
-    ...(localBaseUrl
-      ? {
-          models: {
-            providers: {
-              [modelRef.provider]: {
-                api: "ollama",
-                baseUrl: localBaseUrl,
-                models: [],
-              },
-            },
-          },
-        }
-      : {}),
-  };
-}
-
-async function runPersistedDiagnosticCase(params: {
-  cfg: OpenClawConfig;
-  modelRef: ModelRef;
-  name: string;
-}) {
+async function runCase(name: string, modelRef: ModelRef = defaultModel, localBaseUrl?: string) {
+  const model = `${modelRef.provider}/${modelRef.model}`;
+  const cfg: OpenClawConfig = { agents: { defaults: { model } } };
+  if (localBaseUrl) {
+    cfg.models = {
+      providers: { [modelRef.provider]: { api: "ollama", baseUrl: localBaseUrl, models: [] } },
+    };
+  }
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
-      setRuntimeConfigSnapshot(params.cfg);
+      setRuntimeConfigSnapshot(cfg);
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
@@ -84,7 +79,7 @@ async function runPersistedDiagnosticCase(params: {
         runIsolatedAgentJob: async (runParams) =>
           await runCronIsolatedAgentTurn({
             ...runParams,
-            cfg: params.cfg,
+            cfg,
             deps: {},
             sessionKey: `cron:${runParams.job.id}`,
           }),
@@ -92,15 +87,15 @@ async function runPersistedDiagnosticCase(params: {
       try {
         await cron.start();
         const job = await cron.add({
-          name: params.name,
+          name,
           enabled: true,
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
           payload: {
             kind: "agentTurn",
-            message: `run ${params.name}`,
-            model: `${params.modelRef.provider}/${params.modelRef.model}`,
+            message: `run ${name}`,
+            model,
           },
           delivery: { mode: "none" },
         });
@@ -139,6 +134,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
   beforeEach(() => {
     resetRunCronIsolatedAgentTurnHarness();
     resetCronModelProviderPreflightCacheForTest();
+    resolveConfiguredModelRefMock.mockReturnValue(defaultModel);
   });
 
   afterAll(async () => {
@@ -150,65 +146,41 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     resolveConfiguredModelRefMock.mockReturnValue(modelRef);
     resolveAllowedModelRefMock.mockReturnValue({ ref: modelRef });
 
-    const { finished, history } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef, `http://127.0.0.1:${unavailableEndpoint.port}`),
+    const { finished, history } = await runCase(
+      "unreachable provider",
       modelRef,
-      name: "unreachable provider",
-    });
+      `http://127.0.0.1:${unavailableEndpoint.port}`,
+    );
 
     expect(runWithModelFallbackMock).not.toHaveBeenCalled();
     expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "skipped",
-        provider: "ollama",
-        model: "diagnostic-model",
-        error: expect.stringContaining(
-          "Start the local provider or correct its configured endpoint",
-        ),
-        diagnostics: {
-          entries: expect.arrayContaining([
-            expect.objectContaining({
-              source: "model-preflight",
-              severity: "warn",
-              message: expect.stringContaining("the local provider preflight failed"),
-            }),
-          ]),
-        },
-      });
-    }
+    expectOutcomes([finished, history], {
+      status: "skipped",
+      provider: "ollama",
+      model: "diagnostic-model",
+      error: expect.stringContaining("Start the local provider or correct its configured endpoint"),
+      diagnostics: diagnostic(
+        "model-preflight",
+        "warn",
+        expect.stringContaining("the local provider preflight failed"),
+      ),
+    });
   });
 
   it("persists and emits the canonical terminal timeout diagnostic", async () => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    const modelRef = defaultModel;
     runWithModelFallbackMock.mockRejectedValueOnce(
       makeCommandLaneTaskTimeoutError("cron-nested", 330_000),
     );
 
-    const { finished, history } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name: "nested lane timeout",
-    });
+    const { finished, history } = await runCase("nested lane timeout");
 
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "error",
-        provider: "openai",
-        model: "gpt-5.4",
-        error: "cron: job execution timed out",
-        diagnostics: {
-          entries: expect.arrayContaining([
-            expect.objectContaining({
-              source: "cron-setup",
-              severity: "error",
-              message: "cron: job execution timed out",
-            }),
-          ]),
-        },
-      });
-    }
+    expectOutcomes([finished, history], {
+      status: "error",
+      ...modelRef,
+      error: "cron: job execution timed out",
+      diagnostics: diagnostic("cron-setup", "error", "cron: job execution timed out"),
+    });
   });
 
   it("persists provider failures without internal class names", async () => {
@@ -224,11 +196,10 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       }),
     );
 
-    const { finished, history, lastError, lastErrorReason } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
+    const { finished, history, lastError, lastErrorReason } = await runCase(
+      "missing provider model",
       modelRef,
-      name: "missing provider model",
-    });
+    );
 
     for (const outcome of [finished, history]) {
       expect(outcome).toMatchObject({
@@ -248,16 +219,10 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
   it.each([["superseded run", createAgentRunSupersededAbortError]])(
     "persists the coded %s reason instead of reporting a timeout",
     async (name, createError) => {
-      const modelRef = { provider: "openai", model: "gpt-5.4" };
-      resolveConfiguredModelRefMock.mockReturnValue(modelRef);
       const rejection = createError() as Error & { code: string };
       runWithModelFallbackMock.mockRejectedValueOnce(rejection);
 
-      const { finished, history, lastError } = await runPersistedDiagnosticCase({
-        cfg: configFor(modelRef),
-        modelRef,
-        name,
-      });
+      const { finished, history, lastError } = await runCase(name);
       const expected = `${rejection.message} | ${rejection.code}`;
 
       for (const outcome of [finished, history]) {
@@ -272,8 +237,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
   );
 
   it("persists and emits a fatal execution-denial diagnostic", async () => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    const modelRef = defaultModel;
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [],
@@ -290,35 +254,18 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       },
     });
 
-    const { finished, history } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name: "execution denied",
-    });
+    const { finished, history } = await runCase("execution denied");
 
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "error",
-        provider: "openai",
-        model: "gpt-5.4",
-        error: "SYSTEM_RUN_DENIED: approval required",
-        summary: "SYSTEM_RUN_DENIED: approval required",
-        diagnostics: {
-          entries: expect.arrayContaining([
-            expect.objectContaining({
-              source: "tool",
-              severity: "error",
-              message: "SYSTEM_RUN_DENIED: approval required",
-            }),
-          ]),
-        },
-      });
-    }
+    expectOutcomes([finished, history], {
+      status: "error",
+      ...modelRef,
+      error: "SYSTEM_RUN_DENIED: approval required",
+      summary: "SYSTEM_RUN_DENIED: approval required",
+      diagnostics: diagnostic("tool", "error", "SYSTEM_RUN_DENIED: approval required"),
+    });
   });
 
   it("persists an unresolved exec warning when the scheduled agent recovers with a reply", async () => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "RESULT: the command did not run" }],
@@ -333,11 +280,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       },
     });
 
-    const { finished, history, lastError } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name: "invalid exec arguments",
-    });
+    const { finished, history, lastError } = await runCase("invalid exec arguments");
 
     expect(lastError).toBeUndefined();
     for (const outcome of [finished, history]) {
@@ -359,8 +302,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
   });
 
   it("persists and emits terminal tool detail while keeping the payload generic", async () => {
-    const modelRef = { provider: "openai", model: "gpt-5.4" };
-    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    const modelRef = defaultModel;
     mockRunCronFallbackPassthrough();
     runEmbeddedAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "⚠️ Exec failed", isError: true, toolName: "exec" }],
@@ -374,11 +316,7 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       },
     });
 
-    const { finished, history } = await runPersistedDiagnosticCase({
-      cfg: configFor(modelRef),
-      modelRef,
-      name: "unknown tool id",
-    });
+    const { finished, history } = await runCase("unknown tool id");
 
     expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -388,24 +326,19 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       }),
     );
 
-    for (const outcome of [finished, history]) {
-      expect(outcome).toMatchObject({
-        status: "error",
-        provider: "openai",
-        model: "gpt-5.4",
+    expectOutcomes([finished, history], {
+      status: "error",
+      ...modelRef,
+      summary: "Code Mode could not resolve a configured MCP tool.",
+      diagnostics: {
         summary: "Code Mode could not resolve a configured MCP tool.",
-        diagnostics: {
-          summary: "Code Mode could not resolve a configured MCP tool.",
-          entries: expect.arrayContaining([
-            expect.objectContaining({
-              source: "tool",
-              severity: "error",
-              message: "Code Mode could not resolve a configured MCP tool.",
-              toolName: "exec",
-            }),
-          ]),
-        },
-      });
-    }
+        ...diagnostic(
+          "tool",
+          "error",
+          "Code Mode could not resolve a configured MCP tool.",
+          "exec",
+        ),
+      },
+    });
   });
 });
