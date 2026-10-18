@@ -2,7 +2,10 @@ import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { constants as osConstants, tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  parseStrictPositiveInteger,
+  timestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import { defaultRuntime } from "../runtime.js";
@@ -136,7 +139,16 @@ export async function registerAttachCli(program: Command) {
           // A grant response can arrive after CLI cancellation. Its custody is
           // already ours, so unwind through revocation before creating anything.
           signal?.throwIfAborted();
-          expiresAt = new Date(grant.expiresAtMs).toISOString();
+          // A timestamp outside the Date range is not representable, so report the
+          // malformed grant and unwind through the finally that revokes it. The
+          // return keeps non-throwing runtime substitutes (tests) from continuing.
+          const formattedExpiry = timestampMsToIsoString(grant.expiresAtMs);
+          if (formattedExpiry === undefined) {
+            defaultRuntime.error("attach.grant returned an unexpected response from the gateway.");
+            defaultRuntime.exit(1);
+            return;
+          }
+          expiresAt = formattedExpiry;
           const config = writeClaudeMcpConfig(grant.mcpConfig);
           cleanupConfig = config.cleanup;
           const claudeArgs = ["--strict-mcp-config", "--mcp-config", config.path];
