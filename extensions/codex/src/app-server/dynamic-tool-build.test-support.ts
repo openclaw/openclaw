@@ -137,6 +137,7 @@ export async function cleanupDynamicToolBuildFixture(
     vi.restoreAllMocks();
     await closeOpenClawAgentDatabasesAsync();
     await closeOpenClawStateDatabaseAsync();
+    vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true });
   } finally {
     clearRuntimeConfigSnapshot();

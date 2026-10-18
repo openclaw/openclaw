@@ -94,7 +94,7 @@ function inspectBinding(binding: SessionBindingRecord, baseRoute = route) {
   });
 }
 
-beforeEach(testing.resetSessionBindingAdaptersForTests);
+beforeEach(() => testing.resetSessionBindingAdaptersForTests());
 afterEach(() => {
   vi.useRealTimers();
   acpReadiness.mockReset();

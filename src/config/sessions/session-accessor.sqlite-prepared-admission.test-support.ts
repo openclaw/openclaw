@@ -1,69 +1,78 @@
 import type { ChildProcess } from "node:child_process";
 import type { Worker } from "node:worker_threads";
 import { expect, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
-import type { OpenClawAgentReadOnlyDatabase as ReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
+import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
-import { SqliteReclamationWorker as Reclaimer } from "./session-accessor.sqlite-reclamation-worker-lifetime.js";
-
-type ReclamationRun = Parameters<Reclaimer["run"]>[0];
-
-function interceptReclamationWorker(
-  intercept: (params: ReclamationRun) => ReclamationRun,
-  preparing?: () => void,
-) {
-  const prototype = Reclaimer.prototype;
-  const run = prototype.run;
-  vi.spyOn(prototype, "run").mockImplementation(function (this: Reclaimer, params) {
-    return run.call(this, intercept(params));
-  });
-  if (preparing) {
-    const prepare = prototype.prepare;
-    vi.spyOn(prototype, "prepare").mockImplementation(function (this: Reclaimer, params) {
-      preparing();
-      return prepare.call(this, params);
-    });
-  }
-}
-
-const expectAdmission = <T>(entered: Promise<T>, operation: Promise<unknown>) =>
-  awaitGateBeforeSettlement(entered, operation, "Operation completed before admission");
+import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker.js";
 
 export function holdReclamationAdmission(databasePath: string) {
   const entered = createDeferred();
   const release = createDeferred();
   let admissions = 0;
-  interceptReclamationWorker((params) => {
-    if (
-      params.plan.databaseOptions.path !== databasePath ||
-      params.plan.kind !== "lifecycle-projection-commit"
-    ) {
-      return params;
-    }
-    return {
-      ...params,
-      withWriteAdmission: (performWrite, diagnostics) =>
-        params.withWriteAdmission(async (...admissionArgs) => {
-          if (!admissionArgs[0]) {
-            admissions += 1;
-            entered.resolve();
-            await release.promise;
+  const pause = async () => {
+    admissions += 1;
+    entered.resolve();
+    await release.promise;
+  };
+  const withWorker = reclamationWorker.withSqliteReclamationWorker;
+  vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+    (options, claim, run, assertCurrent, signal) =>
+      withWorker(
+        options,
+        claim,
+        async (worker) => {
+          const execute = worker.run.bind(worker);
+          const spy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (
+              params.plan.databaseOptions.path !== databasePath ||
+              params.plan.kind !== "lifecycle-projection-commit"
+            ) {
+              return execute(params);
+            }
+            return execute({
+              ...params,
+              withWriteAdmission: async (performWrite, diagnostics) => {
+                return params.withWriteAdmission(async (...admissionArgs) => {
+                  if (!admissionArgs[0]) {
+                    await pause();
+                  }
+                  return performWrite(...admissionArgs);
+                }, diagnostics);
+              },
+            });
+          });
+          try {
+            return await run(worker);
+          } finally {
+            spy.mockRestore();
           }
-          return performWrite(...admissionArgs);
-        }, diagnostics),
-    };
-  });
+        },
+        assertCurrent,
+        signal,
+      ),
+  );
   return {
     release,
     count: () => admissions,
-    expectPending: (operation: Promise<unknown>) => expectAdmission(entered.promise, operation),
+    async expectPending(operation: Promise<unknown>) {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "admitted"),
+          operation.then(
+            () => "completed",
+            () => "failed",
+          ),
+        ]),
+      ).toBe("admitted");
+    },
   };
 }
 
@@ -77,7 +86,10 @@ export type PreparedAdmissionHooks = {
   integrityPath?: string;
   worker?: (worker: Worker, owner: PreparedIntegrityOwner) => void;
   integrityPhase?: (
-    ...args: [Worker, PreparedIntegrityOwner, "checking" | "checked", boolean]
+    worker: Worker,
+    owner: PreparedIntegrityOwner,
+    phase: "checking" | "checked",
+    held: boolean,
   ) => void;
 };
 type PreparedAdmissionContext = {
@@ -93,7 +105,9 @@ export function observePreparedAdmission(
   { hooks, releases, own }: PreparedAdmissionContext,
   hold = false,
 ) {
-  const checks = { parent: 0, admissions: 0, settled: 0 };
+  let parentChecks = 0;
+  let admissions = 0;
+  let settled = 0;
   let forkingIntegrity = false;
   const entered = createDeferred();
   const release = createDeferred();
@@ -102,7 +116,9 @@ export function observePreparedAdmission(
     release.resolve();
   }
   const children: Array<{
-    close?: [number | null, string | null];
+    closed: boolean;
+    code: number | null;
+    signal: string | null;
     phases: integrity.SqliteIntegrityWorkerPhase[];
     resultOk?: boolean;
   }> = [];
@@ -110,7 +126,13 @@ export function observePreparedAdmission(
     if (!forkingIntegrity) {
       return;
     }
-    const row: (typeof children)[number] = { phases: [] };
+    const row = {
+      closed: false,
+      code: null as number | null,
+      signal: null as string | null,
+      phases: [] as integrity.SqliteIntegrityWorkerPhase[],
+      resultOk: undefined as boolean | undefined,
+    };
     children.push(row);
     child.on("message", (message: integrity.SqliteIntegrityWorkerMessage) => {
       if ("type" in message) {
@@ -119,12 +141,16 @@ export function observePreparedAdmission(
         row.resultOk = message.ok;
       }
     });
-    const closed = createDeferred();
-    child.once("close", (code, signal) => {
-      row.close = [code, signal];
-      closed.resolve();
-    });
-    void own(closed.promise);
+    void own(
+      new Promise<void>((resolve) => {
+        child.once("close", (code, signal) => {
+          row.closed = true;
+          row.code = code;
+          row.signal = signal;
+          resolve();
+        });
+      }),
+    );
   };
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, options) => {
     const database = realOpen(pathname, options);
@@ -137,7 +163,7 @@ export function observePreparedAdmission(
       if (sql === "PRAGMA integrity_check;" || sql === "PRAGMA integrity_check('sqlite_schema');") {
         const all = statement.all.bind(statement);
         statement.all = () => {
-          checks.parent += 1;
+          parentChecks += 1;
           return all();
         };
       }
@@ -149,7 +175,7 @@ export function observePreparedAdmission(
     if (args[0] !== databasePath) {
       return await realIntegrity(...args);
     }
-    checks.admissions += 1;
+    admissions += 1;
     let check: Promise<void>;
     forkingIntegrity = true;
     try {
@@ -158,18 +184,40 @@ export function observePreparedAdmission(
       forkingIntegrity = false;
     }
     entered.resolve();
-    await Promise.all([check, release.promise]).finally(() => checks.settled++);
+    try {
+      await Promise.all([check, release.promise]);
+    } finally {
+      settled += 1;
+    }
   });
   return {
     release,
-    expectPending: (operation: Promise<unknown>) => expectAdmission(entered.promise, operation),
+    async expectPending(operation: Promise<unknown>) {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "child"),
+          operation.then(
+            () => "completed",
+            () => "failed",
+          ),
+        ]),
+      ).toBe("child");
+    },
     expectHealthy(count: number) {
-      expect(checks).toEqual({ parent: 0, admissions: count, settled: count });
+      expect(parentChecks, "integrity ran on the caller thread").toBe(0);
+      expect(admissions).toBe(count);
+      expect(settled).toBe(count);
       expect(children.length).toBeGreaterThanOrEqual(count);
       expect(children.length).toBeLessThanOrEqual(count * 4);
-      const phases = ["opening", "checking", "closing"];
-      const expected = { close: [0, null], resultOk: true, phases };
-      children.forEach((child) => expect(child).toEqual(expected));
+      for (const child of children) {
+        expect(child).toEqual({
+          closed: true,
+          code: 0,
+          signal: null,
+          resultOk: true,
+          phases: ["opening", "checking", "closing"],
+        });
+      }
     },
   };
 }
@@ -186,88 +234,133 @@ export function observePreparedWorkerAdmission({
   expectParentHealthy: () => void;
 }) {
   const entered = createDeferred<PreparedIntegrityOwner>();
-  const counter = () => new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
-  const counts = new Int32Array(counter());
-  const release = new Int32Array(counter());
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
   const resume = () => {
-    Atomics.store(release, 0, 1);
-    Atomics.notify(release, 0);
+    Atomics.store(new Int32Array(release), 0, 1);
+    Atomics.notify(new Int32Array(release), 0);
   };
   releases.push(resume);
   if (mode === "warm") {
     resume();
   }
-  Object.assign(hooks, {
-    integrityChecks: counts.buffer,
-    integrityRelease: release.buffer,
-    integrityFirstCheck: mode === "cold" ? counter() : undefined,
-    integrityPath: databasePath,
-  });
+  hooks.integrityChecks = counts;
+  hooks.integrityRelease = release;
+  hooks.integrityFirstCheck =
+    mode === "cold" ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT) : undefined;
+  hooks.integrityPath = databasePath;
   const workers: Worker[] = [];
-  const phaseCounts = () => ({ executor: 0, reclamation: 0, other: 0 });
-  const phases = { checking: phaseCounts(), checked: phaseCounts() };
-  const heldCheck: { worker?: Worker; completed: boolean } = { completed: false };
+  const checking = { executor: 0, reclamation: 0, other: 0 };
+  const checked = { executor: 0, reclamation: 0, other: 0 };
+  let heldWorker: Worker | undefined;
+  let heldCompleted = false;
   hooks.worker = (worker, owner) => {
     if (owner !== "other") {
       workers.push(worker);
     }
   };
   hooks.integrityPhase = (worker, owner, phase, held) => {
-    phases[phase][owner] += 1;
-    if (held) {
-      if (phase === "checking") {
+    if (phase === "checking") {
+      checking[owner] += 1;
+      if (held) {
         // The atomic claimant, not cross-worker message order, identifies the held check.
-        heldCheck.worker = worker;
+        heldWorker = worker;
         entered.resolve(owner);
-      } else {
-        heldCheck.completed = worker === heldCheck.worker;
+      }
+    } else {
+      checked[owner] += 1;
+      if (held) {
+        heldCompleted = worker === heldWorker;
       }
     }
   };
   return {
     release: { resolve: resume },
-    expectPending: (operation: Promise<unknown>) => expectAdmission(entered.promise, operation),
+    async expectPending(operation: Promise<unknown>) {
+      const outcome = await Promise.race([
+        entered.promise.then((owner) => ({ kind: "held" as const, owner })),
+        operation.then(
+          () => ({ kind: "completed" as const }),
+          () => ({ kind: "failed" as const }),
+        ),
+      ]);
+      if (outcome.kind !== "held") {
+        throw new Error(`Maintenance ${outcome.kind} before a native integrity check was held`);
+      }
+      return outcome.owner;
+    },
     async expectHealthy(expected: Record<PreparedIntegrityOwner, number>) {
       expectParentHealthy();
       await closeOpenClawAgentDatabaseByPathAsync(databasePath);
       await closeOpenClawStateDatabaseAsync();
-      expect(phases).toEqual({ checking: expected, checked: expected });
-      const expectedCount = expected.executor + expected.reclamation + expected.other;
-      expect(Atomics.load(counts, 0)).toBe(expectedCount);
-      expect(heldCheck.completed).toBe(mode === "cold");
-      expect([...new Set(workers.map(({ threadId }) => threadId))]).toEqual([-1]);
+      expect(checking).toEqual(expected);
+      expect(checked).toEqual(expected);
+      expect(Atomics.load(new Int32Array(counts), 0)).toBe(
+        expected.executor + expected.reclamation + expected.other,
+      );
+      expect(heldCompleted).toBe(mode === "cold");
+      expect(workers.length).toBeGreaterThan(0);
+      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
     },
   };
 }
 
 export function observeRetainedMaintenanceFinalizer(databasePath: string) {
-  const finalizers: Array<[ReadOnlyDatabase | undefined, boolean, boolean, boolean]> = [];
+  const finalizers: Array<{
+    database: OpenClawAgentReadOnlyDatabase | undefined;
+    current: boolean;
+    open: boolean;
+    expired: boolean;
+  }> = [];
   let preparations = 0;
-  interceptReclamationWorker(
-    (params) => {
-      if (
-        params.plan.databaseOptions.path === databasePath &&
-        params.plan.kind === "maintenance-finalize"
-      ) {
-        const owner = params.validationOwner;
-        const retained = owner && "database" in owner ? owner : undefined;
-        finalizers.push([
-          retained?.database,
-          retained?.isCurrent() ?? false,
-          retained?.database.db.isOpen ?? false,
-          retained !== undefined &&
-            getOpenClawAgentDatabaseValidation(retained.database) === undefined,
-        ]);
-      }
-      return params;
-    },
-    () => preparations++,
+  const withWorker = reclamationWorker.withSqliteReclamationWorker;
+  vi.spyOn(reclamationWorker, "withSqliteReclamationWorker").mockImplementation(
+    (options, claim, run, assertCurrent, signal) =>
+      withWorker(
+        options,
+        claim,
+        async (worker) => {
+          const prepare = worker.prepare.bind(worker);
+          const execute = worker.run.bind(worker);
+          const prepareSpy = vi.spyOn(worker, "prepare").mockImplementation((params) => {
+            preparations += 1;
+            return prepare(params);
+          });
+          const runSpy = vi.spyOn(worker, "run").mockImplementation((params) => {
+            if (
+              params.plan.databaseOptions.path === databasePath &&
+              params.plan.kind === "maintenance-finalize"
+            ) {
+              const owner = params.validationOwner;
+              const retained = owner && "database" in owner ? owner : undefined;
+              finalizers.push({
+                database: retained?.database,
+                current: retained?.isCurrent() ?? false,
+                open: retained?.database.db.isOpen ?? false,
+                expired:
+                  retained !== undefined &&
+                  getOpenClawAgentDatabaseValidation(retained.database) === undefined,
+              });
+            }
+            return execute(params);
+          });
+          try {
+            return await run(worker);
+          } finally {
+            prepareSpy.mockRestore();
+            runSpy.mockRestore();
+          }
+        },
+        assertCurrent,
+        signal,
+      ),
   );
   return {
     expectExpired(database: OpenClawAgentDatabase) {
       expect(preparations, "retained finalization must not use cold preparation").toBe(0);
-      expect(finalizers.map(([, ...facts]) => facts)).toEqual([[true, true, true]]);
-      expect(finalizers[0]?.[0]).toBe(database);
+      expect(finalizers).toHaveLength(1);
+      expect(finalizers[0]?.database).toBe(database);
+      expect(finalizers[0]).toMatchObject({ current: true, open: true, expired: true });
     },
   };
 }

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { loadExecApprovalsReadOnly } from "../infra/exec-approvals.js";
@@ -12,8 +12,6 @@ import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
-import { expectCompleted } from "./bash-tools.lifecycle.test-support.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 // Execution spy arguments contain inherited environment; assert only scalar projections.
@@ -43,21 +41,10 @@ vi.mock("./shell-snapshot.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const python3 = resolveExecutablePath("python3", { useCache: false });
-const allowedReview = {
-  decision: "allow-once",
-  risk: "low",
-  rationale: "list fixture files",
-} as const;
-
-function completed(details: ExecToolDetails) {
-  assert(details.status === "completed", `Unexpected exec status: ${details.status}`);
-  return details;
-}
 
 describe.skipIf(process.platform === "win32")("gateway execution authorization boundary", () => {
   let root: string;
   let supervisor: ReturnType<typeof createProcessSupervisor> | undefined;
-  const write = (name: string, text = "fixture") => fs.writeFileSync(path.join(root, name), text);
   beforeEach(() => {
     root = fs.realpathSync(tempDirs.make("exec-authorization-boundary-"));
     for (const key of ["HOME", "USERPROFILE", "OPENCLAW_HOME", "ZDOTDIR"]) {
@@ -67,7 +54,11 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     vi.stubEnv("PATH", "/usr/bin:/bin");
     vi.stubEnv("SHELL", "/bin/bash");
     vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "1");
-    setPolicy("allowlist");
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+      agents: {},
+    });
     resetProcessRegistryForTests();
     boundary.prepare.mockReset().mockResolvedValue(undefined);
     const liveSupervisor = createProcessSupervisor();
@@ -102,7 +93,11 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
   }
   function reviewer() {
-    return vi.fn<ExecAutoReviewer>(async () => allowedReview);
+    return vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "list fixture files",
+    }));
   }
 
   function setPolicy(security: "allowlist" | "deny", allowlisted = false) {
@@ -113,12 +108,13 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     });
   }
 
-  function approve(decision: "allow-once" | "allow-always") {
+  function approve(decision: "allow-once" | "allow-always", beforeDecision?: () => void) {
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       if (method === "exec.approval.request") {
         return { status: "accepted", id: "fixture-approval" };
       }
       if (method === "exec.approval.waitDecision") {
+        beforeDecision?.();
         return { decision };
       }
       return { ok: true };
@@ -131,9 +127,9 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       async () => {
         const command = "env -- env ls ~/approved.txt | cat && ls *.txt";
         vi.stubEnv("SHELL", shell);
-        write("approved.txt");
-        write(
-          shell.endsWith("bash") ? ".bashrc" : ".zshrc",
+        fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
+        fs.writeFileSync(
+          path.join(root, shell.endsWith("bash") ? ".bashrc" : ".zshrc"),
           [
             "ls() { printf 'UNREVIEWED_FUNCTION\\n'; }",
             "env() { printf 'UNREVIEWED_WRAPPER\\n'; }",
@@ -144,13 +140,15 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         );
         const review = reviewer();
         const result = await tool(review).execute("bound-dispatch", { command });
-        const details = completed(result.details);
+        if (result.details.status !== "completed") {
+          throw new Error(`Unexpected exec status: ${result.details.status}`);
+        }
         expect(review.mock.calls.length).toBe(1);
         expect(review.mock.calls[0]?.[0].command).toBe(command);
         expect(vi.mocked(callGatewayTool).mock.calls.length).toBe(0);
-        expect(details.exitCode).toBe(0);
-        expect(details.aggregated).toContain("approved.txt");
-        expect(details.aggregated).not.toContain("UNREVIEWED");
+        expect(result.details.exitCode).toBe(0);
+        expect(result.details.aggregated).toContain("approved.txt");
+        expect(result.details.aggregated).not.toContain("UNREVIEWED");
         expect(boundary.spawn.mock.calls.length).toBe(1);
       },
     );
@@ -182,8 +180,11 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         path.join(sitePackages, "venv_fixture.py"),
         "VALUE = 'venv-package-loaded'\n",
       );
-      write("probe.py", "import sys, venv_fixture; print(venv_fixture.VALUE, *sys.argv[1:])\n");
-      write("approved.txt");
+      fs.writeFileSync(
+        path.join(root, "probe.py"),
+        "import sys, venv_fixture; print(venv_fixture.VALUE, *sys.argv[1:])\n",
+      );
+      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
       expect(
         execFileSync(interpreter, ["probe.py", "approved.txt"], {
           cwd: root,
@@ -197,11 +198,15 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       if (shadowed && mode === "auto") {
         review.mockImplementation(async () => {
           fs.symlinkSync(fs.realpathSync(interpreter), path.join(earlierBin, "python"));
-          return allowedReview;
+          return { decision: "allow-once", risk: "low", rationale: "list fixture files" };
         });
       }
       if (mode === "ask") {
-        approve("allow-once");
+        approve("allow-once", () => {
+          if (shadowed) {
+            fs.symlinkSync(fs.realpathSync(interpreter), path.join(earlierBin, "python"));
+          }
+        });
       }
       // Gateway login-shell PATH is cached; select the fixture through its explicit exec setting.
       const result = await tool(review, mode, [earlierBin, path.dirname(interpreter)]).execute(
@@ -219,7 +224,11 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         expect(boundary.spawn.mock.calls.length).toBe(0);
         return;
       }
-      expectCompleted(result.details, "venv-package-loaded approved.txt");
+      if (result.details.status !== "completed") {
+        throw new Error(`Unexpected exec status: ${result.details.status}`);
+      }
+      expect(result.details.exitCode).toBe(0);
+      expect(result.details.aggregated).toBe("venv-package-loaded approved.txt");
     },
   );
 
@@ -228,7 +237,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     fs.mkdirSync(bin);
     const commandPath = path.join(bin, "read-approved");
     fs.symlinkSync("/bin/cat", commandPath);
-    write("approved.txt", "approved-content\n");
+    fs.writeFileSync(path.join(root, "approved.txt"), "approved-content\n");
     saveExecApprovals({
       version: 1,
       defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
@@ -246,25 +255,32 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
 
     expect(review.mock.calls.length).toBe(0);
     expect(vi.mocked(callGatewayTool).mock.calls.length).toBe(0);
-    expectCompleted(result.details, "approved-content");
+    if (result.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${result.details.status}`);
+    }
+    expect(result.details.exitCode).toBe(0);
+    expect(result.details.aggregated).toBe("approved-content");
   });
 
   it("preserves startup customization for ordinary full-mode execution", async () => {
     saveExecApprovals({ version: 1, defaults: { security: "full", ask: "off" }, agents: {} });
-    write(".bashrc", "ls() { printf 'CUSTOMIZED\\n'; }\n");
+    fs.writeFileSync(path.join(root, ".bashrc"), "ls() { printf 'CUSTOMIZED\\n'; }\n");
     const review = reviewer();
     const result = await tool(review, "full").execute("full-customization", {
       command: "ls *.txt",
     });
     expect(review.mock.calls.length).toBe(0);
-    expect(completed(result.details).aggregated).toBe("CUSTOMIZED");
+    if (result.details.status !== "completed") {
+      throw new Error(`Unexpected exec status: ${result.details.status}`);
+    }
+    expect(result.details.aggregated).toBe("CUSTOMIZED");
   });
 
   it.each(["auto", "human-always", "current-policy"] as const)(
     "revalidates %s after asynchronous shell preparation",
     async (authority) => {
       vi.stubEnv("OPENCLAW_EXEC_SHELL_SNAPSHOT", "0");
-      write("approved.txt");
+      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
       setPolicy("allowlist", authority === "current-policy");
       const review = reviewer();
       approve(authority === "human-always" ? "allow-always" : "allow-once");
@@ -301,7 +317,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
   it.each([false, true])(
     "preserves human allow-always through PTY fallback (revoked=%s)",
     async (revoked) => {
-      write("approved.txt");
+      fs.writeFileSync(path.join(root, "approved.txt"), "fixture");
       approve("allow-always");
       const liveSupervisor = supervisor!;
       let started = 0;
@@ -325,7 +341,10 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
         expect(started).toBe(0);
       } else {
         const result = await pending;
-        expect(completed(result.details).aggregated).toBe("approved.txt");
+        if (result.details.status !== "completed") {
+          throw new Error(`Unexpected exec status: ${result.details.status}`);
+        }
+        expect(result.details.aggregated).toBe("approved.txt");
         expect(started).toBe(1);
         expect((loadExecApprovalsReadOnly().agents?.main?.allowlist ?? []).length).toBeGreaterThan(
           0,

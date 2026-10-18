@@ -987,4 +987,3 @@ it.each<[(typeof errors)[keyof typeof errors], string, RejectedInstall]>([
     expectUnused(mocks.download, mocks.installArchive, mocks.cleanup);
   },
 );
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

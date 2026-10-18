@@ -1,14 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readMarkdownCodeBlockCopyText } from "../../../components/markdown-code-blocks.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
+import { TOOL_OUTPUT_PREVIEW_CHARS } from "../../../lib/chat/tool-output.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
-import {
-  createGroupedMessageHarness,
-  createMessageGroupHarness,
-} from "./chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
+import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
+import { ChatToolOutput } from "./chat-tool-output-view.tsx";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 // Keep these as literal source text: parsing expected values would repeat the
@@ -21,43 +23,66 @@ const jsonSources = [
   { name: "array lexemes", text: "[9007199254740993,1e400,0.1234567890123456789,-0]" },
 ];
 
+const containers: HTMLElement[] = [];
+
 function createContainer() {
-  const container = document.body.appendChild(document.createElement("div"));
-  onTestFinished(() => container.remove());
+  const container = document.createElement("div");
+  document.body.append(container);
+  containers.push(container);
   return container;
 }
+
+afterEach(() => {
+  for (const container of containers.splice(0)) {
+    container.remove();
+  }
+});
 
 describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role) => {
   async function renderMessage(text: string, isStreaming = false) {
     const container = createContainer();
-    createGroupedMessageHarness(container).render(
-      prepareChatMessageRender({
-        role,
-        content: text,
-        ...(role === "toolResult" ? { toolName: "lookup", toolCallId: "json-result" } : {}),
-      }),
-      "json-message",
-      { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
+    mountSolid(
+      GroupedMessage,
+      {
+        preparation: prepareChatMessageRender({
+          role,
+          content: text,
+          ...(role === "toolResult" ? { toolName: "lookup", toolCallId: "json-result" } : {}),
+        }),
+        messageKey: "json-message",
+        options: { isStreaming, showReasoning: false, isToolMessageExpanded: () => true },
+      },
+      container,
     );
     await settleToolBridges(container);
     return container;
   }
 
-  it.each([
-    ...(role === "assistant" ? jsonSources : jsonSources.slice(0, 1)).map(
-      ({ name, text }) => [name, text, false, true] as const,
-    ),
-    ...[20_000, 20_001].map(
-      (size) =>
-        [
-          `${size}-character boundary`,
-          '{"text":"' + "x".repeat(size - 11) + '"}',
-          false,
-          size === 20_000,
-        ] as const,
-    ),
-    ["explicit fence", '{"id":9007199254740993,"text":"**stars**"}', true, true] as const,
-  ])("preserves %s in literal code and copy", async (_name, text, fenced, tree) => {
+  it.each<{ name: string; text: string; fenced: boolean; tree: boolean; size?: number }>([
+    ...(role === "assistant" ? jsonSources : jsonSources.slice(0, 1)).map(({ name, text }) => ({
+      name,
+      text,
+      fenced: false,
+      tree: true,
+    })),
+    ...[20_000, 20_001].map((size) => ({
+      name: `${size}-character boundary`,
+      size,
+      text: '{"text":"' + "x".repeat(size - 11) + '"}',
+      fenced: false,
+      tree: size === 20_000,
+    })),
+    {
+      name: "explicit fence",
+      text: '{"id":9007199254740993,"text":"**stars**"}',
+      fenced: true,
+      tree: true,
+    },
+  ])("preserves $name in literal code and copy", async (scenario) => {
+    const { text, fenced, tree } = scenario;
+    if (scenario.size !== undefined) {
+      expect(text).toHaveLength(scenario.size);
+    }
     const source = fenced ? "```json\n" + text + "\n```" : text;
     const displayed = fenced ? (role === "toolResult" ? source : text + "\n") : text;
     const container = await renderMessage(source);
@@ -78,8 +103,12 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
     }
     if (role === "assistant" && tree) {
       expect(container.querySelectorAll(".code-block-json-tree")).toHaveLength(1);
-      expectJsonMode(container, "tree", true);
-      expectJsonMode(container, "raw", false);
+      expect(container.querySelector('[data-json-mode="tree"]')?.getAttribute("aria-pressed")).toBe(
+        "true",
+      );
+      expect(container.querySelector('[data-json-mode="raw"]')?.getAttribute("aria-pressed")).toBe(
+        "false",
+      );
       expect(container.querySelector(".code-block-viewport pre code")?.textContent).toBe(displayed);
     } else {
       expect(container.querySelector(".code-block-json-tree, .code-block-json-mode")).toBeNull();
@@ -105,6 +134,63 @@ describe.each(["user", "assistant", "toolResult"])("%s JSON message text", (role
   });
 });
 
+describe("tool JSON details", () => {
+  async function openToolDetails(text: string) {
+    const container = createContainer();
+    const openSidebar = vi.fn<(content: SidebarContent) => void>();
+    mountSolid(
+      ChatToolCard,
+      {
+        card: { id: "json-tool", name: "lookup", outputText: text, completed: true },
+        options: {
+          messageKey: "test-message",
+          expanded: true,
+          onToggleExpanded: vi.fn(),
+          onOpenSidebar: openSidebar,
+        },
+      },
+      container,
+    );
+    await settleToolBridges(container);
+    expect(container.querySelector(".chat-tool-card__block code")?.textContent).toBe(
+      text.slice(0, TOOL_OUTPUT_PREVIEW_CHARS),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-tool-card__action-btn")!.click();
+    expect(openSidebar).toHaveBeenCalledOnce();
+    const content = openSidebar.mock.calls[0]?.[0];
+    expect(content?.kind).toBe("tool-output");
+    if (content?.kind !== "tool-output") {
+      throw new Error("Expected raw tool output inspector");
+    }
+    expect(content.card.outputText).toBe(text);
+    const panel = createContainer();
+    mountSolid(ChatToolOutput, { content }, panel);
+    await vi.waitFor(() =>
+      expect(panel.querySelector(".chat-tool-output__text code")?.textContent).toBe(text),
+    );
+    return panel;
+  }
+
+  it.each([
+    jsonSources[0]!,
+    {
+      name: "oversized JSON",
+      size: 20_001,
+      text: '{"text":"**stars**' + "x".repeat(19_981) + '"}',
+    },
+    { name: "explicit fence", text: '```json\n{"id":9007199254740993,"text":"**stars**"}\n```' },
+    { name: "invalid JSON", text: '{"count": }' },
+  ])("preserves $name after opening tool details", async (scenario) => {
+    const { text } = scenario;
+    if ("size" in scenario) {
+      expect(text).toHaveLength(scenario.size);
+    }
+    const panel = await openToolDetails(text);
+    expect(panel.querySelector("pre code")?.textContent).toBe(text);
+    expect(panel.querySelector("pre strong")).toBeNull();
+  });
+});
+
 function expectElement<T extends Element>(
   container: Element,
   selector: string,
@@ -112,36 +198,43 @@ function expectElement<T extends Element>(
 ): T {
   const element = container.querySelector<T>(selector);
   expect(element).toBeInstanceOf(constructor);
-  return element!;
+  if (!(element instanceof constructor)) {
+    throw new Error(`Expected ${selector} to match ${constructor.name}`);
+  }
+  return element;
 }
 
-function expectJsonMode(container: Element, mode: string, pressed: boolean) {
-  expect(container.querySelector(`[data-json-mode="${mode}"]`)?.getAttribute("aria-pressed")).toBe(
-    String(pressed),
-  );
-}
+const jsonGroups = new WeakMap<
+  HTMLElement,
+  ReturnType<typeof mountSolid<Parameters<typeof MessageGroup>[0]>>
+>();
 
-function jsonMessageGroup(message: unknown, role: string) {
-  const container = createContainer();
-  const view = createMessageGroupHarness(container);
-  return {
-    container,
-    render: (options: Partial<NativeMessageGroupOptions>) => {
-      view.render(
-        createMessageGroup(message, role, {
-          key: role + "-group",
-          messages: [{ key: role + "-message", message }],
-        }),
-        {
-          showReasoning: true,
-          showToolCalls: true,
-          assistantName: "OpenClaw",
-          assistantAvatar: null,
-          ...options,
-        },
-      );
+function renderJsonMessageGroup(
+  container: HTMLElement,
+  message: unknown,
+  role: string,
+  opts: Partial<Parameters<typeof MessageGroup>[0]["options"]>,
+) {
+  const group = createMessageGroup(message, role, {
+    key: role + "-group",
+    messages: [{ key: role + "-message", message }],
+  });
+  const props = {
+    group,
+    options: {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      ...opts,
     },
   };
+  const view = jsonGroups.get(container);
+  if (view) {
+    view.update(props);
+  } else {
+    jsonGroups.set(container, mountSolid(MessageGroup, props, container));
+  }
 }
 
 describe("JSON group DOM retention", () => {
@@ -155,12 +248,12 @@ describe("JSON group DOM retention", () => {
       text: "[\n" + Array.from({ length: 45 }, () => "0").join(",\n") + "\n]",
     },
   ])("uses message disclosure for $name user JSON without JSON controls", ({ text }) => {
+    const container = createContainer();
     const message = { role: "user", content: text, timestamp: 1 };
-    const { container, render } = jsonMessageGroup(message, "user");
     const onToggleUserMessageExpanded = vi.fn();
     let expanded = false;
     const rerender = () =>
-      render({
+      renderJsonMessageGroup(container, message, "user", {
         isUserMessageExpanded: () => expanded,
         onToggleUserMessageExpanded,
       });
@@ -188,13 +281,13 @@ describe("JSON group DOM retention", () => {
     expect(code.textContent).toBe(text);
   });
   it.each(["user", "assistant"])("preserves %s JSON DOM across rerenders", (role) => {
+    const container = createContainer();
     const message = {
       role,
       content: role === "user" ? '{"ok":true}' : '{"nested":{"ok":true}}',
       timestamp: 1,
     };
-    const { container, render } = jsonMessageGroup(message, role);
-    render({ showToolCalls: true });
+    renderJsonMessageGroup(container, message, role, { showToolCalls: true });
     const code = expectElement(container, ".chat-text pre code", HTMLElement);
     expect(code.textContent).toBe(message.content);
     const tree =
@@ -211,7 +304,7 @@ describe("JSON group DOM retention", () => {
     } else {
       expect(container.querySelector(".chat-text button, .chat-text details")).toBeNull();
     }
-    render({ showToolCalls: false });
+    renderJsonMessageGroup(container, message, role, { showToolCalls: false });
     expect(container.querySelector(".chat-text pre code")).toBe(code);
     expect(code.textContent).toBe(message.content);
     if (role === "assistant") {
