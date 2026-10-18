@@ -185,6 +185,20 @@ it.each(["capture", "custody", "fork"] as const)(
           expect(control.deref()).toBeUndefined();
           expect(replies.every((reply) => reply.deref() === undefined)).toBe(true);
           expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
+          const releaseRecovery = async () => {
+            const recovery = artifact.captureRecoverySource();
+            const references = [
+              new WeakRef(recovery.fork),
+              new WeakRef(recovery.sourceCapture.capture),
+            ];
+            await recovery.disposeAsync();
+            return references;
+          };
+          const released = await releaseRecovery();
+          await nextTurn();
+          queryObjects(WeakRef);
+          expect(released.every((reference) => reference.deref() === undefined)).toBe(true);
+          expect(fs.readFileSync(artifact.resolve(entry), "utf8")).toContain("42");
         }
         // Recovery copies the captured package synchronously in the worker. Advance
         // its host deadline clock without making this lifecycle proof sleep for 30s.

@@ -184,6 +184,7 @@ export async function preparePluginGenerationArtifact(
   );
   function accept(reply: GenerationWorkerReply): unknown {
     resources = reply.resources;
+    codec.releaseReceivedHandles(reply.released ?? []);
     if ("error" in reply) {
       // Reload recovery distinguishes unavailable old source from fatal preparation errors.
       const error =

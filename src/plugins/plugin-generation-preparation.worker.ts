@@ -62,16 +62,19 @@ function own<T extends Resource>(resource: T): T {
     return resource;
   }
   owned.add(resource);
+  codec.retainResource(resource);
   resources.add(resource);
   const dispose = resource.dispose.bind(resource);
   const disposeAsync = resource.disposeAsync.bind(resource);
   resource.dispose = () => {
     dispose();
+    codec.releaseResource(resource);
     resources.delete(resource);
     orphaned.delete(resource);
   };
   resource.disposeAsync = async () => {
     await disposeAsync();
+    codec.releaseResource(resource);
     resources.delete(resource);
     orphaned.delete(resource);
   };
@@ -263,7 +266,12 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         }
         const value = codec.encode(result);
         const admission = admissionChanges();
-        return { value, admission, resources: resources.size - orphaned.size };
+        return {
+          value,
+          admission,
+          resources: resources.size - orphaned.size,
+          released: codec.takeReleasedHandles(),
+        };
       } catch (error) {
         let failure = error;
         if (failedCapture) {
@@ -281,6 +289,7 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         return {
           error: { message: exception.message, name: exception.name, stack: exception.stack },
           resources: resources.size - orphaned.size,
+          released: codec.takeReleasedHandles(),
         };
       }
     });
