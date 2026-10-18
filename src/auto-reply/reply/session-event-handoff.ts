@@ -24,8 +24,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { channelRouteTargetsMatchExact } from "../../plugin-sdk/channel-route.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.cleanup-context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ReplyPayload } from "../../shared/reply-payload.types.js";
 import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
@@ -405,6 +407,15 @@ export function enqueueSessionEventForHost(
         ...(failure ? { error: String(failure) } : {}),
         ...(failure instanceof SessionWorkStartError ? { retryable: failure.retryable } : {}),
       });
+      if (isCronRunSessionKey(sessionKey)) {
+        void runWithSessionControllerCleanup(async () => {
+          const { removeCronRunContinuationSessionIfIdle } =
+            await import("../../cron/run-continuation-cleanup.js");
+          await removeCronRunContinuationSessionIfIdle(sessionKey);
+        }).catch((error: unknown) => {
+          log.warn("Could not remove settled cron continuation", { error: String(error) });
+        });
+      }
     };
     if (operation?.ownerSettlement) {
       void operation.ownerSettlement.then(complete, complete);

@@ -22,7 +22,6 @@ import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { runWithSessionControllerCleanup } from "../sessions/session-controller.cleanup-context.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
 import {
@@ -440,19 +439,6 @@ export async function maybeNotifyOnExit(
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
           );
-        }
-        if (isCronRunSessionKey(eventSessionKey)) {
-          try {
-            await runWithSessionControllerCleanup(async () => {
-              const { removeCronRunContinuationSessionIfIdle } =
-                await import("../cron/run-continuation-cleanup.js");
-              await removeCronRunContinuationSessionIfIdle(eventSessionKey);
-            });
-          } catch (error) {
-            logWarn(
-              `exec: could not remove settled cron continuation (${formatErrorMessage(error)})`,
-            );
-          }
         }
       });
     } catch (error) {
