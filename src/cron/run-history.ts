@@ -20,6 +20,8 @@ import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 type CronRunHistorySortDir = "asc" | "desc";
 type CronRunHistoryStatusFilter = "all" | CronRunStatus;
 
+const RUN_STATUS_ORDER: Record<CronRunStatus, number> = { error: 0, skipped: 1, ok: 2 };
+
 export type ReadCronRunHistoryPageOptions = {
   storeKey: string;
   view?: "full" | "summary";
@@ -36,6 +38,7 @@ export type ReadCronRunHistoryPageOptions = {
   /** Matches computed while the worker holds each bounded batch of search details. */
   queryMatchedTaskIds?: ReadonlySet<string>;
   sortDir?: CronRunHistorySortDir;
+  sortBy?: "time" | "status";
   jobNameById?: Record<string, string>;
   /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
   entryFilter?: (entry: CronRunLogEntry) => boolean;
@@ -170,9 +173,17 @@ export function selectCronRunHistoryPage(
         (!options.entryFilter || options.entryFilter(entry))
       );
     })
-    .toSorted(
-      (left, right) => sortMultiplier * compareCronRunRecordsNewestFirst(left.record, right.record),
-    );
+    .toSorted((left, right) => {
+      if (options.sortBy === "status") {
+        const statusOrder =
+          (left.entry.status ? RUN_STATUS_ORDER[left.entry.status] : 3) -
+          (right.entry.status ? RUN_STATUS_ORDER[right.entry.status] : 3);
+        if (statusOrder !== 0) {
+          return statusOrder;
+        }
+      }
+      return sortMultiplier * compareCronRunRecordsNewestFirst(left.record, right.record);
+    });
   const total = rows.length;
   const boundedOffset = Math.min(total, offset);
   const selected = rows.slice(boundedOffset, boundedOffset + limit);

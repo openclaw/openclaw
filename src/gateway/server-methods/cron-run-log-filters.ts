@@ -27,6 +27,7 @@ export function cronRunLogPageFilters(params: {
   deliveryStatus?: CronDeliveryStatus;
   query?: string;
   sortDir?: "asc" | "desc";
+  sortBy?: "time" | "status";
 }) {
   return {
     view: params.view,
@@ -39,5 +40,6 @@ export function cronRunLogPageFilters(params: {
     deliveryStatus: params.deliveryStatus,
     query: params.query,
     sortDir: params.sortDir,
+    sortBy: params.sortBy,
   };
 }
