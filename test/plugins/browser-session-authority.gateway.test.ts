@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type BrowserContext } from "playwright-core";
@@ -32,6 +31,7 @@ import { createPluginRecord } from "../../src/plugin-sdk/plugin-test-runtime.js"
 import { runPluginRegisterSyncInRegistry } from "../../src/plugins/loader-module-runtime.js";
 import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -49,12 +49,9 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
       response.setHeader("Content-Type", "text/html");
       response.end("<!doctype html><title>Authority fixture</title>");
     });
-    await new Promise<void>((resolve) => {
-      destination.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await listenLoopback(destination);
     let browser: BrowserContext | undefined;
     try {
-      const origin = `http://127.0.0.1:${(destination.address() as AddressInfo).port}`;
       const port = await getFreePort();
       const cdpUrl = `http://127.0.0.1:${port}`;
       browser = await chromium.launchPersistentContext(path.join(root, "chromium"), {
@@ -269,13 +266,7 @@ it.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
         }
       });
     } finally {
-      destination.closeAllConnections();
-      await Promise.all([
-        browser?.close(),
-        new Promise<void>((resolve) => {
-          destination.close(() => resolve());
-        }),
-      ]);
+      await Promise.all([browser?.close(), closeHttpServer(destination)]);
     }
   },
   60_000,

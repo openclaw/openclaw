@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -73,9 +74,7 @@ it("models.list selects a native user-home API-key catalog through the prepared 
           for (const socket of server.clients) {
             socket.terminate();
           }
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
+          await promisify(server.close.bind(server))();
           await new Promise<void>((resolve) => {
             httpServer.close(() => resolve());
           });

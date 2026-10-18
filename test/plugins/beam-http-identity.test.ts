@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import beamPlugin from "../../extensions/beam/index.js";
@@ -22,6 +21,7 @@ import {
 import { createPluginRuntime } from "../../src/plugins/runtime/index.js";
 import { listProfiles } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
+import { closeHttpServer, listenLoopback } from "../helpers/gateway-integration-fixtures.js";
 
 const routePath = "/api/v1/beam/sessions";
 const log = createSubsystemLogger("test/beam-http-identity");
@@ -81,20 +81,11 @@ async function withBeamHttpServer(
             shouldEnforceGatewayAuthForPluginPath(registry, pathContext),
         },
       });
-      const listening = once(server, "listening");
-      server.listen(0, "127.0.0.1");
-      await listening;
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Beam test server did not bind a TCP port");
-      }
+      const origin = await listenLoopback(server);
       try {
-        await run(`http://127.0.0.1:${address.port}`, registration);
+        await run(origin, registration);
       } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-          server.closeAllConnections();
-        });
+        await closeHttpServer(server);
         resetPluginRuntimeStateForTest();
         closePluginStateDatabase();
       }

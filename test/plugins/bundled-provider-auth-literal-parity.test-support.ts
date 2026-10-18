@@ -13,17 +13,16 @@ import type {
 import { createNonExitingRuntime } from "../../src/runtime.js";
 import { createCapturedPluginRegistration } from "../../src/test-utils/plugin-registration.js";
 
-const PARITY_TIMEOUT_MS = 120_000;
 const PARITY_SHARD_COUNT = 3;
 const SENTINEL_API_KEY = "parity-sentinel-api-key";
-// provider-entry/provider-api-key-auth already prove manifest-derived literals.
-const MANIFEST_DERIVED_PLUGIN_IDS = new Set(
+// Manifest-derived factories and Copilot's full token setup have their own owner proof.
+const OWNER_TESTED_PLUGIN_IDS = new Set(
   `baseten byteplus cerebras clawrouter cohere deepseek featherless fireworks gmi groq
   huggingface kilocode kimi longcat meta mistral novita nvidia opencode opencode-go
-  openrouter qianfan radius synthetic together venice vercel-ai-gateway volcengine`.split(/\s+/),
+  openrouter qianfan radius synthetic together venice vercel-ai-gateway volcengine github-copilot`.split(
+    /\s+/,
+  ),
 );
-// Copilot's owner test covers its manifest literals and full token setup.
-const OWNER_TESTED_PLUGIN_IDS = new Set(["github-copilot"]);
 // Regional factories return before configuration in the null-key probe.
 const SHARED_LITERAL_FACTORIES = new Set(["minimax", "stepfun", "xiaomi", "zai"]);
 
@@ -46,8 +45,8 @@ type PluginEntryModule = {
   register?: PluginRegister;
 };
 
-function listParityCases(): ParityCase[] {
-  return listBundledPluginMetadata({ includeChannelConfigs: false }).flatMap(({ manifest }) =>
+const allParityCases: ParityCase[] = listBundledPluginMetadata({ includeChannelConfigs: false })
+  .flatMap(({ manifest }) =>
     (manifest.providerAuthChoices ?? []).flatMap((choice) => {
       if (!choice.optionKey?.trim() || !choice.cliFlag?.trim()) {
         return [];
@@ -72,30 +71,19 @@ function listParityCases(): ParityCase[] {
         },
       ];
     }),
+  )
+  .toSorted(
+    (left, right) =>
+      left.pluginId.localeCompare(right.pluginId) ||
+      left.providerId.localeCompare(right.providerId) ||
+      left.methodId.localeCompare(right.methodId),
   );
-}
-
-async function loadPluginRegister(pluginId: string): Promise<PluginRegister> {
-  // Lazy load: eager built-plugin graphs break co-resident unit-fast mocks.
-  const { loadBundledPluginFacade } =
-    await import("../../src/test-utils/bundled-plugin-public-surface.js");
-  const mod = await loadBundledPluginFacade<PluginEntryModule>({
-    pluginId,
-    artifactBasename: "index.js",
-  });
-  const register = mod.default?.register ?? mod.register;
-  assert(register, `bundled plugin ${pluginId} has no register() entry`);
-  return register;
-}
 
 async function probeRuntimeAuthLiterals(params: {
   method: ProviderAuthMethod;
   optionKey: string;
   agentDir: string;
 }): Promise<ProviderResolveNonInteractiveApiKeyParams | undefined> {
-  if (!params.method.runNonInteractive) {
-    return undefined;
-  }
   // Only the expected key gets the sentinel; preflight options get distinct placeholders.
   const opts = new Proxy<Record<string, unknown>>(
     { [params.optionKey]: SENTINEL_API_KEY },
@@ -106,7 +94,7 @@ async function probeRuntimeAuthLiterals(params: {
   );
   let captured: ProviderResolveNonInteractiveApiKeyParams | undefined;
   try {
-    await params.method.runNonInteractive({
+    await params.method.runNonInteractive?.({
       authChoice: "parity",
       agentDir: params.agentDir,
       config: {},
@@ -125,20 +113,10 @@ async function probeRuntimeAuthLiterals(params: {
   return captured;
 }
 
-const allParityCases = listParityCases().toSorted(
-  (left, right) =>
-    left.pluginId.localeCompare(right.pluginId) ||
-    left.providerId.localeCompare(right.providerId) ||
-    left.methodId.localeCompare(right.methodId),
-);
-
-const allParityPluginIds = [...new Set(allParityCases.map((entry) => entry.pluginId))];
 export function defineBundledProviderAuthLiteralParityTests(shardIndex: number): void {
-  const parityPluginIds = allParityPluginIds.filter(
+  const parityPluginIds = [...new Set(allParityCases.map((entry) => entry.pluginId))].filter(
     (pluginId, index) =>
-      index % PARITY_SHARD_COUNT === shardIndex &&
-      !MANIFEST_DERIVED_PLUGIN_IDS.has(pluginId) &&
-      !OWNER_TESTED_PLUGIN_IDS.has(pluginId),
+      index % PARITY_SHARD_COUNT === shardIndex && !OWNER_TESTED_PLUGIN_IDS.has(pluginId),
   );
   const parityPluginIdSet = new Set(parityPluginIds);
   const parityCases = allParityCases.filter((entry) => parityPluginIdSet.has(entry.pluginId));
@@ -158,9 +136,17 @@ export function defineBundledProviderAuthLiteralParityTests(shardIndex: number):
   const registrations = new Map<string, CapturedPluginRegistration>();
 
   beforeAll(async () => {
+    // Lazy load: eager built-plugin graphs break co-resident unit-fast mocks.
+    const { loadBundledPluginFacade } =
+      await import("../../src/test-utils/bundled-plugin-public-surface.js");
     // Full plugin entry graphs contend heavily when transformed concurrently.
     for (const pluginId of parityPluginIds) {
-      const register = await loadPluginRegister(pluginId);
+      const mod = await loadBundledPluginFacade<PluginEntryModule>({
+        pluginId,
+        artifactBasename: "index.js",
+      });
+      const register = mod.default?.register ?? mod.register;
+      assert(register, `bundled plugin ${pluginId} has no register() entry`);
       const captured = createCapturedPluginRegistration({
         id: pluginId,
         name: pluginId,
@@ -182,7 +168,7 @@ export function defineBundledProviderAuthLiteralParityTests(shardIndex: number):
 
     it.each(probes)(
       "$parityCase.pluginId $parityCase.providerId/$parityCase.methodId optionKey=$parityCase.optionKey",
-      { timeout: PARITY_TIMEOUT_MS },
+      { timeout: 120_000 },
       async ({ parityCase, methodIds }) => {
         const { pluginId, providerId, methodId, optionKey, cliFlag, setupEnvVars } = parityCase;
         const captured = registrations.get(pluginId);
