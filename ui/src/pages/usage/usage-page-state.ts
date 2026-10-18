@@ -53,6 +53,7 @@ export function createUsagePage(context: ApplicationContext) {
     costSummary: CostUsageSummary | null;
   } | null = null;
   let usageError: string | null = null;
+  let sessionLoadedAtMs: number | null = null;
   let filters: Omit<UsageProps["filters"], "selectedSessions"> = {
     ...createDefaultUsageDateRange(),
     scope: "family",
@@ -284,12 +285,16 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function resetProviderUsage() {
+    sessionLoadedAtMs = null;
     providerUsage.reset();
     refreshPolicy.resetPayload();
   }
 
+  // Only the session read owns freshness: a provider result reuses the last session timestamp,
+  // so provider plans add their retry state and never make a failed session read look fresh.
   // Session rollups converge on publication; only provider usage needs timed retries.
-  function markUsageLoaded(connection: unknown, loadedAtMs: number | null): void {
+  function markUsageLoaded(connection: unknown, loadedAtMs = sessionLoadedAtMs): void {
+    sessionLoadedAtMs = loadedAtMs;
     refreshPolicy.setLastLoadedAtMs(usageCacheIncomplete() ? null : loadedAtMs, {
       incomplete: providerUsage.incomplete,
       connection,
@@ -300,7 +305,7 @@ export function createUsagePage(context: ApplicationContext) {
     client: () => (gateway.connected ? gateway.client : null),
     epoch: () => connectionEpoch,
     isCurrent: (epoch) => epoch === connectionEpoch,
-    onResult: (epoch) => markUsageLoaded(epoch, Date.now()),
+    onResult: (epoch) => markUsageLoaded(epoch),
     onSettled: () => {
       refreshPolicy.flushPending();
       notify();

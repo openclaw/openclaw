@@ -422,6 +422,28 @@ describe("UsagePage provider usage outcome", () => {
     },
   );
 
+  it("keeps a failed session read stale after provider plans load", async () => {
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "usage.status" ? { updatedAt: 1, providers: [] } : cacheSnapshot("fresh").result,
+    );
+    const { page } = await createUsagePageFixture(request, false);
+    page.routeData = {
+      ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
+      // The route's session read failed, so it carries no loaded timestamp.
+      loadedAtMs: null,
+      error: "usage unavailable",
+    };
+    await page.updateComplete;
+    await vi.waitFor(() => expect(usageCalls(request, "usage.status")).toHaveLength(1));
+    await page.updateComplete;
+    const sessionReads = usageCalls(request, "sessions.usage").length;
+    // Provider plans finishing must not mark the failed session read fresh.
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(usageCalls(request, "sessions.usage").length).toBeGreaterThan(sessionReads),
+    );
+  });
+
   it.each([
     { loadSource: "direct", failed: true, aggregateFails: false },
     { loadSource: "preload", failed: true, aggregateFails: false },
