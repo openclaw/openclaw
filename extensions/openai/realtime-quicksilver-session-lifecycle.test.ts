@@ -340,7 +340,7 @@ describe("GPT-Live browser session lifecycle", () => {
       const { socket } = await redeem(reservation.clientSecret);
       trigger(socket);
       expect(socket.closed).toBe(true);
-      expect(realtime.getSessionCounts()).toEqual(emptyCounts);
+      await vi.waitFor(() => expect(realtime.getSessionCounts()).toEqual(emptyCounts));
       await realtime.cleanup();
       socket.emit("error", new Error("late socket error"));
       socket.emit("close", 1006, Buffer.from("late close"));
