@@ -34,12 +34,13 @@ const workspaceSkill = recordSkillFileHost(
   "workspace",
 );
 const snapshot: SkillSnapshot = {
-  prompt:
-    "<available_skills><skill><location>/usr/lib/node_modules/openclaw/skills/demo/SKILL.md</location></skill></available_skills>",
+  prompt: `<available_skills><skill><location>${hostSkillPath}</location></skill></available_skills>`,
   skills: [{ name: "demo" }],
   resolvedSkills: [workspaceSkill],
   discoverySkills: [workspaceSkill],
 };
+const deliveredPath = (name: string, file = "SKILL.md") =>
+  `/workspace/.openclaw/sandbox-skills/skills/${name}/${file}`;
 
 function usagePath(name: string, skillFile = hostSkillPath) {
   return {
@@ -50,12 +51,12 @@ function usagePath(name: string, skillFile = hostSkillPath) {
   };
 }
 
-async function writeSkill(root: string, name: string, description: string, metadata: string) {
+async function writeSkill(root: string, name: string, metadata: string) {
   const dir = path.join(root, "skills", name);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\nopenclaw: ${metadata}\n---\n# ${name}\n`,
+    `---\nname: ${name}\ndescription: ${name}\nopenclaw: ${metadata}\n---\n# ${name}\n`,
     "utf8",
   );
   return dir;
@@ -164,19 +165,11 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
     expect(
       remapSkillReferencePaths(
-        `Read workspace-skill://workspace/demo/SKILL.md, ${hostSkillPath}, ` +
-          `workspace-skill://workspace/hidden/SKILL.md, ` +
-          "workspace-skill://workspace/hidden/references/setup.md, " +
-          `${hiddenSkillPath}, and /host/skills/hidden/references/setup.md before acting.`,
+        `Read workspace-skill://workspace/demo/SKILL.md, ${hostSkillPath}, workspace-skill://workspace/hidden/SKILL.md, workspace-skill://workspace/hidden/references/setup.md, ${hiddenSkillPath}, and /host/skills/hidden/references/setup.md before acting.`,
         runtime.skillUsagePaths,
       ),
     ).toBe(
-      "Read /workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md, " +
-        "/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md, " +
-        "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md, " +
-        "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md, " +
-        "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md, and " +
-        "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md before acting.",
+      `Read ${deliveredPath("demo")}, ${deliveredPath("gateway-demo")}, ${deliveredPath("hidden")}, ${deliveredPath("hidden", "references/setup.md")}, ${deliveredPath("hidden")}, and ${deliveredPath("hidden", "references/setup.md")} before acting.`,
     );
     const selections = [
       ["demo-2", hostSkillPath, "workspace"],
@@ -190,11 +183,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           runtime.skillUsagePaths,
         ),
       ),
-    ).toEqual([
-      "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-      "/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md",
-      "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md",
-    ]);
+    ).toEqual(["demo", "gateway-demo", "hidden"].map((name) => deliveredPath(name)));
   });
 
   it.each([
@@ -210,7 +199,6 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     const skillDir = await writeSkill(
       materializedWorkspace,
       "demo",
-      "Demo skill",
       '{"requires":{"anyBins":["sandboxbin"]}}',
     );
     const skillsEligibility = remoteEligibility("linux", "sandbox", (bins) =>
@@ -232,7 +220,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     const { prompt, skillEntries } = await promptFor(runtime);
 
     if (skillsSnapshot === snapshot) {
-      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      expect(prompt).toContain(deliveredPath("demo"));
       const deliveredSkill = runtime.skillsSnapshot?.resolvedSkills?.[0];
       expect(deliveredSkill).toBeDefined();
       if (!deliveredSkill) {
@@ -251,7 +239,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
   it("preserves remote eligibility when rebuilding sandbox prompts", async () => {
     const root = temps.make("openclaw-sandbox-skills-");
-    await writeSkill(root, "macskill", "Mac-only remote skill", '{"os":["darwin"]}');
+    await writeSkill(root, "macskill", '{"os":["darwin"]}');
     const skillsEligibility = remoteEligibility("darwin", "remote mac available");
 
     const { prompt } = await promptFor({
