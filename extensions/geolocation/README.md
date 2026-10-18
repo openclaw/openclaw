@@ -29,6 +29,10 @@ from disk after that. A failed refresh serves the cached copy rather than taking
 lookups down. A body that does not parse as an MMDB is discarded without
 replacing a working database.
 
+After one minute without lookups, the opened reader is released from memory.
+The next lookup reopens the disk cache. A download that could not be saved stays
+in memory because it is the only usable copy.
+
 ## Data source and license
 
 The default source is **DB-IP City Lite**, licensed **CC BY 4.0**. That license
