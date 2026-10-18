@@ -82,7 +82,13 @@ function isExitedLinuxProcess(pid: number): boolean {
     if (threads !== "0") {
       // pthread_exit can leave a terminal leader with live workers. Reaping also
       // moves the last retained task from Z to X before removing its PID.
-      return (state === "Z" || state === "X") && threads === "1";
+      // Locks record process.pid (a leader), never an unrelated worker TID.
+      // kill(pid, 0) accepts both, so existence alone cannot establish ownership.
+      const tgid = status.match(/^Tgid:[ \t]+(\d+)[ \t]*$/m)?.[1];
+      return (
+        (tgid !== undefined && Number(tgid) !== pid) ||
+        ((state === "Z" || state === "X") && threads === "1")
+      );
     }
   } catch {
     // Reaping can remove procfs after the caller's existence probe.
