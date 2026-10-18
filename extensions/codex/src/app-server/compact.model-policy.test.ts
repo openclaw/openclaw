@@ -9,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
@@ -53,34 +53,16 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("native compaction model policy", () => {
-  it.each([
-    {
-      name: "rejects a same-name model from another provider despite a prepared selected model",
-      selectedModel: "shared-model",
-      nativeProvider: "other-provider",
-      nativeModel: "shared-model",
-      allowed: false,
-      revokeSource: false,
-    },
-
-    {
-      name: "allows a prepared same-provider catalog alias for the actual wire model",
-      selectedModel: "catalog-model",
-      nativeProvider: "allowed-provider",
-      nativeModel: "wire-model",
-      allowed: true,
-      revokeSource: false,
-    },
-    {
-      name: "rejects an allowed model at final provider I/O when its original compaction source is revoked",
-      selectedModel: "catalog-model",
-      nativeProvider: "allowed-provider",
-      nativeModel: "wire-model",
-      allowed: true,
-      revokeSource: true,
-    },
-  ])("$name", async ({ selectedModel, nativeProvider, nativeModel, allowed, revokeSource }) => {
+it.each([
+  ["cross-provider same-name model", false, false],
+  ["same-provider catalog alias", true, false],
+  ["revoked compaction source", true, true],
+] as const)(
+  "native compaction model policy enforces %s",
+  async (_scenario, allowed, revokeSource) => {
+    const selectedModel = allowed ? "catalog-model" : "shared-model";
+    const nativeProvider = allowed ? "allowed-provider" : "other-provider";
+    const nativeModel = allowed ? "wire-model" : "shared-model";
     await withStateDirEnv("openclaw-compact-model-policy-", async ({ tempRoot }) => {
       const provider = "allowed-provider";
       const threadId = "compaction-policy-thread";
@@ -111,9 +93,7 @@ describe("native compaction model policy", () => {
         nativeModelPolicySupport: "exact",
         attempt: {
           runId,
-          agentId: identity.agentId,
-          sessionId: identity.sessionId,
-          sessionKey: identity.sessionKey,
+          ...identity,
           workspaceDir: tempRoot,
           agentDir: path.join(tempRoot, "agent"),
           provider,
@@ -278,11 +258,10 @@ describe("native compaction model policy", () => {
           body: JSON.stringify({ model: nativeModel }),
         });
         const forwarded = allowed && !revokeSource;
-        expect(response.status === 200, "native compaction model admission").toBe(forwarded);
+        expect(response.status, "native compaction model admission").toBe(forwarded ? 200 : 403);
         if (forwarded) {
           expect(await response.text()).toBe("synthetic compaction provider response");
         } else {
-          expect(response.status).toBe(403);
           expect(await response.json()).toMatchObject({
             error: {
               code: "model_permission_denied",
@@ -310,5 +289,5 @@ describe("native compaction model policy", () => {
         host.close();
       }
     });
-  });
-});
+  },
+);

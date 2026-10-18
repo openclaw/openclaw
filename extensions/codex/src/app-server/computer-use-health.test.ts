@@ -6,14 +6,12 @@ import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 describe("Codex Computer Use periodic health", () => {
   beforeEach(() => vi.useFakeTimers());
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("runs the live list_apps probe on the configured cadence and clears on client close", async () => {
     const client = createClient();
 
-    const result = startMonitor(client, {});
+    const result = startMonitor(client);
 
     expect(result).toEqual({ started: true, intervalMs: 30 * 60_000 });
     expect(client.request).not.toHaveBeenCalled();
@@ -36,26 +34,6 @@ describe("Codex Computer Use periodic health", () => {
     expectToolCalls(client, 1);
   });
 
-  it("keeps unified Computer Use health checks on the JavaScript probe", async () => {
-    const client = createClient({
-      mcpServerName: "cua_repl",
-      mcpTools: ["js", "js_reset", "turn_ended"],
-    });
-
-    startMonitor(
-      client,
-      {
-        mcpServerName: "cua_repl",
-        pluginName: "unified-computer-use",
-      },
-      ["js", "js_reset", "turn_ended"],
-    );
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-
-    expectProbe(client, "cua_repl", "js", { code: "await cua.listApps();" }, 60_000);
-  });
-
   it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
     const client = createClient({ liveTestFailures: 1 });
 
@@ -69,45 +47,36 @@ describe("Codex Computer Use periodic health", () => {
     });
   });
 
-  it("stops an existing monitor when health checks are disabled", async () => {
+  it.each([
+    { config: { healthCheckEnabled: false }, reason: "health_disabled" },
+    { config: { enabled: false, healthCheckEnabled: true }, reason: "disabled" },
+  ])("stops an existing monitor when $reason", async ({ config, reason }) => {
     const client = createClient();
-
-    startMonitor(client, {});
-    expect(startMonitor(client, { healthCheckEnabled: false })).toEqual({
-      started: false,
-      reason: "health_disabled",
-    });
-
+    startMonitor(client);
+    expect(startMonitor(client, config)).toEqual({ started: false, reason });
     await vi.advanceTimersByTimeAsync(30 * 60_000);
     expect(client.request).not.toHaveBeenCalled();
   });
 
-  it("stops an existing monitor when Computer Use is disabled", async () => {
-    const client = createClient();
+  it("replaces a same-interval monitor and probes the new unified tool configuration", async () => {
+    const tools = ["js", "js_reset", "turn_ended"];
+    const client = createClient({ mcpServerName: "cua_repl", mcpTools: tools });
 
-    startMonitor(client, {});
-    expect(startMonitor(client, { enabled: false, healthCheckEnabled: true })).toEqual({
-      started: false,
-      reason: "disabled",
-    });
-
-    await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expect(client.request).not.toHaveBeenCalled();
-  });
-
-  it("replaces a same-interval monitor when probe configuration changes", async () => {
-    const client = createClient({ mcpServerName: "replacement-computer-use" });
-
-    startMonitor(client, {});
+    startMonitor(client);
     expect(
-      startMonitor(client, {
-        mcpServerName: "replacement-computer-use",
-        toolCallTimeoutMs: 45_000,
-      }),
+      startMonitor(
+        client,
+        {
+          pluginName: "unified-computer-use",
+          mcpServerName: "cua_repl",
+          toolCallTimeoutMs: 45_000,
+        },
+        tools,
+      ),
     ).toEqual({ started: true, intervalMs: 30 * 60_000 });
 
     await vi.advanceTimersByTimeAsync(30 * 60_000);
-    expectProbe(client, "replacement-computer-use", "list_apps", {}, 45_000);
+    expectProbe(client, "cua_repl", "js", { code: "await cua.listApps();" }, 45_000);
     expectToolCalls(client, 1);
   });
 });
@@ -134,18 +103,16 @@ function createClient(
     }
     throw new Error(`unexpected request ${method}`);
   });
-  const addCloseHandler = vi.fn((handler: (client: CodexAppServerClient) => void) => {
-    closeHandlers.add(handler);
-    return () => closeHandlers.delete(handler);
-  });
   const client = {
     request,
-    addCloseHandler,
+    addCloseHandler(handler: (client: CodexAppServerClient) => void) {
+      closeHandlers.add(handler);
+      return () => closeHandlers.delete(handler);
+    },
   } as unknown as CodexAppServerClient;
   return {
     client,
     request,
-    addCloseHandler,
     close: () => {
       for (const handler of closeHandlers) {
         handler(client);
