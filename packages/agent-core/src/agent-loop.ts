@@ -598,7 +598,7 @@ async function executeToolCallGroups(
 
   while (cursor < toolCalls.length) {
     if (sequential && batch.toolPlan.executionStarted && !batch.signal?.aborted) {
-      const steering = getSteeringAtCheckpoint(batch.config);
+      const steering = getSteeringAtCheckpoint(batch.config, toolCalls[cursor]);
       steeringMessages = Array.isArray(steering) ? steering : await steering;
     }
     if (steeringMessages.length > 0) {
@@ -627,7 +627,8 @@ async function executeToolCallGroups(
 
       const hasReady = entries.some((entry) => "kind" in entry);
       if (sequential && batch.toolPlan.executionStarted && hasReady && !batch.signal?.aborted) {
-        const steering = getSteeringAtCheckpoint(batch.config);
+        // Sequential groups hold exactly the call just prepared.
+        const steering = getSteeringAtCheckpoint(batch.config, toolCalls[cursor - 1]);
         steeringMessages = Array.isArray(steering) ? steering : await steering;
       }
       const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>

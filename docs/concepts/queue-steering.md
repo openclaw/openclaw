@@ -20,7 +20,7 @@ Steering does not interrupt a tool call that is already running. An assistant me
 
 1. The assistant asks for tool calls.
 2. In sequential mode, OpenClaw launches the first executable call without checking steering. After a call from that assistant message has started, OpenClaw checks before each later call, including after asynchronous resolution, validation, and pre-execution hooks.
-3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped.
+3. A running call finishes. If a steer is waiting afterward, the unstarted sequential tail is skipped. If the next call delivers the turn's visible reply, it still launches first (see [Tool launch boundaries](#tool-launch-boundaries)).
 4. In parallel mode, OpenClaw prepares and launches calls together without a steering checkpoint. Waiting steering never skips a parallel batch.
 5. Every skipped call receives paired tool start/end events and a synthetic result (`Skipped to process an incoming message.`), in assistant source order. The result tells the model that the tool did not run, and the Control UI labels it **Skipped**.
 6. After either kind of batch settles, OpenClaw checks steering before stop hooks or the next model call. It appends the exact drained steering messages after the tool results, before the next LLM call.
@@ -56,6 +56,7 @@ OpenClaw tracks whether a tool has actually started across the whole assistant m
 
 - Before any tool in the assistant message has started, steering cannot skip a sequential call. Validation or policy rejection alone does not count as execution starting.
 - A sequential call that is already running completes. Waiting steering can skip the unstarted sequential tail and let the model reconsider with the steer visible.
+- A waiting steer does not skip a call that delivers the turn's visible reply. On `message_tool_only` turns, where final text stays private and the answer is a `message` send to the current conversation, that send still launches and the steer follows its result. Later calls stay skippable. If steering already skipped an earlier call in the batch, the send is skipped with the rest of the batch, and the model replans with the skipped send visible.
 - Parallel batches never skip calls for steering. Prepared calls launch together, and steering is checked after the batch settles.
 - Streamed tool batches and any remaining calls at the end of the same assistant message share this started state. A later sequential batch can be skipped after an earlier call started; a later parallel batch still runs.
 - The transcript stays append-only and structurally paired: assistant tool calls, real or synthetic tool results, then the steering user message.

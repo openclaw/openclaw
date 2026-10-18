@@ -25,7 +25,7 @@ function resultConfirmsCurrentSourceRoute(value: unknown): boolean {
   return asOptionalRecord(asOptionalRecord(value)?.details)?.sourceReplyRoute === "current-source";
 }
 
-function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
+export function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
   return (
     EXPLICIT_MESSAGE_ROUTE_KEYS.some((key) => hasNonEmptyString(args[key])) ||
     (Array.isArray(args.targets) && args.targets.some((value) => hasNonEmptyString(value)))

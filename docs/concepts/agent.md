@@ -109,9 +109,11 @@ Inbound prompts that arrive mid-run are steered into the current run by default.
 The OpenClaw runtime starts the first executable tool call of an assistant message
 before steering can skip its unstarted sequential tail. Streamed batches share
 that message's started state. Parallel batches always run without steering skips,
-and running tools continue. After each batch settles, steering is checked before
-stop hooks and the next model call. Skipped calls receive synthetic paired results,
-and drained steering messages follow the tool results.
+and running tools continue. A call that delivers the turn's visible reply, such as
+a `message` send when final text stays private, still launches before a waiting
+steer applies. After each batch settles, steering is checked before stop hooks and
+the next model call. Skipped calls receive synthetic paired results, and drained
+steering messages follow the tool results.
 
 `/queue steer` is the default active-run behavior. `/queue followup` and
 `/queue collect` make messages wait for a later turn instead of steering.

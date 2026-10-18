@@ -3,6 +3,7 @@ import {
   type AssistantMessage,
   type Model,
 } from "openclaw/plugin-sdk/llm";
+import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import { Agent, type AgentTool } from "../../runtime/index.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { installMessageToolTerminalHook } from "./message-tool-terminal.js";
@@ -56,6 +57,7 @@ export function terminalMessageAgent(
   tools: AgentTool[],
   step: (request: number) => ReturnType<typeof terminalResponse>,
   afterToolCall: Agent["afterToolCall"],
+  sourceReplyDeliveryMode: SourceReplyDeliveryMode = "automatic",
 ) {
   const counts = { requests: 0, deliveries: 0 };
   const agent = new Agent({
@@ -65,7 +67,7 @@ export function terminalMessageAgent(
   agent.afterToolCall = afterToolCall;
   installMessageToolTerminalHook({
     agent,
-    sourceReplyDeliveryMode: "automatic",
+    sourceReplyDeliveryMode,
     onDeliveredSourceReply: () => {
       counts.deliveries += 1;
     },

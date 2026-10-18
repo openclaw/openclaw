@@ -5,6 +5,7 @@ import {
 } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import type { SourceReplyDeliveryMode } from "../../../auto-reply/get-reply-options.types.js";
 import {
+  hasExplicitMessageRoute,
   isDeliveredMessageToolOnlySourceReplyResult,
   resolveMessageToolSourceReplyFinal,
 } from "../../embedded-agent-message-tool-source-reply.js";
@@ -13,12 +14,17 @@ import {
   extractMessagingToolSendResult,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
-import type { MessagingToolSourceReplyPayload } from "../../embedded-agent-messaging.types.js";
+import { isMessageToolSendActionName } from "../../embedded-agent-messaging.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../../embedded-agent-messaging.types.js";
 import { captureToolAuthoredSourceReply } from "../../embedded-agent-tool-authored-source-reply.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
 import {
   getInternalToolTurnCompletion,
   setInternalToolTurnCompletion,
+  setInternalVisibleReplyClassifier,
 } from "../../runtime/internal-hooks.js";
 import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { isToolResultError, readToolResultDetails } from "../../tool-result-error.js";
@@ -36,6 +42,40 @@ type MessageToolTerminalRoute = Omit<
 
 function argsRecordForToolCall(context: AfterToolCallContext): Record<string, unknown> {
   return asOptionalRecord(context.args) ?? asOptionalRecord(context.toolCall.arguments) ?? {};
+}
+
+function extractPendingMessagingToolSend(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  route: MessageToolTerminalRoute,
+): MessagingToolSend | undefined {
+  const extractionArgs =
+    toolName === "message" &&
+    route.currentProvider &&
+    typeof toolArgs.provider !== "string" &&
+    typeof toolArgs.channel !== "string"
+      ? { ...toolArgs, provider: route.currentProvider }
+      : toolArgs;
+  return extractMessagingToolSend(toolName, extractionArgs, route);
+}
+
+/** Pre-launch twin of the delivered-reply check: does this send address the current source? */
+function isCurrentSourceSendCall(
+  toolName: string,
+  toolArgs: Record<string, unknown>,
+  route: MessageToolTerminalRoute,
+): boolean {
+  if (toolName !== "message" || !isMessageToolSendActionName(toolArgs.action)) {
+    return false;
+  }
+  // Without an explicit route, the message tool sends to the current source.
+  return (
+    !hasExplicitMessageRoute(toolArgs) ||
+    isDeliveredMessagingToolSendToCurrentSource({
+      ...route,
+      send: extractPendingMessagingToolSend(toolName, toolArgs, route),
+    })
+  );
 }
 
 /**
@@ -105,6 +145,13 @@ export function installMessageToolTerminalHook(
     onDeliveredSourceReply?: () => void;
   },
 ): void {
+  if (params.sourceReplyDeliveryMode === "message_tool_only") {
+    // Final text stays private here, so a current-source send is the answer itself:
+    // a waiting steer must let it launch rather than skip it.
+    setInternalVisibleReplyClassifier(params.agent, (toolCall) =>
+      isCurrentSourceSendCall(toolCall.name, asOptionalRecord(toolCall.arguments) ?? {}, params),
+    );
+  }
   const finalReplyInputs = new Set<object>();
   const nestedCompletion = createSourceReplyBatchCompletion();
   const previousCompletion = getInternalToolTurnCompletion(params.agent);
@@ -126,14 +173,7 @@ export function installMessageToolTerminalHook(
     const toolName = context.toolCall.name;
     const toolArgs = argsRecordForToolCall(context);
     const final = resolveMessageToolSourceReplyFinal(toolArgs);
-    const extractionArgs =
-      toolName === "message" &&
-      params.currentProvider &&
-      typeof toolArgs.provider !== "string" &&
-      typeof toolArgs.channel !== "string"
-        ? { ...toolArgs, provider: params.currentProvider }
-        : toolArgs;
-    const pendingSend = extractMessagingToolSend(toolName, extractionArgs, params);
+    const pendingSend = extractPendingMessagingToolSend(toolName, toolArgs, params);
     const confirmedSend =
       pendingSend && extractMessagingToolSendResult(pendingSend, context.result);
     const isDelivered = (hookResult?: AfterToolCallResult) =>

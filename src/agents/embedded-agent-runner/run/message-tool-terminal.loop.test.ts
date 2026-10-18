@@ -143,6 +143,89 @@ describe("confirmed message-tool turn completion", () => {
       }
     },
   );
+  it("delivers a message-tool-only answer that waits behind a running sequential call", async () => {
+    const config = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(config);
+    const sourceTool = createMessageTool({
+      config,
+      preparedMessageToolCatalog: { version: 0, channels: [], getChannel: () => undefined },
+      currentChannelProvider: "webchat",
+      sourceReplyDeliveryMode: "message_tool_only",
+      agentSessionKey: "agent:main:webchat:dm:steered-tail-reply",
+      runId: "steered-tail-reply",
+      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
+      resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
+        resolvedConfig,
+        diagnostics: [],
+        targetStatesByPath: {},
+        hadUnresolvedTargets: false,
+      }),
+    });
+    const steer = { role: "user" as const, content: "Input B: one more question.", timestamp: 1 };
+    const sent: unknown[] = [];
+    const { agent, counts } = terminalMessageAgent(
+      [
+        {
+          name: "lookup",
+          label: "Lookup",
+          description: "Read a value",
+          parameters: Type.Object({}),
+          executionMode: "sequential",
+          execute: async () => {
+            // Input B arrives while this call runs, before the answer's send launches.
+            agent.steer(steer);
+            return { content: [{ type: "text", text: "42" }], details: {} };
+          },
+        },
+        {
+          name: "message",
+          label: "Message",
+          description: "Reply to the current source",
+          parameters: Type.Object({ action: Type.String(), message: Type.String() }),
+          execute: async (id, args) => {
+            const result = await sourceTool.execute(id, args);
+            sent.push(args);
+            return result;
+          },
+        },
+      ],
+      (requests) =>
+        terminalResponse(
+          [
+            ...(requests === 1 ? [terminalToolCall("lookup", "lookup")] : []),
+            terminalToolCall("message", `source-${requests}`, {
+              action: "send",
+              message: requests === 1 ? answer : "Answer for input B.",
+            }),
+          ],
+          "toolUse",
+          { timestamp: requests },
+        ),
+      undefined,
+      "message_tool_only",
+    );
+
+    try {
+      await agent.prompt("Input A: look it up and answer.");
+    } finally {
+      clearRuntimeConfigSnapshot();
+    }
+
+    expect({ sent, ...counts }).toEqual({
+      sent: [
+        { action: "send", message: answer },
+        { action: "send", message: "Answer for input B." },
+      ],
+      requests: 2,
+      deliveries: 2,
+    });
+    const steerIndex = agent.state.messages.indexOf(steer);
+    expect(agent.state.messages.slice(steerIndex - 2, steerIndex + 1)).toMatchObject([
+      { role: "toolResult", toolCallId: "lookup", isError: false },
+      { role: "toolResult", toolCallId: "source-1", isError: false },
+      steer,
+    ]);
+  });
   it.each([
     { final: true, hookThrows: false },
     { final: false, hookThrows: false },

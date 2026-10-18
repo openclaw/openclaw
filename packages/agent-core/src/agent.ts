@@ -14,6 +14,7 @@ import {
   getInternalBeforeToolBatch,
   getInternalRepetitionGuard,
   getInternalToolTurnCompletion,
+  getInternalVisibleReplyClassifier,
 } from "./internal-hooks.js";
 import { isOpenClawSystemUpdateMessage } from "./operator-messages.js";
 import { resolveAgentReasoningOption } from "./reasoning.js";
@@ -610,6 +611,7 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       beforeToolBatch: getInternalBeforeToolBatch(this),
       completesToolTurn: getInternalToolTurnCompletion(this),
+      deliversVisibleReply: getInternalVisibleReplyClassifier(this),
       toolLoopRecoveryState: this.toolLoopRecoveryState,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,

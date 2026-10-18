@@ -5,6 +5,7 @@ import {
   commitInternalToolTurnInput,
   getInternalToolTurnCompletion,
   getInternalToolTurnInputScope,
+  getInternalVisibleReplyClassifier,
 } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { captureAgentToolInputScope } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
@@ -469,6 +470,67 @@ describe("message-tool-only source replies", () => {
         }),
       ),
     ).resolves.toEqual({ details: { untouched: true } });
+  });
+});
+
+// Steering never skips a classified call, so only sends that answer the source qualify.
+describe("message-tool-only visible reply classification", () => {
+  const classify = (
+    sourceReplyDeliveryMode: "automatic" | "message_tool_only",
+    name: string,
+    args: Record<string, unknown>,
+  ) => {
+    const agent = {} as unknown as Agent;
+    installMessageToolTerminalHook({
+      agent,
+      sourceReplyDeliveryMode,
+      config: {},
+      currentProvider: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+      sessionKey: "agent:main:test-channel:chat123",
+    });
+    return getInternalVisibleReplyClassifier(agent)?.({
+      type: "toolCall",
+      id: "call-1",
+      name,
+      arguments: args,
+    });
+  };
+
+  it.each([
+    {
+      label: "an explicit send to the source route",
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: "account-1",
+        target: "chat123",
+        threadId: "thread-1",
+        message: "reply",
+      },
+      expected: true,
+    },
+    {
+      label: "an explicit send to another target",
+      args: {
+        action: "send",
+        channel: "test-channel",
+        accountId: "account-1",
+        target: "chat456",
+        message: "elsewhere",
+      },
+      expected: false,
+    },
+    { label: "a read action", args: { action: "read" }, expected: false },
+  ])("classifies $label before launch", ({ args, expected }) => {
+    expect(classify("message_tool_only", "message", args)).toBe(expected);
+  });
+
+  it("ignores other tools and turns whose final text is delivered", () => {
+    expect(classify("message_tool_only", "sessions_send", { message: "delegate" })).toBe(false);
+    expect(classify("automatic", "message", { action: "send", message: "reply" })).toBeUndefined();
   });
 });
 

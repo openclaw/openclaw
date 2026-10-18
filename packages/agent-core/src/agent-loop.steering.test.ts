@@ -21,6 +21,7 @@ import {
   getInternalToolTurnInputScope,
   setInternalBeforeToolBatch,
   setInternalToolTurnCompletion,
+  setInternalVisibleReplyClassifier,
   type InternalToolExecutionPreparation,
 } from "./internal-hooks.js";
 import { createAssistantMessageEventStream, type AssistantMessage, type Message } from "./llm.js";
@@ -593,6 +594,89 @@ describe("agentLoop steering", () => {
       expectInjectedOnce(events, steer);
     },
   );
+
+  it.each(["previous call", "reply preparation"] as const)(
+    "launches a visible reply when steering arrives during the %s",
+    async (timing) => {
+      const executed: string[] = [];
+      const steer = user("next question", 2);
+      const first = makeTool("first", executed);
+      const { agent, requests, events } = makeAgent(
+        [
+          {
+            ...first,
+            execute: async (...args) => {
+              if (timing === "previous call") {
+                agent.steer(steer);
+              }
+              return await first.execute(...args);
+            },
+          },
+          makeTool("reply", executed),
+          makeTool("tail", executed),
+        ],
+        {
+          toolExecution: "sequential",
+          beforeToolCall: async ({ toolCall }) => {
+            if (timing === "reply preparation" && toolCall.name === "reply") {
+              agent.steer(steer);
+            }
+            return undefined;
+          },
+        },
+      );
+      setInternalVisibleReplyClassifier(agent, (toolCall) => toolCall.name === "reply");
+
+      await agent.prompt("start");
+
+      expect(executed).toEqual(["first", "reply"]);
+      expect(requests[1]?.slice(-4)).toMatchObject([
+        { role: "toolResult", toolCallId: "first", isError: false },
+        { role: "toolResult", toolCallId: "reply", isError: false },
+        {
+          role: "toolResult",
+          toolCallId: "tail",
+          isError: true,
+          details: { status: "skipped", deniedReason: "steering" },
+        },
+        steer,
+      ]);
+      expectInjectedOnce(events, steer);
+    },
+  );
+
+  it("skips a visible reply with the tail once steering skipped an earlier call", async () => {
+    const executed: string[] = [];
+    const steer = user("redirect", 2);
+    const first = makeTool("first", executed);
+    const { agent, requests } = makeAgent(
+      [
+        {
+          ...first,
+          execute: async (...args) => {
+            agent.steer(steer);
+            return await first.execute(...args);
+          },
+        },
+        makeTool("second", executed),
+        makeTool("reply", executed),
+      ],
+      { toolExecution: "sequential" },
+    );
+    setInternalVisibleReplyClassifier(agent, (toolCall) => toolCall.name === "reply");
+
+    await agent.prompt("start");
+
+    // The reply was composed assuming "second" would run, so it must not go out alone.
+    const skipped = { isError: true, details: { status: "skipped", deniedReason: "steering" } };
+    expect(executed).toEqual(["first"]);
+    expect(requests[1]?.slice(-4)).toMatchObject([
+      { role: "toolResult", toolCallId: "first", isError: false },
+      { role: "toolResult", toolCallId: "second", ...skipped },
+      { role: "toolResult", toolCallId: "reply", ...skipped },
+      steer,
+    ]);
+  });
 
   it.each(["parallel", "mixed", "rejected-first"] as const)(
     "shares the committed plan and FIFO steering across %s streamed batches",

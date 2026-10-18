@@ -258,7 +258,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * Returns steering messages to inject into the conversation mid-run.
    *
    * After a call from the assistant message actually starts, sequential execution
-   * checks before each later call, including again after asynchronous preparation.
+   * checks before each later call, including again after asynchronous preparation,
+   * except a call `deliversVisibleReply` identifies.
    * Streamed batches share that started state. Parallel batches never steering-skip.
    * Both modes check after a batch settles, before stop hooks. Drained messages
    * follow tool results before the next LLM call; already-running calls continue.
@@ -315,6 +316,16 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     terminalToolCallIds: ReadonlySet<string>;
     inputScope: object;
   }) => boolean;
+
+  /**
+   * @internal OpenClaw-owned visible-reply classification. Returns true for a call that
+   * delivers the turn's visible reply when final text stays private. A sequential steering
+   * checkpoint lets such a call launch: its answer was composed before the steer arrived,
+   * so waiting steering follows its result. Not a plugin or session SDK hook.
+   *
+   * Contract: must not throw.
+   */
+  deliversVisibleReply?: (toolCall: AgentToolCall) => boolean;
 
   /** @internal Preserves loop safety evidence across Agent.continue() retries. */
   toolLoopRecoveryState?: ToolLoopRecoveryState;

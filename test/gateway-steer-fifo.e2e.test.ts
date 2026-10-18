@@ -22,7 +22,7 @@ import {
 } from "./helpers/openclaw-test-instance.js";
 import { createDeferred } from "./helpers/promise.js";
 
-type FirstResponseKind = "final" | "sequential-tools" | "tool";
+type FirstResponseKind = "final" | "message-tool-reply" | "sequential-tools" | "tool";
 type ModelRequest = { body: Record<string, unknown> };
 type MockModelServer = Awaited<ReturnType<typeof startMockModelServer>>;
 type AgentEvent = {
@@ -111,13 +111,35 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
   ]);
 }
 
-function writeToolsResponse(res: ServerResponse, id: string, tools: [string, string][]): void {
-  const items = tools.map(([key, name]) => ({
+const MESSAGE_TOOL_ANSWER_A = "ANSWER_FOR_HELD_TURN";
+const MESSAGE_TOOL_ANSWER_B = "ANSWER_FOR_STEER";
+
+// The answer is a message send between a held sequential tool and an ordinary tail call.
+function writeMessageToolReplyResponse(res: ServerResponse, requestIndex: number): void {
+  if (requestIndex === 1) {
+    writeToolsResponse(res, "resp_steer_fifo_message_tool_reply", [
+      ["steering_gate", STEERING_GATE_TOOL],
+      ["reply_a", "message", { action: "send", message: MESSAGE_TOOL_ANSWER_A }],
+      ["steering_tail", STEERING_TAIL_TOOL],
+    ]);
+    return;
+  }
+  writeToolsResponse(res, "resp_steer_fifo_message_tool_reply_b", [
+    ["reply_b", "message", { action: "send", message: MESSAGE_TOOL_ANSWER_B }],
+  ]);
+}
+
+function writeToolsResponse(
+  res: ServerResponse,
+  id: string,
+  tools: Array<[string, string, Record<string, unknown>?]>,
+): void {
+  const items = tools.map(([key, name, args = {}]) => ({
     type: "function_call",
     id: `fc_${key}`,
     call_id: `call_${key}`,
     name,
-    arguments: "{}",
+    arguments: JSON.stringify(args),
     status: "completed",
   }));
   writeOpenAiResponsesSse(res, [
@@ -179,6 +201,10 @@ async function startMockModelServer(holdSecondResponse = false) {
           writeSequentialToolsResponse(res);
           return;
         }
+      }
+      if (firstResponseKind === "message-tool-reply" && requestIndex <= 2) {
+        writeMessageToolReplyResponse(res, requestIndex);
+        return;
       }
       if (requestIndex === 2 && holdSecondResponse) {
         await secondResponse.promise;
@@ -361,6 +387,7 @@ function createConfig(params: {
   modelServer: MockModelServer;
   steeringTools?: SteeringToolsFixture;
   steeringAdmission?: SteeringAdmissionFixture;
+  messageToolOnly?: boolean;
 }): OpenClawConfig {
   const provider = buildMockOpenAiResponsesProvider(
     `${params.modelServer.baseUrl}/v1`,
@@ -406,7 +433,11 @@ function createConfig(params: {
           // This scripted provider emits direct calls to the steering fixture tools.
           codeMode: false,
           toolSearch: false,
-          alsoAllow: [STEERING_GATE_TOOL, STEERING_TAIL_TOOL],
+          alsoAllow: [
+            STEERING_GATE_TOOL,
+            STEERING_TAIL_TOOL,
+            ...(params.messageToolOnly ? ["message"] : []),
+          ],
         }
       : { profile: "minimal" },
     models: {
@@ -418,7 +449,11 @@ function createConfig(params: {
         },
       },
     },
-    messages: { queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } } },
+    messages: {
+      queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
+      // Final text stays private, so the visible answer is the message send itself.
+      ...(params.messageToolOnly ? { visibleReplies: "message_tool" as const } : {}),
+    },
   };
 }
 
@@ -469,6 +504,7 @@ async function createGatewayFixture(
     cliMode?: boolean;
     holdSecondResponse?: boolean;
     observeSteering?: string;
+    messageToolOnly?: boolean;
   } = {},
 ) {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
@@ -484,7 +520,13 @@ async function createGatewayFixture(
   const instance = await createOpenClawTestInstance({
     name,
     gatewayToken: "steer-fifo-token",
-    config: createConfig({ fixtureDir, modelServer, steeringTools, steeringAdmission }),
+    config: createConfig({
+      fixtureDir,
+      modelServer,
+      steeringTools,
+      steeringAdmission,
+      messageToolOnly: options.messageToolOnly,
+    }),
     env: {
       OPENCLAW_LOG_LEVEL: "debug",
       OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -809,6 +851,75 @@ describe("Gateway steer FIFO", () => {
         expect(redactedFixtureLogs(fixture.instance)).not.toContain("active run changed");
       }
       expect(fixture.modelServer.requests).toHaveLength(2);
+      expect(fixture.chatErrors).toEqual([]);
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "delivers a message-tool-only answer launched behind a running sequential tool",
+    async () => {
+      const steerMarker = "STEER_BEHIND_MESSAGE_TOOL_REPLY";
+      const fixture = await createGatewayFixture("steer-message-tool-reply", {
+        withSteeringTools: true,
+        messageToolOnly: true,
+      });
+      const steeringTools = fixture.steeringTools;
+      if (!steeringTools) {
+        throw new Error("steering tool fixture was not configured");
+      }
+      const first = await sendHeldTurn(fixture, true);
+      // Final text is private on this turn, so the send is the only visible answer.
+      expect(JSON.stringify(fixture.modelServer.requests[0]?.body)).toContain(
+        "visible reply MUST use `message(action=send)`",
+      );
+
+      try {
+        fixture.modelServer.releaseFirst("message-tool-reply");
+        await vi.waitFor(
+          async () =>
+            expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-execute-start"]),
+          WAIT_OPTS,
+        );
+        const steerRunId = `run-${steerMarker.toLowerCase()}`;
+        const steerResult = await directChat(fixture, steerMarker, steerRunId, "steer");
+        expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
+      } finally {
+        await writeFile(steeringTools.releasePath, "release\n", "utf8");
+      }
+
+      await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);
+      await waitForRunTerminal(fixture, first.runId);
+
+      // The waiting steer let the answer launch, then still skipped the ordinary tail.
+      const replyOutput = contentText(
+        responseInputItems(fixture.modelServer.requests[1]).find(
+          (item) => item.type === "function_call_output" && item.call_id === "call_reply_a",
+        )?.output,
+      );
+      expect(replyOutput).toContain("Sent visible reply to the current source conversation");
+      assertSteeringOrder(fixture.modelServer.requests[1], steerMarker);
+      expect(await readTrace(steeringTools.tracePath)).toEqual([
+        "gate-execute-start",
+        "gate-execute-end",
+      ]);
+
+      // Each input got its own visible answer, in order.
+      await vi.waitFor(async () => {
+        const { messages } = await fixture.diagnosticsClient.request<{ messages: unknown[] }>(
+          "chat.history",
+          { sessionKey: fixture.sessionKey, limit: 100 },
+        );
+        const visible = messages
+          .filter(isRecord)
+          .map((message) => `${String(message.role)}: ${contentText(message.content)}`);
+        const answerA = visible.findIndex((text) => text.includes(MESSAGE_TOOL_ANSWER_A));
+        expect(answerA, visible.join("\n")).toBeGreaterThanOrEqual(0);
+        expect(
+          visible.findIndex((text) => text.includes(MESSAGE_TOOL_ANSWER_B)),
+          visible.join("\n"),
+        ).toBeGreaterThan(answerA);
+      }, WAIT_OPTS);
       expect(fixture.chatErrors).toEqual([]);
     },
     TEST_TIMEOUT_MS,

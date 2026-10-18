@@ -32,6 +32,10 @@ export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["comple
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
 const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
 
+export type InternalVisibleReplyClassifier = NonNullable<AgentLoopConfig["deliversVisibleReply"]>;
+
+const visibleReplyClassifierByAgent = new WeakMap<object, InternalVisibleReplyClassifier>();
+
 /** Keep the accepted input identity across same-input Agent.continue() calls. */
 export function getInternalToolTurnInputScope(hook: InternalToolTurnCompletionHook): object {
   let scope = toolTurnInputScopeByHook.get(hook);
@@ -153,6 +157,19 @@ export function getInternalToolTurnCompletion(
   agent: object,
 ): InternalToolTurnCompletionHook | undefined {
   return toolTurnCompletionByAgent.get(agent);
+}
+
+export function setInternalVisibleReplyClassifier(
+  agent: object,
+  classifier: InternalVisibleReplyClassifier,
+): void {
+  visibleReplyClassifierByAgent.set(agent, classifier);
+}
+
+export function getInternalVisibleReplyClassifier(
+  agent: object,
+): InternalVisibleReplyClassifier | undefined {
+  return visibleReplyClassifierByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */

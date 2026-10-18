@@ -1,11 +1,16 @@
 import { getInternalSyncSteeringGetter } from "./internal-hooks.js";
-import type { AgentLoopConfig, AgentMessage } from "./types.js";
+import type { AgentLoopConfig, AgentMessage, AgentToolCall } from "./types.js";
 
+/**
+ * Launch checkpoints pass the call about to start. A call that delivers the turn's visible
+ * reply is not a skip point, so steering stays queued and follows that call's result.
+ */
 export function getSteeringAtCheckpoint(
   config: AgentLoopConfig,
+  launchingCall?: AgentToolCall,
 ): AgentMessage[] | Promise<AgentMessage[]> {
   const callback = config.getSteeringMessages;
-  if (!callback) {
+  if (!callback || (launchingCall && config.deliversVisibleReply?.(launchingCall))) {
     return [];
   }
   return getInternalSyncSteeringGetter(callback)?.() ?? callback.call(config);
