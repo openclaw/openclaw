@@ -55,13 +55,20 @@ function sharingHarness(
 ) {
   const scope = { agentId, sessionKey, storePath };
   const request = { cfg, sessionKey, agentId };
+  const transaction = (run: Parameters<typeof runOpenClawAgentWriteTransaction>[0]) =>
+    runOpenClawAgentWriteTransaction(run, { agentId, path: storePath });
   return {
     scope,
     prepare: () => prepareSessionMutationFacts(request),
     prepareMissing: () => prepareSessionMutationFacts({ ...request, allowMissing: true }),
     write: (entry: SessionEntry) => replaceSessionEntrySync(scope, entry),
-    transaction: (run: Parameters<typeof runOpenClawAgentWriteTransaction>[0]) =>
-      runOpenClawAgentWriteTransaction(run, { agentId, path: storePath }),
+    transaction,
+    commit: (...entries: SessionEntry[]) =>
+      transaction((database) => {
+        for (const entry of entries) {
+          writeSessionEntry(database, sessionKey, entry);
+        }
+      }),
     authorize: (facts: Parameters<typeof authorizePreparedSessionMutation>[1]) =>
       authorizePreparedSessionMutation(
         { ...request, client: sharingPolicyClient({ user: "requester" }) },
@@ -116,9 +123,8 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   const file = fs.statSync(storePath, { bigint: true });
   const readEntries = entryReads.readSessionEntriesFromStoreInWorker;
   const observed: Array<Awaited<ReturnType<typeof readEntries>>["databaseIdentity"]> = [];
-  const reader = vi
-    .spyOn(entryReads, "readSessionEntriesFromStoreInWorker")
-    .mockImplementation(async (...args) => {
+  vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+    async (...args) => {
       const [input] = args;
       const loaded = await readEntries(...args);
       if (input.projection !== "full" || !input.includeAuthorization) {
@@ -134,30 +140,25 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
             },
           }
         : loaded;
-    });
-  let prepared: Awaited<ReturnType<typeof prepareSessionMutationFacts>> | undefined;
-  try {
-    await expect(
-      prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }).then((read) => {
-        prepared = read;
-        return read;
-      }),
-    ).rejects.toThrow(unavailableMessage);
-    expect(observed).toEqual([
-      expect.objectContaining({
-        identity: `${file.dev}:${file.ino}`,
-        filename: storePath,
-        birthtime: readDatabaseIdentityBirthtime(file),
-        incarnation: expect.any(String),
-      }),
-    ]);
-  } finally {
-    prepared?.release();
-    reader.mockRestore();
-  }
+    },
+  );
+  await expect(
+    prepareSessionMutationFacts({ cfg, sessionKey, agentId: "main" }).then((read) => {
+      read.release();
+      return read;
+    }),
+  ).rejects.toThrow(unavailableMessage);
+  expect(observed).toEqual([
+    expect.objectContaining({
+      identity: `${file.dev}:${file.ino}`,
+      filename: storePath,
+      birthtime: readDatabaseIdentityBirthtime(file),
+      incarnation: expect.any(String),
+    }),
+  ]);
 });
 
-it.each(["unknown", "rollback"] as const)(
+it.for(["unknown", "rollback"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {
     const storePath = state.statePath("shared.sqlite");
@@ -214,7 +215,7 @@ it("does not discover registry-only retired stores outside captured roots", asyn
   expect(prepared.readCurrent(cfg).target).toBeNull();
 });
 
-it.each(["main", "research"])(
+it.for(["main", "research"])(
   "retains %s mutation facts across agent roster publications",
   async (agentId, { state }) => {
     const storePath = resolveOpenClawAgentSqlitePath({ agentId, env: state.env });
@@ -327,16 +328,12 @@ it("keeps durable sharing facts current before observers without SQL in retained
     ]);
     expect(observationErrors).toEqual([]);
     assertWithoutSql(false);
-    runOpenClawAgentWriteTransaction(
-      (database) =>
-        writeSessionEntry(database, sessionKey, {
-          ...target.entry,
-          sessionId: "replacement-session",
-          lifecycleRevision: "replacement-generation",
-          updatedAt: 5,
-        }),
-      { agentId: target.agentId, path: databasePath },
-    );
+    harness.commit({
+      ...target.entry,
+      sessionId: "replacement-session",
+      lifecycleRevision: "replacement-generation",
+      updatedAt: 5,
+    });
     expect(observationErrors).toHaveLength(1);
     expect(observationErrors[0]).toBeInstanceOf(Error);
     expect(observationErrors[0]).toHaveProperty("message", unavailableMessage);
@@ -354,7 +351,7 @@ it("keeps durable sharing facts current before observers without SQL in retained
   }
 });
 
-it.each([
+it.for([
   "worker-metadata",
   "visibility",
   "membership",
@@ -405,16 +402,16 @@ it.each([
             await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
           } else if (change === "lifecycle" || change === "replacement") {
             // Exercise the entry publisher itself, without a separate lifecycle event.
-            harness.transaction((database) => {
-              writeSessionEntry(database, sessionKey, {
+            harness.commit(
+              {
                 ...entry,
                 ...(change === "lifecycle"
                   ? { lifecycleRevision: "replacement" }
                   : { sessionId: "replacement-session" }),
                 updatedAt: 2,
-              });
-              writeSessionEntry(database, sessionKey, entry);
-            });
+              },
+              entry,
+            );
           } else if (change === "worker-metadata") {
             await replaceSessionEntry(scope, { ...entry, updatedAt: 2, label: "worker metadata" });
           } else {

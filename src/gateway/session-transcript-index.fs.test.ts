@@ -70,7 +70,7 @@ test("keeps exact physical ranges across newline dialects and malformed UTF8", a
   const file = await fixture(
     Buffer.concat([
       Buffer.from(` \r\n${message("first", "α🦞".repeat(18000))}\r`),
-      Buffer.from('{"type":"message","id":"invalid-utf8","message":{"role":"user","content":"'),
+      Buffer.from('{"type":"message","id":"invalid","message":{"role":"user","content":"'),
       Buffer.from([0xff]),
       Buffer.from(
         `"}}\n{malformed\r\n${message("", "blank raw id")}\n${message(undefined, "no id")}`,
@@ -92,15 +92,9 @@ test("keeps exact physical ranges across newline dialects and malformed UTF8", a
     isVisibleTranscriptRecord(entry.record),
   );
   const { index, read } = await openIndex(file);
-  expect(index).not.toBeNull();
   const payload = (e: recordParser.TranscriptRecord) => [e.record, e.byteLength, e.id];
   expect((await read()).map(payload)).toEqual(expected.map(payload));
-  expect(index.entries.map((entry) => entry.rawId)).toEqual([
-    "first",
-    "invalid-utf8",
-    "",
-    undefined,
-  ]);
+  expect(index.entries.map((entry) => entry.rawId)).toEqual(["first", "invalid", "", undefined]);
 });
 
 test("retains duplicate order, last by-ID selection and oversized image recovery", async () => {
@@ -231,9 +225,8 @@ test("rejects an oversized source line before decoding while retaining ordinary 
   const reader = new ArchivedTranscriptReader({ sessionId: "test", exactArchivePath: file });
   const parse = vi.spyOn(recordParser, "parseTranscriptRecord");
   const reads = vi.spyOn(fileReads, "readFileWindowFully");
-  await expect(sourcePage(reader)).rejects.toThrow(
-    "Transcript source message exceeds the 8388608-byte page limit",
-  );
+  const oversized = "Transcript source message exceeds the 8388608-byte page limit";
+  await expect(sourcePage(reader)).rejects.toThrow(oversized);
   expect(parse).not.toHaveBeenCalled();
   expect(
     reads.mock.calls.reduce((bytes, [, buffer]) => bytes + buffer.length, 0),
@@ -246,9 +239,7 @@ test("rejects an oversized source line before decoding while retaining ordinary 
     },
   });
   parse.mockClear();
-  await expect(sourcePage(reader)).rejects.toThrow(
-    "Transcript source message exceeds the 8388608-byte page limit",
-  );
+  await expect(sourcePage(reader)).rejects.toThrow(oversized);
   await expect(reader.readById("large-image")).resolves.toMatchObject({ found: true });
   expect(parse).toHaveBeenCalledTimes(1);
 });

@@ -32,6 +32,8 @@ function snapshot(
   });
 }
 
+const sessionEntry = (sessionId: string) => ({ sessionId, updatedAt: 400 });
+
 function collector(index: number, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
     runId: `run-${index}`,
@@ -63,7 +65,7 @@ async function listCollectors(
       return listSessionFixture({
         cfg,
         storePath: "",
-        store: { [parent]: { sessionId: "parent", updatedAt: 400 } },
+        store: { [parent]: sessionEntry("parent") },
         opts: {},
         ...overrides,
       });
@@ -84,32 +86,28 @@ it("counts every retained collector after child sessions are deleted", async () 
     groups: [{ groupId, createdAt: 100, queued: 0, running: 0, done: 25, failed: 5 }],
     otherActiveGroups: 0,
   });
-  expect(buildSnapshot({ sessionRow: result.sessions[0]! })).toMatchObject({
+  expect(snapshot(result.sessions[0]!)).toMatchObject({
     swarm: { groups: [{ done: 25, failed: 5 }] },
   });
   expect(JSON.stringify(result)).not.toContain("Private child");
 });
 
 it("does not expose a hidden parent's summary or borrow another parent's collectors", async () => {
-  const store = {
-    [parent]: { sessionId: "parent", updatedAt: 400 },
-    "agent:main:other": { sessionId: "other", updatedAt: 400 },
-  };
   const result = await listCollectors([collector(0)], {
-    store,
+    store: { [parent]: sessionEntry("parent"), "agent:main:other": sessionEntry("other") },
     entryFilter: (key) => key !== parent,
   });
   expect(result.sessions).toHaveLength(1);
-  expect(JSON.stringify(result.sessions[0])).not.toContain('"swarm":');
+  expect(result.sessions[0]).not.toHaveProperty("swarm");
 });
 it("keeps list payloads compact and selected-parent details bounded without losing totals", () => {
-  const runs = Array.from({ length: 300 }, (_, index) => collector(index));
-  runs.push(
+  const runs = [
+    ...Array.from({ length: 300 }, (_, index) => collector(index)),
     collector(300, {
       collectorCompletion: undefined,
       execution: { status: "running", startedAt: 300 },
     }),
-  );
+  ];
   const summary = summarize(runs, parent, "main");
   expect(summary?.groups[0]).toMatchObject({ running: 1, done: 25, failed: 275 });
   expect(summary?.groups[0]).not.toHaveProperty("children");
@@ -166,7 +164,7 @@ it.each(["workspace", "global"])(
       ],
       {
         cfg: globalConfig,
-        store: { [admitted.canonicalKey]: { sessionId: "global-owner", updatedAt: 400 } },
+        store: { [admitted.canonicalKey]: sessionEntry("global-owner") },
         opts: { agentId: admitted.agentId, includeGlobal: true },
       },
     );

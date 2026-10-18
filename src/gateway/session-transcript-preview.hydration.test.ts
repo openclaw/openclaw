@@ -46,7 +46,7 @@ async function duringHydration<T>(read: () => Promise<T>, mutate: () => void, on
   const storageRoots = new Set<string | undefined>();
   const prepare = hydration.prepareSessionTranscriptHydration;
   let first = true;
-  let mutated = false;
+  const mutation = vi.fn(mutate);
   const intercept: typeof prepare = (...args) => {
     const prepared = prepare(...args);
     storageRoots.add(prepared.target.env.OPENCLAW_STATE_DIR);
@@ -57,8 +57,7 @@ async function duringHydration<T>(read: () => Promise<T>, mutate: () => void, on
       read: async () => {
         const snapshot = await prepared.read();
         if (pause) {
-          mutate();
-          mutated = true;
+          mutation();
         }
         return snapshot;
       },
@@ -68,7 +67,7 @@ async function duringHydration<T>(read: () => Promise<T>, mutate: () => void, on
   held[once ? "mockImplementationOnce" : "mockImplementation"](intercept);
   try {
     const items = await read();
-    expect(mutated).toBe(true);
+    expect(mutation).toHaveBeenCalledOnce();
     return { items, storageRoots: [...storageRoots] };
   } finally {
     held.mockRestore();
@@ -148,28 +147,27 @@ it("restores cold Talk history through its existing owner before bounded hydrati
     const fixture = await createSessionColdStorageFixture(
       path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     );
-    await persistHistory(fixture.scope, ["Archived question", "Archived followup"]);
-    fixture
-      .database()
+    const texts = ["Archived question", "Archived followup"];
+    await persistHistory(fixture.scope, texts);
+    const database = fixture.database();
+    database
       .prepare(
         "UPDATE session_windows SET updated_at = 1, transcript_updated_at = 1 WHERE session_id = ?",
       )
       .run(fixture.scope.sessionId);
-    const expected = [
-      { role: "user", text: "Archived question" },
-      { role: "user", text: "Archived followup" },
-    ];
+    const expected = texts.map((text) => ({ role: "user", text }));
     expect(await readPreview(fixture.scope)).toEqual(expected);
     expect(
       await runSessionColdStorageMaintenance({
         config: maintenanceConfig(fixture.scope.storePath),
       }),
     ).toEqual({ archivedTranscripts: 1, externalizedTranscripts: 0 });
-    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
+    const coldTranscript = () => readSessionColdTranscript(database, fixture.scope.sessionId);
+    expect(coldTranscript()).toBeDefined();
     await replaceSessionEntry(fixture.scope, { sessionId: fixture.scope.sessionId, updatedAt: 1 });
-    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
+    expect(coldTranscript()).toBeDefined();
     expect(await readTalk(fixture.scope)).toEqual(expected);
-    expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeUndefined();
+    expect(coldTranscript()).toBeUndefined();
   });
 });
 
@@ -177,12 +175,7 @@ it("rejects Talk history when its live authority is revoked during real hydratio
   await withOpenClawTestState({ label: "preview-authority" }, async (state) => {
     const scope = previewScope(state);
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    SessionManager.open(scope).appendMessage({
-      role: "user",
-      content: "retained history",
-      timestamp: 1,
-    });
-    await waitForSessionTranscriptProjection(scope);
+    await persistHistory(scope, ["retained history"]);
     let current = true;
     const assertCurrent = () => {
       if (!current) {
