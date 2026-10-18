@@ -24,7 +24,12 @@ import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-s
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+  withExistingOpenClawStateDatabaseReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -468,62 +473,147 @@ describe("doctor lint state isolation", () => {
     },
   );
 
-  it("shares private bytes within each advisory report and refreshes the next report", async () => {
-    await withOpenClawTestState({ prefix: "openclaw-doctor-lint-source-wal-" }, async (state) => {
-      await state.writeConfig({ memory: { search: { enabled: false } } });
+  it.each(["advisory", "selected"] as const)(
+    "shares private bytes within each %s report and refreshes the next report",
+    async (mode) => {
+      await withOpenClawTestState({ prefix: "openclaw-doctor-lint-source-wal-" }, async (state) => {
+        await state.writeConfig({ memory: { search: { enabled: false } } });
+        const databasePath = resolveOpenClawStateSqlitePath(state.env);
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        const writer = new DatabaseSync(databasePath);
+        const locations: string[] = [];
+        const observed: unknown[] = [];
+        let fixtureValue = "committed";
+        mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
+          {
+            id: "core/doctor/source-state-read",
+            kind: "core",
+            description: "reads source state through the shared read-only owner",
+            async detect(ctx: HealthCheckContext) {
+              for (let read = 0; read < 3; read++) {
+                observed.push(
+                  withExistingOpenClawStateDatabaseReadOnly(
+                    ({ db }) => {
+                      locations.push(requireNativeSqliteDatabase(db).location()!);
+                      return db.prepare("SELECT value FROM marker").all();
+                    },
+                    { env: ctx.env },
+                  ),
+                );
+                await Promise.resolve();
+              }
+              return [];
+            },
+          },
+          {
+            id: "core/doctor/async-source-state-read",
+            kind: "core",
+            description: "shares the source view with asynchronous checks",
+            async detect(ctx: HealthCheckContext) {
+              const options = { env: ctx.env };
+              const snapshot = getActiveOpenClawStateDatabaseReadSnapshot(options);
+              expect(snapshot).toBeDefined();
+              locations.push(snapshot!.location);
+              observed.push(
+                await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(({ db }) => {
+                  locations.push(requireNativeSqliteDatabase(db).location()!);
+                  return db.prepare("SELECT value FROM marker").all();
+                }, options),
+              );
+              await expect(
+                executeExistingOpenClawStateRead(options, {
+                  type: "tui.lastSession.read",
+                  stateKey: "doctor.snapshot-reuse",
+                }),
+              ).resolves.toMatchObject({
+                type: "tui.lastSession.read",
+                row: { value_json: JSON.stringify(fixtureValue), updated_at_ms: 1 },
+              });
+              return [];
+            },
+          },
+        ]);
+        const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+        try {
+          writer.exec(
+            "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed'); CREATE TABLE config_machine_state (state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL) STRICT;",
+          );
+          const previousLocations = new Set<string>();
+          for (const value of ["committed", "updated"]) {
+            fixtureValue = value;
+            writer.prepare("UPDATE marker SET value = ?").run(value);
+            writer
+              .prepare("INSERT OR REPLACE INTO config_machine_state VALUES (?, ?, 1)")
+              .run("doctor.snapshot-reuse", JSON.stringify(value));
+            const before = snapshotDoctorLintSqliteFamily(databasePath);
+            locations.length = 0;
+            observed.length = 0;
+            if (mode === "selected") {
+              const exitCode = await runDoctorLintCli(runtime, {
+                json: true,
+                onlyIds: ["core/doctor/source-state-read", "core/doctor/async-source-state-read"],
+              });
+              const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+              expect(report).toMatchObject({
+                checksRun: 2,
+                findings: [],
+              });
+              expect(exitCode).toBe(0);
+            } else {
+              await collectDoctorFindings(runtime);
+            }
+            expect(observed).toEqual(Array.from({ length: 4 }, () => [{ value }]));
+            const uniqueLocations = new Set(locations);
+            expect(uniqueLocations.size).toBe(1);
+            for (const location of uniqueLocations) {
+              expect(location).not.toBe(databasePath);
+              expect(previousLocations.has(location)).toBe(false);
+              expect(fs.existsSync(location)).toBe(false);
+              previousLocations.add(location);
+            }
+            expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
+          }
+        } finally {
+          stdout.mockRestore();
+          writer.close();
+        }
+      });
+    },
+  );
+
+  it("does not create shared state for a selected check", async () => {
+    await withOpenClawTestState({ prefix: "openclaw-doctor-lint-no-state-" }, async (state) => {
+      await state.writeConfig({ plugins: { enabled: false } });
       const databasePath = resolveOpenClawStateSqlitePath(state.env);
-      fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-      const writer = new DatabaseSync(databasePath);
-      const locations: string[] = [];
-      const observed: unknown[] = [];
+      expect(fs.existsSync(databasePath)).toBe(false);
       mocks.resolveDoctorContributionHealthChecks.mockResolvedValue([
         {
-          id: "core/doctor/source-state-read",
+          id: "core/doctor/no-state-read",
           kind: "core",
-          description: "reads source state through the shared read-only owner",
-          async detect(ctx: HealthCheckContext) {
-            for (let read = 0; read < 3; read++) {
-              observed.push(
-                withExistingOpenClawStateDatabaseReadOnly(
-                  ({ db }) => {
-                    locations.push(requireNativeSqliteDatabase(db).location()!);
-                    return db.prepare("SELECT value FROM marker").all();
-                  },
-                  { env: ctx.env },
-                ),
-              );
-              await Promise.resolve();
-            }
+          description: "does not require database state",
+          async detect() {
             return [];
           },
         },
       ]);
+      const before = snapshotDoctorLintSqliteFamily(databasePath);
       const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      mocks.sqliteOpen.mockClear();
       try {
-        writer.exec(
-          "PRAGMA journal_mode = WAL; CREATE TABLE marker(value TEXT); INSERT INTO marker VALUES ('committed');",
-        );
-        const previousLocations = new Set<string>();
-        for (const value of ["committed", "updated"]) {
-          writer.prepare("UPDATE marker SET value = ?").run(value);
-          const before = snapshotDoctorLintSqliteFamily(databasePath);
-          locations.length = 0;
-          observed.length = 0;
-          await collectDoctorFindings(runtime);
-          expect(observed).toEqual(Array.from({ length: 3 }, () => [{ value }]));
-          const uniqueLocations = new Set(locations);
-          expect(uniqueLocations.size).toBe(1);
-          for (const location of uniqueLocations) {
-            expect(location).not.toBe(databasePath);
-            expect(previousLocations.has(location)).toBe(false);
-            expect(fs.existsSync(location)).toBe(false);
-            previousLocations.add(location);
-          }
-          expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
-        }
+        const exitCode = await runDoctorLintCli(runtime, {
+          json: true,
+          onlyIds: ["core/doctor/no-state-read"],
+        });
+        const report = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+        expect(report).toMatchObject({
+          checksRun: 1,
+          findings: [],
+        });
+        expect(exitCode).toBe(0);
+        expect(mocks.sqliteOpen).not.toHaveBeenCalled();
+        expect(snapshotDoctorLintSqliteFamily(databasePath)).toEqual(before);
       } finally {
         stdout.mockRestore();
-        writer.close();
       }
     });
   });

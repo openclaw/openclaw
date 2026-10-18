@@ -202,14 +202,11 @@ async function prepareDoctorLintExecution(
       cleanupWarnings,
       onChecksComplete,
     );
-  // Full reports share private source bytes. Selected checks retain on-demand inspection.
-  if (opts.onlyIds?.length) {
-    return await run();
-  }
   let execution: DoctorLintExecution | undefined;
   try {
     return await withOpenClawStateDatabaseReadSnapshot(async () => (execution = await run()), {
       env: sourceEnv,
+      lazy: Boolean(opts.onlyIds?.length),
     });
   } catch (error) {
     if (!execution || !cleanupWarnings || !(error instanceof SqliteSnapshotCleanupError)) {
