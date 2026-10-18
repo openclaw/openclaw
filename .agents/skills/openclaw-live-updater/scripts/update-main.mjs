@@ -40,6 +40,7 @@ import {
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
 } from "../../../../scripts/run-node.mts";
+import { isGeneratedLaunchAgentEnvironmentWrapper } from "../../../../src/daemon/launchd-env-wrapper.js";
 import { resolveRuntimeScriptPosition } from "../../../../src/daemon/runtime-binary.js";
 
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
@@ -83,15 +84,6 @@ const SAFE_INVARIANT_DETAIL_KEYS = [
 // CLI diagnostics stay typed and bounded because child-process errors can
 // retain argv, environment, and output that must never enter the JSON result.
 const aggregateDiagnosticMembers = new WeakMap();
-const GENERATED_LAUNCH_AGENT_ENV_WRAPPER = `#!/bin/sh
-set -eu
-env_file="$1"
-shift
-if [ -f "$env_file" ]; then
-  . "$env_file"
-fi
-exec "$@"
-`;
 const DEPENDENCY_INPUT_RE =
   /^(?:\.npmrc$|package\.json$|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|patches\/)|(?:^|\/)package\.json$/u;
 
@@ -1288,7 +1280,7 @@ function isTrustedGeneratedEnvironmentWrapper(command) {
       (envFileStat.mode & 0o077) === 0 &&
       realpathSync(command.wrapperPath) === command.wrapperPath &&
       realpathSync(command.envFilePath) === command.envFilePath &&
-      readFileSync(command.wrapperPath, "utf8") === GENERATED_LAUNCH_AGENT_ENV_WRAPPER
+      isGeneratedLaunchAgentEnvironmentWrapper(readFileSync(command.wrapperPath, "utf8"))
     );
   } catch {
     return false;
