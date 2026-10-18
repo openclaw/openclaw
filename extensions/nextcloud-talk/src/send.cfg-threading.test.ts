@@ -15,8 +15,9 @@ const hoisted = vi.hoisted(() => ({
   mockFetchGuard: vi.fn(),
 }));
 
-vi.mock("./send.runtime.js", () => {
+vi.mock("./send.runtime.js", async (importOriginal) => {
   return {
+    ...(await importOriginal<typeof import("./send.runtime.js")>()),
     convertMarkdownTables: hoisted.convertMarkdownTables,
     fetchWithSsrFGuard: hoisted.mockFetchGuard,
     generateNextcloudTalkSignature: hoisted.generateNextcloudTalkSignature,
@@ -25,12 +26,6 @@ vi.mock("./send.runtime.js", () => {
         config: { current: hoisted.currentConfig },
         channel: { activity: { record: hoisted.record } },
       }),
-    requireRuntimeConfig: (cfg: unknown, context: string) => {
-      if (cfg) {
-        return cfg;
-      }
-      throw new Error(`${context} requires a resolved runtime config`);
-    },
     resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
     resolveMarkdownTableMode: hoisted.resolveMarkdownTableMode,
     ssrfPolicyFromPrivateNetworkOptIn: hoisted.ssrfPolicyFromPrivateNetworkOptIn,
