@@ -298,6 +298,40 @@ describe("gateway health collection deadline", () => {
     }
   }, 1_000);
 
+  it.each([
+    { stepMs: 60_000, probe: { ok: true } },
+    {
+      stepMs: -60_000,
+      probe: { error: "health collection timed out after 7000ms", timedOut: true },
+    },
+  ])(
+    "keeps the 7s budget when the wall clock steps $stepMs ms",
+    async ({ stepMs, probe }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "performance"] });
+      const slowProbe = createDeferredCore<Record<string, unknown>>();
+      healthPluginsForTest = [
+        createDeadlinePlugin({
+          accountIds: ["default"],
+          probe: async () => (stepMs > 0 ? { ok: true } : await slowProbe.promise),
+        }),
+      ];
+      readSessionStoreSummaryReadOnly.mockImplementation(() => {
+        // setSystemTime moves only Date; performance.now() keeps monotonic time.
+        vi.setSystemTime(Date.now() + stepMs);
+        return { count: 0, recent: [], byAgent: new Map() };
+      });
+
+      const snapshotPromise = collectDeadlineSnapshot();
+      await flushHealthPreparation();
+      await vi.advanceTimersByTimeAsync(7_000);
+      const snap = await snapshotPromise;
+      slowProbe.resolve({ ok: true });
+
+      expect(snap.channels["deadline-test"]?.accounts?.default?.probe).toEqual(probe);
+    },
+    1_000,
+  );
+
   it("retains timed-out permits across repeated health collections", async () => {
     vi.useFakeTimers();
     const accountIds = ["default", "blocked-1", "blocked-2", "blocked-3", "blocked-4"];

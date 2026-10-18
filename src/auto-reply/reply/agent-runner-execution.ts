@@ -7,6 +7,7 @@ import {
   type PreparedAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { resolveRunStartupPhase } from "../../agents/embedded-agent-runner/execution-phase.js";
 import {
   createDeferredEmbeddedRunLifecycleManager,
   type DeferredEmbeddedRunLifecycleManager,
@@ -78,10 +79,7 @@ import { settleAgentFallbackCycle } from "./agent-runner-fallback-settlement.js"
 import { buildReplyMediaContextParams } from "./agent-runner-media-context.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
 import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
-import {
-  createAgentTurnTimingTracker,
-  resolveRunStartupPhase,
-} from "./agent-runner-turn-timing.js";
+import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { resolveQueuedReplyRuntimeConfig } from "./agent-runner-utils.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";

@@ -5,7 +5,7 @@ import {
   removeSandboxBrowserContainer,
   removeSandboxContainer,
   type SandboxContainerInfo,
-} from "../agents/sandbox.js";
+} from "../agents/sandbox/manage.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { formatErrorMessage } from "../infra/errors.js";
