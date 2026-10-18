@@ -1,6 +1,7 @@
 import { assertSyncTransactionResult, sqlPublicationAnchor } from "../sql-connection.js";
 import type { PostgresSqlConnection } from "../sql-connection.js";
 import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
+import { beginPostgresReadSnapshotScope } from "../sqlite-schema-facts.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
 
@@ -22,6 +23,7 @@ export function runPostgresTransactionSync<T>(
   const anchor = sqlPublicationAnchor(db);
   return withSqlitePostCommitPublications(anchor, () => {
     const nested = db.isTransaction && !reserved;
+    let closeReadScope: (() => void) | undefined;
     try {
       if (nested) {
         db.exec("SAVEPOINT openclaw_tx_nested");
@@ -31,6 +33,9 @@ export function runPostgresTransactionSync<T>(
             ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
             : `BEGIN ISOLATION LEVEL READ COMMITTED; SELECT pg_advisory_xact_lock(${db.advisoryLockKey})`,
         );
+      }
+      if (readOnly && !nested) {
+        closeReadScope = beginPostgresReadSnapshotScope(db);
       }
       const mutationRevision = db.mutationRevision;
       const result = operation();
@@ -77,6 +82,8 @@ export function runPostgresTransactionSync<T>(
         }
       }
       throw error;
+    } finally {
+      closeReadScope?.();
     }
   });
 }

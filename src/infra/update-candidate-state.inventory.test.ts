@@ -258,7 +258,11 @@ describe("snapshot inventory", () => {
       expect(snapshot.code, snapshot.stderr.toString("utf8")).toBe(0);
     } else {
       expect(snapshot.code, "snapshot must refuse uninventoried bytes").not.toBe(0);
-      expect(snapshot.stderr.toString("utf8")).toContain("changed after snapshot inventory");
+      expect(snapshot.stderr.toString("utf8")).toContain(
+        change === "enlarged file"
+          ? "file exceeds limit of 4096 bytes (got 16777216)"
+          : "changed after snapshot inventory",
+      );
       expectFailurePhase(
         snapshot,
         change === "database registration" ? "database snapshot" : "plugin snapshot",

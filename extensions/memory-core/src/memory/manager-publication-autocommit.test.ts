@@ -14,7 +14,9 @@ import {
   MEMORY_EMBEDDING_CACHE_WRITE_SCOPE,
   MEMORY_INDEX_WRITE_SCOPE,
 } from "./manager-publication-task.js";
+import { memoryPublicationInline } from "./manager-publication-transfer.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
+import type { MemorySourceIndexReplacement } from "./manager-source-index-kernel.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -151,7 +153,7 @@ it("promotes legacy metadata when no embedding cache table exists", () => {
   }
 });
 
-it("publishes settled write tokens and fresh facts for scalar autocommits", () => {
+it("publishes settled tokens and facts for metadata writes and atomic source refreshes", () => {
   const filename = path.join(tempDirs.make("memory-publication-scalar-"), "index.sqlite");
   const db = openNodeSqliteDatabase(filename);
   const backend = bindSqliteWorkerBackend(
@@ -182,14 +184,112 @@ it("publishes settled write tokens and fresh facts for scalar autocommits", () =
     const current = readSqliteDatabaseScopedWriteTokenForPath(filename, MEMORY_INDEX_WRITE_SCOPE);
     expect(current).not.toBe(before);
     expect(outcome).toMatchObject({ ok: true, value: true, writeToken: current });
+    expect(outcome).toMatchObject({ facts: { revision: 1 } });
     expect(db.prepare("SELECT hash, mtime, size FROM memory_index_sources").get()).toEqual({
       hash: "new",
       mtime: 2,
       size: 2,
     });
+    expect(
+      backend.execute({
+        type: "source.refresh",
+        input: { path: "sessions/current", hash: "stale", mtime: 3, size: 3, expectedHash: "old" },
+      }),
+    ).toMatchObject({ ok: true, value: false, facts: { revision: 1 } });
   } finally {
     backend.close();
     db.close();
+  }
+});
+
+it("publishes one revision per source batch and rolls back both rows and revision", () => {
+  const filename = path.join(tempDirs.make("memory-publication-revision-"), "index.sqlite");
+  const db = openNodeSqliteDatabase(filename);
+  let denyCommit = false;
+  const backend = bindSqliteWorkerBackend(
+    { kind: "agent" },
+    {
+      databasePath: filename,
+      database: db,
+      admit(stage) {
+        if (stage === "commit" && denyCommit) {
+          throw new Error("publication authority revoked");
+        }
+      },
+    },
+  );
+  const state = {
+    vector: { enabled: false, available: false },
+    fts: { enabled: true, available: true },
+    hasVectorTable: false,
+  };
+  const source = (name: string, text: string) => {
+    const replacement: MemorySourceIndexReplacement = {
+      source: "memory",
+      entry: { path: `memory/${name}.md`, hash: text, mtimeMs: 1, size: text.length },
+      model: "fts-only",
+      now: 1,
+      vectorReady: false,
+      embeddings: [[], []],
+      chunks: [1, 2].map((line) => ({
+        startLine: line,
+        endLine: line,
+        hash: `${text}-${line}`,
+        text: `${text} ${line}`,
+        importance: null,
+        triggers: null,
+        projectKey: null,
+      })),
+    };
+    return memoryPublicationInline(replacement)!;
+  };
+  const replace = (text: string) =>
+    backend.execute({
+      type: "source.replace.group",
+      input: { sources: [source("first", text), source("second", text)], state },
+    });
+  const rows = () =>
+    db.prepare("SELECT path, text FROM memory_index_chunks ORDER BY path, start_line").all();
+  try {
+    ensureMemoryIndexSchema({ db, cacheEnabled: false, ftsEnabled: true });
+    expect(replace("original")).toMatchObject({ ok: true, facts: { revision: 1 } });
+    expect(rows()).toHaveLength(4);
+    const before = rows();
+    denyCommit = true;
+    expect(replace("discarded")).toMatchObject({ ok: false, committed: false });
+    expect(rows()).toEqual(before);
+    expect(backend.execute({ type: "index.facts", input: undefined })).toMatchObject({
+      revision: 1,
+    });
+    denyCommit = false;
+    expect(replace("replacement")).toMatchObject({ ok: true, facts: { revision: 2 } });
+    expect(rows().map((row) => row.text)).toEqual([
+      "replacement 1",
+      "replacement 2",
+      "replacement 1",
+      "replacement 2",
+    ]);
+    expect(
+      backend.execute({
+        type: "source.delete",
+        input: { path: "memory/first.md", source: "memory", expectedHash: "replacement", state },
+      }),
+    ).toMatchObject({ ok: true, value: true, facts: { revision: 3 } });
+    expect(rows().map((row) => row.path)).toEqual(["memory/second.md", "memory/second.md"]);
+  } finally {
+    backend.close();
+    db.close();
+  }
+  const reopened = openNodeSqliteDatabase(filename);
+  try {
+    expect(reopened.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual({
+      revision: 3,
+    });
+    expect(reopened.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks").get()).toEqual({
+      count: 2,
+    });
+  } finally {
+    reopened.close();
   }
 });
 

@@ -5,6 +5,7 @@
  * server types and helpers without paying the full startup dependency graph.
  */
 import { measureGatewayBootstrapStep } from "../cli/startup-trace.js";
+import { installDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { supportsSpawnBrokerCommandTransport } from "../process/spawn-broker/pipe.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -25,13 +26,14 @@ export async function startGatewayServer(
   port = 18789,
   opts: GatewayServerOptions = {},
 ): ReturnType<typeof import("./server-start.js").startGatewayServerCore> {
+  installDatabaseProcessRole("gateway");
   const { installGatewayDatabaseEngine } = await import("./server-database-engine.js");
   await installGatewayDatabaseEngine(
     opts.startupConfigSnapshotRead?.snapshot,
     opts.startupConfigSnapshotRead?.databaseEngineSelection,
   );
-  const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-  await initializeSqliteRuntimeCapabilities();
+  const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+  await initializeSqliteRuntime();
   const { acquireGatewayLock } = await import("../infra/gateway-lock.js");
   const ownedLock = opts.gatewayStateOwner
     ? null

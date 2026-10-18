@@ -8,24 +8,20 @@ import type {
   UpdateCandidatePluginHashRequest,
 } from "./update-candidate-plugin-hash.js";
 
-// Internal one-shot subprocess: a hard process deadline can interrupt SQLite
-// integrity checks and backup/VACUUM, which expose no AbortSignal contract.
+// Internal one-shot subprocess: a hard process deadline can interrupt synchronous
+// SQLite inspection, backup/VACUUM, and retained-runtime file verification.
 async function snapshotCandidateState(): Promise<unknown> {
-  // File workers must not retain the subprocess's database/config inspection graph.
-  const { createUpdateStateInspectionReporter } =
-    await import("./update-candidate-state.diagnostics.js");
-  const {
-    discoverUpdateStateSchemaInspectionInProcess,
-    readUpdateCandidateStateInventoryInProcess,
-    readUpdateStateSchemaVersionsInProcess,
-    snapshotUpdateCandidateState,
-  } = await import("./update-candidate-state.js");
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   // SAFETY: Only the updater's typed state inspection launchers serialize this private worker's stdin.
   const input = JSON.parse(Buffer.concat(chunks).toString("utf8")) as
+    | (Parameters<
+        typeof import("./update-retained-runtime-files.js").prepareRetainedRuntimeFiles
+      >[0] & {
+        mode: "runtime-retention";
+      })
     | (Parameters<typeof snapshotUpdateCandidateState>[0] & {
         mode: "snapshot";
         streamProgress?: boolean;
@@ -47,6 +43,19 @@ async function snapshotCandidateState(): Promise<unknown> {
         paths: string[];
         pluginOwners?: import("./database-engine/port-descriptor.js").DatabasePortPluginOwners;
       };
+  if (input.mode === "runtime-retention") {
+    const { prepareRetainedRuntimeFiles } = await import("./update-retained-runtime-files.js");
+    return prepareRetainedRuntimeFiles(input);
+  }
+  // Runtime retention needs no database/config inspection graph.
+  const { createUpdateStateInspectionReporter } =
+    await import("./update-candidate-state.diagnostics.js");
+  const {
+    discoverUpdateStateSchemaInspectionInProcess,
+    readUpdateCandidateStateInventoryInProcess,
+    readUpdateStateSchemaVersionsInProcess,
+    snapshotUpdateCandidateState,
+  } = await import("./update-candidate-state.js");
   switch (input.mode) {
     case "database-restore-preparation": {
       const { prepareUpdateDatabaseRestoreSourceInProcess } =

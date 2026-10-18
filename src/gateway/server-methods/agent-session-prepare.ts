@@ -86,7 +86,7 @@ async function prepareAdmittedAgentSession(
   params: PrepareAgentSessionParams,
   selected: Pick<
     Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "cfg" | "storePath" | "entry" | "canonicalKey" | "legacyKey" | "storeKeys"
+    "cfg" | "storePath" | "readSource" | "entry" | "canonicalKey" | "legacyKey" | "storeKeys"
   >,
   requestedAgentId: string,
   freshChild?: FreshChildSession,
@@ -239,6 +239,7 @@ async function prepareAdmittedAgentSession(
   return {
     cfg,
     storePath,
+    physicalStorePath: selected.readSource?.path,
     entry,
     canonicalKey,
     storeKeys,

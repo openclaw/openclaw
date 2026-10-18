@@ -51,10 +51,23 @@ vi.mock("../channels/plugins/bundled-ids.js", async (importOriginal) => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
 }));
 
-vi.mock("../channels/plugins/persisted-auth-state.js", () => ({
-  listBundledChannelIdsWithPersistedAuthState: () => ["matrix", "whatsapp"],
-  hasBundledChannelPersistedAuthState: () => false,
-}));
+vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../channels/plugins/package-state-probes.js")>();
+  return {
+    ...actual,
+    listBundledChannelIdsForPackageState: (
+      ...args: Parameters<typeof actual.listBundledChannelIdsForPackageState>
+    ) =>
+      args[0] === "persistedAuthState"
+        ? ["matrix", "whatsapp"]
+        : actual.listBundledChannelIdsForPackageState(...args),
+    hasBundledChannelPackageState: (
+      params: Parameters<typeof actual.hasBundledChannelPackageState>[0],
+    ) =>
+      params.metadataKey !== "persistedAuthState" && actual.hasBundledChannelPackageState(params),
+  };
+});
 
 describe("doctor state integrity", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;

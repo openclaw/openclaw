@@ -51,11 +51,11 @@ The latter retirement received explicit SDK-owner approval on September 30,
   load. Follow the [import path mappings](/plugins/sdk-migration/import-paths) before upgrading.
 </Warning>
 
-OpenClaw does not remove or reinterpret documented plugin behavior in the same
-change that introduces a replacement. Breaking contract changes go through a
-compatibility adapter, diagnostics, docs, and a deprecation window first. That
-applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
-registration behavior.
+OpenClaw's default compatibility policy preserves documented plugin behavior
+through a compatibility adapter, diagnostics, docs, and a deprecation window.
+That applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
+registration behavior. The three session-controller changes below are explicit
+exceptions with immediate enforcement and no compatibility aliases or window.
 
 `ChatCommandDefinition.category` retains the `"docks"` value accepted by the
 2026.8.1 SDK. Command lists display these legacy definitions under **Tools**.
@@ -94,6 +94,65 @@ probes. Use `rethrowIncognitoSessionError(error)` before treating other failures
 as an absent session or an uncertain probe; it also recognizes nested refusals.
 The deprecated synchronous contracts for durable sessions remain available
 through 2026-12-31 and are removed in the first January 2027 stable release.
+
+### Session-keyed harness registration
+
+The session-controller cutover changes standalone session-keyed
+`setActiveEmbeddedRun(...)` registration immediately, with no compatibility
+window. Register native runs from the host-provided, admitted harness attempt.
+Calling the function without that admission throws
+`AgentHarnessPreflightError`, with code
+`SESSION_CONTROLLER_ADMISSION_REQUIRED` and migration guidance.
+
+A hosted call inherits the host's captured operation; passing a session key,
+agent ID, or a plugin-created operation does not obtain admission. Host-owned
+detached work can carry a session key for policy, but cannot own that session's
+turn, queue, or Stop. See [Harness attempt runtime](/plugins/sdk-agent-harness/attempt-runtime)
+for the supported registration and cleanup path. Registration accepts only the
+five public identity arguments and returns a cleanup function bound to that
+exact run. The optional `replyOperation` refers to the same admitted controller
+and retains its documented tool-authority methods; it does not authorize
+standalone registration. Host admission state and native attachment records
+stay private to the host.
+
+### Gateway session control
+
+`GatewayRequestHandlerOptions.context` no longer exposes the mutable
+`chatAbortControllers` or `chatQueuedTurns` maps. The session controller owns
+admission, queued input, and Stop; plugin handlers cannot register or cancel work
+by changing shared maps. Reading either removed property fails with code
+`PLUGIN_CAPABILITY_REMOVED` and the exact capability name.
+
+Keep `api.registerGatewayMethod(...)` for plugin methods. To compose existing
+session operations from an authenticated handler, declare
+`contracts: { gatewayMethodDispatch: ["authenticated-request"] }` in the plugin
+manifest and import `dispatchGatewayMethod` from
+`openclaw/plugin-sdk/gateway-method-runtime`. Use `chat.send` to submit input,
+`chat.abort` with `{ sessionKey, runId? }` to cancel a chat run, or
+`sessions.abort` with `{ key, runId?, clearQueued? }` for session cancellation.
+These calls retain the current caller's authority and the target method's
+authorization; the declaration does not grant additional scopes. Use
+`agent.wait` to await a run, and `sessions.list` for activity observations.
+Bundled or trusted official plugins can also use `api.runtime.gateway.request`,
+session facts, and subscriptions; those runtime capabilities retain their
+existing trust restriction.
+See [Gateway runtime](/plugins/sdk-runtime/gateway-and-nodes#session-control)
+for the supported read and control paths.
+
+### Agent turn start observation
+
+`AgentTurnStartOwner.observe()` now returns `startDeadlineAtMs` instead of
+`expiresAtMs`. The old property has no alias; reading it fails with code
+`PLUGIN_CAPABILITY_REMOVED`. Update consumers of the `onStartOwner` callback
+exposed through `context.createAgentTurnFacade` to inspect the new field.
+
+A finite `startDeadlineAtMs` is the controller's deadline for execution to
+start. `null` means a live controller-owned wait has no finite start deadline;
+an absent field means no controller deadline is available yet. An `undefined`
+observation means the captured owner is no longer current. Stop watching for
+start once `executionStarted` is true. This field does not extend execution
+authority or describe the run's execution timeout. Other API fields named
+`expiresAtMs` retain their existing contracts.
 
 ### Session and command preparation
 

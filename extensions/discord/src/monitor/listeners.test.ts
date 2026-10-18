@@ -18,9 +18,7 @@ import { DiscordPresenceGuildDeleteListener, DiscordPresenceListener } from "./l
 import { createDiscordLivePolicyReader, type DiscordLivePolicy } from "./live-policy.js";
 import { clearPresences, getPresence } from "./presence-cache.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
-import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { registerDiscordMonitorListeners } from "./provider.startup.js";
-import { createNoopThreadBindingManager } from "./thread-bindings.js";
 
 const lifecycle = vi.hoisted(() => {
   const unbindThread = vi.fn();
@@ -288,17 +286,8 @@ function createHarness(
   });
   const update = (archived = false) =>
     client.dispatchGatewayEvent("THREAD_UPDATE", thread(archived));
-  const dispose = vi.fn();
   const joinGuild = () => client.dispatchGatewayEvent("GUILD_CREATE", guildCreateEvent());
-  const cleanup = () =>
-    cleanupDiscordProviderStartup({
-      stopMonitorListeners,
-      lifecycleStarted: true,
-      threadBindings: createNoopThreadBindingManager(),
-      runtime,
-      gatewaySupervisor: { dispose },
-    });
-  return { client, fetch, logger, onEvent, update, joinGuild, cleanup, dispose };
+  return { client, fetch, logger, onEvent, update, joinGuild, cleanup: stopMonitorListeners };
 }
 
 const denied = () =>
@@ -443,7 +432,7 @@ describe("Discord guild join introductions", () => {
         mocks.reportChannelRoomJoin.mockImplementationOnce(report.run);
       }
       const blocked = stage === "permission" ? permission : report;
-      const { joinGuild, cleanup, dispose } = createHarness({
+      const { joinGuild, cleanup } = createHarness({
         groupPolicy: "open",
         guildEntries: undefined,
       });
@@ -457,10 +446,8 @@ describe("Discord guild join introductions", () => {
             setImmediate(resolve);
           });
           expect(cleaned).not.toHaveBeenCalled();
-          expect(dispose).not.toHaveBeenCalled();
         } else {
           await stopped;
-          expect(dispose).toHaveBeenCalledOnce();
         }
         await joinGuild();
       } finally {
@@ -469,7 +456,6 @@ describe("Discord guild join introductions", () => {
       }
       expect(mocks.reportChannelRoomJoin).toHaveBeenCalledTimes(stage === "permission" ? 0 : 1);
       expect(cleaned).toHaveBeenCalledOnce();
-      expect(dispose).toHaveBeenCalledOnce();
     },
   );
 

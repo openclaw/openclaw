@@ -27,9 +27,11 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
-import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureGatewaySessionControllerWork,
+  isSessionControllerWorkActive,
+} from "../../sessions/session-controller.lifecycle.js";
 import { resolveExplicitIncognitoAgentSqliteTarget } from "../../state/openclaw-agent-db.paths.js";
-import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
   hasCompletedMainSessionRecoveryOutcome,
   isMainRestartRecoveryTerminalOnly,
@@ -47,6 +49,7 @@ import {
 } from "./main-session-restart-recovery-shared.js";
 import {
   captureYieldedMainSessionContinuation,
+  resolveRestartRecoveryDispatchIdentity,
   resolveRestartRecoveryDispatchTarget,
 } from "./main-session-restart-recovery-target.js";
 
@@ -137,6 +140,7 @@ export async function markRestartAbortedMainSessions(params: {
   cfg?: OpenClawConfig;
   stateDir?: string;
   activeRuns: Iterable<RestartRecoveryCandidate>;
+  activeAdmissions?: ReturnType<typeof captureGatewaySessionControllerWork>;
   isActiveRun?: (run: RestartRecoveryCandidate) => boolean;
   reason?: string;
 }): Promise<{ marked: number; skipped: number }> {
@@ -160,7 +164,8 @@ export async function markRestartAbortedMainSessions(params: {
   };
   // Channel work can outlive its chat-run registration. The admission owner
   // retains the authoritative store and session identities until the turn releases.
-  const activeAdmissions = captureGatewaySessionWorkAdmissions(params.resolveGatewayContext);
+  const activeAdmissions =
+    params.activeAdmissions ?? captureGatewaySessionControllerWork(params.resolveGatewayContext);
   if (activeRuns.length === 0 && activeAdmissions.targets.size === 0) {
     return result;
   }
@@ -198,6 +203,9 @@ export async function markRestartAbortedMainSessions(params: {
   for (const storePath of activeAdmissions.targets.keys()) {
     addStoreTarget({ storePath });
   }
+  for (const run of activeRuns) {
+    addStoreTarget({ storePath: run.storePath, agentId: run.agentId });
+  }
   for (const target of storeTargets.values()) {
     const { storePath } = target;
     // Preselect read-only: ID-only admissions can own multiple persisted keys.
@@ -206,7 +214,10 @@ export async function markRestartAbortedMainSessions(params: {
       .filter(
         ({ sessionKey, entry }) =>
           activeRuns.some(
-            (run) => run.sessionKey === sessionKey && run.sessionId === entry.sessionId,
+            (run) =>
+              run.storePath === storePath &&
+              run.sessionKey === sessionKey &&
+              run.sessionId === entry.sessionId,
           ) ||
           activeAdmissions.isActive({ scope: storePath, sessionKey, sessionId: entry.sessionId }),
       )
@@ -220,6 +231,13 @@ export async function markRestartAbortedMainSessions(params: {
           sessionKey: selectedSessionKey,
           storePath,
         });
+        const agentId =
+          requester?.agentId ??
+          resolveRestartRecoveryDispatchIdentity({
+            storeAgentId: target.agentId,
+            sessionKey: selectedSessionKey,
+            storePath,
+          }).agentId;
         const storeResult = await markRecoveryStore({
           ...target,
           sessionKeys: [selectedSessionKey],
@@ -233,6 +251,8 @@ export async function markRestartAbortedMainSessions(params: {
             // store discovery; an ID collision must not select a row or attach its fences.
             const matchingActiveRuns = activeRuns.filter(
               (run) =>
+                run.storePath === storePath &&
+                run.agentId === agentId &&
                 run.sessionKey === sessionKey &&
                 run.sessionId === entry.sessionId &&
                 (entry.lifecycleRunId === run.runId ||
@@ -254,6 +274,7 @@ export async function markRestartAbortedMainSessions(params: {
             );
             const matchedActiveAdmission = activeAdmissions.isActive({
               scope: storePath,
+              agentId,
               sessionKey,
               sessionId: entry.sessionId,
             });
@@ -290,6 +311,7 @@ export async function markRestartAbortedMainSessions(params: {
               ((matchedActiveAdmission &&
                 activeAdmissions.isActive({
                   scope: storePath,
+                  agentId,
                   sessionKey,
                   sessionId: entry.sessionId,
                 })) ||
@@ -347,8 +369,6 @@ export async function markRestartAbortedMainSessions(params: {
 
 type OrphanMarkParams = {
   cfg?: OpenClawConfig;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
   updatedBeforeMs?: number;
   lifecycleGeneration: string;
 };
@@ -377,7 +397,6 @@ async function markOrphanedMainSessionStore(
     assertCommitAllowed?: () => void;
   },
 ): Promise<{ marked: number; skipped: number }> {
-  const hasCurrentProcessOwner = createCurrentProcessOwnerLookup(params);
   const updatedBeforeMs = asFiniteNumber(params.updatedBeforeMs);
   const key = params.target.sessionKey;
   let sessionKeys: string[];
@@ -445,7 +464,7 @@ async function markOrphanedMainSessionStore(
         listAgentRunsForSession({ sessionKey, sessionId: entry.sessionId }).some(({ runId }) =>
           hasLiveAgentRunContext(runId),
         ) ||
-        hasCurrentProcessOwner(entry, sessionKey);
+        isSessionControllerWorkActive(params.target.storePath, [sessionKey, entry.sessionId]);
       if (hasLiveOwner()) {
         return undefined;
       }
@@ -524,8 +543,6 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   cfg?: OpenClawConfig;
   agentIds?: ReadonlySet<string>;
   stateDir?: string;
-  activeSessionIds?: Iterable<string>;
-  activeSessionKeys?: Iterable<string>;
   startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
 }): Promise<{ marked: number; skipped: number; failedTargets?: RestartRecoveryStoreTarget[] }> {

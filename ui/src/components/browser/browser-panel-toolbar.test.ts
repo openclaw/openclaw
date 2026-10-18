@@ -10,7 +10,6 @@ import "./browser-panel.ts";
 describe("Browser toolbar", () => {
   beforeEach(() => {
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
   });
 
   afterEach(() => {

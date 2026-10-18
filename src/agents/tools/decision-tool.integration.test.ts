@@ -1,12 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, onTestFinished } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DecisionBatchV2, ProviderDecisionOutcomeV2 } from "../../decisions/types-v2.js";
 import type { DecisionBatch } from "../../decisions/types.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
+import { markTrustedOtelDiagnosticListener } from "../../infra/diagnostic-otel-listener-provenance.js";
 import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
 import { resetPluginLoaderTestStateForTest } from "../../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -31,6 +37,7 @@ type Trace = {
 };
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -38,6 +45,16 @@ afterEach(async () => {
 });
 
 it("returns rich native outcomes through the core tool, registered host and real preparation", async () => {
+  const events: DiagnosticEventPayload[] = [];
+  onTestFinished(
+    onTrustedInternalDiagnosticEvent(
+      markTrustedOtelDiagnosticListener((event) => {
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
+      }),
+    ),
+  );
   const root = roots.make("decision-tool-native-");
   const pluginRoot = path.join(root, "plugin");
   const emptyBundled = path.join(root, "bundled");
@@ -172,6 +189,16 @@ it("returns rich native outcomes through the core tool, registered host and real
         },
       };
       const result = await tool!.execute("native", batch);
+      expect(events).toEqual([
+        expect.objectContaining({
+          type: "model.usage",
+          provider: id,
+          model: "native",
+          agentId: "main",
+          usage: { input: 12 },
+          costUsd: 0,
+        }),
+      ]);
       expect(trace.authenticated).toBe(true);
       expect(trace.calls).toBe(1);
       expect(trace.batch).toEqual({
@@ -237,6 +264,7 @@ it("returns rich native outcomes through the core tool, registered host and real
       expect(Value.Check(DecisionEvaluateOutput, imageResult.details)).toBe(true);
       expect(trace.batch).toEqual(imageBatch);
       expect(trace.calls).toBe(3);
+      expect(events).toHaveLength(1);
     },
   );
 });

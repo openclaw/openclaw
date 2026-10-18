@@ -1,12 +1,12 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
+import { captureSessionMcpRuntimeRetirement } from "../agents/agent-bundle-mcp-manager-api.js";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import {
   listAgentIds,
   resolveAgentEntry,
   tryResolveAmbientOwnerAgentId,
 } from "../agents/agent-scope-config.js";
-import { isEmbeddedAgentSessionHeldByOtherRun } from "../agents/embedded-agent-runner/runs.js";
+import { abortAndDrainEmbeddedAgentRunByRunId } from "../agents/embedded-agent-runner/runs.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { loadPreparedInboundPluginRegistry } from "../agents/prepared-model-runtime.inbound-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -647,23 +647,27 @@ export function buildGatewayCronService(params: {
       if (!execution?.sessionId) {
         return;
       }
-      if (
-        execution.runId &&
-        isEmbeddedAgentSessionHeldByOtherRun(execution.sessionId, execution.runId)
-      ) {
-        cronLogger.warn(
-          { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
-          "cron: timed-out agent run already left its session; kept the current run",
-        );
-        return;
-      }
-      const result = await abortAndDrainEmbeddedAgentRun({
+      const mcpRetirement = captureSessionMcpRuntimeRetirement({
+        sessionId: execution.sessionId,
+        sessionKey: execution.sessionKey,
+      });
+      const cleanup = {
         sessionId: execution.sessionId,
         sessionKey: execution.sessionKey,
         settleMs: 15_000,
         forceClear: true,
         reason: "cron_timeout",
-      });
+      };
+      const result = await (execution.runId
+        ? abortAndDrainEmbeddedAgentRunByRunId({ ...cleanup, runId: execution.runId })
+        : abortAndDrainEmbeddedAgentRun(cleanup));
+      if (!result) {
+        cronLogger.warn(
+          { jobId: job.id, sessionId: execution.sessionId, sessionKey: execution.sessionKey },
+          "cron: timed-out agent run no longer registered; kept the current run",
+        );
+        return;
+      }
       cronLogger.warn(
         {
           jobId: job.id,
@@ -675,16 +679,14 @@ export function buildGatewayCronService(params: {
         },
         "cron: cleaned up timed-out agent run",
       );
-      await retireSessionMcpRuntime({
-        sessionId: execution.sessionId,
-        reason: "cron-timeout-cleanup",
-        onError: (error, sid) => {
+      await mcpRetirement
+        ?.retire(() => params.scheduler.signal.throwIfAborted())
+        .catch((error: unknown) => {
           cronLogger.warn(
-            { jobId: job.id, sessionId: sid },
+            { jobId: job.id, sessionId: execution.sessionId },
             `cron: failed to retire MCP runtime for timed-out session: ${String(error)}`,
           );
-        },
-      }).catch(() => {});
+        });
     },
     onIsolatedAgentSetupTimeout: ({ job, error, timeoutMs }) => {
       cronLogger.warn(

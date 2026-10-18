@@ -40,10 +40,7 @@ import { prepareOpenClawAgentDatabaseRegistryRemoval } from "../state/openclaw-a
 import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/openclaw-agent-db-validation-cache.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
-import type {
-  OpenClawStateDatabase,
-  OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db-contract.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { withCurrentOpenClawStateReadScope } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerLeaseContext } from "../state/openclaw-state-lease-context.js";
@@ -553,16 +550,4 @@ export function isAgentDeletionBlocked(
     }
     return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
   });
-}
-
-/** Keep persisted identity stable until the winning deletion completes or rolls back. */
-export function assertAgentDeletionAllowsMutation(
-  database: OpenClawStateDatabase,
-  agentId: string,
-): void {
-  const id = normalizeAgentId(agentId);
-  const journal = readAgentDeletionJournalInDatabase(database, id);
-  if (journal && !journal.cleanupCompleted) {
-    throw new Error(`Agent ${id} has pending deletion; retry after removal completes.`);
-  }
 }

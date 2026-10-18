@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import { shellEscapeBackslash } from "../../../src/shared/shell-quote.js";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { registerMcpEnglish } from "../i18n/locales/en-mcp.ts";
@@ -79,15 +79,21 @@ export function McpServersCard(props: McpServersCardProps) {
   void context.runtimeConfig.ensureLoaded().catch((error: unknown) => {
     setView((state) => ({ ...state, message: { kind: "error", text: formatUiError(error) } }));
   });
-  const hello = createMemo(() => gateway.read().snapshot.hello);
-  // A new transport retires the previous sign-in before another interaction can start one.
-  createEffect(hello, () => {
-    login.reset();
-  });
-  const stopSelection = context.agentSelection.subscribe(() => login.reset());
-  onCleanup(() => {
-    active = false;
-    stopSelection();
+  onSettled(() => {
+    let hello = context.gateway.snapshot.hello;
+    // Retire sign-in with its transport, before the next interaction can reuse it.
+    const stopGateway = context.gateway.subscribe((snapshot) => {
+      if (snapshot.hello !== hello) {
+        hello = snapshot.hello;
+        login.reset();
+      }
+    });
+    const stopSelection = context.agentSelection.subscribe(() => login.reset());
+    return () => {
+      active = false;
+      stopGateway();
+      stopSelection();
+    };
   });
 
   const mutationBlockedReason = (): string | null => {

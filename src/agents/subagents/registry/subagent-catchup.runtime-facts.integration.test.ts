@@ -178,7 +178,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     },
   );
 
-  it.each(["retained result", "requester final pending", "older generation"])(
+  it.each(["retained result", "fallback result", "requester final pending", "older generation"])(
     "exposes the owned result without acknowledging it: %s",
     async (scenario) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
@@ -199,8 +199,12 @@ describe("parent runtime facts from retained completion obligations", () => {
         expectsCompletionMessage: true,
         completion: {
           required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
+          ...(scenario === "fallback result"
+            ? { resultText: null, fallbackResultText: RESULT }
+            : {
+                terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
+                resultText: RESULT,
+              }),
           capturedAt: now - 7_200_000,
         },
         delivery: { status: scenario === "requester final pending" ? "delivered" : "pending" },
@@ -231,7 +235,11 @@ describe("parent runtime facts from retained completion obligations", () => {
         );
       }
       const before = loadSubagentRegistryFromSqlite();
-      expect(before.get(child.runId)?.completion?.resultText).toBe(RESULT);
+      expect(
+        scenario === "fallback result"
+          ? before.get(child.runId)?.completion?.fallbackResultText
+          : before.get(child.runId)?.completion?.resultText,
+      ).toBe(RESULT);
       const params = {
         cfg: getRuntimeConfig(),
         agentId: "main",

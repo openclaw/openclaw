@@ -5,10 +5,8 @@ import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { enqueueFollowupRun } from "../../../auto-reply/reply/queue.js";
 import { createQueueTestRun } from "../../../auto-reply/reply/queue.test-helpers.js";
-import {
-  clearFollowupQueue,
-  getExistingFollowupQueue,
-} from "../../../auto-reply/reply/queue/state.js";
+import { clearSessionQueues } from "../../../auto-reply/reply/queue/cleanup.js";
+import { getExistingFollowupQueue } from "../../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -16,28 +14,31 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { runWithChatAbortExecution } from "../../../gateway/chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { createDirectChatContext } from "../../../gateway/server-chat.agent-events.test-helpers.js";
 import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
-import { clearCommandLane, enqueueCommandInLane } from "../../../process/command-queue.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
-import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
-import { resolveEmbeddedSessionLane } from "../../embedded-agent-runner/lanes.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "../../embedded-agent-runner/runs.js";
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../../sessions/session-controller.lifecycle.js";
+import { trackSessionControllerSourceWork } from "../../../sessions/session-controller.mailbox.js";
+import { markReplyOperationExecutionStarted } from "../../../sessions/session-controller.state.js";
+import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
+import type { EmbeddedAgentQueueHandle } from "../../embedded-agent-runner/run-state.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import type { AgentToolGatewayRequestCaller } from "../../tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../../tools/sessions-send-tool.js";
 import { createSubagentsTool } from "../../tools/subagents-tool.js";
 import { captureSubagentCompletionReply } from "../announce/subagent-announce-output.js";
+import {
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
@@ -134,33 +135,56 @@ it("cancelling a watched main/global child preserves the other agent's work", as
 
   const foreignAbort = vi.fn();
   const foreignHandle = createEmbeddedRunHandle({ runId: "foreign-run", abort: foreignAbort });
-  setActiveEmbeddedRun(foreignId, foreignHandle, "global", undefined, foreignAgent);
+  attachActiveEmbeddedRun(
+    foreignId,
+    foreignHandle,
+    "global",
+    foreignStorePath,
+    undefined,
+    foreignAgent,
+  );
   const followup = createQueueTestRun({ prompt: "Other agent's queued followup" });
   Object.assign(followup.run, {
     agentId: foreignAgent,
     sessionKey: "global",
     sessionId: foreignId,
+    config: cfg,
+  });
+  const foreignTarget = captureSessionTarget({
+    storeScope: foreignStorePath,
+    sessionKey: "global",
+    agentId: foreignAgent,
+    incarnation: foreignId,
   });
   enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
-  const lane = resolveEmbeddedSessionLane("global");
-  const entered = createDeferred();
-  const release = createDeferred();
-  const blocker = enqueueCommandInLane(lane, async () => {
-    entered.resolve();
-    await release.promise;
+  const childTarget = captureSessionTarget({
+    storeScope: childStorePath,
+    sessionKey: "global",
+    agentId: owner,
+    incarnation: childId,
   });
-  await entered.promise;
-  const foreignCommand = enqueueCommandInLane(lane, async () => "foreign command survived", {
-    sessionTarget: { agentId: foreignAgent, sessionKey: "global", sessionId: foreignId },
+  const childSource = registerChatAbortController({
+    target: childTarget,
+    runId: "child-preparing-run",
+    sessionKey: "global",
+    sessionId: childId,
+    kind: "agent",
+    timeoutMs: 60_000,
   });
-  const childCommand = enqueueCommandInLane(lane, async () => "child must not start", {
-    sessionTarget: { agentId: owner, sessionKey: "global", sessionId: childId },
-  });
+  const foreignTurn = vi.fn(async () => "foreign command survived");
+  const childTurn = vi.fn(async () => "child must not start");
+  const foreignCommand = withSessionTurn(
+    { sessionKey: "global", sessionId: foreignId, target: foreignTarget },
+    foreignTurn,
+  );
+  const childCommand = withSessionTurn(
+    { sessionKey: "global", sessionId: childId, target: childTarget },
+    childTurn,
+  );
   const outcome = Promise.allSettled([foreignCommand, childCommand]);
   const interruptChild = vi.fn(() => childAdmission.release());
-  const childAdmission = await beginSessionWorkAdmission({
-    scope: childStorePath,
-    identities: ["global", childId],
+  const childAdmission = await beginSessionEffect({
+    target: childTarget,
     assertAllowed: () => {},
     onInterrupt: interruptChild,
   });
@@ -176,14 +200,20 @@ it("cancelling a watched main/global child preserves the other agent's work", as
       loadSessionEntry({ agentId: owner, storePath: childStorePath, sessionKey: "global" }),
     ).toMatchObject({ abortedLastRun: true, status: "killed" });
     expect.soft(foreignAbort).not.toHaveBeenCalled();
-    expect.soft(getExistingFollowupQueue("global")?.items.includes(followup) ?? false).toBe(true);
-    release.resolve();
-    await blocker;
+    expect
+      .soft(getExistingFollowupQueue("global", foreignTarget)?.items.includes(followup) ?? false)
+      .toBe(true);
+    expect(childSource.controller.signal.aborted).toBe(true);
+    expect(childTurn).not.toHaveBeenCalled();
+    expect(foreignTurn).not.toHaveBeenCalled();
+    clearSessionQueues(["global"], foreignTarget, [followup.controllerInput!]);
+    await detachActiveEmbeddedRun(foreignId, foreignHandle, "global");
     const [foreignResult, childResult] = await outcome;
     expect.soft(foreignResult).toEqual({ status: "fulfilled", value: "foreign command survived" });
+    expect(foreignTurn).toHaveBeenCalledOnce();
     expect(childResult).toMatchObject({
       status: "rejected",
-      reason: { name: "CommandLaneClearedError" },
+      reason: { message: "Session mailbox cleared" },
     });
     expect
       .soft(
@@ -196,11 +226,11 @@ it("cancelling a watched main/global child preserves the other agent's work", as
       .not.toBe(true);
   } finally {
     childAdmission.release();
-    release.resolve();
-    clearCommandLane(lane);
-    clearFollowupQueue("global");
-    clearActiveEmbeddedRun(foreignId, foreignHandle, "global");
-    await Promise.allSettled([blocker, outcome]);
+    childSource.cleanup();
+    clearSessionQueues(["global"], childTarget);
+    clearSessionQueues(["global"], foreignTarget);
+    await detachActiveEmbeddedRun(foreignId, foreignHandle, "global");
+    await outcome;
   }
 });
 
@@ -405,7 +435,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
       },
     },
   };
-  setActiveEmbeddedRun("main-global", handle, "global", undefined, "main");
+  attachActiveEmbeddedRun("main-global", handle, "global", undefined, undefined, "main");
   try {
     const sent = await send("main", "main-turn", "steer");
     expect(sent.details, JSON.stringify(sent.details)).toMatchObject({
@@ -416,7 +446,7 @@ it("steers its watched raw child while another agent has a newer row", async () 
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
     expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
   } finally {
-    clearActiveEmbeddedRun("main-global", handle, "global");
+    await detachActiveEmbeddedRun("main-global", handle, "global");
   }
 });
 
@@ -514,7 +544,18 @@ it.each(["admin", "bulk", "tool"] as const)(
     const before = structuredClone(research);
     const sessionBefore = loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" });
     const followup = createQueueTestRun({ prompt: "Retained queued followup" });
-    Object.assign(followup.run, { agentId: "research", sessionKey: "global" });
+    Object.assign(followup.run, {
+      agentId: "research",
+      sessionKey: "global",
+      sessionId: "legacy-global",
+      config: cfg,
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "global",
+      agentId: "research",
+      incarnation: "legacy-global",
+    });
     enqueueFollowupRun("global", followup, { mode: "followup" }, "none", undefined, false);
 
     try {
@@ -571,11 +612,11 @@ it.each(["admin", "bulk", "tool"] as const)(
       expect(loadSessionEntry({ agentId: "main", storePath, sessionKey: "global" })).toEqual(
         sessionBefore,
       );
-      expect(getExistingFollowupQueue("global")?.items).toContain(followup);
+      expect(getExistingFollowupQueue("global", target)?.items).toContain(followup);
       expect(fixture.cleanup).not.toHaveBeenCalled();
       expect(fixture.gateway).not.toHaveBeenCalled();
     } finally {
-      clearFollowupQueue("global");
+      clearSessionQueues(["global"], target);
     }
   },
 );
@@ -615,7 +656,12 @@ it.each([
     const nextBefore = structuredClone(getSubagentRunByRunId("next-incarnation"));
     const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const nativeRun = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: "original-session",
+      }),
       runId: legacyRun.runId,
       sessionKey,
       sessionId: "original-session",
@@ -623,7 +669,12 @@ it.each([
       timeoutMs: 60_000,
     });
     const successorRun = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: sessionBefore!.sessionId,
+      }),
       runId: "next-incarnation",
       sessionKey,
       sessionId: sessionBefore!.sessionId,
@@ -631,13 +682,36 @@ it.each([
       timeoutMs: 60_000,
     });
     const nativeReleased = createDeferred();
+    const nativeEntered = createDeferred();
     nativeRun.controller.signal.addEventListener("abort", () => nativeReleased.resolve(), {
       once: true,
     });
-    const nativeExecution = runWithChatAbortExecution(
-      nativeRun.entry,
-      () => nativeReleased.promise,
-      nativeRun.cleanup,
+    const nativeExecution = withSessionTurn(
+      {
+        sessionKey,
+        sessionId: "original-session",
+        agentId: "main",
+        storePath,
+        controllerInput: nativeRun.entry!.input,
+      },
+      async (operation) => {
+        if (!operation) {
+          throw new Error("Native source did not claim a session operation");
+        }
+        markReplyOperationExecutionStarted(operation);
+        nativeEntered.resolve();
+        try {
+          await nativeReleased.promise;
+        } finally {
+          nativeRun.cleanup();
+        }
+      },
+    );
+    trackSessionControllerSourceWork(nativeRun.entry!.input, nativeExecution);
+    await awaitGateBeforeSettlement(
+      nativeEntered.promise,
+      nativeExecution,
+      "Native source did not begin execution",
     );
     if (bindNativeRun) {
       bindGatewayContextResolver(legacyRun, () => context);
@@ -647,6 +721,13 @@ it.each([
       agentId: "main",
       sessionKey,
       sessionId: sessionBefore!.sessionId,
+      config: cfg,
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionBefore!.sessionId,
     });
     enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
     fixture.worker.mockClear();
@@ -679,11 +760,11 @@ it.each([
         endedReason: SUBAGENT_ENDED_REASON_KILLED,
         execution: { status: "terminal", suppressSessionEffects: true },
       });
-      expect(nativeRun.controller.signal.aborted).toBe(bindNativeRun);
+      expect(nativeRun.controller.signal.aborted).toBe(true);
       expect(successorRun.controller.signal.aborted).toBe(false);
       expect(getSubagentRunByRunId("next-incarnation")).toEqual(nextBefore);
       expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(sessionBefore);
-      expect(getExistingFollowupQueue(sessionKey)?.items).toContain(followup);
+      expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
       expect(fixture.cleanup).not.toHaveBeenCalled();
       expect(fixture.gateway).not.toHaveBeenCalled();
       expect(fixture.capture).not.toHaveBeenCalled();
@@ -695,8 +776,7 @@ it.each([
       await nativeExecution;
       nativeRun.cleanup();
       successorRun.cleanup();
-      context.chatAbortControllers.clear();
-      clearFollowupQueue(sessionKey);
+      clearSessionQueues([sessionKey], target);
     }
   },
 );
@@ -739,10 +819,21 @@ it.each(["registration", "execution target"] as const)(
     const sessionBefore = loadSessionEntry(scope);
     const abort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId, abort });
-    abort.mockImplementation(() => clearActiveEmbeddedRun(sessionId, handle, sessionKey));
-    setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main");
+    abort.mockImplementation(() => detachActiveEmbeddedRun(sessionId, handle, sessionKey));
+    attachActiveEmbeddedRun(sessionId, handle, sessionKey, storePath, undefined, "main");
     const followup = createQueueTestRun({ prompt: "Successor's queued followup" });
-    Object.assign(followup.run, { agentId: "main", sessionKey, sessionId });
+    Object.assign(followup.run, {
+      agentId: "main",
+      sessionKey,
+      sessionId,
+      config: { session: { store: storePath } },
+    });
+    const target = captureSessionTarget({
+      storeScope: storePath,
+      sessionKey,
+      agentId: "main",
+      incarnation: sessionBefore!.sessionId,
+    });
     enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false);
     fixture.worker.mockClear();
     try {
@@ -773,7 +864,7 @@ it.each(["registration", "execution target"] as const)(
         expect(fixture.worker).not.toHaveBeenCalled();
       }
       expect(loadSessionEntry(scope)).toEqual(sessionBefore);
-      expect(getExistingFollowupQueue(sessionKey)?.items).toContain(followup);
+      expect(getExistingFollowupQueue(sessionKey, target)?.items).toContain(followup);
       expect(abort).toHaveBeenCalledTimes(identitySource === "registration" ? 1 : 0);
       expect(fixture.cleanup).not.toHaveBeenCalled();
       expect(fixture.gateway).not.toHaveBeenCalled();
@@ -781,8 +872,8 @@ it.each(["registration", "execution target"] as const)(
       expect(fixture.announce).not.toHaveBeenCalled();
       expect(fixture.wake).not.toHaveBeenCalled();
     } finally {
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      clearFollowupQueue(sessionKey);
+      await detachActiveEmbeddedRun(sessionId, handle, sessionKey);
+      clearSessionQueues([sessionKey], target);
     }
   },
 );

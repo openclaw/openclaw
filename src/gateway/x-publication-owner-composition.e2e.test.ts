@@ -55,7 +55,7 @@ import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { isPublicSessionShareActive } from "./control-ui-public-session-read.js";
@@ -875,9 +875,10 @@ describe("X publication production-owner composition", () => {
             );
             expect(publication.sessionId).toBe(entry.sessionId);
             // The append checkpoint precedes the run's final session metadata writes.
-            const childReleased = getSessionWorkAdmissionRelease({
+            const childReleased = captureSessionControllerSettlement({
               scope: childStore,
               identities: [key, entry.sessionId],
+              agentId: "coder",
             });
             if (childReleased) {
               await waitFor("child admission release", childReleased);
@@ -948,9 +949,10 @@ describe("X publication production-owner composition", () => {
             "child admission cleanup",
             Promise.all(
               children.flatMap(({ sessionKey, entry }) => {
-                const drain = getSessionWorkAdmissionRelease({
+                const drain = captureSessionControllerSettlement({
                   scope: childStore,
                   identities: [sessionKey, entry.sessionId],
+                  agentId: "coder",
                 });
                 return drain ? [drain] : [];
               }),

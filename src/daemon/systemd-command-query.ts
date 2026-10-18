@@ -10,16 +10,9 @@ import {
 } from "./service-inspection-error.js";
 import type { GatewayServiceEnv, GatewayServiceReadOptions } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
-import { decodeSystemdBusProperties } from "./systemd-bus-query.js";
-import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
-import {
-  bindSystemdManagerOwner,
-  execBusctlSystem,
-  execBusctlUser,
-  systemdInspectionError,
-} from "./systemd-exec.js";
+import { createSystemdBusctlQuery } from "./systemd-busctl-query.js";
+import { bindSystemdManagerOwner } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
-import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 export async function createSystemdCommandQuery(
@@ -76,8 +69,20 @@ export async function createSystemdCommandQuery(
         ? await openSystemdUserManager(transport.address, deadlineAt).catch(privateInspectionFailed)
         : undefined;
     const managerUid = scope === "system" ? 0 : inspection?.managerUid;
-    let remainingCalls = managerUid !== undefined ? 6 : 3;
-    let legacyOutput = false;
+    const cliQuery = createSystemdBusctlQuery({
+      env,
+      scope,
+      deadline: deadlineAt,
+      calls: managerUid !== undefined ? 6 : 3,
+      boundCalls: managerUid !== undefined,
+      noAutoStart: Boolean(opts?.requireLoaded),
+      unitName,
+      unavailable,
+      assertCurrent: (args) =>
+        (args[0] === "call" && args[4] === "LoadUnit"
+          ? undefined
+          : inspection?.assertReadCurrent) ?? inspection?.assertCurrent,
+    });
     // All manager D-Bus calls share one deadline so wedged reads reach local fallback promptly.
     const query = async (args: string[], signatures: string[]): Promise<unknown[] | null> => {
       if (managerPeer) {
@@ -94,9 +99,6 @@ export async function createSystemdCommandQuery(
       if (budget.now() >= deadlineAt) {
         throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
       }
-      if (managerUid !== undefined && remainingCalls <= 0) {
-        throw unavailable();
-      }
       if (peer) {
         runServiceInspectionGuard(assertCurrent);
         const values = await peer.query(args, signatures, deadlineAt, inspection);
@@ -106,82 +108,7 @@ export async function createSystemdCommandQuery(
         }
         return values;
       }
-      const callTimeout = Math.max(1, Math.floor((deadlineAt - budget.now()) / remainingCalls--));
-      const callDeadline = Math.min(deadlineAt, budget.now() + callTimeout);
-      const exec = async (queryArgs: string[], callBudget: number) => {
-        if (scope === "system") {
-          runServiceInspectionGuard(assertCurrent);
-          return await execBusctlSystem(queryArgs, callBudget);
-        }
-        return await execBusctlUser(env, queryArgs, callBudget, assertCurrent);
-      };
-      let result = await exec(
-        [
-          ...(legacyOutput ? [] : ["--json=short"]),
-          ...(opts?.requireLoaded ? ["--auto-start=no"] : []),
-          ...args,
-        ],
-        callTimeout,
-      );
-      runServiceInspectionGuard(assertCurrent);
-      if (
-        !legacyOutput &&
-        result.termination === "exit" &&
-        result.code === 1 &&
-        result.stdout === "" &&
-        result.stderr.trim() === "busctl: unrecognized option '--json=short'"
-      ) {
-        // Option parsing failed before a manager call. Reuse this call's remaining
-        // budget; neither the retry nor later legacy calls earn a new deadline.
-        const remaining = Math.floor(callDeadline - budget.now());
-        if (remaining <= 0) {
-          throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-        }
-        legacyOutput = true;
-        result = await exec(
-          [...(opts?.requireLoaded ? ["--auto-start=no"] : []), ...args],
-          remaining,
-        );
-        runServiceInspectionGuard(assertCurrent);
-      }
-      if (result.termination === "error" && result.errorCode === "ENOENT") {
-        const reason =
-          scope === "system"
-            ? await resolveUnavailableSystemdInspectionReason(
-                "systemd-busctl-unavailable",
-                process.env,
-                callDeadline,
-              )
-            : "systemd-busctl-unavailable";
-        runServiceInspectionGuard(assertCurrent);
-        throw new ServiceInspectionError(reason);
-      }
-      if (budget.now() >= (legacyOutput ? callDeadline : deadlineAt)) {
-        throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
-      }
-      if ((legacyOutput || managerUid !== undefined) && result.termination !== "exit") {
-        throw systemdInspectionError(result, unavailable().message, scope);
-      }
-      if (result.code !== 0) {
-        const detail = result.stderr.trim();
-        if (
-          result.termination === "exit" &&
-          ((args.includes("LoadUnit") && detail === `Call failed: Unit ${unitName} not found.`) ||
-            (args.includes("GetUnit") &&
-              (detail === `Call failed: Unit ${unitName} not loaded.` ||
-                detail === `Call failed: Unit ${unitName} not found.`)) ||
-            (args.includes("GetUnitFileState") &&
-              (detail === `Call failed: Unit file ${unitName} does not exist.` ||
-                detail === "Call failed: No such file or directory")))
-        ) {
-          return null;
-        }
-        throw systemdInspectionError(result, unavailable().message, scope);
-      }
-      if (legacyOutput) {
-        return decodeLegacyBusctlOutput(result.stdout, signatures, args[0] === "call");
-      }
-      return decodeSystemdBusProperties(result.stdout, signatures, unavailable);
+      return await cliQuery(args, signatures);
     };
     const binding =
       peer ??

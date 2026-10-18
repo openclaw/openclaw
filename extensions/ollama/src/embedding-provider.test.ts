@@ -661,6 +661,8 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  // Vary the credential and the non-secret tenant header independently: only
+  // the tenant may change the cache key.
   it("keys custom endpoints by non-secret headers while excluding credentials", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
     const createCustomProvider = (tenant: string, apiKey: string) =>

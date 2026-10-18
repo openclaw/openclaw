@@ -1,13 +1,11 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
-import {
-  createAgentRunDirectAbortError,
-  resolveAgentRunAbortLifecycleFields,
-} from "../agents/run-termination.js";
+import * as termination from "../agents/run-termination.js";
 import { createAgentLifecycleTerminalBackstop } from "../auto-reply/reply/agent-lifecycle-terminal.js";
 import { setRuntimeConfigSnapshot } from "../config/io.js";
 import {
@@ -29,33 +27,32 @@ import {
   getAgentRunContextOwnerStatus,
   releaseAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import type { SubsystemLogger } from "../logging/subsystem.js";
-import { startSessionWorkAdmissionInterruption } from "../sessions/session-lifecycle-admission.js";
 import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+  startSessionControllerInterruption,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import * as agentDb from "../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { createAgentAdmissionController } from "./agent-turn/agent-admission-controller.js";
 import { createAgentDedupeLifecycle } from "./agent-turn/agent-dedupe-lifecycle.js";
 import { waitForChatAbortControllerRemoval } from "./chat-abort-lifecycle-internal.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+import { createChatRunState, createSessionEventSubscriberRegistry } from "./server-chat-state.js";
 import { chatHistoryHandlers } from "./server-methods/chat-history-handler.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import * as lifecycleState from "./session-lifecycle-state.js";
-import {
-  bindSessionRowProjection,
-  getSessionRowProjection,
-} from "./session-row-projection-access.js";
+import * as projection from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-terminal-");
@@ -82,42 +79,60 @@ vi.mock("./session-utils-store-worker.js", async (importOriginal) => ({
   },
 }));
 
-const persistenceTestWarnings = vi.fn();
-const silentLog: SubsystemLogger = {
+const subscriptionFixture = createSubscriptionTestFixture();
+const persistenceTestWarnings = subscriptionFixture.warn;
+const silentLog: typeof subscriptionFixture.log = {
+  ...subscriptionFixture.log,
   subsystem: "gateway-lifecycle-persistence-test",
   isEnabled: () => false,
-  trace: vi.fn(),
-  debug: vi.fn(),
-  info: vi.fn(),
-  warn: persistenceTestWarnings,
-  error: vi.fn(),
-  fatal: vi.fn(),
-  raw: vi.fn(),
   child: () => silentLog,
 };
 
+function createTarget(sessionKey: string) {
+  const target = { storePath: path.join(tempDirs.make(), "sessions.json"), sessionKey };
+  routing.loadSessionEntry.mockImplementation(() => ({
+    ...target,
+    canonicalKey: sessionKey,
+    entry: loadSessionEntry(target),
+  }));
+  return target;
+}
+
+async function closeStore(root: string) {
+  await agentDb.closeOpenClawAgentDatabasesAsync(root);
+  agentDb.closeOpenClawAgentDatabasesForTest(root);
+}
+
+type Subscriptions = ReturnType<typeof startGatewayEventSubscriptions>;
+function subscribe(
+  chatRunState: ReturnType<typeof createChatRunState>,
+  overrides: Partial<Parameters<typeof startGatewayEventSubscriptions>[0]> = {},
+) {
+  return startGatewayEventSubscriptions({
+    ...subscriptionFixture.createParams(),
+    log: silentLog,
+    chatRunState,
+    toolEventRecipients: chatRunState.toolEventRecipients,
+    ...overrides,
+  });
+}
+
+async function stopSubscriptions(subscriptions: Subscriptions | undefined) {
+  await subscriptions?.agentUnsub();
+  subscriptions?.heartbeatUnsub();
+  subscriptions?.transcriptUnsub();
+  subscriptions?.lifecycleUnsub();
+}
+
 it.each([
-  {
-    stopReason: "restart",
-    status: "interrupted",
-    recovery: "recoverable",
-    timeoutPhase: undefined,
-  },
-  { stopReason: "aborted", status: "killed", recovery: "inactive", timeoutPhase: undefined },
-  { stopReason: "restart", status: "timeout", recovery: "inactive", timeoutPhase: "provider" },
-])(
-  "retains $stopReason cancellation as $status after reopening a store without a shutdown marker",
-  async ({ stopReason, status, recovery, timeoutPhase }) => {
-    const target = {
-      storePath: path.join(tempDirs.make(), "sessions.json"),
-      sessionKey: "agent:main:restart-terminal",
-    };
+  ["restart", "interrupted", "recoverable", undefined],
+  ["aborted", "killed", "inactive", undefined],
+  ["restart", "timeout", "inactive", "provider"],
+] as const)(
+  "retains %s cancellation as %s after reopening a store without a shutdown marker",
+  async (stopReason, status, recovery, timeoutPhase) => {
+    const target = createTarget("agent:main:restart-terminal");
     const runId = "interrupted-run";
-    routing.loadSessionEntry.mockImplementation(() => ({
-      ...target,
-      canonicalKey: target.sessionKey,
-      entry: loadSessionEntry(target),
-    }));
     try {
       await replaceSessionEntry(target, {
         sessionId: "restart-terminal-session",
@@ -136,8 +151,7 @@ it.each([
           data: { phase: "error", aborted: true, stopReason, timeoutPhase, endedAt: 2_000 },
         },
       });
-      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+      await closeStore(path.dirname(target.storePath));
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored?.status).toBe(status);
       if (recovery === "recoverable") {
@@ -162,24 +176,15 @@ it.each([
       expect(observed).toMatchObject({ kind: "observed", view: { status: recovery } });
     } finally {
       routing.loadSessionEntry.mockReset();
-      await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-      closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+      await closeStore(path.dirname(target.storePath));
     }
   },
 );
 
 it("persists current-run timing after pre-start failure and clears it on the next run", async () => {
-  const target = {
-    storePath: path.join(tempDirs.make(), "sessions.json"),
-    sessionKey: "agent:main:timing",
-  };
+  const target = createTarget("agent:main:timing");
   let now = 1_000_000;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
-  routing.loadSessionEntry.mockImplementation(() => ({
-    ...target,
-    canonicalKey: target.sessionKey,
-    entry: loadSessionEntry(target),
-  }));
   let persistence = Promise.resolve();
   const unsubscribe = onAgentEvent((event) => {
     if (event.sessionKey === target.sessionKey && event.stream === "lifecycle") {
@@ -243,8 +248,7 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     now += 11_192;
     recovered.emit("end", { meta: {} });
     await persistence;
-    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+    await closeStore(path.dirname(target.storePath));
     expect(loadSessionEntry(target)).toMatchObject({
       status: "done",
       startedAt: 3_600_000,
@@ -257,8 +261,7 @@ it("persists current-run timing after pre-start failure and clears it on the nex
     await persistence;
     clock.mockRestore();
     routing.loadSessionEntry.mockReset();
-    await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-    closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+    await closeStore(path.dirname(target.storePath));
   }
 });
 
@@ -274,6 +277,14 @@ it.each(["success", "failed-write"])(
     };
     const sessionId = "native-cancel-session";
     const runId = "native-cancel-run";
+    const emitLifecycle = (data: Record<string, unknown>) =>
+      emitAgentEvent({
+        runId,
+        sessionId,
+        sessionKey: target.sessionKey,
+        stream: "lifecycle",
+        data,
+      });
     const chatRunState = createChatRunState();
     const broadcast = vi.fn();
     const terminalChanged = createDeferred();
@@ -291,19 +302,25 @@ it.each(["success", "failed-write"])(
     );
     const context = {
       chatRunState,
-      chatAbortControllers: new Map(),
       dedupe: new Map(),
       getRuntimeConfig: () => cfg,
       logGateway: silentLog,
     } as unknown as GatewayRequestContext;
+    const sourceFinished = createDeferred();
     const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: target.storePath,
+        sessionKey: target.sessionKey,
+        incarnation: sessionId,
+        agentId: "main",
+      }),
       runId,
       sessionId,
       sessionKey: target.sessionKey,
       agentId: "main",
       timeoutMs: 60_000,
       kind: "agent",
+      sourceWork: sourceFinished.promise,
     });
     const admissionParams = {
       cfg,
@@ -334,22 +351,33 @@ it.each(["success", "failed-write"])(
       setAdmittedSessionId: (admittedSessionId) => expect(admittedSessionId).toBe(sessionId),
     });
     admission.setAdmittedRunAbort(registration);
-    registration.markExecutionStarted();
-    const entry = registration.entry;
-    if (!entry) {
-      throw new Error("expected registered child");
-    }
-    const startPersisted = createDeferred();
-    const terminalWrite = createDeferred();
+    registration.initializeTiming();
+    const entry = expectDefined(registration.entry, "registered child");
+    const producer = await claimSessionControllerTask(entry.input, (mailboxClaim) => {
+      const operation = createReplyOperation({
+        sessionKey: target.sessionKey,
+        sessionId,
+        agentId: "main",
+        resetTriggered: false,
+        mailboxClaim,
+        target: entry.input.mailbox.owner.target,
+      });
+      markReplyOperationExecutionStarted(operation);
+    });
+    const releaseProducer = () => {
+      producer.operation?.complete();
+      releaseSessionControllerClaim(producer);
+    };
+    expect(registration.markExecutionStarted()).toBe(true);
+    const [startPersisted, terminalWrite] = [createDeferred(), createDeferred()] as const;
     let persistenceSpy:
       | MockInstance<typeof lifecycleState.prepareGatewaySessionLifecycleEvent>
       | undefined;
     const restartRecoveryCandidates = new Map();
-    const writerStarted = createDeferred();
-    const releaseWriter = createDeferred();
+    const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
     let heldWriter: Promise<unknown> | undefined;
-    let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
-    let interruption: ReturnType<typeof startSessionWorkAdmissionInterruption> | undefined;
+    let subscriptions: Subscriptions | undefined;
+    let interruption: ReturnType<typeof startSessionControllerInterruption> | undefined;
     const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
       "./session-utils-store-worker.js",
     );
@@ -362,7 +390,7 @@ it.each(["success", "failed-write"])(
         readOnly: false,
       }),
     );
-    const readHistory = async () => {
+    const readSessionInfo = async () => {
       const respond = vi.fn();
       await chatHistoryHandlers["chat.history"]!({
         req: { type: "req", id: "native-cancel-history", method: "chat.history" },
@@ -373,7 +401,7 @@ it.each(["success", "failed-write"])(
         context,
       });
       expect(respond.mock.calls[0]?.[0]).toBe(true);
-      return respond.mock.calls[0]?.[1];
+      return respond.mock.calls[0]?.[1]?.sessionInfo;
     };
     try {
       admissionEntry =
@@ -384,26 +412,15 @@ it.each(["success", "failed-write"])(
         })) ?? undefined;
       await admission.acquire(target.storePath);
       const rowProjection = await createSessionRowProjection({ cfg, context });
-      bindSessionRowProjection(context, () => rowProjection);
+      projection.bindSessionRowProjection(context, () => rowProjection);
       const sessionEventSubscribers = createSessionEventSubscriberRegistry();
       sessionEventSubscribers.subscribe("session-observer");
-      subscriptions = startGatewayEventSubscriptions({
-        scheduler: createTestGatewayScheduler(),
-        getSessionRowProjection: () => getSessionRowProjection(context),
-        signal: new AbortController().signal,
-        log: silentLog,
+      subscriptions = subscribe(chatRunState, {
+        getSessionRowProjection: () => projection.getSessionRowProjection(context),
         broadcast,
         broadcastToConnIds,
-        nodeHasSessionSubscribers: () => false,
-        nodeSendToSession: vi.fn(),
-        agentRunSeq: new Map(),
-        chatRunState,
-        toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers,
-        sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates,
-        refreshConnectedUserProfiles: vi.fn(),
       });
       const prepareLifecycleEvent = lifecycleState.prepareGatewaySessionLifecycleEvent;
       persistenceSpy = vi
@@ -418,19 +435,14 @@ it.each(["success", "failed-write"])(
             return persistence;
           };
         });
-      emitAgentEvent({
-        runId,
-        sessionId,
-        sessionKey: target.sessionKey,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 1_000 },
-      });
-      // The first start crosses lazy handler loading; await its real commit,
-      // not a polling deadline that also measures cold module initialization.
+      emitLifecycle({ phase: "start", startedAt: 1_000 });
+      // Join the real commit across lazy handler loading, not a polling deadline.
       await startPersisted.promise;
       expect(loadSessionEntry(target)?.status).toBeUndefined();
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: { status: "running", hasActiveRun: true, activeRunIds: [runId] },
+      expect(await readSessionInfo()).toMatchObject({
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: [runId],
       });
       heldWriter = patchSessionEntryCore(target, async () => {
         writerStarted.resolve();
@@ -442,61 +454,69 @@ it.each(["success", "failed-write"])(
         persistenceSpy.mockReturnValueOnce(() => terminalWrite.promise);
       }
 
-      interruption = startSessionWorkAdmissionInterruption({
+      interruption = startSessionControllerInterruption({
         scope: target.storePath,
         identities: [target.sessionKey, sessionId],
-        reason: createAgentRunDirectAbortError(),
+        reason: termination.createAgentRunDirectAbortError(),
       });
       expect(registration.controller.signal.aborted).toBe(true);
-      emitAgentEvent({
-        runId,
-        sessionId,
-        sessionKey: target.sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "error",
-          ...resolveAgentRunAbortLifecycleFields(registration.controller.signal),
-          endedAt: 2_000,
-        },
+      emitLifecycle({
+        phase: "error",
+        ...termination.resolveAgentRunAbortLifecycleFields(registration.controller.signal),
+        endedAt: 2_000,
       });
+      await vi.waitFor(() =>
+        expect(entry.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise),
+      );
+      const terminalPersistence = entry.adapter.projectSessionTerminalPersistence;
+      releaseProducer();
       registration.cleanup();
       admission.release();
-      await interruption.released;
       expect(chatRunState.runs.get(runId)?.abortMarker).toBeUndefined();
-      expect(context.chatAbortControllers.get(runId)).toBe(registration.entry);
-      expect(registration.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
+      expect(rpcSourceTesting.get(runId)).toBe(entry);
+      expect(registration.entry?.adapter.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
       expect(
         resolveVisibleActiveSessionRunState({
-          context,
+          storePath: target.storePath,
+          resolveGatewayContext: context.resolveGatewayContext,
           requestedKey: target.sessionKey,
           canonicalKey: target.sessionKey,
           sessionId,
           agentId: "main",
         }),
       ).toEqual({ active: false, runIds: [] });
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: { status: "running", hasActiveRun: true },
-      });
+      expect(await readSessionInfo()).toMatchObject({ status: "running", hasActiveRun: true });
 
       if (outcome === "failed-write") {
         const removed = waitForChatAbortControllerRemoval({
-          entries: context.chatAbortControllers,
           targets: [{ runId, entry }],
           timeoutMs: 1_000,
         });
         terminalWrite.reject(new Error("terminal write failed"));
+        await expect(terminalPersistence).rejects.toThrow("terminal write failed");
+        sourceFinished.resolve();
+        registration.cleanup();
+        await expect(producer.settlement.promise).rejects.toMatchObject({
+          message: "Source cleanup failed",
+          errors: [expect.objectContaining({ message: "terminal write failed" })],
+        });
+        await expect(interruption.released).rejects.toThrow("Source cleanup failed");
         expect(await removed).toBe(false);
         expect(restartRecoveryCandidates.get(runId)).toMatchObject({
           sessionId,
           observedAt: 2_000,
         });
-        expect(entry.projectSessionTerminalPersisted).toBe(false);
+        expect(entry.adapter.projectSessionTerminalPersisted).toBe(false);
         expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();
       await heldWriter;
-      await vi.waitFor(() => expect(context.chatAbortControllers.has(runId)).toBe(false));
+      await terminalPersistence;
+      sourceFinished.resolve();
+      registration.cleanup();
+      await interruption.released;
+      await vi.waitFor(() => expect(rpcSourceTesting.has(runId)).toBe(false));
       await vi.waitFor(() =>
         expect(broadcast).toHaveBeenCalledWith(
           "chat",
@@ -504,16 +524,14 @@ it.each(["success", "failed-write"])(
           expect.anything(),
         ),
       );
-      expect(await readHistory()).toMatchObject({
-        sessionInfo: {
-          status: "killed",
-          hasActiveRun: false,
-          activeRunIds: [],
-          startedAt: 1_000,
-          endedAt: 2_000,
-          runtimeMs: 1_000,
-          abortedLastRun: true,
-        },
+      expect(await readSessionInfo()).toMatchObject({
+        status: "killed",
+        hasActiveRun: false,
+        activeRunIds: [],
+        startedAt: 1_000,
+        endedAt: 2_000,
+        runtimeMs: 1_000,
+        abortedLastRun: true,
       });
       await terminalChanged.promise;
       expect(broadcastToConnIds).toHaveBeenCalledWith(
@@ -526,8 +544,7 @@ it.each(["success", "failed-write"])(
           prepareSessionProjection: expect.any(Function),
         },
       );
-      await closeOpenClawAgentDatabasesAsync(state.root);
-      closeOpenClawAgentDatabasesForTest(state.root);
+      await closeStore(state.root);
       const restored = loadSessionEntry({ ...target, readConsistency: "latest" });
       expect(restored).toMatchObject({
         status: "killed",
@@ -538,16 +555,19 @@ it.each(["success", "failed-write"])(
       expect(restored?.lifecycleRunId).toBeUndefined();
       expect(restored?.restartRecoveryForceSafeTools).toBeUndefined();
     } finally {
+      releaseProducer();
       admission.release();
-      await interruption?.released;
       terminalWrite.resolve();
       releaseWriter.resolve();
       await heldWriter;
-      await subscriptions?.agentUnsub();
-      subscriptions?.heartbeatUnsub();
-      subscriptions?.transcriptUnsub();
-      subscriptions?.lifecycleUnsub();
-      getSessionRowProjection(context)?.dispose();
+      sourceFinished.resolve();
+      registration.cleanup();
+      await Promise.allSettled([
+        producer.settlement.promise,
+        ...(interruption ? [interruption.released] : []),
+      ]);
+      await stopSubscriptions(subscriptions);
+      projection.getSessionRowProjection(context)?.dispose();
       registration.cleanup();
       persistenceSpy?.mockRestore();
       routing.loadSessionEntry.mockReset();
@@ -563,42 +583,23 @@ afterEach(async () => {
 });
 
 it.for([
-  { label: "end", phase: "end", data: {}, status: "done" },
-  {
-    label: "cancellation",
-    phase: "error",
-    data: { aborted: true, stopReason: "aborted" },
-    status: "killed",
-  },
-  {
-    label: "settled failure",
-    phase: "error",
-    data: { executionSettled: true, error: "Preparation failed" },
-    status: "failed",
-  },
-])(
-  "keeps an owner claim active until its queued $label write commits",
-  ({ phase, data, status }, { signal }) =>
+  ["end", "end", {}, "done"],
+  ["cancellation", "error", { aborted: true, stopReason: "aborted" }, "killed"],
+  ["settled failure", "error", { executionSettled: true, error: "Preparation failed" }, "failed"],
+] as const)(
+  "keeps an owner claim active until its queued %s write commits",
+  ([, phase, data, status], { signal }) =>
     ownerClaimFixture.run(async () => {
-      const target = {
-        storePath: path.join(tempDirs.make(), "sessions.json"),
-        sessionKey: "agent:main:worker-terminal",
-      };
+      const target = createTarget("agent:main:worker-terminal");
       const runId = "worker-terminal-run";
       const sessionId = "worker-terminal-session";
       const lifecycleGeneration = getAgentEventLifecycleGeneration();
-      const writerStarted = createDeferred();
-      const releaseWriter = createDeferred();
+      const [writerStarted, releaseWriter] = [createDeferred(), createDeferred()] as const;
       const clearRequested = createDeferred<string>();
       let claimId: string | undefined;
-      let subscriptions: ReturnType<typeof startGatewayEventSubscriptions> | undefined;
+      let subscriptions: Subscriptions | undefined;
       let heldWriter: Promise<unknown> | undefined;
       persistenceTestWarnings.mockReset();
-      routing.loadSessionEntry.mockImplementation(() => ({
-        ...target,
-        canonicalKey: target.sessionKey,
-        entry: loadSessionEntry(target),
-      }));
       try {
         await replaceSessionEntry(target, {
           lifecycleRunId: runId,
@@ -622,30 +623,12 @@ it.for([
             onClearRequested: clearRequested.resolve,
           },
         );
-        if (!claimId) {
-          throw new Error("expected worker terminal claim");
-        }
-        const terminalClaimId = claimId;
+        const terminalClaimId = expectDefined(claimId, "worker terminal claim");
+        const ownerStatus = () =>
+          getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration);
         const chatRunState = createChatRunState();
         const markFinal = vi.spyOn(chatRunState.toolEventRecipients, "markFinal");
-        const agentRunSeq = new Map<string, number>();
-        subscriptions = startGatewayEventSubscriptions({
-          scheduler: createTestGatewayScheduler(),
-          signal: new AbortController().signal,
-          log: silentLog,
-          broadcast: vi.fn(),
-          broadcastToConnIds: vi.fn(),
-          nodeHasSessionSubscribers: () => false,
-          nodeSendToSession: vi.fn(),
-          agentRunSeq,
-          chatRunState,
-          toolEventRecipients: chatRunState.toolEventRecipients,
-          sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-          sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-          chatAbortControllers: new Map(),
-          restartRecoveryCandidates: new Map(),
-          refreshConnectedUserProfiles: vi.fn(),
-        });
+        subscriptions = subscribe(chatRunState);
 
         emitAgentEventForOwner(
           {
@@ -655,7 +638,7 @@ it.for([
             stream: "lifecycle",
             data: { phase, ...data, startedAt: 1_000, endedAt: 2_000 },
           },
-          claimId,
+          terminalClaimId,
         );
         await vi.waitFor(
           () =>
@@ -667,9 +650,7 @@ it.for([
         expect(persistenceTestWarnings).not.toHaveBeenCalled();
         expect(markFinal).toHaveBeenCalledWith(runId);
 
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "active",
-        );
+        expect(ownerStatus()).toBe("active");
         releaseWriter.resolve();
         await heldWriter;
         // Failed runs also persist a transcript receipt after the row update.
@@ -689,20 +670,14 @@ it.for([
             }),
           );
         }
-        expect(getAgentRunContextOwnerStatus(runId, terminalClaimId, lifecycleGeneration)).toBe(
-          "clear-requested",
-        );
+        expect(ownerStatus()).toBe("clear-requested");
       } finally {
         releaseWriter.resolve();
         await heldWriter;
-        await subscriptions?.agentUnsub();
-        subscriptions?.heartbeatUnsub();
-        subscriptions?.transcriptUnsub();
-        subscriptions?.lifecycleUnsub();
+        await stopSubscriptions(subscriptions);
         releaseAgentRunContext(runId, claimId);
         routing.loadSessionEntry.mockReset();
-        await closeOpenClawAgentDatabasesAsync(path.dirname(target.storePath));
-        closeOpenClawAgentDatabasesForTest(path.dirname(target.storePath));
+        await closeStore(path.dirname(target.storePath));
       }
     }),
 );

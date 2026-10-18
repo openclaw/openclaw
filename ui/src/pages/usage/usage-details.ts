@@ -13,6 +13,7 @@ import {
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import {
   requestSessionUsage,
   requestSessionUsageLogs,
@@ -20,7 +21,6 @@ import {
   type SessionUsageQuery,
   type SessionUsageTarget,
 } from "../../lib/sessions/usage.ts";
-import { createUsageRequest } from "./request.ts";
 import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
 
 type UsageDetailTarget = Pick<UsageSessionEntry, "key" | "agentId" | "sessionId">;
@@ -44,7 +44,7 @@ function createUsageDetailRequest<T>(
   let value: { target: UsageDetailTarget; data?: T } | null = null;
   let status = createPanelRefreshStatus();
   let pending: Promise<void> | null = null;
-  const task = createUsageRequest(notify, {
+  const task = createPageRequest(notify, {
     task: async (
       [client, target]: readonly [GatewayBrowserClient, UsageDetailTarget],
       { signal },
@@ -91,7 +91,7 @@ function createUsageDetailRequest<T>(
       status = failPanelRefresh(status, undefined, gateway.snapshot);
     }
     pending = null;
-    task.cancel();
+    task.reset();
   };
   const reset = (target?: UsageDetailTarget) => {
     value = target ? { target } : null;

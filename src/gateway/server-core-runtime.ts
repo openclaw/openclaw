@@ -84,8 +84,6 @@ export async function startGatewayCoreRuntime(input: {
     nodeSendToAllSubscribed,
     refreshGatewayHealthSnapshotWithRuntime,
     dedupe,
-    chatAbortControllers,
-    chatQueuedTurns,
     restartRecoveryCandidates,
     chatRunState,
     removeChatRun,
@@ -200,8 +198,6 @@ export async function startGatewayCoreRuntime(input: {
               logHealth,
               clients,
               dedupe,
-              chatAbortControllers,
-              chatQueuedTurns,
               restartRecoveryCandidates,
               chatRunState,
               removeChatRun,
@@ -233,6 +229,7 @@ export async function startGatewayCoreRuntime(input: {
     ...runtimeSubscriptionUnsubs
   } = await startupTrace.measure("runtime.subscriptions", () =>
     startGatewayEventSubscriptions({
+      resolveGatewayContext: runtime.resolvePluginGatewayContext,
       scheduler: runtime.scheduler,
       signal: runtime.connectionWork.signal,
       getSessionRowProjection: runtime.getSessionRowProjection,
@@ -246,7 +243,6 @@ export async function startGatewayCoreRuntime(input: {
       toolEventRecipients,
       sessionEventSubscribers,
       sessionMessageSubscribers,
-      chatAbortControllers,
       restartRecoveryCandidates,
       refreshConnectedUserProfiles: () =>
         runtime.resolvePluginGatewayContext()?.refreshConnectedUserProfile?.(),
@@ -303,7 +299,6 @@ export async function startGatewayCoreRuntime(input: {
     const auxHandlers = createGatewayAuxHandlers({
       scheduler: runtime.scheduler,
       log,
-      chatAbortControllers,
       hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
       getNativeApprovalRouteCoordinator: () =>
         runtime.gatewayInstanceRuntimeRef.current?.nativeApprovals.routeCoordinator,

@@ -6,7 +6,7 @@ import {
 } from "@openclaw/ai/transports";
 import OpenAI from "openai";
 import { describe, expect, it } from "vitest";
-import { classifyAssistantFailoverReason } from "./embedded-agent-helpers.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 
 function createTransportOutput() {

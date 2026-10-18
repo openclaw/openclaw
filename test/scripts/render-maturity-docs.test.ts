@@ -788,6 +788,35 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
     expect(scorecard).toContain("Readiness by area");
+    expect(scorecard).toContain("## QA scorecard gaps");
+    expect(scorecard).toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: all. Taxonomy: current.");
+  });
+
+  it("uses the same all-before-release selection for gap reporting without changing scores", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-gap-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-gap-evidence-");
+    for (const profile of ["all", "release"]) {
+      writeQaEvidence({
+        dir: path.join(evidenceDir, profile),
+        profile,
+        generatedAt:
+          profile === "release" ? "2099-01-01T00:00:00.000Z" : "2026-10-01T00:00:00.000Z",
+        entries: [{ id: "pass", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+    }
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+    expect(scorecard).toContain("Profile: all. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).toContain("UNKNOWN");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain(
+      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    );
+    expect(result.stderr).not.toContain("UNKNOWN");
   });
 
   it("renders passing evidence with unique section jump targets", () => {

@@ -29,7 +29,7 @@ import {
   resetTestPluginRegistry,
   setTestPluginRegistry,
 } from "../../test-helpers.plugin-registry.js";
-import { registerDeflatedSegment } from "../ws-compression.js";
+import { GATEWAY_PER_MESSAGE_DEFLATE, registerDeflatedSegment } from "../ws-compression.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -576,7 +576,7 @@ describe("authenticated operator request starts", () => {
         expect(stream.bytesWritten - before).toBeLessThan(Buffer.byteLength(expected) / 4);
       }
       // Live session/tool events stay raw below the threshold.
-      const smallText = "x".repeat(2 * 1024);
+      const smallText = "x".repeat(GATEWAY_PER_MESSAGE_DEFLATE.threshold / 2);
       expect(
         await echo("small", smallText, () => socket.send(request("small", smallText))),
       ).toBeGreaterThan(smallText.length);

@@ -244,7 +244,6 @@ export class SwarmRosterHydrator {
   }
 
   private applyParent(parent: GatewaySessionRow | null): void {
-    const previous = this.parentRow;
     const summary = JSON.stringify([
       parent?.sessionId,
       parent?.childSessions,
@@ -252,28 +251,18 @@ export class SwarmRosterHydrator {
       parent?.swarm?.otherActiveGroups,
     ]);
     const changed = this.parentSummary !== summary;
-    // Roster/event summaries omit members. Equal summary facts retain the detailed
-    // read's membership; changed groups are re-read through the same row observation.
-    this.parentRow =
-      parent && !changed && previous?.swarm && parent.swarm
-        ? {
-            ...parent,
-            swarm: {
-              ...parent.swarm,
-              groups: parent.swarm.groups.map((group) => ({
-                ...group,
-                children:
-                  group.children ??
-                  previous.swarm?.groups.find((entry) => entry.groupId === group.groupId)?.children,
-              })),
-            },
-          }
-        : parent;
+    this.parentRow = parent;
     this.parentSummary = summary;
     this.rows = this.parentRow ? mergeSwarmSessionRows(this.childRows, [this.parentRow]) : [];
     this.refreshNewChildren();
     this.publish();
-    if (parent && changed && this.parent && !this.publishingParentRead) {
+    if (
+      parent &&
+      changed &&
+      parent.swarm?.groups.some((group) => group.children === undefined) &&
+      this.parent &&
+      !this.publishingParentRead
+    ) {
       void this.readParent();
     }
   }
@@ -381,9 +370,12 @@ export class SwarmRosterHydrator {
       return;
     }
     this.childResult = result;
+    // List listeners run before row listeners, but the observation already holds
+    // this frame's parent. Comparing the prior callback's row re-describes every child update.
+    const observedParent = this.parent?.row;
     const previousChildren = new Map(this.childRows.map((row) => [row.key, row]));
     const described = new Map(
-      this.parentRow?.swarm?.groups.flatMap((group) =>
+      observedParent?.swarm?.groups.flatMap((group) =>
         (group.children ?? []).map(
           (child) => [child.sessionKey, { ...child, groupId: group.groupId }] as const,
         ),
@@ -391,22 +383,62 @@ export class SwarmRosterHydrator {
     );
     const changedMembers = result.sessions.filter((row) => {
       const previous = previousChildren.get(row.key);
-      return previous?.swarmGroupId !== row.swarmGroupId || previous?.status !== row.status;
+      return previous?.swarmGroupId !== row.swarmGroupId;
     });
+    const initialGroupSizes = new Map<string, number>();
+    const initialUnlistedActiveGroups = new Set<string>();
+    if (!this.childrenRead) {
+      for (const row of result.sessions) {
+        if (row.swarmGroupId) {
+          initialGroupSizes.set(
+            row.swarmGroupId,
+            (initialGroupSizes.get(row.swarmGroupId) ?? 0) + 1,
+          );
+          if (
+            (row.status === "running" || row.status === "queued") &&
+            !observedParent?.swarm?.groups.some((group) => group.groupId === row.swarmGroupId)
+          ) {
+            initialUnlistedActiveGroups.add(row.swarmGroupId);
+          }
+        }
+      }
+    }
     const currentKeys = new Set(result.sessions.map((row) => row.key));
     const removedMember = [...described.keys()].some(
       (key) => previousChildren.has(key) && !currentKeys.has(key),
+    );
+    const initialGroupGrowth = observedParent?.swarm?.groups.some(
+      (group) =>
+        (initialGroupSizes.get(group.groupId) ?? 0) >
+        group.queued + group.running + group.done + group.failed,
     );
     // Reuse a parent read that already observed this child change. Equal aggregate
     // counts alone cannot prove unchanged membership outside the primary page.
     const missingDetail = changedMembers.some((row) => {
       const member = described.get(row.key);
-      return (
-        row.swarmGroupId &&
-        (member?.groupId !== row.swarmGroupId || (row.status && member?.status !== row.status))
-      );
+      if (!member && !this.childrenRead) {
+        const group = observedParent?.swarm?.groups.find(
+          (candidate) => candidate.groupId === row.swarmGroupId,
+        );
+        // Boot's retained children extend beyond the descriptor's bounded window.
+        // Only a complete displayed group certifies an individual missing member.
+        if (
+          !group ||
+          group.children?.length !== group.queued + group.running + group.done + group.failed
+        ) {
+          return false;
+        }
+      }
+      // Provider status cannot settle a collector; its parent summary owns progress.
+      return row.swarmGroupId && member?.groupId !== row.swarmGroupId;
     });
-    if (this.parentRow && (removedMember || missingDetail)) {
+    if (
+      observedParent &&
+      (removedMember ||
+        missingDetail ||
+        initialGroupGrowth ||
+        initialUnlistedActiveGroups.size > (observedParent.swarm?.otherActiveGroups ?? 0))
+    ) {
       // Child membership can change without invalidating the parent's descriptor revision.
       void this.readParent(true);
     }

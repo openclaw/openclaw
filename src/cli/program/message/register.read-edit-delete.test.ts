@@ -7,8 +7,9 @@ import {
   runGeneratedBashCompletion,
   runGeneratedFishCompletion,
 } from "../../completion-cli.test-support.js";
+import { registerMessageCommands } from "../register.message.js";
+import * as messageCliHelpers from "./helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";
-import { registerMessageReadEditDeleteCommands } from "./register.read-edit-delete.js";
 
 const powerShellCompletion = new PowerShellCompletionRunner();
 afterAll(async () => {
@@ -18,7 +19,6 @@ afterAll(async () => {
 function createReadProgram() {
   const program = new Command().name("openclaw").exitOverride();
   program.configureOutput({ writeErr: () => {} });
-  const message = program.command("message");
   const runMessageAction = vi.fn(async () => undefined);
   const helpers: MessageCliHelpers = {
     withMessageBase: (command, target) => {
@@ -29,7 +29,22 @@ function createReadProgram() {
     },
     runMessageAction,
   };
-  registerMessageReadEditDeleteCommands(message, helpers);
+  const createHelpers = vi
+    .spyOn(messageCliHelpers, "createMessageCliHelpers")
+    .mockReturnValue(helpers);
+  try {
+    registerMessageCommands(program, {
+      programVersion: "test",
+      messageChannelOptions: "discord",
+      agentChannelOptions: "last|discord",
+    });
+  } finally {
+    createHelpers.mockRestore();
+  }
+  const message = program.commands.find((command) => command.name() === "message");
+  if (!message) {
+    throw new Error("Expected the message command");
+  }
   return { program, message, runMessageAction };
 }
 

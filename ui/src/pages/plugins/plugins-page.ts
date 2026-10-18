@@ -1,17 +1,18 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import {
   pathForRoute,
   pluginCatalogIdFromPath,
   pluginSettingsIdFromPath,
 } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registryFor } from "../../components/overlay-registry.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding, type GatewayPageChange } from "../../lib/gateway-page-binding.ts";
 import { isComposingKeyboardEvent } from "../../lib/ime.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import {
   loadPluginDiscoveryDetail,
   uninstallPlugin,
@@ -20,14 +21,13 @@ import {
 } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import type { PluginCredentialEditorProps } from "./credential-editor.tsx";
 import { installedPluginDetailTabFromHash, type InstalledPluginDetailTab } from "./detail-tabs.ts";
 import { createPluginDiscovery } from "./plugin-discovery.ts";
 import { createPluginHelp } from "./plugin-help.ts";
 import { createPluginMcpLogin } from "./plugin-mcp-login.ts";
 import { focusHeadingAfterRemoval } from "./plugin-removal-focus.ts";
-import { createPluginRequest } from "./plugin-request.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
-import { createPluginSettings } from "./plugin-settings.ts";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
 import { loadInstalledPluginDetail, loadPluginCatalogDetail } from "./plugins-detail-loader.ts";
 import type { PluginsHubTab } from "./plugins-hub.ts";
@@ -41,6 +41,7 @@ import {
   type PluginsPageDetail,
 } from "./plugins-page-model.ts";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginSettingsField } from "./settings-editor.tsx";
 import type { PluginSettingsTab } from "./settings-view.tsx";
 import { createPluginPreview } from "./skill-preview.tsx";
 
@@ -105,6 +106,8 @@ export function createPluginsPage(options: {
   let pluginConfigEditPending = false;
   let routeDataConsumed = false;
   let pluginGeneration: number | undefined;
+  let adminAccess: boolean | undefined;
+  let readAccess: boolean | undefined;
   const icons = createPluginsPageIcons({
     getContext: () => context,
     isConnected: () => active,
@@ -115,12 +118,15 @@ export function createPluginsPage(options: {
   const gateway = new GatewayPageBinding(publish, {
     getGateway: () => context.gateway,
     onIdentityChange: () => {
+      adminAccess = undefined;
+      readAccess = undefined;
       setState({ result: null, error: null, messages: {}, pageNotice: null });
     },
     invalidateRequests: (change) =>
       active &&
       invalidateRequests(
         change.identityChanged || change.snapshot.phase !== "connected" || !change.snapshot.client,
+        change.identityChanged,
       ),
     onSnapshot: handleGatewaySnapshot,
   });
@@ -138,17 +144,58 @@ export function createPluginsPage(options: {
     },
     publish,
   );
-  const settings = createPluginSettings({
-    gateway,
-    getContext: () => context,
-    getDetail: () => state.detail,
-    canInspect: () => hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
-    canEdit: canEditConfig,
-    onEdit: () => {
-      pluginConfigEditPending = true;
-    },
-    isSettings: () => state.installedDetailTab === "configuration",
-  });
+  let write: Promise<boolean> | undefined;
+  const patch = (path: Array<string | number>, value: unknown): boolean => {
+    if (!canEditConfig()) {
+      return false;
+    }
+    pluginConfigEditPending = true;
+    const runtime = context.runtimeConfig;
+    if (value === undefined) {
+      runtime.removeFormValue(path);
+    } else {
+      runtime.patchForm(path, value);
+    }
+    if (state.detail && state.installedDetailTab === "configuration") {
+      write = runtime.flushFormChanges();
+    }
+    return true;
+  };
+
+  const resolveCredential = (
+    field: PluginSettingsField,
+  ): PluginCredentialEditorProps | undefined => {
+    const detail = state.detail;
+    const descriptor = detail?.inspection?.credentials?.find(
+      (entry) =>
+        entry.path.length === field.path.length &&
+        entry.path.every((segment, index) => segment === field.path[index]),
+    );
+    if (!detail || !descriptor) {
+      return undefined;
+    }
+    const runtime = context.runtimeConfig;
+    return {
+      field,
+      descriptor,
+      context: {
+        pluginId: detail.pluginId,
+        baseHash: runtime.state.configSnapshot?.hash ?? null,
+        gateway,
+        canInspect: hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null),
+        saveError: runtime.state.lastError,
+        onDiscard: () => runtime.discardFormValue(field.path),
+        onCommit: async (path, value) => {
+          const previous = write;
+          const accepted = field.onPatch(path, value);
+          // Nested drafts may accept an edit without publishing a complete value.
+          // Only the flush captured by this edit can acknowledge its persistence.
+          return accepted !== false && write && write !== previous ? write : false;
+        },
+      },
+    };
+  };
+  const settings = { patch, resolveCredential };
 
   const consent = createPluginsConsent({
     gateway,
@@ -167,7 +214,7 @@ export function createPluginsPage(options: {
     refreshCatalogAfterMutation: refreshCatalog,
     onChange: publish,
   });
-  const catalogTask = createPluginRequest(publish, {
+  const catalogTask = createPageRequest(publish, {
     task: ([client]: readonly [NonNullable<GatewayPageBinding["client"]>], { signal }) =>
       client.request<PluginListResult>("plugins.list", {}, { signal }),
     onComplete: (result) => {
@@ -178,6 +225,7 @@ export function createPluginsPage(options: {
     },
     onError: (error) => setState({ error: formatUiError(error) }),
   });
+  onCleanup(catalogTask.cancel);
 
   onSettled(() => {
     const runtimeConfig = context.runtimeConfig;
@@ -297,6 +345,19 @@ export function createPluginsPage(options: {
 
   function handleGatewaySnapshot(change: GatewayPageChange) {
     const snapshot = change.snapshot;
+    if (snapshot.phase === "connected") {
+      const allowed = hasOperatorAdminAccess(snapshot.hello?.auth ?? null);
+      const canRead = hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+      if ((adminAccess && !allowed) || (readAccess && !canRead)) {
+        gateway.invalidate();
+        invalidateRequests(true);
+        if (!canRead) {
+          setState({ result: null, error: null, messages: {}, pageNotice: null });
+        }
+      }
+      adminAccess = allowed;
+      readAccess = canRead;
+    }
     const generation = snapshot.pluginCapabilities?.generation;
     const pluginsChanged = generation !== undefined && generation !== pluginGeneration;
     pluginGeneration = generation;
@@ -360,6 +421,9 @@ export function createPluginsPage(options: {
             : installedPluginDetailTabFromHash(data.location.hash),
       });
     }
+    if (readAccess === false) {
+      return;
+    }
     if (gateway.isRouteDataCurrent(data)) {
       // Route loading can complete after publication on the same connection.
       if (pluginGeneration !== undefined && (data.result?.generation ?? -1) < pluginGeneration) {
@@ -378,15 +442,16 @@ export function createPluginsPage(options: {
     ensureInitialData();
   }
 
-  function invalidateRequests(invalidateCatalog: boolean) {
+  function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
     mcpLogin.reset();
     if (invalidateCatalog) {
       catalogTask.reset();
       discovery.invalidate();
     }
     skillPreview.close();
-    // Inspection results belong to one connection epoch, including same-client reconnects.
-    setState({ detail: null, catalogDetail: null });
+    if (retirePresentation) {
+      setState({ detail: null, catalogDetail: null });
+    }
     installRequestGeneration += 1;
     consent.reset();
   }
@@ -443,6 +508,9 @@ export function createPluginsPage(options: {
   }
 
   function ensureInitialData() {
+    if (readAccess === false) {
+      return;
+    }
     // Category navigation needs neither installed inventory nor catalog cards.
     // Start it as soon as this discovery page has a connection, even while the
     // route's plugins.list request is pending.
@@ -468,7 +536,7 @@ export function createPluginsPage(options: {
   }
 
   async function refreshCatalog(client = gateway.connected ? gateway.client : null) {
-    if (!client) {
+    if (!client || readAccess === false) {
       return;
     }
     setState({ error: null });

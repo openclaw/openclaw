@@ -39,6 +39,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import * as setupMigration from "../wizard/setup.migration-snapshot.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import * as providerBrowserAuth from "./provider-browser-auth.js";
 import { mcpAuthLoginHandlers } from "./server-methods/mcp-auth-login.js";
 import { whenAdmittedWizardSessionSettled } from "./server-methods/setup-admission.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -600,15 +601,26 @@ describe("registered mcp.authLogin", () => {
   it("expires callbacks and cancels the exact published attempt", async () => {
     await clearMcpOAuthCredentials(identity());
     const started = await begin();
-    const now = Date.now();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 11 * 60_000);
+    const expiredAt = Date.now() + 11 * 60_000;
+    const handleCallback = providerBrowserAuth.handleProviderOAuthCallback;
+    const expiredCallback = vi
+      .spyOn(providerBrowserAuth, "handleProviderOAuthCallback")
+      .mockImplementation((...args) => {
+        // Advance only callback validation; cleanup leases share the worker's real clock.
+        const clock = vi.spyOn(Date, "now").mockReturnValue(expiredAt);
+        try {
+          return handleCallback(...args);
+        } finally {
+          clock.mockRestore();
+        }
+      });
     try {
       expect((await callback(started.state)).status).toBe(410);
     } finally {
-      clock.mockRestore();
+      expiredCallback.mockRestore();
     }
     expect(await terminal(started.sessionId)).toMatchObject({ status: "error" });
-    expect((await store()).codeVerifier).toBeUndefined();
+    expectPendingCleared(await store());
     const next = await begin();
     const session = getSession(next.sessionId);
     expect(await rpcReq(owner, "wizard.cancel", { sessionId: next.sessionId })).toMatchObject({
@@ -617,7 +629,7 @@ describe("registered mcp.authLogin", () => {
     });
     expect((await callback(next.state)).status).toBe(410);
     await whenAdmittedWizardSessionSettled(session);
-    expect((await store()).codeVerifier).toBeUndefined();
+    expectPendingCleared(await store());
   });
 
   it.each(["register", "token"] as const)(

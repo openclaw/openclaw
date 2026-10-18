@@ -447,9 +447,13 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
             } satisfies SqliteCanonicalValidationTaskMessage,
             [],
           );
-          await runReclamationWorkerPort(task.port, task.databaseOptions, taskSequence);
+          const cleanup = await runReclamationWorkerPort(
+            task.port,
+            task.databaseOptions,
+            taskSequence,
+          );
           channel.consumeInput();
-          return { status: "closed" };
+          return { status: "closed", cleanup };
         } catch (error) {
           return {
             status: "failed",

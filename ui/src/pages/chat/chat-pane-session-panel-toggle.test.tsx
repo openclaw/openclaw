@@ -57,7 +57,7 @@ function fixture() {
   root.append(region);
   const state = createPageState(
     createInitializationContext(),
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     root,
   );
   state.connected = true;
@@ -69,10 +69,9 @@ function fixture() {
     state,
     linkReaders: [reader],
     pluginPanels: ["review/document"] as const,
-    updateComplete: Promise.resolve(),
+    awaitDomCommit: () => Promise.resolve(),
   };
-  const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
-  const requestUpdate = vi.fn();
+  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const updateSidebarLayout = vi.fn((layout: ChatPageHost["sidebarLayout"]) => {
     state.sidebarLayout = layout;
   });
@@ -81,7 +80,6 @@ function fixture() {
     flush = createChatPaneSessionPanelToggles({
       current: () => owner,
       pending,
-      requestUpdate,
       updateSidebarLayout,
     });
     return stop;
@@ -141,7 +139,7 @@ describe("plugin panel intent delivery", () => {
           window.dispatchEvent(event);
         }
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(true);
-        expect(f.pending.size).toBe(0);
+        expect(f.pending.requests.size).toBe(0);
         expect(f.deliverPanelEvent).not.toHaveBeenCalled();
         window.dispatchEvent(send("document", false));
         expect(isSidebarSlotVisible(f.state.sidebarLayout, "plugin:review/document")).toBe(false);
@@ -177,7 +175,7 @@ describe("session link-reader intent delivery", () => {
       }
       recipientCommit.resolve(true);
       await vi.advanceTimersByTimeAsync(0);
-      expect(f.pending.size).toBe(0);
+      expect(f.pending.requests.size).toBe(0);
       if (outcome === "ready") {
         expect(f.deliverPanelEvent).toHaveBeenCalledExactlyOnceWith("link-reader", event);
       } else {
@@ -208,7 +206,7 @@ describe("session link-reader intent delivery", () => {
       ["link-reader", first],
       ["link-reader", second],
     ]);
-    expect(f.pending.size).toBe(0);
+    expect(f.pending.requests.size).toBe(0);
   });
 
   it("does not append a new session intent to a retired pending batch", async () => {
@@ -222,7 +220,7 @@ describe("session link-reader intent delivery", () => {
     f.commit.resolve(true);
     await vi.waitFor(() => expect(f.deliverPanelEvent).toHaveBeenCalledTimes(1));
     expect(f.deliverPanelEvent).toHaveBeenCalledWith("link-reader", current);
-    expect(f.pending.size).toBe(0);
+    expect(f.pending.requests.size).toBe(0);
   });
 
   it.each([
@@ -245,7 +243,7 @@ describe("session link-reader intent delivery", () => {
         window.dispatchEvent(
           new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
         );
-        expect(f.pending.size).toBe(0);
+        expect(f.pending.requests.size).toBe(0);
       } else if (change === "session") {
         f.state.sessionKey = "session-b";
       } else {
@@ -297,12 +295,12 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   let pendingUpdate: Promise<void> | undefined;
   const state = createPageState(
     createInitializationContext(),
-    { invalidate: requestUpdate, afterCommit: () => () => {} },
+    { afterCommit: () => () => {} },
     pane,
   );
   state.sidebarLayout = { columns: [] };
   state.sessionKey = "agent:main:local-preview";
-  const pending = new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>();
+  const pending = { requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>() };
   const dispose = createRoot((stop) => {
     createChatPaneSessionPanelToggles({
       current: () => ({
@@ -310,13 +308,12 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         state,
         linkReaders: [],
         pluginPanels: [],
-        updateComplete: pendingUpdate ?? Promise.resolve(),
+        awaitDomCommit: () => pendingUpdate ?? Promise.resolve(),
       }),
       pending,
-      requestUpdate,
       updateSidebarLayout: (layout) => {
         state.sidebarLayout = layout;
-        requestUpdate();
+        scheduleCommit();
       },
     });
     return stop;
@@ -341,14 +338,14 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
   const [snapshot, setSnapshot] = createSignal({
     layout: state.sidebarLayout,
     sessionKey: state.sessionKey,
-    refresh: !pending.has("browser"),
+    refresh: !pending.requests.has("browser"),
   });
   let view: ReturnType<typeof mountSolid> | undefined;
   function draw() {
     setSnapshot({
       layout: state.sidebarLayout,
       sessionKey: state.sessionKey,
-      refresh: !pending.has("browser"),
+      refresh: !pending.requests.has("browser"),
     });
     view ??= mountSolid(
       () => {
@@ -392,7 +389,7 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
     );
     flushSolid();
   }
-  function requestUpdate() {
+  function scheduleCommit() {
     // Expose the new commit promise before the browser card can mount.
     pendingUpdate ??= commit.promise.then(() => {
       draw();

@@ -165,8 +165,10 @@ Admission lookups and established borrowers reuse those shared facts without
 checking the pathname again. Native open and reopen still identify replacement
 files, and creation witnesses retain their physical file check. A replaced or
 restored file needs fresh admission. Migration and repair owners validate their
-changes and publish new facts after successful DDL settlement. Doctor and explicit
-verification retain full checks, and observed corruption still revokes admission.
+changes and publish new facts after successful DDL settlement. Ordinary Doctor
+migrations and repairs default to quick integrity with full checks of affected
+tables. Explicit verification and recovery retain full checks, and observed
+corruption still revokes admission.
 Silent corruption with unchanged metadata is outside the seal's guarantee and
 is caught by normal SQLite access or the next full verification. See
 [clean-close seal and integrity checks](/reference/database-schemas/integrity-and-recovery#integrity-checks)
@@ -305,7 +307,7 @@ process's published facts without repeating validation.
 
 Progress-card writes reuse the transaction's admitted table facts. The schema owner creates the lazy table only when it is absent and publishes the committed facts for every handle and worker. A rolled-back installation remains absent until the next normal installation transaction. Stored cards, revision tombstones, schema versions, and upgrade or downgrade behavior are unchanged.
 
-The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent 30-minute idle timeout; a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
+The agent-database execution owner retains up to four idle physical-agent executors in least-recently-used order. Borrowing an executor refreshes its independent idle timeout (30 minutes in the Gateway, 30 seconds in CLI processes so Doctor maintenance is not left waiting on an idle lease); a fifth idle executor evicts the least recently used one. Configuration changes to the agent roster or storage paths leave existing executors to expire normally. Already-admitted work retains its original physical store; new requests resolve the current configuration. Explicit database closure and Gateway shutdown still revoke and drain the existing lifecycle resources. This changes no schema, stored bytes, or update behavior.
 
 Creating an agent database at an admitted absent path revokes the previous file's
 retained validation before worker preparation. A recreated file cannot borrow that

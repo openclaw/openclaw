@@ -9,6 +9,7 @@ import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
 } from "../../../components/command-palette-contract.ts";
+import type { GatewayStatusProps } from "../../../components/gateway-status.ts";
 import { StandalonePersonLink } from "../../../components/person-activity-link-solid.tsx";
 import {
   personActivityLink,
@@ -16,6 +17,7 @@ import {
 } from "../../../components/person-activity-link.ts";
 import { SessionColorDot } from "../../../components/session-color.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
+import { GatewayStatus } from "../../../components/solid/gateway-status.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { Menu, type MenuItem } from "../../../components/solid/menu.tsx";
@@ -70,6 +72,7 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   presented: PresentationValue;
   mergedChrome: boolean;
   navDrawerOpen?: boolean;
+  gatewayStatus?: GatewayStatusProps | null;
   title: string;
   agent?: AgentIdentity & { name: string };
   titlePending?: boolean;
@@ -161,11 +164,17 @@ export function resolveChatPaneParentSession(
 
 function IdentityCrumbs(props: ChatPaneHeaderProps) {
   const hasProject = () => !props.catalog && Boolean(props.workspaceLabel);
+  const status = () =>
+    props.mergedChrome && props.gatewayStatus?.kind !== "connected" && props.gatewayStatus?.kind;
   return (
     <div class="chat-pane__crumbs">
-      <Show when={hasProject()}>
+      <Show when={hasProject() || status()}>
         <div class="chat-pane__project-row">
-          <ProjectCrumb {...props} />
+          <Show when={status()} fallback={<ProjectCrumb {...props} />}>
+            <div class="mobile-connection-status">
+              <GatewayStatus {...props.gatewayStatus!} />
+            </div>
+          </Show>
         </div>
       </Show>
       <div class="chat-pane__session-trail">
@@ -445,6 +454,7 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
                 type="button"
                 aria-label={drawerLabel()}
                 aria-expanded={props.navDrawerOpen ? "true" : "false"}
+                data-connection-status={props.gatewayStatus?.kind ?? undefined}
                 onClick={(event) => {
                   window.dispatchEvent(
                     new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
@@ -456,6 +466,9 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
                 }}
               >
                 <Icon name="menu" />
+                <Show when={props.gatewayStatus?.kind}>
+                  <span class="gateway-status-dot" aria-hidden="true" />
+                </Show>
               </button>
             </openclaw-tooltip>
           ) : undefined}

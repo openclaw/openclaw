@@ -1,15 +1,15 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
-  ReplyToolAuthorityOverlay,
-  ReplyToolAuthorityPreparation,
-  ReplyToolAuthorityRoute,
-} from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import type {
   PreparedSessionEntryWorkerRead,
   SessionEntryWorkerRead,
 } from "../../config/sessions/session-entry-read-runtime.types.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import type {
+  ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityPreparation,
+  ReplyToolAuthorityRoute,
+} from "../../sessions/session-controller.contracts.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { CronScheduledToolProjectionRequest } from "../exec-tool-target-pinning.js";
 import type { AnyAgentTool } from "../tools/common.js";

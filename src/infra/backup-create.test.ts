@@ -954,12 +954,21 @@ describe("createBackupArchive", () => {
         }
         await createDatabase(dbPath);
         const sourceBytes = await fs.readFile(dbPath);
+        const sidecarNames = new Set([
+          `${path.basename(dbPath)}-wal`,
+          `${path.basename(dbPath)}-shm`,
+        ]);
+        const readSidecars = async () =>
+          (await fs.readdir(path.dirname(dbPath))).filter((name) => sidecarNames.has(name));
+        expect(await readSidecars()).toEqual([]);
         const recordOutcome = backupRunRecords.recordBackupRunOutcome;
         let bytesBeforeOutcome: Buffer | undefined;
+        let sidecarsBeforeOutcome: string[] | undefined;
         const outcomeSpy = vi
           .spyOn(backupRunRecords, "recordBackupRunOutcome")
           .mockImplementation(async (params, options) => {
             bytesBeforeOutcome = await fs.readFile(dbPath);
+            sidecarsBeforeOutcome = await readSidecars();
             await recordOutcome(params, options);
           });
         try {
@@ -977,7 +986,9 @@ describe("createBackupArchive", () => {
             }),
           );
           expect(bytesBeforeOutcome).toEqual(sourceBytes);
+          expect(sidecarsBeforeOutcome).toEqual([]);
           expect(await fs.readFile(dbPath)).toEqual(sourceBytes);
+          expect(await readSidecars()).toEqual([]);
           expect(await fs.readdir(outputDir)).toEqual([]);
         } finally {
           outcomeSpy.mockRestore();

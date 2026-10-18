@@ -42,7 +42,9 @@ function observePresence(socket: WebSocket) {
 }
 
 function rowsInUpdate(payload: PresenceFrame["payload"]): PresenceEntry[] {
-  return "presence" in payload ? payload.presence : payload.upsert.map((row) => row.presence);
+  return "presence" in payload
+    ? payload.presence
+    : payload.upsert.flatMap((row) => ("presence" in row ? [row.presence] : []));
 }
 
 function nextPresence(socket: WebSocket, matches: (row: PresenceEntry) => boolean) {
@@ -51,7 +53,8 @@ function nextPresence(socket: WebSocket, matches: (row: PresenceEntry) => boolea
     (frame) =>
       frame.type === "event" &&
       frame.event === "presence" &&
-      rowsInUpdate(frame.payload).some(matches),
+      // Field patches omit unchanged row identity; wait for this publication via the legacy peer.
+      (!("presence" in frame.payload) || rowsInUpdate(frame.payload).some(matches)),
   );
 }
 
@@ -76,8 +79,18 @@ function reconstruct(hello: HelloOk, frames: PresenceFrame[]): PresenceEntry[] {
       for (const key of payload.remove) {
         entries.delete(key);
       }
-      for (const { key, presence } of payload.upsert) {
-        entries.set(key, presence);
+      for (const entry of payload.upsert) {
+        if ("presence" in entry) {
+          entries.set(entry.key, entry.presence);
+        } else {
+          const before = entries.get(entry.key);
+          expect(before).toBeDefined();
+          const row: PresenceEntry & Record<string, unknown> = { ...before!, ...entry.set };
+          for (const field of entry.unset) {
+            delete row[field];
+          }
+          entries.set(entry.key, row);
+        }
       }
       expect(new Set(payload.order)).toEqual(new Set(entries.keys()));
       rows = payload.order.map((key) => entries.get(key)!);

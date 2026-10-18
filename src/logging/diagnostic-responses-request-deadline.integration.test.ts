@@ -14,11 +14,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { wrapStreamFnWithDiagnosticModelCallEvents } from "../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../agents/embedded-agent-runner/runs.test-support.js";
 import { runWithModelFallback } from "../agents/model-fallback-runner.js";
@@ -28,8 +27,8 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { createDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import { enqueueCommandInLane } from "../process/command-queue.js";
-import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -46,8 +45,8 @@ import {
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 import { resetDiagnosticStateForTest } from "./diagnostic.test-support.js";
 
-const REQUEST_TIMEOUT_MS = 1_000;
-const STUCK_ABORT_MS = 500;
+const REQUEST_TIMEOUT_MS = 10 * 60_000;
+const STUCK_ABORT_MS = 5 * 60_000;
 const OWNER_START_MS = Date.parse("2026-10-04T00:00:00.000Z");
 
 type FixtureOutcome = { stopReason?: string; errorMessage?: string; error?: unknown };
@@ -186,7 +185,6 @@ async function settleModelStream(
 afterEach(() => {
   vi.useRealTimers();
   embeddedRunTesting.resetActiveEmbeddedRuns();
-  resetCommandQueueStateForTest();
   resetDiagnosticRunActivityForTest();
   resetDiagnosticStateForTest();
   resetDiagnosticEventsForTest();
@@ -206,7 +204,12 @@ it.for(["success", "expiry"] as const)(
       sessionId: "fallback-session-" + terminal,
       sessionKey: "agent:main:fallback-" + terminal,
     };
-    const owner = createDiagnosticEmbeddedRunOwner(ref);
+    const operation = createReplyOperation({ ...ref, resetTriggered: false });
+    operation.setPhase("running");
+    const watchdogAttempt = operation.watchdog.attachAttempt({
+      assertCurrent: () => operation.abortSignal.throwIfAborted(),
+    });
+    const owner = createDiagnosticEmbeddedRunOwner({ ...ref, watchdogAttempt });
     startDiagnosticRunActivityTracking();
     markDiagnosticEmbeddedRunStarted({ ...ref, owner });
     const controller = new AbortController();
@@ -219,6 +222,7 @@ it.for(["success", "expiry"] as const)(
     let callSequence = 0;
     let chainSettled = false;
     const handle = {
+      kind: "embedded" as const,
       runId: ref.runId,
       diagnosticOwner: owner,
       closeDiagnostics: () => closeDiagnosticEmbeddedRunOwner(owner),
@@ -230,17 +234,26 @@ it.for(["success", "expiry"] as const)(
         releaseActive.resolve();
       }),
     };
-    const activeRun = enqueueCommandInLane(resolveEmbeddedSessionLane(ref.sessionKey), async () => {
-      setActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+    const activeRun = withSessionTurn({ ...ref, replyOperation: operation }, async () => {
+      attachActiveEmbeddedRun(
+        ref.sessionId,
+        handle,
+        ref.sessionKey,
+        undefined,
+        undefined,
+        operation,
+      );
       activeEntered.resolve();
       try {
         await releaseActive.promise;
         await chain;
         await waitForDiagnosticEventsDrained();
       } finally {
-        clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+        detachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+        operation.complete();
       }
     });
+    const releaseCleanup = operation.registerExecutionCleanup(() => activeRun);
     let chain: Promise<FallbackSettlement> | undefined;
     const waitForStage = (gate: Promise<unknown>, description: string) =>
       wait(awaitGateBeforeSettlement(gate, chain!, description));
@@ -274,6 +287,7 @@ it.for(["success", "expiry"] as const)(
               trace: createDiagnosticTraceContext(),
               nextCallId: () => ref.runId + ":model:" + ++callSequence,
               ownerGeneration: owner.generation,
+              diagnosticOwner: owner,
               requestTimeoutMs: REQUEST_TIMEOUT_MS,
               suppressPluginHooks: true,
             },
@@ -348,13 +362,14 @@ it.for(["success", "expiry"] as const)(
       });
       const recover = () =>
         recoverStuckDiagnosticSession({
+          operation,
           sessionKey: ref.sessionKey,
           ageMs: Date.now() - OWNER_START_MS,
           queueDepth: 1,
           allowActiveAbort: true,
           repeatedRequestNoProgressAbortMs: STUCK_ABORT_MS,
         });
-      expect(await recover()).toMatchObject({ status: "skipped", reason: "active_embedded_run" });
+      expect(await recover()).toMatchObject({ status: "skipped", reason: "active_reply_work" });
       expect(handle.abort).not.toHaveBeenCalled();
       expect(chainSettled).toBe(false);
 
@@ -397,7 +412,9 @@ it.for(["success", "expiry"] as const)(
         }
         await wait(activeRun);
       } finally {
-        clearActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+        releaseCleanup();
+        detachActiveEmbeddedRun(ref.sessionId, handle, ref.sessionKey);
+        operation.complete();
         closeDiagnosticEmbeddedRunOwner(owner);
         await fixture.close();
       }

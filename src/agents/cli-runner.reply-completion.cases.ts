@@ -181,82 +181,65 @@ export function registerCliReplyCompletionTests({
   it.each([
     {
       name: "source progress",
-      target: "chat123",
-      final: false,
       expected: "success",
       text: SILENT_REPLY_TOKEN,
-      trigger: "user",
-      expectation: "required",
-      notice: false,
     },
     {
       name: "empty source progress",
-      target: "chat123",
-      final: false,
       expected: "error",
       text: "",
-      trigger: "user",
-      expectation: "required",
-      notice: true,
     },
-  ] as const)(
-    "settles $name without replaying a send",
-    async ({ target, final, expected, text, trigger, expectation, notice }) => {
-      supervisorSpawnMock.mockImplementationOnce(async (input) => {
-        completeToolCall(
-          {
-            captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
-            toolName: "message",
-            args: {
-              action: "send",
-              channel: "telegram",
-              target,
-              message: "sent without a terminal reply",
-              final,
-            },
+  ] as const)("settles $name without replaying a send", async ({ expected, text }) => {
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      completeToolCall(
+        {
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: "telegram",
+            target: "chat123",
+            message: "sent without a terminal reply",
+            final: false,
           },
-          { status: "sent" },
-        );
-        input.onStdout?.(
-          `${JSON.stringify({ type: "result", session_id: "claude-session", result: text })}\n`,
-        );
-        return makeManagedRun();
-      });
-      const context = createContext({
-        sessionKey: "agent:main:telegram:direct:chat123",
-        runId: "run-required-source-delivery",
-        sourceReplyDeliveryMode: "message_tool_only",
-        messageChannel: "telegram",
-        currentChannelId: "chat123",
-        terminalReplyExpectation: expectation,
-        trigger,
-      });
-      context.backendResolved.config.output = "jsonl";
+        },
+        { status: "sent" },
+      );
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "claude-session", result: text })}\n`,
+      );
+      return makeManagedRun();
+    });
+    const context = createContext({
+      sessionKey: "agent:main:telegram:direct:chat123",
+      runId: "run-required-source-delivery",
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "telegram",
+      currentChannelId: "chat123",
+      terminalReplyExpectation: "required",
+      trigger: "user",
+    });
+    context.backendResolved.config.output = "jsonl";
 
-      const result = await run(context);
+    const result = await run(context);
 
-      expect(result.didSendViaMessagingTool).toBe(true);
-      expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe(expected);
-      if (expected === "success") {
-        expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
-        expect(result.payloads).toBeUndefined();
-      } else {
-        expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
-        if (notice) {
-          expect(result.payloads).toEqual([
-            {
-              text: "No answer was returned. Ask again if you still need one.",
-              isError: true,
-              isStatusNotice: true,
-            },
-          ]);
-        } else {
-          expect(result.payloads).toBeUndefined();
-        }
-      }
-      expect(supervisorSpawnMock).toHaveBeenCalledOnce();
-    },
-  );
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe(expected);
+    if (expected === "success") {
+      expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+      expect(result.payloads).toBeUndefined();
+    } else {
+      expect(result.meta.error).toMatchObject({ kind: "incomplete_turn", fallbackSafe: false });
+      expect(result.payloads).toEqual([
+        {
+          text: "No answer was returned. Ask again if you still need one.",
+          isError: true,
+          isStatusNotice: true,
+        },
+      ]);
+    }
+    expect(supervisorSpawnMock).toHaveBeenCalledOnce();
+  });
 
   it("does not mistake CLI WebChat progress for a final result", async () => {
     const sessionKey = "agent:main:webchat:dm:cli-internal-source";

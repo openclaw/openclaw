@@ -14,21 +14,12 @@ export const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(
 export const canRunChatLayoutBrowser = canRunPlaywrightChromium(chromiumExecutablePath);
 let cachedUiCss: string | null = null;
 
-export type ControlRect = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  clientWidth?: number;
-  scrollWidth?: number;
-  clientHeight?: number;
-  scrollHeight?: number;
-  overflow?: string;
-  textOverflow?: string;
-  scrollTop?: number;
-  text?: string;
-  display?: string;
-};
+type Rect = Pick<DOMRect, "x" | "y" | "width" | "height">;
+export type ControlRect = Rect &
+  Partial<
+    Pick<HTMLElement, "clientWidth" | "scrollWidth" | "clientHeight" | "scrollHeight" | "scrollTop">
+  > &
+  Partial<Pick<CSSStyleDeclaration, "overflow" | "textOverflow" | "display">> & { text?: string };
 
 export function createChatLayoutBrowser() {
   let sharedBrowser: Browser | null = null;
@@ -85,18 +76,11 @@ export function createChatLayoutBrowser() {
 
 async function waitForViewportSize(page: Page, width: number, height: number) {
   await expectBrowser
-    .poll(
-      () =>
-        page.evaluate(() => ({
-          width: window.innerWidth,
-          height: window.innerHeight,
-        })),
-      { timeout: 5_000 },
-    )
-    .toEqual({ width, height });
+    .poll(() => page.evaluate(() => [window.innerWidth, window.innerHeight]), { timeout: 5_000 })
+    .toEqual([width, height]);
 }
 
-export function expectFiniteRect(rect: Pick<ControlRect, "x" | "y" | "width" | "height">) {
+export function expectFiniteRect(rect: Rect) {
   for (const key of ["x", "y", "width", "height"] as const) {
     expect(Number.isFinite(rect[key])).toBe(true);
   }
@@ -112,97 +96,63 @@ export async function getBoundingBox(page: Page, selector: string) {
 }
 
 export function readUiCss(): string {
-  if (cachedUiCss !== null) {
-    return cachedUiCss;
-  }
-  const files = [
-    "ui/src/styles/base.css",
-    "ui/src/styles/layout.css",
-    "ui/src/styles/layout.mobile.css",
-    "ui/src/styles/components.css",
-    "ui/src/styles/chat/startup-layout.css",
-    "ui/src/styles/chat/layout.css",
-    "ui/src/styles/chat/message-layout.css",
-    "ui/src/styles/chat/composer-surface.css",
-    "ui/src/styles/chat/composer.css",
-    "ui/src/styles/chat/composer-queue.css",
-    "ui/src/styles/chat/progress-card.css",
-    "ui/src/styles/chat/composer-progress.css",
-    "ui/src/styles/chat/composer-context-strip.css",
-    "ui/src/styles/chat/text.css",
-    "ui/src/styles/chat/grouped.css",
-    "ui/src/styles/chat/tool-cards.css",
-    "ui/src/styles/chat/working-indicator.css",
-    "ui/src/styles/chat/question-card.css",
-    "ui/src/styles/rail-header.css",
-    "ui/src/styles/chat/sidebar.css",
-    "ui/src/styles/chat/session-rail.css",
-    "ui/src/styles/chat/side-panel.css",
-  ];
-  cachedUiCss = files.map((file) => readStyleSheet(file)).join("\n");
-  return cachedUiCss;
+  const styles = `base layout layout.mobile components
+    chat/startup-layout chat/layout chat/message-layout chat/composer-surface
+    chat/composer chat/composer-queue chat/progress-card chat/composer-progress
+    chat/composer-context-strip chat/text chat/grouped chat/tool-cards
+    chat/working-indicator chat/question-card rail-header
+    chat/sidebar chat/session-rail chat/side-panel`;
+  return (cachedUiCss ??= styles
+    .split(/\s+/)
+    .map((name) => readStyleSheet(`ui/src/styles/${name}.css`))
+    .join("\n"));
 }
 
 export async function waitForLayoutSettled(page: Page, selector: string): Promise<void> {
-  // content-visibility and container queries can defer descendant layout beyond
-  // a fixed rAF pair. Require a short quiet window so a delayed update cannot
-  // land immediately after two coincidentally identical frames.
-  await page.evaluate(
-    async ({ maxFrames, minStableFrames, minStableMs, selector: targetSelector }) => {
-      let previousGeometry: string | undefined;
-      let stableFrames = 0;
-      let stableSince = performance.now();
-      for (let frame = 0; frame < maxFrames; frame += 1) {
-        await new Promise<void>((resolve) => {
-          requestAnimationFrame(() => resolve());
-        });
-        const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
-        if (elements.length === 0) {
-          throw new Error(`No layout elements matched ${targetSelector}`);
-        }
-        const geometry = JSON.stringify(
-          elements.map((element) => {
-            const rect = element.getBoundingClientRect();
-            return [rect.x, rect.y, rect.width, rect.height];
-          }),
-        );
-        if (geometry === previousGeometry) {
-          stableFrames += 1;
-        } else {
-          stableFrames = 1;
-          stableSince = performance.now();
-        }
-        if (stableFrames >= minStableFrames && performance.now() - stableSince >= minStableMs) {
-          return;
-        }
-        previousGeometry = geometry;
+  // Container queries/content-visibility need a quiet window, not just matching frames.
+  await page.evaluate(async (targetSelector) => {
+    let previousGeometry: string | undefined;
+    let stableFrames = 0;
+    let stableSince = performance.now();
+    for (let frame = 0; frame < 60; frame += 1) {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => resolve());
+      });
+      const elements = [...document.querySelectorAll<HTMLElement>(targetSelector)];
+      if (elements.length === 0) {
+        throw new Error(`No layout elements matched ${targetSelector}`);
       }
-      throw new Error(`Layout did not stabilize for ${targetSelector} within ${maxFrames} frames`);
-    },
-    { maxFrames: 60, minStableFrames: 4, minStableMs: 50, selector },
-  );
+      const geometry = JSON.stringify(
+        elements.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return [rect.x, rect.y, rect.width, rect.height];
+        }),
+      );
+      if (geometry === previousGeometry) {
+        stableFrames += 1;
+      } else {
+        stableFrames = 1;
+        stableSince = performance.now();
+      }
+      if (stableFrames >= 4 && performance.now() - stableSince >= 50) {
+        return;
+      }
+      previousGeometry = geometry;
+    }
+    throw new Error(`Layout did not stabilize for ${targetSelector} within 60 frames`);
+  }, selector);
 }
 
 export async function getRect(page: Page, selector: string) {
   const rect = await page.locator(selector).evaluate((node) => {
-    const bounds = (node as HTMLElement).getBoundingClientRect();
-    return {
-      left: bounds.left,
-      right: bounds.right,
-      top: bounds.top,
-      bottom: bounds.bottom,
-      width: bounds.width,
-      height: bounds.height,
-    };
+    const { left, right, top, bottom, width, height } = node.getBoundingClientRect();
+    return { left, right, top, bottom, width, height };
   });
   expectFiniteRect({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
   return rect;
 }
 
-export function rectsOverlap(
-  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
-  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
-) {
+export function rectsOverlap(first: Rect, second: Rect) {
   return (
     first.x < second.x + second.width &&
     first.x + first.width > second.x &&

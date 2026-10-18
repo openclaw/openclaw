@@ -122,7 +122,8 @@ suite.define(() => {
         ),
       );
       expect(failedRange).toBeNull();
-      expect(failedValue).toBeNull();
+      // The failed range shows the placeholder, never the earlier range's cost.
+      expect(failedValue).toBe("—");
       expect(await page.locator(".usage-empty-state").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.usage", sessions("2026-07-01"));

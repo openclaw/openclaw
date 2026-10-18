@@ -112,14 +112,14 @@ function PendingDevice(props: {
       <div class="settings-row__control">
         <button
           class="btn btn--sm"
-          disabled={!props.devices.canManagePairing}
+          disabled={!props.devices.connected || !props.devices.canManagePairing}
           onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
         >
           {t("devices.inventory.approve")}
         </button>
         <button
           class="btn btn--sm"
-          disabled={!props.devices.canManagePairing}
+          disabled={!props.devices.connected || !props.devices.canManagePairing}
           onClick={() => props.devices.onDeviceReject(props.req.requestId)}
         >
           {t("devices.inventory.reject")}

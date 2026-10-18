@@ -392,7 +392,7 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
-  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+  it("preserves OS and worker memory attribution and unavailable samples in exported bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
@@ -404,6 +404,8 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
       memory: {
         rssBytes: 4096,
+        anonymousRssBytes: 3072,
+        anonymousSwapBytes: 0,
         heapTotalBytes: 1024,
         heapUsedBytes: 512,
         externalBytes: 32,
@@ -467,6 +469,8 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
     });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      anonymousRssBytes: 3072,
+      anonymousSwapBytes: 0,
       workerCount: 2,
       workerHeapSampledCount: 1,
       workerHeapUsedBytes: 1024,
@@ -767,6 +771,58 @@ describe("diagnostic stability bundles", () => {
     expect(result.status === "failed" ? String(result.error) : "").toContain(
       "Unsupported stability bundle version",
     );
+  });
+
+  it.each([
+    {
+      name: "legacy bundle without build identity",
+      identity: {},
+      expected: {},
+    },
+    {
+      name: "public version metadata and maximum generated build id",
+      identity: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+      expected: {
+        openclawVersion: "2026.4.22-beta.1+fixture",
+        buildId: "b".repeat(96),
+        commit: "abcdef0",
+      },
+    },
+    {
+      name: "unsafe imported identity",
+      identity: {
+        openclawVersion: "version\nsecret",
+        buildId: "/private/build",
+        commit: "not-a-commit",
+      },
+      expected: {},
+    },
+    {
+      name: "overlong imported identity",
+      identity: {
+        openclawVersion: "v".repeat(257),
+        buildId: "b".repeat(97),
+        commit: "a".repeat(41),
+      },
+      expected: {},
+    },
+  ])("preserves only recorded safe build identity: $name", ({ identity, expected }) => {
+    const file = path.join(tempDir, "imported.json");
+    const bundle = createImportedBundle();
+    const originalProcess = bundle.process as Record<string, unknown>;
+    bundle.process = { ...originalProcess, ...identity };
+    fs.writeFileSync(file, JSON.stringify(bundle), "utf8");
+
+    const result = readDiagnosticStabilityBundleFileSync(file);
+    expect(result.status).toBe("found");
+    if (result.status !== "found") {
+      throw new Error("Expected readable stability bundle");
+    }
+    expect(result.bundle.process).toEqual({ ...originalProcess, ...expected });
   });
 
   it("rejects oversized bundle files before reading them", () => {

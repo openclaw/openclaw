@@ -118,7 +118,7 @@ export function ActivitySessionGit(props: ActivitySessionGitProps) {
     <openclaw-activity-session-git>
       <Show when={visible()}>
         <openclaw-link-reader-hovercard-provider
-          prop:client={connection().phase === "connected" ? connection().client : null}
+          prop:client={connection().client}
           prop:readers={availableLinkPreviewReaders(connection())}
           prop:agentId={props.agentId ?? ""}
           prop:sessionKey={props.sessionKey}

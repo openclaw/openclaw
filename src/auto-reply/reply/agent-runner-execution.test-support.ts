@@ -13,31 +13,26 @@ import {
   initialModelFallbackAttemptOptions,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
-import {
-  createUserTurnTranscriptRecorder,
-  type PersistedUserTurnMessage,
-} from "../../sessions/user-turn-transcript.js";
-import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import type {
   buildEmbeddedRunExecutionParams,
   mintReplyMessageActionTurnCapability,
 } from "./agent-runner-utils.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 type RunEntryParams = Parameters<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>[0];
 type RunEntryResult = Awaited<ReturnType<typeof runEmbeddedAgentEntry<EmbeddedAgentRunResult>>>;
 type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
 type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
+
+export { getRawExecuteAgentTurnForTest } from "./agent-runner-execution-admission.test-support.js";
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
 export { createMockReplyOperation } from "./test-helpers.js";
@@ -191,23 +186,29 @@ vi.mock("../../agents/bootstrap-budget.js", async () => ({
   resolveBootstrapWarningSignaturesSeen: () => [],
 }));
 
-vi.mock("../../agents/embedded-agent-helpers.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/embedded-agent-helpers.js")>(
-    "../../agents/embedded-agent-helpers.js",
-  );
+vi.mock("../../agents/embedded-agent-helpers/context-overflow-observation.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../agents/embedded-agent-helpers/context-overflow-observation.js")
+  >("../../agents/embedded-agent-helpers/context-overflow-observation.js");
   return {
     ...actual,
-    formatBillingErrorMessage: actual.formatBillingErrorMessage,
     isCompactionFailureError: (message?: string) => state.isCompactionFailureErrorMock(message),
-    isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
-    isLikelyContextOverflowError: (message?: string) =>
-      state.isLikelyContextOverflowErrorMock(message),
-    sanitizeUserFacingText: (text?: string) => text ?? "",
   };
 });
 
-vi.mock("../../config/sessions.js", () => ({
+vi.mock("../../agents/failover/context-overflow.js", async () => ({
+  ...(await vi.importActual<typeof import("../../agents/failover/context-overflow.js")>(
+    "../../agents/failover/context-overflow.js",
+  )),
+  isContextOverflowError: (message?: string) => state.isContextOverflowErrorMock(message),
+  isLikelyContextOverflowError: (message?: string) =>
+    state.isLikelyContextOverflowErrorMock(message),
+}));
+
+vi.mock("../../config/sessions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions.js")>()),
   resolveGroupSessionKey: vi.fn(() => null),
+  resolveSessionStorePathCore: vi.fn(() => "/tmp/mock-sessions.json"),
   resolveSessionTranscriptPath: vi.fn(),
   updateSessionStore: state.updateSessionStoreMock,
 }));
@@ -344,14 +345,6 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => ({
   }),
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
-
-export async function getRawExecuteAgentTurnForTest() {
-  const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
-  return async (...args: Parameters<typeof execute>) => {
-    setRuntimeConfigSnapshot(args[0].followupRun.run.config);
-    return execute(...args);
-  };
-}
 
 export async function getExecuteAgentTurnForTest() {
   const execute = await getRawExecuteAgentTurnForTest();
@@ -538,14 +531,6 @@ export function createFollowupRun(): FollowupRun {
       blockReplyBreak: "message_end",
     },
   } as unknown as FollowupRun;
-}
-
-export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
-  return createUserTurnTranscriptRecorder({
-    message,
-    target: createTestUserTurnTranscriptTarget(),
-    updateMode: "none",
-  });
 }
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {

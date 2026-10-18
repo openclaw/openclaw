@@ -152,6 +152,32 @@ afterEach(() => {
 });
 
 describe("WorktreesPage lifecycle", () => {
+  it("keeps local creation editable but disables server actions while offline", async () => {
+    const request = vi.fn(async () => ({
+      worktrees: [worktree(), { ...worktree("removed"), removedAt: 2 }],
+    }));
+    const source = mutableGateway({ request } as unknown as GatewayBrowserClient);
+    source.setScopes(["operator.admin"]);
+    const page = createWorktreesPage();
+    page.setContext(contextWithGateway(source.gateway));
+    page.mount();
+    await waitForSolid(() => expect(page.model.records).toHaveLength(2));
+    page.model.update({ createOpen: true, createRepoRoot: "/tmp/repo", createName: "local draft" });
+    source.emit(false);
+    await settle();
+    const button = (label: string) =>
+      [...page.element.querySelectorAll<HTMLButtonElement>("button")].find(
+        (item) => item.textContent?.trim() === label,
+      )!;
+    expect(button("New worktree").disabled).toBe(false);
+    for (const label of ["Clean up now", "Create", "Delete", "Restore"]) {
+      expect(button(label).disabled, label).toBe(true);
+    }
+    const name = page.element.querySelector<HTMLInputElement>('input[aria-label="Name"]')!;
+    expect(name.disabled).toBe(false);
+    expect(name.value).toBe("local draft");
+  });
+
   it("navigates the hub only after activating a tab", async () => {
     const page = createWorktreesPage();
     page.mount();

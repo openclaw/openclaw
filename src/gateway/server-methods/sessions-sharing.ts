@@ -23,7 +23,10 @@ import {
   sessionEntryCommitGuardOptions,
 } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { listResidentUserProfileDisplayFacts } from "../../state/user-profile-list.js";
 import {
   encodePublicSessionShareLocator,
@@ -56,14 +59,21 @@ import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 function runExclusiveSharingMutation<T>(
   target: SessionSharingTarget,
-  storePath: string,
+  lifecycleStorePath: string,
   run: () => Promise<T>,
 ): Promise<T> {
   // Sharing and lifecycle mutations share one exact-row fence so authorization
   // cannot change between archive's stop and commit boundaries.
-  return runExclusiveSessionLifecycleMutation("sharing", {
-    scope: storePath,
-    identities: [target.canonicalKey, target.storeKey, ...target.storeKeys, target.entry.sessionId],
+  return runSessionMutation({
+    diagnosticLabel: "sharing",
+    target: captureSessionTarget({
+      storeScope: lifecycleStorePath,
+      sessionKey: target.canonicalKey,
+      aliases: [target.storeKey, ...target.storeKeys],
+      incarnation: target.entry.sessionId,
+      agentId: target.agentId,
+    }),
+    policy: "allow-live",
     run,
   });
 }
@@ -200,9 +210,9 @@ function createSessionMembersListHandler(
       await projection.withSelectionPreparation(async () => {
         do {
           await measureSessionCollaborationPhase(`${method}.projection`, () =>
-            Promise.resolve(projection.prepareSelection()),
+            Promise.resolve(projection.prepareSelection({ metadataOnly: true })),
           );
-        } while (projection.needsSelectionPreparation());
+        } while (projection.needsSelectionPreparation({ metadataOnly: true }));
         let tokenCodec = resolveSessionPublicShare(managed.entry)
           ? await loadPublicSessionShareTokenCodec()
           : undefined;
@@ -322,8 +332,8 @@ function createSessionMemberMutationHandler(
       if (action === "add") {
         const projection = requireSessionRowProjection(context);
         do {
-          await projection.ensureMaterialized();
-        } while (projection.needsMaterialization);
+          await projection.prepareSelection({ metadataOnly: true });
+        } while (projection.needsSelectionPreparation({ metadataOnly: true }));
         access.assertCurrent();
         addActor = actorIdentity(client);
         const known = knownSessionIdentities({

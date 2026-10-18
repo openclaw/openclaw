@@ -482,6 +482,7 @@ async function updateCommandInternal(
         installTarget,
         env,
         timeoutMs: updateStepTimeoutMs,
+        signal: run.deadline?.signal,
         assertCurrent: () => fence.assertCurrent(),
       });
       retainedRuntimeStep = {

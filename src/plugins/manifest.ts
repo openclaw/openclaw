@@ -342,6 +342,7 @@ export function loadPluginManifest(
   const controlUiResult = loadPluginControlUiDeclaration({
     rootDir,
     controlUi: raw.controlUi,
+    channels,
     rejectHardlinks,
     rootRealPath,
   });

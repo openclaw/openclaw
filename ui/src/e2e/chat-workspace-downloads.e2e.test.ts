@@ -1,12 +1,9 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import { createServer, request } from "node:http";
-import path from "node:path";
-import type { Locator } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
@@ -20,21 +17,22 @@ suite.define(() => {
       { name: "release report.md", bytes: Buffer.from("# Release report\r\nReady. 🦞\r\n") },
       { name: "large.txt", bytes: Buffer.alloc(16 * 1024 * 1024, "x") },
     ];
+    const scope = { sessionKey: "agent:main:main", root: "/workspace/project" };
+    const downloadPath = "/api/artifacts/download/e2e/file";
+    const entry = (name: string) => ({ name, path: name });
     const gateway = await installMockGateway(page, {
       methodResponses: {
         "sessions.files.list": {
-          sessionKey: "agent:main:main",
-          root: "/workspace/project",
+          ...scope,
           files: [],
           browser: {
             path: "",
             entries: [
-              { kind: "directory", name: "reports", path: "reports" },
-              ...files.map((file) => ({
+              { kind: "directory", ...entry("reports") },
+              ...files.map(({ name, bytes }) => ({
                 kind: "file",
-                name: file.name,
-                path: file.name,
-                size: file.bytes.length,
+                ...entry(name),
+                size: bytes.length,
               })),
             ],
           },
@@ -50,7 +48,7 @@ suite.define(() => {
       offsets: [0],
       createListener: () =>
         createServer((req, res) => {
-          if (req.url === "/api/artifacts/download/e2e/file") {
+          if (req.url === downloadPath) {
             const file = selected;
             res.writeHead(200, {
               "content-type": "text/plain",
@@ -82,20 +80,6 @@ suite.define(() => {
         }),
     });
     const baseUrl = "http://127.0.0.1:" + server.claim.port + "/";
-    const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifacts = parent
-      ? createControlUiE2eArtifactDir("file-stream-downloads", parent)
-      : undefined;
-    const capture = async (surface: Locator, name: string) => {
-      if (!artifacts) {
-        return;
-      }
-      const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
-        elements: [surface],
-        animations: "disabled",
-      });
-      await writeFile(path.join(artifacts, name), frame.elements[0]!.png);
-    };
     const save = async (button: Locator) => {
       expect(await button.isEnabled()).toBe(true);
       releaseBody = createDeferredCore();
@@ -105,7 +89,7 @@ suite.define(() => {
       const download = await pending;
       // Saving begins while the body is deliberately held. A fetch/blob path cannot do this.
       expect(transferFinished).toBe(false);
-      expect(download.url()).toBe(baseUrl + "api/artifacts/download/e2e/file");
+      expect(download.url()).toBe(new URL(downloadPath, baseUrl).href);
       releaseBody.resolve();
       expect(download.suggestedFilename()).toBe(selected.name);
       const saved = await download.path();
@@ -118,23 +102,22 @@ suite.define(() => {
       const originalUrl = page.url();
       await openChatSidePanelType(page, "Files");
       const rail = page.locator(".chat-workspace-rail");
-      expect(
-        await rail
-          .getByRole("listitem")
-          .filter({ hasText: "reports" })
-          .getByRole("button", { name: "Download file" })
-          .count(),
-      ).toBe(0);
+      const rowFor = (name: string) => rail.getByRole("listitem").filter({ hasText: name });
+      const downloadButton = (surface: Locator | Page) =>
+        surface.getByRole("button", { name: "Download file", exact: true });
+      expect(await rowFor("reports").getByRole("button", { name: "Download file" }).count()).toBe(
+        0,
+      );
       for (const file of files) {
         selected = file;
         await gateway.setMethodResponse("sessions.files.download", {
           filename: file.name,
           mimeType: "text/plain",
-          url: "/api/artifacts/download/e2e/file",
+          url: downloadPath,
           expiresAt: "2099-01-01T00:00:00Z",
         });
-        const row = rail.getByRole("listitem").filter({ hasText: file.name });
-        const button = row.getByRole("button", { name: "Download file", exact: true });
+        const row = rowFor(file.name);
+        const button = downloadButton(row);
         await button.hover();
         const beforePreviewReads = (await gateway.getRequests("sessions.files.get")).length;
         if (file === files[0]) {
@@ -146,8 +129,6 @@ suite.define(() => {
             message: "File access denied",
           });
           await page.getByText(/Could not download this file:.*File access denied/).waitFor();
-        } else {
-          await capture(rail, "large-list.png");
         }
         await save(button);
         expect((await gateway.getRequests("sessions.files.get")).length).toBe(beforePreviewReads);
@@ -156,11 +137,9 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.files.get", { after: before });
         if (file === files[0]) {
           await gateway.resolveDeferred("sessions.files.get", {
-            sessionKey: "agent:main:main",
-            root: "/workspace/project",
+            ...scope,
             file: {
-              path: file.name,
-              name: file.name,
+              ...entry(file.name),
               kind: "read",
               missing: false,
               content: file.bytes.toString(),
@@ -183,12 +162,9 @@ suite.define(() => {
         }
         const preview = page
           .locator(".chat-files-panel__page:visible")
-          .filter({ has: page.getByRole("button", { name: "Download file", exact: true }) });
+          .filter({ has: downloadButton(page) });
         await preview.waitFor();
-        if (file !== files[0]) {
-          await capture(preview, "large-preview.png");
-        }
-        await save(preview.getByRole("button", { name: "Download file", exact: true }));
+        await save(downloadButton(preview));
         await preview.getByRole("button", { name: "Show in Files", exact: true }).click();
       }
       expect(await gateway.getRequests("sessions.files.download")).toHaveLength(5);

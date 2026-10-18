@@ -119,37 +119,34 @@ describe("findExtraGatewayServices (win32)", () => {
     }
   });
 
-  it.each(["node"])(
-    "recognizes verified %s launcher metadata independently of the task label",
-    async (kind) => {
-      listScheduledTasksMock.mockReturnValue([
-        task("\\Custom Service", "C:\\fixtures\\service.cmd", ""),
-      ]);
-      readScheduledTaskCommandMock.mockResolvedValue({
-        programArguments: ["C:\\runtime\\node.exe", "C:\\app\\entry.js", kind, "run"],
-        environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: kind },
-      });
+  it("recognizes verified node launcher metadata independently of the task label", async () => {
+    listScheduledTasksMock.mockReturnValue([
+      task("\\Custom Service", "C:\\fixtures\\service.cmd", ""),
+    ]);
+    readScheduledTaskCommandMock.mockResolvedValue({
+      programArguments: ["C:\\runtime\\node.exe", "C:\\app\\entry.js", "node", "run"],
+      environment: { OPENCLAW_SERVICE_MARKER: "openclaw", OPENCLAW_SERVICE_KIND: "node" },
+    });
 
-      const result = await findExtraGatewayServices(nativeEnv, { deep: true });
+    const result = await findExtraGatewayServices(nativeEnv, { deep: true });
 
-      expect(result.errors).toEqual([]);
-      expect(result.services).toEqual([
-        expect.objectContaining({ label: "\\Custom Service", marker: "openclaw", legacy: false }),
-      ]);
-      const managed = await listManagedOpenClawGatewayServices(nativeEnv);
-      expect(managed).toEqual({
-        services: kind === "gateway" ? [{ ...result.services[0], windowsProfile: "default" }] : [],
-        errors: [],
-      });
-    },
-  );
+    expect(result.errors).toEqual([]);
+    expect(result.services).toEqual([
+      expect.objectContaining({ label: "\\Custom Service", marker: "openclaw", legacy: false }),
+    ]);
+    const managed = await listManagedOpenClawGatewayServices(nativeEnv);
+    expect(managed).toEqual({
+      services: [],
+      errors: [],
+    });
+  });
 
   type IncompleteCase = {
     name: string;
     tasks: ScheduledTaskSnapshot[];
     selected?: string;
-    read?: "missing" | "unreadable" | "recognizable";
-    projection?: "extras" | "both";
+    read?: "missing";
+    projection?: "both";
     sources: string[];
     message?: string;
     exact?: boolean;
@@ -158,17 +155,17 @@ describe("findExtraGatewayServices (win32)", () => {
   const missingLabels = [...knownLabels, "\\Custom Service"];
   const custom = "\\Custom Assistant";
   it.each<IncompleteCase>([
-    ...[undefined].map((actions) => ({
-      name: `known selectors with ${actions ? "empty" : "missing"} actions`,
+    {
+      name: "known selectors with missing actions",
       tasks: ["\\OpenClaw Gateway", "\\Selected Custom"].map((taskPath) => ({
         taskPath,
         state: null,
-        actions,
+        actions: undefined,
       })),
       selected: "\\Selected Custom",
-      projection: "both" as const,
+      projection: "both",
       sources: ["\\OpenClaw Gateway", "\\Selected Custom"],
-    })),
+    },
     {
       name: "disappeared OpenClaw launchers with unknown native state",
       tasks: missingLabels.map((label) => task(label, "C:\\OpenClaw\\gateway.cmd", "")),
@@ -196,18 +193,6 @@ describe("findExtraGatewayServices (win32)", () => {
       listScheduledTasksMock.mockReturnValue(tasks);
       if (read === "missing") {
         readScheduledTaskCommandMock.mockResolvedValue(null);
-      }
-      if (read === "unreadable") {
-        readScheduledTaskCommandMock.mockRejectedValue(new Error("Access denied"));
-      }
-      if (read === "recognizable") {
-        readScheduledTaskCommandMock.mockImplementationOnce(async (_env, options) => {
-          options?.onLauncherContent?.(
-            "@echo off\r\nnode C:\\openclaw\\dist\\entry.js gateway run\r\n",
-            "C:\\fixtures\\service.cmd",
-          );
-          throw new Error("Nested launcher could not be read");
-        });
       }
       const env = { ...nativeEnv, OPENCLAW_WINDOWS_TASK_NAME: selected };
       const result = projection

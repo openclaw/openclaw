@@ -78,6 +78,35 @@ function readSchemaMarkers(database: DatabaseSync) {
 }
 
 describe("retained existing-state writer", () => {
+  it("admits maintenance with QUICK without lending that receipt to a FULL writer", () => {
+    const options = fixture();
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      runExistingOpenClawStateWriteTransaction(
+        ({ db }) => db.exec("INSERT INTO records VALUES (1, 'quick write')"),
+        options,
+        { ...contract, integrityCheck: "quick" },
+      );
+      expect(reads.queries).toContain("PRAGMA quick_check;");
+      expect(reads.queries).toContain("PRAGMA integrity_check('config_machine_state');");
+      expect(reads.queries).not.toContain("PRAGMA integrity_check;");
+      runExistingOpenClawStateWriteTransaction(
+        ({ db }) => {
+          expect(db.prepare("SELECT value FROM records WHERE id = 1").get()?.value).toBe(
+            "quick write",
+          );
+          db.exec("INSERT INTO records VALUES (2, 'full write')");
+        },
+        options,
+        contract,
+      );
+      expect(reads.queries.filter((query) => query === "PRAGMA integrity_check;")).toHaveLength(1);
+      expect(readValues(options.path)).toEqual([{ value: "quick write" }, { value: "full write" }]);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it("initializes an existing additive subset without repeating DDL on its warm table", () => {
     const options = fixture(true);
     const queries: Array<{ query: string; database?: DatabaseSync }> = [];
