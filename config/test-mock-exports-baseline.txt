@@ -5523,7 +5523,6 @@
 ["src/commands/status-all/report-data.test.ts","../status.gateway-connection.ts","20c24bda96e62a697f5525402b6130d721f478830a30541b59f70b241d9e314e",1]
 ["src/commands/status-json-command.test.ts","../runtime.js","717a1a8a7fa4c2c4538daa1c6a5df74a89627071594666799a678e5aea5ce967",1]
 ["src/commands/status-json-command.test.ts","./status-json-runtime.ts","e946590ad6de244e8e2cbb48a10c9f7288782393834e2c28d87b8883204c3d62",1]
-["src/commands/status-json-runtime.test.ts","../state/backup-run-records.js","485178875a066e4522ad7836bfdc83d114f59665b022c9b2fb6fcc9dabda3b9e",1]
 ["src/commands/status-json.test.ts","../gateway/call.js","64011d40301330b379e7aea54e4e35d6dfa3da206700467657e3fa35f1e31c87",1]
 ["src/commands/status-json.test.ts","../infra/provider-usage.js","0770470a01662caacf023b5a28d06a1218bd8af9e23a22cf334b564cad7f46e2",1]
 ["src/commands/status-json.test.ts","../infra/update-channels.js","a9a8fddfbabafdce7d7261575c63773a9ae26572ef8f197c12af1414e0607ad2",1]

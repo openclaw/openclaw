@@ -60,11 +60,12 @@ export async function resolveStatusJsonOutput(params: {
         : {}),
     });
 
+  const databaseEngines = await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores);
   const surface: StatusOverviewSurface = {
     ...scan,
     gatewayService,
     nodeService,
-    databaseEngines: await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores),
+    databaseEngines,
   };
   const projectedSecurityAudit =
     params.includeSecurityAudit && scan.collection
@@ -77,10 +78,7 @@ export async function resolveStatusJsonOutput(params: {
     updateConfigChannel: surface.cfg.update?.channel,
     update: surface.update,
   });
-  const databaseFamilies = describeDatabaseEngineSelection(
-    surface.cfg,
-    surface.databaseEngines?.stores,
-  );
+  const databaseFamilies = describeDatabaseEngineSelection(surface.cfg, databaseEngines.stores);
   const payload = {
     ...scan.summary,
     os: scan.osSummary,
@@ -90,10 +88,9 @@ export async function resolveStatusJsonOutput(params: {
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
     databaseEngines: {
-      source: "configured",
       experimental: databaseFamilies.some((family) => family.effective === "postgres"),
       families: databaseFamilies,
-      ...surface.databaseEngines,
+      ...databaseEngines,
     },
     gateway: buildGatewayStatusJsonPayload(surface),
     gatewayService: surface.gatewayService,
