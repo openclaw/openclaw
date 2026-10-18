@@ -21,7 +21,7 @@ All `system` subcommands use Gateway RPC and accept the shared client flags:
 | `--token <token>`       | none                                 | Gateway token (if required).                                                                                                                                                                           |
 | `--password <password>` | none                                 | Gateway password (if required).                                                                                                                                                                        |
 | `--timeout <ms>`        | `30000`                              | RPC timeout in milliseconds.                                                                                                                                                                           |
-| `--expect-final`        | off                                  | Accepted as a shared client flag, but has no effect on system commands.                                                                                                                                 |
+| `--expect-final`        | off                                  | Accepted as a shared client flag, but has no effect on system commands.                                                                                                                                |
 | `--json`                | off                                  | Output JSON. `heartbeat last/enable/disable` and `system presence` always print the raw RPC JSON payload regardless of this flag; `system event` uses it to switch between JSON and a plain `ok` line. |
 
 ## Common commands
