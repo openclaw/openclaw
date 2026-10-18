@@ -43,9 +43,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 afterEach(() => clearRuntimeConfigSnapshot());
 
-export function getDispatchTestMocks() {
-  return dispatchTestMocks;
-}
+export const getDispatchTestMocks = () => dispatchTestMocks;
 
 beforeEach(() => {
   const readFixtureEntry: typeof sessionStore.loadGatewaySessionEntryReadOnlyAsync = async (
@@ -82,17 +80,16 @@ beforeEach(() => {
   );
 });
 
-vi.mock("../../process/exec.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
+vi.mock("../../process/exec.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../process/exec.js")>();
   return {
     ...actual,
     runCommandWithTimeout: dispatchTestMocks.runCommandWithTimeout,
   };
 });
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
+vi.mock("../session-utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../session-utils.js")>();
   return {
     ...actual,
     resolveGatewaySessionStoreTargetInWorker: async (
@@ -125,12 +122,11 @@ vi.mock("../session-utils.js", async () => {
 
 import { sessionDispatchHandlers } from "./sessions-dispatch.js";
 
-export function getSessionDispatchHandler() {
-  return expectDefined(
+export const getSessionDispatchHandler = () =>
+  expectDefined(
     sessionDispatchHandlers["sessions.dispatch"],
     'sessionDispatchHandlers["sessions.dispatch"] test invariant',
   );
-}
 
 export const dispatchTestSessionKey = "agent:main:cloud-test";
 export const dispatchTestSessionId = "session-cloud-test";
@@ -180,15 +176,15 @@ type DispatchSessionEntry = Pick<
 >;
 
 export function makeSessionTarget(entry?: DispatchSessionEntry) {
-  // Pin an anthropic model by default: the effective-runtime fallback consults
-  // the process-global harness registry, so the default openai model resolves
-  // to "codex" whenever a sibling test in the shard registered that harness.
-  const pinnedEntry = entry
-    ? { providerOverride: "anthropic", modelOverride: "claude-test", ...entry }
-    : undefined;
-  const store: Record<string, DispatchSessionEntry> = pinnedEntry
-    ? { [dispatchTestSessionKey]: pinnedEntry }
-    : {};
+  // Avoid inheriting a Codex harness registered by a sibling test.
+  const store: Record<string, DispatchSessionEntry> = {};
+  if (entry) {
+    store[dispatchTestSessionKey] = {
+      providerOverride: "anthropic",
+      modelOverride: "claude-test",
+      ...entry,
+    };
+  }
   return {
     agentId: "main",
     storePath: "/tmp/openclaw-agent.sqlite",
@@ -244,8 +240,7 @@ export function makeDispatchTestContext(
         if (placement.state !== "active" && placement.state !== "draining") {
           return undefined;
         }
-        const environmentId =
-          typeof placement.environmentId === "string" ? placement.environmentId : "";
+        const environmentId = placement.environmentId ?? "";
         const service = workerEnvironmentService as {
           get?: (environmentId: string) => { nodeDeviceId?: string } | undefined;
         };
@@ -300,7 +295,7 @@ async function invokeSessionMethod(
   sessionMutationAuthorization?: SessionMutationAuthorization,
   signal?: AbortSignal,
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
+  const respond = vi.fn<RespondFn>();
   await expectDefined(
     sessionDispatchHandlers[`sessions.${method}`],
     `sessionDispatchHandlers["sessions.${method}"] test invariant`,

@@ -56,6 +56,13 @@ const sendRun = (
 const gitUrl = "https://github.com/openclaw/openclaw.git";
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
 
+async function workspaceFixture(name: string) {
+  const root = tempDirs.make(`openclaw-session-${name}-`);
+  const workspace = await initializeRepository(root, "workspace");
+  testState.agentConfig = { workspace };
+  return { root, workspace, ...(await createSessionStoreDir()) };
+}
+
 async function cloneFixture(root: string) {
   const publisher = await initializeRepository(root, "publisher");
   const upstream = path.join(root, "upstream.git");
@@ -105,8 +112,7 @@ afterEach(async () => {
 test.each(["fresh", "retry"] as const)(
   "sessions.create validates a %s remote base",
   async (mode) => {
-    const root = tempDirs.make("openclaw-session-remote-base-");
-    const workspace = await initializeRepository(root, "workspace");
+    const { root, storePath } = await workspaceFixture("remote-base");
     const { publisher, upstream, projectRoot } = await cloneFixture(root);
     const baseRef = mode === "retry" ? "origin/missing" : "main";
     if (mode === "retry") {
@@ -117,8 +123,6 @@ test.each(["fresh", "retry"] as const)(
     } else {
       await git(projectRoot, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
     }
-    testState.agentConfig = { workspace };
-    const { storePath } = await createSessionStoreDir();
     projectCloneMocks.materialize.mockResolvedValue(
       await registerClonedProjectRegistry({
         path: projectRoot,
@@ -178,10 +182,7 @@ test("remote retry refresh does not mutate a registered project checkout", async
 });
 
 test("sessions.create rejects an invalid worktree base before persisting the session", async () => {
-  const root = tempDirs.make("openclaw-session-invalid-worktree-base-");
-  const workspace = await initializeRepository(root, "workspace");
-  testState.agentConfig = { workspace };
-  const { storePath } = await createSessionStoreDir();
+  const { storePath } = await workspaceFixture("invalid-worktree-base");
   const sessionKey = "agent:main:dashboard:invalid-worktree-base";
 
   const created = await directSessionReq(
@@ -210,15 +211,12 @@ test("sessions.create rejects an invalid worktree base before persisting the ses
 test.each(["local", "remote"] as const)(
   "chat.send keeps an accepted %s base pinned after setup fails and its branch moves",
   async (source) => {
-    const root = tempDirs.make("openclaw-session-pinned-worktree-base-");
-    const workspace = await initializeRepository(root, "workspace");
+    const { workspace, storePath } = await workspaceFixture("pinned-worktree-base");
     await git(workspace, "branch", "base");
     const acceptedCommit = (await git(workspace, "rev-parse", "base")).stdout.trim();
     const setup = path.join(workspace, ".openclaw", "worktree-setup.sh");
     await fs.mkdir(path.dirname(setup));
     await fs.writeFile(setup, "#!/bin/sh\nexit 23\n", { mode: 0o755 });
-    testState.agentConfig = { workspace };
-    const { storePath } = await createSessionStoreDir();
     if (source === "remote") {
       projectCloneMocks.materialize.mockResolvedValue(
         await registerClonedProjectRegistry({

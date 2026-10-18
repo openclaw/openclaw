@@ -12,6 +12,7 @@ import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTimeout } from "../../infra/fs-safe.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { settleWorkspaceRuns } from "../server.sessions.create.projects.test-support.js";
+import { sharingPolicyClient } from "../session-sharing.test-utils.js";
 import {
   agentDiscoveryMock,
   dispatchInboundMessageMock,
@@ -26,7 +27,6 @@ import {
 } from "../test/server-sessions.test-helpers.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
-import type { GatewayClient } from "./types.js";
 
 const fixedNow = vi.hoisted(() => 1_800_000_000_000);
 const waitFor = <T>(promise: Promise<T>, label: string) =>
@@ -53,15 +53,9 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
 });
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-const client: GatewayClient = {
+const client = {
+  ...sharingPolicyClient({ scopes: ["operator.read", "operator.write", "operator.admin"] }),
   connId: "created-thinking-proof",
-  connect: {
-    minProtocol: 1,
-    maxProtocol: 1,
-    role: "operator",
-    scopes: ["operator.read", "operator.write", "operator.admin"],
-    client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-  },
 };
 
 test.each(["later-read", "delivered-event", "ui-patch"])(
@@ -85,6 +79,11 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         emitEvent({ type: "event", event, payload });
       },
     });
+    const requestOptions = () => ({
+      context: { ...context },
+      client,
+      isWebchatConnect: () => true,
+    });
     const replyEntered = createDeferred();
     const releaseReply = createDeferred();
     const replyFinished = createDeferred();
@@ -92,7 +91,8 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
     const firstListRead = createDeferred();
     const order: string[] = [];
     const key = "agent:main:dashboard:created-thinking-proof";
-    const scope = { agentId: "main", sessionKey: key, storePath };
+    const identity = { agentId: "main", sessionKey: key };
+    const scope = { ...identity, storePath };
     const clock = vi.spyOn(Date, "now").mockReturnValue(fixedNow);
     const runModel = vi
       .spyOn(embeddedAgent, "runEmbeddedAgent")
@@ -110,7 +110,6 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       }
     });
     let listCalls = 0;
-    let creationReturned = false;
     const gatewayClient = createTestGatewayClient(async (method, params) => {
       if (
         method !== "sessions.create" &&
@@ -122,19 +121,14 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
       if (!isRecord(params)) {
         throw new Error(`Expected object parameters for ${method}`);
       }
-      const response = await directSessionReq(method, params, {
-        context: { ...context },
-        client,
-        isWebchatConnect: () => true,
-      });
+      const response = await directSessionReq(method, params, requestOptions());
       if (!response.ok) {
         throw new Error(response.error?.message ?? `${method} failed`);
       }
       if (method === "sessions.create") {
         order.push("create-ack");
-        creationReturned = true;
       }
-      if (method === "sessions.list" && creationReturned) {
+      if (method === "sessions.list" && order.includes("create-ack")) {
         listCalls += 1;
         order.push(`list-${listCalls}-read`);
         if (listCalls === 1) {
@@ -167,15 +161,13 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         ),
         "create response",
       );
+      const highEntry = { thinkingLevel: "high", updatedAt: Date.now() };
       expect(created, sessions.state.error ?? undefined).toMatchObject({
         key,
         initialRun: { status: "started" },
-        entry: { thinkingLevel: "high", updatedAt: Date.now() },
+        entry: highEntry,
       });
-      expect(loadSessionEntry(scope)).toMatchObject({
-        thinkingLevel: "high",
-        updatedAt: Date.now(),
-      });
+      expect(loadSessionEntry(scope)).toMatchObject(highEntry);
       expect(sessions.think(key, "main")).toBe("high");
       await waitFor(replyEntered.promise, "reply admission");
       await waitFor(firstListRead.promise, "first list");
@@ -195,17 +187,13 @@ test.each(["later-read", "delivered-event", "ui-patch"])(
         const changed = await directSessionReq(
           "sessions.patch",
           { key, agentId: "main", thinkingLevel: "low" },
-          { context: { ...context }, client, isWebchatConnect: () => true },
+          requestOptions(),
         );
         expect(changed.ok).toBe(true);
         await flushPendingSessionsChangedEvents();
         expect(deliveredEvents).toContainEqual({
           event: "sessions.changed",
-          payload: expect.objectContaining({
-            sessionKey: key,
-            agentId: "main",
-            ...lowEntry,
-          }),
+          payload: expect.objectContaining({ ...identity, ...lowEntry }),
         });
         expect(sessions.think(key, "main")).toBe("low");
         releaseFirstList.resolve(undefined);

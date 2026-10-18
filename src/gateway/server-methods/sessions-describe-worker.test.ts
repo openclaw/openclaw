@@ -51,6 +51,15 @@ const expectSession = (response: unknown, session: unknown) =>
   expect(response).toMatchObject({ session });
 const putSession = (key: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
   upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+const seedSession = (key: string, entry: Parameters<typeof putSession>[1] = {}) =>
+  putSession(key, { sessionId: key, updatedAt: Date.now(), ...entry });
+const deleteSession = (key: string) =>
+  deleteSessionEntryLifecycle({
+    agentId: "main",
+    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    target: { canonicalKey: key, storeKeys: [key] },
+    archiveTranscript: false,
+  });
 const readerRoles = (
   others: "view" | "none",
 ): NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]> => ({
@@ -117,16 +126,14 @@ async function withFixture(
       setRuntimeConfigSnapshot(cfg);
       const ownerId = ensureProfileForEmail("owner@example.com").id;
       const viewer = identifiedClient(ensureProfileForEmail("viewer@example.com").id);
-      await upsertSessionEntryCore(targetScope, {
+      await seedSession(targetKey, {
         sessionId: "original",
-        updatedAt: Date.now(),
         label: "Original",
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: ownerId },
       });
-      await putSession("agent:main:subagent:run-0", {
+      await seedSession("agent:main:subagent:run-0", {
         sessionId: "off-page-child",
-        updatedAt: Date.now(),
         spawnedBy: "agent:main:off-page-requester",
       });
       const records = Array.from({ length: 64 }, (_, i) =>
@@ -217,63 +224,54 @@ async function afterCommittedChange(
   }
 }
 
-it.each(["list"] as const)(
-  "captures current registry facts after %s owner publications",
-  async () => {
-    await withFixture(async ({ context, viewer, retainedRunIds, describe }) => {
-      await describe();
-      const current = retainedRun("current-memory", {
-        childSessionKey: targetKey,
-        controllerSessionKey: "agent:main:current-controller",
-      });
-      try {
-        const response = await whilePaused(
-          context,
-          () =>
-            listSessions({ client: viewer, context, request: { limit: 100 } }).then((result) => ({
-              session: result.sessions.find((row) => row.key === targetKey),
-            })),
-          () => {
-            const published = retainedRun("current-persisted", {
-              collect: true,
-              groupId: "current-group",
-              swarmRequesterSessionKey: targetKey,
-              collectorCompletion: { status: "done" },
-            });
-            persistRegistryFixture(new Map([[published.runId, published]]), [
-              ...retainedRunIds,
-              published.runId,
-            ]);
-            subagentRuns.set(current.runId, current);
-            subagentRuns.commitOwnership(current);
-          },
-        );
-        expectSession(response, {
-          controlOwnerSessionKey: "agent:main:current-controller",
-          swarm: { groups: [{ groupId: "current-group", done: 1 }] },
-        });
-        expect(JSON.stringify(response)).not.toContain("retained-group");
-      } finally {
-        subagentRuns.delete(current.runId);
-      }
+it("captures current registry facts after list owner publications", () =>
+  withFixture(async ({ context, viewer, retainedRunIds, describe }) => {
+    await describe();
+    const current = retainedRun("current-memory", {
+      childSessionKey: targetKey,
+      controllerSessionKey: "agent:main:current-controller",
     });
-  },
-);
+    try {
+      const response = await whilePaused(
+        context,
+        () =>
+          listSessions({ client: viewer, context, request: { limit: 100 } }).then((result) => ({
+            session: result.sessions.find((row) => row.key === targetKey),
+          })),
+        () => {
+          const published = retainedRun("current-persisted", {
+            collect: true,
+            groupId: "current-group",
+            swarmRequesterSessionKey: targetKey,
+            collectorCompletion: { status: "done" },
+          });
+          persistRegistryFixture(new Map([[published.runId, published]]), [
+            ...retainedRunIds,
+            published.runId,
+          ]);
+          subagentRuns.set(current.runId, current);
+          subagentRuns.commitOwnership(current);
+        },
+      );
+      expectSession(response, {
+        controlOwnerSessionKey: "agent:main:current-controller",
+        swarm: { groups: [{ groupId: "current-group", done: 1 }] },
+      });
+      expect(JSON.stringify(response)).not.toContain("retained-group");
+    } finally {
+      subagentRuns.delete(current.runId);
+    }
+  }));
 
-it("projects current target, lineage, children and placement after committed changes", async () => {
-  await withFixture(async ({ context, afterChange }) => {
+it("projects current target, lineage, children and placement after committed changes", () =>
+  withFixture(async ({ context, afterChange }) => {
     const childKey = "agent:main:direct-child";
     const removedKey = "agent:main:removed-child";
     for (const key of [childKey, removedKey]) {
-      await putSession(key, {
-        sessionId: key,
-        updatedAt: Date.now(),
-        parentSessionKey: targetKey,
-      });
+      await seedSession(key, { parentSessionKey: targetKey });
     }
-    await putSession("agent:main:current-parent", {
+    await seedSession("agent:main:current-parent", {
       sessionId: "current-parent",
-      updatedAt: Date.now(),
       providerOverride: "openai",
       modelOverride: "gpt-5.5",
       modelOverrideSource: "user",
@@ -291,12 +289,7 @@ it("projects current target, lineage, children and placement after committed cha
         parentSessionKey: "agent:main:other",
         spawnedBy: "agent:main:other",
       });
-      await deleteSessionEntryLifecycle({
-        agentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-        target: { canonicalKey: removedKey, storeKeys: [removedKey] },
-        archiveTranscript: false,
-      });
+      await deleteSession(removedKey);
       reportPlacementTransition(
         undefined,
         await placements.startDispatch({
@@ -325,13 +318,12 @@ it("projects current target, lineage, children and placement after committed cha
       },
     });
     expect(JSON.stringify(response)).not.toContain("synthetic retained");
-  });
-});
+  }));
 
 it.each(["role", "creator alias"] as const)(
   "rechecks sharing visibility after a %s change before the synchronous read",
-  async (change) => {
-    await withFixture(async ({ cfg, viewer, afterChange }) => {
+  (change) =>
+    withFixture(async ({ cfg, viewer, afterChange }) => {
       const response = await afterChange(async () => {
         if (change === "role") {
           const next: OpenClawConfig = {
@@ -349,13 +341,13 @@ it.each(["role", "creator alias"] as const)(
           ? { session: { sessionId: "original", sharingRole: "owner" } }
           : { session: null },
       );
-    });
-  },
+    }),
 );
 
-it("resolves the current agent store and main alias after committed changes", async () => {
-  for (const route of ["agent", "main alias"] as const) {
-    await withFixture(async ({ cfg, context, describe, afterChange }) => {
+it.each(["agent", "main alias"] as const)(
+  "resolves the current %s after committed changes",
+  (route) =>
+    withFixture(async ({ cfg, context, describe, afterChange }) => {
       const initial: OpenClawConfig = {
         ...cfg,
         agents: {
@@ -416,12 +408,7 @@ it("resolves the current agent store and main alias after committed changes", as
       catalogs.mockClear();
       const response = await afterChange(async () => {
         if (route === "main alias") {
-          await deleteSessionEntryLifecycle({
-            agentId: "main",
-            storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-            target: { canonicalKey: "agent:main:main", storeKeys: ["agent:main:main"] },
-            archiveTranscript: false,
-          });
+          await deleteSession("agent:main:main");
         }
         setRuntimeConfigSnapshot(next);
       }, key);
@@ -432,12 +419,11 @@ it("resolves the current agent store and main alias after committed changes", as
         thinkingLevels:
           route === "agent" ? expect.arrayContaining([{ id: "low", label: "low" }]) : [],
       });
-    });
-  }
-});
+    }),
+);
 
-it("projects elapsed runtime, status expiry and budget time after committed changes", async () => {
-  await withFixture(async ({ describe, afterChange }) => {
+it("projects elapsed runtime, status expiry and budget time after committed changes", () =>
+  withFixture(async ({ describe, afterChange }) => {
     const startedAt = Date.now() - 1000;
     const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt + 1000);
     const running = retainedRun("clock-running", {
@@ -498,11 +484,10 @@ it("projects elapsed runtime, status expiry and budget time after committed chan
       subagentRuns.delete(running.runId);
       clock.mockRestore();
     }
-  });
-});
+  }));
 
-it("refreshes retained control ownership after committed changes", async () => {
-  await withFixture(async ({ describe, afterChange }) => {
+it("refreshes retained control ownership after committed changes", () =>
+  withFixture(async ({ describe, afterChange }) => {
     const now = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const older = retainedRun("expiring-owner", {
@@ -532,13 +517,12 @@ it("refreshes retained control ownership after committed changes", async () => {
     } finally {
       clock.mockRestore();
     }
-  });
-});
+  }));
 
 it.each(["executor", "reservation"] as const)(
   "rechecks the sole %s owner after committed changes",
-  async (owner) => {
-    await withFixture(async ({ describe, afterChange }) => {
+  (owner) =>
+    withFixture(async ({ describe, afterChange }) => {
       const old = Date.now() - 3 * 60 * 60 * 1000;
       const run = retainedRun(`owned-${owner}`, {
         requesterSessionKey: targetKey,
@@ -596,8 +580,7 @@ it.each(["executor", "reservation"] as const)(
         subagentRuns.delete(run.runId);
         await Promise.all(reservationReleases);
       }
-    });
-  },
+    }),
 );
 
 it("returns no row for missing or hidden targets without provisioning missing storage", async () => {
