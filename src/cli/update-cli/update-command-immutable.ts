@@ -40,6 +40,7 @@ function reportImmutableFailure(
   error: unknown,
   json?: boolean,
   reason = "immutable-preparation-refused",
+  warnings: string[] = [],
 ): never {
   const message = formatErrorMessage(error);
   if (json) {
@@ -48,6 +49,7 @@ function reportImmutableFailure(
       installKind: "immutable",
       reason,
       message,
+      ...(warnings.length ? { warnings } : {}),
     });
   } else {
     defaultRuntime.error(message);
@@ -117,6 +119,11 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
   } catch (error) {
     return reportImmutableFailure(error, opts.json);
   }
+  if (!opts.json) {
+    for (const warning of result.warnings) {
+      defaultRuntime.error(`Warning: ${warning}`);
+    }
+  }
   const receipts: string[] = [];
   let activation: ActivationResult | "disabled" | "skipped" | "planned" | "not-needed" =
     !installation.activationEnabled
@@ -144,7 +151,12 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
         onReceipt: collectReceipt(receipts, opts),
       });
     } catch (error) {
-      return reportImmutableFailure(error, opts.json, "immutable-activation-failed");
+      return reportImmutableFailure(
+        error,
+        opts.json,
+        "immutable-activation-failed",
+        result.warnings,
+      );
     }
   }
   const message =
@@ -181,9 +193,6 @@ export async function tryRunImmutableUpdateCommand(opts: UpdateCommandOptions): 
             ? `Prepared immutable generation${target}.`
             : `Immutable preparation failed: ${result.reason ?? "candidate preparation failed"}.`,
     );
-    for (const warning of result.warnings) {
-      defaultRuntime.error(`Warning: ${warning}`);
-    }
     if (result.coverage) {
       const { formatImmutableUpdateCoverage } =
         await import("../../infra/update-immutable-inspection.js");

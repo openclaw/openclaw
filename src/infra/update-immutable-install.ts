@@ -451,6 +451,7 @@ export async function prepareImmutableUpdate(params: {
       sealImmutableGeneration,
       verifyImmutableGeneration,
       assertImmutableGenerationControlVersion,
+      recordImmutableOperatorBuild,
     } = await import("./update-immutable-generation.js");
     const runner = await buildUpdateCommandRunner();
     const defaultCommandEnv = resolveImmutableGenerationEnv({
@@ -590,9 +591,14 @@ export async function prepareImmutableUpdate(params: {
       let cleanupUncertain = false;
       try {
         // The builder can populate its child, never pre-create the privileged copy target.
-        await fs.chmod(stage, 0o755);
+        await fs.chmod(stage, descriptor.build ? 0o755 : 0o700);
         const buildStage = path.join(stage, "build");
         await fs.mkdir(buildStage, { mode: 0o700 });
+        if (!descriptor.build) {
+          warnings.push(
+            "Building without the isolated build account as the current operator (built-by: operator; isolation: none). See https://docs.openclaw.ai/cli/update#immutable-release-installations for build-account provisioning status.",
+          );
+        }
         await runImmutableBuild({
           descriptor,
           stage: buildStage,
@@ -609,6 +615,9 @@ export async function prepareImmutableUpdate(params: {
         const candidate = path.join(stage, "sealed");
         await copyImmutableGeneration(path.join(buildStage, "generation"), candidate);
         await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
+        if (!descriptor.build) {
+          await recordImmutableOperatorBuild(candidate);
+        }
         const metadata = await readGitTargetSchemaVersions({
           runCommand,
           root: candidate,

@@ -54,18 +54,13 @@ export async function runImmutableBuild(params: {
 }): Promise<void> {
   const { descriptor, stage, sha, timeoutMs, assertCurrent } = params;
   const build = descriptor.build;
-  if (!build) {
-    throw new Error(
-      "Immutable build identity is not adopted; current remains running. Build isolation adoption is not enabled yet.",
-    );
-  }
-  if (build.account === descriptor.service.account) {
+  if (build?.account === descriptor.service.account) {
     throw new Error("Immutable build and runtime accounts must be separate.");
   }
   await fs.access("/sys/fs/cgroup/cgroup.controllers");
   for (const file of [
     stage,
-    build.toolchainPath,
+    ...(build ? [build.toolchainPath] : []),
     descriptor.service.stateDir,
     descriptor.service.configPath,
   ]) {
@@ -75,64 +70,76 @@ export async function runImmutableBuild(params: {
       );
     }
   }
-  const id = async (flag: string, account: string) =>
-    checked(["/usr/bin/id", flag, account], stage);
-  const uid = await id("-u", build.account);
-  const gid = await id("-g", build.account);
-  const groups = await id("-G", build.account);
-  const runtimeUid = await id("-u", descriptor.service.account);
-  if (
-    uid !== String(build.uid) ||
-    gid !== String(build.gid) ||
-    groups !== gid ||
-    uid === runtimeUid ||
-    runtimeUid === "0"
-  ) {
-    throw new Error("Immutable build identity changed or has supplementary/runtime privileges.");
-  }
-  // The toolchain is installation-owned, not a writable bin directory from the calling shell.
-  for (let parent = build.toolchainPath; ; parent = path.dirname(parent)) {
-    directoryIdentity(parent);
-    if (parent === path.dirname(parent)) {
-      break;
+  if (build) {
+    const id = async (flag: string, account: string) =>
+      checked(["/usr/bin/id", flag, account], stage);
+    const uid = await id("-u", build.account);
+    const gid = await id("-g", build.account);
+    const groups = await id("-G", build.account);
+    const runtimeUid = await id("-u", descriptor.service.account);
+    if (
+      uid !== String(build.uid) ||
+      gid !== String(build.gid) ||
+      groups !== gid ||
+      uid === runtimeUid ||
+      runtimeUid === "0"
+    ) {
+      throw new Error("Immutable build identity changed or has supplementary/runtime privileges.");
     }
+    // The toolchain is installation-owned, not a writable bin directory from the calling shell.
+    for (let parent = build.toolchainPath; ; parent = path.dirname(parent)) {
+      directoryIdentity(parent);
+      if (parent === path.dirname(parent)) {
+        break;
+      }
+    }
+    const capacity = await fs.statfs(stage, { bigint: true });
+    if (capacity.bavail * capacity.bsize < BigInt(build.resources.buildFreeBytes)) {
+      throw new Error("Insufficient immutable build headroom; current remains running.");
+    }
+    assertCurrent();
+    await checked(
+      [
+        "/usr/sbin/runuser",
+        "-u",
+        descriptor.service.account,
+        "--",
+        "/usr/bin/env",
+        "-i",
+        "PATH=/usr/bin:/bin",
+        descriptor.runtime.path,
+        "-e",
+        runtimeProbe,
+        descriptor.service.stateDir,
+        String(build.resources.runtimeFreeBytes),
+      ],
+      stage,
+    );
+    assertCurrent();
+    await fs.chown(stage, build.uid, build.gid);
   }
-  const capacity = await fs.statfs(stage, { bigint: true });
-  if (capacity.bavail * capacity.bsize < BigInt(build.resources.buildFreeBytes)) {
-    throw new Error("Insufficient immutable build headroom; current remains running.");
+  try {
+    await fs.access(stage, fs.constants.W_OK);
+  } catch (error) {
+    throw new Error(
+      `Immutable build cannot write private staging area ${stage}; check the operator's permissions.`,
+      { cause: error },
+    );
   }
-  assertCurrent();
-  await checked(
-    [
-      "/usr/sbin/runuser",
-      "-u",
-      descriptor.service.account,
-      "--",
-      "/usr/bin/env",
-      "-i",
-      "PATH=/usr/bin:/bin",
-      descriptor.runtime.path,
-      "-e",
-      runtimeProbe,
-      descriptor.service.stateDir,
-      String(build.resources.runtimeFreeBytes),
-    ],
-    stage,
-  );
-  assertCurrent();
-  await fs.chown(stage, build.uid, build.gid);
   for (const name of ["home", "tmp"]) {
     const dir = path.join(stage, name);
     await fs.mkdir(dir, { mode: 0o700 });
-    await fs.chown(dir, build.uid, build.gid);
+    if (build) {
+      await fs.chown(dir, build.uid, build.gid);
+    }
   }
   const unit = `openclaw-build-${randomUUID()}.service`;
   const controlGroup = `/system.slice/${unit}`;
   const worker = resolveRuntimeProcessEntrypointUrl("immutableBuild");
   const resolver = JSON.stringify((await fs.realpath("/etc/resolv.conf")).replaceAll("%", "%%"));
   const properties = [
-    `User=${build.uid}`,
-    `Group=${build.gid}`,
+    `User=${build?.uid ?? process.geteuid?.()}`,
+    `Group=${build?.gid ?? process.getegid?.()}`,
     "SupplementaryGroups=",
     "Slice=system.slice",
     "Delegate=no",
@@ -159,9 +166,10 @@ export async function runImmutableBuild(params: {
     `BindReadOnlyPaths=-/run/systemd/resolve ${resolver}`,
     `ReadWritePaths=${stage}`,
     `RuntimeMaxSec=${Math.ceil((timeoutMs * 12 + UPDATE_NETWORK_TIMEOUT_MS * 2) / 1000)}`,
-    `InaccessiblePaths=-/root ${descriptor.service.stateDir} ${descriptor.service.configPath}`,
-    `MemoryMax=${build.resources.memoryMaxBytes}`,
-    `TasksMax=${build.resources.tasksMax}`,
+    `InaccessiblePaths=${build ? "-/root " : ""}${descriptor.service.stateDir} ${descriptor.service.configPath}`,
+    ...(build
+      ? [`MemoryMax=${build.resources.memoryMaxBytes}`, `TasksMax=${build.resources.tasksMax}`]
+      : []),
   ];
   const settle = async () => {
     const outcome = await run(["/usr/bin/systemctl", "stop", unit], {
@@ -183,7 +191,7 @@ export async function runImmutableBuild(params: {
   try {
     assertCurrent();
     const result = await runStep({
-      name: "immutable-unprivileged-build",
+      name: build ? "immutable-unprivileged-build" : "immutable-operator-build",
       argv: [
         "/usr/bin/systemd-run",
         "--quiet",
@@ -196,7 +204,7 @@ export async function runImmutableBuild(params: {
         "--",
         "/usr/bin/env",
         "-i",
-        `PATH=${build.toolchainPath}:/usr/bin:/bin`,
+        `PATH=${build ? `${build.toolchainPath}:/usr/bin:/bin` : (process.env.PATH ?? systemEnv.PATH)}`,
         "LANG=C.UTF-8",
         `HOME=${stage}/home`,
         `TMPDIR=${stage}/tmp`,

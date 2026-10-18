@@ -18,12 +18,9 @@ async function build(): Promise<void> {
     !currentSha ||
     !/^[a-f0-9]{40}$/u.test(currentSha) ||
     !sha ||
-    !/^[a-f0-9]{40}$/u.test(sha) ||
-    process.geteuid?.() === 0
+    !/^[a-f0-9]{40}$/u.test(sha)
   ) {
-    throw new Error(
-      "Immutable builds require a private stage, exact SHA and unprivileged account.",
-    );
+    throw new Error("Immutable builds require a private stage, exact SHA.");
   }
   const timeoutMs = Number(deadline);
   const workTimeoutMs = Number(workDeadline);

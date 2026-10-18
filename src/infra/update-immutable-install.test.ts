@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type * as Activation from "./package-update-activation-immutable.js";
 import { packageActivationRuntimeIdentity } from "./package-update-activation-paths.js";
 import type { ImmutableInstallRecord } from "./update-immutable-install-schema.js";
@@ -38,7 +39,10 @@ vi.mock("./update-immutable-generation.js", async (importOriginal) => ({
   installImmutableLauncher: vi.fn(),
 }));
 vi.mock("./update-immutable-service.js", () => ({ verifyImmutableService: async () => {} }));
-vi.mock("./update-git-runtime.js", () => ({ collectGitRuntimeErrors: async () => [] }));
+vi.mock("./update-git-runtime.js", async (original) => ({
+  ...(await original<typeof import("./update-git-runtime.js")>()),
+  collectGitRuntimeErrors: async () => [],
+}));
 // mock-isolation: The synthetic installation cannot launch native systemd build services.
 vi.mock("./update-immutable-build.js", () => ({ runImmutableBuild: mocks.build }));
 vi.mock("./update-runner-git-schema.js", async (importOriginal) => ({
@@ -100,6 +104,7 @@ beforeEach(async () => {
     const built = path.join(stage, "generation");
     await fs.mkdir(path.join(built, "dist"), { recursive: true, mode: 0o755 });
     await fs.writeFile(path.join(built, "dist/index.js"), `candidate ${sha}`);
+    await fs.writeFile(path.join(built, "dist/build-info.json"), JSON.stringify({ commit: sha }));
   });
 });
 afterEach(() => vi.restoreAllMocks());
@@ -152,6 +157,7 @@ it.each([
 it("resolves a dry-run target without filesystem or receipt changes", async () => {
   const before = new Set(await fs.readdir(root));
   const result = await prepareImmutableUpdate({ root, dryRun: true });
+  expect(result.status, result.reason).toBe("dry-run");
   expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
   expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
   expect(new Set(await fs.readdir(root))).toEqual(before);
@@ -167,7 +173,8 @@ it("refuses abbreviated targets before fetching or building", async () => {
   await expectUnchanged(mocks.command);
 });
 
-describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
+describe("immutable preparation", () => {
+  beforeEach(() => vi.spyOn(process, "platform", "get").mockReturnValue("linux"));
   it("refuses a different Node executable before touching a candidate", async () => {
     const runtime = path.join(path.dirname(root), "node");
     await fs.writeFile(runtime, "synthetic external runtime", { mode: 0o755 });
@@ -205,6 +212,13 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     });
     expect(await pointer()).toBe(`releases/${currentSha}`);
     expect(await readRelease(nextSha, "dist/index.js")).toBe(`candidate ${nextSha}`);
+    expect(JSON.parse(await readRelease(nextSha, "dist/build-info.json"))).toEqual({
+      commit: nextSha,
+      immutableBuild: { builtBy: "operator", isolation: "none" },
+    });
+    expect(result.warnings).toEqual([
+      expect.stringContaining("without the isolated build account"),
+    ]);
     expect(await readRelease(currentSha, "serving")).toBe("previous Gateway bytes");
     expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
     expect(mocks.seal).toHaveBeenCalledOnce();
@@ -216,7 +230,7 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     mocks.build.mockRejectedValueOnce(new CommandProcessCleanupError());
     const result = await prepareImmutableUpdate({ root, sha: nextSha });
     expect(result.status).toBe("error");
-    expect(result.warnings).toEqual([expect.stringContaining("processes did not settle")]);
+    expect(result.warnings).toContainEqual(expect.stringContaining("processes did not settle"));
     expect((await fs.readdir(root)).some((name) => name.startsWith(".openclaw-immutable-"))).toBe(
       true,
     );
@@ -236,5 +250,13 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     });
     expect(await readRelease(nextSha, "incomplete")).toBe("retain for inspection");
     await expectUnchanged(mocks.build, mocks.record);
+  });
+
+  it("preserves the serving generation and refuses publication when sealing fails", async () => {
+    mocks.seal.mockRejectedValueOnce(new Error("Candidate seal failed"));
+    const result = await prepareImmutableUpdate({ root, sha: nextSha });
+    expect(result).toMatchObject({ status: "error", reason: "Candidate seal failed" });
+    expect(await fs.readdir(path.join(root, "releases"))).toEqual([currentSha]);
+    await expectUnchanged(mocks.record);
   });
 });

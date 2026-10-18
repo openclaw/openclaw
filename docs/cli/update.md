@@ -324,7 +324,7 @@ budget per attempt. Interrupted pack transfers restart the missing pack, not the
 installed history. Before building, preparation copies the reused objects into
 its own store; the prepared release retains independent Git objects.
 
-Immutable preparation requires a separately adopted build account and toolchain.
+When a separate build account and toolchain are adopted, immutable preparation uses them.
 The build account must differ from the runtime account, have no supplementary
 groups, and match the recorded numeric identity. The updater runs dependency
 installation and builds in a restricted systemd service with a private home,
@@ -337,10 +337,17 @@ Build storage admission and the runtime account's write/quota probe run
 separately. A failed admission, installation, build, or process-settlement check
 leaves the existing service and `current` pointer unchanged. Uncertain process
 settlement retains the build scratch for inspection. Installations without an
-adopted build identity can still inspect status, reuse an already prepared
-generation, and detect an already-current target; preparing a new target reports
-the missing adoption. Build-identity adoption is staged for the native immutable
-update rollout and is not exposed as an `openclaw.json` setting or CLI flag yet.
+adopted build identity build as the current operator in the same private staging
+area and restricted systemd service. Each such build warns that it ran without
+an isolated build account. The release's sealed `dist/build-info.json` records
+`immutableBuild: { "builtBy": "operator", "isolation": "none" }`; status and
+Doctor report this recorded fact. The operator's toolchain search path is used,
+with a clean environment and private home and temporary directories. Exact-SHA
+verification, process settlement, materialization, and sealing still apply.
+
+Build-account provisioning remains staged and has no supported CLI command or
+`openclaw.json` setting yet. This does not block updates; this section will carry
+provisioning instructions when that workflow becomes available.
 
 `--drain-timeout <seconds>` sets the immutable drain budget independently of
 `--timeout`, which retains the canary/readiness phase budget. The default drain

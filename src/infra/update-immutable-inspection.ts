@@ -13,6 +13,7 @@ import { formatErrorMessage } from "./errors.js";
 import { isPathInside } from "./path-guards.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import type { UpdateStateSchemaVersion } from "./update-candidate-state.js";
+import { readBuiltRuntimeIsolation } from "./update-git-runtime.js";
 import { readImmutableSchemaContracts } from "./update-immutable-generation.js";
 import { readImmutableInstallRecord } from "./update-immutable-install-record.js";
 import { assertImmutableDescriptorCurrent, directoryIdentity } from "./update-immutable-layout.js";
@@ -63,6 +64,11 @@ export async function inspectImmutableUpdateCoverage(params: {
     throw new Error("Immutable adoption record is unavailable.");
   }
   assertImmutableDescriptorCurrent(record.descriptor);
+  if (await readBuiltRuntimeIsolation(record.descriptor.current.path)) {
+    result.warnings.push(
+      "Current generation was built by the operator without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.",
+    );
+  }
   const selected = record.prepared;
   const hasPrepared = selected && (!params.targetSha || selected.sha === params.targetSha);
   if (hasPrepared) {
@@ -70,6 +76,11 @@ export async function inspectImmutableUpdateCoverage(params: {
     try {
       if (directoryIdentity(selected.path) !== selected.identity) {
         throw new Error("Prepared generation identity differs from its receipt.");
+      }
+      if (await readBuiltRuntimeIsolation(selected.path)) {
+        result.warnings.push(
+          "Prepared generation was built by the operator without an isolated build account (builtBy: operator; isolation: none). See https://docs.openclaw.ai/cli/update for build-account provisioning.",
+        );
       }
       const contracts = await readImmutableSchemaContracts(record);
       result.currentSchemaVersions = contracts.current;

@@ -70,6 +70,17 @@ export async function readBuiltRuntimeCommit(root: string): Promise<string | nul
   return normalizeNullableString(asNullableRecord(buildInfo)?.commit);
 }
 
+/** Recorded release provenance; absence does not establish how a build ran. */
+export async function readBuiltRuntimeIsolation(
+  root: string,
+): Promise<{ builtBy: "operator"; isolation: "none" } | undefined> {
+  const buildInfo = await tryReadJson(path.join(root, "dist", "build-info.json"));
+  const immutableBuild = asNullableRecord(asNullableRecord(buildInfo)?.immutableBuild);
+  return immutableBuild?.builtBy === "operator" && immutableBuild.isolation === "none"
+    ? { builtBy: "operator", isolation: "none" }
+    : undefined;
+}
+
 export async function readBuiltGatewayBuildId(root: string): Promise<string | null> {
   const buildInfo = await tryReadJson(path.join(root, "dist", "build-info.json"));
   const buildId = normalizeNullableString(asNullableRecord(buildInfo)?.buildId);
