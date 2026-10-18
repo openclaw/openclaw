@@ -508,7 +508,11 @@ describe("OpenAI realtime voice provider routing", () => {
     await provider.createBrowserSession?.({
       providerConfig: await provider.resolveConfigAsync?.({
         cfg: {} as never,
-        rawConfig: { apiKey: PLATFORM_KEY, model: "gpt-live-1", voice },
+        rawConfig: {
+          apiKey: PLATFORM_KEY,
+          model: "gpt-live-1",
+          speakerVoiceId: voice.id,
+        },
       }),
       ...browserRequest,
       runAgentConsult: vi.fn(async () => ({ text: "Done" })),
