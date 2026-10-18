@@ -1,6 +1,8 @@
 import { expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import type { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
+import type { performGatewaySessionReset } from "../session-reset-service.js";
 import {
   type getAgentTestMocks,
   operatorWriteCliClient,
@@ -12,10 +14,14 @@ import {
   invokeAgent,
 } from "./agent.test-harness.js";
 
+type PatchOptions = NonNullable<Parameters<typeof patchSessionEntryTarget>[2]>;
+
 export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAgentTestMocks>) {
   const resetRunId = "test-idem-reset-closed-authority";
+  const sessionKey = "agent:main:main";
+  const sessionId = "reset-session-id";
   const reset = (message: string, options: Parameters<typeof invokeAgent>[1]) =>
-    invokeAgent({ message, sessionKey: "agent:main:main", idempotencyKey: resetRunId }, options);
+    invokeAgent({ message, sessionKey, idempotencyKey: resetRunId }, options);
 
   it.each([
     "before ingress",
@@ -25,142 +31,118 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
     "during follow-up persistence",
     "reset fails",
     "never",
-  ] as const)(
-    "keeps /reset effects within delegated runtime authority closing %s",
-    async (closeAt) => {
-      let authorityActive = closeAt !== "before ingress";
-      let resetCommitted = false;
-      const closesAfterCommit = closeAt.startsWith("after reset commit");
-      const closesDuringFollowUp = closeAt === "during follow-up persistence";
-      const hasFollowUp = closeAt.endsWith("with follow-up") || closesDuringFollowUp;
-      const message = hasFollowUp ? "/reset continue working" : "/reset";
-      let followUpCommitted = false;
-      mockMainSessionEntry({
-        sessionId: closesDuringFollowUp ? "reset-session-id" : "existing-session-id",
-        ...(closesDuringFollowUp ? { lifecycleRevision: "before-reset" } : {}),
-      });
-      mocks.performGatewaySessionReset.mockClear();
-      mocks.agentCommand.mockClear();
-      mocks.patchSessionEntryTarget.mockClear();
-      if (closesDuringFollowUp) {
-        mocks.patchSessionEntryTarget.mockImplementationOnce(
-          async (
-            scope,
-            _update,
-            options: {
-              workerGuard: { source: () => void };
-              fallbackEntry?: { sessionId: string; lifecycleRevision?: string };
-            },
-          ) => {
-            expect(scope).toMatchObject({
-              agentId: "main",
-              target: { canonicalKey: "agent:main:main" },
-            });
-            expect(options.fallbackEntry).toMatchObject({
-              sessionId: "reset-session-id",
-              lifecycleRevision: "after-reset",
-            });
-            expect(resetCommitted).toBe(true);
-            expect(authorityActive).toBe(true);
-            await Promise.resolve();
-            authorityActive = false;
-            options.workerGuard.source();
-            followUpCommitted = true;
-            return null;
-          },
-        );
-      }
-      mocks.performGatewaySessionReset.mockImplementation(
-        async (options: {
-          assertCurrent?: () => void;
-          onCommitted?: (commit: { key: string; sessionId: string }) => void;
-        }) => {
+  ] as const)("contains /reset effects when runtime authority closes %s", async (closeAt) => {
+    let authorityActive = closeAt !== "before ingress";
+    let resetCommitted = false;
+    const closesAfterCommit = closeAt.startsWith("after reset commit");
+    const closesDuringFollowUp = closeAt === "during follow-up persistence";
+    const hasFollowUp = closeAt.endsWith("with follow-up") || closesDuringFollowUp;
+    const message = hasFollowUp ? "/reset continue working" : "/reset";
+    let followUpCommitted = false;
+    mockMainSessionEntry({
+      sessionId: closesDuringFollowUp ? sessionId : "existing-session-id",
+      ...(closesDuringFollowUp ? { lifecycleRevision: "before-reset" } : {}),
+    });
+    mocks.performGatewaySessionReset.mockClear();
+    if (closesDuringFollowUp) {
+      mocks.patchSessionEntryTarget.mockImplementationOnce(
+        async (scope, _update, options: PatchOptions) => {
+          expect(scope).toMatchObject({ agentId: "main", target: { canonicalKey: sessionKey } });
+          expect(options.fallbackEntry).toMatchObject({
+            sessionId,
+            lifecycleRevision: "after-reset",
+          });
+          expect([resetCommitted, authorityActive]).toEqual([true, true]);
           await Promise.resolve();
-          if (closeAt === "before reset commit") {
-            authorityActive = false;
-          }
-          options.assertCurrent?.();
-          if (closeAt === "reset fails") {
-            authorityActive = false;
-            return {
-              ok: false,
-              error: { code: "UNAVAILABLE", message: "reset storage unavailable" },
-            };
-          }
-          resetCommitted = true;
-          options.onCommitted?.({ key: "agent:main:main", sessionId: "reset-session-id" });
-          mockMainSessionEntry({
-            sessionId: "reset-session-id",
-            ...(closesDuringFollowUp ? { lifecycleRevision: "after-reset" } : {}),
-          });
-          if (closesAfterCommit) {
-            authorityActive = false;
-          }
-          return {
-            ok: true,
-            key: "agent:main:main",
-            entry: { sessionId: "reset-session-id" },
-          };
+          authorityActive = false;
+          requireValue(options.workerGuard?.source, "missing follow-up authority guard")();
+          followUpCommitted = true;
+          return null;
         },
       );
-      const client = operatorWriteCliClient(["operator.admin"]);
-      const operationalRunInstance = createOperationalRunInstanceRef("reset-caller");
-      client.internal = {
-        agentRuntimeIdentity: {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          operationalRunInstance,
-          delegatedAuthority: {
-            kind: "local",
-            operationalRunInstance,
-            lifecycleGeneration: "test-generation",
-            claimId: "reset-caller-claim",
-          },
-        },
-      };
-      const context = makeContext();
-      context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
-
-      const respond = await reset(message, { reqId: "4-reset-closed-authority", client, context });
-
-      expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(
-        closeAt === "before ingress" ? 0 : 1,
-      );
-      expect(resetCommitted).toBe(closesAfterCommit || closesDuringFollowUp || closeAt === "never");
-      expect(followUpCommitted).toBe(false);
-      if (closesDuringFollowUp) {
-        expect(mocks.patchSessionEntryTarget).toHaveBeenCalledOnce();
-      }
-      expect(mocks.agentCommand).not.toHaveBeenCalled();
-      if (closeAt === "never") {
-        expect(mockCallArg(respond)).toBe(true);
-      } else if (closeAt === "reset fails") {
-        expectRespondError(respond, { message: "reset storage unavailable" });
-        expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
-      } else {
-        expectRespondError(respond, { message: "agent runtime authority is no longer active" });
-        expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
-      }
-      if (closesAfterCommit || closesDuringFollowUp) {
-        authorityActive = true;
-        const retry = await reset(message, { client, context });
-        expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
-        expect(mockCallArg(retry)).toBe(true);
-        expect(mockCallArg(retry, 0, 3)).toEqual({ cached: true });
-        expect(mockCallArg(retry, 0, 1)).toMatchObject({
-          status: "ok",
-          result: { meta: { agentMeta: { sessionId: "reset-session-id" } } },
-        });
-        if (hasFollowUp) {
-          expect(mockCallArg(retry, 0, 1)).toMatchObject({
-            result: { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] },
-          });
+    }
+    mocks.performGatewaySessionReset.mockImplementation(
+      async (options: Parameters<typeof performGatewaySessionReset>[0]) => {
+        await Promise.resolve();
+        if (closeAt === "before reset commit") {
+          authorityActive = false;
         }
-      }
-    },
-  );
+        options.assertCurrent?.();
+        if (closeAt === "reset fails") {
+          authorityActive = false;
+          return {
+            ok: false,
+            error: { code: "UNAVAILABLE", message: "reset storage unavailable" },
+          };
+        }
+        resetCommitted = true;
+        options.onCommitted?.({ key: sessionKey, sessionId });
+        mockMainSessionEntry({
+          sessionId,
+          ...(closesDuringFollowUp ? { lifecycleRevision: "after-reset" } : {}),
+        });
+        if (closesAfterCommit) {
+          authorityActive = false;
+        }
+        return { ok: true, key: sessionKey, entry: { sessionId } };
+      },
+    );
+    const client = operatorWriteCliClient(["operator.admin"]);
+    const operationalRunInstance = createOperationalRunInstanceRef("reset-caller");
+    client.internal = {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey,
+        operationalRunInstance,
+        delegatedAuthority: {
+          kind: "local",
+          operationalRunInstance,
+          lifecycleGeneration: "test-generation",
+          claimId: "reset-caller-claim",
+        },
+      },
+    };
+    const context = makeContext();
+    context.validateAgentRuntimeApprovalAuthority = () => authorityActive;
+
+    const respond = await reset(message, { client, context });
+
+    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(
+      closeAt === "before ingress" ? 0 : 1,
+    );
+    expect(resetCommitted).toBe(closesAfterCommit || closesDuringFollowUp || closeAt === "never");
+    expect(followUpCommitted).toBe(false);
+    if (closesDuringFollowUp) {
+      expect(mocks.patchSessionEntryTarget).toHaveBeenCalledOnce();
+    }
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    if (closeAt === "never") {
+      expect(mockCallArg(respond)).toBe(true);
+    } else if (closeAt === "reset fails") {
+      expectRespondError(respond, { message: "reset storage unavailable" });
+      expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
+    } else {
+      expectRespondError(respond, { message: "agent runtime authority is no longer active" });
+      expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);
+    }
+    if (closesAfterCommit || closesDuringFollowUp) {
+      authorityActive = true;
+      const retry = await reset(message, { client, context });
+      expect(mocks.performGatewaySessionReset).toHaveBeenCalledOnce();
+      expect(mocks.agentCommand).not.toHaveBeenCalled();
+      expect([mockCallArg(retry), mockCallArg(retry, 0, 3)]).toEqual([true, { cached: true }]);
+      expect(mockCallArg(retry, 0, 1)).toMatchObject({
+        status: "ok",
+        result: {
+          meta: { agentMeta: { sessionId } },
+          ...(hasFollowUp
+            ? { payloads: [{ text: expect.stringContaining("before the follow-up ran") }] }
+            : {}),
+        },
+      });
+    }
+  });
 
   it.each([
     "owned reservation",
@@ -199,13 +181,13 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       context,
       io: { emitAcceptance: emit, emitFinal: emit },
     });
-    lifecycle.reserve("agent:main:main", "main");
+    lifecycle.reserve(sessionKey, "main");
     const reservation = requireValue(context.dedupe.get(key), "reset reservation missing");
     reservation.requestIdentity = "original-request-fingerprint";
     lifecycle.setCommittedResetCompletion({
       reason: "reset",
-      sessionId: "reset-session-id",
-      sessionKey: "agent:main:main",
+      sessionId,
+      sessionKey,
       followUpPending: !replyError,
       replyError,
     });
@@ -234,7 +216,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
         payload: {
           runId,
           status: "ok",
-          result: { meta: { agentMeta: { sessionId: "reset-session-id" } } },
+          result: { meta: { agentMeta: { sessionId } } },
         },
       });
     } else if (state === "failed reply" || hasAlias) {

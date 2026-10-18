@@ -17,19 +17,17 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
-import type { CronService } from "../../cron/service.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { getUserPreferences } from "../../state/user-preferences.test-support.js";
 import { readAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
-import type { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resumeAgentDeletions } from "../server-agent-deletion-recovery.js";
 import { loadGatewayStartupConfigSnapshot } from "../server-startup-config-helpers.js";
 import { runStartupSessionMaintenanceForTest } from "../server-startup-session-migration.test-support.js";
-import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
+import { createDeletionCron, deletionGatewayEnv } from "./agents-delete.fixture.test-support.js";
 import { seedLegacyAgentDeletionFixture } from "./legacy-agent-deletion-fixture.test-support.js";
 
 let scenarioWork: Promise<void> | undefined;
@@ -84,14 +82,7 @@ it.for([true, false])(
         label: "agent-delete-stable-upgrade",
         layout: "split",
         env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          ...deletionGatewayEnv,
           OPENCLAW_DISABLE_BONJOUR: "1",
         },
       },
@@ -124,24 +115,19 @@ it.for([true, false])(
         }
 
         const readScope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
-        let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
-        let cron: CronService | undefined;
+        let owner: ReturnType<typeof createDeletionCron> | undefined;
         const resumeDeletion = async () => {
           await captureRuntimeConfigAsyncReader()();
-          const owner = createDeletionCron(state, async () => {
+          owner = createDeletionCron(state, async () => {
             throw new Error("Unexpected cron dispatch in upgrade fixture");
           });
-          ({ scheduler, cron } = owner);
           await resumeAgentDeletions(owner.context, signal);
           expect(owner.context.logGateway.warn).not.toHaveBeenCalled();
         };
         const closeOwners = async () => {
-          cron?.stop();
-          await cron?.waitForIdle();
-          await scheduler?.stop();
+          await owner?.stop();
           await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-          cron = undefined;
-          scheduler = undefined;
+          owner = undefined;
           resetConfigRuntimeState();
         };
         const assertKeeper = async () => {

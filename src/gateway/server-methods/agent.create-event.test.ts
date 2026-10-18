@@ -21,23 +21,18 @@ import * as sessionProject from "./session-create-project.js";
 const configMocks = vi.hoisted(() => ({
   storePath: "",
   workspaceDir: "",
-  getRuntimeConfig: vi.fn(() => ({
+  getRuntimeConfig: () => ({
     agents: {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-6" },
-        workspace: configMocks.workspaceDir || "/tmp/openclaw-agent-create-event",
+        workspace: configMocks.workspaceDir,
       },
     },
-    session: {
-      mainKey: "main",
-      store: configMocks.storePath,
-    },
-  })),
+    session: { mainKey: "main", store: configMocks.storePath },
+  }),
 }));
 
-const agentIngressMocks = vi.hoisted(() => ({
-  agentCommandFromIngress: vi.fn(async () => ({ ok: true })),
-}));
+const agentCommandFromIngress = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const preparedRuntimeMocks = vi.hoisted(() => ({
   captured: vi.fn(),
   acquired: vi.fn(),
@@ -46,8 +41,8 @@ const preparedRuntimeMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../commands/agent.js", () => ({
-  agentCommandFromGatewayIngress: agentIngressMocks.agentCommandFromIngress,
-  agentCommandFromIngress: agentIngressMocks.agentCommandFromIngress,
+  agentCommandFromGatewayIngress: agentCommandFromIngress,
+  agentCommandFromIngress,
 }));
 
 vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
@@ -96,25 +91,19 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {},
-}));
+vi.mock("../../runtime.js", () => ({ defaultRuntime: {} }));
 
 import { agentHandlers } from "./agent.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
 
 beforeEach(async () => {
-  const tempDir = sessionDirs.make();
-  const storePath = path.join(tempDir, "sessions.json");
-  configMocks.storePath = storePath;
-  configMocks.workspaceDir = tempDir;
+  configMocks.workspaceDir = sessionDirs.make();
+  configMocks.storePath = path.join(configMocks.workspaceDir, "sessions.json");
   setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
-  configMocks.getRuntimeConfig.mockClear();
-  agentIngressMocks.agentCommandFromIngress.mockClear();
-  agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+  agentCommandFromIngress.mockClear();
   Object.values(preparedRuntimeMocks).forEach((mock) => mock.mockClear());
-  await fs.writeFile(storePath, "{}\n", "utf8");
+  await fs.writeFile(configMocks.storePath, "{}\n", "utf8");
 });
 
 afterEach(() => {
@@ -137,9 +126,7 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
     vi.spyOn(sessionProject, "prepareSessionWorkspaceForRun").mockResolvedValue(undefined);
     if (preparation === "superseded catalog") {
       vi.mocked(acquireAgentRunPreparedModelRuntime).mockRejectedValueOnce(
-        new PreparedModelRuntimePublicationSupersededError(
-          "Accepted model catalog changed during runtime preparation",
-        ),
+        new PreparedModelRuntimePublicationSupersededError(),
       );
     }
     const broadcastToConnIds = vi.fn();
@@ -148,11 +135,7 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
 
     const agent = expectDefined(agentHandlers.agent, "agent handler missing");
     await agent({
-      params: {
-        message: "hi",
-        sessionKey,
-        idempotencyKey: runId,
-      },
+      params: { message: "hi", sessionKey, idempotencyKey: runId },
       respond,
       context: {
         trackExecution: (work: () => Promise<void>) => (execution = trackAsyncWork(work)),
@@ -171,6 +154,11 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
     });
 
     const responseCall = respond.mock.calls[0];
+    await execution;
+    expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
+    expect(preparedRuntimeMocks.releaseSelected).toHaveBeenCalledTimes(
+      preparation === "superseded catalog" ? 0 : 1,
+    );
     if (preparation === "superseded catalog") {
       expect(responseCall?.[0]).toBe(false);
       expect(responseCall?.[2]).toMatchObject({
@@ -180,9 +168,7 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
         retryAfterMs: 0,
       });
       expect(execution).toBeUndefined();
-      expect(agentIngressMocks.agentCommandFromIngress).not.toHaveBeenCalled();
-      expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
-      expect(preparedRuntimeMocks.releaseSelected).not.toHaveBeenCalled();
+      expect(agentCommandFromIngress).not.toHaveBeenCalled();
       expect(rpcSourceTesting.has(runId)).toBe(false);
       return;
     }
@@ -192,13 +178,10 @@ it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
       undefined,
       expect.objectContaining({ runId }),
     ]);
-    await execution;
     expect(preparedRuntimeMocks.acquired).toHaveBeenCalledExactlyOnceWith(
       preparedRuntimeMocks.captured.mock.calls[0]?.[0],
       0,
     );
-    expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
-    expect(preparedRuntimeMocks.releaseSelected).toHaveBeenCalledOnce();
     await vi.waitFor(
       () => {
         expect(broadcastToConnIds.mock.calls[0]).toEqual([

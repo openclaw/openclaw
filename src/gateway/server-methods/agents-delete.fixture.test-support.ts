@@ -7,6 +7,17 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 
+export const deletionGatewayEnv = {
+  OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+  OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+  OPENCLAW_SKIP_PROVIDERS: "1",
+  OPENCLAW_SKIP_CHANNELS: "1",
+  OPENCLAW_SKIP_CRON: "1",
+  OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_SKIP_CANVAS_HOST: "1",
+  OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+};
+
 export async function configureDeletionAgents(
   state: OpenClawTestState,
   workspace = state.path("doomed"),
@@ -38,7 +49,16 @@ export function createDeletionCron(
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob,
   });
-  return { scheduler, cron, context: createDirectChatContext({ cron, getRuntimeConfig }) };
+  return {
+    scheduler,
+    cron,
+    context: createDirectChatContext({ cron, getRuntimeConfig }),
+    async stop() {
+      cron.stop();
+      await cron.waitForIdle();
+      await scheduler.stop();
+    },
+  };
 }
 
 export async function expectDeletedStorage(

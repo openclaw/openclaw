@@ -1,4 +1,5 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -82,16 +83,16 @@ function routeCancellation(...processes: Array<{ id: string; cancel: () => void 
   });
 }
 
-it("drains an independent agent service through exit while preserving another agent and ordinary Stop", async () => {
-  await withOpenClawTestState({ label: "agent-delete-exec" }, async (state) => {
+it("drains an independent agent service through exit while preserving another agent and ordinary Stop", async () =>
+  withOpenClawTestState({ label: "agent-delete-exec" }, async (state) => {
     const workspace = state.path("workspace-doomed");
     await fs.mkdir(workspace);
-    await fs.writeFile(`${workspace}/witness.txt`, "process still owns its workspace");
+    await fs.writeFile(`${workspace}/witness.txt`, "owned");
     await configureDeletionAgents(state, workspace, { skipBootstrap: true });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const launch = async (agentId: string, cwd: string) => {
       const identity = { runId: `${agentId}-run`, agentId };
-      const result = await withExecRequestTurn({ identity }, () =>
+      const { details } = await withExecRequestTurn({ identity }, () =>
         createExecTool({
           ...identity,
           config: getRuntimeConfig(),
@@ -108,14 +109,9 @@ it("drains an independent agent service through exit while preserving another ag
           timeoutSeconds: 0,
         }),
       );
-      const details = result.details;
-      if (details.status !== "running") {
-        throw new Error(`Expected a running service: ${JSON.stringify(result)}`);
-      }
+      assert(details.status === "running", "Expected a running service");
       const session = getSession(details.sessionId);
-      if (!session) {
-        throw new Error("Service is missing from its process owner");
-      }
+      assert(session, "Service is missing from its process owner");
       return session;
     };
     const doomed = prepareProcess();
@@ -130,25 +126,19 @@ it("drains an independent agent service through exit while preserving another ag
     expect(stop.cancel()).toBe(false);
     await stop.settle();
     expect(doomed.cancel).not.toHaveBeenCalled();
-    const { scheduler, cron, context } = createDeletionCron(state);
+    const { stop: stopCron, context } = createDeletionCron(state);
     const deleting = deleteGatewayAgent("doomed", true, context);
     const settled = vi.fn();
     void deleting.then(settled, settled);
     try {
-      await awaitGateBeforeSettlement(
-        doomed.cancelled.promise,
-        deleting,
-        "deletion skipped independent exec",
-      );
+      await awaitGateBeforeSettlement(doomed.cancelled.promise, deleting, "exec skipped");
       expect(keeper.cancel).not.toHaveBeenCalled();
       expect(await readAgentDeletionJournalAsync("doomed")).toMatchObject({
         phase: "draining",
         cleanupCompleted: false,
       });
       expect(settled).not.toHaveBeenCalled();
-      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe(
-        "process still owns its workspace",
-      );
+      expect(await fs.readFile(`${workspace}/witness.txt`, "utf8")).toBe("owned");
       doomed.exit.resolve(createRunExit({ reason: "manual-cancel" }));
       await expect(deleting).resolves.toMatchObject({ ok: true, failed: [] });
       await expect(fs.stat(workspace)).rejects.toMatchObject({ code: "ENOENT" });
@@ -163,12 +153,9 @@ it("drains an independent agent service through exit while preserving another ag
         waitForExecSession(keeperSession),
       ]);
       vi.useRealTimers();
-      cron.stop();
-      await cron.waitForIdle();
-      await scheduler.stop();
+      await stopCron();
     }
-  });
-});
+  }));
 
 it("rejects later exec cancellation after authority loss while joining the accepted process", async () => {
   let current = true;

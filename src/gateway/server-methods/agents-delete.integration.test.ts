@@ -66,7 +66,11 @@ import * as deletionRecovery from "../server-agent-deletion-recovery.js";
 import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
-import { createDeletionCron, expectDeletedStorage } from "./agents-delete.fixture.test-support.js";
+import {
+  createDeletionCron,
+  deletionGatewayEnv,
+  expectDeletedStorage,
+} from "./agents-delete.fixture.test-support.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 
 const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
@@ -242,36 +246,16 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
     await (scenarioWork = withOpenClawTestState(
       {
         label: `agent-delete-${scenario}`,
-        env: {
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        },
+        env: deletionGatewayEnv,
       },
       async (state) => {
         const sharedDatabasePath = resolveOpenClawStateSqlitePath(state.env);
         if (scenario === "legacy-retiring") {
           await fs.mkdir(path.dirname(sharedDatabasePath), { recursive: true });
           using legacy = new DatabaseSync(sharedDatabasePath);
-          // Main's v20 journal predates the nullable deletion phase.
-          legacy.exec(`CREATE TABLE agent_deletion_journal (
-              agent_id TEXT PRIMARY KEY,
-              operation_id TEXT NOT NULL DEFAULT '',
-              agent_dir TEXT NOT NULL,
-              workspace_dir TEXT NOT NULL,
-              sessions_dir TEXT NOT NULL,
-              database_paths_json TEXT NOT NULL DEFAULT '[]',
-              cleanup_paths_json TEXT NOT NULL DEFAULT '[]',
-              created_at INTEGER NOT NULL,
-              cleanup_completed INTEGER NOT NULL DEFAULT 0,
-              delete_files INTEGER NOT NULL DEFAULT 1
-            ) STRICT;`);
           legacy.exec(OPENCLAW_STATE_SCHEMA_SQL);
+          // v20 used the same journal fields, without the nullable phase.
+          legacy.exec("ALTER TABLE agent_deletion_journal DROP COLUMN phase");
           legacy.exec(`PRAGMA user_version = 20;
               INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
                 VALUES ('primary', 'global', 20, 1, 1);
@@ -323,7 +307,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
           "synthetic",
         );
         await fs.writeFile(path.join(workspace, "owned-work.txt"), "synthetic");
-        const { scheduler, cron, context } = createDeletionCron(state);
+        const { context, stop } = createDeletionCron(state);
         try {
           if (scenario === "active") {
             const claim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
@@ -756,9 +740,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             );
           }
         } finally {
-          cron.stop();
-          await cron.waitForIdle();
-          await scheduler.stop();
+          await stop();
         }
       },
     ));
