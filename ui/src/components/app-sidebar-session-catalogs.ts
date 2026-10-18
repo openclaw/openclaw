@@ -154,7 +154,10 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   for (const host of catalog.hosts) {
     // A disconnected empty host is normal fleet state, not a provider failure.
     // Cached rows still expose the host-level offline badge when the host is visible.
-    if (host.error?.code !== "NODE_OFFLINE" && !isPendingCatalogError(host.error)) {
+    if (
+      host.error?.code !== "NODE_OFFLINE" &&
+      !isPendingCatalogError(host.error)
+    ) {
       add(host.error);
     }
   }
@@ -207,10 +210,14 @@ export function projectSidebarSessionCatalogs(
   });
 }
 
+export type CatalogRowControls = Partial<
+  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
+>;
+
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined) => void;
+  rowRef?: (element: Element | undefined, controls: CatalogRowControls) => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
