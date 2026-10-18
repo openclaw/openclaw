@@ -291,18 +291,7 @@ export async function invokeSessionDispatch(
   sessionMutationAuthorization?: SessionMutationAuthorization,
   signal?: AbortSignal,
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await getSessionDispatchHandler()({
-    signal,
-    req: { id: "dispatch-request" } as never,
-    params: { key: dispatchTestSessionKey, ...target },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-    sessionMutationAuthorization,
-  });
-  return respond;
+  return invokeSessionMethod("dispatch", context, target, sessionMutationAuthorization, signal);
 }
 
 export async function invokeSessionMove(
@@ -317,20 +306,7 @@ export async function invokeSessionMove(
   },
   sessionMutationAuthorization?: SessionMutationAuthorization,
 ) {
-  const respond = vi.fn() as unknown as RespondFn;
-  await expectDefined(
-    sessionDispatchHandlers["sessions.move"],
-    'sessionDispatchHandlers["sessions.move"] test invariant',
-  )({
-    req: { id: "move-request" } as never,
-    params: { key: dispatchTestSessionKey, ...params },
-    respond,
-    context,
-    client: null,
-    isWebchatConnect: () => false,
-    sessionMutationAuthorization,
-  });
-  return respond;
+  return invokeSessionMethod("move", context, params, sessionMutationAuthorization);
 }
 
 export async function invokeSessionReclaim(
@@ -338,12 +314,23 @@ export async function invokeSessionReclaim(
   sessionMutationAuthorization?: SessionMutationAuthorization,
   params: Omit<SessionsReclaimParams, "key"> = {},
 ) {
+  return invokeSessionMethod("reclaim", context, params, sessionMutationAuthorization);
+}
+
+async function invokeSessionMethod(
+  method: "dispatch" | "move" | "reclaim",
+  context: GatewayRequestContext,
+  params: Record<string, unknown>,
+  sessionMutationAuthorization?: SessionMutationAuthorization,
+  signal?: AbortSignal,
+) {
   const respond = vi.fn() as unknown as RespondFn;
   await expectDefined(
-    sessionDispatchHandlers["sessions.reclaim"],
-    'sessionDispatchHandlers["sessions.reclaim"] test invariant',
+    sessionDispatchHandlers[`sessions.${method}`],
+    `sessionDispatchHandlers["sessions.${method}"] test invariant`,
   )({
-    req: { id: "reclaim-request" } as never,
+    signal,
+    req: { id: `${method}-request` } as never,
     params: { key: dispatchTestSessionKey, ...params },
     respond,
     context,

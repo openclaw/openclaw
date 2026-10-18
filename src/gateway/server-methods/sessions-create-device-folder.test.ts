@@ -30,6 +30,22 @@ let transport: NodeWorkerSupervisorTransport;
 const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
 const getCurrentNode = vi.fn<NodeWorkerSupervisorTransport["getCurrentNode"]>();
 const isCurrent = vi.fn<NodeWorkerSupervisorTransport["isCurrent"]>();
+const validationResponse = (workspaceDir = canonicalFolder.path) => ({
+  ok: true as const,
+  payload: {
+    workspaceDir,
+    stdout: "validated\n",
+    stderr: "",
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  },
+});
+const create = (
+  params: Record<string, unknown>,
+  options: Parameters<typeof directSessionReq>[2] = controlUiClient,
+) => directSessionReq<{ entry: InternalSessionEntry }>("sessions.create", params, options);
 beforeEach(() => {
   node = {
     nodeId: folder.deviceId,
@@ -49,18 +65,7 @@ beforeEach(() => {
     isCurrent: isCurrent.mockReset().mockReturnValue(true),
     invoke: invoke.mockReset().mockImplementation(async (request) => {
       expect(request.isDispatchAuthorized()).toBe(true);
-      return {
-        ok: true,
-        payload: {
-          workspaceDir: canonicalFolder.path,
-          stdout: "validated\n",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        },
-      };
+      return validationResponse();
     }),
   };
   mocks.getTransport.mockReturnValue(transport);
@@ -73,14 +78,7 @@ afterEach(async () => {
 test("sessions.create validates the node folder before persisting and publishes the canonical binding", async () => {
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:device-folder";
-  const result = await directSessionReq<{ entry: InternalSessionEntry }>(
-    "sessions.create",
-    {
-      key,
-      deviceFolder: folder,
-    },
-    controlUiClient,
-  );
+  const result = await create({ key, deviceFolder: folder });
   expect(result.ok, JSON.stringify(result.error)).toBe(true);
   expect(invoke).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -112,38 +110,15 @@ test("sessions.create validates the node folder before persisting and publishes 
 test("sessions.create reuses only the same canonical device folder", async () => {
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:dashboard:reuse-device-folder";
-  const created = await directSessionReq<{ entry: InternalSessionEntry }>(
-    "sessions.create",
-    { key, deviceFolder: folder },
-    controlUiClient,
-  );
+  const created = await create({ key, deviceFolder: folder });
   expect(created.ok, JSON.stringify(created.error)).toBe(true);
-  const reused = await directSessionReq<{ entry: InternalSessionEntry }>(
-    "sessions.create",
-    { key, deviceFolder: canonicalFolder },
-    controlUiClient,
-  );
+  const reused = await create({ key, deviceFolder: canonicalFolder });
   expect(reused.ok, JSON.stringify(reused.error)).toBe(true);
   expect(reused.payload?.entry.sessionId).toBe(created.payload?.entry.sessionId);
-  const omitted = await directSessionReq("sessions.create", { key }, controlUiClient);
+  const omitted = await create({ key });
   expect(omitted.ok).toBe(false);
-  invoke.mockResolvedValue({
-    ok: true,
-    payload: {
-      workspaceDir: "/home/example/other",
-      stdout: "validated\n",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    },
-  });
-  const changed = await directSessionReq(
-    "sessions.create",
-    { key, deviceFolder: { ...folder, path: "/home/example/other" } },
-    controlUiClient,
-  );
+  invoke.mockResolvedValue(validationResponse("/home/example/other"));
+  const changed = await create({ key, deviceFolder: { ...folder, path: "/home/example/other" } });
   expect(changed.ok).toBe(false);
   expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.deviceFolder).toEqual(
     canonicalFolder,
@@ -175,11 +150,7 @@ test.each([
   async (conflict) => {
     const { storePath } = await createSessionStoreDir();
     const key = "agent:main:dashboard:invalid-device-folder";
-    const result = await directSessionReq(
-      "sessions.create",
-      { key, deviceFolder: folder, ...conflict },
-      controlUiClient,
-    );
+    const result = await create({ key, deviceFolder: folder, ...conflict });
     expect(result).toMatchObject({
       ok: false,
       error: { code: "INVALID_REQUEST", message: expect.stringContaining("deviceFolder") },
@@ -209,11 +180,7 @@ test.each(["offline", "unsupported", "denied", "malformed", "disconnected"])(
       isCurrent.mockReturnValue(false);
     }
     const key = "agent:main:dashboard:unavailable-device-folder";
-    const result = await directSessionReq(
-      "sessions.create",
-      { key, deviceFolder: folder },
-      controlUiClient,
-    );
+    const result = await create({ key, deviceFolder: folder });
     expect(result.ok).toBe(false);
     expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
   },
@@ -236,8 +203,7 @@ test.each(["caller", "device"] as const)(
     });
     const key = `agent:main:dashboard:revoked-${revoked}`;
     // The request owner may reject by response or by throwing its authority error.
-    const result = await directSessionReq(
-      "sessions.create",
+    const result = await create(
       { key, deviceFolder: folder },
       {
         ...controlUiClient,

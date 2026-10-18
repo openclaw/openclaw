@@ -47,6 +47,16 @@ import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js
 
 const targetKey = "agent:main:controller";
 const targetScope = { agentId: "main", sessionKey: targetKey };
+const expectSession = (response: unknown, session: unknown) =>
+  expect(response).toMatchObject({ session });
+const putSession = (key: string, entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+  upsertSessionEntryCore({ agentId: "main", sessionKey: key }, entry);
+const readerRoles = (
+  others: "view" | "none",
+): NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]> => ({
+  default: "reader",
+  definitions: { reader: { agents: "*", scopes: ["operator.read"], sessions: { others } } },
+});
 
 function retainedRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   const now = Date.now();
@@ -101,14 +111,7 @@ async function withFixture(
     async () => {
       const cfg: OpenClawConfig = {
         agents: { entries: { main: {} }, defaults: { model: "openai/gpt-5.6-sol" } },
-        gateway: {
-          roles: {
-            default: "reader",
-            definitions: {
-              reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
-            },
-          },
-        },
+        gateway: { roles: readerRoles("view") },
       };
       setRuntimeConfigSnapshot(cfg);
       const ownerId = ensureProfileForEmail("owner@example.com").id;
@@ -120,14 +123,11 @@ async function withFixture(
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: ownerId },
       });
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: "agent:main:subagent:run-0" },
-        {
-          sessionId: "off-page-child",
-          updatedAt: Date.now(),
-          spawnedBy: "agent:main:off-page-requester",
-        },
-      );
+      await putSession("agent:main:subagent:run-0", {
+        sessionId: "off-page-child",
+        updatedAt: Date.now(),
+        spawnedBy: "agent:main:off-page-requester",
+      });
       const records = Array.from({ length: 64 }, (_, i) =>
         retainedRun(`run-${i}`, {
           controllerSessionKey: i === 0 ? targetKey : `agent:main:other-${i}`,
@@ -245,11 +245,9 @@ it.each(["list"] as const)(
             subagentRuns.commitOwnership(current);
           },
         );
-        expect(response).toMatchObject({
-          session: {
-            controlOwnerSessionKey: "agent:main:current-controller",
-            swarm: { groups: [{ groupId: "current-group", done: 1 }] },
-          },
+        expectSession(response, {
+          controlOwnerSessionKey: "agent:main:current-controller",
+          swarm: { groups: [{ groupId: "current-group", done: 1 }] },
         });
         expect(JSON.stringify(response)).not.toContain("retained-group");
       } finally {
@@ -264,26 +262,20 @@ it("projects current target, lineage, children and placement after committed cha
     const childKey = "agent:main:direct-child";
     const removedKey = "agent:main:removed-child";
     for (const key of [childKey, removedKey]) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: key },
-        {
-          sessionId: key,
-          updatedAt: Date.now(),
-          parentSessionKey: targetKey,
-        },
-      );
-    }
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:current-parent" },
-      {
-        sessionId: "current-parent",
+      await putSession(key, {
+        sessionId: key,
         updatedAt: Date.now(),
-        providerOverride: "openai",
-        modelOverride: "gpt-5.5",
-        modelOverrideSource: "user",
-        modelOverrideRouteResolution: "resolved",
-      },
-    );
+        parentSessionKey: targetKey,
+      });
+    }
+    await putSession("agent:main:current-parent", {
+      sessionId: "current-parent",
+      updatedAt: Date.now(),
+      providerOverride: "openai",
+      modelOverride: "gpt-5.5",
+      modelOverrideSource: "user",
+      modelOverrideRouteResolution: "resolved",
+    });
     const placements = createWorkerSessionPlacementStore();
     context.workerSessionPlacementService = placements;
     const response = await afterCommittedChange(
@@ -295,13 +287,10 @@ it("projects current target, lineage, children and placement after committed cha
           label: "Current conversation",
           parentSessionKey: "agent:main:current-parent",
         });
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: childKey },
-          {
-            parentSessionKey: "agent:main:other",
-            spawnedBy: "agent:main:other",
-          },
-        );
+        await putSession(childKey, {
+          parentSessionKey: "agent:main:other",
+          spawnedBy: "agent:main:other",
+        });
         await deleteSessionEntryLifecycle({
           agentId: "main",
           storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
@@ -318,24 +307,22 @@ it("projects current target, lineage, children and placement after committed cha
         );
       },
     );
-    expect(response).toMatchObject({
-      session: {
-        sessionId: "replacement",
-        label: "Current conversation",
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        modelOverrideSource: "inherited",
-        placement: { state: "requested" },
-        childSessions: ["agent:main:subagent:run-0"],
-        swarm: {
-          groups: [
-            {
-              groupId: "retained-group",
-              done: 1,
-              children: [{ sessionKey: "agent:main:subagent:deleted-collector", status: "done" }],
-            },
-          ],
-        },
+    expectSession(response, {
+      sessionId: "replacement",
+      label: "Current conversation",
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      modelOverrideSource: "inherited",
+      placement: { state: "requested" },
+      childSessions: ["agent:main:subagent:run-0"],
+      swarm: {
+        groups: [
+          {
+            groupId: "retained-group",
+            done: 1,
+            children: [{ sessionKey: "agent:main:subagent:deleted-collector", status: "done" }],
+          },
+        ],
       },
     });
     expect(JSON.stringify(response)).not.toContain("synthetic retained");
@@ -353,18 +340,7 @@ it.each(["role", "creator alias"] as const)(
           if (change === "role") {
             const next: OpenClawConfig = {
               ...cfg,
-              gateway: {
-                roles: {
-                  default: "reader",
-                  definitions: {
-                    reader: {
-                      agents: "*",
-                      scopes: ["operator.read"],
-                      sessions: { others: "none" },
-                    },
-                  },
-                },
-              },
+              gateway: { roles: readerRoles("none") },
             };
             setRuntimeConfigSnapshot(next);
           } else {
@@ -440,8 +416,9 @@ it("resolves the current agent store and main alias after committed changes", as
       context.readPreparedGatewayModelCatalog = catalogs;
       setRuntimeConfigSnapshot(initial);
       const key = route === "agent" ? "global" : "agent:main:main";
-      expect(await describeSession(context, viewer, key)).toMatchObject({
-        session: { agentId: "main", thinkingLevels: [] },
+      expectSession(await describeSession(context, viewer, key), {
+        agentId: "main",
+        thinkingLevels: [],
       });
       catalogs.mockClear();
       const response = await afterCommittedChange(
@@ -459,14 +436,12 @@ it("resolves the current agent store and main alias after committed changes", as
           setRuntimeConfigSnapshot(next);
         },
       );
-      expect(response).toMatchObject({
-        session: {
-          key: "global",
-          agentId: route === "agent" ? "work" : "main",
-          sessionId: route === "agent" ? "work-global" : "main-global",
-          thinkingLevels:
-            route === "agent" ? expect.arrayContaining([{ id: "low", label: "low" }]) : [],
-        },
+      expectSession(response, {
+        key: "global",
+        agentId: route === "agent" ? "work" : "main",
+        sessionId: route === "agent" ? "work-global" : "main-global",
+        thinkingLevels:
+          route === "agent" ? expect.arrayContaining([{ id: "low", label: "low" }]) : [],
       });
     });
   }
@@ -510,12 +485,10 @@ it("projects elapsed runtime, status expiry and budget time after committed chan
         { trackOwner: true, ownsContext: true },
       );
       expect(registryRead.isSubagentRunLive(running)).toBe(true);
-      expect(await describeSession(context, viewer)).toMatchObject({
-        session: {
-          status: "running",
-          runtimeMs: 1000,
-          agentStatus: { note: "Working" },
-        },
+      expectSession(await describeSession(context, viewer), {
+        status: "running",
+        runtimeMs: 1000,
+        agentStatus: { note: "Working" },
       });
       const response = await afterCommittedChange(
         context,
@@ -524,16 +497,14 @@ it("projects elapsed runtime, status expiry and budget time after committed chan
           clock.mockReturnValue(startedAt + 6000);
         },
       );
-      expect(response).toMatchObject({
-        session: {
-          status: "running",
-          runtimeMs: 6000,
-          agentStatus: undefined,
-          goal: {
-            status: "budget_limited",
-            budgetLimitedAt: startedAt + 6000,
-            updatedAt: startedAt + 6000,
-          },
+      expectSession(response, {
+        status: "running",
+        runtimeMs: 6000,
+        agentStatus: undefined,
+        goal: {
+          status: "budget_limited",
+          budgetLimitedAt: startedAt + 6000,
+          updatedAt: startedAt + 6000,
         },
       });
       expect(loadSessionEntry(targetScope)?.goal?.status).toBe("active");
@@ -566,8 +537,8 @@ it("refreshes retained control ownership after committed changes", async () => {
     try {
       saveSubagentRegistryToSqlite(new Map([older, newer].map((run) => [run.runId, run])));
       clearSubagentRunsReadCacheForTest();
-      expect(await describeSession(context, viewer)).toMatchObject({
-        session: { controlOwnerSessionKey: older.controllerSessionKey },
+      expectSession(await describeSession(context, viewer), {
+        controlOwnerSessionKey: older.controllerSessionKey,
       });
       const response = await afterCommittedChange(
         context,
@@ -576,9 +547,7 @@ it("refreshes retained control ownership after committed changes", async () => {
           clock.mockReturnValue(now + 1);
         },
       );
-      expect(response).toMatchObject({
-        session: { controlOwnerSessionKey: newer.controllerSessionKey },
-      });
+      expectSession(response, { controlOwnerSessionKey: newer.controllerSessionKey });
     } finally {
       clock.mockRestore();
     }
@@ -622,9 +591,7 @@ it.each(["executor", "reservation"] as const)(
       try {
         expect(registryRead.isSubagentRunLive(run)).toBe(owner === "executor");
         expect(registryRead.isSubagentRunQueued(run)).toBe(owner === "reservation");
-        expect(await describeSession(context, viewer)).toMatchObject({
-          session: { hasActiveSubagentRun: true },
-        });
+        expectSession(await describeSession(context, viewer), { hasActiveSubagentRun: true });
         const response = await afterCommittedChange(
           context,
           () => describeSession(context, viewer),
@@ -641,7 +608,7 @@ it.each(["executor", "reservation"] as const)(
             }
           },
         );
-        expect(response).toMatchObject({ session: { hasActiveSubagentRun: undefined } });
+        expectSession(response, { hasActiveSubagentRun: undefined });
       } finally {
         releaseAgentRunContext(run.runId, claim);
         const hold = holdQueuedSwarmRun(run.runId);

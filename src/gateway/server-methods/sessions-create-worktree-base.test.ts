@@ -30,7 +30,43 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const execFileAsync = promisify(execFile);
+const git = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args]);
+const readSession = (storePath: string, sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey, storePath });
 const projectCloneMocks = vi.hoisted(() => ({ materialize: vi.fn() }));
+
+async function cloneFixture(root: string) {
+  const publisher = await initializeRepository(root, "publisher");
+  const upstream = path.join(root, "upstream.git");
+  const projectRoot = path.join(root, "project");
+  await execFileAsync("git", ["clone", "--bare", publisher, upstream]);
+  await execFileAsync("git", ["clone", "--no-local", upstream, projectRoot]);
+  return { publisher, upstream, projectRoot };
+}
+
+function runContext() {
+  dispatchInboundMessageMock.mockResolvedValue({
+    queuedFinal: false,
+    counts: { block: 0, final: 0, tool: 0 },
+  });
+  return { broadcast: vi.fn() };
+}
+
+async function cleanupRun(
+  context: ReturnType<typeof runContext>,
+  storePath: string,
+  sessionKey: string,
+) {
+  await settleWorkspaceRuns(context, storePath, sessionKey, true);
+  const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
+  if (owned) {
+    await managedWorktrees.remove({
+      id: owned.id,
+      reason: "test-cleanup",
+      allowSnapshotLoss: true,
+    });
+  }
+}
 
 vi.mock("../../projects/project-clone.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../projects/project-clone.js")>();
@@ -48,15 +84,11 @@ afterEach(async () => {
 test("sessions.create revalidates an unavailable remote base before retrying", async () => {
   const root = tempDirs.make("openclaw-session-invalid-remote-worktree-base-");
   const workspace = await initializeRepository(root, "workspace");
-  const publisher = await initializeRepository(root, "publisher");
-  const upstream = path.join(root, "upstream.git");
-  await execFileAsync("git", ["clone", "--bare", publisher, upstream]);
-  const projectRoot = path.join(root, "project");
-  await execFileAsync("git", ["clone", "--no-local", upstream, projectRoot]);
+  const { publisher, upstream, projectRoot } = await cloneFixture(root);
   // The registry, not mutable origin configuration, owns the requested repository.
   const unrelated = await initializeRepository(root, "unrelated");
-  await execFileAsync("git", ["-C", unrelated, "branch", "missing-remote-base"]);
-  await execFileAsync("git", ["-C", projectRoot, "remote", "set-url", "origin", unrelated]);
+  await git(unrelated, "branch", "missing-remote-base");
+  await git(projectRoot, "remote", "set-url", "origin", unrelated);
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const project = await registerClonedProjectRegistry({
@@ -65,12 +97,7 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
     originUrl: upstream,
   });
   projectCloneMocks.materialize.mockResolvedValue(project);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
-  const broadcast = vi.fn();
-  const context = { broadcast };
+  const context = runContext();
   const created = await directSessionReq<{ key: string; runId: string }>(
     "sessions.create",
     {
@@ -87,7 +114,7 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
 
   try {
     await settleWorkspaceRuns(context, storePath, sessionKey);
-    expect(broadcast).toHaveBeenCalledWith(
+    expect(context.broadcast).toHaveBeenCalledWith(
       "chat",
       expect.objectContaining({
         runId: created.payload!.runId,
@@ -98,18 +125,17 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
       expect.anything(),
     );
     expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-    expect(
-      loadSessionEntry({ agentId: "main", sessionKey, storePath })?.pendingWorktree,
-    ).toMatchObject({ baseRef: "origin/missing-remote-base" });
+    expect(readSession(storePath, sessionKey)?.pendingWorktree).toMatchObject({
+      baseRef: "origin/missing-remote-base",
+    });
 
-    await execFileAsync("git", ["-C", publisher, "branch", "missing-remote-base"]);
-    await execFileAsync("git", [
-      "-C",
+    await git(publisher, "branch", "missing-remote-base");
+    await git(
       publisher,
       "push",
       upstream,
       "refs/heads/missing-remote-base:refs/heads/missing-remote-base",
-    ]);
+    );
 
     const retried = await directSessionReq(
       "chat.send",
@@ -124,41 +150,20 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
     expect(retried.ok, JSON.stringify(retried.error)).toBe(true);
     await settleWorkspaceRuns(context, storePath, sessionKey);
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-      "pendingWorktree",
-    );
+    expect(readSession(storePath, sessionKey)).not.toHaveProperty("pendingWorktree");
     expect((await managedWorktrees.findLiveByOwner("session", sessionKey))?.baseRef).toBe(
       "origin/missing-remote-base",
     );
   } finally {
-    await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-    if (owned) {
-      await managedWorktrees.remove({
-        id: owned.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await cleanupRun(context, storePath, sessionKey);
   }
 });
 
 test("sessions.create accepts a fresh valid remote base without refreshing the clone", async () => {
   const root = tempDirs.make("openclaw-session-valid-remote-worktree-base-");
   const workspace = await initializeRepository(root, "workspace");
-  const publisher = await initializeRepository(root, "publisher");
-  const upstream = path.join(root, "upstream.git");
-  await execFileAsync("git", ["clone", "--bare", publisher, upstream]);
-  const projectRoot = path.join(root, "project");
-  await execFileAsync("git", ["clone", "--no-local", upstream, projectRoot]);
-  await execFileAsync("git", [
-    "-C",
-    projectRoot,
-    "remote",
-    "set-url",
-    "origin",
-    path.join(root, "unavailable.git"),
-  ]);
+  const { projectRoot } = await cloneFixture(root);
+  await git(projectRoot, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
   const project = await registerClonedProjectRegistry({
@@ -167,13 +172,7 @@ test("sessions.create accepts a fresh valid remote base without refreshing the c
     originUrl: "https://github.com/openclaw/openclaw.git",
   });
   projectCloneMocks.materialize.mockResolvedValue(project);
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
-  const context = {
-    broadcast: vi.fn(),
-  };
+  const context = runContext();
   const created = await directSessionReq<{ key: string }>(
     "sessions.create",
     {
@@ -193,45 +192,26 @@ test("sessions.create accepts a fresh valid remote base without refreshing the c
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect((await managedWorktrees.findLiveByOwner("session", sessionKey))?.baseRef).toBe("main");
   } finally {
-    await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-    if (owned) {
-      await managedWorktrees.remove({
-        id: owned.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await cleanupRun(context, storePath, sessionKey);
   }
 });
 
 test("remote retry refresh does not mutate a registered project checkout", async () => {
   const root = tempDirs.make("openclaw-session-registered-project-refresh-");
-  const publisher = await initializeRepository(root, "publisher");
-  const upstream = path.join(root, "upstream.git");
-  await execFileAsync("git", ["clone", "--bare", publisher, upstream]);
-  const projectRoot = path.join(root, "project");
-  await execFileAsync("git", ["clone", "--no-local", upstream, projectRoot]);
+  const { publisher, upstream, projectRoot } = await cloneFixture(root);
   const project = await registerProjectRegistry({ path: projectRoot, name: "Registered" });
 
-  await execFileAsync("git", ["-C", publisher, "branch", "operator-owned-branch"]);
-  await execFileAsync("git", [
-    "-C",
+  await git(publisher, "branch", "operator-owned-branch");
+  await git(
     publisher,
     "push",
     upstream,
     "refs/heads/operator-owned-branch:refs/heads/operator-owned-branch",
-  ]);
+  );
   await refreshProjectClone(project);
 
   await expect(
-    execFileAsync("git", [
-      "-C",
-      projectRoot,
-      "rev-parse",
-      "--verify",
-      "refs/remotes/origin/operator-owned-branch",
-    ]),
+    git(projectRoot, "rev-parse", "--verify", "refs/remotes/origin/operator-owned-branch"),
   ).rejects.toBeDefined();
 });
 
@@ -261,7 +241,7 @@ test("sessions.create rejects an invalid worktree base before persisting the ses
       message: expect.stringContaining("does not resolve to a commit"),
     },
   });
-  expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  expect(readSession(storePath, sessionKey)).toBeUndefined();
   expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
 });
 
@@ -270,10 +250,8 @@ test.each(["local", "remote"] as const)(
   async (source) => {
     const root = tempDirs.make("openclaw-session-pinned-worktree-base-");
     const workspace = await initializeRepository(root, "workspace");
-    await execFileAsync("git", ["-C", workspace, "branch", "accepted-base"]);
-    const acceptedCommit = (
-      await execFileAsync("git", ["-C", workspace, "rev-parse", "accepted-base"])
-    ).stdout.trim();
+    await git(workspace, "branch", "accepted-base");
+    const acceptedCommit = (await git(workspace, "rev-parse", "accepted-base")).stdout.trim();
     const setup = path.join(workspace, ".openclaw", "worktree-setup.sh");
     await fs.mkdir(path.dirname(setup));
     await fs.writeFile(setup, "#!/bin/sh\nexit 23\n", { mode: 0o755 });
@@ -289,13 +267,7 @@ test.each(["local", "remote"] as const)(
         }),
       );
     }
-    dispatchInboundMessageMock.mockResolvedValue({
-      queuedFinal: false,
-      counts: { block: 0, final: 0, tool: 0 },
-    });
-    const context = {
-      broadcast: vi.fn(),
-    };
+    const context = runContext();
     const options = { client: { connect: { scopes: ["operator.admin"] } } as never, context };
     const created = await directSessionReq<{ key: string }>(
       "sessions.create",
@@ -314,14 +286,14 @@ test.each(["local", "remote"] as const)(
     try {
       await settleWorkspaceRuns(context, storePath, sessionKey);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
+      expect(readSession(storePath, sessionKey)).toMatchObject({
         status: "failed",
         lastRunError: expect.stringContaining("23"),
         pendingWorktree: { baseRef: "accepted-base", baseCommit: acceptedCommit },
       });
       expect(await managedWorktrees.findLiveByOwner("session", sessionKey)).toBeUndefined();
-      await execFileAsync("git", ["-C", workspace, "commit", "--allow-empty", "-m", "move base"]);
-      await execFileAsync("git", ["-C", workspace, "branch", "-f", "accepted-base", "HEAD"]);
+      await git(workspace, "commit", "--allow-empty", "-m", "move base");
+      await git(workspace, "branch", "-f", "accepted-base", "HEAD");
       await fs.writeFile(setup, "#!/bin/sh\nexit 0\n");
       const sent = await directSessionReq(
         "chat.send",
@@ -341,22 +313,10 @@ test.each(["local", "remote"] as const)(
         throw new Error("expected a managed worktree");
       }
       expect(worktree.baseRef).toBe("accepted-base");
-      expect(
-        (await execFileAsync("git", ["-C", worktree.path, "rev-parse", "HEAD"])).stdout.trim(),
-      ).toBe(acceptedCommit);
-      expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).not.toHaveProperty(
-        "pendingWorktree",
-      );
+      expect((await git(worktree.path, "rev-parse", "HEAD")).stdout.trim()).toBe(acceptedCommit);
+      expect(readSession(storePath, sessionKey)).not.toHaveProperty("pendingWorktree");
     } finally {
-      await settleWorkspaceRuns(context, storePath, sessionKey, true);
-      const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-      if (owned) {
-        await managedWorktrees.remove({
-          id: owned.id,
-          reason: "test-cleanup",
-          allowSnapshotLoss: true,
-        });
-      }
+      await cleanupRun(context, storePath, sessionKey);
     }
   },
 );
@@ -370,14 +330,8 @@ test("sessions.create recovers a failed worktree in the same session with an exp
   const project = await registerProjectRegistry({ path: repository, name: "Recovery" });
   testState.agentConfig = { workspace };
   const { storePath } = await createSessionStoreDir();
-  const context = {
-    broadcast: vi.fn(),
-  };
+  const context = runContext();
   const options = { ...controlUiClient, context };
-  dispatchInboundMessageMock.mockResolvedValue({
-    queuedFinal: false,
-    counts: { block: 0, final: 0, tool: 0 },
-  });
   const created = await directSessionReq<{ key: string }>(
     "sessions.create",
     { agentId: "main", message: "Investigate the retained evidence", worktree: true },
@@ -433,14 +387,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(loadSessionEntry(target)?.sessionId).toBe(failed.sessionId);
   } finally {
-    await settleWorkspaceRuns(context, storePath, sessionKey, true);
-    const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-    if (owned) {
-      await managedWorktrees.remove({
-        id: owned.id,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
+    await cleanupRun(context, storePath, sessionKey);
   }
 });
