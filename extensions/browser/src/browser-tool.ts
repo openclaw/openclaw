@@ -18,6 +18,7 @@ import {
   createBrowserNodeSessionTabRoute,
   type BrowserProxyRequest,
 } from "./browser-node-proxy.js";
+import { isBrowserLifecycleAction } from "./browser-tool-action-facts.js";
 import { applyBrowserTabToolBinding } from "./browser-tool-binding.js";
 import { createBrowserToolDefinition } from "./browser-tool-description.js";
 import { executeBrowserTabAction } from "./browser-tool-dispatch.js";
@@ -265,7 +266,7 @@ export function createBrowserTool(
             browserDashboard: await callDashboard("POST", true),
           });
         }
-        if (["doctor", "status", "start", "stop", "profiles", "importprofile"].includes(action)) {
+        if (isBrowserLifecycleAction(action)) {
           throw new Error(
             "Use browser tab actions with a dashboard selector; open resumes it and close pauses it",
           );
@@ -463,26 +464,18 @@ export function createBrowserTool(
         isHostFallbackActive: proxyRequest?.isHostFallbackActive,
         registry: { touchSessionBrowserTab, trackSessionBrowserTab, untrackSessionBrowserTab },
       });
-      switch (action) {
-        case "doctor":
-        case "status":
-        case "start":
-        case "stop":
-        case "profiles":
-        case "importprofile":
-          return await executeBrowserLifecycleAction({
-            action,
-            input: params,
-            baseUrl,
-            profile,
-            timeoutMs: toolTimeoutMs,
-            proxyRequest,
-            allowHostControl: opts?.allowHostControl,
-            sandboxBridgeUrl: opts?.sandboxBridgeUrl,
-            signal,
-          });
-        default:
-          break;
+      if (isBrowserLifecycleAction(action)) {
+        return await executeBrowserLifecycleAction({
+          action,
+          input: params,
+          baseUrl,
+          profile,
+          timeoutMs: toolTimeoutMs,
+          proxyRequest,
+          allowHostControl: opts?.allowHostControl,
+          sandboxBridgeUrl: opts?.sandboxBridgeUrl,
+          signal,
+        });
       }
       let tabIdentity: BrowserTabIdentity | undefined;
       if (browserDashboard) {
