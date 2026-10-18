@@ -66,6 +66,20 @@ describe("outbound producer claim worker", () => {
     vi.useRealTimers();
   });
 
+  const payload = (text: string) => ({
+    channel: "matrix",
+    to: "!synthetic:example",
+    payloads: [{ text }],
+  });
+  async function claimRetained(id: string, stateDir: string) {
+    await enqueueDeliveryOnce(payload("retained"), id, stateDir);
+    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
+    if (!claimId) {
+      throw new Error("Expected claimed queue custody");
+    }
+    return claimId;
+  }
+
   it("refreshes the attempt timestamp immediately before provider I/O", async () => {
     const id = await enqueueDelivery(
       {
@@ -105,16 +119,15 @@ describe("outbound producer claim worker", () => {
     }
 
     const entry = await loadPendingDelivery(id, fixtures.tmpDir());
-    expect(entry?.platformSendStartedAt).toBe(9_000);
-    expect(entry?.recoveryState).toBe("send_attempt_started");
+    expect(entry).toMatchObject({
+      platformSendStartedAt: 9_000,
+      recoveryState: "send_attempt_started",
+    });
   });
 
   it("transfers only reply metadata from the actual callback-bearing send context", async () => {
     const stateDir = fixtures.tmpDir();
-    const id = await enqueueDelivery(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "ordinary result" }] },
-      stateDir,
-    );
+    const id = await enqueueDelivery(payload("ordinary result"), stateDir);
     const localGuard = vi.fn();
     const route = {
       replyToId: "reply",
@@ -137,11 +150,7 @@ describe("outbound producer claim worker", () => {
   it("claims and renews retained custody without host data SQL, then reopens the same owner", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "worker-claim";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
+    await enqueueDeliveryOnce(payload("retained"), id, stateDir);
     await closeOpenClawStateDatabaseAsync();
     const context = captureDeliveryQueueStateContext(stateDir);
     const sql = observeHostDataSql();
@@ -179,14 +188,9 @@ describe("outbound producer claim worker", () => {
   it("rereads lease expiry after a real writer wait while the host remains responsive", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "expired-during-writer-wait";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
-    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
+    const claimId = await claimRetained(id, stateDir);
     const entry = await loadPendingDelivery(id, stateDir);
-    if (!claimId || !entry) {
+    if (!entry) {
       throw new Error("Expected claimed queue custody");
     }
     const db = requireNativeSqliteDatabase(
@@ -238,15 +242,7 @@ describe("outbound producer claim worker", () => {
   it("joins an accepted renewal before lease stop permits acknowledgement", async () => {
     const stateDir = fixtures.tmpDir();
     const id = "joined-worker-renewal";
-    await enqueueDeliveryOnce(
-      { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "retained" }] },
-      id,
-      stateDir,
-    );
-    const claimId = await claimReusableDeliveryPlatformSendAttempt(id, stateDir);
-    if (!claimId) {
-      throw new Error("Expected claimed queue custody");
-    }
+    const claimId = await claimRetained(id, stateDir);
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const renew = vi.fn(() => renewDeliveryPlatformSendLease(id, stateDir, claimId));
     const lease = await startDeliveryProducerLease({ id, renew });

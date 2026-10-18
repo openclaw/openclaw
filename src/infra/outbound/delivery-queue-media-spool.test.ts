@@ -84,6 +84,25 @@ async function seedArtifact(name: string, ageMs: number): Promise<string> {
   return artifactPath;
 }
 
+async function writeSource(name = "voice.ogg") {
+  const source = path.join(sourceDir, name);
+  await fs.writeFile(source, "opus-bytes");
+  return source;
+}
+const stage = (
+  options: Omit<Parameters<typeof stageQueuePayloadMedia>[0], "stateDir" | "maxBytes">,
+) =>
+  stageQueuePayloadMedia({
+    mediaAccess: { localRoots: [sourceDir] },
+    maxBytes: 1024 * 1024,
+    stateDir,
+    ...options,
+  });
+async function expectArtifacts(present: string[], absent: string[]) {
+  expect(await Promise.all(present.map(exists))).toEqual(present.map(() => true));
+  expect(await Promise.all(absent.map(exists))).toEqual(absent.map(() => false));
+}
+
 beforeEach(async () => {
   stateDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-state-")));
   sourceDir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "spool-src-")));
@@ -136,11 +155,7 @@ describe("retention", () => {
     expect(
       loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, "expired-receipt", stateDir, "all"),
     ).toBeNull();
-    expect(await exists(retained)).toBe(true);
-    expect(await exists(staged)).toBe(true);
-    expect(await exists(orphan)).toBe(false);
-    // Grace protects stage-before-row-commit and bounds crash leftovers.
-    expect(await exists(fresh)).toBe(true);
+    await expectArtifacts([retained, staged, fresh], [orphan]);
   });
 
   it("retains media from generation-bound and migration namespaces in one inventory", async () => {
@@ -185,12 +200,8 @@ describe("retention", () => {
 
     await pruneOrphanedDeliveryQueueMedia({ stateDir });
 
-    await expect(
-      Promise.all(retained.map(async (artifact) => await exists(artifact))),
-    ).resolves.toEqual([true, true, true, true, true, true]);
-    expect(await exists(orphan)).toBe(false);
-    expect(await exists(generationOrphan)).toBe(false);
-    expect(await exists(ownerOrphan)).toBe(false);
+    expect(retained).toHaveLength(6);
+    await expectArtifacts(retained, [orphan, generationOrphan, ownerOrphan]);
   });
 
   it("reclaims stale partial writes but ignores foreign files and symlinks", async () => {
@@ -205,22 +216,17 @@ describe("retention", () => {
 
     await pruneOrphanedDeliveryQueueMedia({ stateDir });
 
-    expect(await exists(partial)).toBe(false);
-    expect(await exists(generationPartial)).toBe(false);
-    expect(await exists(freshGenerationPartial)).toBe(true);
-    expect(await exists(foreign)).toBe(true);
-    expect(await exists(unknownFormat)).toBe(true);
+    await expectArtifacts(
+      [freshGenerationPartial, foreign, unknownFormat],
+      [partial, generationPartial],
+    );
     expect(await fs.readFile(outside, "utf8")).toBe("keep");
   });
 
   it("expires abandoned stages and rejects a producer that resumes too late", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
-    const staged = await stageQueuePayloadMedia({
+    const source = await writeSource("voice.ogg");
+    const staged = await stage({
       payloads: [{ mediaUrl: source, audioAsVoice: true }],
-      mediaAccess: { localRoots: [sourceDir] },
-      maxBytes: 1024 * 1024,
-      stateDir,
     });
     expect(staged.status).toBe("staged");
     if (staged.status !== "staged") {
@@ -262,18 +268,13 @@ describe("ownership helpers", () => {
       stateDir,
     );
 
-    expect(await exists(generationFinal)).toBe(false);
-    expect(await exists(generationPartial)).toBe(false);
-    expect(await exists(outside)).toBe(true);
+    await expectArtifacts([outside], [generationFinal, generationPartial]);
   });
 });
 
 describe("staging", () => {
-  const mediaAccessFor = (roots: string[]) => ({ localRoots: roots });
-
   it("stages local media while a competing writer needs the host to release its lock", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
+    const source = await writeSource("voice.ogg");
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
@@ -282,11 +283,8 @@ describe("staging", () => {
       writer.exec("BEGIN IMMEDIATE");
       // A worker can hold this lock while waiting for host admission. Staging
       // must yield so the host can let that writer finish.
-      const staged = stageQueuePayloadMedia({
+      const staged = stage({
         payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([sourceDir]),
-        maxBytes: 1024 * 1024,
-        stateDir,
       });
       writer.exec("COMMIT");
       const result = await staged;
@@ -313,15 +311,12 @@ describe("staging", () => {
   });
 
   it("uses the live send's local-read capability", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
+    const source = await writeSource("voice.ogg");
 
     await expect(
-      stageQueuePayloadMedia({
+      stage({
         payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([path.join(stateDir, "elsewhere")]),
-        maxBytes: 1024 * 1024,
-        stateDir,
+        mediaAccess: { localRoots: [path.join(stateDir, "elsewhere")] },
       }),
     ).rejects.toThrow();
   });
@@ -329,8 +324,7 @@ describe("staging", () => {
   it.each([undefined, "session-generation-v1", "command-owner-v1"] as const)(
     "publishes complete media with older-reader-compatible custody (%s)",
     async (artifactFormat) => {
-      const source = path.join(sourceDir, "voice.ogg");
-      await fs.writeFile(source, "opus-bytes");
+      const source = await writeSource();
       const atMove: { finalExisted: boolean; partSize: number }[] = [];
       storeSpy.onMove = (from, to, rootDir) => {
         const knownToPublishedReader = artifactFormat === undefined;
@@ -350,11 +344,8 @@ describe("staging", () => {
         });
       };
 
-      const result = await stageQueuePayloadMedia({
+      const result = await stage({
         payloads: [{ mediaUrl: source }],
-        mediaAccess: mediaAccessFor([sourceDir]),
-        maxBytes: 1024 * 1024,
-        stateDir,
         artifactFormat,
       });
 
@@ -365,15 +356,11 @@ describe("staging", () => {
   );
 
   it("cleans earlier copies when a later source fails", async () => {
-    const good = path.join(sourceDir, "first.ogg");
-    await fs.writeFile(good, "opus-bytes");
+    const good = await writeSource("first.ogg");
 
     await expect(
-      stageQueuePayloadMedia({
+      stage({
         payloads: [{ mediaUrls: [good, path.join(sourceDir, "missing.ogg")] }],
-        mediaAccess: mediaAccessFor([sourceDir]),
-        maxBytes: 1024 * 1024,
-        stateDir,
       }),
     ).rejects.toThrow();
 
@@ -381,14 +368,10 @@ describe("staging", () => {
   });
 
   it("preserves blank media slots and copies repeated local media once", async () => {
-    const source = path.join(sourceDir, "voice.ogg");
-    await fs.writeFile(source, "opus-bytes");
+    const source = await writeSource("voice.ogg");
 
-    const result = await stageQueuePayloadMedia({
+    const result = await stage({
       payloads: [{ mediaUrl: " ", mediaUrls: ["", source, source, "  "] }],
-      mediaAccess: mediaAccessFor([sourceDir]),
-      maxBytes: 1024 * 1024,
-      stateDir,
     });
 
     expect(result.status).toBe("staged");

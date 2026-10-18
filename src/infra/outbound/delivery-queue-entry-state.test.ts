@@ -43,6 +43,29 @@ describe("delivery queue entry state", () => {
     );
   }
 
+  function root(name: string) {
+    const dir = path.join(fixtures.tmpDir(), name);
+    fs.mkdirSync(dir);
+    return dir;
+  }
+  const inputFor = (text: string) => ({
+    cfg: {},
+    channel: "reef" as const,
+    to: target,
+    payloads: [{ text }],
+    queuePolicy: "required" as const,
+    requireUnknownSendReconciliation: false,
+  });
+  const drain = (options: Partial<Parameters<typeof drainPendingDeliveries>[0]>) =>
+    drainPendingDeliveries({
+      drainKey: "sdk-unprivileged",
+      logLabel: "Synthetic SDK reconnect",
+      cfg: {},
+      log: createRecoveryLog(),
+      selectEntry: () => ({ match: true, bypassBackoff: false }),
+      ...options,
+    });
+
   afterEach(() => {
     vi.restoreAllMocks();
     resetGatewayWorkAdmission();
@@ -53,10 +76,9 @@ describe("delivery queue entry state", () => {
   it.each(["sdk", "public-delivery"] as const)(
     "ignores a recovery-only root and private context for a fresh %s send",
     async (entrypoint) => {
-      const originalRoot = path.join(fixtures.tmpDir(), "original");
-      const injectedRoot = path.join(fixtures.tmpDir(), "injected");
-      fs.mkdirSync(originalRoot);
-      fs.mkdirSync(injectedRoot);
+      const originalRoot = root("original");
+      const injectedRoot = root("injected");
+
       vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
       const sendText = vi.fn(async (input: object) => {
         expect(input).not.toHaveProperty("conversationDeliveryTarget");
@@ -67,13 +89,8 @@ describe("delivery queue entry state", () => {
       });
       installSender(sendText);
       const input = {
-        cfg: {},
-        channel: "reef" as const,
-        to: target,
-        payloads: [{ text: "public contract" }],
-        queuePolicy: "required" as const,
+        ...inputFor("public contract"),
         durability: "required" as const,
-        requireUnknownSendReconciliation: false,
         deliveryIntentId: "public-state-selector",
         conversationDeliveryTarget: {
           agentId: "main",
@@ -96,10 +113,9 @@ describe("delivery queue entry state", () => {
   );
 
   it("retains the default root and supervisor mode through awaited preparation", async () => {
-    const originalRoot = path.join(fixtures.tmpDir(), "original");
-    const replacementRoot = path.join(fixtures.tmpDir(), "replacement");
-    fs.mkdirSync(originalRoot);
-    fs.mkdirSync(replacementRoot);
+    const originalRoot = root("original");
+    const replacementRoot = root("replacement");
+
     vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
     claimOpenClawStateOwnership("queue-fixture", { env: process.env });
@@ -112,13 +128,8 @@ describe("delivery queue entry state", () => {
     });
     installSender(sendText);
     const delivery = deliverOutboundPayloads({
-      cfg: {},
-      channel: "reef",
-      to: target,
-      payloads: [{ text: "default owner" }],
-      queuePolicy: "required",
+      ...inputFor("default owner"),
       deliveryIntentId: queueId,
-      requireUnknownSendReconciliation: false,
     });
     vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
     vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "");
@@ -129,10 +140,9 @@ describe("delivery queue entry state", () => {
   });
 
   it("honors the owned root when resuming an existing queue entry", async () => {
-    const originalRoot = path.join(fixtures.tmpDir(), "recovery");
-    const ambientRoot = path.join(fixtures.tmpDir(), "ambient");
-    fs.mkdirSync(originalRoot);
-    fs.mkdirSync(ambientRoot);
+    const originalRoot = root("recovery");
+    const ambientRoot = root("ambient");
+
     vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
     const queueId = "existing-recovery-entry";
     await enqueueDeliveryOnce(
@@ -149,15 +159,10 @@ describe("delivery queue entry state", () => {
     installSender(sendText);
     await expect(
       deliverOutboundPayloads({
-        cfg: {},
-        channel: "reef",
-        to: target,
-        payloads: [{ text: "recovered" }],
-        queuePolicy: "required",
+        ...inputFor("recovered"),
         skipQueue: true,
         deliveryQueueId: queueId,
         deliveryQueueStateDir: originalRoot,
-        requireUnknownSendReconciliation: false,
       }),
     ).resolves.toMatchObject([{ messageId: "recovered-root" }]);
     expect(sendText).toHaveBeenCalledOnce();
@@ -173,11 +178,11 @@ describe("delivery queue entry state", () => {
     "captures the SDK %s root before admission and lazy delivery for a %s callback",
     async (locator, callback) => {
       resetGatewayWorkAdmission();
-      const originalDirectory = path.join(fixtures.tmpDir(), "original");
+      const originalDirectory = root("original");
       const originalRoot = path.join(originalDirectory, "queue");
-      const replacementDirectory = path.join(fixtures.tmpDir(), "replacement");
+      const replacementDirectory = root("replacement");
       fs.mkdirSync(originalRoot, { recursive: true });
-      fs.mkdirSync(replacementDirectory);
+
       vi.stubEnv("OPENCLAW_STATE_DIR", originalRoot);
       vi.stubEnv("OPENCLAW_SUPERVISOR_MODE", "external");
       vi.stubEnv("OPENCLAW_HOME", originalDirectory);
@@ -209,12 +214,8 @@ describe("delivery queue entry state", () => {
       }[locator];
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.commit()).toBe(true);
-      const pending = drainPendingDeliveries({
+      const pending = drain({
         drainKey: `sdk-entry-${locator}-${callback}`,
-        logLabel: "Synthetic SDK reconnect",
-        cfg: {},
-        log: createRecoveryLog(),
-        selectEntry: () => ({ match: true, bypassBackoff: false }),
         ...(stateDir !== undefined ? { stateDir } : {}),
         ...(callback === "custom" ? { deliver: custom } : {}),
       });
@@ -270,13 +271,9 @@ describe("delivery queue entry state", () => {
       await input.onPlatformSendStart?.({});
       return [{ channel: "reef", messageId: "unexpected-dispatch" }];
     });
-    const pending = drainPendingDeliveries({
+    const pending = drain({
       drainKey: "sdk-unprivileged",
-      logLabel: "Synthetic SDK reconnect",
-      cfg: {},
-      log: createRecoveryLog(),
       deliver: custom,
-      selectEntry: () => ({ match: true, bypassBackoff: false }),
     });
     const outcome = pending.catch((error: unknown) => error);
     try {

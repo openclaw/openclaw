@@ -36,6 +36,23 @@ describe("outbound delivery namespace ownership", () => {
   let rootDir: string;
   let stateDir: string;
 
+  const database = () =>
+    openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } });
+  const seed = (queueName: string, entry: Parameters<typeof seedDeliveryQueueEntry>[0]["entry"]) =>
+    seedDeliveryQueueEntry({ queueName, entry, stateDir });
+  const legacyOwner = (status: "pending" | "failed") => ({
+    queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
+    namespace: "legacy",
+    retired: true,
+    status,
+  });
+  const preparedOwner = {
+    queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+    namespace: "prepared",
+    retired: false,
+    status: "pending",
+  };
+
   beforeEach(() => {
     rootDir = fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-dq-owner-"));
     stateDir = path.join(rootDir, "state");
@@ -99,12 +116,10 @@ describe("outbound delivery namespace ownership", () => {
       entry,
       stateDir,
     });
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = database();
     expect(
       terminalizePendingDeliveryQueueEntryInDatabase(
-        database,
+        db,
         prepareDeliveryQueueTerminalEntry({
           queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
           id,
@@ -135,18 +150,12 @@ describe("outbound delivery namespace ownership", () => {
   it("resolves canonical ownership from one batched namespace snapshot", () => {
     const id = "shared-delivery-intent";
     for (const queueName of [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, OUTBOUND_DELIVERY_QUEUE_NAME]) {
-      seedDeliveryQueueEntry({
-        queueName,
-        entry: { id, enqueuedAt: 1, retryCount: 0 },
-        stateDir,
-      });
+      seed(queueName, { id, enqueuedAt: 1, retryCount: 0 });
     }
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
+    const db = database();
     const readOwner = () => {
       const reads = trackSqliteStatementExecutions(
-        requireNativeSqliteDatabase(database.db),
+        requireNativeSqliteDatabase(db.db),
         ["owners"],
         (sql) =>
           sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
@@ -154,7 +163,7 @@ describe("outbound delivery namespace ownership", () => {
             : null,
       );
       try {
-        const [owner, missing, duplicate] = findDeliveryIntentOwnersInDatabase(database, {
+        const [owner, missing, duplicate] = findDeliveryIntentOwnersInDatabase(db, {
           ids: [id, "absent", id],
         });
         expect(missing).toBeNull();
@@ -167,64 +176,24 @@ describe("outbound delivery namespace ownership", () => {
       }
     };
 
-    expect(readOwner()).toEqual({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      namespace: "prepared",
-      retired: false,
-      status: "pending",
-    });
-    deleteDeliveryQueueEntryInDatabase(
-      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
-      OUTBOUND_DELIVERY_QUEUE_NAME,
-      id,
-    );
-    expect(readOwner()).toEqual({
-      queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-      namespace: "legacy",
-      retired: true,
-      status: "pending",
-    });
+    expect(readOwner()).toEqual(preparedOwner);
+    deleteDeliveryQueueEntryInDatabase(database(), OUTBOUND_DELIVERY_QUEUE_NAME, id);
+    expect(readOwner()).toEqual(legacyOwner("pending"));
   });
 
   it("resolves ordered batches after receipt expiry without confusing namespace precedence", () => {
     const ids = seedOwnerSet("batch");
-    seedDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      entry: { id: ids.expired, enqueuedAt: Date.now(), retryCount: 0 },
-      stateDir,
-    });
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    });
-    const owners = findDeliveryIntentOwnersInDatabase(database, {
+    seed(OUTBOUND_DELIVERY_QUEUE_NAME, { id: ids.expired, enqueuedAt: Date.now(), retryCount: 0 });
+    const db = database();
+    const owners = findDeliveryIntentOwnersInDatabase(db, {
       ids: [ids.unexpired, ids.expired, "absent", ids.permanent, ids.unexpired],
     });
     expect(owners).toEqual([
-      {
-        queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-        namespace: "legacy",
-        retired: true,
-        status: "failed",
-      },
-      {
-        queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        namespace: "prepared",
-        retired: false,
-        status: "pending",
-      },
+      legacyOwner("failed"),
+      preparedOwner,
       null,
-      {
-        queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-        namespace: "legacy",
-        retired: true,
-        status: "failed",
-      },
-      {
-        queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
-        namespace: "legacy",
-        retired: true,
-        status: "failed",
-      },
+      legacyOwner("failed"),
+      legacyOwner("failed"),
     ]);
     expect(
       getDeliveryQueueEntryStatus(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, ids.expired, stateDir),
@@ -239,14 +208,11 @@ describe("outbound delivery namespace ownership", () => {
       [ids.permanent, false],
     ] as const) {
       expect(
-        upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
-          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
-          {
-            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-            conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
-            entry: { id, enqueuedAt: 2_050, retryCount: 0 },
-          },
-        ),
+        upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase(database(), {
+          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
+          entry: { id, enqueuedAt: 2_050, retryCount: 0 },
+        }),
       ).toBe(created);
     }
     expect(
@@ -262,22 +228,19 @@ describe("outbound delivery namespace ownership", () => {
       [ids.permanent, "existing"],
     ] as const) {
       const stagingId = `stage-${id}`;
-      seedDeliveryQueueEntry({
-        queueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-        entry: { id: stagingId, enqueuedAt: 2_050, retryCount: 0 },
-        stateDir,
+      seed(DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME, {
+        id: stagingId,
+        enqueuedAt: 2_050,
+        retryCount: 0,
       });
       expect(
-        commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(
-          openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
-          {
-            queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-            conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
-            entry: { id, enqueuedAt: 2_050, retryCount: 0 },
-            stagingId,
-            stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
-          },
-        ),
+        commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase(database(), {
+          queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
+          conflictQueueNames: [LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME],
+          entry: { id, enqueuedAt: 2_050, retryCount: 0 },
+          stagingId,
+          stagingQueueName: DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME,
+        }),
       ).toBe(expected);
     }
   });
@@ -290,11 +253,7 @@ describe("outbound delivery namespace ownership", () => {
       [ids.permanent, "destination-exists"],
     ] as const) {
       const source = { id, enqueuedAt: 2_050, retryCount: 0 };
-      seedDeliveryQueueEntry({
-        queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-        entry: source,
-        stateDir,
-      });
+      seed(OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME, source);
       expect(
         movePendingDeliveryQueueEntryNamespace({
           sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,

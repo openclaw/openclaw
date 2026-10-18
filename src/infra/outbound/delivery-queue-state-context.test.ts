@@ -58,100 +58,100 @@ describe("captured delivery queue state", () => {
     );
   }
 
+  const payload = {
+    channel: "matrix",
+    to: "!synthetic:example",
+    payloads: [{ text: "synthetic" }],
+  };
+  const enqueue = (context: DeliveryQueueStateContext) =>
+    enqueueDelivery(payload, undefined, undefined, context);
+  const withAmbientState = (otherState: string, run: () => Promise<void>) =>
+    withEnvAsync({ OPENCLAW_STATE_DIR: otherState, OPENCLAW_SUPERVISOR_MODE: undefined }, run);
+
   it("keeps preparation, retry evidence, and ACK on the captured state after ambient changes", async () => {
     const context = claimState();
     const otherState = path.join(tmpDir(), "other-state");
-    await withEnvAsync(
-      { OPENCLAW_STATE_DIR: otherState, OPENCLAW_SUPERVISOR_MODE: undefined },
-      async () => {
-        const id = "captured-intent";
-        const claim = createInitialDeliveryProducerClaim();
-        const preparation = await withStableDeliveryPreparation(
-          {
-            id,
-            run: async (owner) => {
-              await Promise.resolve();
-              await owner.beforeFirstModifier();
-              await owner.markPrepared();
-              const queued = await enqueuePreparedDeliveryOnce(
-                {
-                  channel: "matrix",
-                  to: "!synthetic:example",
-                  payloads: [{ text: "synthetic" }],
-                  initialProducerClaim: claim,
-                  completionRetention: "permanent",
-                },
-                id,
-                await owner.current(),
-                undefined,
-                undefined,
-                context,
-              );
-              owner.markPublished();
-              return queued;
-            },
+    await withAmbientState(otherState, async () => {
+      const id = "captured-intent";
+      const claim = createInitialDeliveryProducerClaim();
+      const preparation = await withStableDeliveryPreparation(
+        {
+          id,
+          run: async (owner) => {
+            await Promise.resolve();
+            await owner.beforeFirstModifier();
+            await owner.markPrepared();
+            const queued = await enqueuePreparedDeliveryOnce(
+              {
+                ...payload,
+                initialProducerClaim: claim,
+                completionRetention: "permanent",
+              },
+              id,
+              await owner.current(),
+              undefined,
+              undefined,
+              context,
+            );
+            owner.markPublished();
+            return queued;
           },
-          context,
-        );
-        expect(preparation).toEqual({ status: "claimed", value: { id, created: true } });
-        expect(
-          await renewDeliveryPlatformSendLease(id, undefined, claim.producerClaimId, context),
-        ).toBeGreaterThan(Date.now());
-        expect(
-          await reserveDeliveryAttempt(id, 2, undefined, claim.producerClaimId, context),
-        ).toEqual({ status: "reserved", attemptCount: 1 });
-        await markDeliveryPlatformSendDispatched(
-          id,
-          undefined,
-          undefined,
-          claim.producerClaimId,
-          context,
-        );
-        await failDeliveryAfterPlatformSend(
-          id,
-          "synthetic failure",
-          undefined,
-          claim.producerClaimId,
-          context,
-        );
-        expect(await loadPendingDelivery(id, undefined, context)).toMatchObject({
-          retryCount: 1,
-          lastError: "synthetic failure",
-          recoveryState: "unknown_after_send",
-          platformSendAttemptId: claim.producerClaimId,
-        });
-        await ackDelivery(
-          id,
-          undefined,
-          { expectedPlatformSendAttemptId: claim.producerClaimId },
-          context,
-        );
-        const mainSql = observeMainThreadSql();
-        try {
-          expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
-            expect.objectContaining({ status: "completed" }),
-            null,
-            expect.objectContaining({ status: "completed" }),
-          ]);
-          mainSql.expectIdle();
-        } finally {
-          mainSql.restore();
-        }
-        await expect(fs.stat(otherState)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
+        },
+        context,
+      );
+      expect(preparation).toEqual({ status: "claimed", value: { id, created: true } });
+      expect(
+        await renewDeliveryPlatformSendLease(id, undefined, claim.producerClaimId, context),
+      ).toBeGreaterThan(Date.now());
+      expect(
+        await reserveDeliveryAttempt(id, 2, undefined, claim.producerClaimId, context),
+      ).toEqual({ status: "reserved", attemptCount: 1 });
+      await markDeliveryPlatformSendDispatched(
+        id,
+        undefined,
+        undefined,
+        claim.producerClaimId,
+        context,
+      );
+      await failDeliveryAfterPlatformSend(
+        id,
+        "synthetic failure",
+        undefined,
+        claim.producerClaimId,
+        context,
+      );
+      expect(await loadPendingDelivery(id, undefined, context)).toMatchObject({
+        retryCount: 1,
+        lastError: "synthetic failure",
+        recoveryState: "unknown_after_send",
+        platformSendAttemptId: claim.producerClaimId,
+      });
+      await ackDelivery(
+        id,
+        undefined,
+        { expectedPlatformSendAttemptId: claim.producerClaimId },
+        context,
+      );
+      const mainSql = observeMainThreadSql();
+      try {
+        expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
+          expect.objectContaining({ status: "completed" }),
+          null,
+          expect.objectContaining({ status: "completed" }),
+        ]);
+        mainSql.expectIdle();
+      } finally {
+        mainSql.restore();
+      }
+      await expect(fs.stat(otherState)).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 
   it.each(["read", "owners", "ack"] as const)(
     "does not gain external ownership from later ambient mode during %s",
     async (operation) => {
       const external = claimState();
-      const id = await enqueueDelivery(
-        { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "synthetic" }] },
-        undefined,
-        undefined,
-        external,
-      );
+      const id = await enqueue(external);
       const captured = withEnv({ OPENCLAW_SUPERVISOR_MODE: undefined }, () =>
         captureDeliveryQueueStateContext(external.stateDir),
       );
@@ -172,12 +172,7 @@ describe("captured delivery queue state", () => {
     "settles %s recovery on its captured state without changing public callback input",
     async (route) => {
       const context = claimState();
-      const id = await enqueueDelivery(
-        { channel: "matrix", to: "!synthetic:example", payloads: [{ text: "synthetic" }] },
-        undefined,
-        undefined,
-        context,
-      );
+      const id = await enqueue(context);
       const otherState = path.join(tmpDir(), "other-state");
       await withEnvAsync(
         { OPENCLAW_STATE_DIR: context.stateDir, OPENCLAW_SUPERVISOR_MODE: "external" },
@@ -192,17 +187,18 @@ describe("captured delivery queue state", () => {
           const custom = vi.fn(send);
           const internal = vi.fn(
             async (params: Parameters<DeliverFn>[0], captured: DeliveryQueueStateContext) => {
-              expect(captured.stateDir).toBe(context.stateDir);
-              expect(captured.supervisorMode).toBe(context.supervisorMode);
-              expect(captured.workerContext.admission.databasePath).toBe(
-                context.workerContext.admission.databasePath,
-              );
-              expect(captured.workerContext.environment.OPENCLAW_STATE_DIR).toBe(
-                context.workerContext.environment.OPENCLAW_STATE_DIR,
-              );
-              expect(captured.workerContext.environment.OPENCLAW_SUPERVISOR_MODE).toBe(
-                context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
-              );
+              expect(captured).toMatchObject({
+                stateDir: context.stateDir,
+                supervisorMode: context.supervisorMode,
+                workerContext: {
+                  admission: { databasePath: context.workerContext.admission.databasePath },
+                  environment: {
+                    OPENCLAW_STATE_DIR: context.workerContext.environment.OPENCLAW_STATE_DIR,
+                    OPENCLAW_SUPERVISOR_MODE:
+                      context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
+                  },
+                },
+              });
               return send(params);
             },
           );
@@ -259,20 +255,14 @@ describe("captured delivery queue state", () => {
     );
     expect(release).toBeTypeOf("function");
     expect(await fs.readFile(artifact, "utf8")).toBe("synthetic audio");
-    await withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: path.join(tmpDir(), "other-state"),
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-      },
-      async () => {
-        await release?.();
-        expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
-        expect(
-          (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context))
-            .stagedArtifacts,
-        ).toEqual([]);
-        await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
-      },
-    );
+    await withAmbientState(path.join(tmpDir(), "other-state"), async () => {
+      await release?.();
+      expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
+      expect(
+        (await loadDeliveryQueueMediaRetentionSnapshot({ expireBeforeMs: 0 }, context))
+          .stagedArtifacts,
+      ).toEqual([]);
+      await expect(fs.stat(artifact)).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });
