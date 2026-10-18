@@ -11,6 +11,30 @@ import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 
 type ChatDetailsWorkspace = { root: string | null; label: string | null; branch?: string };
 
+export type ChatDetailsDesktopSectionId =
+  | "people"
+  | "environment"
+  | "context"
+  | "pull-requests"
+  | "automations"
+  | "subagents"
+  | "processes"
+  | "outputs";
+
+export type ChatDetailsDesktopDisclosures = {
+  /** Restored by the preference owner before the first render, scoped to this session. */
+  expanded: Partial<Record<ChatDetailsDesktopSectionId, boolean>>;
+  onExpandedChange: (section: ChatDetailsDesktopSectionId, expanded: boolean) => void;
+};
+
+export type ChatDetailsDesktopPresentation = {
+  /** Localized section labels supplied by the host's copy owner. */
+  peopleLabel: string;
+  outputsLabel: string;
+  /** Localized Working, without the ellipsis in common.working. */
+  subagentsWorkingLabel: string;
+};
+
 /** Published assistant-artifact/dashboard facts and real destination/icon operations. */
 export type ChatDetailsOutputs = ChatOutputsDesktopProps;
 export type ChatDetailsOutputsIcons = Pick<
