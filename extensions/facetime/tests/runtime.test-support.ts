@@ -3,7 +3,7 @@ import {
   createPluginStateKeyedStoreV2ForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterAll, vi } from "vitest";
+import { afterAll, expect, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   helperParams: undefined as
@@ -146,12 +146,22 @@ export function completeAbsence() {
   };
 }
 
-export async function pendingDialState(overrides: Record<string, unknown> = {}) {
-  const store = createPluginStateKeyedStoreV2ForTests<unknown>(
+export function emptyState() {
+  return createPluginStateKeyedStoreV2ForTests<unknown>(
     "facetime",
     { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
     { assertCurrent() {} },
   );
+}
+
+export function expectNotCalled(...functions: unknown[]) {
+  for (const fn of functions) {
+    expect(fn).not.toHaveBeenCalled();
+  }
+}
+
+export async function pendingDialState(overrides: Record<string, unknown> = {}) {
+  const store = emptyState();
   await store.register("active", {
     dialID: "approved-dial",
     version: 1,
@@ -233,11 +243,7 @@ export function incomingCall(status = 4) {
 }
 
 export async function createRuntime(
-  state: PluginStateKeyedStore<unknown, 2> = createPluginStateKeyedStoreV2ForTests<unknown>(
-    "facetime",
-    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
-    { assertCurrent() {} },
-  ),
+  state: PluginStateKeyedStore<unknown, 2> = emptyState(),
   ownerHandles = ["owner@example.com"],
   storeOpeners?: {
     openKeyedStoreV2: () => PluginStateKeyedStore<unknown, 2>;
@@ -295,11 +301,7 @@ afterAll(() => resetPluginStateStoreForTests());
 
 export async function resetRuntimeTestState() {
   resetPluginStateStoreForTests({ closeDatabase: false });
-  await createPluginStateKeyedStoreV2ForTests<unknown>(
-    "facetime",
-    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
-    { assertCurrent() {} },
-  ).clear();
+  await emptyState().clear();
   vi.clearAllMocks();
   mocks.helperParams = undefined;
   mocks.helper.connectedSockets = 2;

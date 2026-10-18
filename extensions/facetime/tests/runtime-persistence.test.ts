@@ -1,9 +1,10 @@
-import { createPluginStateKeyedStoreV2ForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntime,
   createTalkDriver,
+  emptyState,
+  expectNotCalled,
   incomingCall,
   mocks,
   pendingDialCancellationResult,
@@ -12,21 +13,7 @@ import {
   resetRuntimeTestState,
 } from "./runtime.test-support.js";
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
-function emptyState() {
-  return createPluginStateKeyedStoreV2ForTests<unknown>(
-    "facetime",
-    { namespace: "pending-dial", maxEntries: 1, overflowPolicy: "reject-new" },
-    { assertCurrent() {} },
-  );
-}
+const deferred = () => Promise.withResolvers<void>();
 
 function suspendNextWrite(state: ReturnType<typeof emptyState>) {
   const entered = deferred();
@@ -125,9 +112,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
         await mocks.helperParams?.onMessage(incomingCall(callStatus));
         expect((await runtime.status()).calls).toEqual([]);
 
-        expect(mocks.helper.answerCall).not.toHaveBeenCalled();
-        expect(mocks.startTalk).not.toHaveBeenCalled();
-        expect(mocks.helper.startCall).not.toHaveBeenCalled();
+        expectNotCalled(mocks.helper.answerCall, mocks.startTalk, mocks.helper.startCall);
         write.release();
         expect(await outcome).toBeUndefined();
         expect(mocks.helper.startCall).toHaveBeenCalledOnce();
@@ -215,10 +200,12 @@ describe("FaceTime runtime asynchronous persistence", () => {
       await write.entered;
       releaseReadiness.resolve();
       await Promise.race([active, activated.promise]);
-      expect(talk.activate).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
-      expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
-      expect(mocks.helper.leaveCall).not.toHaveBeenCalled();
+      expectNotCalled(
+        talk.activate,
+        mocks.helper.setMuted,
+        mocks.helper.startTransmission,
+        mocks.helper.leaveCall,
+      );
       write.release();
       expect(await outcome).toBeUndefined();
     } finally {
@@ -299,8 +286,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       write.release();
       await Promise.all([active, ended]);
 
-      expect(mocks.startTalk).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
+      expectNotCalled(mocks.startTalk, mocks.helper.setMuted);
       expect((await runtime.status()).calls).toEqual([]);
       expect((await runtime.status()).outboundCallPending).toBeUndefined();
       expect(await state.lookup("active")).toBeUndefined();
@@ -325,8 +311,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
     try {
       await Promise.resolve();
       expect(stopped).toBe(false);
-      expect(mocks.helper.stop).not.toHaveBeenCalled();
-      expect(mocks.helper.startCall).not.toHaveBeenCalled();
+      expectNotCalled(mocks.helper.stop, mocks.helper.startCall);
 
       write.release();
       await Promise.all([rejectedDial, stopping]);
@@ -377,9 +362,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       await active;
       await talkClosed.promise;
       expect(talk.close).toHaveBeenCalledWith("native-ended");
-      expect(talk.activate).not.toHaveBeenCalled();
-      expect(mocks.helper.setMuted).not.toHaveBeenCalled();
-      expect(mocks.helper.startTransmission).not.toHaveBeenCalled();
+      expectNotCalled(talk.activate, mocks.helper.setMuted, mocks.helper.startTransmission);
 
       releaseDeletion.resolve();
       await ended;
@@ -446,8 +429,7 @@ describe("FaceTime runtime asynchronous persistence", () => {
       releaseResult.resolve();
       await Promise.all([ended, stopping]);
 
-      expect(register).not.toHaveBeenCalled();
-      expect(mocks.helper.cancelOutgoingCall).not.toHaveBeenCalled();
+      expectNotCalled(register, mocks.helper.cancelOutgoingCall);
       expect(await state.lookup("active")).toBeUndefined();
     } finally {
       releaseResult.resolve();

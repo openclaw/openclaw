@@ -41,13 +41,7 @@ function topologyResult(helperResults: ReturnType<typeof absentPeer>[], generati
   };
 }
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+const deferred = () => Promise.withResolvers<void>();
 
 function observeDeletion() {
   const deleted = deferred();

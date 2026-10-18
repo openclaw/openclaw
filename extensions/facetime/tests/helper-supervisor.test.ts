@@ -36,6 +36,14 @@ describe("FaceTime helper supervisor", () => {
     });
     return { supervisor: activeSupervisor, run, logger };
   }
+  function expectStatus(expected: Partial<ReturnType<FaceTimeHelperSupervisor["status"]>[number]>) {
+    expect(activeSupervisor.status()).toContainEqual(expect.objectContaining(expected));
+  }
+  function onlyFaceTimeInstalled() {
+    vi.mocked(existsSync).mockImplementation(
+      (path) => path === "/System/Applications/FaceTime.app",
+    );
+  }
   beforeEach(() => {
     vi.useFakeTimers();
     vi.mocked(existsSync).mockReturnValue(true);
@@ -49,11 +57,7 @@ describe("FaceTime helper supervisor", () => {
 
   it("cancels reinjection after an authenticated helper reconnects", async () => {
     const connectedBundles: string[] = [];
-    const runCommandWithTimeout = vi
-      .fn<SupervisorParams["runCommandWithTimeout"]>()
-      .mockResolvedValue(completed);
-    const { supervisor } = createSupervisor({
-      runCommandWithTimeout,
+    const { supervisor, run } = createSupervisor({
       connectedBundles: () => connectedBundles,
     });
 
@@ -63,7 +67,7 @@ describe("FaceTime helper supervisor", () => {
     supervisor.connected("com.apple.mobilephone");
     await vi.advanceTimersByTimeAsync(6_000);
 
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
     expect(supervisor.status()).toEqual([
       expect.objectContaining({ target: "FaceTime", connected: true, attempts: 0 }),
       expect.objectContaining({ target: "Phone", connected: true, attempts: 0 }),
@@ -78,15 +82,13 @@ describe("FaceTime helper supervisor", () => {
     supervisor.start();
     await vi.advanceTimersByTimeAsync(6_000);
     expect(run).toHaveBeenCalledTimes(1);
-    expect(supervisor.status()).toContainEqual(
-      expect.objectContaining({
-        target: "FaceTime",
-        attempts: 1,
-        connected: false,
-        injecting: false,
-        lastError: "Developer Tools mode is disabled",
-      }),
-    );
+    expectStatus({
+      target: "FaceTime",
+      attempts: 1,
+      connected: false,
+      injecting: false,
+      lastError: "Developer Tools mode is disabled",
+    });
     await vi.advanceTimersByTimeAsync(999);
     expect(run).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1);
@@ -94,28 +96,19 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("reports an injection that never authenticates instead of waiting forever", async () => {
-    vi.mocked(existsSync).mockImplementation(
-      (path) => path === "/System/Applications/FaceTime.app",
-    );
-    const runCommandWithTimeout = vi
-      .fn<SupervisorParams["runCommandWithTimeout"]>()
-      .mockResolvedValue(completed);
-    const { supervisor } = createSupervisor({
-      runCommandWithTimeout,
-    });
+    onlyFaceTimeInstalled();
+    const { supervisor } = createSupervisor();
 
     supervisor.start();
     await vi.advanceTimersByTimeAsync(16_000);
 
-    expect(supervisor.status()).toContainEqual(
-      expect.objectContaining({
-        target: "FaceTime",
-        connected: false,
-        injecting: false,
-        retryScheduled: true,
-        lastError: "FaceTime helper injection completed but no authenticated connection arrived",
-      }),
-    );
+    expectStatus({
+      target: "FaceTime",
+      connected: false,
+      injecting: false,
+      retryScheduled: true,
+      lastError: "FaceTime helper injection completed but no authenticated connection arrived",
+    });
   });
 
   it("waits for a stale helper process to exit before reinjecting", async () => {
@@ -124,13 +117,7 @@ describe("FaceTime helper supervisor", () => {
     supervisor.stale("com.apple.FaceTime", 1234);
     await vi.advanceTimersByTimeAsync(2_000);
     expect(run).not.toHaveBeenCalled();
-    expect(supervisor.status()).toContainEqual(
-      expect.objectContaining({
-        target: "FaceTime",
-        stale: true,
-        staleProcessId: 1234,
-      }),
-    );
+    expectStatus({ target: "FaceTime", stale: true, staleProcessId: 1234 });
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });
@@ -139,9 +126,7 @@ describe("FaceTime helper supervisor", () => {
   });
 
   it("warns once while stale helper processes keep reconnecting", () => {
-    vi.mocked(existsSync).mockImplementation(
-      (path) => path === "/System/Applications/FaceTime.app",
-    );
+    onlyFaceTimeInstalled();
     const { supervisor, logger } = createSupervisor();
     supervisor.start();
     supervisor.stale("com.apple.FaceTime", 1234);
@@ -151,19 +136,10 @@ describe("FaceTime helper supervisor", () => {
     expect(logger.warn).toHaveBeenLastCalledWith(
       "[facetime] Restart FaceTime to load the updated OpenClaw helper",
     );
-    expect(supervisor.status()).toContainEqual(
-      expect.objectContaining({
-        target: "FaceTime",
-        stale: true,
-        staleProcessId: 1234,
-        retryScheduled: true,
-      }),
-    );
+    expectStatus({ target: "FaceTime", stale: true, staleProcessId: 1234, retryScheduled: true });
     supervisor.stale("com.apple.FaceTime", 5678);
     expect(logger.warn).toHaveBeenCalledTimes(1);
-    expect(supervisor.status()).toContainEqual(
-      expect.objectContaining({ target: "FaceTime", staleProcessId: 5678 }),
-    );
+    expectStatus({ target: "FaceTime", staleProcessId: 5678 });
     supervisor.connected("com.apple.FaceTime");
     supervisor.stale("com.apple.FaceTime", 9012);
     expect(logger.warn).toHaveBeenCalledTimes(2);
@@ -171,9 +147,7 @@ describe("FaceTime helper supervisor", () => {
 
   it("preserves the stale-process monitor when injection finishes concurrently", async () => {
     const { promise, resolve } = Promise.withResolvers<CommandResult>();
-    vi.mocked(existsSync).mockImplementation(
-      (path) => path === "/System/Applications/FaceTime.app",
-    );
+    onlyFaceTimeInstalled();
     vi.spyOn(process, "kill").mockImplementation(() => {
       throw Object.assign(new Error("process exited"), { code: "ESRCH" });
     });

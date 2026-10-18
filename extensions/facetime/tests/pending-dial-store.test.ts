@@ -11,13 +11,7 @@ type StoredDial = Omit<PendingFaceTimeDial, "callUUIDAliases"> & {
   callUUIDAliases?: string[];
 };
 
-function deferred() {
-  let resolve!: () => void;
-  const promise = new Promise<void>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
+const deferred = () => Promise.withResolvers<void>();
 
 function pendingDial(dialID = "dial-a"): PendingFaceTimeDial {
   return {
