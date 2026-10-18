@@ -40,9 +40,12 @@ export function messageToolCallCompletesBeforeSteering(params: {
   ) {
     return false;
   }
-  const args = params.args as Record<string, unknown>;
-  const action = readToolStringParam(args, "action");
-  return action === "send" ? args.final !== false : action === "react" && args.final === true;
+  if (!("action" in params.args)) {
+    return false;
+  }
+  const action = params.args.action;
+  const final = "final" in params.args ? params.args.final : undefined;
+  return action === "send" ? final !== false : action === "react" && final === true;
 }
 
 function sourceReplyPolicyError(message: string): MessageActionDeniedError {
