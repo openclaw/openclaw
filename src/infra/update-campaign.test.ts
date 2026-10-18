@@ -45,6 +45,9 @@ function createInspectors(
 describe("UpdateCampaignController", () => {
   let clock: ReturnType<typeof createGatewaySchedulerClock>;
   let scheduler: GatewayScheduler;
+  let controller: UpdateCampaignController;
+  let apply: ReturnType<typeof vi.fn<() => Promise<"applied">>>;
+  let onChange: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     let nextId = 0;
@@ -52,27 +55,27 @@ describe("UpdateCampaignController", () => {
     randomUUIDMock.mockImplementation(() => `campaign-${++nextId}`);
     clock = createGatewaySchedulerClock(1_000_000);
     scheduler = createTestGatewayScheduler(clock.clock);
+    controller = new UpdateCampaignController(scheduler);
+    apply = vi.fn(async () => "applied" as const);
+    onChange = vi.fn();
   });
 
   afterEach(async () => {
     await scheduler.stop();
   });
 
-  function createController() {
-    return new UpdateCampaignController(scheduler);
-  }
-
-  it("keeps the countdown deadline absolute across a clock rollback and applies once", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-
+  function announce(options: Partial<Parameters<UpdateCampaignController["announce"]>[0]> = {}) {
     controller.announce({
       target: { kind: "package", version: "2.0.0" },
       inspect: createInspectors(() => 0),
       apply,
       onChange,
+      ...options,
     });
+  }
+
+  it("keeps the countdown deadline absolute across a clock rollback and applies once", async () => {
+    announce();
 
     expect(controller.getState()).toMatchObject({
       state: "countdown",
@@ -94,19 +97,14 @@ describe("UpdateCampaignController", () => {
   });
 
   it("ignores open terminals while persistence and queue work still delay countdown", async () => {
-    const controller = createController();
     let queueSize = 0;
     let terminalPersistence = 1;
-    const apply = vi.fn(async () => "applied" as const);
 
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    announce({
       inspect: createInspectors(() => queueSize, {
         getTerminalPersistence: () => terminalPersistence,
         getTerminalSessions: () => 2,
       }),
-      apply,
-      onChange: vi.fn(),
     });
     expect(controller.getState()?.state).toBe("waiting-for-idle");
 
@@ -128,15 +126,11 @@ describe("UpdateCampaignController", () => {
   });
 
   it("keeps an announced countdown stable when active work begins", async () => {
-    const controller = createController();
     let busy = 0;
-    const apply = vi.fn(async () => "applied" as const);
 
-    controller.announce({
+    announce({
       target: { kind: "git", upstreamRef: "origin/main", upstreamSha: "one", commitsBehind: 1 },
       inspect: createInspectors(() => busy),
-      apply,
-      onChange: vi.fn(),
     });
     const applyAtMs = controller.getState()?.applyAtMs;
     busy = 1;
@@ -152,24 +146,16 @@ describe("UpdateCampaignController", () => {
   });
 
   it("starts a fresh campaign for a newer target and clears availability", () => {
-    const controller = createController();
-    const onChange = vi.fn();
     const inspect = createInspectors(() => 1);
-    const apply = vi.fn(async () => "applied" as const);
 
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    announce({
       inspect,
-      apply,
-      onChange,
     });
     const first = controller.getState();
     clock.setTime(1_010_000);
-    controller.announce({
+    announce({
       target: { kind: "package", version: "3.0.0" },
       inspect,
-      apply,
-      onChange,
     });
 
     expect(controller.getState()).toMatchObject({
@@ -184,16 +170,8 @@ describe("UpdateCampaignController", () => {
   });
 
   it("lets update.run adopt a campaign without invoking automatic apply", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
     expect(controller.adopt()).toEqual({ status: "absent" });
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply,
-      onChange: vi.fn(),
-    });
+    announce();
     expect(controller.adopt()).toEqual({
       status: "adopted",
       campaignId: "campaign-1",
@@ -205,31 +183,20 @@ describe("UpdateCampaignController", () => {
     expect(apply).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      name: "a different Git upstream",
-      target: {
-        kind: "git" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-        commitsBehind: 3,
-      },
-      requested: {
-        mode: "tracked" as const,
-        upstreamRef: "upstream/main",
-        upstreamSha: "frozen-sha",
-      },
-      matching: {
-        mode: "tracked" as const,
-        upstreamRef: "origin/main",
-        upstreamSha: "frozen-sha",
-      },
-    },
-  ])("keeps $name waiting after mismatched adoption", ({ target, requested, matching }) => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-    controller.announce({ target, inspect: createInspectors(() => 1), apply, onChange });
+  it("keeps a different Git upstream waiting after mismatched adoption", () => {
+    const target = {
+      kind: "git" as const,
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
+      commitsBehind: 3,
+    };
+    const matching = {
+      mode: "tracked" as const,
+      upstreamRef: "origin/main",
+      upstreamSha: "frozen-sha",
+    };
+    const requested = { ...matching, upstreamRef: "upstream/main" };
+    announce({ target, inspect: createInspectors(() => 1) });
 
     expect(controller.adopt(requested)).toEqual({ status: "mismatch" });
     expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "waiting-for-idle" });
@@ -245,19 +212,13 @@ describe("UpdateCampaignController", () => {
   });
 
   it("keeps an applying campaign unchanged for a conflicting adoption", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-    const onChange = vi.fn();
-    controller.announce({
+    announce({
       target: {
         kind: "git",
         upstreamRef: "origin/main",
         upstreamSha: "frozen-sha",
         commitsBehind: 3,
       },
-      inspect: createInspectors(() => 0),
-      apply,
-      onChange,
     });
     await clock.advanceBy(60_000);
     const transitionCount = onChange.mock.calls.length;
@@ -274,14 +235,8 @@ describe("UpdateCampaignController", () => {
   });
 
   it("holds a waiting campaign once and shifts its hard deadline", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    announce({
       inspect: createInspectors(() => 1),
-      apply,
-      onChange: vi.fn(),
     });
 
     expect(controller.hold()).toBe(true);
@@ -311,15 +266,7 @@ describe("UpdateCampaignController", () => {
   });
 
   it("holds a countdown, drops its apply deadline, and allows adoption", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply,
-      onChange: vi.fn(),
-    });
+    announce();
     expect(controller.getState()?.state).toBe("countdown");
 
     expect(controller.hold(10_000)).toBe(true);
@@ -344,15 +291,7 @@ describe("UpdateCampaignController", () => {
   });
 
   it("preserves a consumed hold while returning to countdown without spinning timers", async () => {
-    const controller = createController();
-    const apply = vi.fn(async () => "applied" as const);
-
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply,
-      onChange: vi.fn(),
-    });
+    announce();
     expect(controller.hold(10_000)).toBe(true);
 
     await clock.advanceBy(10_000);
@@ -367,46 +306,33 @@ describe("UpdateCampaignController", () => {
   });
 
   it("clears a failed apply and lets the next announcement start fresh", async () => {
-    const controller = createController();
-    const onChange = vi.fn();
-    const announcement = {
-      target: { kind: "package" as const, version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply: vi.fn(async () => "failed" as const),
-      onChange,
-    };
-
-    controller.announce(announcement);
+    const announcement = { apply: vi.fn(async () => "failed" as const) };
+    announce(announcement);
     await clock.advanceBy(60_000);
 
     expect(controller.getState()).toBeUndefined();
     expect(onChange).toHaveBeenLastCalledWith(undefined);
 
-    controller.announce(announcement);
+    announce(announcement);
     expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
   });
 
   it("keeps the applying campaign owner when a newer target is announced", async () => {
-    const controller = createController();
     const firstApply = vi.fn(async () => "handoff" as const);
     const nextApply = vi.fn(async () => "handoff" as const);
-    const onChange = vi.fn();
     const inspect = createInspectors(() => 0);
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
+    announce({
       inspect,
       apply: firstApply,
-      onChange,
     });
     await clock.advanceBy(60_000);
     const applying = controller.getState();
     onChange.mockClear();
 
-    controller.announce({
+    announce({
       target: { kind: "package", version: "3.0.0" },
       inspect,
       apply: nextApply,
-      onChange,
     });
     await clock.advanceBy(15 * 60_000);
 
@@ -418,32 +344,21 @@ describe("UpdateCampaignController", () => {
   });
 
   it("does not clear a replacement campaign when an earlier apply fails", async () => {
-    const controller = createController();
     const applying = createDeferredCore();
     const outcome = createDeferredCore<"failed">();
-    const apply = vi.fn(() => {
+    const pendingApply = vi.fn(() => {
       applying.resolve();
       return outcome.promise;
     });
 
-    controller.announce({
-      target: { kind: "package", version: "2.0.0" },
-      inspect: createInspectors(() => 0),
-      apply,
-      onChange: vi.fn(),
-    });
+    announce({ apply: pendingApply });
     const wake = clock.advanceBy(60_000);
     try {
       await applying.promise;
       expect(controller.getState()).toMatchObject({ id: "campaign-1", state: "applying" });
 
       controller.clear();
-      controller.announce({
-        target: { kind: "package", version: "3.0.0" },
-        inspect: createInspectors(() => 0),
-        apply: vi.fn(async () => "applied" as const),
-        onChange: vi.fn(),
-      });
+      announce({ target: { kind: "package", version: "3.0.0" } });
       expect(controller.getState()).toMatchObject({ id: "campaign-2", state: "countdown" });
     } finally {
       outcome.resolve("failed");

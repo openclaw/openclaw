@@ -49,6 +49,15 @@ function verdictJson(fields: Record<string, unknown> = {}, facts: Record<string,
   return JSON.stringify({ ...verdict, ...fields, facts: { ...verdict.facts, ...facts } });
 }
 
+function invalid(
+  name: string,
+  fields: Record<string, unknown> = {},
+  facts: Record<string, unknown> = {},
+  code = 0,
+) {
+  return [name, code, verdictJson(fields, facts), "invalid-verdict"] as const;
+}
+
 async function setMarker(marker: unknown): Promise<void> {
   await fs.writeFile(
     path.join(root, "package.json"),
@@ -309,76 +318,57 @@ describe("runUpdateCandidateAdmission", () => {
     ["malformed JSON", 0, "not a verdict", "malformed-json"],
     ["protocol mismatch", 0, verdictJson({ protocol: 2 }), "protocol-mismatch"],
     ["wrong shape", 0, JSON.stringify({ protocol: 1, verdict: "admit" }), "invalid-verdict"],
-    ["wrong exit", 3, verdictJson(), "invalid-verdict"],
-    ["empty refusal", 3, verdictJson({ verdict: "refuse" }), "invalid-verdict"],
-    [
-      "duplicate check",
-      0,
-      verdictJson({}, { checks: [...admit().facts.checks, ...admit().facts.checks] }),
-      "invalid-verdict",
-    ],
+    invalid("wrong exit", {}, {}, 3),
+    invalid("empty refusal", { verdict: "refuse" }, {}, 3),
+    invalid("duplicate check", {}, { checks: [...admit().facts.checks, ...admit().facts.checks] }),
     ["oversized output", 0, "x".repeat(1024 * 1024 + 1), "output-limit"],
-    [
+    invalid(
       "too many reasons",
-      3,
-      verdictJson({
+      {
         verdict: "refuse",
         reasons: Array.from({ length: 33 }, () => ({
           code: "invalid-config",
           message: "Invalid config.",
         })),
-      }),
-      "invalid-verdict",
-    ],
-    [
-      "too many checks",
-      0,
-      verdictJson(
-        {},
-        {
-          checks: Array.from({ length: 33 }, (_, index) => ({
-            name: `check-${index}`,
-            status: "ok",
-          })),
-        },
-      ),
-      "invalid-verdict",
-    ],
-    [
-      "oversized reason identity",
+      },
+      {},
       3,
-      verdictJson({
+    ),
+    invalid(
+      "too many checks",
+      {},
+      {
+        checks: Array.from({ length: 33 }, (_, index) => ({
+          name: `check-${index}`,
+          status: "ok",
+        })),
+      },
+    ),
+    invalid(
+      "oversized reason identity",
+      {
         verdict: "refuse",
         reasons: [{ code: "x".repeat(81), message: "Invalid config." }],
-      }),
-      "invalid-verdict",
-    ],
-    [
+      },
+      {},
+      3,
+    ),
+    invalid(
       "oversized multibyte check identity",
-      0,
-      verdictJson({}, { checks: [{ name: "é".repeat(65), status: "ok" }] }),
-      "invalid-verdict",
-    ],
-    [
-      "oversized candidate version",
-      0,
-      verdictJson({}, { candidateVersion: "v".repeat(129) }),
-      "invalid-verdict",
-    ],
-    [
+      {},
+      { checks: [{ name: "é".repeat(65), status: "ok" }] },
+    ),
+    invalid("oversized candidate version", {}, { candidateVersion: "v".repeat(129) }),
+    invalid(
       "irreducible history metadata",
-      0,
-      verdictJson(
-        {},
-        {
-          checks: Array.from({ length: 8 }, (_, index) => ({
-            name: `${index}${"c".repeat(127)}`,
-            status: "ok",
-          })),
-        },
-      ),
-      "invalid-verdict",
-    ],
+      {},
+      {
+        checks: Array.from({ length: 8 }, (_, index) => ({
+          name: `${index}${"c".repeat(127)}`,
+          status: "ok",
+        })),
+      },
+    ),
   ] as const)(
     "falls back after %s and retains the last redacted stderr diagnostic",
     async (_name, code, stdout, reason) => {

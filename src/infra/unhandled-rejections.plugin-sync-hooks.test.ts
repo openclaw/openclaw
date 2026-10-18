@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import { createHookRunner } from "../plugins/hooks.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
@@ -22,11 +22,17 @@ function createToolResultMessage(text: string, details?: Record<string, unknown>
   } as AgentMessage;
 }
 
-function createLogger() {
-  return {
-    warn: vi.fn<(message: string) => void>(),
-    error: vi.fn<(message: string) => void>(),
-  };
+type Hook = Parameters<typeof createMockPluginRegistry>[0][number];
+type LogMock = ReturnType<typeof vi.fn<(message: string) => void>>;
+let logger: { warn: LogMock; error: LogMock };
+beforeEach(() => {
+  logger = { warn: vi.fn<(message: string) => void>(), error: vi.fn<(message: string) => void>() };
+});
+function createRunner(hookName: string, hooks: Omit<Hook, "hookName">[], failClosed = false) {
+  return createHookRunner(createMockPluginRegistry(hooks.map((hook) => ({ ...hook, hookName }))), {
+    logger,
+    ...(failClosed ? { failurePolicyByHook: { [hookName]: "fail-closed" as const } } : {}),
+  });
 }
 
 describe("sync-only plugin hooks", () => {
@@ -75,48 +81,41 @@ describe("sync-only plugin hooks", () => {
   });
 
   it("preserves synchronous secret redaction and subsequent handler composition", () => {
-    const logger = createLogger();
     const secret = ["fixture", "secret"].join("-");
     const originalMessage = createToolResultMessage(JSON.stringify({ value: secret }), {
       value: secret,
     });
     const observedMessages: AgentMessage[] = [];
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "tool_result_persist",
-          pluginId: "ignored-async-handler",
-          priority: 30,
-          handler: async () => ({ message: createToolResultMessage("ignored") }),
+    const runner = createRunner("tool_result_persist", [
+      {
+        pluginId: "ignored-async-handler",
+        priority: 30,
+        handler: async () => ({ message: createToolResultMessage("ignored") }),
+      },
+      {
+        pluginId: "secret-redactor",
+        priority: 20,
+        handler: (event) => {
+          const message = (event as { message: AgentMessage }).message;
+          return {
+            message: {
+              ...message,
+              content: [{ type: "text", text: JSON.stringify({ redacted: true }) }],
+              details: { redacted: true },
+            },
+          };
         },
-        {
-          hookName: "tool_result_persist",
-          pluginId: "secret-redactor",
-          priority: 20,
-          handler: (event) => {
-            const message = (event as { message: AgentMessage }).message;
-            return {
-              message: {
-                ...message,
-                content: [{ type: "text", text: JSON.stringify({ redacted: true }) }],
-                details: { redacted: true },
-              },
-            };
-          },
+      },
+      {
+        pluginId: "subsequent-handler",
+        priority: 10,
+        handler: (event) => {
+          const message = (event as { message: AgentMessage }).message;
+          observedMessages.push(message);
+          return { message: { ...message, details: { redacted: true, observed: true } } };
         },
-        {
-          hookName: "tool_result_persist",
-          pluginId: "subsequent-handler",
-          priority: 10,
-          handler: (event) => {
-            const message = (event as { message: AgentMessage }).message;
-            observedMessages.push(message);
-            return { message: { ...message, details: { redacted: true, observed: true } } };
-          },
-        },
-      ]),
-      { logger },
-    );
+      },
+    ]);
 
     const result = runner.runToolResultPersist({ message: originalMessage }, {});
 
@@ -129,39 +128,32 @@ describe("sync-only plugin hooks", () => {
   });
 
   it("preserves synchronous message blocking and priority order", () => {
-    const logger = createLogger();
     const calls: string[] = [];
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_message_write",
-          pluginId: "ignored-async-handler",
-          priority: 30,
-          handler: async () => {
-            calls.push("async");
-            return { block: false };
-          },
+    const runner = createRunner("before_message_write", [
+      {
+        pluginId: "ignored-async-handler",
+        priority: 30,
+        handler: async () => {
+          calls.push("async");
+          return { block: false };
         },
-        {
-          hookName: "before_message_write",
-          pluginId: "message-blocker",
-          priority: 20,
-          handler: () => {
-            calls.push("blocker");
-            return { block: true };
-          },
+      },
+      {
+        pluginId: "message-blocker",
+        priority: 20,
+        handler: () => {
+          calls.push("blocker");
+          return { block: true };
         },
-        {
-          hookName: "before_message_write",
-          pluginId: "unreached-handler",
-          priority: 10,
-          handler: () => {
-            calls.push("unreached");
-          },
+      },
+      {
+        pluginId: "unreached-handler",
+        priority: 10,
+        handler: () => {
+          calls.push("unreached");
         },
-      ]),
-      { logger },
-    );
+      },
+    ]);
 
     expect(
       runner.runBeforeMessageWrite({ message: createToolResultMessage("original") }, {}),
@@ -173,16 +165,15 @@ describe("sync-only plugin hooks", () => {
 
   it("preserves fail-closed behavior for async handlers", () => {
     const hookName = "tool_result_persist";
-    const logger = createLogger();
-    const runner = createHookRunner(
-      createMockPluginRegistry([
+    const runner = createRunner(
+      hookName,
+      [
         {
-          hookName,
           pluginId: "fail-closed-hook",
           handler: async () => undefined,
         },
-      ]),
-      { logger, failurePolicyByHook: { [hookName]: "fail-closed" } },
+      ],
+      true,
     );
 
     expect(() =>
@@ -201,18 +192,13 @@ describe("sync-only plugin hooks", () => {
       ["not-a-message", {}].map((message) => ({ hookName, message })),
     ),
   )("logs and ignores $hookName replacement $message", ({ hookName, message }) => {
-    const logger = createLogger();
     const originalMessage = createToolResultMessage("original");
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName,
-          pluginId: "malformed-sync-hook",
-          handler: () => ({ message }),
-        },
-      ]),
-      { logger },
-    );
+    const runner = createRunner(hookName, [
+      {
+        pluginId: "malformed-sync-hook",
+        handler: () => ({ message }),
+      },
+    ]);
 
     const result =
       hookName === "tool_result_persist"

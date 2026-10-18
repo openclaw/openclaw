@@ -36,9 +36,16 @@ vi.mock("../plugins/plugin-runtime-inventory.js", () => ({ listEnabledPluginReco
 
 let sequence = 0;
 let testState: OpenClawTestState;
+let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
+let config: OpenClawConfig;
+function check(readConfig: () => OpenClawConfig = () => config, nowMs?: number) {
+  return checkTelemetryUpdate(readConfig, { surface: "gateway", fetchImpl, nowMs });
+}
 beforeEach(async () => {
+  config = { telemetry: { enabled: true } };
   testState = await createOpenClawTestState({ layout: "state-only", prefix: "telemetry-async-" });
   contexts.length = 0;
+  fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
   execute.mockReset().mockImplementation(async (command) => {
     switch (command.type) {
       case "telemetry.readState":
@@ -67,15 +74,12 @@ it("retains best-effort reads and accepted updates when storage cannot admit wor
   vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation(() => {
     throw new Error("Storage admission is closed");
   });
-  const config = { telemetry: { enabled: true } };
   expect(
     (await buildTelemetryPayload(config, { surface: "gateway" })).features.sessionsLast24h,
   ).toBe(0);
   expect(await resolveTelemetryStatus(config)).toMatchObject({ enabled: true, reason: "enabled" });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
-  expect(await checkTelemetryUpdate(() => config, options)).toEqual({ version: "2026.8.24" });
-  expect(await checkTelemetryUpdate(() => config, { ...options, nowMs: 200 })).toEqual({
+  expect(await check(() => config, 100)).toEqual({ version: "2026.8.24" });
+  expect(await check(() => config, 200)).toEqual({
     version: "2026.8.24",
   });
   expect(fetchImpl).toHaveBeenCalledOnce();
@@ -96,14 +100,12 @@ it("coalesces a cold check through storage preparation and accepted response per
     }
     return 3;
   });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
   let settled = false;
-  const first = checkTelemetryUpdate(() => ({}), options).then((value) => {
+  const first = check(() => ({}), 100).then((value) => {
     settled = true;
     return value;
   });
-  const second = checkTelemetryUpdate(() => ({}), options);
+  const second = check(() => ({}), 100);
   try {
     expect(fetchImpl).not.toHaveBeenCalled();
     read.resolve({});
@@ -126,11 +128,7 @@ it("keeps the captured endpoint and storage destination across the first read wa
   const read = createDeferredCore<TelemetryState>();
   execute.mockImplementationOnce(() => read.promise);
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const checking = checkTelemetryUpdate(() => ({ telemetry: { enabled: true } }), {
-    surface: "gateway",
-    fetchImpl,
-  });
+  const checking = check();
   const context = contexts[0];
   try {
     vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("other-state"));
@@ -156,11 +154,9 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       }
       return command.type === "telemetry.persistSuccess" ? command.input.state : {};
     });
-    const config: OpenClawConfig = { telemetry: { enabled: true } };
     setRuntimeConfigSnapshot(config);
     expect(getRuntimeConfig()).toBe(config);
-    const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-    const checking = checkTelemetryUpdate(getRuntimeConfig, { surface: "gateway", fetchImpl });
+    const checking = check(getRuntimeConfig);
     try {
       await countRequested.promise;
       const replacement: OpenClawConfig = {

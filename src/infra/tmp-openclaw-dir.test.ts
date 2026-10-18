@@ -1,4 +1,3 @@
-// Covers preferred OpenClaw temp directory resolution.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -12,18 +11,7 @@ function fallbackTmp(uid = 501) {
 }
 
 function nodeErrorWithCode(code: string) {
-  const err = new Error(code) as Error & { code?: string };
-  err.code = code;
-  return err;
-}
-
-function secureDirStat(uid = 501) {
-  return {
-    isDirectory: () => true,
-    isSymbolicLink: () => false,
-    uid,
-    mode: 0o40700,
-  };
+  return Object.assign(new Error(code), { code });
 }
 
 function makeDirStat(params?: {
@@ -42,12 +30,6 @@ function makeDirStat(params?: {
 
 function symlinkTmpDirLstat() {
   return vi.fn(() => makeDirStat({ isSymbolicLink: true, mode: 0o120777 }));
-}
-
-function expectFallsBackToOsTmpDir(params: { lstatSync: NonNullable<TmpDirOptions["lstatSync"]> }) {
-  const { resolved, tmpdir } = resolveWithMocks({ lstatSync: params.lstatSync });
-  expect(resolved).toBe(fallbackTmp());
-  expect(tmpdir).toHaveBeenCalled();
 }
 
 function resolveWithMocks(params: {
@@ -70,9 +52,9 @@ function resolveWithMocks(params: {
       if (params.fallbackLstatSync) {
         return params.fallbackLstatSync(target);
       }
-      return secureDirStat(uid);
+      return makeDirStat({ uid });
     }
-    return secureDirStat(uid);
+    return makeDirStat({ uid });
   }) as NonNullable<TmpDirOptions["lstatSync"]>;
   const mkdirSync = vi.fn();
   const getuid = vi.fn(() => uid);
@@ -90,12 +72,7 @@ function resolveWithMocks(params: {
 
 describe.skipIf(process.platform === "win32")("POSIX preferred temp directory selection", () => {
   it("prefers /tmp/openclaw when it already exists and is writable", () => {
-    const lstatSync: NonNullable<TmpDirOptions["lstatSync"]> = vi.fn(() => ({
-      isDirectory: () => true,
-      isSymbolicLink: () => false,
-      uid: 501,
-      mode: 0o40700,
-    }));
+    const lstatSync = vi.fn(() => makeDirStat());
     const { resolved, accessSync, tmpdir } = resolveWithMocks({ lstatSync });
 
     expect(lstatSync).toHaveBeenCalledTimes(1);
@@ -122,17 +99,16 @@ describe.skipIf(process.platform === "win32")("POSIX preferred temp directory se
       lstatSync: vi.fn(() => makeDirStat({ mode: 0o40777 })),
     },
   ])("$name", ({ lstatSync }) => {
-    expectFallsBackToOsTmpDir({ lstatSync });
+    const { resolved, tmpdir } = resolveWithMocks({ lstatSync });
+    expect(resolved).toBe(fallbackTmp());
+    expect(tmpdir).toHaveBeenCalled();
   });
 
   it("throws when fallback path is a symlink", () => {
-    const lstatSync = symlinkTmpDirLstat();
-    const fallbackLstatSync = vi.fn(() => makeDirStat({ isSymbolicLink: true, mode: 0o120777 }));
-
     expect(() =>
       resolveWithMocks({
-        lstatSync,
-        fallbackLstatSync,
+        lstatSync: symlinkTmpDirLstat(),
+        fallbackLstatSync: symlinkTmpDirLstat(),
       }),
     ).toThrow(/Unsafe fallback OpenClaw temp dir/);
   });
@@ -140,16 +116,11 @@ describe.skipIf(process.platform === "win32")("POSIX preferred temp directory se
 
 describe("Windows temp directory selection", () => {
   it("skips the POSIX preferred path on Windows even when /tmp is accessible (#60713)", () => {
-    // Node on Windows resolves the POSIX path `/tmp` to `C:\tmp` against the
-    // current drive root. If `C:\tmp` happens to exist (Git, MSYS2, etc.
-    // create it), the previous code path returned `/tmp/openclaw` and routed
-    // log files / TTS temp files there instead of `%TEMP%\openclaw`. The
-    // platform: "win32" branch must skip the POSIX path entirely.
     const winFallback = path.win32.join("C:\\Users\\u\\AppData\\Local\\Temp", "openclaw-501");
     const accessSync = vi.fn();
     const lstatSync = vi.fn((target: string) => {
       if (target === DEFAULT_POSIX_TMP_ROOT || target === winFallback) {
-        return secureDirStat();
+        return makeDirStat();
       }
       throw nodeErrorWithCode("ENOENT");
     });
@@ -206,13 +177,16 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     };
   }
 
-  function expectPrivateDirectory(candidate: string, uid: number) {
+  function expectPrivateDirectory(candidate: string, uid: number, identity?: fs.BigIntStats) {
     const stat = fs.lstatSync(candidate, { bigint: true });
     expect(stat.isDirectory()).toBe(true);
     expect(stat.isSymbolicLink()).toBe(false);
     expect(stat.uid).toBe(BigInt(uid));
     expect(stat.mode & 0o7777n).toBe(0o700n);
     fs.accessSync(candidate, fs.constants.W_OK | fs.constants.X_OK);
+    if (identity) {
+      expect(stat).toMatchObject({ dev: identity.dev, ino: identity.ino });
+    }
     return stat;
   }
 
@@ -260,10 +234,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
     expect(f.resolve()).toBe(f.candidate);
 
     expect(admitted).toBeDefined();
-    expect(expectPrivateDirectory(f.candidate, f.uid)).toMatchObject({
-      dev: admitted?.dev,
-      ino: admitted?.ino,
-    });
+    expectPrivateDirectory(f.candidate, f.uid, admitted);
     expect(f.warn).toHaveBeenCalledExactlyOnceWith(
       `[openclaw] tightened permissions on temp dir: ${f.candidate}`,
     );
@@ -297,10 +268,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
 
       expect(opened).toHaveLength(1);
       expect(fchmod).not.toHaveBeenCalled();
-      expect(expectPrivateDirectory(f.candidate, f.uid)).toMatchObject({
-        dev: admitted.dev,
-        ino: admitted.ino,
-      });
+      expectPrivateDirectory(f.candidate, f.uid, admitted);
       expect(f.warn).not.toHaveBeenCalled();
       if (route === "preferred") {
         expect(f.tmpdir).not.toHaveBeenCalled();
@@ -341,10 +309,7 @@ describe.skipIf(process.platform === "win32")("POSIX temp directory admission an
 
       if (repaired) {
         expect(f.resolve()).toBe(f.candidate);
-        expect(expectPrivateDirectory(f.candidate, f.uid)).toMatchObject({
-          dev: admitted.dev,
-          ino: admitted.ino,
-        });
+        expectPrivateDirectory(f.candidate, f.uid, admitted);
         if (route === "preferred") {
           expect(f.tmpdir).not.toHaveBeenCalled();
         }
