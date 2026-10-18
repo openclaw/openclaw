@@ -9,6 +9,7 @@ import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { coerceConfig } from "../config/io.read-helpers.js";
 import {
   ConfigWritePostCommitError,
+  createConfigWriteSafetyRejectionError,
   isConfigValidationFailedError,
 } from "../config/io.write-errors.js";
 import { prepareConfigWriteValues } from "../config/io.write-prepare.js";
@@ -519,7 +520,7 @@ export async function runConfigOperations(params: {
     ) {
       let reasons: string[];
       try {
-        reasons = previewConfigFileWriteSafety({
+        reasons = await previewConfigFileWriteSafety({
           sourceConfig: authoredNextConfig,
           snapshot,
           writeOptions,
@@ -544,7 +545,7 @@ export async function runConfigOperations(params: {
         validation.result.errors = [
           {
             kind: "write-safety",
-            message: `Config write would be rejected (${reasons.join(", ")}). No settings were saved.`,
+            message: `Config write would be rejected (${reasons.join(", ")}). ${createConfigWriteSafetyRejectionError({ reasons }).message}`,
           },
         ];
       }

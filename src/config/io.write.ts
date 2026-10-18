@@ -52,10 +52,7 @@ import {
   captureConfigHealthBaselineForWrite,
   restoreConfigHealthBaselineForRolledBackWrite,
 } from "./io.observe.js";
-import {
-  hashConfigRaw,
-  hasConfigMeta,
-} from "./io.read-helpers.js";
+import { hashConfigRaw, hasConfigMeta } from "./io.read-helpers.js";
 import {
   loggedConfigWarningFingerprints,
   restoreLoggedConfigWarningFingerprint,
@@ -68,10 +65,7 @@ import {
   type ReadConfigFileSnapshotInternalResult,
 } from "./io.types.js";
 import { logConfigWarningsOnce } from "./io.warnings.js";
-import {
-  ConfigWritePostCommitError,
-  type ConfigWriteRollbackStatus,
-} from "./io.write-errors.js";
+import { ConfigWritePostCommitError, type ConfigWriteRollbackStatus } from "./io.write-errors.js";
 import { prepareConfigWritePayload } from "./io.write-payload.js";
 import { preflightConfigRuntimeWrite } from "./io.write-preflight.js";
 import { rejectConfigWriteForBlockingReasons } from "./io.write-rejected.js";
