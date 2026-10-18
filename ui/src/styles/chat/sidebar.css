@@ -1776,6 +1776,12 @@ button.sidebar-image-view__image {
   tab-size: 4;
 }
 
+.session-diff-menu--desktop > .oc-menu-trigger {
+  /* Preserve the renderer's 1px spatial anchor without native button chrome. */
+  padding: 0;
+  border: 0;
+}
+
 .session-diff-menu__surface {
   width: min(var(--session-diff-menu-width), calc(100vw - 16px));
   min-width: min(var(--session-diff-menu-width), calc(100vw - 16px));
@@ -2123,6 +2129,474 @@ openclaw-chat-files-panel,
   flex: 1 1 0;
   min-height: 0;
   overflow: auto;
+}
+
+/* Review owns its scrollports and content insets; the host must not inset its
+   rail or full-width file dividers. Native mobile keeps its separate presenter. */
+.sidebar-content:has(> openclaw-session-diff .session-diff--desktop) {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+}
+
+openclaw-session-diff:has(> .session-diff--desktop) {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.session-diff--desktop {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.session-diff--desktop [hidden] {
+  display: none;
+}
+
+/* Geometry and controls come from the shared desktop rail. Review alone
+   can wrap its intact scope/totals group onto a second line. */
+.session-diff--desktop .session-diff__summary {
+  --session-rail-background: color-mix(in srgb, var(--bg) 94%, black);
+  background: var(--session-rail-background);
+  position: relative;
+  top: auto;
+  flex-wrap: wrap;
+}
+
+.session-diff__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--session-rail-group-gap, 8px);
+  flex: none;
+}
+
+.session-diff--desktop .session-diff__summary > .session-diff__scope-group {
+  flex: 0 1 auto;
+  margin-inline-start: auto;
+  max-width: 100%;
+}
+
+.session-diff--desktop .session-diff__scope-group > .session-diff__scope {
+  flex: 0 1 auto;
+  min-width: 0;
+  height: auto;
+  white-space: normal;
+}
+
+.session-diff--desktop .session-diff__scope > span {
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.session-diff__scope-group > .chat-diffstat {
+  flex: none;
+  padding-inline-end: var(--session-rail-label-gap, 4px);
+}
+
+.session-diff__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__scope > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff__scope svg,
+.session-diff__jump svg,
+.session-diff__context-toggle svg {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--muted);
+}
+
+.session-diff__jump {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.session-diff--desktop .session-diff__files {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  gap: 0;
+  padding-bottom: 24px;
+  min-width: 0;
+  container: review-reader / inline-size;
+}
+
+.session-diff--desktop .session-diff__reading-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-diff__secondary {
+  display: flex;
+  align-items: center;
+  gap: var(--session-rail-gap, 2px);
+  flex: none;
+}
+
+.session-diff--desktop .chat-diffstat {
+  font-family: var(--font-body);
+  font-size: inherit;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-diff--desktop .chat-diffstat__add {
+  color: var(--ok);
+}
+
+.session-diff--desktop .chat-diffstat__del {
+  color: var(--destructive);
+}
+
+.session-diff--desktop .session-diff__file-toggle > .chat-diffstat {
+  display: grid;
+  grid-template-columns: var(--session-diff-add-width) var(--session-diff-del-width);
+  text-align: right;
+  margin-inline-start: auto;
+}
+
+.session-diff__tree-sidebar {
+  flex: 0 0 clamp(140px, 30%, 240px);
+  max-width: calc(100% - 176px);
+  min-width: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+  padding: 6px;
+  transition:
+    flex-basis 240ms ease,
+    padding 240ms ease,
+    border-width 240ms ease;
+}
+.session-diff__tree-sidebar[data-open="false"] {
+  flex-basis: 0;
+  padding-inline: 0;
+  border-right-width: 0;
+  overflow: hidden;
+}
+.session-diff__tree-sidebar[data-instant="true"],
+.session-diff--desktop[data-instant="true"] .session-diff__chevron {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .session-diff__tree-sidebar,
+  .session-diff--desktop .session-diff__chevron {
+    transition: none;
+  }
+}
+.session-diff__tree-sidebar input,
+.session-diff-menu__search {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.session-diff__tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.session-diff__tree ul ul {
+  padding-left: 12px;
+}
+.session-diff__tree-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 5px 4px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--text);
+  background: transparent;
+  font: inherit;
+  font-size: var(--control-ui-text-xs);
+  text-align: left;
+  cursor: var(--cursor-action);
+}
+.session-diff__tree-row:hover,
+.session-diff__tree-row.is-selected {
+  background: var(--bg-hover);
+}
+.session-diff__tree-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.session-diff__tree-name > svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+.session-diff__tree-name > span:last-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.session-diff__tree-row .chat-diffstat {
+  margin-left: auto;
+  flex: none;
+  white-space: nowrap;
+}
+.session-diff__filename-label {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.session-diff__basename {
+  overflow: hidden;
+  white-space: nowrap;
+}
+.session-diff__basename[data-overflow="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 12px), transparent);
+}
+.session-diff__extension {
+  flex: none;
+}
+.session-diff-menu__jump-path {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.session-diff-menu__jump-path small {
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (max-width: 640px) {
+  .session-diff__secondary {
+    display: none;
+  }
+}
+
+.session-diff--desktop .session-diff__file {
+  flex: none;
+  overflow: visible;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+}
+
+.session-diff--desktop .session-diff__file-header {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  min-height: 38px;
+  background: var(--panel);
+}
+
+.session-diff--desktop .session-diff__file.is-selected > .session-diff__file-header,
+.session-diff--desktop .session-diff__file-header:hover {
+  background: var(--bg-hover);
+}
+
+.session-diff--desktop .session-diff__file-toggle {
+  align-self: stretch;
+  padding: 8px 4px 8px 12px;
+  gap: 8px;
+}
+
+.session-diff--desktop .session-diff__path {
+  align-items: center;
+  gap: 0;
+  font-family: var(--font-body);
+}
+
+.session-diff--desktop .session-diff__path > .session-diff__chevron {
+  margin-inline-start: 8px;
+  opacity: 0;
+}
+
+.session-diff--desktop .session-diff__file-header:hover .session-diff__chevron,
+.session-diff--desktop .session-diff__file-toggle:focus-visible .session-diff__chevron,
+.session-diff--desktop .session-diff__path > .session-diff__chevron--open {
+  opacity: 1;
+}
+
+.session-diff--desktop .session-diff__filename {
+  flex-shrink: 1;
+  max-width: none;
+}
+
+.session-diff--desktop .session-diff__directory {
+  flex-shrink: 2;
+  font-size: inherit;
+}
+
+.session-diff--desktop
+  .session-diff__file-header
+  :is(.session-diff__open-file, .session-diff__file-menu) {
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 4px;
+  color: var(--muted);
+}
+
+.session-diff--desktop
+  .session-diff__file-header
+  :is(.session-diff__open-file, .session-diff__file-menu)
+  svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-diff--desktop .session-diff__file-menu {
+  flex: none;
+  opacity: 1;
+}
+
+.session-diff__context-toggle,
+.session-diff__context-label {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 12px 8px 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  cursor: var(--cursor-action);
+}
+
+.session-diff__context-toggle > span:first-child,
+.session-diff__context-label > span:first-child {
+  flex: none;
+  width: 42px;
+  padding-inline-end: 8px;
+  text-align: right;
+}
+
+.session-diff__context-label {
+  cursor: default;
+}
+
+.session-diff__context-toggle:hover {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.session-diff--desktop .chat-diff__row--skip > .chat-diff__text {
+  flex: 1;
+}
+
+.session-diff--desktop .chat-diff__row--skip > .chat-diff__gutter,
+.session-diff--desktop .chat-diff__row--skip > .chat-diff__sign {
+  display: none;
+}
+
+@container review-reader (max-width: 640px) {
+  .session-diff--desktop .session-diff__directory {
+    display: none;
+  }
+}
+
+/* Review keeps the native diff renderer, with the approved semantic gutter.
+   Transcript diffs and mobile cards retain their own presentation. */
+.session-diff--desktop :is(.chat-diff, .session-diff-split) {
+  background: transparent;
+  line-height: 22px;
+}
+
+.session-diff--desktop :is(.chat-diff__gutter, .session-diff-split__gutter) {
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  border-inline-start: 3px solid transparent;
+}
+
+.session-diff--desktop .chat-diff__row--add .chat-diff__gutter,
+.session-diff--desktop
+  .session-diff-split__side--right.session-diff-split__side--filled
+  .session-diff-split__gutter {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 7%, var(--panel));
+  border-inline-start-color: var(--ok);
+}
+
+.session-diff--desktop .chat-diff__row--del .chat-diff__gutter,
+.session-diff--desktop
+  .session-diff-split__side--left.session-diff-split__side--filled
+  .session-diff-split__gutter {
+  color: var(--destructive);
+  background: color-mix(in srgb, var(--destructive) 7%, var(--panel));
+  border-inline-start-color: var(--destructive);
+  border-inline-start-style: dashed;
+}
+
+.session-diff--desktop .chat-diff__row--skip {
+  min-width: 0;
+}
+
+.session-diff--desktop .session-diff-split__row--skip {
+  padding-inline-start: 0;
+}
+
+/* At the native compact breakpoint, the open tree already supplies identity;
+   reserve the reader header for complete counts and actions. */
+@container review-reader (max-width: 400px) {
+  .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__path,
+  .session-diff__tree-sidebar[data-open="true"] + .session-diff__files .session-diff__badge {
+    display: none;
+  }
+}
+
+.session-diff--desktop .session-diff__context-short {
+  display: none;
+}
+
+@container review-reader (max-width: 400px) {
+  .session-diff__context-toggle:has(.session-diff__context-short) .session-diff__context-full,
+  .session-diff__context-label:has(.session-diff__context-short) .session-diff__context-full {
+    display: none;
+  }
+
+  .session-diff--desktop .session-diff__context-short {
+    display: inline;
+    white-space: nowrap;
+  }
+}
+
+.session-diff-menu--desktop .oc-menu-item__icon {
+  margin-inline-end: 0;
+  color: var(--muted);
+}
+
+.session-diff-menu--desktop .oc-menu-item__icon svg {
+  width: 14px;
+  height: 14px;
 }
 
 /* Files publishes preview/pin through the native hosted-tab class. */

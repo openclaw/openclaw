@@ -1,0 +1,309 @@
+/* Only native mobile presentation opts into these cards and their reading viewport. */
+.sidebar-content:has(> openclaw-session-diff .session-diff--mobile) {
+  display: flex;
+  overflow: hidden;
+  padding: 0;
+}
+
+openclaw-session-diff:has(> .session-diff--mobile) {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.session-diff--mobile {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-diff-mobile__rail {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: 2px;
+  min-height: 40px;
+  padding-inline: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.session-diff-mobile__rail .session-diff__scope {
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  font-size: 14px;
+  font-weight: 400;
+  text-align: start;
+}
+
+.session-diff-mobile__rail .btn,
+.session-diff--mobile .session-diff__file-menu {
+  flex-shrink: 0;
+  width: 32px;
+  min-width: 32px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: var(--muted);
+}
+
+.session-diff-mobile__rail .btn svg,
+.session-diff--mobile .session-diff__file-menu svg {
+  width: 16px;
+  height: 16px;
+}
+
+.session-diff-mobile__body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+}
+
+.session-diff-mobile__scroll {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+/* Fade only hidden reading content, leaving the rail and scrollbar untouched. */
+.session-diff-mobile__body::before,
+.session-diff-mobile__body::after {
+  position: absolute;
+  z-index: 2;
+  inset-inline: 0 var(--scrollbar-size);
+  height: 16px;
+  pointer-events: none;
+}
+
+.session-diff-mobile__body[data-at-start="false"]::before {
+  content: "";
+  top: 0;
+  background: linear-gradient(var(--panel), transparent);
+}
+
+.session-diff-mobile__body[data-at-end="false"]::after {
+  content: "";
+  bottom: 0;
+  background: linear-gradient(transparent, var(--panel));
+}
+
+.session-diff-mobile__summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin-bottom: 12px;
+}
+
+.session-diff-mobile__branch {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 16px;
+}
+
+.session-diff-mobile__branch > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.session-diff-mobile__branch > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-diff-mobile__branch > span > * {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-diff-mobile__counts {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  margin-inline-start: auto;
+}
+
+.session-diff-mobile__summary small {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.session-diff--mobile .session-diff__files {
+  gap: 10px;
+  padding: 0;
+}
+
+.session-diff--mobile .session-diff__file {
+  padding: 0 12px 12px;
+  border: 0;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
+}
+
+.session-diff--mobile .session-diff__file[data-collapsed="true"] {
+  padding-bottom: 0;
+}
+
+.session-diff--mobile .session-diff__file-header {
+  width: auto;
+  margin-inline-end: -8px;
+}
+
+.session-diff--mobile .session-diff__file-toggle {
+  gap: 8px;
+  min-height: 52px;
+  padding: 8px 0;
+}
+
+.session-diff--mobile .session-diff__chevron {
+  width: 14px;
+}
+
+.session-diff--mobile .session-diff__chevron svg {
+  width: 12px;
+  height: 12px;
+}
+
+.session-diff--mobile .session-diff__status {
+  width: 12px;
+  height: auto;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.session-diff--mobile .session-diff__path {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 1px;
+  font-family: inherit;
+  white-space: normal;
+}
+
+.session-diff--mobile .session-diff__filename {
+  max-width: none;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.session-diff--mobile .session-diff__directory,
+.session-diff--mobile .session-diff__old-path {
+  max-width: none;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.session-diff--mobile .session-diff__old-path {
+  order: 1;
+}
+
+.session-diff--mobile .session-diff__file-menu {
+  margin: 0;
+  opacity: 1;
+}
+
+.session-diff--mobile .session-diff__file-body {
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.session-diff--mobile .session-diff__file :is(.chat-diff, .session-diff-split) {
+  margin: 0;
+  padding-block: 6px 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.session-diff--mobile :is(.chat-diff__gutter, .session-diff-split__gutter) {
+  font-variant-numeric: tabular-nums;
+}
+
+.session-diff--mobile.session-diff--wrap
+  :is(.session-diff-split__row--pair, .session-diff-split__row--context) {
+  min-width: 0;
+}
+
+.session-diff--mobile.session-diff--wrap
+  :is(.session-diff-split__side, .session-diff-split__row--context) {
+  grid-template-columns: 34px 16px minmax(0, 1fr);
+}
+
+.session-diff-mobile__commits {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  margin-top: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.session-diff-mobile__commits svg {
+  width: 14px;
+  height: 14px;
+}
+
+.session-diff--mobile > .callout {
+  margin: 12px;
+}
+
+.session-diff-menu--mobile .session-menu__item {
+  min-height: 44px;
+}
+
+.session-diff--mobile .chat-diffstat {
+  gap: 5px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-diff--mobile .chat-diffstat__add {
+  color: var(--ok);
+}
+
+.session-diff--mobile .chat-diffstat__del {
+  color: var(--destructive);
+}
+
+.session-diff-mobile__rail .btn {
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+.session-diff-mobile__rail .session-diff__scope svg {
+  width: 16px;
+  height: 16px;
+}
