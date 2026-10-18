@@ -1,13 +1,14 @@
 // Verifies the session capability summary keeps session limits distinct from product limits.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { EffectiveToolInventoryResult } from "../tools-effective-inventory.types.js";
 import {
   formatSessionCapabilities,
-  summarizeSessionCapabilities,
+  resolveSessionCapabilities,
 } from "./session-status-capabilities.js";
 
 describe("session capability summary", () => {
-  it("groups missing tools by the policy reason and keeps final presence authoritative", () => {
-    const summary = summarizeSessionCapabilities({
+  it("groups missing tools by the policy reason and keeps final presence authoritative", async () => {
+    const inventory = {
       agentId: "main",
       profile: "coding",
       groups: [
@@ -51,8 +52,13 @@ describe("session capability summary", () => {
           },
         ],
       },
-    });
+    } satisfies EffectiveToolInventoryResult;
 
+    const summary = await resolveSessionCapabilities({
+      callGateway: vi.fn().mockResolvedValue(inventory),
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
     expect(summary).toEqual({
       checked: "live-session",
       available: ["exec", "read"],
