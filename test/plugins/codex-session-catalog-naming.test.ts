@@ -36,8 +36,6 @@ it("adopts duplicate native titles without claiming labels or replacing local na
       },
     });
     const run = async () => {
-      // Only the native service is synthetic. The public plugin, real client,
-      // registry, creator, SQLite history, and binding owner all execute.
       const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
       await once(server, "listening");
       try {
@@ -45,6 +43,9 @@ it("adopts duplicate native titles without claiming labels or replacing local na
         if (!address || typeof address === "string") {
           throw new Error("Native fixture requires a loopback port");
         }
+        const pluginConfig = {
+          appServer: { transport: "websocket" as const, url: `ws://127.0.0.1:${address.port}` },
+        };
         const config = {
           agents: {
             defaults: {
@@ -53,17 +54,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             },
           },
           plugins: {
-            entries: {
-              codex: {
-                enabled: true,
-                config: {
-                  appServer: {
-                    transport: "websocket" as const,
-                    url: `ws://127.0.0.1:${address.port}`,
-                  },
-                },
-              },
-            },
+            entries: { codex: { enabled: true, config: pluginConfig } },
           },
         };
         await state.writeConfig(config);
@@ -86,9 +77,10 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           configSchema: true,
           contracts: manifest.contracts,
         });
+        const title = "Shared native title";
         const titles = [
-          "  Shared native title  ",
-          "Shared native title",
+          `  ${title}  `,
+          title,
           null,
           "   ",
           "",
@@ -112,33 +104,21 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             {
               id: `turn-${index}`,
               status: "completed",
-              items: [
-                {
-                  type: "userMessage",
-                  id: `user-${index}`,
-                  content: [{ type: "text", text: `Request ${index}` }],
-                },
-                { type: "agentMessage", id: `answer-${index}`, text: `Answer ${index}` },
-              ],
+              items: [{ type: "agentMessage", id: `answer-${index}`, text: `Answer ${index}` }],
             },
           ],
         }));
         for (const thread of threads) {
-          const timestamp = new Date(thread.createdAt * 1000).toISOString();
           await fs.writeFile(
             thread.path,
             `${JSON.stringify({
-              timestamp,
               type: "session_meta",
               payload: {
-                session_id: thread.id,
                 id: thread.id,
-                timestamp,
+                timestamp: new Date(thread.createdAt * 1000).toISOString(),
                 cwd: thread.cwd,
                 source: thread.source,
                 originator: "codex_cli_rs",
-                cli_version: "0.151.0",
-                model_provider: thread.modelProvider,
               },
             })}\n`,
           );
@@ -154,36 +134,28 @@ it("adopts duplicate native titles without claiming labels or replacing local na
               return;
             }
             const thread = threads.find((entry) => entry.id === request.params?.threadId);
-            const result =
-              request.method === "initialize"
-                ? { userAgent: "openclaw/0.150.1 (test)" }
-                : request.method === "thread/list"
-                  ? {
-                      data: threads.map((entry) => Object.assign({}, entry, { turns: [] })),
-                      nextCursor: null,
-                    }
-                  : request.method === "thread/read" && thread
-                    ? { thread }
-                    : undefined;
+            const replies: Record<string, unknown> = {
+              initialize: { userAgent: "openclaw/0.150.1 (test)" },
+              "thread/list": {
+                data: threads.map((entry) => ({ ...entry, turns: [] })),
+                nextCursor: null,
+              },
+              "thread/read": thread ? { thread } : undefined,
+            };
+            const result = replies[request.method];
             const response =
               result !== undefined
-                ? { id: request.id, result }
+                ? { result }
                 : {
-                    id: request.id,
                     error: { code: -32601, message: `Unexpected native RPC: ${request.method}` },
                   };
-            socket.send(JSON.stringify(response));
+            socket.send(JSON.stringify({ id: request.id, ...response }));
           });
         });
         builder.registry.plugins.push(record);
         markPluginRegistryActive(builder.registry);
         try {
-          plugin.register(
-            builder.createApi(record, {
-              config,
-              pluginConfig: config.plugins.entries.codex.config,
-            }),
-          );
+          plugin.register(builder.createApi(record, { config, pluginConfig }));
           const provider = builder.registry.sessionCatalogs.find(
             (entry) => entry.provider.id === "codex",
           )!.provider;
@@ -195,10 +167,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
               clientScopes: ["operator.admin"],
             });
           const getEntry = (sessionKey: string) =>
-            runtime.agent.session.getSessionEntry({
-              sessionKey,
-              readConsistency: "latest",
-            })!;
+            runtime.agent.session.getSessionEntry({ sessionKey, readConsistency: "latest" })!;
 
           // Preserve the reported order: the second same-agent adoption used to
           // fail unique-label admission after the first had durably committed.
@@ -210,7 +179,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
           );
           for (const [index, result] of [first, second].entries()) {
             const entry = getEntry(result.sessionKey);
-            expect(entry.displayName).toBe("Shared native title");
+            expect(entry.displayName).toBe(title);
             expect(entry.label).toBeUndefined();
             expect(entry.initializationPending).toBeUndefined();
             const transcript = await loadTranscriptEvents({
@@ -221,15 +190,14 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(JSON.stringify(transcript)).toContain(`Answer ${index}`);
           }
 
-          await runtime.agent.session.patchSessionEntry({
-            sessionKey: first.sessionKey,
-            update: () => ({ label: "Operator chosen label" }),
-          });
           // Equality with the old source name cannot identify label authorship.
-          await runtime.agent.session.patchSessionEntry({
-            sessionKey: second.sessionKey,
-            update: () => ({ label: "Shared native title" }),
-          });
+          for (const [index, result] of [first, second].entries()) {
+            const label = index === 0 ? "Operator chosen label" : title;
+            await runtime.agent.session.patchSessionEntry({
+              sessionKey: result.sessionKey,
+              update: () => ({ label }),
+            });
+          }
           for (const [index, result] of [first, second].entries()) {
             const before = getEntry(result.sessionKey);
             threads[index]!.name = "Renamed upstream";
@@ -238,7 +206,7 @@ it("adopts duplicate native titles without claiming labels or replacing local na
             expect(getEntry(result.sessionKey)).toMatchObject({
               sessionId: before.sessionId,
               label: before.label,
-              displayName: "Shared native title",
+              displayName: title,
               pluginExtensions: before.pluginExtensions,
             });
           }
@@ -251,10 +219,8 @@ it("adopts duplicate native titles without claiming labels or replacing local na
               commandSource: "test",
               operatorRoleActor: { kind: "system" },
             });
-          const explicitA = await createExplicit("a", "User duplicate");
-          const explicitB = await createExplicit("b", "  User duplicate  ");
-          expect(explicitA.ok).toBe(true);
-          expect(explicitB).toMatchObject({
+          expect((await createExplicit("a", "User duplicate")).ok).toBe(true);
+          expect(await createExplicit("b", "  User duplicate  ")).toMatchObject({
             ok: false,
             error: { code: "INVALID_REQUEST", message: "label already in use: User duplicate" },
           });

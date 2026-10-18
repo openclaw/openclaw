@@ -144,8 +144,7 @@ describe("Crabbox allocation through Gateway ownership", () => {
               id: "chk_authority",
               kind: "aws-ebs-snapshot",
               leaseId: value("--id"),
-              workdir: "/workspace",
-              native: { imageId: "snap_authority", state: "completed" },
+              native: { state: "completed" },
             });
           }
           if (argv[1] === "checkpoint" && argv[2] === "inspect") {
