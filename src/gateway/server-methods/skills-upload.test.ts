@@ -4,6 +4,7 @@ import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { observeSkillUploadRenewal } from "../../skills/lifecycle/upload-store.test-support.js";
 import { closeSkillsWatchers } from "../../skills/runtime/refresh.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -25,6 +26,10 @@ const installSecurityScanState = vi.hoisted(() => ({
 const replaceFileState = vi.hoisted(() => ({
   publishFailureTarget: "",
   publishFailures: 0,
+}));
+
+const removePathState = vi.hoisted(() => ({
+  beforeBackupCleanup: undefined as (() => Promise<void>) | undefined,
 }));
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
@@ -58,6 +63,24 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => {
         throw new Error("publish boom");
       }
       return await actual.movePathWithCopyFallback(options);
+    },
+  };
+});
+
+vi.mock("../../infra/fs-safe-remove.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/fs-safe-remove.js")>();
+  return {
+    ...actual,
+    removePathWithinRoot: async (options: Parameters<typeof actual.removePathWithinRoot>[0]) => {
+      if (
+        removePathState.beforeBackupCleanup &&
+        String(options.relativePath).includes(".openclaw-install-backups")
+      ) {
+        const hook = removePathState.beforeBackupCleanup;
+        removePathState.beforeBackupCleanup = undefined;
+        await hook();
+      }
+      return await actual.removePathWithinRoot(options);
     },
   };
 });
@@ -256,6 +279,7 @@ describe("skill upload gateway handlers", () => {
     testStates = [];
     replaceFileState.publishFailureTarget = "";
     replaceFileState.publishFailures = 0;
+    removePathState.beforeBackupCleanup = undefined;
     installSecurityScanState.evaluateSkillInstallPolicy.mockReset();
     installSecurityScanState.evaluateSkillInstallPolicy.mockResolvedValue(undefined);
   });
@@ -525,4 +549,49 @@ describe("skill upload gateway handlers", () => {
       ).resolves.toContain(publishFails ? "first version" : "second version");
     },
   );
+
+  it("keeps a forced replacement successful when lease loss is confirmed during backup cleanup", async () => {
+    const { handlers, install: installArchive, workspaceDir } = await makeHarness();
+    const slug = "cleanup-lease-demo";
+    const uploadVersion = async (body: string, force = false) =>
+      uploadArchive(handlers, {
+        archive: await makeSkillArchive({ name: "Cleanup Lease Demo", body }),
+        slug,
+        force,
+      });
+    const first = await uploadVersion("first version");
+    expect((await installArchive(first.uploadId, slug)).ok).toBe(true);
+    const forced = await uploadVersion("second version", true);
+
+    let cleanupPaused = false;
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    const renewalSettled = observeSkillUploadRenewal();
+    removePathState.beforeBackupCleanup = async () => {
+      cleanupPaused = true;
+      uploadDb()
+        .prepare(
+          "UPDATE state_leases SET expires_at = ? WHERE scope = 'skill-upload-install' AND lease_key = ?",
+        )
+        .run(Date.now() - 1, forced.uploadId);
+      const heartbeat = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
+      if (!heartbeat) {
+        throw new Error("Install heartbeat was not scheduled");
+      }
+      heartbeat();
+      await renewalSettled;
+    };
+    try {
+      await expect(installArchive(forced.uploadId, slug, { force: true })).resolves.toMatchObject({
+        ok: true,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(cleanupPaused).toBe(true);
+    await expect(
+      fs.readFile(path.join(workspaceDir, "skills", slug, "SKILL.md"), "utf8"),
+    ).resolves.toContain("second version");
+  });
 });

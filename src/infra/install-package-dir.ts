@@ -266,6 +266,8 @@ export async function installPackageDir<
   afterInstall?: (installedDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   afterBackup?: (backupDir: string) => Promise<InstallPackageDirSuccess | TAfterInstallFailure>;
   beforePersistentApply?: () => void;
+  /** Pre-publication authority check; never reused for post-publication cleanup custody. */
+  assertPublicationAuthority?: () => void;
   /** Remote owners answer before displacement/publication; local checks still run at the mutation. */
   authorizeMutation?: () => Promise<void>;
   requireExistingTarget?: boolean;
@@ -329,6 +331,10 @@ export async function installPackageDir<
   const assertPersistentApply = retainMutationAuthority(() => {
     assertRollbackOwned();
     return params.beforePersistentApply?.();
+  });
+  const assertPublicationApply = retainMutationAuthority(() => {
+    assertPersistentApply();
+    return params.assertPublicationAuthority?.();
   });
   const removeInstallTree = async (removal: {
     directory: string;
@@ -618,7 +624,7 @@ export async function installPackageDir<
         await params.authorizeMutation();
       }
       await movePathWithCopyFallback({
-        assertBeforeMutation: assertPersistentApply,
+        assertBeforeMutation: assertPublicationApply,
         onDestinationPublished: (receipt) => {
           published.backup = receipt;
         },
@@ -654,7 +660,7 @@ export async function installPackageDir<
       await params.authorizeMutation();
     }
     await movePathWithCopyFallback({
-      assertBeforeMutation: assertPersistentApply,
+      assertBeforeMutation: assertPublicationApply,
       onDestinationPublished: (receipt) => {
         published.install = receipt;
       },

@@ -261,6 +261,7 @@ export async function applyExtractedSkillRoot(
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
       beforePersistentApply: params.beforePersistentApply,
+      assertPublicationAuthority: params.assertPublicationAuthority,
       authorizeMutation: params.authorizeMutation,
       requireExistingTarget: Boolean(params.deferCommit && expectedClawHubState),
       hasDeps: false,
@@ -329,6 +330,7 @@ export async function installSkillArchiveFromPath(params: {
   logger?: ArchiveLogger;
   policy?: SkillArchiveInstallPolicy;
   beforePersistentApply?: () => void;
+  assertPublicationAuthority?: () => void;
 }): Promise<SkillArchiveInstallResult> {
   const result = await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -346,6 +348,7 @@ export async function installSkillArchiveFromPath(params: {
         logger: params.logger,
         policy: params.policy,
         beforePersistentApply: params.beforePersistentApply,
+        assertPublicationAuthority: params.assertPublicationAuthority,
       }),
   });
   if (!result.ok) {
