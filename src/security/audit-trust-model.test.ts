@@ -146,9 +146,7 @@ describe("security audit trust model findings", () => {
         name: "does not warn for multi-user heuristic when no shared-user signals are configured",
         cfg: {
           channels: {
-            discord: {
-              groupPolicy: "allowlist",
-            },
+            discord: { groupPolicy: "allowlist" },
           },
           tools: { elevated: { enabled: false } },
         } satisfies OpenClawConfig,
@@ -160,10 +158,7 @@ describe("security audit trust model findings", () => {
           session: { groupScope: "main" },
         } satisfies OpenClawConfig,
         checkId: groupScope,
-        match: {
-          severity: "warn",
-          title: "Group rooms share the main session",
-        },
+        match: { severity: "warn", title: "Group rooms share the main session" },
         detail: ['session.groupScope="main"', "all group/channel rooms"],
         remediation: ["https://docs.openclaw.ai/channels/groups#session-keys"],
       },
