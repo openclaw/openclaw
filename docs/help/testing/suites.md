@@ -244,6 +244,14 @@ Native dependency policy:
       without retrying the shard, even when the child shuts down with exit code zero. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` (`pnpm tsgo*`) type checks with tsrs on
+      Linux and Apple Silicon macOS, and with tsgo on Windows and Intel macOS,
+      where tsrs ships no binary. Set `OPENCLAW_TYPECHECKER=tsgo` to use tsgo
+      anywhere, for example to compare a suspected tsrs false positive; Full
+      Release Validation does this for every release. Declaration emit and
+      `pnpm tsgo:profile` always use tsgo. Ordinary `--pprofDir` requests
+      (including `OPENCLAW_TSGO_PPROF_DIR`) also select tsgo; forcing tsrs
+      for that Go-only flag fails with an actionable message.
     - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
       behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
       a positive millisecond value to make a wedged compiler fail loudly

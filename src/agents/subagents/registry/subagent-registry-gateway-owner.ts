@@ -1,7 +1,9 @@
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -24,6 +26,13 @@ import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
+type ActivationMetrics = {
+  authorityRestoreMs: number;
+  publishMs: number;
+  recoveredRuns: number;
+  publishedRuns: number;
+};
+
 const log = createSubsystemLogger("agents/subagents");
 // Worker admission and unavailable policy startup retry; revoked custody never re-arms itself.
 const deferredCompletionSources = new WeakSet<object>();
@@ -40,6 +49,7 @@ async function restoreSubagentCompletionSource(
   entry: SubagentRunRecord,
   resolver: GatewayContextResolver,
   isGatewayCurrent: () => boolean,
+  metrics?: ActivationMetrics,
 ): Promise<void> {
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   deferredCompletionSources.delete(runtimeKey);
@@ -63,6 +73,7 @@ async function restoreSubagentCompletionSource(
   ) {
     return;
   }
+  const beforeRestore = performance.now();
   let releaseRestored: (() => void) | undefined;
   let continuation:
     | Awaited<
@@ -226,6 +237,9 @@ async function restoreSubagentCompletionSource(
   } finally {
     continuation?.release();
     releaseRestored?.();
+    if (metrics) {
+      metrics.authorityRestoreMs += performance.now() - beforeRestore;
+    }
   }
 }
 
@@ -250,6 +264,7 @@ async function recoverSubagentRunGatewayOwner(
   resolver: GatewayContextResolver,
   onRecovered: (entry: SubagentRunRecord) => void,
   isGatewayCurrent: () => boolean,
+  metrics: ActivationMetrics,
 ): Promise<boolean> {
   const previousResolver = getEntryGatewayContextResolver(expected);
   const gateway = resolver();
@@ -257,34 +272,42 @@ async function recoverSubagentRunGatewayOwner(
     return false;
   }
   let recovered: SubagentRunRecord | undefined;
-  const committed = await mutateSubagentRuns(
-    [expected.runId],
-    (rows) => {
-      const current = rows.get(expected.runId);
-      if (!current) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent Gateway recovery row disappeared",
-        );
-      }
-      return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
-    },
-    {
-      gatewayRecovery: { expected, previousResolver, resolver, gateway },
-      onPublished: (postimages) => {
-        const row = postimages.get(expected.runId);
-        if (row) {
-          bindGatewayContextResolver(row, resolver);
-          if (!row.collect) {
-            subagentRuns.requireCompletionAuthority(row);
-          }
-          recovered = row;
-          subagentRuns.commitOwnership(row);
+  const beforePublish = performance.now();
+  let committed: boolean;
+  try {
+    committed = await mutateSubagentRuns(
+      [expected.runId],
+      (rows) => {
+        const current = rows.get(expected.runId);
+        if (!current) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Subagent Gateway recovery row disappeared",
+          );
         }
+        return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
       },
-    },
-  );
+      {
+        gatewayRecovery: { expected, previousResolver, resolver, gateway },
+        onPublished: (postimages) => {
+          const row = postimages.get(expected.runId);
+          if (row) {
+            bindGatewayContextResolver(row, resolver);
+            if (!row.collect) {
+              subagentRuns.requireCompletionAuthority(row);
+            }
+            recovered = row;
+            subagentRuns.commitOwnership(row);
+            metrics.publishedRuns += 1;
+          }
+        },
+      },
+    );
+  } finally {
+    metrics.publishMs += performance.now() - beforePublish;
+  }
   if (recovered) {
-    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent);
+    metrics.recoveredRuns += 1;
+    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent, metrics);
     if (isGatewayCurrent()) {
       onRecovered(recovered);
     }
@@ -298,6 +321,7 @@ export async function bindSubagentRunGatewayOwners(params: {
   resumedRuns: Set<object>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   onRecovered: (entry: SubagentRunRecord) => void;
+  startupTrace?: GatewayStartupTrace;
 }): Promise<boolean> {
   const resolver = params.getGatewayContextResolver();
   const gateway = resolver?.();
@@ -307,41 +331,75 @@ export async function bindSubagentRunGatewayOwners(params: {
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
   // New registrations during a yield belong to the next pass, not this captured owner set.
   const capturedRuns = [...params.runs.values()];
+  const metrics: ActivationMetrics = {
+    authorityRestoreMs: 0,
+    publishMs: 0,
+    recoveredRuns: 0,
+    publishedRuns: 0,
+  };
+  let activeRuns = 0;
+  let yieldMs = 0;
   let visited = 0;
-  for (const snapshot of capturedRuns) {
-    if (++visited % 128 === 0) {
-      await yieldToEventLoop();
-      if (!isCurrent()) {
-        return false;
+  try {
+    for (const snapshot of capturedRuns) {
+      if (snapshot.execution.status !== "terminal") {
+        activeRuns += 1;
       }
-    }
-    const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
-    if (!entry) {
-      continue;
-    }
-    const previous = getEntryGatewayContextResolver(entry);
-    if (previous) {
-      if (
-        previous() ||
-        (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
-          !isRetiredSubagentExecution(entry))
-      ) {
+      if (++visited % 128 === 0) {
+        const beforeYield = performance.now();
+        await yieldToEventLoop();
+        yieldMs += performance.now() - beforeYield;
+        if (!isCurrent()) {
+          return false;
+        }
+      }
+      const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
+      if (!entry) {
         continue;
       }
-      const previousResumeKey = getSubagentRunRuntimeKey(entry);
-      if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered, isCurrent)) {
-        params.resumedRuns.delete(previousResumeKey);
+      const previous = getEntryGatewayContextResolver(entry);
+      if (previous) {
+        if (
+          previous() ||
+          (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
+            !isRetiredSubagentExecution(entry))
+        ) {
+          continue;
+        }
+        const previousResumeKey = getSubagentRunRuntimeKey(entry);
+        if (
+          await recoverSubagentRunGatewayOwner(
+            entry,
+            resolver,
+            params.onRecovered,
+            isCurrent,
+            metrics,
+          )
+        ) {
+          params.resumedRuns.delete(previousResumeKey);
+        }
+        if (!isCurrent()) {
+          return false;
+        }
+        continue;
       }
+      bindGatewayContextResolver(entry, resolver);
+      metrics.publishedRuns += 1;
+      await restoreSubagentCompletionSource(entry, resolver, isCurrent, metrics);
       if (!isCurrent()) {
         return false;
       }
-      continue;
     }
-    bindGatewayContextResolver(entry, resolver);
-    await restoreSubagentCompletionSource(entry, resolver, isCurrent);
-    if (!isCurrent()) {
-      return false;
-    }
+    return isCurrent();
+  } finally {
+    params.startupTrace?.detail("sidecars.subagent-activation", [
+      ["registryActivationAuthorityRestoreMs", metrics.authorityRestoreMs],
+      ["registryActivationPublishMs", metrics.publishMs],
+      ["registryActivationYieldMs", yieldMs],
+      ["registryActivationRuns", capturedRuns.length],
+      ["registryActivationActiveRuns", activeRuns],
+      ["registryActivationRecoveredRuns", metrics.recoveredRuns],
+      ["registryActivationPublishedRuns", metrics.publishedRuns],
+    ]);
   }
-  return isCurrent();
 }

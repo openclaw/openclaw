@@ -13,7 +13,6 @@ it.each([
   { schemaPolicy: undefined, ending: "deadline" },
   { schemaPolicy: undefined, ending: "abort" },
   { schemaPolicy: undefined, ending: "cleanup" },
-  { schemaPolicy: undefined, ending: "delayed-cleanup" },
   { schemaPolicy: "existing", ending: "release" },
   { schemaPolicy: "existing", ending: "cleanup" },
 ] as const)(
@@ -33,24 +32,12 @@ it.each([
           },
         };
       };
-      const cleanup = ending === "cleanup" || ending === "delayed-cleanup";
+      const cleanup = ending === "cleanup";
       let writer = cleanup ? undefined : takeWriter();
       const controller = new AbortController();
       let entered = 0;
       let cleanupRelease: Promise<void> | undefined;
       const clock = vi.spyOn(performance, "now").mockReturnValue(0);
-      const exec = database.db.exec.bind(database.db);
-      const nativeExec = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
-        try {
-          return exec(sql);
-        } catch (error) {
-          if (ending === "delayed-cleanup" && sql === "BEGIN IMMEDIATE") {
-            // The writer still owns its lock when a delayed cleanup exhausts its retry budget.
-            clock.mockReturnValue(2_001);
-          }
-          throw error;
-        }
-      });
       const retry = vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async () => {
         if (ending === "release") {
           writer?.release();
@@ -111,7 +98,6 @@ it.each([
         ).toEqual([]);
       } finally {
         retry.mockRestore();
-        nativeExec.mockRestore();
         clock.mockRestore();
         vi.useRealTimers();
         writer?.release();

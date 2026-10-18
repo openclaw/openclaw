@@ -16,7 +16,7 @@ describe("createAgentToolsSandboxContext", () => {
     expect(sandbox.workspaceAccess).toBe("rw");
     expect(sandbox.containerName).toBe("openclaw-sbx-test");
     expect(sandbox.containerWorkdir).toBe("/workspace");
-    expect(sandbox.docker.image).toBe("openclaw-sandbox:bookworm-slim");
+    expect(sandbox.docker.image).toBe("openclaw-sandbox:trixie-slim");
     expect(sandbox.docker.containerPrefix).toBe("openclaw-sbx-");
     expect(sandbox.tools).toEqual({ allow: [], deny: [] });
     expect(sandbox.browserAllowHostControl).toBe(false);

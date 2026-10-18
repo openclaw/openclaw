@@ -471,9 +471,9 @@ type GatewayPostAttachRuntimeDeps = {
   ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
-  loadSubagentRegistryActivation: () => Awaitable<
-    (resolveGatewayContext: GatewayContextResolver) => Awaitable<void>
-  >;
+  loadSubagentRegistryActivation: Parameters<
+    typeof runGatewayStartupObservers
+  >[0]["loadSubagentRegistryActivation"];
 };
 
 const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {

@@ -34,26 +34,25 @@ type BackgroundSnapshot = Extract<UsersBackgroundResult, { status: "ok" }>;
 type BackgroundScope = { client: GatewayBrowserClient; profileId: string };
 
 async function readFileBase64(file: File): Promise<string> {
-  return await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener(
-      "load",
-      () => {
-        if (typeof reader.result !== "string") {
-          reject(new Error("Image could not be read"));
-          return;
-        }
-        resolve(reader.result.slice(reader.result.indexOf(",") + 1));
-      },
-      { once: true },
-    );
-    reader.addEventListener(
-      "error",
-      () => reject(reader.error ?? new Error("Image could not be read")),
-      { once: true },
-    );
-    reader.readAsDataURL(file);
-  });
+  const reader = new FileReader();
+  const stops: Array<() => void> = [];
+  try {
+    return await new Promise((resolve, reject) => {
+      stops.push(
+        listen(reader, "load", () => {
+          if (typeof reader.result !== "string") {
+            reject(new Error("Image could not be read"));
+            return;
+          }
+          resolve(reader.result.slice(reader.result.indexOf(",") + 1));
+        }),
+        listen(reader, "error", () => reject(reader.error ?? new Error("Image could not be read"))),
+      );
+      reader.readAsDataURL(file);
+    });
+  } finally {
+    stops.forEach((stop) => stop());
+  }
 }
 
 export function createAppearanceBackground(
@@ -108,6 +107,7 @@ export function createAppearanceBackground(
       // Revoke an active preview immediately when its selected background changes.
       nextContext.theme.subscribe(() => {
         retireChangedCanvasPreview();
+        refreshPreview();
         publish();
       }),
       // Connection receipts retire upload and image-preview authority synchronously.
@@ -117,6 +117,7 @@ export function createAppearanceBackground(
         }
         retireChangedPreview();
         retireChangedCanvasPreview();
+        refreshPreview();
         publish();
       }),
       nextContext.gateway.subscribeEvents((event) => {
@@ -134,6 +135,7 @@ export function createAppearanceBackground(
         }
         metadataRevision += 1;
         releasePreview();
+        refreshPreview();
         publish();
       }),
       subscribeServerUiPrefWrites(publish),
@@ -178,6 +180,7 @@ export function createAppearanceBackground(
       }
       metadata =
         result.status === "ok" ? { ...scope, revision: requestedRevision, snapshot: result } : null;
+      refreshPreview();
       publish();
     } catch (error) {
       if (owns(scope) && !controller.signal.aborted) {
@@ -395,6 +398,8 @@ export function createAppearanceBackground(
       profileId: context.gateway.snapshot.selfUser?.id,
       gatewayUrl: context.gateway.connection.gatewayUrl,
     };
+    // Escape retires the bridge immediately, even when another key reopens it before render.
+    previewCanvas().presented = true;
     publish();
     canvas.setAttribute("data-background-preview", "");
     host().setAttribute("data-background-preview", "");
@@ -622,12 +627,6 @@ export function createAppearanceBackground(
   }
   // Replace subscriptions and requests when the application owner changes.
   createEffect(currentContext, (context) => synchronizeContext(context));
-  // Synchronize the shared background renderer and its image request with the view.
-  createEffect(revision, () => {
-    refreshPreview();
-    // The shared renderer is retired synchronously; reapply after same-turn reopen.
-    previewCanvas().presented = canvasPreview();
-  });
   onSettled(() => {
     connected = true;
     synchronizeContext(currentContext());
@@ -642,5 +641,12 @@ export function createAppearanceBackground(
       releasePreview();
     };
   });
-  return { viewProps: createMemo(viewProps), previewPreference };
+  return {
+    viewProps: createMemo(viewProps),
+    previewPreference,
+    previewPresented: () => {
+      revision();
+      return canvasPreview();
+    },
+  };
 }

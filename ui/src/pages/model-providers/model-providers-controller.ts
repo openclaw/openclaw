@@ -67,6 +67,8 @@ export function createModelProviders(
   let pendingCredentialInvalidation = false;
   let profilesVisible = false;
   let readAccess = false;
+  let catalogClient: GatewayBrowserClient | null = null;
+  let stopCatalog: (() => void) | undefined;
 
   function setState<Key extends keyof ModelProvidersState>(
     key: Key,
@@ -130,6 +132,13 @@ export function createModelProviders(
     invalidateRequests,
     ensureInitialData,
     onSnapshot: (change) => {
+      if (change.snapshot.client !== catalogClient) {
+        stopCatalog?.();
+        catalogClient = change.snapshot.client;
+        stopCatalog = catalogClient
+          ? modelCatalog.subscribeModelCatalogCache(catalogClient, notify)
+          : undefined;
+      }
       if (change.initial) {
         resetConnectionState();
       } else if (change.connectionChanged && !change.identityChanged) {
@@ -183,8 +192,8 @@ export function createModelProviders(
   const discovery = createModelProviderDiscovery({
     canOpen: canMutate,
     getOwner: () => ({
-      client: gatewayState.read().snapshot.client,
-      agentId: selection.read().state.selectedId,
+      client: context.gateway.snapshot.client,
+      agentId: context.settingsAgentSelection.state.selectedId,
     }),
     onClose: () => void refresh("replacement"),
     onError: (error) =>
@@ -296,11 +305,6 @@ export function createModelProviders(
       }
     },
   );
-  // The catalog cache subscription belongs to the current Gateway client.
-  createEffect(
-    () => gatewayState.read().snapshot.client,
-    (client) => (client ? modelCatalog.subscribeModelCatalogCache(client, notify) : undefined),
-  );
   function syncConfig() {
     if (!context.runtimeConfig.state.configSnapshot && !context.runtimeConfig.state.configLoading) {
       void context.runtimeConfig.ensureLoaded().catch(() => undefined);
@@ -311,6 +315,7 @@ export function createModelProviders(
     connected = true;
     gateway.connect();
     const syncAgent = () => {
+      discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
     };
@@ -338,6 +343,7 @@ export function createModelProviders(
       }
       profileActions.resetOrders();
       refreshPolicy.dispose();
+      stopCatalog?.();
       gateway.dispose();
     };
   });
