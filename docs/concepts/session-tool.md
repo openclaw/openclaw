@@ -10,12 +10,19 @@ title: "Session tools"
 OpenClaw gives agents tools to work across sessions, inspect status, and orchestrate sub-agents.
 
 `sessions_list`, `sessions_history`, `sessions_search`, `session_status`,
-`sessions_send`, `sessions`, `sessions_create`, and `sessions_spawn` accept optional `user` (the requester's verified `requester_profile.id`).
-It is required when several people have steered the turn. The named person's
-authority determines session access and child execution; unknown or revoked
-participants are rejected. Single-person turns can omit it.
-Scheduled jobs and SDK/plugin runs without turn participants retain their existing
-session access rules.
+`sessions_send`, `sessions`, `sessions_create`, and `sessions_spawn` accept optional
+`user` (an admitted participant's verified `requester_profile.id`). Omit it to use
+the active execution's original requester, even after another person steers the
+turn. Explicit selection uses that participant's authority; unknown or revoked
+participants are rejected. New executions also require the selected person's
+authenticated requester facts and resolve current applicable destination policy.
+The initiating agent and parent execution remain unchanged. Children do not inherit
+the parent's participant roster, and native delegation retains the original requester.
+
+Selecting Bob does not establish that Bob requested or approved the action.
+Message authors, execution authority, initiating agents, and actual approval
+responses remain separate facts. Scheduled jobs and SDK/plugin runs without turn
+participants retain their existing session access rules.
 
 ## Available tools
 

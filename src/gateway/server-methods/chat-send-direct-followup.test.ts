@@ -408,6 +408,7 @@ it.for([false, true])(
                   requesterPrincipalKey: resolveRequesterPrincipalKey(requesterOrigin),
                   acceptsRequesterOrigin: (incoming) =>
                     hasSameRequesterOrigin(requesterOrigin, incoming),
+                  assertRegistrationActive: () => {},
                   assertActive: () => {},
                   project: () => "human-tools",
                   projectAsync: async () => "human-tools",

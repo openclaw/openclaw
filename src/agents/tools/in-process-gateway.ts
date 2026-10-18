@@ -444,7 +444,9 @@ async function callInProcessGatewayToolBound<T>(
       ? {
           agentId: caller.agentId,
           sessionKey: caller.sessionKey,
-          requesterOrigin: caller.requesterOrigin,
+          executionIdentityToken: caller.executionIdentityToken,
+          requesterOrigin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
           assertCurrent: assertCallerCurrent,
         }
       : undefined;

@@ -50,11 +50,30 @@ describe("sessions_send steering custody", () => {
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
-      await withParticipantSessionToolsFixture(async ({ cfg, turn, alice }) => {
+      await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
         expect(await turn.steer(alice)).toMatchObject({ status: "accepted" });
         await withDelayedSessionToolsSteering(
           cfg,
           async (receiver) => {
+            if (outcome === "sender completed") {
+              cfg.messages = { ...cfg.messages, queue: { allowCollaborativeSteering: true } };
+              expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+              const refused = await createSessionsSendTool({
+                config: cfg,
+                agentSessionKey: REQUESTER,
+              }).execute("selected-cross-session-steer", {
+                sessionKey: PARTICIPANT_SHARED,
+                user: bob.profileId,
+                message: "stop the current work",
+                mode: "steer",
+                timeoutSeconds: 0,
+              });
+              expect(refused.details).toMatchObject({
+                status: "error",
+                error: expect.stringContaining('mode: "followup"'),
+              });
+              expect(receiver.pendingCount()).toBe(0);
+            }
             const result = await createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,

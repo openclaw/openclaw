@@ -245,6 +245,27 @@ describe("Gateway agent command execution identity", () => {
     expect(readAgentCommandExecutionIdentitySpawnFacts(prepared)).toBe(facts);
   });
 
+  it("admits a non-spawn agent invocation with its selected person recorded separately", async () => {
+    let work: ExecutionIdentityAdmissionWork | undefined;
+    cleanupSink = configureExecutionIdentityAdmissionSink((candidate) => {
+      work = candidate;
+      return true;
+    });
+    const opts = { message: "continue the selected person's work" };
+    const facts = {
+      ingress: { kind: "api" as const, boundary: "gateway.agent-tool", state: "present" as const },
+      invoker: { state: "present" as const, kind: "agent" as const, rawPrincipalRef: "main" },
+      representedSubject: {
+        state: "present" as const,
+        kind: "person" as const,
+        rawPrincipalRef: "selected-person",
+      },
+    };
+    attachAgentCommandAdmissionFacts(opts, facts);
+    await prepareIdentity(opts).admit("embedded");
+    expect(work).toMatchObject({ kind: "capture", envelope: facts });
+  });
+
   it.each([false, true])(
     "retains the bounded, redacted profile label only with audit=%s",
     async (audit) => {

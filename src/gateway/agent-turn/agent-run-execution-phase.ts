@@ -3,10 +3,6 @@ import {
   hasGatewayClientCap,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
-import {
-  attachAgentCommandAdmissionFacts,
-  attachAgentCommandRecoveryAdmissionFacts,
-} from "../../agents/agent-command-admission-facts.js";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { repairMainSessionRecoveryMutation } from "../../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import { scheduleMainSessionRecoveryPendingTarget } from "../../agents/main-session-recovery/main-session-recovery-owner-release.js";
@@ -44,7 +40,6 @@ import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-ru
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
 import { discardPreparedInboundMedia } from "../chat-attachments.js";
-import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { createAgentRunModelSelectionHandler } from "../server-methods/agent-run-model-selection.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
@@ -62,7 +57,7 @@ import {
 } from "./agent-restart-recovery-context.js";
 import { createAgentRunDiagnostics } from "./agent-run-diagnostics.js";
 import { withAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
-import { resolveExecutionIdentitySpawnFacts } from "./agent-run-execution-lineage.js";
+import { prepareAgentRunExecutionIdentityFacts } from "./agent-run-execution-lineage.js";
 import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
 import {
@@ -358,12 +353,6 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           runId: params.runId,
           sessionEntry: params.sessionEntry,
         });
-        const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
-        const executionIdentitySpawnFacts =
-          agentRuntimeIdentity &&
-          params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
-            ? resolveExecutionIdentitySpawnFacts(agentRuntimeIdentity)
-            : undefined;
         const restartRecoveryContext = resolveAgentRestartRecoveryContext({
           isRestartRecoveryResumeRun: params.isRestartRecoveryResumeRun,
           canUseInternalRuntimeHandoff: params.canUseInternalRuntimeHandoff,
@@ -402,12 +391,11 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
           restartRecoveryChannelContext?.sameChannelThreadRequired,
         );
 
-        const localUserIngress = getGatewayLocalUserIngress(params.client);
-        if (params.isRestartRecoveryResumeRun) {
-          attachAgentCommandRecoveryAdmissionFacts(runContext);
-        } else if (localUserIngress) {
-          attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
-        }
+        const executionIdentitySpawnFacts = prepareAgentRunExecutionIdentityFacts(
+          params,
+          runContext,
+          prepared.operatorAuthority?.profileId,
+        );
         // Awaited routing can retire this owner before final dispatch.
         params.assertContextCurrent?.();
         const callerContext = resolveChatSendCallerContext(params.client);

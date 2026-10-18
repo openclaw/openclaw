@@ -18,6 +18,7 @@ import {
   withGatewayToolCallerIdentity,
   withGatewayPersonalToolUser,
 } from "../../agents/tools/gateway-caller-context.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import type { GatewayClient, GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
@@ -125,6 +126,7 @@ type PreparedRun = Pick<EmbeddedAgentQueueHandle, "toolAuthorityFingerprint">;
 export async function withPersonalToolTurn<T>(
   params: {
     owner: Person;
+    config?: OpenClawConfig;
     backendKind?: "embedded" | "cli";
     hiddenQuestion?: boolean;
     sessionKey?: string;
@@ -210,7 +212,7 @@ export async function withPersonalToolTurn<T>(
   const admission = params.admittedRunContext
     ? undefined
     : prepareSystemAgentRunAdmission(
-        {},
+        params.config ?? {},
         runId,
         "main",
         "personal-tool-test",
@@ -267,14 +269,19 @@ export async function withPersonalToolTurn<T>(
             return !reject;
           };
         }
-        const backend = { ...handle, kind: params.backendKind ?? "embedded", cancel() {} };
+        const backend = {
+          ...handle,
+          ...(params.backendKind === "cli"
+            ? { kind: "cli" as const }
+            : { kind: "embedded" as const }),
+          cancel() {},
+        };
         operation.attachBackend(backend);
         if (backend.kind === "embedded") {
-          const embeddedBackend = { ...backend, kind: "embedded" as const };
-          registeredHandle = embeddedBackend;
+          registeredHandle = backend;
           setActiveEmbeddedRun(
             queued.sessionId,
-            embeddedBackend,
+            backend,
             queued.sessionKey,
             queued.sessionFile,
             "main",
@@ -307,6 +314,7 @@ export async function withPersonalToolTurn<T>(
               isInboundUserMessage: true,
               allowCollaborativeSteering: params.allowCollaborativeSteering,
               toolAuthorityOverlay: {
+                sessionKey: queued.sessionKey,
                 ...(params.allowCollaborativeSteering
                   ? {
                       messageProvider: queued.messageProvider,
@@ -334,6 +342,7 @@ export async function withPersonalToolTurn<T>(
         {
           ...caller,
           operatorAuthority: run.operatorAuthority,
+          executionIdentityToken: admittedRunContext.executionIdentityToken,
           gatewayContextResolver: params.gatewayContextResolver,
           receiptAuthority: () => {
             if (getAdmittedRunDelegatedAuthority(admittedRunContext) !== delegatedAuthority) {

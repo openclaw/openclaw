@@ -355,6 +355,7 @@ describe("embedded run registry lifecycle generations", () => {
           acceptsRequesterOrigin: () => false,
           project: () => "authority",
           projectAsync: async () => "authority",
+          assertRegistrationActive: () => {},
           assertActive: () => {},
         }),
       },

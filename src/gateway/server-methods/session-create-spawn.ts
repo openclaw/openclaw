@@ -4,14 +4,109 @@ import {
   errorShape,
   type SessionsCreateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
 import { reportCreatedVisibleWorkSession } from "../../auto-reply/reply/visible-work-sessions.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { captureAgentTurnPrincipal } from "../agent-turn/principal.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayAgentToolIngress,
+} from "../local-user-ingress.js";
 import type { createGatewaySession } from "../session-create-service.js";
 import type { CreatedGatewaySession } from "../session-create-service.types.js";
 import type { TrustedSessionCreation } from "../session-creation-provenance.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
+
+/** Opening input keeps its selected person while recording the agent that actually sent it. */
+export function prepareSessionCreateOpening(params: {
+  client: GatewayClient | null;
+  context: Pick<GatewayRequestContext, "validateAgentRuntimeApprovalAuthority">;
+  creation: TrustedSessionCreation;
+  session: CreatedGatewaySession;
+  agentCreated: boolean;
+  sourceAccepted: boolean;
+  assertCurrent: () => void;
+}) {
+  const { client, creation, session } = params;
+  const toolCaller = client?.internal?.agentToolCaller;
+  const runtime = client?.internal?.agentRuntimeIdentity;
+  const caller = toolCaller?.assertCurrent
+    ? toolCaller
+    : runtime && params.context.validateAgentRuntimeApprovalAuthority?.(runtime) === true
+      ? {
+          agentId: runtime.agentId,
+          sessionKey: runtime.sessionKey,
+          executionIdentityToken: runtime.executionIdentity,
+          assertCurrent: params.assertCurrent,
+        }
+      : undefined;
+  const spawn =
+    creation.via === "spawn" &&
+    creation.actor?.type === "agent" &&
+    caller?.agentId === normalizeAgentId(creation.actor.id) &&
+    caller.sessionKey === creation.requesterSessionKey;
+  const agentOpening = caller && (params.agentCreated || spawn);
+  const principal =
+    params.sourceAccepted || agentOpening ? captureAgentTurnPrincipal(client) : client;
+  if (!agentOpening || !principal) {
+    return { client: principal };
+  }
+  params.assertCurrent();
+  caller.assertCurrent?.();
+  const parent = caller.executionIdentityToken;
+  const depth = session.entry.spawnDepth;
+  const spawnAdmission =
+    spawn && session.entry.parentSessionKey === caller.sessionKey && depth && depth > 0
+      ? executionIdentitySpawnAdmission({
+          operation: "serialize",
+          value: {
+            ...(parent?.contextId ? { parentContextId: parent.contextId } : {}),
+            ...(parent?.executionId ? { parentExecutionId: parent.executionId } : {}),
+            ...(parent?.runId ? { parentRunId: parent.runId } : {}),
+            parentAgentId: caller.agentId,
+            relation: "sessions_spawn",
+            rawRequesterRef: caller.sessionKey,
+            rawControllerRef: caller.sessionKey,
+            depth,
+            localPolicyRefs: [],
+            targetPolicyRefs: [],
+          },
+          extra: [
+            ...(!parent?.contextId ? ["lineage.parent-context"] : []),
+            ...(!parent?.executionId ? ["lineage.parent-execution"] : []),
+            ...(!parent?.runId ? ["lineage.parent-run"] : []),
+            "lineage.local-policy",
+            "lineage.target-policy",
+          ],
+        })
+      : undefined;
+  attachGatewayLocalUserIngress(
+    principal,
+    prepareGatewayAgentToolIngress({
+      agentId: caller.agentId,
+      representedProfileId: client?.internal?.operatorRunAuthority?.profileId,
+      spawnAdmission,
+    }),
+  );
+  // Creator/access identity stays with the person; their agent wrote the opening message.
+  principal.internal = {
+    ...principal.internal,
+    senderAttribution: { id: "agent:" + caller.agentId },
+  };
+  return {
+    client: principal,
+    internalInput: {
+      systemInputProvenance: {
+        kind: "inter_session",
+        sourceSessionKey: creation.requesterSessionKey,
+        sourceTool: spawn ? "sessions_spawn" : "sessions_create",
+      },
+      suppressCommandInterpretation: true,
+    },
+  };
+}
 
 export async function reportCreatedVisibleSpawn(
   cfg: OpenClawConfig,

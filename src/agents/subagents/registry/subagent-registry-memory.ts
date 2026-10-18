@@ -283,7 +283,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   private readonly completionAuthorities = new Map<object, CompletionCustody>();
   // A tombstone rejects stale callbacks without retaining closed Gateway/source contexts.
   // True marks restart custody; false marks a live admitted source.
-  private readonly operatorCompletionEntries = new WeakMap<object, boolean>();
+  private readonly requiredCompletionEntries = new WeakMap<object, boolean>();
   private readonly retiredCompletionEntries = new WeakSet<object>();
 
   retireCompletionAuthority(observed: SubagentRunRecord): void {
@@ -302,14 +302,14 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
   }
 
   requireCompletionAuthority(entry: SubagentRunRecord): void {
-    this.operatorCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
+    this.requiredCompletionEntries.set(getSubagentRunRuntimeKey(entry), true);
   }
 
   bindCompletionAuthority(row: SubagentRunRecord, source: CompletionAuthority, recovered = false) {
     const entry = this.currentValue(row);
     const key = getSubagentRunRuntimeKey(entry);
-    // A committed operator-owned row stays restricted if its source expires before publication.
-    this.operatorCompletionEntries.set(key, this.operatorCompletionEntries.get(key) ?? recovered);
+    // A committed row with captured custody stays restricted if its source expires before publication.
+    this.requiredCompletionEntries.set(key, this.requiredCompletionEntries.get(key) ?? recovered);
     source.assertCurrent();
     if (
       this.retiredCompletionEntries.has(key) &&
@@ -318,7 +318,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion retry no longer owns its source");
     }
     this.releaseCompletionAuthority(entry);
-    this.operatorCompletionEntries.set(key, recovered);
+    this.requiredCompletionEntries.set(key, recovered);
     this.retiredCompletionEntries.delete(key);
     const custody: CompletionCustody = {
       authority: source,
@@ -355,7 +355,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       throw new Error("Subagent completion requester store was retired");
     }
     if (
-      this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
+      this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) &&
       !isSameSubagentRunOwner(this.get(entry.runId), entry)
     ) {
       throw new Error("Subagent completion authority is no longer active");
@@ -371,7 +371,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (!custody && this.isCancellationNotice(entry)) {
       return run();
     }
-    if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
+    if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
       throw new Error("Subagent completion authority is no longer active");
     }
     return custody ? custody.authority.run(run) : run();
@@ -381,7 +381,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     return (
       entry.endedReason === SUBAGENT_ENDED_REASON_KILLED &&
       entry.execution.outcome?.status === "error" &&
-      !this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(entry))
+      !this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry))
     );
   }
 
@@ -411,26 +411,27 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       sources.forEach((source) => source?.assertCurrent());
       return first.run(run);
     }
-    const first = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry))?.authority
-      .operatorAuthority;
+    const firstCustody = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry));
+    const first = firstCustody?.authority.operatorAuthority;
     // Mixed waves must still prove the cancelled member's original source is live and identical.
     // A revoked or unrelated cancellation cannot borrow a successful sibling's authority.
     for (const entry of batch) {
-      const source = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority
-        .operatorAuthority;
-      if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !source) {
+      const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
+      if (this.requiredCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
         throw new Error("Subagent completion authority is no longer active");
       }
-      source?.assertCurrent();
+      custody?.authority.assertCurrent();
+      const source = custody?.authority.operatorAuthority;
       // Siblings re-admitted independently share durable input evidence, not an old capability.
       const sameRecoveredSource =
-        this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
-        this.operatorCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
+        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(resultEntry)) &&
+        this.requiredCompletionEntries.get(getSubagentRunRuntimeKey(entry)) &&
         resultEntry.operatorRecoverySource !== undefined &&
         isDeepStrictEqual(resultEntry.operatorRecoverySource, entry.operatorRecoverySource);
       if (
         (!sameRecoveredSource && source?.source !== first?.source) ||
-        !isDeepStrictEqual(source?.scopes, first?.scopes)
+        !isDeepStrictEqual(source?.scopes, first?.scopes) ||
+        !isDeepStrictEqual(custody?.authority.scopes, firstCustody?.authority.scopes)
       ) {
         throw new Error("Subagent completion batch has incompatible operator authority");
       }
@@ -446,9 +447,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (this.retiredCompletionEntries.has(previousKey)) {
       this.retiredCompletionEntries.add(nextKey);
     }
-    const recovered = this.operatorCompletionEntries.get(previousKey);
+    const recovered = this.requiredCompletionEntries.get(previousKey);
     if (recovered !== undefined) {
-      this.operatorCompletionEntries.set(nextKey, recovered);
+      this.requiredCompletionEntries.set(nextKey, recovered);
     }
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(previous));
     if (!custody) {

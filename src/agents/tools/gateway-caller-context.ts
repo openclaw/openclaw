@@ -148,6 +148,7 @@ export function evaluateGatewayToolCallerReceiptAdmission(
 export type GatewayToolOperatorSelection = Readonly<{
   /** Raw host-issued source; custody transfers must not retain the turn-bound assertion. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  requesterOrigin?: RequesterOrigin;
   assertCurrent: () => void;
 }>;
 
@@ -333,40 +334,52 @@ export async function withGatewayPersonalToolUser<T>(
 }
 
 /** One prepared identity per tool call; execution, approvals and receipts stay turn-owned. */
-export function resolveGatewayToolOperatorSelection(): GatewayToolOperatorSelection {
+export function resolveGatewayToolOperatorSelection(options?: {
+  requireRequesterOrigin?: boolean;
+}): GatewayToolOperatorSelection {
   const caller = getGatewayToolCallerIdentity();
-  if (caller?.personalToolSelection) {
-    return caller.personalToolSelection;
+  let selection = caller?.personalToolSelection;
+  if (!selection) {
+    const participant =
+      caller?.personalToolUser !== undefined ? resolveGatewayPersonalToolParticipant() : undefined;
+    const selectedParticipant =
+      participant?.profileId !== caller?.operatorAuthority?.profileId ? participant : undefined;
+    const operatorAuthority = selectedParticipant?.operatorAuthority ?? caller?.operatorAuthority;
+    selection = Object.freeze({
+      operatorAuthority,
+      requesterOrigin: selectedParticipant
+        ? selectedParticipant.requesterOrigin
+        : caller?.requesterOrigin,
+      assertCurrent: composeSessionSourceAssertion([
+        participant?.assertCurrent,
+        operatorAuthority?.assertCurrent,
+      ]),
+    });
+    if (caller?.personalToolIdentityScoped) {
+      caller.personalToolSelection = selection;
+    }
   }
-  const participant = caller?.personalToolIdentityScoped
-    ? resolveGatewayPersonalToolParticipant()
-    : undefined;
-  const operatorAuthority =
-    participant && participant.profileId !== caller?.operatorAuthority?.profileId
-      ? participant.operatorAuthority
-      : caller?.operatorAuthority;
-  const selection = Object.freeze({
-    operatorAuthority,
-    assertCurrent: composeSessionSourceAssertion([
-      participant?.assertCurrent,
-      operatorAuthority?.assertCurrent,
-    ]),
-  });
-  if (caller?.personalToolIdentityScoped) {
-    caller.personalToolSelection = selection;
+  if (
+    options?.requireRequesterOrigin &&
+    selection.operatorAuthority &&
+    selection.operatorAuthority.profileId !== caller?.operatorAuthority?.profileId &&
+    selection.requesterOrigin?.operatorProfileId !== selection.operatorAuthority.profileId
+  ) {
+    throw new Error("Selected user's requester identity is unavailable; ask them in a new turn.");
   }
   return selection;
 }
 
 /** The accepting collector already holds this source independently of the spawning turn. */
 export function withGatewayToolOperatorContinuation<T>(
-  operatorAuthority: AdmittedRunOperatorAuthority | undefined,
+  selection: Pick<GatewayToolOperatorSelection, "operatorAuthority" | "requesterOrigin">,
   run: () => T,
 ): T {
   const caller = getGatewayToolCallerIdentity();
   if (!caller) {
     return run();
   }
+  const { operatorAuthority, requesterOrigin } = selection;
   operatorAuthority?.assertCurrent();
   return gatewayToolCallerStorage.run(
     {
@@ -376,6 +389,7 @@ export function withGatewayToolOperatorContinuation<T>(
       personalToolIdentityScoped: true,
       personalToolSelection: Object.freeze({
         operatorAuthority,
+        requesterOrigin,
         assertCurrent: composeSessionSourceAssertion([operatorAuthority?.assertCurrent]),
       }),
     },

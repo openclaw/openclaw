@@ -604,8 +604,9 @@ export async function spawnSubagentDirect(
       }
       const canLaunch = pipelineResult.registrationScope?.canLaunch() !== false;
       if (swarmReservation?.isCurrent() !== false) {
+        const selection = { operatorAuthority, requesterOrigin: requester?.requesterOrigin };
         // The scheduler also settles registrations that have lost launch authority.
-        withGatewayToolOperatorContinuation(operatorAuthority, () =>
+        withGatewayToolOperatorContinuation(selection, () =>
           activateSwarmRun({
             groupId: swarmSchedulerGroupKey,
             runId: childRunId,

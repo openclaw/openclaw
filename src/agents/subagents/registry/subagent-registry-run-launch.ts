@@ -418,7 +418,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority?.operatorAuthority) {
+              if (authority) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
               }

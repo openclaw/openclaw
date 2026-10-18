@@ -6,7 +6,10 @@ import {
   bindPreparedToolAuthority,
   createLegacyToolAuthorityQueuePreflight,
 } from "../agents/harness/tool-authority-preparation.js";
-import { resolveRequesterPrincipalKey } from "../agents/requester-origin.js";
+import {
+  captureRequesterOrigin,
+  resolveRequesterPrincipalKey,
+} from "../agents/requester-origin.js";
 import { hasInboundAudio } from "../auto-reply/reply/inbound-media.js";
 import {
   createMessageInjectionAuthority,
@@ -521,13 +524,12 @@ async function beginPreparedReplyMessageInjectionTarget(
     inboundAudio,
     ...backendOptions
   } = options ?? {};
-  const incomingRequester =
-    allowCollaborativeSteering === false && incomingOverlay
-      ? resolveRequesterPrincipalKey({
-          ...incomingOverlay,
-          messageChannel: incomingOverlay.originatingChannel,
-        })
-      : undefined;
+  const incomingRequester = incomingOverlay
+    ? resolveRequesterPrincipalKey({
+        ...incomingOverlay,
+        messageChannel: incomingOverlay.originatingChannel,
+      })
+    : undefined;
   if (
     !requesterToolAuthority &&
     allowCollaborativeSteering === false &&
@@ -569,6 +571,9 @@ async function beginPreparedReplyMessageInjectionTarget(
     allowCollaborativeSteering &&
     backendOptions.isInboundUserMessage &&
     incomingOverlay &&
+    incomingRequester &&
+    owner.requesterPrincipalKey &&
+    incomingRequester !== owner.requesterPrincipalKey &&
     (!projectedToolAuthorityFingerprint ||
       projectedToolAuthorityFingerprint !== owner.toolAuthorityFingerprint)
   ) {
@@ -730,8 +735,20 @@ async function beginPreparedReplyMessageInjectionTarget(
   let queueAccepted = false;
   let participantRecorded = false;
   const recordParticipant = () => {
-    const participant = toolAuthorityOverlay ?? personalToolParticipant;
-    if (!participantRecorded && queueOptions?.isInboundUserMessage && participant) {
+    if (participantRecorded || !queueOptions?.isInboundUserMessage) {
+      return;
+    }
+    const participant = incomingOverlay
+      ? {
+          ...incomingOverlay,
+          requesterOrigin: captureRequesterOrigin({
+            ...incomingOverlay,
+            messageChannel: incomingOverlay.originatingChannel,
+            operatorProfileId: incomingOverlay.operatorAuthority?.profileId,
+          }),
+        }
+      : personalToolParticipant;
+    if (participant) {
       participantRecorded = true;
       owner.acceptParticipant?.(participant);
     }

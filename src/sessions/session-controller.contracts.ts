@@ -824,6 +824,8 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   projectAsync: (overlay: ReplyToolAuthorityOverlay) => Promise<string | undefined>;
   projectRequester?: (requester: ReplyToolAuthorityRequester) => string | undefined;
   projectRequesterAsync?: (requester: ReplyToolAuthorityRequester) => Promise<string | undefined>;
+  /** Registration may precede reply-backend attachment; use requires the attached owner. */
+  assertRegistrationActive: () => void;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
 };

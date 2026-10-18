@@ -185,6 +185,7 @@ describe("native lifecycle admission and cancellation", () => {
           detached: true,
           project: () => undefined,
           projectAsync: async () => undefined,
+          assertRegistrationActive: assertActive,
           assertActive,
         }),
       },

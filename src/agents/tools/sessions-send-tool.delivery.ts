@@ -170,9 +170,8 @@ export async function trySessionsSendActiveRunDelivery(
   ownChild: boolean,
 ): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
   const assertCaller = captureGatewayToolCallerAssertion();
-  const caller = getGatewayToolCallerIdentity();
   try {
-    const selection = resolveGatewayToolOperatorSelection();
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     selection.assertCurrent();
     let fallbackSessionKey: string | undefined;
     const activeOperation =
@@ -205,7 +204,7 @@ export async function trySessionsSendActiveRunDelivery(
     }
     const { inputProvenance, message: messageText, sourceReplyDeliveryMode } = params.sendParams;
     if (activeOperation && activeRunSessionId && messageText) {
-      const requesterOrigin = caller?.requesterOrigin;
+      const requesterOrigin = selection.requesterOrigin;
       if (!requesterOrigin) {
         if (params.mode === "steer") {
           throw new Error('Cannot verify requester identity for steering; use mode: "followup".');
@@ -380,6 +379,7 @@ export async function startSessionsSendAgentRun(
     | Awaited<ReturnType<NonNullable<SessionsSendDeliveryParams["prepareFallback"]>>>
     | undefined;
   try {
+    const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
     if (fallbackSessionKey) {
       fallback = await params.prepareFallback?.(fallbackSessionKey);
     }
@@ -404,12 +404,12 @@ export async function startSessionsSendAgentRun(
       admissionPending?: boolean;
     }>({
       method: "agent",
-      ...(caller?.requesterOrigin
+      ...(caller && selection.requesterOrigin
         ? {
             agentToolCaller: {
               agentId: caller.agentId,
               sessionKey: caller.sessionKey,
-              requesterOrigin: caller.requesterOrigin,
+              requesterOrigin: selection.requesterOrigin,
             },
           }
         : {}),

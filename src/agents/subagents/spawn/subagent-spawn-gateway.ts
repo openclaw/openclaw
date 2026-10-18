@@ -54,11 +54,11 @@ export function captureSubagentSpawnGatewayContext() {
     gatewayCaller?.gatewayContextResolver ??
     gatewayScope?.resolveGatewayContext ??
     gatewayScope?.context?.resolveGatewayContext;
+  const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
   const operatorAuthority =
-    resolveGatewayToolOperatorSelection().operatorAuthority ??
-    gatewayScope?.client?.internal?.operatorRunAuthority;
-  const requesterOrigin = gatewayCaller?.requesterOrigin
-    ? captureRequesterOrigin({ requesterOrigin: gatewayCaller.requesterOrigin })
+    selection.operatorAuthority ?? gatewayScope?.client?.internal?.operatorRunAuthority;
+  const requesterOrigin = selection.requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin: selection.requesterOrigin })
     : undefined;
   const requester =
     gatewayCaller && requesterOrigin
@@ -293,7 +293,9 @@ export async function callSubagentGateway(
   params: SubagentGatewayRequest,
   authorization?: SubagentLaunchAuthorization,
 ): Promise<SubagentGatewayResponse> {
-  return (await dispatchSubagentGateway(params, authorization)).response;
+  return (
+    await dispatchSubagentGateway(params, authorization, captureSubagentSpawnGatewayContext())
+  ).response;
 }
 
 export async function callNativeSubagentGateway(

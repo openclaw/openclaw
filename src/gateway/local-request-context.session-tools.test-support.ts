@@ -79,10 +79,14 @@ export async function seedSessionToolsFixtureSession({
   return { sessionKey, sessionId };
 }
 
-export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
+export function withSessionToolsFixture(
+  run: (cfg: OpenClawConfig) => Promise<void>,
+  options?: { audit?: boolean },
+) {
   return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
+      ...(options?.audit ? { logging: { audit: { enabled: true, executionIdentity: true } } } : {}),
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
@@ -128,6 +132,7 @@ export function withParticipantSessionToolsFixture(
     alice: Parameters<typeof withPersonalToolTurn>[0]["owner"];
     bob: Parameters<typeof withPersonalToolTurn>[0]["owner"];
   }) => Promise<void>,
+  options?: { audit?: boolean },
 ) {
   return withSessionToolsFixture(async (cfg) => {
     const person = (name: string) => {
@@ -160,6 +165,7 @@ export function withParticipantSessionToolsFixture(
     await withPersonalToolTurn(
       {
         owner: alice,
+        config: cfg,
         sessionKey: REQUESTER,
         sessionId: "session-tools-requester-id",
         allowCollaborativeSteering: true,
@@ -178,7 +184,7 @@ export function withParticipantSessionToolsFixture(
         }
       },
     );
-  });
+  }, options);
 }
 
 export async function drainSessionToolsFixture() {

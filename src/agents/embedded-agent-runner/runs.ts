@@ -990,7 +990,7 @@ export function attachActiveEmbeddedRun(
     EMBEDDED_RUN_FORCED_TERMINAL_SETTLEMENTS.delete(previousHandle);
   }
   try {
-    toolAuthority?.assertActive();
+    toolAuthority?.assertRegistrationActive();
   } catch (error) {
     revokeCompletionClaim(sessionId, handle.runId, completionTarget);
     throw error;

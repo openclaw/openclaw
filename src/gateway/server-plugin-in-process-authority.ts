@@ -41,7 +41,7 @@ import {
   mergePluginRuntimeClientInternal,
   projectPluginRuntimeClientExecution,
 } from "./server-plugin-runtime-client.js";
-import { resolveRuntimeSessionParticipant } from "./session-tool-participant.js";
+import { resolveSessionRuntimeAuthority } from "./session-runtime-authority.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -206,6 +206,7 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
       return {
         assertCurrent,
         operatorAuthority: captured?.authority,
+        scopes: resolved.client.connect.scopes,
         signal: lifetime.signal,
         release,
         run<T>(run: () => T): T {
@@ -260,12 +261,10 @@ export function resolveInProcessGatewayDispatch(
       `In-process gateway dispatch requires a gateway request scope or instance binding (method: ${method}).`,
     );
   }
-  const runtimeParticipant = resolveRuntimeSessionParticipant({
+  const runtimeAuthority = resolveSessionRuntimeAuthority({
     method,
-    requestParams: params,
     runtimeIdentity: agentRuntimeIdentity ?? scope?.client?.internal?.agentRuntimeIdentity,
     context,
-    connId: scope?.client?.connId,
   });
   const operatorRunAuthority =
     selection?.operatorAuthority ??
@@ -293,7 +292,7 @@ export function resolveInProcessGatewayDispatch(
     options.agentToolCaller.sessionKey === caller.sessionKey;
   const assertInvocationCurrent = composeSessionSourceAssertion([
     selection?.assertCurrent,
-    runtimeParticipant?.assertCurrent,
+    runtimeAuthority?.assertCurrent,
     assertSettleWakeCurrent,
     !isHostOwnedAgentRun || !operatorRunAuthority
       ? composeSessionSourceAssertion(
@@ -557,7 +556,7 @@ export function resolveInProcessGatewayDispatch(
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([
       selection?.assertCurrent,
-      runtimeParticipant?.assertCurrent,
+      runtimeAuthority?.assertCurrent,
       assertSourceCurrent,
       method !== "agent" ? assertCallerCurrent : undefined,
       transfersCreatedInput ? options.agentToolCaller?.assertCurrent : undefined,

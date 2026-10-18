@@ -391,6 +391,7 @@ describe("cloud worker run ownership", () => {
               acceptsRequesterOrigin: () => false,
               project,
               projectAsync: async (overlay) => project(overlay),
+              assertRegistrationActive: () => {},
               assertActive: () => {},
             };
           },

@@ -207,7 +207,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       throw new Error("embedded tool authority lost its source execution claim");
     }
   }
-  const assertQuestionActive = () => {
+  const assertReplyActive = () => {
     assertActive();
     input.operatorAuthority?.assertCurrent();
     if (
@@ -216,7 +216,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         operation.toolAuthorityRoute.model !== route.model ||
         operation.toolAuthorityFingerprint !== fingerprint)
     ) {
-      throw new Error("question creator reply authority is no longer active");
+      throw new Error("reply authority is no longer active");
     }
   };
   let registered = false;
@@ -237,7 +237,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const runPrepared = () =>
     withSessionTranscriptQuestionAnswers(
       attempt.userTurnTranscriptRecorder,
-      assertQuestionActive,
+      assertReplyActive,
       (admitTranscriptAnswer) => {
         const questionAuthority = sessionKey
           ? createAgentQuestionAnswerAuthority({
@@ -250,13 +250,13 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                   caller,
                   fingerprint,
                   route,
-                  assertQuestionActive,
+                  assertReplyActive,
                 ),
               project: (caller) =>
                 operation
                   ? operation.projectToolAuthorityFingerprint(caller)
                   : direct?.project(caller, route),
-              assertActive: assertQuestionActive,
+              assertActive: assertReplyActive,
               admitTranscriptAnswer,
             })
           : undefined;
@@ -281,6 +281,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         personalToolParticipants,
         watchdogAttempt,
         requesterOrigin,
+        receiptAuthority: assertReplyActive,
         embeddedRunToolAuthorityBinding: (registration) => {
           assertActive();
           const { handle } = registration;
@@ -376,7 +377,16 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             get requesterPrincipalKey() {
               return operation?.requesterPrincipalKey ?? direct?.requesterPrincipalKey;
             },
-            assertActive: assertRegistered,
+            assertRegistrationActive: () => {
+              assertRegistered();
+              assertReplyActive();
+            },
+            assertActive: () => {
+              assertRegistered();
+              if (!ownsOperation()) {
+                throw new Error("embedded reply authority is no longer active");
+              }
+            },
             acceptsRequesterOrigin: (incoming) => {
               assertRegistered();
               return Boolean(

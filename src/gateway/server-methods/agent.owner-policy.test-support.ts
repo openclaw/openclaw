@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { getAgentCommandAdmissionFacts } from "../../agents/agent-command-admission-facts.js";
 import type { AgentCommandGatewayIngressOpts } from "../../agents/command/types.js";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
@@ -37,6 +38,13 @@ export function registerAgentOwnerPolicyCases(): void {
       admin: false,
       authenticatedProfile: true,
       expectedOwner: false,
+    },
+    {
+      name: "authenticated operator continuation",
+      admin: true,
+      authenticatedProfile: true,
+      requesterOrigin: { sessionKey: "agent:main:source" },
+      expectedOwner: true,
     },
     {
       name: "operator admin continuation",
@@ -104,7 +112,7 @@ export function registerAgentOwnerPolicyCases(): void {
     async ({
       admin,
       authenticatedProfile,
-      requesterOrigin,
+      requesterOrigin: providedOrigin,
       ownerAllowFrom,
       expectedOwner,
       expectedSenderRestriction,
@@ -117,7 +125,9 @@ export function registerAgentOwnerPolicyCases(): void {
       primeMainAgentRun({ cfg });
       mocks.agentCommand.mockClear();
       let availableTools: string[] | undefined;
+      let admissionFacts: ReturnType<typeof getAgentCommandAdmissionFacts>;
       mocks.agentCommand.mockImplementation(async (opts: AgentCommandGatewayIngressOpts) => {
+        admissionFacts = getAgentCommandAdmissionFacts(opts.runContext ?? opts);
         availableTools = projectConversationToolNames({
           capabilityProfile: resolveConversationCapabilityProfile({
             ...opts,
@@ -130,15 +140,23 @@ export function registerAgentOwnerPolicyCases(): void {
         return { payloads: [{ text: "ok" }], meta: {} };
       });
       const scopes = [admin ? "operator.admin" : "operator.write"];
+      const profile = authenticatedProfile
+        ? ensureProfileForEmail("owner-policy@example.test")
+        : undefined;
+      const requesterOrigin =
+        profile && providedOrigin
+          ? { ...providedOrigin, operatorProfileId: profile.id }
+          : providedOrigin;
       const client = requesterOrigin
         ? createSyntheticPluginRuntimeClient({
             scopes,
-            operatorRoleActor: { kind: "system" },
+            operatorRoleActor: profile
+              ? { kind: "operator", profileId: profile.id }
+              : { kind: "system" },
             agentToolCaller: { agentId: "main", sessionKey: "agent:main:source", requesterOrigin },
           })
         : operatorWriteCliClient(scopes);
-      if (authenticatedProfile) {
-        const profile = ensureProfileForEmail("owner-policy@example.test");
+      if (profile) {
         client.authenticatedUserProfile = {
           profileId: profile.id,
           displayName: profile.displayName,
@@ -174,6 +192,21 @@ export function registerAgentOwnerPolicyCases(): void {
       });
       if (requesterOrigin) {
         expect(callArgs).toMatchObject({ requesterOrigin });
+        expect(admissionFacts).toMatchObject({
+          invoker: { state: "present", kind: "agent", rawPrincipalRef: "main" },
+          ...(profile
+            ? {
+                representedSubject: {
+                  state: "present",
+                  kind: "person",
+                  rawPrincipalRef: profile.id,
+                },
+              }
+            : {}),
+        });
+        if (!profile) {
+          expect(admissionFacts?.representedSubject).toBeUndefined();
+        }
       }
       expect(availableTools).toEqual(
         expectedOwner && !expectedSenderRestriction ? ["read", "exec"] : ["read"],

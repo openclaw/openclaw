@@ -31,6 +31,12 @@ describe("reply requester authority", () => {
     accepted: boolean;
   }>([
     { name: "same channel requester", senderId: "alice", accepted: true },
+    {
+      name: "same requester with changed permissions while collaboration is enabled",
+      senderId: "alice",
+      collaborative: true,
+      accepted: false,
+    },
     { name: "another channel requester with equal permissions", senderId: "bob", accepted: false },
     {
       name: "collaborator with fewer permissions",

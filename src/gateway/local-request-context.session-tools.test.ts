@@ -26,6 +26,8 @@ import { createSessionsListTool } from "../agents/tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
 import { maybeSpawnVisibleSession } from "../agents/tools/sessions-spawn-visible.js";
 import { createSessionsTool } from "../agents/tools/sessions-tool.js";
+import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
+import type { ExecutionDecisionWork } from "../audit/execution-decision-work.types.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
@@ -131,88 +133,130 @@ describe("built-in session tool role authority", () => {
   afterEach(drainSessionToolsFixture);
 
   it("uses the named participant's current identity for session reads and writes", async () => {
-    await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
-      const options = { config: cfg, agentSessionKey: REQUESTER };
-      const history = createSessionsHistoryTool(options);
-      const read = (sessionKey: string, user?: string) =>
-        history.execute("participant-history", { sessionKey, user });
-      const expectDraft = async (user?: string) =>
-        expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject({
-          messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+    await withParticipantSessionToolsFixture(
+      async ({ cfg, turn, alice, bob }) => {
+        const decisions: ExecutionDecisionWork[] = [];
+        onTestFinished(
+          configureExecutionDecisionWorkSink((work) => {
+            decisions.push(work);
+            return true;
+          }),
+        );
+        const token = expectDefined(
+          turn.admittedRunContext.executionIdentityToken,
+          "Alice admission",
+        );
+        const options = { config: cfg, agentSessionKey: REQUESTER };
+        const history = createSessionsHistoryTool(options);
+        const read = (sessionKey: string, user?: string) =>
+          history.execute("participant-history", { sessionKey, user });
+        const expectDraft = async (user?: string) =>
+          expect((await read(PARTICIPANT_DRAFT, user)).details).toMatchObject({
+            messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+          });
+
+        await expectDraft();
+        const admittedFingerprint = turn.operation.toolAuthorityFingerprint;
+        expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+        expect(turn.operation.toolAuthorityFingerprint).toBe(admittedFingerprint);
+        expect(getGatewayToolCallerIdentity()?.operatorAuthority?.profileId).toBe(alice.profileId);
+        expect(getGatewayToolCallerIdentity()?.requesterOrigin?.operatorProfileId).toBe(
+          alice.profileId,
+        );
+        await expectDraft();
+        expect((await read(PARTICIPANT_DRAFT, bob.profileId)).details).toMatchObject({
+          status: "error",
+          error: expect.stringMatching(/not found|no session found/i),
         });
-
-      await expectDraft();
-      const admittedFingerprint = turn.operation.toolAuthorityFingerprint;
-      expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
-      expect(turn.operation.toolAuthorityFingerprint).toBe(admittedFingerprint);
-      expect(getGatewayToolCallerIdentity()?.operatorAuthority?.profileId).toBe(alice.profileId);
-      expect(getGatewayToolCallerIdentity()?.requesterOrigin?.operatorProfileId).toBe(
-        alice.profileId,
-      );
-      await expect(read(PARTICIPANT_DRAFT)).rejects.toThrow(
-        `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
-      );
-      expect((await read(PARTICIPANT_DRAFT, bob.profileId)).details).toMatchObject({
-        status: "error",
-        error: expect.stringMatching(/not found|no session found/i),
-      });
-      expect((await read(PARTICIPANT_SHARED, bob.profileId)).details).toMatchObject({
-        messages: [expect.objectContaining({ content: "Shared participant marker" })],
-      });
-      await expectDraft(alice.profileId);
-      await expect(read(PARTICIPANT_DRAFT, "unknown-profile")).rejects.toThrow(/not a participant/);
-
-      const sessionStatus = createSessionStatusTool(options);
-      await expect(
-        sessionStatus.execute("draft-status", {
-          sessionKey: PARTICIPANT_DRAFT,
-          user: bob.profileId,
-        }),
-      ).rejects.toThrow(/not found|not visible/i);
-      const notify = (sessionKey: string) =>
-        createSessionsSendTool(options).execute("participant-notify", {
-          sessionKey,
-          message: "Bob's selected notification",
-          mode: "notify",
-          user: bob.profileId,
+        expect((await read(PARTICIPANT_SHARED, bob.profileId)).details).toMatchObject({
+          messages: [expect.objectContaining({ content: "Shared participant marker" })],
         });
-      expect((await notify(PARTICIPANT_DRAFT)).details).toMatchObject({
-        status: "error",
-        error: expect.stringMatching(/not found|no session found/i),
-      });
-      expect(drainSystemEvents(PARTICIPANT_DRAFT)).toEqual([]);
-      await expect(notify(PARTICIPANT_SHARED)).resolves.toMatchObject({
-        details: { status: "queued", sessionKey: PARTICIPANT_SHARED, runStarted: false },
-      });
-      expect(drainSystemEvents(PARTICIPANT_SHARED)).toEqual([
-        expect.stringContaining("Bob's selected notification"),
-      ]);
+        await expectDraft(alice.profileId);
+        await expect(read(PARTICIPANT_DRAFT, "unknown-profile")).rejects.toThrow(
+          /not a participant/,
+        );
 
-      const patch = (user: string) =>
-        createSessionsTool(options).execute("participant-patch", {
+        const sessionStatus = createSessionStatusTool(options);
+        await expect(
+          sessionStatus.execute("draft-status", {
+            sessionKey: PARTICIPANT_DRAFT,
+            user: bob.profileId,
+          }),
+        ).rejects.toThrow(/not found|not visible/i);
+        const notify = (sessionKey: string) =>
+          createSessionsSendTool(options).execute("participant-notify", {
+            sessionKey,
+            message: "Bob's selected notification",
+            mode: "notify",
+            user: bob.profileId,
+          });
+        expect((await notify(PARTICIPANT_DRAFT)).details).toMatchObject({
+          status: "error",
+          error: expect.stringMatching(/not found|no session found/i),
+        });
+        expect(drainSystemEvents(PARTICIPANT_DRAFT)).toEqual([]);
+        await expect(notify(PARTICIPANT_SHARED)).resolves.toMatchObject({
+          details: { status: "queued", sessionKey: PARTICIPANT_SHARED, runStarted: false },
+        });
+        expect(drainSystemEvents(PARTICIPANT_SHARED)).toEqual([
+          expect.stringContaining("Bob's selected notification"),
+        ]);
+
+        await createSessionsTool(options).execute("bob-shared-patch", {
           action: "patch",
-          sessionKey: PARTICIPANT_DRAFT,
-          expectedSessionId: PARTICIPANT_DRAFT_ID,
-          label: "Selected participant write",
-          user,
+          sessionKey: PARTICIPANT_SHARED,
+          expectedSessionId: "participant-shared-id",
+          label: "Bob's selected shared update",
+          user: bob.profileId,
         });
-      await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label,
-      ).toBeUndefined();
-      await expect(patch(alice.profileId)).resolves.toMatchObject({
-        details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label).toBe(
-        "Selected participant write",
-      );
+        expect(mainSession(PARTICIPANT_SHARED)?.label).toBe("Bob's selected shared update");
+        expect(decisions.at(-1)).toMatchObject({
+          token,
+          receipt: { action: { operation: "patch" }, decision: { outcome: "allowed" } },
+          refs: {
+            representedSubject: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: bob.profileId,
+            },
+          },
+        });
 
-      turn.revoke(bob.profileId);
-      await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(/Bob's access changed/);
-      await expectDraft(alice.profileId);
-      await turn.complete();
-      await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
-    });
+        const patch = (user: string) =>
+          createSessionsTool(options).execute("participant-patch", {
+            action: "patch",
+            sessionKey: PARTICIPANT_DRAFT,
+            expectedSessionId: PARTICIPANT_DRAFT_ID,
+            label: "Selected participant write",
+            user,
+          });
+        await expect(patch(bob.profileId)).rejects.toThrow("session is draft for this connection");
+        expect(
+          loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label,
+        ).toBeUndefined();
+        await expect(patch(alice.profileId)).resolves.toMatchObject({
+          details: { status: "updated", sessionKey: PARTICIPANT_DRAFT },
+        });
+        expect(loadSessionEntry({ agentId: "main", sessionKey: PARTICIPANT_DRAFT })?.label).toBe(
+          "Selected participant write",
+        );
+        expect(decisions.at(-1)?.token).toBe(token);
+        expect(decisions.at(-1)?.refs?.representedSubject).toMatchObject({
+          state: "present",
+          kind: "person",
+          rawPrincipalRef: alice.profileId,
+        });
+
+        turn.revoke(bob.profileId);
+        await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(
+          /Bob's access changed/,
+        );
+        await expectDraft(alice.profileId);
+        await turn.complete();
+        await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
+      },
+      { audit: true },
+    );
   });
 
   it("reads named-participant status while keeping current-session status local", async () => {
@@ -238,7 +282,7 @@ describe("built-in session tool role authority", () => {
   });
 
   it.each(["selected history", "unselected history", "unselected wake"] as const)(
-    "rejects %s when another participant steers during preparation",
+    "preserves incumbent authority for %s when another participant steers during preparation",
     async (surface) => {
       await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
         const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
@@ -263,21 +307,28 @@ describe("built-in session tool role authority", () => {
           config: cfg,
           agentSessionKey: REQUESTER,
         });
-        await expect(
-          surface === "unselected wake"
-            ? dispatchGatewayMethodInProcess("wake", {
+        const result = await (surface === "unselected wake"
+          ? dispatchGatewayMethodInProcess("wake", {
+              sessionKey: PARTICIPANT_DRAFT,
+              mode: "now",
+              text: "Wake the draft",
+            })
+          : surface === "unselected history"
+            ? dispatchGatewayMethodInProcess("chat.history", { sessionKey: PARTICIPANT_DRAFT })
+            : history.execute("racing-history", {
                 sessionKey: PARTICIPANT_DRAFT,
-                mode: "now",
-                text: "Wake the draft",
-              })
-            : surface === "unselected history"
-              ? dispatchGatewayMethodInProcess("chat.history", { sessionKey: PARTICIPANT_DRAFT })
-              : history.execute("racing-history", { sessionKey: PARTICIPANT_DRAFT }),
-        ).rejects.toThrow(
-          `Several people have steered this turn: Alice (user: ${alice.profileId}), Bob (user: ${bob.profileId}). Pass the requester's requester_profile.id as user, or ask them if unclear.`,
-        );
+                user: alice.profileId,
+              }));
         if (surface === "unselected wake") {
-          expect(enqueueWake).not.toHaveBeenCalled();
+          expect(result).toMatchObject({ ok: true });
+          expect(enqueueWake).toHaveBeenCalledOnce();
+        } else {
+          const messages = [
+            expect.objectContaining({ content: "Alice's distinctive draft marker" }),
+          ];
+          expect(result).toMatchObject(
+            surface === "selected history" ? { details: { messages } } : { messages },
+          );
         }
         expect(
           (
@@ -293,7 +344,7 @@ describe("built-in session tool role authority", () => {
     },
   );
 
-  it("limits unselected in-process session calls to the turn's own session after steering", async () => {
+  it("keeps unselected in-process session calls under the incumbent after steering", async () => {
     await withParticipantSessionToolsFixture(async ({ turn, bob }) => {
       const read = (sessionKey: string) =>
         dispatchGatewayMethodInProcess("chat.history", { sessionKey, agentId: "main" });
@@ -305,12 +356,12 @@ describe("built-in session tool role authority", () => {
       await expect(read(REQUESTER.replace("agent:main:", ""))).resolves.toMatchObject({
         messages: [],
       });
-      await expect(read(PARTICIPANT_DRAFT)).rejects.toThrow(
-        "Use a session tool with the requester's requester_profile.id as user.",
-      );
-      await expect(dispatchGatewayMethodInProcess("sessions.list", {})).rejects.toThrow(
-        /Several people have steered this turn/,
-      );
+      await expect(read(PARTICIPANT_DRAFT)).resolves.toMatchObject({
+        messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })],
+      });
+      await expect(dispatchGatewayMethodInProcess("sessions.list", {})).resolves.toMatchObject({
+        sessions: expect.arrayContaining([expect.objectContaining({ key: PARTICIPANT_DRAFT })]),
+      });
       await expect(
         dispatchGatewayMethodInProcess("agent.wait", {
           runId: turn.runtimeIdentity.operationalRunInstance.runId,
@@ -319,18 +370,19 @@ describe("built-in session tool role authority", () => {
       ).resolves.toMatchObject({ status: "timeout" });
       await expect(
         dispatchGatewayMethodInProcess("agent.wait", { runId: "unknown-run", timeoutMs: 0 }),
-      ).rejects.toThrow(/Several people have steered this turn/);
+      ).resolves.toMatchObject({ status: "timeout" });
       await expect(
         dispatchGatewayMethodInProcess("chat.abort", { sessionKey: PARTICIPANT_DRAFT }),
-      ).rejects.toThrow(/Several people have steered this turn/);
+      ).resolves.toMatchObject({ ok: true, aborted: false, runIds: [] });
       await expect(
         dispatchGatewayMethodInProcess("agent", {
           sessionKey: REQUESTER,
           sessionId: PARTICIPANT_DRAFT_ID,
+          expectedExistingSessionId: "session-tools-requester-id",
           message: "unselected transcript override",
           idempotencyKey: "unselected-transcript-override",
         }),
-      ).rejects.toThrow(/Several people have steered this turn/);
+      ).rejects.toThrow("conflicting session identity constraints");
       const context = getPluginRuntimeGatewayRequestScope()?.context;
       if (!context) {
         throw new Error("expected local Gateway context");
@@ -365,7 +417,7 @@ describe("built-in session tool role authority", () => {
     });
   });
 
-  it("limits runtime-identity-only session reads to the turn's own session after steering", async () => {
+  it("keeps runtime-identity-only session reads under the incumbent after steering", async () => {
     await withParticipantSessionToolsFixture(async ({ turn, alice, bob }) => {
       const context = getPluginRuntimeGatewayRequestScope()?.context;
       const operatorRunAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
@@ -411,14 +463,8 @@ describe("built-in session tool role authority", () => {
       await expect(read()).resolves.toBeUndefined();
       expect(respond.mock.calls).toMatchObject([
         [
-          false,
-          undefined,
-          {
-            code: "INVALID_REQUEST",
-            message: expect.stringContaining(
-              "Use a session tool with the requester's requester_profile.id as user.",
-            ),
-          },
+          true,
+          { messages: [expect.objectContaining({ content: "Alice's distinctive draft marker" })] },
         ],
       ]);
       respond.mockClear();
@@ -499,9 +545,9 @@ describe("built-in session tool role authority", () => {
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
-        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
+        const chatSendOwner = await import("./server-methods/chat-send-handler.js");
         const startChild = vi
-          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
+          .spyOn(chatSendOwner, "handleTrustedInternalChatSend")
           .mockImplementation(async ({ respond }) => {
             respond(true, { status: "started", runId: "fork-child-run" });
           });
@@ -561,9 +607,23 @@ describe("built-in session tool role authority", () => {
           );
           expect(transcript).toEqual(expect.arrayContaining(inherited));
           expect(startChild).toHaveBeenCalledOnce();
-          const childMessage = startChild.mock.calls[0]?.[0].params.message;
-          expect(childMessage).toContain("inherited conversation is background context");
-          expect(childMessage).toContain("Continue from the inherited reproduction");
+          const [{ params: childParams }, onAdmissionOwned, inputOptions] = expectDefined(
+            startChild.mock.calls[0],
+            "child input admission",
+          );
+          expect(childParams).toMatchObject({
+            sessionKey: childKey,
+            systemInputProvenance: {
+              kind: "inter_session",
+              sourceSessionKey: REQUESTER,
+              sourceTool: "sessions_spawn",
+            },
+            suppressCommandInterpretation: true,
+          });
+          expect(onAdmissionOwned).toBeUndefined();
+          expect(inputOptions).toEqual({ stageCreatedInput: true });
+          expect(childParams.message).toContain("inherited conversation is background context");
+          expect(childParams.message).toContain("Continue from the inherited reproduction");
           expect(registerRun).toHaveBeenCalledOnce();
           expect(loadSessionEntry(scope)?.sessionId).toBe(sessionId);
         } finally {

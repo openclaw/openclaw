@@ -8,7 +8,7 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
 
-export async function commitQueuedReplySessionActivity(params: {
+async function commitQueuedReplySessionActivity(params: {
   target: { agentId?: string; storePath: string; sessionKey: string };
   expected: SessionEntry;
   updatedAt: number;

@@ -9,7 +9,7 @@ const refs = z.strictObject({
   exact: z.array(boundedString).max(4096),
   wildcards: z.array(boundedString).max(256),
 });
-export const operatorRunRecoverySnapshotSchema = z.strictObject({
+const operatorRunRecoverySnapshotSchema = z.strictObject({
   profileId: boundedString,
   scopes: z.array(boundedString).max(64),
   assignedRole: boundedString.nullable(),

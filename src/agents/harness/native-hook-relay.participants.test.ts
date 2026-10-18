@@ -9,6 +9,7 @@ import {
   prepareAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { invokeNativeHookRelay } from "./native-hook-relay.js";
@@ -29,10 +30,11 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("denies native spawn at final admission after its parent turn ends", async () => {
+it("keeps collaborative native spawn under the incumbent and refuses an ended parent", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const entered = createDeferredCore();
   const resume = createDeferredCore();
+  const admittedCalls: string[] = [];
   const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
   vi.spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime").mockImplementation(
     (params) => {
@@ -49,6 +51,11 @@ it("denies native spawn at final admission after its parent turn ends", async ()
                     assertCurrent,
                     preparation,
                   );
+                  expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
+                    profileId: "alice",
+                    scopes: ["operator.read", "operator.write"],
+                  });
+                  admittedCalls.push(invocation.toolUseId ?? "missing-tool-call");
                   if (invocation.toolUseId === "pending-spawn") {
                     entered.resolve();
                     await resume.promise;
@@ -94,6 +101,7 @@ it("denies native spawn at final admission after its parent turn ends", async ()
       {
         owner: { profileId: "alice", senderId: "alice-sender", name: "Alice", operatorAuthority },
         admittedRunContext,
+        allowCollaborativeSteering: true,
       },
       async (turn) =>
         host.runWithScope(async () => {
@@ -117,6 +125,13 @@ it("denies native spawn at final admission after its parent turn ends", async ()
               },
             });
           try {
+            await expect(
+              turn.steer(
+                { profileId: "bob", senderId: "bob-sender", name: "Bob" },
+                { scopes: ["operator.read"] },
+              ),
+            ).resolves.toMatchObject({ status: "accepted" });
+            expect(turn.operation.personalToolParticipants?.resolve("bob")?.profileId).toBe("bob");
             for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
               await expect(invoke(name, `single-${name}`)).resolves.toEqual({
                 stdout: "",
@@ -124,6 +139,11 @@ it("denies native spawn at final admission after its parent turn ends", async ()
                 exitCode: 0,
               });
             }
+            expect(admittedCalls).toEqual([
+              "single-Agent",
+              "single-spawn_agent",
+              "single-crewspawn_agent",
+            ]);
             const pending = invoke("Agent", "pending-spawn");
             await Promise.race([
               entered.promise,
@@ -131,10 +151,6 @@ it("denies native spawn at final admission after its parent turn ends", async ()
                 throw new Error("Native spawn bypassed execution admission");
               }),
             ]);
-            await expect(
-              turn.steer({ profileId: "bob", senderId: "bob-sender", name: "Bob" }),
-            ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
-            expect(turn.operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
             await turn.complete();
             resume.resolve();
             const ended = /turn has ended/;
