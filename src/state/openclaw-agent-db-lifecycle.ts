@@ -47,7 +47,6 @@ import {
   matchesAgentDatabaseClose,
   revokeAgentDatabaseResources,
   withAgentDatabaseCloseFence,
-  type AgentDatabaseCloseSelection,
 } from "./openclaw-agent-db-resources.js";
 import {
   assertSupportedAgentSchemaVersion,
@@ -487,23 +486,6 @@ export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {
   cache.terminal.clearAll(rootPath);
 }
 
-async function drainPendingAgentDatabaseOpens(
-  selection: AgentDatabaseCloseSelection,
-): Promise<void> {
-  while (true) {
-    const pending = [...cache.activePending].filter((owner) =>
-      matchesAgentDatabaseClose(selection, owner),
-    );
-    if (pending.length === 0) {
-      return;
-    }
-    for (const owner of pending) {
-      revokePendingAgentDatabaseOpen(owner.path, selection.agentId);
-    }
-    await Promise.allSettled(pending.map((owner) => owner.promise));
-  }
-}
-
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
 export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promise<void> {
   const selection = { rootPath };
@@ -538,7 +520,14 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
   const selection = { path: path.resolve(pathname), agentId: expectedAgentId };
   revokePendingAgentDatabaseOpen(selection.path, expectedAgentId);
   return drainAgentDatabaseResources(selection, async () => {
-    await drainPendingAgentDatabaseOpens(selection);
+    // The close selection already refuses new matching opens at their producer.
+    const pending = [...cache.activePending].filter((owner) =>
+      matchesAgentDatabaseClose(selection, owner),
+    );
+    for (const owner of pending) {
+      revokePendingAgentDatabaseOpen(owner.path, expectedAgentId);
+    }
+    await Promise.allSettled(pending.map((owner) => owner.promise));
     const database = cache.databases.get(selection.path);
     if (database && (expectedAgentId === undefined || database.agentId === expectedAgentId)) {
       await database.walMaintenance.stop();
