@@ -1,8 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -26,7 +26,6 @@ import {
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import {
@@ -300,6 +299,34 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <span>{props.skill.name}</span>
         </div>
       }
+      footer={
+        <Show when={installOption() || props.skill.primaryEnv}>
+          <openclaw-modal-actions class="skill-reader-dialog__actions">
+            <Show when={installOption()}>
+              {(option) => (
+                <button
+                  class="btn"
+                  disabled={skillInstallLocked(props.view)}
+                  onClick={() =>
+                    props.view.onInstall(props.skill.skillKey, props.skill.name, option().id)
+                  }
+                >
+                  {active() ? t("skillsPage.installing") : option().label}
+                </button>
+              )}
+            </Show>
+            <Show when={props.skill.primaryEnv}>
+              <button
+                class="btn primary"
+                disabled={updateLocked() || !editValue().trim()}
+                onClick={() => props.view.onSaveKey(props.skill.skillKey)}
+              >
+                {t("skillsPage.saveKey")}
+              </button>
+            </Show>
+          </openclaw-modal-actions>
+        </Show>
+      }
     >
       <div class="skill-reader-dialog__body" style={{ display: "grid", gap: "var(--space-4)" }}>
         <div>
@@ -312,23 +339,21 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           />
         </div>
         <Show when={hasTabs()}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "skill-detail",
-                active: detailTab(),
-                tabs: [
-                  { value: "overview", label: t("skillsPage.overview") },
-                  ...(props.skill.skillCard?.present
-                    ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
-                    : []),
-                ],
-                ariaLabel: props.skill.name,
-                panelId: "skill-detail-panel",
-                variant: "sub",
-                onSelect: props.view.onDetailTabChange,
-              })
-            }
+          <HubTabs
+            {...{
+              id: "skill-detail",
+              active: detailTab(),
+              tabs: [
+                { value: "overview", label: t("skillsPage.overview") },
+                ...(props.skill.skillCard?.present
+                  ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
+                  : []),
+              ],
+              ariaLabel: props.skill.name,
+              panelId: "skill-detail-panel",
+              variant: "sub",
+              onSelect: props.view.onDetailTabChange,
+            }}
           />
         </Show>
         <div
@@ -373,19 +398,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           <span style={{ "font-size": "13px", "font-weight": "500" }}>
             {props.skill.disabled ? t("skillsPage.disabled") : t("skillsPage.enabled")}
           </span>
-          <Show when={installOption()}>
-            {(option) => (
-              <button
-                class="btn"
-                disabled={skillInstallLocked(props.view)}
-                onClick={() =>
-                  props.view.onInstall(props.skill.skillKey, props.skill.name, option().id)
-                }
-              >
-                {active() ? t("skillsPage.installing") : option().label}
-              </button>
-            )}
-          </Show>
         </div>
         <Show when={message()}>
           {(value) => (
@@ -426,13 +438,6 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
                 </div>
               )}
             </Show>
-            <button
-              class="btn primary"
-              disabled={updateLocked() || !editValue().trim()}
-              onClick={() => props.view.onSaveKey(props.skill.skillKey)}
-            >
-              {t("skillsPage.saveKey")}
-            </button>
           </div>
         </Show>
         <div

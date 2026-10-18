@@ -131,7 +131,11 @@ async function runCapturedSessionActorUsage(
     const reportBudget =
       operation.kind === "summary" || operation.kind === "sessions"
         ? {
-            remainingBytes: 32 * 1024 * 1024 - metadataLimit * 256,
+            remainingBytes:
+              (operation.kind === "sessions"
+                ? (operation.reportBudgetBytes ?? 32 * 1024 * 1024)
+                : 32 * 1024 * 1024) -
+              metadataLimit * 256,
             metadataLimit,
             pricingFingerprint: operation.pricingFingerprint,
           }
@@ -256,6 +260,7 @@ async function runCapturedSessionActorUsage(
                 ...operation,
                 files: selectedFiles ?? [],
               })),
+              remainingReportBytes: Math.max(0, decodeBudget.remainingBytes),
             };
       // This is the disclosure boundary; ordinary bookkeeping uses the captured immutable snapshot.
       binding.actor?.snapshot(binding.authority);

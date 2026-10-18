@@ -21,6 +21,67 @@ import {
 } from "./crabbox-worker-warm-image.test-support.js";
 
 describe("Crabbox warm-image lifecycle ownership", () => {
+  it("keeps idle renewal through capture admission and capture, then stops it before release", async () => {
+    vi.useFakeTimers();
+    const inspectionEntered = createDeferred<void>();
+    const finishInspection = createDeferred<void>();
+    const captureEntered = createDeferred<void>();
+    const finishCapture = createDeferred<void>();
+    let destroying = false;
+    let periodicHeartbeatCount = 0;
+    let heartbeatSignal: AbortSignal | undefined;
+    const { provider, calls } = createWarmProvider(async ({ argv, options }) => {
+      if (argv[1] === "heartbeat" && argv.includes("--idle-timeout")) {
+        periodicHeartbeatCount++;
+        heartbeatSignal = options.signal;
+      }
+      if (destroying && argv[1] === "inspect") {
+        inspectionEntered.resolve();
+        await finishInspection.promise;
+      }
+      if (destroying && argv[2] === "create") {
+        captureEntered.resolve();
+        await finishCapture.promise;
+      }
+      return undefined;
+    });
+    let teardown: Promise<void> | undefined;
+    try {
+      const lease = await provisionWarmProfile(provider);
+      await vi.advanceTimersByTimeAsync(0);
+      const beforeAdmission = periodicHeartbeatCount;
+      destroying = true;
+      teardown = destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
+      void teardown.catch(() => {});
+      await inspectionEntered.promise;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicHeartbeatCount).toBeGreaterThan(beforeAdmission);
+      expect(heartbeatSignal?.aborted).toBe(false);
+      finishInspection.resolve();
+      await captureEntered.promise;
+      const beforeCapture = periodicHeartbeatCount;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(periodicHeartbeatCount).toBeGreaterThan(beforeCapture);
+      expect(calls.some(({ argv }) => argv[1] === "stop")).toBe(false);
+      finishCapture.resolve();
+      await teardown;
+      expect(heartbeatSignal?.aborted).toBe(true);
+      const afterRelease = periodicHeartbeatCount;
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(periodicHeartbeatCount).toBe(afterRelease);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    } finally {
+      finishInspection.resolve();
+      finishCapture.resolve();
+      try {
+        await teardown;
+      } finally {
+        await provider.dispose();
+        vi.useRealTimers();
+      }
+    }
+  });
+
   it("enrolls after detected setup failure, records diagnostics, and suppresses teardown capture after restart", async () => {
     const events: string[] = [];
     const { options, observe } = createProjectOptions(events);

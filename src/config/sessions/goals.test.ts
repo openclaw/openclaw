@@ -1,4 +1,3 @@
-// Session goal tests cover persisted session goal state and transitions.
 import { describe, expect, it } from "vitest";
 import {
   clearSessionGoal,
@@ -9,274 +8,169 @@ import {
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "./goals.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore as upsertAccessorSessionEntry,
-} from "./session-accessor.js";
+import { loadSessionEntry, upsertSessionEntryCore } from "./session-accessor.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
-
-// The goal APIs read/write session entries through the SQLite-backed accessor,
-// so fixtures must seed and assert through the same accessor rather than the
-// file-backed store helpers.
-function getSessionEntry(params: {
-  storePath: string;
-  sessionKey: string;
-}): SessionEntry | undefined {
-  return loadSessionEntry(params);
-}
-
-async function upsertSessionEntry(params: {
-  storePath: string;
-  sessionKey: string;
-  entry: SessionEntry;
-}): Promise<void> {
-  await upsertAccessorSessionEntry(
-    { sessionKey: params.sessionKey, storePath: params.storePath },
-    params.entry,
-  );
-}
 
 describe("session goals", () => {
   const fixture = useTempSessionsFixture("openclaw-session-goals-");
   const sessionKey = "agent:main:telegram:direct:123";
 
-  async function writeSession(totalTokens = 0) {
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        totalTokens,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
+  const scope = () => ({ storePath: fixture.storePath(), sessionKey });
+  const readEntry = () => loadSessionEntry(scope());
+  const writeEntry = (entry: SessionEntry) => upsertSessionEntryCore(scope(), entry);
+  type GoalOptions = Omit<Parameters<typeof createSessionGoal>[0], "storePath" | "sessionKey">;
+  const createGoal = (options: GoalOptions) =>
+    createSessionGoal({ ...scope(), now: 10, ...options });
+  const setStatus = (
+    status: Parameters<typeof updateSessionGoalStatus>[0]["status"],
+    now: number,
+    note?: string,
+  ) =>
+    updateSessionGoalStatus({ ...scope(), status, now, ...(note === undefined ? {} : { note }) });
+
+  const sessionEntry = (totalTokens = 0): SessionEntry => ({
+    sessionId: "sess-1",
+    updatedAt: 1,
+    totalTokens,
+    totalTokensFresh: true,
+    totalTokensVersion: 1,
+  });
+  const writeSession = (totalTokens = 0) => writeEntry(sessionEntry(totalTokens));
+  async function startGoal(totalTokens = 0, options: Partial<GoalOptions> = {}) {
+    await writeSession(totalTokens);
+    return createGoal({ objective: "ship", ...options });
   }
 
   it("creates core-owned goal state on the session entry", async () => {
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 100,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
+    await writeEntry({
+      ...readEntry()!,
+      totalTokens: 100,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
     });
 
-    const goal = await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "  land the PR \n",
+    const goal = await createGoal({ objective: "  land the PR \n", tokenBudget: 50 });
+
+    expect(goal).toMatchObject({
+      objective: "land the PR",
+      status: "active",
+      tokenStart: 100,
+      tokenStartFresh: true,
       tokenBudget: 50,
-      now: 10,
     });
-
-    expect(goal.objective).toBe("land the PR");
-    expect(goal.status).toBe("active");
-    expect(goal.tokenStart).toBe(100);
-    expect(goal.tokenStartFresh).toBe(true);
-    expect(goal.tokenBudget).toBe(50);
-    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.id).toBe(goal.id);
+    expect(readEntry()?.goal?.id).toBe(goal.id);
   });
 
   it("can create a goal from a fallback session entry", async () => {
-    const goal = await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
+    const goal = await createGoal({
       objective: "native slash start",
-      fallbackEntry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        totalTokens: 10,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-      now: 10,
+      fallbackEntry: sessionEntry(10),
     });
 
     expect(goal.tokenStart).toBe(10);
-    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.objective).toBe(
-      "native slash start",
-    );
+    expect(readEntry()?.goal?.objective).toBe("native slash start");
   });
 
   it("resumes budget-limited goals with a fresh budget window", async () => {
-    await writeSession(100);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "finish task",
-      tokenBudget: 20,
-      now: 10,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 125,
-      },
-    });
-    await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
+    await startGoal(100, { objective: "finish task", tokenBudget: 20 });
+    await writeEntry({ ...readEntry()!, totalTokens: 125 });
+    await getSessionGoal({ ...scope(), now: 20 });
 
-    const resumed = await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "active",
-      now: 30,
-    });
-    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 40 });
+    const resumed = await setStatus("active", 30);
+    const snapshot = await getSessionGoal({ ...scope(), now: 40 });
 
-    expect(resumed.status).toBe("active");
-    expect(resumed.tokenStart).toBe(125);
-    expect(resumed.tokensUsed).toBe(0);
-    expect(snapshot.goal?.status).toBe("active");
-    expect(snapshot.goal?.tokensUsed).toBe(0);
+    expect(resumed).toMatchObject({ status: "active", tokenStart: 125, tokensUsed: 0 });
+    expect(snapshot.goal).toMatchObject({ status: "active", tokensUsed: 0 });
   });
 
   it("adopts the first fresh token snapshot as the baseline after stale goal creation", async () => {
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        sessionId: "sess-1",
-        updatedAt: 1,
-        totalTokens: 100,
-        totalTokensFresh: false,
-      },
+    await writeEntry({
+      sessionId: "sess-1",
+      updatedAt: 1,
+      totalTokens: 100,
+      totalTokensFresh: false,
     });
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "finish task",
-      tokenBudget: 20,
-      now: 10,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 125,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
+    await createGoal({ objective: "finish task", tokenBudget: 20 });
+    await writeEntry({
+      ...readEntry()!,
+      totalTokens: 125,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
     });
 
-    const snapshot = await getSessionGoal({ storePath: fixture.storePath(), sessionKey, now: 20 });
+    const snapshot = await getSessionGoal({ ...scope(), now: 20 });
 
-    expect(snapshot.goal?.tokenStart).toBe(125);
-    expect(snapshot.goal?.tokenStartFresh).toBe(true);
-    expect(snapshot.goal?.tokensUsed).toBe(0);
-    expect(snapshot.goal?.status).toBe("active");
+    expect(snapshot.goal).toMatchObject({
+      tokenStart: 125,
+      tokenStartFresh: true,
+      tokensUsed: 0,
+      status: "active",
+    });
   });
 
   it("lets model tools complete or block but keeps existing terminal state", async () => {
-    await writeSession(0);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship",
-      now: 10,
-    });
+    await startGoal();
 
-    const completed = await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "complete",
-      note: "done",
-      now: 20,
-    });
+    const completed = await setStatus("complete", 20, "done");
 
-    expect(completed.status).toBe("complete");
-    expect(completed.lastStatusNote).toBe("done");
-    const repeated = await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "complete",
-      note: "verified",
-      now: 30,
+    expect(completed).toMatchObject({ status: "complete", lastStatusNote: "done" });
+    const repeated = await setStatus("complete", 30, "verified");
+    expect(repeated).toMatchObject({
+      completedAt: completed.completedAt,
+      lastStatusNote: "verified",
     });
-    expect(repeated.completedAt).toBe(completed.completedAt);
-    expect(repeated.lastStatusNote).toBe("verified");
-    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.completedAt).toBe(
-      completed.completedAt,
-    );
-    await expect(
-      updateSessionGoalStatus({
-        storePath: fixture.storePath(),
-        sessionKey,
-        status: "blocked",
-        now: 30,
-      }),
-    ).rejects.toThrow(/already complete/);
+    expect(readEntry()?.goal?.completedAt).toBe(completed.completedAt);
+    await expect(setStatus("blocked", 30)).rejects.toThrow(/already complete/);
   });
 
+  it.each([
+    { totalTokens: 105, tokenStart: 100, tokensUsed: 5 },
+    { totalTokens: 125, tokenStart: 125, tokensUsed: 0 },
+  ])(
+    "resumes completed goals with appropriate accounting at $totalTokens tokens",
+    async ({ totalTokens, tokenStart, tokensUsed }) => {
+      const created = await startGoal(100, { tokenBudget: 20 });
+      await writeEntry({ ...readEntry()!, totalTokens });
+      const completed = await setStatus("complete", 20, "verified");
+      expect(formatSessionGoalStatus(completed)).toContain("Commands: /goal resume, /goal clear");
+      const resumed = await setStatus("active", 30);
+      expect(resumed).toMatchObject({
+        id: created.id,
+        objective: "ship",
+        createdAt: 10,
+        status: "active",
+        updatedAt: 30,
+        tokenBudget: 20,
+        tokenStart,
+        tokensUsed,
+        continuationTurns: 0,
+        lastStatusNote: "verified",
+      });
+      expect(resumed.completedAt).toBeUndefined();
+      const recompleted = await setStatus("complete", 40);
+      expect(recompleted.completedAt).toBe(40);
+      expect(readEntry()?.goal?.completedAt).toBe(40);
+    },
+  );
+
   it("lets users resume blocked goals", async () => {
-    await writeSession(0);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship",
-      now: 10,
-    });
+    await startGoal();
 
-    await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "blocked",
-      note: "waiting on CI",
-      now: 20,
-    });
-    const resumed = await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "active",
-      now: 30,
-    });
+    await setStatus("blocked", 20, "waiting on CI");
+    const resumed = await setStatus("active", 30);
 
-    expect(resumed.status).toBe("active");
-    expect(resumed.lastStatusNote).toBe("waiting on CI");
+    expect(resumed).toMatchObject({ status: "active", lastStatusNote: "waiting on CI" });
   });
 
   it("resumes paused goals with a fresh budget window after usage passes the budget", async () => {
-    await writeSession(0);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship",
-      tokenBudget: 20,
-      now: 10,
-    });
-    await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "paused",
-      now: 20,
-    });
-    await upsertSessionEntry({
-      storePath: fixture.storePath(),
-      sessionKey,
-      entry: {
-        ...getSessionEntry({ storePath: fixture.storePath(), sessionKey })!,
-        totalTokens: 100,
-      },
-    });
+    await startGoal(0, { tokenBudget: 20 });
+    await setStatus("paused", 20);
+    await writeEntry({ ...readEntry()!, totalTokens: 100 });
 
-    const resumed = await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "active",
-      now: 30,
-    });
+    const resumed = await setStatus("active", 30);
 
-    expect(resumed.status).toBe("active");
-    expect(resumed.tokenStart).toBe(100);
-    expect(resumed.tokensUsed).toBe(0);
+    expect(resumed).toMatchObject({ status: "active", tokenStart: 100, tokensUsed: 0 });
     expect(resumed.budgetLimitedAt).toBeUndefined();
   });
 
@@ -301,60 +195,40 @@ describe("session goals", () => {
   });
 
   it("rewords the objective without touching status or token accounting", async () => {
-    await writeSession(100);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship the fix",
-      tokenBudget: 50,
-      now: 10,
-    });
+    await startGoal(100, { objective: "ship the fix", tokenBudget: 50 });
 
     const updated = await updateSessionGoalObjective({
-      storePath: fixture.storePath(),
-      sessionKey,
+      ...scope(),
       objective: "\tship the fix and update docs \n",
       now: 20,
     });
 
-    expect(updated.objective).toBe("ship the fix and update docs");
-    expect(updated.status).toBe("active");
-    expect(updated.tokenStart).toBe(100);
-    expect(updated.tokenBudget).toBe(50);
-    expect(updated.updatedAt).toBe(20);
-    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal?.objective).toBe(
-      "ship the fix and update docs",
-    );
+    expect(updated).toMatchObject({
+      objective: "ship the fix and update docs",
+      status: "active",
+      tokenStart: 100,
+      tokenBudget: 50,
+      updatedAt: 20,
+    });
+    expect(readEntry()?.goal?.objective).toBe("ship the fix and update docs");
   });
 
   it("rejects rewording terminal or missing goals", async () => {
     await writeSession(0);
     await expect(
       updateSessionGoalObjective({
-        storePath: fixture.storePath(),
-        sessionKey,
+        ...scope(),
         objective: "anything",
         now: 10,
       }),
     ).rejects.toThrow(/goal not found/);
 
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship",
-      now: 10,
-    });
-    await updateSessionGoalStatus({
-      storePath: fixture.storePath(),
-      sessionKey,
-      status: "complete",
-      now: 20,
-    });
+    await createGoal({ objective: "ship" });
+    await setStatus("complete", 20);
 
     await expect(
       updateSessionGoalObjective({
-        storePath: fixture.storePath(),
-        sessionKey,
+        ...scope(),
         objective: "new target",
         now: 30,
       }),
@@ -385,24 +259,18 @@ describe("session goals", () => {
       { adoptFreshBaseline: false },
     );
 
-    expect(goal?.tokenStart).toBe(0);
-    expect(goal?.tokenStartFresh).toBe(false);
-    expect(goal?.tokensUsed).toBe(0);
-    expect(goal?.status).toBe("active");
+    expect(goal).toMatchObject({
+      tokenStart: 0,
+      tokenStartFresh: false,
+      tokensUsed: 0,
+      status: "active",
+    });
   });
 
   it("clears goal state", async () => {
-    await writeSession(0);
-    await createSessionGoal({
-      storePath: fixture.storePath(),
-      sessionKey,
-      objective: "ship",
-      now: 10,
-    });
+    await startGoal();
 
-    await expect(clearSessionGoal({ storePath: fixture.storePath(), sessionKey })).resolves.toBe(
-      true,
-    );
-    expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal).toBeUndefined();
+    await expect(clearSessionGoal({ ...scope() })).resolves.toBe(true);
+    expect(readEntry()?.goal).toBeUndefined();
   });
 });

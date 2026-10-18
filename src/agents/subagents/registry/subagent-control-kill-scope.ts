@@ -9,7 +9,6 @@ import {
 } from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -425,9 +424,8 @@ export async function withSubagentKillScope<T>(
       throw rootObservationFailure.error;
     }
   };
-  let queuedRefresh: ReturnType<typeof createDeferredCore<number>> | undefined;
+  let queuedRefresh: Promise<number> | undefined;
   let refreshWork: Promise<void> | undefined;
-  let refreshing = false;
   let refreshClosed = false;
   let refreshFailure: { error: unknown; promise: Promise<number> } | undefined;
   const refresh = (): Promise<number> => {
@@ -437,53 +435,42 @@ export async function withSubagentKillScope<T>(
     if (refreshFailure) {
       return refreshFailure.promise;
     }
-    const batch = (queuedRefresh ??= createDeferredCore<number>());
-    void batch.promise.catch(() => {});
-    if (!refreshing) {
-      refreshing = true;
-      refreshWork = runInScope(async () => {
-        try {
-          while (queuedRefresh) {
-            const current = queuedRefresh;
-            queuedRefresh = undefined;
-            try {
-              if (rootObservationFailure) {
-                throw rootObservationFailure.error;
-              }
-              for (const pending of publishedRoots.splice(0)) {
-                await pending.prepare();
-              }
-              for (const tree of trees) {
-                await refreshTree(tree);
-              }
-              current.resolve(selectedCount);
-            } catch (error) {
-              refreshFailure = { error, promise: current.promise };
-              current.reject(error);
-              throw error;
-            }
-          }
-        } finally {
-          refreshing = false;
-        }
-      }).catch((error: unknown) => {
-        queuedRefresh?.reject(error);
-        queuedRefresh = undefined;
-      });
+    if (queuedRefresh) {
+      return queuedRefresh;
     }
-    return batch.promise;
+    const batch = (refreshWork ?? Promise.resolve()).then(() =>
+      runInScope(async () => {
+        queuedRefresh = undefined;
+        if (refreshFailure) {
+          throw refreshFailure.error;
+        }
+        if (rootObservationFailure) {
+          throw rootObservationFailure.error;
+        }
+        for (const pending of publishedRoots.splice(0)) {
+          await pending.prepare();
+        }
+        for (const tree of trees) {
+          await refreshTree(tree);
+        }
+        return selectedCount;
+      }),
+    );
+    queuedRefresh = batch;
+    refreshWork = batch.then(
+      () => {},
+      (error: unknown) => {
+        refreshFailure ??= { error, promise: batch };
+      },
+    );
+    return batch;
   };
   const withPublication = async (publish: () => void) => {
     let publicationActive = true;
-    let publicationConsumed = false;
     const publishResult = () => {
       if (!publicationActive) {
         throw new Error("Subagent cancellation publication scope is no longer active");
       }
-      if (publicationConsumed) {
-        throw new Error("Subagent cancellation result was already published");
-      }
-      publicationConsumed = true;
       publish();
     };
     const publicationSession = captureResult ? trees[0]?.session : undefined;
@@ -506,9 +493,6 @@ export async function withSubagentKillScope<T>(
         await preparePublication.prepare(publishPrepared);
       } else {
         await publishPrepared();
-      }
-      if (!publicationConsumed) {
-        throw new Error("Subagent cancellation publication did not consume its prepared scope");
       }
     } finally {
       publicationActive = false;

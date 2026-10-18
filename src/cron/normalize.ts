@@ -12,6 +12,7 @@ import { normalizeOptionalAccountId } from "../routing/account-id.js";
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { shouldDefaultCronDeliveryToAnnounce } from "./delivery-defaults.js";
 import { parseDeliveryInput } from "./delivery-field-schemas.js";
+import { normalizeCronInferenceBinding } from "./inference-binding.js";
 import { normalizeCronCommandArgv, normalizeCronPayload } from "./normalize-payload.js";
 import { snapshotOwnCronRecord } from "./own-record.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
@@ -48,7 +49,8 @@ function coerceSchedule(schedule: UnknownRecord) {
     rawKind === "every" ||
     rawKind === "cron" ||
     rawKind === "on-exit" ||
-    rawKind === "stream"
+    rawKind === "stream" ||
+    rawKind === "event"
       ? rawKind
       : undefined;
   const exprRaw = normalizeOptionalString(next.expr) ?? "";
@@ -125,30 +127,21 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.staggerMs;
   }
 
-  if (next.kind === "at") {
+  if (kind) {
     // Keep each schedule variant canonical so persisted jobs do not carry stale
     // fields from a previous kind after CLI/API normalization.
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "every") {
-    delete next.at;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
-  } else if (next.kind === "cron") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-  } else if (next.kind === "on-exit" || next.kind === "stream") {
-    delete next.at;
-    delete next.everyMs;
-    delete next.anchorMs;
-    delete next.expr;
-    delete next.tz;
-    delete next.staggerMs;
+    if (kind !== "at") {
+      delete next.at;
+    }
+    if (kind !== "every") {
+      delete next.everyMs;
+      delete next.anchorMs;
+    }
+    if (kind !== "cron") {
+      delete next.expr;
+      delete next.tz;
+      delete next.staggerMs;
+    }
   }
 
   if (next.kind !== "on-exit" && next.kind !== "stream") {
@@ -162,6 +155,10 @@ function coerceSchedule(schedule: UnknownRecord) {
     delete next.maxBatchBytes;
   }
 
+  if (next.kind !== "event") {
+    delete next.source;
+    delete next.options;
+  }
   return { ...next };
 }
 
@@ -328,6 +325,7 @@ export function normalizeCronJobInput(
     ["toolsAllowExecTarget", normalizeCronToolsAllowExecTarget],
     ["toolsAllowExecTargetRequirement", normalizeCronToolsAllowExecTargetRequirement],
     ["runtimeAuthority", normalizeCronRuntimeAuthority],
+    ["inferenceBinding", normalizeCronInferenceBinding],
   ] as const) {
     if (!(field in base)) {
       continue;
@@ -470,10 +468,7 @@ export function normalizeCronJobInput(
     }
     if ("schedule" in next && isRecord(next.schedule) && next.schedule.kind === "cron") {
       const schedule = next.schedule;
-      const explicit = normalizeCronStaggerMs(schedule.staggerMs);
-      if (explicit !== undefined) {
-        schedule.staggerMs = explicit;
-      } else {
+      if (schedule.staggerMs === undefined) {
         const expr = typeof schedule.expr === "string" ? schedule.expr : "";
         const defaultStaggerMs = resolveDefaultCronStaggerMs(expr);
         if (defaultStaggerMs !== undefined) {

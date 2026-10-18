@@ -14,6 +14,7 @@ import {
   vi,
 } from "vitest";
 import type { SessionMcpRuntimeManager } from "../src/agents/agent-bundle-mcp-types.js";
+import type { SharedAuthStoreOwnership } from "../src/agents/auth-profiles/types.js";
 import { resetAgentEventsForTest } from "../src/infra/agent-events.js";
 import { loggingState } from "../src/logging/state.js";
 import { clearNamedPluginRuntimeStoresForTest } from "../src/plugin-sdk/runtime-store-registry.js";
@@ -22,6 +23,7 @@ import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../src/process/gateway-work-admission.js";
+import { readGlobalSingleton } from "../src/shared/global-singleton.js";
 import { hasOpenClawAgentDatabaseAsyncResources } from "../src/state/openclaw-agent-db-resources.js";
 import { cleanupSolid } from "../ui/src/test-helpers/solid-cleanup.ts";
 import { clearJsdomViewportFocus } from "./jsdom-compat.mjs";
@@ -30,6 +32,7 @@ import {
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
+import { type JsdomResourceTracking, trackJsdomResources } from "./jsdom-resources.ts";
 import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 import {
   drainSqliteTestAgentOwner,
@@ -80,8 +83,10 @@ const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTe
 const SESSION_MCP_RUNTIME_MANAGER = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const RETAINED_MCP_MANAGERS = Symbol.for("openclaw.nonIsolatedRetainedMcpManagers");
 const SUBAGENT_REGISTRY_TEST_API = Symbol.for("openclaw.subagentRegistryTestApi");
+const SHARED_AUTH_STORE_OWNERSHIP = Symbol.for("openclaw.sharedAuthStoreOwnershipByDatabasePath");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
+const DOM_RESOURCE_TRACKING = Symbol.for("openclaw.nonIsolatedDomResourceTracking");
 const nativeConsoleMethods = {
   log: console.log,
   info: console.info,
@@ -151,17 +156,19 @@ function resetEvaluatedModules(
     // Vitest's evaluator records each execution independently (including native ones),
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
-    const sqliteKey = sqliteTestSingletonPublications.get(node.file);
+    const sqliteKeys = sqliteTestSingletonPublications.get(node.file) ?? [];
     const execution = retirableModuleExecution(node, modules, executions);
-    if ((key || (sqliteKey && !retainedSqlite)) && execution) {
+    if ((key || (sqliteKeys.length > 0 && !retainedSqlite)) && execution) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
       if (key && publication?.configurable && "value" in publication) {
         Reflect.deleteProperty(globalThis, key);
       }
-      if (sqliteKey && !retainedSqlite) {
-        retireSqliteTestSingleton(sqliteKey, testFiles);
+      if (!retainedSqlite) {
+        for (const sqliteKey of sqliteKeys) {
+          retireSqliteTestSingleton(sqliteKey, testFiles);
+        }
       }
     }
     // Mock metadata owns factories and cached exports after the registry resets.
@@ -200,6 +207,7 @@ function restoreSharedTestHomeAfterEnvUnstub(testHomeRaw: string | undefined): v
 function customElementTrackingStore(): Record<PropertyKey, unknown> & {
   customElements?: CustomElementRegistry;
   [CUSTOM_ELEMENT_TRACKING]?: CustomElementTracking;
+  [DOM_RESOURCE_TRACKING]?: JsdomResourceTracking;
 } {
   return globalThis;
 }
@@ -213,6 +221,13 @@ function installCustomElementTracking(): void {
     return;
   }
   globalStore[CUSTOM_ELEMENT_TRACKING] = trackCustomElementRegistry(registry);
+}
+
+function installDomResourceTracking(): void {
+  const store = customElementTrackingStore();
+  if (typeof document !== "undefined" && store[DOM_RESOURCE_TRACKING]?.document !== document) {
+    store[DOM_RESOURCE_TRACKING] = trackJsdomResources();
+  }
 }
 
 function dropTrackedRepoOwnedCustomElements(): void {
@@ -428,6 +443,18 @@ function resetOpenClawSecretRedactionState(): void {
   api?.resetSecretRedactionRegistryForTest?.();
 }
 
+function resetSharedAuthStoreOwnership(): void {
+  if (hasRetainedSqliteTestCustody()) {
+    return;
+  }
+  // Runtime and storage drains have joined before this file boundary. Keep the
+  // Map itself: externalized/native auth modules still consume that same owner.
+  const ownership = readGlobalSingleton(SHARED_AUTH_STORE_OWNERSHIP) as
+    | Map<string, SharedAuthStoreOwnership>
+    | undefined;
+  ownership?.clear();
+}
+
 async function retireSessionMcpRuntimeManager(): Promise<void> {
   const globalStore = globalThis as Record<PropertyKey, unknown>;
   const manager = globalStore[SESSION_MCP_RUNTIME_MANAGER] as SessionMcpRuntimeManager | undefined;
@@ -486,6 +513,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     super.onCollectStart(file);
     if (!this.config.isolate) {
       installCustomElementTracking();
+      installDomResourceTracking();
     }
     restoreRealTimers();
     restoreNativeTimerGlobals();
@@ -659,7 +687,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       : (key: symbol) =>
           Array.from(modules.idToModuleMap.values()).some(
             (node) =>
-              sqliteTestSingletonPublications.get(node.file) === key &&
+              sqliteTestSingletonPublications.get(node.file)?.includes(key) &&
               retirableModuleExecution(node, modules, executions) !== undefined,
           );
     if (
@@ -673,7 +701,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     if (!this.config.isolate) {
       for (const [phase, run] of [
         ["plugin runtimes", clearNamedPluginRuntimeStoresForTest],
+        ["shared auth ownership", resetSharedAuthStoreOwnership],
         ["custom elements", dropTrackedRepoOwnedCustomElements],
+        ["DOM resources", () => customElementTrackingStore()[DOM_RESOURCE_TRACKING]?.retire()],
         ["document body", resetSharedDocumentBody],
         ["Gateway admission", resetGatewayWorkAdmission],
         ["module mocks", () => internals.moduleRunner?.mocker?.reset?.()],

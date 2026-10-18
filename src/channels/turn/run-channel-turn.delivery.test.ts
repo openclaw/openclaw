@@ -21,7 +21,7 @@ import {
   readAgentRunTerminalOutcome,
   recordAgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
-import { hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
+import { hasVisibleChannelTurnDispatch } from "./dispatch-result.js";
 import { dispatchAssembledChannelTurn, dispatchRoutedChannelTurn } from "./lifecycle.js";
 import {
   createCtx,

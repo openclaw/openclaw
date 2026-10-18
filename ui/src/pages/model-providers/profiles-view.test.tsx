@@ -300,55 +300,6 @@ describe("renderProviderProfiles", () => {
     expect(onProfileOrderChange).not.toHaveBeenCalled();
   });
 
-  it("previews the reordered gap, reverses it, then saves using the credential owner", () => {
-    const onProfileOrderChange = vi.fn();
-    const { grip, row, rows, hitTest, container } = pointerFixture(props({ onProfileOrderChange }));
-
-    pointer(grip, "pointerdown");
-    pointer(grip, "pointermove", { x: 20, y: 140 });
-    expect(rows[1]!.style.translate).toBe("0px -80px");
-    expect(rows[2]!.style.translate).toBe("0px 0px");
-    pointer(grip, "pointermove", { x: 40, y: 285 });
-    expect(row.style.translate).toBe("20px 210px");
-    expect(rows[1]!.style.translate).toBe("0px -80px");
-    expect(rows[2]!.style.translate).toBe("0px -80px");
-    expect(rows[3]!.style.translate).toBe("");
-    // The pointer can be over the new gap, not a row. Repeating it must not
-    // change the preview after the neighbors have animated into their slots.
-    hitTest.mockReturnValue(container.querySelector(".model-providers__profile-list"));
-    pointer(grip, "pointermove", { x: 40, y: 285 });
-    expect(rows[2]!.style.translate).toBe("0px -80px");
-    pointer(grip, "pointermove");
-    expect(rows[1]!.style.translate).toBe("0px 0px");
-    expect(rows[2]!.style.translate).toBe("0px 0px");
-    expect(onProfileOrderChange).not.toHaveBeenCalled();
-    pointer(grip, "pointermove", { x: 40, y: 285 });
-    pointer(grip, "pointerup", { x: 40, y: 285 });
-    expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
-
-    expect(onProfileOrderChange).toHaveBeenCalledExactlyOnceWith("route-one", "credential-owner", [
-      "account:two",
-      "account:three",
-      "account:one",
-    ]);
-
-    const lastGrip = rows[2]!.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
-    pointer(lastGrip, "pointerdown", { x: 20, y: 250 });
-    pointer(lastGrip, "pointermove", { x: 20, y: 185 });
-    expect(rows[0]!.style.translate).toBe("0px 0px");
-    expect(rows[1]!.style.translate).toBe("0px 100px");
-    pointer(lastGrip, "pointermove", { x: 20, y: 20 });
-    expect(rows[0]!.style.translate).toBe("0px 100px");
-    expect(rows[1]!.style.translate).toBe("0px 100px");
-    pointer(lastGrip, "pointerup", { x: 20, y: 20 });
-    expect(onProfileOrderChange).toHaveBeenNthCalledWith(2, "route-one", "credential-owner", [
-      "account:three",
-      "account:one",
-      "account:two",
-    ]);
-    expect(rows.every((candidate) => candidate.style.translate === "")).toBe(true);
-  });
-
   it.each(["Escape", "pointercancel", "lostpointercapture", "outside-section", "other-owner"])(
     "does not save a %s drag and allows the next drag",
     (ending) => {

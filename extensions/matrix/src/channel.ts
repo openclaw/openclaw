@@ -68,7 +68,9 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 import {
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
   setMatrixThreadBindingIdleTimeoutBySessionKeyAsync,
+  setMatrixThreadBindingMaxAgeBySessionKey,
   setMatrixThreadBindingMaxAgeBySessionKeyAsync,
 } from "./matrix/thread-bindings-shared.js";
 import { matrixPresentationCapabilities } from "./presentation-capabilities.js";
@@ -426,6 +428,19 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
         supportsCurrentConversationBinding: true,
         bindingStore: "adapter",
         defaultTopLevelPlacement,
+        // Released synchronous runtime setters dispatch here through 2026-12-31.
+        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          setMatrixThreadBindingIdleTimeoutBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            idleTimeoutMs,
+          }).map(projectMatrixConversationBinding),
+        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+          setMatrixThreadBindingMaxAgeBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            maxAgeMs,
+          }).map(projectMatrixConversationBinding),
         setIdleTimeoutBySessionKeyAsync: async ({ targetSessionKey, accountId, idleTimeoutMs }) =>
           (
             await setMatrixThreadBindingIdleTimeoutBySessionKeyAsync({

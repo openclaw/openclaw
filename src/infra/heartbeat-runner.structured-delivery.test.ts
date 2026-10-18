@@ -37,7 +37,7 @@ import {
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
-import { resetSystemEventsForTest } from "./system-events.js";
+import { enqueueSystemEvent, resetSystemEventsForTest } from "./system-events.js";
 
 // mock-isolation: Keep speech policy and synthesis real while isolating live guards and audio persistence.
 vi.mock("../tts/tts.runtime.js", async () => {
@@ -118,6 +118,104 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
     resetSystemEventsForTest();
   });
 
+  it.each(["disconnected", "throws", "no-target"])(
+    "checks readiness before the model and recovers: %s",
+    async (failure) =>
+      heartbeatCase(async ({ cfg, seed, replySpy, sendTelegram, run }) => {
+        let ready = false;
+        const checkReady = vi.fn(async () => {
+          if (!ready && failure === "throws") {
+            throw new Error("readiness unavailable");
+          }
+          return { ok: ready, reason: ready ? "ok" : "terminal-disconnect" };
+        });
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: { ...heartbeatRunnerTelegramPlugin, heartbeat: { checkReady } },
+            },
+          ]),
+        );
+        if (failure === "no-target") {
+          cfg.agents!.defaults!.heartbeat!.target = "none";
+        }
+        await seed();
+        replySpy.mockResolvedValue({ text: "Deployment needs attention." });
+        const result = await run();
+        if (failure === "no-target") {
+          expect(result.status).toBe("ran");
+          expect(replySpy).toHaveBeenCalledOnce();
+          expect(checkReady).not.toHaveBeenCalled();
+        } else {
+          expect(result).toEqual({ status: "skipped", reason: "channel-not-ready" });
+          expect(replySpy).not.toHaveBeenCalled();
+          expect(checkReady).toHaveBeenCalledOnce();
+        }
+        expect(sendTelegram).not.toHaveBeenCalled();
+        if (failure !== "no-target") {
+          ready = true;
+          expect((await run()).status).toBe("ran");
+          expect(replySpy).toHaveBeenCalledOnce();
+          expect(sendTelegram).toHaveBeenCalledOnce();
+        }
+      })(),
+  );
+
+  it.each([
+    { kind: "task", source: "interval", intent: "task" },
+    { kind: "event", source: "cron", intent: "immediate" },
+    { kind: "event", source: "interval", intent: "scheduled" },
+    { kind: "manual", source: "manual", intent: "manual" },
+  ] as const)(
+    "executes $kind work from $source before gating unavailable delivery",
+    async ({ kind, source, intent }) =>
+      heartbeatCase(async ({ cfg, seed, replySpy, sendTelegram, run }) => {
+        const payload = "Check inbox for queued work.";
+        const order: string[] = [];
+        setActivePluginRegistry(
+          createTestRegistry([
+            {
+              pluginId: "telegram",
+              source: "test",
+              plugin: {
+                ...heartbeatRunnerTelegramPlugin,
+                heartbeat: {
+                  checkReady: async () => {
+                    order.push("readiness");
+                    return { ok: false, reason: "terminal-disconnect" };
+                  },
+                },
+              },
+            },
+          ]),
+        );
+        cfg.agents!.defaults!.heartbeat!.prompt =
+          kind === "manual" ? payload : "Ambient monitor only.";
+        const sessionKey = await seed();
+        if (kind === "event") {
+          enqueueSystemEvent(`Reminder: ${payload}`, { sessionKey, contextKey: "cron:inbox" });
+        }
+        replySpy.mockImplementation(async () => {
+          order.push("model");
+          return { text: "Inbox needs attention." };
+        });
+        const result = await run({
+          source,
+          intent,
+          ...(kind === "task"
+            ? { tasks: [{ jobId: "inbox", name: "Check inbox", prompt: payload }] }
+            : {}),
+        });
+        expect(replySpy).toHaveBeenCalledOnce();
+        expect(replySpy.mock.calls[0]?.[0].Body).toContain(payload);
+        expect(order).toEqual(["model", "readiness"]);
+        expect(result).toMatchObject({ status: "skipped", reason: "channel-not-ready" });
+        expect(sendTelegram).not.toHaveBeenCalled();
+      })(),
+  );
+
   it(
     "synthesizes and delivers a speech-only heartbeat without placeholder text",
     heartbeatCase(async ({ cfg, seed, replySpy, sendTelegram, run }) => {
@@ -142,11 +240,19 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
   );
 
   it(
-    "persists the first silent heartbeat after boot for the next user run",
+    "replaces an absent cached outcome when a silent heartbeat runs",
     heartbeatCase(async ({ cfg, storePath, seed, replySpy, sendTelegram, run }) => {
       cfg.agents!.defaults!.heartbeat!.target = "none";
       const sessionKey = await seed();
       await closeOpenClawAgentDatabasesAsync();
+      const claim = (runId: string) =>
+        heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
+          agentId: "main",
+          sessionKey,
+          storePath,
+          runId,
+        });
+      expect(await claim("before-heartbeat")).toBeUndefined();
       replySpy.mockResolvedValue(
         createHeartbeatToolResponsePayload({
           outcome: "progress",
@@ -156,15 +262,11 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
       );
       expect(await run()).toMatchObject({ status: "ran" });
       expect(sendTelegram).not.toHaveBeenCalled();
-      await closeOpenClawAgentDatabasesAsync();
-      expect(
-        await heartbeatOutcomeStore.claimHeartbeatOutcomeForRun({
-          agentId: "main",
-          sessionKey,
-          storePath,
-          runId: "next-user",
-        }),
-      ).toMatchObject({ summary: "First heartbeat after boot", outcome: "progress" });
+      expect(await claim("next-user")).toMatchObject({
+        summary: "First heartbeat after boot",
+        outcome: "progress",
+      });
+      expect(await claim("later-user")).toBeUndefined();
     }),
   );
 
@@ -292,7 +394,7 @@ describe("runHeartbeatOnce structured heartbeat delivery", () => {
               ...heartbeatRunnerTelegramPlugin,
               heartbeat: {
                 checkReady: async () => {
-                  if (failure === "readiness-throws") {
+                  if (failure === "readiness-throws" && replySpy.mock.calls.length > 0) {
                     throw new Error(reason);
                   }
                   return { ok: failure !== "readiness", reason };

@@ -478,6 +478,7 @@ export async function handleGatewayRequest(
             isWebchatConnect,
             respond: respondAuthorized,
             acceptsSerializedJson: opts.acceptsSerializedJson,
+            acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
             context,
             signal,
             ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
@@ -510,6 +511,7 @@ export async function handleGatewayRequest(
           : undefined;
         chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
+          req.method,
           () =>
             sharing
               ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {

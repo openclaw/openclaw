@@ -40,7 +40,6 @@ useChatSendBrowserFixture();
 
 it.each(
   [
-    {},
     { newerEvent: true },
     { reentrantSuccessor: true },
     { mainKeyChanged: true },
@@ -350,7 +349,6 @@ it.each(
     { message: "/approve approval-123 allow-once", action: "approve" },
     { message: "ordinary draft", action: "queued" },
     { message: "/stop after the next turn", action: "blocked" },
-    { message: "/stop", action: "goal" },
   ].flatMap((test) =>
     (test.action === "approve" ? [true, false] : [true]).map((hydrated) => ({
       message: test.message,

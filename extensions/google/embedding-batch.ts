@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import {
   buildEmbeddingBatchGroupOptions,
   runEmbeddingBatchGroups,
@@ -11,6 +10,7 @@ import {
   withRemoteHttpResponse,
   type EmbeddingBatchExecutionParams,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { sha256Hex as hashText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
   assertOkOrThrowProviderError,
   createProviderOperationDeadline,
@@ -76,10 +76,6 @@ function bindGeminiBatchAuth(client: GeminiEmbeddingClient): GeminiEmbeddingClie
       ...client.headers,
     },
   };
-}
-
-function hashText(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
 }
 
 function getGeminiBatchFileUrl(

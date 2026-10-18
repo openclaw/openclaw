@@ -379,45 +379,19 @@ describe("Discord monitor dispatch", () => {
     });
   });
 
-  it.each(["archive", "READY"] as const)(
-    "keeps the replacement rejoin claim when an old request fails after %s",
-    async (reset) => {
-      const { client, fetch, update } = createHarness();
-      const oldResponse = pause(async () => denied());
-      fetch.mockImplementationOnce(oldResponse.run);
-      const oldUpdate = update();
-      let newUpdate: Promise<void> | undefined;
-      try {
-        await oldResponse.entered;
-        await update();
-        expect(fetch).toHaveBeenCalledOnce();
-        expect(fetch).toHaveBeenCalledWith(
-          "https://discord.com/api/v10/channels/thread-42/thread-members/@me",
-          expect.objectContaining({ method: "PUT" }),
-        );
-        expect(lifecycle.closeDiscordThreadSessions).not.toHaveBeenCalled();
-        if (reset === "archive") {
-          await update(true);
-          expect(fetch).toHaveBeenCalledOnce();
-          expect(lifecycle.closeDiscordThreadSessions).toHaveBeenCalledWith({
-            cfg: {},
-            threadId: "thread-42",
-          });
-        } else {
-          await client.dispatchGatewayEvent("READY", {});
-        }
-        newUpdate = update();
-        await vi.waitFor(() => expect(client.getRuntimeMetrics().eventQueue?.processing).toBe(2));
-        oldResponse.resolve();
-        await Promise.all([oldUpdate, newUpdate]);
-        await update();
-        expect(fetch).toHaveBeenCalledTimes(2);
-      } finally {
-        oldResponse.resolve();
-        await Promise.all([oldUpdate, newUpdate]);
-      }
-    },
-  );
+  it("rejoins after an archived thread is reopened", async () => {
+    const { fetch, update } = createHarness();
+    await update();
+    await update();
+    expect(fetch).toHaveBeenCalledOnce();
+    await update(true);
+    expect(lifecycle.closeDiscordThreadSessions).toHaveBeenCalledWith({
+      cfg: {},
+      threadId: "thread-42",
+    });
+    await update();
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
 
   it("keeps membership claims independent for two account clients", async () => {
     const first = createHarness({ accountId: "account-a" });
@@ -697,9 +671,8 @@ describe("DiscordPresenceListener", () => {
     },
   );
 
-  it("drains reset-detached rollback without deleting a replacement cooldown", async () => {
-    const values = new Map<string, number>();
-    const store = cooldownStore(values);
+  it("drains admitted rollback during shutdown after a gateway reset", async () => {
+    const store = cooldownStore();
     const listener = createPresenceListener({ cooldownStore: store });
     await listener.handle(presence("offline"), humanClient);
     const claim = pause(store.registerIfAbsent);
@@ -715,7 +688,6 @@ describe("DiscordPresenceListener", () => {
       stopping = listener.stop().then(stopped);
       claim.resolve();
       await rollback.entered;
-      values.set("molty:guild-1:user-1", nowMs + 1);
       expect(stopped).not.toHaveBeenCalled();
       await listener.handle(presence("online", "late-user"), humanClient);
       expectWake();
@@ -725,7 +697,7 @@ describe("DiscordPresenceListener", () => {
       await Promise.all([event, stopping]);
     }
     expect(stopped).toHaveBeenCalledOnce();
-    expect(await store.lookup("molty:guild-1:user-1")).toBe(nowMs + 1);
+    expect(await store.lookup("molty:guild-1:user-1")).toBeUndefined();
     expectWake();
   });
 
@@ -791,14 +763,10 @@ describe("DiscordPresenceListener", () => {
     expectWake("quiet-arrival");
   });
 
-  it("detaches stale lookups after a new gateway session", async () => {
+  it("preserves per-user FIFO across a new gateway session", async () => {
     const listener = createPresenceListener({ presenceEvents: { reconnectSuppressSeconds: 0 } });
     const oldLookup = pause(async () => ({ bot: false }));
-    const newLookup = pause(async () => ({ bot: false }));
-    const fetchUser = vi
-      .fn()
-      .mockImplementationOnce(oldLookup.run)
-      .mockImplementationOnce(newLookup.run);
+    const fetchUser = vi.fn(oldLookup.run);
     const lookupClient = presenceClient(fetchUser);
     await listener.seedGuildSnapshot(guildSnapshot([]));
     const stale = listener.handle(presence("online"), lookupClient);
@@ -808,15 +776,17 @@ describe("DiscordPresenceListener", () => {
     await listener.seedGuildSnapshot(guildSnapshot([]));
     const current = listener.handle(presence("online"), lookupClient);
     try {
-      await newLookup.entered;
-      newLookup.resolve();
-      await current;
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(fetchUser).toHaveBeenCalledOnce();
+      expectWake();
     } finally {
       oldLookup.resolve();
-      newLookup.resolve();
       await Promise.all([stale, current]);
     }
     expectWake("user-1");
+    expect(fetchUser).toHaveBeenCalledOnce();
   });
 
   it("invalidates in-flight work when Discord deletes a guild", async () => {
@@ -855,28 +825,55 @@ describe("DiscordPresenceListener", () => {
     expect(registerIfAbsent).toHaveBeenCalledTimes(1);
   });
 
-  it("suppresses the presence replay burst after a gateway reconnect", async () => {
-    const info = vi.fn();
-    const listener = createPresenceListener({
-      logger: { info } as never,
-    });
+  it.each(["before", "permission", "claim"] as const)(
+    "suppresses replay when reconnect happens %s presence work",
+    async (stage) => {
+      const info = vi.fn();
+      const store = cooldownStore();
+      const listener = createPresenceListener({
+        logger: { info } as never,
+        cooldownStore: store,
+      });
+      if (stage === "before") {
+        listener.resetGatewaySession();
+        await listener.seedGuildSnapshot(guildSnapshot([]));
+        await listener.handle(presence("online", "replayed-1"), humanClient);
+      } else {
+        const pauses = {
+          permission: pause(async () => true),
+          claim: pause(store.registerIfAbsent),
+        };
+        const blocked = pauses[stage];
+        if (stage === "permission") {
+          mocks.canViewDiscordGuildChannel.mockImplementationOnce(pauses.permission.run);
+        } else {
+          vi.spyOn(store, "registerIfAbsent").mockImplementationOnce(pauses.claim.run);
+        }
+        await listener.seedGuildSnapshot(guildSnapshot([]));
+        const pending = listener.handle(presence("online", "replayed-1"), humanClient);
+        try {
+          await blocked.entered;
+          listener.resetGatewaySession();
+          await listener.seedGuildSnapshot(guildSnapshot([]));
+        } finally {
+          blocked.resolve();
+          await pending;
+        }
+      }
+      await listener.handle(presence("online", "replayed-2"), humanClient);
 
-    listener.resetGatewaySession();
-    await listener.seedGuildSnapshot(guildSnapshot([]));
-    await listener.handle(presence("online", "replayed-1"), humanClient);
-    await listener.handle(presence("online", "replayed-2"), humanClient);
+      expectWake();
+      expect(info).toHaveBeenCalledTimes(1);
 
-    expectWake();
-    expect(info).toHaveBeenCalledTimes(1);
-
-    // Post-window: replayed members stay marked online; a fresh transition emits.
-    nowMs += 5 * 60 * 1000;
-    await listener.handle(presence("online", "replayed-1"), humanClient);
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    await listener.handle(presence("offline", "replayed-1"), humanClient);
-    await listener.handle(presence("online", "replayed-1"), humanClient);
-    expectWake("replayed-1");
-  });
+      // Post-window: replayed members stay marked online; a fresh transition emits.
+      nowMs += 5 * 60 * 1000;
+      await listener.handle(presence("online", "replayed-1"), humanClient);
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      await listener.handle(presence("offline", "replayed-1"), humanClient);
+      await listener.handle(presence("online", "replayed-1"), humanClient);
+      expectWake("replayed-1");
+    },
+  );
 
   it.each(["pending", "committed"] as const)(
     "holds burst admission through a delayed permission lookup (%s)",

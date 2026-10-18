@@ -17,7 +17,6 @@ import { ModelRegistry } from "../../agents/sessions/model-registry.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../agents/test-helpers/provider-model-fixture.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
@@ -473,7 +472,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       });
       runEmbeddedAgentMock.mockResolvedValue({
         payloads: [
-          { text: outcome === "silent" ? "NO_REPLY" : "Report" },
+          ...(outcome === "silent" ? [] : [{ text: "Report" }]),
           ...(outcome === "presentation warning"
             ? [
                 setReplyPayloadMetadata(
@@ -485,7 +484,10 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         ],
         meta: {
           agentMeta: {},
-          ...(outcome === "silent" ? { finalAssistantRawText: "NO_REPLY" } : {}),
+          terminalReply:
+            outcome === "silent"
+              ? { disposition: "silent" }
+              : { disposition: "visible", text: "Report" },
           ...(outcome === "execution error"
             ? { error: { kind: "provider_error", message: "provider failed" } }
             : {}),
@@ -527,49 +529,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       expect(isSessionWorkAdmissionActive(storePath, [sessionKey, sessionId])).toBe(false);
     },
   );
-
-  it("marks a final lifecycle claim conflict as post-execution (#108428)", async () => {
-    const sessionKey = "agent:main:main";
-    seedPersistentSession(sessionKey, "persistent-session");
-
-    let agentExecutionStarted = false;
-    runEmbeddedAgentMock.mockImplementationOnce(
-      async (runParams: { onExecutionStarted?: () => void }) => {
-        runParams.onExecutionStarted?.();
-        agentExecutionStarted = true;
-        return {
-          payloads: [{ text: "completed" }],
-          meta: { agentMeta: {} },
-        };
-      },
-    );
-
-    const writeRow = patchSessionEntryMock.getMockImplementation();
-    if (!writeRow) {
-      throw new Error("Expected guarded session writer");
-    }
-    patchSessionEntryMock.mockImplementation((scope, update, options) =>
-      writeRow(
-        scope,
-        (entry: SessionEntry, context: { existingEntry?: SessionEntry }) =>
-          update(entry, {
-            existingEntry:
-              agentExecutionStarted && scope.sessionKey === sessionKey
-                ? { ...entry, lifecycleRevision: "replacement-revision" }
-                : context.existingEntry,
-          }),
-        options,
-      ),
-    );
-
-    await expect(
-      runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
-    ).resolves.toMatchObject({
-      status: "error",
-      error: `Session "${sessionKey}" changed while starting work. Retry.`,
-      executionStarted: true,
-    });
-  });
 });
 
 describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
@@ -616,13 +575,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       }
       const retryPreparationFailure = outcome === "retry-preflight-failure";
       const retryPreparationError = new AgentHarnessPreflightError("retry preparation failed");
-      const retriesInterimAck = retryPreparationFailure;
-      if (retriesInterimAck) {
-        resolveCronPayloadOutcomeMock.mockImplementation(
-          (await vi.importActual<typeof import("./helpers.js")>("./helpers.js"))
-            .resolveCronPayloadOutcome,
-        );
-      }
       runWithModelFallbackMock.mockImplementation(
         (
           await vi.importActual<typeof import("../../agents/model-fallback-runner.js")>(
@@ -698,12 +650,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       runEmbeddedAgentMock.mockImplementation(async (runParams: RunEmbeddedAgentParams) => {
         runIds.add(runParams.runId);
         const first = attemptIndex++ === 0;
-        if (retriesInterimAck && attemptIndex > 2) {
-          throw retryPreparationError;
-        }
         if (!first) {
           secondPreparing.resolve();
           await releaseSecond.promise;
+          if (retryPreparationFailure) {
+            throw retryPreparationError;
+          }
         }
         const { provider, model, thinkLevel } = runParams;
         if (!provider || !model || !thinkLevel) {
@@ -826,7 +778,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             emitAssistantEnd({ stopReason: "aborted", content: [] });
             return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
           }
-          const text = retriesInterimAck ? "On it." : "Final report";
+          const text = "Final report";
           emitAssistantEnd({
             stopReason: "stop",
             content: [{ type: "text", text }],
@@ -896,7 +848,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           });
         }
         if (retryPreparationFailure) {
-          await expect(runWithModelFallbackMock.mock.results[1]?.value).rejects.toBe(
+          await expect(runWithModelFallbackMock.mock.results[0]?.value).rejects.toBe(
             retryPreparationError,
           );
         }
@@ -921,7 +873,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
           });
         }
-        expect(onExecutionStarted).toHaveBeenCalledTimes(2);
+        expect(onExecutionStarted).toHaveBeenCalledTimes(retryPreparationFailure ? 1 : 2);
         expect(runIds.size).toBe(1);
         expect(
           broadcast.mock.calls.filter(

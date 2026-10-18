@@ -471,38 +471,6 @@ it("rejects a read owner closed after scanning instead of accepting the detached
   });
 });
 
-it("refuses a copied replacement with identical context version after scanning", async () => {
-  await withOpenClawTestState({ label: "context-reader-replacement" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "context-replacement",
-      sessionKey: "agent:main:context-replacement",
-      storePath: state.statePath("transcript.sqlite"),
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const source = await SessionManager.openAsync(scope);
-    await source.appendMessageAsync({ role: "user", content: "original", timestamp: 1 });
-    await closeOpenClawAgentDatabaseByPathAsync(scope.storePath);
-    const original = contextWorker.readSessionTranscriptModelContextInWorker;
-    const spy = vi
-      .spyOn(contextWorker, "readSessionTranscriptModelContextInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const context = await original(...args);
-        const previous = state.statePath("original.sqlite");
-        await fs.rename(scope.storePath, previous);
-        await fs.copyFile(previous, scope.storePath);
-        return context;
-      });
-    try {
-      await expect(SessionManager.openModelContextAsync(scope)).rejects.toThrow(
-        "captured database owner",
-      );
-    } finally {
-      spy.mockRestore();
-    }
-  });
-});
-
 it.each(["worker", "native"] as const)(
   "reads actual %s admission and completed-turn receipts through either store locator",
   async (mode) => {

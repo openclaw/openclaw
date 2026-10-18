@@ -32,19 +32,6 @@ export function expectProvidedCfgSkipsRuntimeLoad<TCfg>({
   });
 }
 
-export function expectRuntimeCfgFallback<TCfg>({
-  loadConfig,
-  resolveAccount,
-  cfg,
-  accountId,
-}: CfgThreadingAssertion<TCfg>): void {
-  expect(loadConfig).toHaveBeenCalledTimes(1);
-  expect(resolveAccount).toHaveBeenCalledWith({
-    cfg,
-    accountId,
-  });
-}
-
 export function createSendCfgThreadingRuntime({
   loadConfig,
   resolveMarkdownTableMode,

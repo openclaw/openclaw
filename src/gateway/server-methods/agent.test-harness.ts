@@ -20,6 +20,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
+import { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
@@ -43,6 +44,7 @@ export {
 } from "./agent-clock.test-helpers.js";
 
 export { getAgentTestMocks } from "./agent.mocks.test-utils.js";
+export { expectRecordFields };
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -97,17 +99,6 @@ export function requireValue<T>(value: T | null | undefined, message: string): T
     throw new Error(message);
   }
   return value;
-}
-
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 export function expectStringFieldContains(

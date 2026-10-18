@@ -11,6 +11,7 @@ import type { ChatType } from "../../channels/chat-type.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import type { SessionToolOverrides } from "../../config/sessions/types.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
@@ -77,11 +78,13 @@ export type AgentRunMessageContext = {
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
   currentThreadTs?: string;
+  /** Authentication-derived provenance for MCP conversation fields. */
+  currentConversationOrigin?: import("../../gateway/mcp-grant-store.js").McpCurrentConversationOrigin;
   /** Current inbound message id for action fallbacks (e.g. Telegram react). */
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   /** Reply-to mode for Slack auto-threading. */
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   /** Visible source replies must use the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Action sink available for model-proposed follow-up tasks. */
@@ -122,6 +125,8 @@ export type AgentRunModelOptions = {
   /** Outer model-fallback owner facts for this admitted attempt. */
   modelRoutingProvenance?: ModelFallbackAttemptProvenance;
   thinkLevel?: ThinkLevel;
+  /** Run-scoped selection intent for declared chat-template effort. */
+  thinkingExplicit?: boolean;
   fastMode?: FastMode;
   /** Stable outer-run start time for auto fast-mode cutoff across retries/fallbacks. */
   fastModeStartedAtMs?: number;
@@ -168,6 +173,8 @@ export type AgentRunInputContext = {
 };
 
 export type AgentRunTranscriptContext = {
+  /** Host-admitted private completion; retain its transcript without user-facing projection. */
+  privateCompletion?: true;
   /** Caller-owned in-memory transcript for ephemeral helper runs. */
   sessionManager?: SessionManager;
   sessionId: string;

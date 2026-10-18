@@ -411,7 +411,6 @@ export function applyServerUiPrefs(
   }
   const lastSeenSnapshot = readConfirmedPrefs(sync, scope);
   const lastSeen = { ...lastSeenSnapshot };
-  delete lastSeen.navigationConfirmation;
   if (hooks.profileId && !hooks.navigationConfirmed) {
     // Config/appearance application cannot publish a stale profile cache over a sibling read.
     const confirmed = SYNCED_PREFS.sidebarEntries.extract(lastSeen.sidebarEntries);
@@ -441,18 +440,12 @@ export function applyServerUiPrefs(
     loadLocalNavigationPreferences(gatewayScope, hooks.profileId),
     retainedLocalKeys,
   );
-  const confirmedKeys =
-    hooks.profileId && hooks.navigationConfirmed
-      ? SYNCED_PREF_KEYS.filter(
-          (key) => isNavigationPref(key) && isServerUiPrefReady(key, readiness),
-        )
-      : [];
   if (
     !navigationIdentityChanged &&
     !scopeChanged &&
     JSON.stringify(prefs) === JSON.stringify(lastSeen)
   ) {
-    publishConfirmedPrefs(sync, scope, prefs, confirmedKeys);
+    publishConfirmedPrefs(sync, scope, prefs);
     finishReconciliation();
     return false;
   }
@@ -467,7 +460,7 @@ export function applyServerUiPrefs(
     delete changed.background;
   }
   Object.assign(changed, navigationPatch);
-  publishConfirmedPrefs(sync, scope, prefs, confirmedKeys);
+  publishConfirmedPrefs(sync, scope, prefs);
   finishReconciliation();
   if (Object.hasOwn(changed, "theme")) {
     hooks.onThemeChanged?.(changed.theme ?? null);

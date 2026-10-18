@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runner/compact.queued-execution.js";
-import type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionParams,
+  QueuedCompactionHostOptions,
+} from "../agents/embedded-agent-runner/compact.types.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions.js";
@@ -35,7 +38,6 @@ import {
   listSessionStateEventsSince,
 } from "../sessions/session-state-events.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import * as settlementOwner from "./server-methods/session-run-settlement.js";
 import { embeddedRunMock, onceMessage, agentDiscoveryMock, rpcReq } from "./test-helpers.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import { testConfigRoot } from "./test-helpers.runtime-state.js";
@@ -115,48 +117,6 @@ async function createCompactionSession(
   return { ...scope, dir };
 }
 
-test("sessions.compact reads entry and transcript facts after the prior writer settles", async () => {
-  const scope = await createCompactionSession("sess-compact-settled", {
-    totalLines: 0,
-    entry: {
-      agentHarnessId: "codex",
-      cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
-      modelSelectionLocked: true,
-    },
-  });
-  const settle = settlementOwner.waitForTerminalSessionRunSettlement;
-  const settlement = vi
-    .spyOn(settlementOwner, "waitForTerminalSessionRunSettlement")
-    .mockImplementationOnce(async (params) => {
-      const settled = await settle(params);
-      await upsertSessionEntryCore(scope, {
-        ...loadSessionEntry(scope),
-        sessionId: scope.sessionId,
-        updatedAt: 2,
-        spawnedCwd: "/tmp/after-settlement",
-      });
-      await appendTranscriptMessage(scope, {
-        message: { role: "user", content: "final settled message", timestamp: 2 },
-      });
-      return settled;
-    });
-  embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({ ok: true, compacted: true });
-  const { ws } = await openClient();
-  try {
-    expectMainCompactionResult(await rpcReq(ws, "sessions.compact", { key: "main" }), true);
-    expect(embeddedRunMock.compactEmbeddedAgentSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cwd: "/tmp/after-settlement",
-        sessionEntry: expect.objectContaining({ spawnedCwd: "/tmp/after-settlement" }),
-      }),
-      expect.anything(),
-    );
-  } finally {
-    settlement.mockRestore();
-    ws.close();
-  }
-});
-
 test("sessions.compact without maxLines runs embedded manual compaction without checkpoint metadata", async () => {
   const sessionScope = await createCompactionSession("sess-main", {
     totalLines: 1,
@@ -186,7 +146,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     message: { role: "user", content: "follow-up", timestamp: 2 },
     now: Date.parse("2026-06-19T12:00:02.000Z"),
   });
-  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params, hostInput) => {
     const call = params as CompactEmbeddedAgentSessionParams;
     if (
       !call.sessionTarget?.agentId ||
@@ -196,24 +156,24 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     ) {
       throw new Error("expected SQLite session target");
     }
-    const targetScope = {
-      agentId: call.sessionTarget.agentId,
-      sessionId: call.sessionTarget.sessionId,
-      sessionKey: call.sessionTarget.sessionKey,
-      storePath: call.sessionTarget.storePath,
-    };
-    const rows = await loadTranscriptEvents(targetScope);
-    expect(rows).toHaveLength(3);
-    await appendTranscriptEvent(targetScope, {
-      type: "compaction",
-      id: "compact-1",
-      parentId: seedMessage.messageId,
-      timestamp: "2026-06-19T12:00:02.000Z",
-      summary: "summary",
-      firstKeptEntryId: seedMessage.messageId,
-      tokensBefore: 120,
-      tokensAfter: 80,
-    });
+    const host = hostInput as QueuedCompactionHostOptions;
+    const manager = host.preparedSession?.sessionManager;
+    if (!manager || !host.withCompactionPersistenceAsync) {
+      throw new Error("expected prepared Gateway compaction persistence");
+    }
+    expect(manager.getEntries()).toHaveLength(2);
+    await withSessionCompactionPersistenceAsync(manager, host.withCompactionPersistenceAsync, () =>
+      manager.appendCompactionAsync(
+        "summary",
+        seedMessage.messageId,
+        120,
+        undefined,
+        undefined,
+        undefined,
+        80,
+      ),
+    );
+    expect(loadSessionEntry(sessionScope)).toMatchObject({ compactionCount: 1, totalTokens: 80 });
     return {
       ok: true,
       compacted: true,
@@ -1039,7 +999,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
 
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = [
-      { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+      { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6 (NVIDIA)", provider: "nvidia" },
     ];
 
     const context = { getRuntimeConfig: () => runtimeConfig };
@@ -1055,17 +1015,17 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       "sessions.patch",
       {
         key: "agent:main:main",
-        model: "nvidia/moonshotai/kimi-k2.5",
+        model: "nvidia/moonshotai/kimi-k2.6",
       },
       { context },
     );
     expect(patched.ok).toBe(true);
-    expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+    expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.6");
     expect(patched.payload?.entry.providerOverride).toBe("nvidia");
     expect(patched.payload?.entry.model).toBeUndefined();
     expect(patched.payload?.entry.modelProvider).toBeUndefined();
     expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
-    expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+    expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.6");
 
     const listed = await directSessionReq<{
       sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
@@ -1075,6 +1035,6 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       (session) => session.key === "agent:main:main",
     );
     expect(mainSession?.modelProvider).toBe("nvidia");
-    expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+    expect(mainSession?.model).toBe("moonshotai/kimi-k2.6");
   });
 });

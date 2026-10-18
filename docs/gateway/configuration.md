@@ -88,6 +88,11 @@ carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
 
+Use `config.get` to read a redacted config snapshot without building the form
+schema. Request `config.schema` or `config.schema.lookup` when you need field
+metadata. The Gateway shares these results across clients and refreshes them
+when the active config or plugin generation changes.
+
 Every config leaf has a common or advanced presentation tier in `uiHints`.
 `advanced: false` marks common settings and `advanced: true` marks advanced
 settings. A leaf inherits the nearest ancestor tier when it has no direct hint.

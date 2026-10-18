@@ -10,6 +10,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { readExactSessionEntryRowValidated } from "./session-accessor.sqlite-entry-read.js";
@@ -101,7 +102,11 @@ it("captures and revalidates existing admission without host SQL", async () => {
     runOpenClawAgentWriteTransaction(() => {
       expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
     }, options);
-    const queries = trackSqliteStatementExecutions(database.db, ["host"], () => "host");
+    const queries = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["host"],
+      () => "host",
+    );
     const exec = vi.spyOn(database.db, "exec").mockImplementation(() => {
       throw new Error("host SQL");
     });

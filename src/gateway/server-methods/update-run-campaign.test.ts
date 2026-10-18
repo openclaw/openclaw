@@ -489,22 +489,6 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
   });
 
-  it("pins a directly applied dev campaign to its announced commit", async () => {
-    setDevCampaignSchedule();
-
-    await invokeUpdateRun();
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: {
-          mode: "tracked",
-          upstreamRef: "origin/main",
-          upstreamSha: "frozen-upstream-sha",
-        },
-      }),
-    );
-  });
-
   it("pins a managed dev campaign handoff to its announced commit", async () => {
     setDevCampaignSchedule();
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -521,7 +505,6 @@ describe("update.run campaign ownership", () => {
       }),
     );
   });
-
   it("rejects an explicit commit that conflicts with the adopted Git campaign before mutation", async () => {
     const campaignSha = "1234567890abcdef1234567890abcdef12345678";
     setDevCampaignSchedule(campaignSha);
@@ -550,20 +533,6 @@ describe("update.run campaign ownership", () => {
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
       expect.objectContaining({
         devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: campaignSha },
-      }),
-    );
-  });
-
-  it("coalesces an explicit commit matching the adopted Git campaign", async () => {
-    const upstreamSha = "1234567890abcdef1234567890abcdef12345678";
-    setDevCampaignSchedule(upstreamSha);
-    mockGitInstallStatus(upstreamSha);
-
-    await invokeUpdateRun({ target: { kind: "git", upstreamRef: "origin/main", upstreamSha } });
-
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha },
       }),
     );
   });

@@ -4,6 +4,14 @@ import {
   truncateWithMarker,
 } from "@openclaw/normalization-core/utf16-slice";
 
+export function truncateOptionalText(
+  value: string | undefined,
+  maxLength: number,
+): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
+}
+
 export function truncateUtf16WithEllipsis(value: string, maxLength: number): string {
   if (value.length <= maxLength) {
     return value;

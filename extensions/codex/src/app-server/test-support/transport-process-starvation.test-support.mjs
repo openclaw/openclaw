@@ -10,7 +10,6 @@ import fs, {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import fsp from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -41,10 +40,8 @@ if (fixtureProcfs) {
     writeFileSync(target, value);
     mapped.set(key, target);
   }
-  const originalReadFile = fsp.readFile;
   const originalReadFileSync = fs.readFileSync;
   const originalOpenSync = fs.openSync;
-  fsp.readFile = (file, ...args) => originalReadFile(mapped.get(file) ?? file, ...args);
   fs.readFileSync = (file, ...args) => originalReadFileSync(mapped.get(file) ?? file, ...args);
   fs.openSync = (file, ...args) => originalOpenSync(mapped.get(file) ?? file, ...args);
   const originalExecFile = childProcess.execFile;

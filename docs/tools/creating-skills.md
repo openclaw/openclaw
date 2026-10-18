@@ -159,7 +159,7 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `requires.anyBins` | At least one binary must exist on `PATH` |
     | `requires.env` | Each env var must exist in the process or config |
     | `requires.config` | Each `openclaw.json` path must be truthy |
-    | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
+    | `os` | Platform filter: `["darwin"]` (or `["macos"]`), `["linux"]`, `["win32"]` |
     | `always` | Include on a compatible OS even when `requires.*` checks fail |
 
     Full reference: [Skills — Gating](/tools/skills#gating).

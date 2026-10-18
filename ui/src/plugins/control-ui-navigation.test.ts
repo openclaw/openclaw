@@ -1,11 +1,10 @@
-import { getObserver } from "@solidjs/signals";
-import { render as renderLit } from "lit";
-import { createSignal } from "solid-js";
+import { createComponent, createRoot, onCleanup } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../app/context.ts";
-import { icons } from "../components/icons.ts";
-import { SidebarMenusController } from "../components/sidebar-menus-controller.tsx";
+import type { SidebarMenusOwner } from "../components/sidebar-menus-types.ts";
+import { createSidebarMenus } from "../components/sidebar-menus.tsx";
+import { Icon } from "../components/solid/icon.tsx";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
@@ -48,35 +47,35 @@ it("opens navigation actions through the sidebar menu owner for pointer and keyb
     plugins: { registrations: () => entries, subscribe: () => () => {} },
     router: { subscribe: () => () => {} },
   } as unknown as ApplicationContext);
-  const [menuRevision, setMenuRevision] = createSignal(0);
-  const controller = new SidebarMenusController({
-    addController: vi.fn(),
-    requestUpdate: () => setMenuRevision((revision) => revision + 1),
-  } as unknown as ConstructorParameters<typeof SidebarMenusController>[0]);
-  onTestFinished(() => controller.hostDisconnected());
-  await controller.preloadMenuRenderer();
   const menuRoot = document.createElement("div");
+  const menuHost = {} as SidebarMenusOwner;
+  const menus = createRoot((dispose) => {
+    onTestFinished(dispose);
+    return createSidebarMenus({
+      host: menuHost,
+      element: menuRoot,
+      commit: () => Promise.resolve(true),
+    });
+  });
+  await menus.preloadMenuRenderer();
   const contributions = ["boards", "child", "plain"].map((id) =>
     Object.assign(document.createElement("openclaw-plugin-contributions"), {
       kind: "navigation",
       navigationKey: `example/${id}`,
-      navigationMenus: controller,
+      navigationMenus: menus,
     }),
   );
   window.history.replaceState(null, "", "/boards");
   provider.append(...contributions, menuRoot);
   document.body.append(provider);
   await Promise.all(contributions.map((element) => element.updateComplete));
-  // Project the standalone controller's updates as the sidebar host does.
-  const menuView = new Proxy(controller, {
-    get(target, key, receiver) {
-      if (getObserver()) {
-        menuRevision();
-      }
-      return Reflect.get(target, key, receiver);
+  mountSolid(
+    () => {
+      onCleanup(menus.bindCatalogMenuView(menus.catalogMenu.createView(menuHost)));
+      return menus.render(menuHost);
     },
-  });
-  mountSolid(() => menuView.render(), { container: menuRoot });
+    { container: menuRoot },
+  );
   const [parent, pinned, plain] = contributions;
   const links = [
     parent!.querySelector("a")!,
@@ -218,15 +217,18 @@ it("shows the active plugin section's ordered children and leaves pinned childre
   const children = [...parent.querySelectorAll<HTMLAnchorElement>(".nav-item--child")];
   expect(children.map((child) => child.textContent?.trim())).toEqual(["Alpha", "Beta", "Zulu"]);
   expect(children.map((child) => child.getAttribute("aria-current"))).toEqual(["page", null, null]);
-  const icon = document.createElement("div");
-  renderLit(icons.activity, icon);
+  const activityIcon = mountSolid(() => createComponent(Icon, { name: "activity" }), {
+    container: document.createElement("div"),
+  }).container;
   expect(
     [...children[0]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
-  renderLit(icons.layers, icon);
+  ).toEqual([...activityIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  const layersIcon = mountSolid(() => createComponent(Icon, { name: "layers" }), {
+    container: document.createElement("div"),
+  }).container;
   expect(
     [...children[1]!.querySelectorAll("svg path")].map((path) => path.getAttribute("d")),
-  ).toEqual([...icon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
+  ).toEqual([...layersIcon.querySelectorAll("svg path")].map((path) => path.getAttribute("d")));
   expect(pinned.querySelectorAll("a")).toHaveLength(1);
   expect(pinned.querySelector(".nav-item--child")).toBeNull();
   expect(pinned.querySelector("a")?.getAttribute("aria-current")).toBe("page");

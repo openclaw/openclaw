@@ -188,15 +188,10 @@ export function isPluginMetadataSnapshotCompatible(params: {
 }
 
 function appendOwner(owners: Map<string, string[]>, ownedId: string, pluginId: string): void {
-  const existing = owners.get(ownedId);
-  if (existing) {
-    if (existing.includes(pluginId)) {
-      return;
-    }
-    existing.push(pluginId);
-    return;
+  const existing = owners.get(ownedId) ?? [];
+  if (!existing.includes(pluginId)) {
+    owners.set(ownedId, [...existing, pluginId]);
   }
-  owners.set(ownedId, [pluginId]);
 }
 
 function buildPluginMetadataOwnerMaps(
@@ -274,7 +269,11 @@ function buildPluginMetadataOwnerMaps(
       }
     }
   }
-  return { ...owners, channelAccountKeyPolicies, ...buildPluginMetadataProviderFacts(plugins) };
+  return {
+    ...owners,
+    channelAccountKeyPolicies,
+    ...buildPluginMetadataProviderFacts(plugins, enabledPluginIds),
+  };
 }
 
 function buildPluginMetadataManifestFacts(
@@ -314,12 +313,8 @@ export function rebasePluginMetadataSnapshotManifestRegistry(
   const rebased = {
     ...snapshot,
     ...buildPluginMetadataManifestFacts(manifestRegistry, snapshot.index),
-    normalizePluginId: snapshot.index
-      ? createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry })
-      : snapshot.normalizePluginId,
-    ...(snapshot.metrics
-      ? { metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length } }
-      : {}),
+    normalizePluginId: createPluginRegistryIdNormalizer(snapshot.index, { manifestRegistry }),
+    metrics: { ...snapshot.metrics, manifestPluginCount: manifestRegistry.plugins.length },
   };
   // Rebuilt views retain the original generation even when consumed in another scope.
   bindPluginMetadataSnapshotCache(rebased, getPluginMetadataSnapshotCache(snapshot));
@@ -400,17 +395,13 @@ export function loadPluginMetadataSnapshot(
       env: params.env,
       workspaceDir: params.workspaceDir,
       allowWorkspaceScopedSnapshot: true,
+      ...(params.config === undefined ? { requireDefaultDiscoveryContext: true } : {}),
     });
     if (
       current &&
       (isCurrentPluginMetadataSnapshotRuntimeGeneration(current) ||
-        isPluginMetadataSnapshotCompatible({
-          snapshot: current,
-          config: params.config,
-          env: params.env,
-          workspaceDir: params.workspaceDir,
-          index: params.index,
-        }))
+        ((current.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
+          indexesMatch(current.index, params.index)))
     ) {
       return projectPluginMetadataSnapshot(
         current,
@@ -598,19 +589,7 @@ function selectPluginMetadataSnapshot(
     if (!params.index) {
       return { kind: "current", snapshot: current };
     }
-    if (
-      allowSynchronousPolicyRead &&
-      isPluginMetadataSnapshotCompatible({
-        snapshot: current,
-        config: params.config,
-        env: params.env,
-        allowScopedSnapshot: params.pluginIds !== undefined || params.pluginIdScope !== undefined,
-        workspaceDir:
-          params.workspaceDir ??
-          (params.allowWorkspaceScopedCurrent === true ? current.workspaceDir : undefined),
-        index: params.index,
-      })
-    ) {
+    if (allowSynchronousPolicyRead && indexesMatch(current.index, params.index)) {
       return { kind: "current", snapshot: current };
     }
   }

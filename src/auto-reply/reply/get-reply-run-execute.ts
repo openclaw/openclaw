@@ -26,7 +26,6 @@ import { conversationIdentityFromMsgContext } from "../../config/sessions/conver
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
-import { normalizeMediaFacts } from "../../media/media-facts.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
 import { isSessionPersonalBootstrapTurn } from "../../sessions/session-participant-input.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
@@ -124,7 +123,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     typingMode,
     terminalReplyExpectation,
   } = context;
-  const runParams = { ...params };
   const {
     ctx,
     sessionCtx,
@@ -238,7 +236,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     (replyRoute.chatType === "direct" &&
       ctx.InboundAccessAuthorized === true &&
       ctx.SenderIsSelf !== true);
-  const ctxMediaForPersistence = normalizeMediaFacts(ctx.media);
+  const ctxMediaForPersistence = ctx.media ?? [];
   const unresolvedSourceIndexes = new Set(currentTurnImages.unresolvedSourceIndexes ?? []);
   const persistedCtxMedia = ctxMediaForPersistence.map((fact, index) =>
     unresolvedSourceIndexes.has(index) ? { ...fact, hydrationSuppressed: true } : fact,
@@ -271,7 +269,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     imageSourceIndexes: promptMediaSourceIndexes,
   });
   const userTurnTimestamp = normalizeMessageTimestampMs(ctx.Timestamp);
-  // prompt-prelude substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
+  // Prompt preparation substitutes MEDIA_ONLY_USER_TEXT as transcriptBody for
   // bodyless turns; storage stays bare (the LLM boundary re-injects it), while
   // room-event lines that merely contain the marker keep their real text.
   const userTurnTranscriptText =
@@ -371,7 +369,44 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     InternalTurnSource: ctx.InternalTurnSource ?? sessionCtx.InternalTurnSource,
     InputProvenance: inputProvenance,
   });
+  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
+  const authorityRunId =
+    freshChannelCronAuthorityTurn && command.senderIsOwner
+      ? (opts?.runId ?? crypto.randomUUID())
+      : undefined;
+  const channelRequester =
+    authorityRunId && messageProvider === "discord" && sessionCtx.SenderId
+      ? {
+          version: 1 as const,
+          channel: messageProvider,
+          accountId: normalizeAccountId(replyRoute.accountId),
+          senderId: sessionCtx.SenderId,
+        }
+      : undefined;
+  const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
+  const cronOwner = {
+    channel: messageProvider,
+    accountId: replyRoute.accountId,
+    senderId: normalizeOptionalString(command.senderId),
+  };
+  const isCurrentChannelOwner = () =>
+    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
+  // Capture the authenticated source, never the later drain runner's identity.
+  // The queue assigns a new run ID after the ingress capability has settled.
+  const createChannelCronAuthority =
+    !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
+      ? (runId: string) =>
+          createCronCreatorAuthorityCapability(
+            runId,
+            { kind: "external", channel: messageProvider },
+            { source: "channel-owner", isCurrent: isCurrentChannelOwner },
+            undefined,
+            channelRequester,
+            { isCurrent: isCurrentChannelOwner, ...cronOwner },
+          )
+      : undefined;
   const followupRun = {
+    createChannelCronAuthority,
     prompt: queuedBody,
     sourceTurnId: resolveReplySourceTurnId({
       sourceTurnId,
@@ -421,6 +456,12 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
+    ...(opts?.forceRestartSafeTools !== undefined
+      ? { forceRestartSafeTools: opts.forceRestartSafeTools }
+      : {}),
+    ...(opts?.forceCodeModeTools !== undefined
+      ? { forceCodeModeTools: opts.forceCodeModeTools }
+      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
@@ -459,7 +500,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       agentAccountId: replyRoute.accountId,
       conversationRoutePeerId: sessionCtx.ConversationRoutePeerId,
       conversationToolPolicy: sessionCtx.ConversationToolPolicy,
-      groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
+      groupId: resolveGroupSessionKey(sessionCtx)?.id,
       groupChannel:
         normalizeOptionalString(sessionCtx.GroupChannel) ??
         normalizeOptionalString(sessionCtx.GroupSubject),
@@ -505,6 +546,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
+      thinkingExplicit: params.thinkingExplicit,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -518,7 +560,9 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           sessionEntry: preparedSessionState.sessionEntry,
         });
         return {
-          fastMode: params.resolvedFastMode ?? fastModeState.mode,
+          fastMode: params.resolvedFastModeOverride
+            ? params.resolvedFastMode
+            : fastModeState.requestMode,
           fastModeAutoOnSeconds:
             params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
           ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),
@@ -573,7 +617,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
   };
   const sourceReplyDeliveryRuntimeOptions = opts as SourceReplyDeliveryRuntimeOptions | undefined;
   copyChildSessionPublication(sessionCtx, followupRun.run);
-  const channelOwnerAuthority = getCommandOwnerAuthority(sessionCtx);
   if (command.senderIsOwner && channelOwnerAuthority) {
     bindCommandOwnerAuthority(followupRun.run, channelOwnerAuthority);
   }
@@ -593,47 +636,14 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       ? { ...sessionCtx.ReplyThreading, implicitCurrentMessage: "deny" as const }
       : undefined;
 
-  const authorityRunId =
-    freshChannelCronAuthorityTurn && command.senderIsOwner
-      ? (opts?.runId ?? crypto.randomUUID())
-      : undefined;
-  const channelRequester =
-    authorityRunId && messageProvider === "discord" && sessionCtx.SenderId
-      ? {
-          version: 1 as const,
-          channel: messageProvider,
-          accountId: normalizeAccountId(replyRoute.accountId),
-          senderId: sessionCtx.SenderId,
-        }
-      : undefined;
-  const inheritedCronCreatorAuthorityCapability = opts?.cronCreatorAuthorityCapability;
-  const cronOwner = {
-    channel: messageProvider,
-    accountId: replyRoute.accountId,
-    senderId: normalizeOptionalString(command.senderId),
-  };
-  const isCurrentChannelOwner = () =>
-    channelOwnerAuthority?.isCurrent() ?? isConfiguredCommandOwner(getRuntimeConfig(), cronOwner);
-  // Only fresh owner ingress mints this identity. Management-only admissions do not imply it.
-  const createdCronCreatorAuthorityCapability =
-    !inheritedCronCreatorAuthorityCapability && authorityRunId && messageProvider
-      ? createCronCreatorAuthorityCapability(
-          authorityRunId,
-          { kind: "external", channel: messageProvider },
-          {
-            source: "channel-owner",
-            isCurrent: isCurrentChannelOwner,
-          },
-          undefined,
-          channelRequester,
-          { isCurrent: isCurrentChannelOwner, ...cronOwner },
-        )
-      : undefined;
+  const createdCronCreatorAuthorityCapability = authorityRunId
+    ? createChannelCronAuthority?.(authorityRunId)
+    : undefined;
   const cronCreatorAuthorityCapability =
     inheritedCronCreatorAuthorityCapability ?? createdCronCreatorAuthorityCapability;
   const execute = () =>
     runReplyAgent({
-      ...runParams,
+      ...params,
       commandBody: prefixedCommandBody,
       transcriptCommandBody,
       followupRun,

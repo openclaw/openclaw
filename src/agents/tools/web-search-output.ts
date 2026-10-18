@@ -1,6 +1,4 @@
 /**
- * Normalized `web_search` output contract.
- *
  * Every bundled or external provider payload is normalized at the core tool
  * boundary into one of four closed branches (error / results / answer / raw).
  * The boundary owns the untrusted-content envelope: provider prose is

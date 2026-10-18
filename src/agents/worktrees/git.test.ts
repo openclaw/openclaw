@@ -520,6 +520,10 @@ describe("Git checkout discovery", () => {
     await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(nested, { recursive: true });
 
+    expect(findGitCheckoutRoot(nested)).toBeNull();
+    expect(insideGitCheckout(nested)).toBe(false);
+    await fs.writeFile(path.join(root, ".git", "HEAD"), "ref: refs/heads/main\n");
+
     expect(findGitCheckoutRoot(nested)).toBe(root);
     expect(insideGitCheckout(nested)).toBe(true);
   });

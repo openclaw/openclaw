@@ -1,3 +1,4 @@
+import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
 import {
   runWithoutOwnedSessionTranscriptWrites,
   withOwnedSessionTranscriptWrites,
@@ -65,6 +66,7 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const initialTarget = initialWriter ? { ...activeSessionTarget } : undefined;
   let sessionTargetAdopted = false;
   let committedCompactionSuccessor: AcceptedCompactionSuccessor | undefined;
+  const committedCompactionTransitions: SessionAdmissionTransition[] = [];
   // Only retries after this run mutates its transcript may wait for deferred projection work.
   // Fresh attempts retain the projection owner's bounded, retryable failure contract.
   let settleOwnedTranscriptProjection = false;
@@ -109,6 +111,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
   const recordCommittedCompactionSuccessor = (accepted: AcceptedCompactionSuccessor) => {
     // Commit-edge bookkeeping only: observers may cancel before the patch promise
     // returns, so neither notification callbacks nor another await belongs here.
+    if (accepted.admissionTransition && committedCompactionSuccessor !== accepted) {
+      committedCompactionTransitions.push(accepted.admissionTransition);
+    }
     committedCompactionSuccessor = accepted;
     capturePreparedCompactionTarget(accepted);
   };
@@ -198,6 +203,9 @@ export async function createEmbeddedRunSessionPromptState(input: {
     },
     get sessionTargetAdopted() {
       return sessionTargetAdopted;
+    },
+    get committedCompactionTransitions() {
+      return Object.freeze([...committedCompactionTransitions]);
     },
     get committedCompactionSuccessor() {
       return committedCompactionSuccessor;

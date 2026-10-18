@@ -23,6 +23,28 @@ function promptPricing(): ModelCostConfig {
 }
 
 describe("usage cost estimation", () => {
+  it("never reprices an incomplete mixed-model total after another aggregation", () => {
+    const attempt = createUsageAccumulator();
+    mergeUsageIntoAccumulator(attempt, {
+      input: 100,
+      costStatus: "unavailable",
+    });
+    mergeUsageIntoAccumulator(attempt, {
+      input: 200,
+      cost: { total: 0.7 },
+      costStatus: "complete",
+    });
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    expect(toNormalizedUsage(run)?.input).toBe(300);
+    expect(
+      estimateAggregateUsageCost({
+        usage: toNormalizedUsage(run),
+        cost: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0 },
+      }),
+    ).toBeUndefined();
+  });
+
   it.each([
     {
       name: "recorded zero",
@@ -110,6 +132,49 @@ describe("usage cost estimation", () => {
       estimateAggregateUsageCost({ ...pricing, usage: toNormalizedUsage(run) }),
     ).toBeUndefined();
   });
+
+  it.each([
+    {
+      usage: { input: 100 },
+      declaredCost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: 0.0000042,
+    },
+    {
+      usage: { input: 100, output: 0 },
+      declaredCost: { input: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: 0,
+    },
+    {
+      usage: { input: 100 },
+      declaredCost: { input: 0.042, output: 1, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      usage: { input: 100, output: 1 },
+      declaredCost: { input: 0.042, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      usage: { total: 100 },
+      declaredCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+    {
+      usage: { input: -1 },
+      declaredCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      expected: undefined,
+    },
+  ])(
+    "prices captured route rates only when charged buckets are known: %j",
+    ({ usage, declaredCost, expected }) => {
+      const cost = estimateUsageCost({ usage, declaredCost });
+      if (expected === undefined || expected === 0) {
+        expect(cost).toBe(expected);
+      } else {
+        expect(cost).toBeCloseTo(expected, 15);
+      }
+    },
+  );
 
   it("uses the selected input rate for the 1h cache-write subset", () => {
     const usage = { input: 20, output: 10, cacheRead: 30, cacheWrite: 60, cacheWrite1h: 40 };

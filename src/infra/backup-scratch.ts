@@ -6,8 +6,8 @@ import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { getChildLogger } from "../logging/logger.js";
 import { isMissingPathError } from "./errno.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
-import { FsSafeError, root as createRoot, type Root } from "./fs-safe.js";
-import { isSqliteLockError, isSqliteNativeOpenFailure } from "./sqlite-error-diagnostics.js";
+import { root as createRoot, type Root } from "./fs-safe.js";
+import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import {
   acquireSqliteStagingToken,
@@ -32,42 +32,27 @@ export type BackupScratchReport = {
 };
 
 export async function createBackupScratchDirectory(root: string): Promise<BackupScratch> {
-  for (let attempt = 0; ; attempt += 1) {
-    const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
-    let boundary: Root | undefined;
-    try {
-      boundary = await createRoot(directory);
-      const observed = await fs.lstat(directory, { bigint: true });
-      const admitted = await boundary.stat(".");
-      if (
-        !observed.isDirectory() ||
-        !admitted.exactIdentity ||
-        !sameFileIdentity(observed, admitted.exactIdentity)
-      ) {
-        throw new Error("Backup scratch directory identity changed");
-      }
-      return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
-    } catch (error) {
-      // A reclaimer can win before BEGIN IMMEDIATE. No payload exists yet;
-      // leave that attempt to its new owner and allocate a fresh directory.
-      if (
-        isSqliteLockError(error) ||
-        error instanceof SqliteStagingRetiredError ||
-        ((isMissingPathError(error) ||
-          isSqliteNativeOpenFailure(error) ||
-          (error instanceof FsSafeError &&
-            error.code === "path-mismatch" &&
-            isMissingPathError(error.cause))) &&
-          (await wasScratchReclaimed(directory)))
-      ) {
-        if (attempt < 2) {
-          continue;
-        }
-        throw error;
-      }
-      await cleanupBackupScratchDirectory(directory, boundary);
+  const directory = await createPrivateSqliteTempDirectory(root, ownedPrefix);
+  let boundary: Root | undefined;
+  try {
+    boundary = await createRoot(directory);
+    const observed = await fs.lstat(directory, { bigint: true });
+    const admitted = await boundary.stat(".");
+    if (
+      !observed.isDirectory() ||
+      !admitted.exactIdentity ||
+      !sameFileIdentity(observed, admitted.exactIdentity)
+    ) {
+      throw new Error("Backup scratch directory identity changed");
+    }
+    return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
+  } catch (error) {
+    // Busy or retired tokens belong to reclamation; leave that owner's cleanup intact.
+    if (isSqliteLockError(error) || error instanceof SqliteStagingRetiredError) {
       throw error;
     }
+    await cleanupBackupScratchDirectory(directory, boundary);
+    throw error;
   }
 }
 

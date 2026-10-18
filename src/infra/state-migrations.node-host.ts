@@ -225,15 +225,13 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const stateDb = getNodeSqliteKysely<NodeHostConfigDatabase>(db);
-      const readConfig = () =>
-        executeSqliteQueryTakeFirstSync(
-          db,
-          stateDb
-            .selectFrom("config_machine_state")
-            .selectAll()
-            .where("state_key", "=", NODE_HOST_CONFIG_KEY),
-        );
-      const row = readConfig();
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        stateDb
+          .selectFrom("config_machine_state")
+          .selectAll()
+          .where("state_key", "=", NODE_HOST_CONFIG_KEY),
+      );
       const existing = row ? rowToCanonicalState(row) : null;
       if (existing && existing.config.nodeId !== params.legacy.config.nodeId) {
         throw new Error("legacy node-host nodeId conflicts with canonical SQLite identity");
@@ -278,18 +276,6 @@ function migrateIntoDatabase(params: { env: NodeJS.ProcessEnv; legacy: Canonical
             .onConflict((conflict) => conflict.column("state_key").doUpdateSet(updates)),
         );
         imported = expected.updatedAtMs === params.legacy.updatedAtMs;
-      }
-
-      const verifiedRow = readConfig();
-      if (!verifiedRow) {
-        throw new Error("SQLite verification failed for node-host config");
-      }
-      const verified = rowToCanonicalState(verifiedRow);
-      if (
-        !configsEqual(verified.config, expected.config) ||
-        verified.updatedAtMs !== expected.updatedAtMs
-      ) {
-        throw new Error("SQLite verification failed for node-host config");
       }
     },
     { env: params.env },

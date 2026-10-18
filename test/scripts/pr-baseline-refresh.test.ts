@@ -254,6 +254,72 @@ describePosix("native correction baseline refresh", () => {
     expect(f.run("require_prepared_review 42").status).toBe(0);
   });
 
+  it("revalidates both correction callers under native supervision and rejects authority mutation", () => {
+    const f = fixture();
+    expect(f.refresh().status).toBe(0);
+    expect(f.run("prepare_correction_review_init 42").status).toBe(0);
+    f.approve();
+    // The baseline fixture uses a synthetic lock during setup. Retire only that
+    // fixture ref before letting the actual supervisor acquire its own owner.
+    f.git("update-ref", "-d", "refs/openclaw/pr-operation-locks/42", f.incoming);
+    const driver = join(f.root, ".local/supervised-review.sh");
+    writeFileSync(
+      driver,
+      `#!/bin/bash
+set -euo pipefail
+script_parent_dir="$1"
+canonical_repo_root="$PWD"
+source "$1/pr-lib/common.sh"
+source "$1/pr-lib/review.sh"
+pr_git() { command git "$@"; }
+source "$1/pr-lib/worktree.sh"
+source "$1/pr-lib/operation-lock.sh"
+[ "$(repo_root)" = "$PWD" ]
+acquire_pr_operation_lock 42
+snapshot=$(correction_review_snapshot 42)
+baseline=$(run_prepared_correction_review 42 publication-baseline)
+[ "$baseline" = "$2" ]
+if [ "$3" = mutate ]; then printf '\\n' >> .local/correction-review.json; fi
+verify_correction_review_snapshot 42 "$snapshot"
+printf '%s\\n' "$snapshot"
+`,
+    );
+    chmodSync(driver, 0o700);
+    const supervise = (mode: string) =>
+      spawnSync(
+        "node",
+        [
+          join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs"),
+          f.root,
+          driver,
+          join(process.cwd(), "scripts"),
+          f.baseline,
+          mode,
+        ],
+        {
+          cwd: f.root,
+          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+          encoding: "utf8",
+        },
+      );
+    const before = readFileSync(join(f.root, ".local/correction-review.json"));
+    const valid = supervise("valid");
+    expect(valid.status, valid.stdout + valid.stderr).toBe(0);
+    expect(valid.stdout).toContain(
+      `.local/prepare-baseline.json ${f.git("hash-object", "--no-filters", ".local/prepare-baseline.json")}`,
+    );
+    expect(readFileSync(join(f.root, ".local/correction-review.json"))).toEqual(before);
+    expect(f.git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/")).toBe(
+      "",
+    );
+    const changed = supervise("mutate");
+    expect(changed.status).not.toBe(0);
+    expect(changed.stderr).toContain("Correction review authority changed during admission");
+    expect(f.git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/")).toBe(
+      "",
+    );
+  });
+
   it.each(["delete", "binary"] as const)(
     "requires exact native conflict identities for %s/edit and preserves the reviewed resolution",
     (shape) => {

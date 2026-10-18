@@ -1,18 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runOutsideOperatorToolGatewayAuthority } from "../../gateway/operator-tool-gateway-authority.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
   getAgentEventLifecycleGeneration,
   registerAgentEventLifecycleRotationHandler,
 } from "../../infra/agent-events.js";
-import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import { withoutGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 
 type MaintenanceOwner = {
-  sequence: number;
-  lifecycleGeneration: string;
   controller: AbortController;
   done: Promise<void>;
   writesDone: Promise<void>;
@@ -26,22 +25,9 @@ type SessionMaintenance = {
   foreground: number;
   wake: Set<() => void>;
 };
-const log = createSubsystemLogger("agents/session-maintenance");
-function recordPhase(sessionKey: string, owner: MaintenanceOwner, phase: string): void {
-  if (owner.preemptible) {
-    log.debug("session maintenance lifecycle", {
-      event: "session_maintenance",
-      phase,
-      sessionKey,
-      maintenanceId: owner.sequence,
-      lifecycleGeneration: owner.lifecycleGeneration,
-    });
-  }
-}
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionMaintenance"),
   () => ({
-    sequence: 0,
     sessions: new Map<string, SessionMaintenance>(),
     current: new AsyncLocalStorage<ReadonlySet<MaintenanceOwner>>(),
   }),
@@ -122,8 +108,6 @@ export function createSessionMaintenanceOwner(params: {
     finishWrites();
   };
   const owner: MaintenanceOwner = {
-    sequence: state.sequence++,
-    lifecycleGeneration: generation,
     controller,
     done,
     writesDone,
@@ -133,7 +117,6 @@ export function createSessionMaintenanceOwner(params: {
     running: params.preemptible !== true,
   };
   session.owners.add(owner);
-  recordPhase(key, owner, "pending");
   const assertCurrent = () => {
     signal.throwIfAborted();
     assertAgentRunLifecycleGenerationCurrent(generation);
@@ -161,16 +144,19 @@ export function createSessionMaintenanceOwner(params: {
         }
         assertCurrent();
         owner.running = true;
-        recordPhase(key, owner, "started");
       }
-      // A maintenance model call and a coalesced child must not wait on their own parent.
-      return state.current.run(new Set([...ancestors, owner]), run);
+      // Maintenance owns this session's work, never its launching turn's tool grants.
+      return withoutGatewayToolCallerIdentity(() =>
+        runOutsideOperatorToolGatewayAuthority(() =>
+          // Nested model reads must not wait on their own maintenance parent.
+          state.current.run(new Set([...ancestors, owner]), run),
+        ),
+      );
     },
     track: <T>(work: Promise<T>): Promise<T> =>
       work.finally(() => {
         releaseWrites();
         session.owners.delete(owner);
-        recordPhase(key, owner, "settled");
         finish();
         releaseSessionState(key, session);
       }),
@@ -203,7 +189,6 @@ export async function beginForegroundSessionMaintenance(sessionKey?: string): Pr
   const existing = independentOwners(session, current);
   const optional = existing.filter((owner) => owner.preemptible);
   for (const owner of optional) {
-    recordPhase(key, owner, "foreground_preemption_requested");
     owner.controller.abort(createAbortError("Session maintenance yielded to a foreground turn"));
   }
   await Promise.all(existing.map((owner) => owner.done));

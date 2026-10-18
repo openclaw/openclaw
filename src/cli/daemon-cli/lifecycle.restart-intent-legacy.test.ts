@@ -5,6 +5,8 @@ import { hostname } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveLaunchAgentLabel } from "../../daemon/launchd-label.js";
+import { resolveSystemdServiceName } from "../../daemon/systemd-service-files.js";
 import { resolveGatewayLockPaths } from "../../infra/gateway-lock.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
@@ -106,11 +108,11 @@ function beforeIntentWriteAdmission(operation: () => void) {
   );
 }
 
-function publishUnrelatedOwner(pid = process.pid) {
+function publishOwner(pid = process.pid, supervised = false) {
   const now = Date.now();
   openOpenClawStateDatabase()
     .db.prepare(
-      `INSERT INTO state_leases
+      `INSERT OR REPLACE INTO state_leases
      (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
      VALUES ('gateway-owner', 'global', 'unrelated-owner', ?, ?, ?, ?, ?)`,
     )
@@ -120,8 +122,12 @@ function publishUnrelatedOwner(pid = process.pid) {
       JSON.stringify({
         owner: { pid, host: hostname(), startedAt: getFileLockProcessStartTime(pid) },
         port: 18789,
-        mode: "foreground",
-        supervisor: null,
+        mode: supervised ? "supervised" : "foreground",
+        supervisor: supervised
+          ? process.platform === "darwin"
+            ? { kind: "launchd", name: resolveLaunchAgentLabel(process.env) }
+            : { kind: "systemd", name: resolveSystemdServiceName(process.env) }
+          : null,
       }),
       now,
       now,
@@ -183,6 +189,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       }
       await Promise.all(children.splice(0).map(({ exited }) => exited));
       closeOpenClawStateDatabaseForTest();
+      vi.useRealTimers();
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
     });
@@ -201,6 +208,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       switch (failure) {
         case "dead pid":
           await stopServingChild(lock.pid);
+          service.readRuntime.mockResolvedValue({ status: "running", pid: lock.pid });
           break;
         case "mismatched start time":
           lock.startTime = (lock.startTime ?? 0) + 1;
@@ -232,7 +240,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
         case "stopped service with dead SQLite owner and live legacy lock": {
           const deadOwner = await spawnServingChild();
           await stopServingChild(deadOwner.pid);
-          publishUnrelatedOwner(deadOwner.pid);
+          publishOwner(deadOwner.pid);
           service.readRuntime.mockResolvedValue({ status: "stopped" });
           break;
         }
@@ -241,6 +249,63 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       await expectRestartRefused("GATEWAY_RESTART_PREPARATION_REFUSED");
       expect(lifecycleRuntimeLogs.join("\n")).toContain("Gateway was not signaled");
     });
+
+    it.each([
+      ["absent", "gateway"],
+      ["absent", "foreign process"],
+      ["absent", "timeout"],
+      ["dead", "gateway"],
+      ["dead", "foreign process"],
+      ["dead", "timeout"],
+    ] as const)(
+      "waits for a native startup owner before restart admission: %s → %s",
+      async (previous, publication) => {
+        const native = await spawnServingChild();
+        const published = publication === "foreign process" ? await spawnServingChild() : native;
+        if (previous === "dead") {
+          const retired = await spawnServingChild();
+          publishOwner(retired.pid);
+          writeLegacyLock(retired);
+          await stopServingChild(retired.pid);
+        }
+        const waiting = Promise.withResolvers<void>();
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+        service.readRuntime
+          .mockResolvedValueOnce({ status: "running", pid: native.pid })
+          .mockImplementation(async () => {
+            if (publication !== "timeout") {
+              setTimeout(() => {
+                writeLegacyLock(published);
+                publishOwner(published.pid, publication === "gateway");
+              }, 100);
+            }
+            waiting.resolve();
+            return { status: "running", pid: native.pid };
+          });
+        let recorded: unknown;
+        service.restart.mockImplementationOnce(async () => {
+          recorded = readIntent();
+          return { outcome: "completed" };
+        });
+        const result = runServiceRestart(createGatewayServiceRunArgs()).then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await expect(
+          Promise.race([waiting.promise.then(() => "waiting"), result.then(() => "settled")]),
+        ).resolves.toBe("waiting");
+        expect(service.restart).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(publication === "timeout" ? 45_000 : 200);
+        if (publication === "gateway") {
+          await expect(result).resolves.toEqual({ value: true });
+          expect(recorded).toEqual({ pid: native.pid, reason: "gateway.restart" });
+        } else {
+          await expect(result).resolves.toHaveProperty("error");
+          expect(service.restart).not.toHaveBeenCalled();
+          expect(readIntent()).toBeUndefined();
+        }
+      },
+    );
 
     it.each(["dead pid", "mismatched start time"] as const)(
       "permits stopped-service startup without intent for a legacy lock with %s",
@@ -265,7 +330,7 @@ describe.skipIf(process.platform !== "linux" && process.platform !== "darwin")(
       async (owner) => {
         writeLegacyLock(await spawnServingChild());
         if (owner === "unrelated SQLite owner") {
-          beforeIntentWriteAdmission(publishUnrelatedOwner);
+          beforeIntentWriteAdmission(publishOwner);
           await expectRestartRefused();
           return;
         }

@@ -1,6 +1,5 @@
-import { For, Show, onSettled, untrack } from "solid-js";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { reclaimHubTabFocus, rememberHubTabFocus } from "../../components/hub-tabs-focus.ts";
+import { For, Show, untrack } from "solid-js";
+import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import {
   SettingsEmpty,
   SettingsPage,
@@ -9,32 +8,34 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { Tabs } from "../../components/solid/tabs.tsx";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { WorktreesModel } from "./worktrees-model.ts";
 import "../../styles/settings.css";
 import "../../styles/hub-tabs.css";
 
 const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
-function WorktreesContent() {
+export function WorktreesPage() {
   const context = useApplication();
-  return <WorktreesView model={new WorktreesModel(() => context)} />;
+  return (
+    <openclaw-worktrees-page>
+      <WorktreesView model={new WorktreesModel(() => context)} />
+    </openclaw-worktrees-page>
+  );
 }
 
 export function WorktreesView(props: { model: WorktreesModel }) {
+  // One model owns this mounted view; its Gateway context remains live.
   const model = untrack(() => props.model);
   model.gateway = useGatewayPage({
     getGateway: () => model.context.gateway,
@@ -43,20 +44,7 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     ensureInitialData: () => void model.load(),
     onSnapshot: () => model.update(model.operatorAccess.canAdmin ? {} : { createOpen: false }),
   });
-  const projection = projectSource(model, {
-    read: (source) => source,
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
-  const view = projection.read;
-  let tabGroup!: HTMLDivElement;
-  onSettled(() =>
-    reclaimHubTabFocus(
-      "sessions",
-      "worktrees",
-      tabGroup.querySelector("#sessions-tab-worktrees") ?? undefined,
-    ),
-  );
+  const view = projectOwner(model, (source) => source).read;
 
   const owner = (record: WorktreesModel["records"][number]) => {
     if (record.ownerKind === "session" && record.ownerId) {
@@ -92,61 +80,23 @@ export function WorktreesView(props: { model: WorktreesModel }) {
 
   return (
     <>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
-          <div class="hub-page-header__title">
-            <div class="page-title">{t("tabs.sessions")}</div>
-            <div class="page-subtitle">
-              {t("subtitles.worktrees")}{" "}
-              <a
-                class="learn-more-link"
-                href={WORKTREES_DOCS_URL}
-                target={EXTERNAL_LINK_TARGET}
-                rel={buildExternalLinkRel()}
-              >
-                {t("common.learnMore")}
-              </a>
-            </div>
-          </div>
-          <div class="hub-page-header__tabs">
-            <Tabs
-              class="hub-tabs hub-tabs--primary sessions-hub-tabs"
-              active="worktrees"
-              ariaLabel={t("sessionsPage.hubTablistLabel")}
-              activation="manual"
-              ref={(element) => {
-                tabGroup = element;
-              }}
-              items={[
-                {
-                  value: "sessions",
-                  id: "sessions-tab-sessions",
-                  panelId: "sessions-hub-panel",
-                  className: "hub-tab",
-                  label: t("tabs.sessions"),
-                },
-                {
-                  value: "worktrees",
-                  id: "sessions-tab-worktrees",
-                  panelId: "sessions-hub-panel",
-                  className: "hub-tab",
-                  label: t("tabs.worktrees"),
-                },
-              ]}
-              onSelect={(value, tab, event) => {
-                if (value === "sessions") {
-                  if (event instanceof KeyboardEvent) {
-                    rememberHubTabFocus("sessions", "sessions", tab);
-                  }
-                  model.context.navigate("sessions");
-                }
-                return false;
-              }}
-            />
-          </div>
-          <div class="hub-page-header__actions" />
-        </section>
-      </ShellLayoutBoundary>
+      <HubPageHeader<"sessions" | "worktrees">
+        id="sessions"
+        active="worktrees"
+        tabs={[
+          { value: "sessions", label: t("tabs.sessions") },
+          { value: "worktrees", label: t("tabs.worktrees") },
+        ]}
+        ariaLabel={t("sessionsPage.hubTablistLabel")}
+        panelId="sessions-hub-panel"
+        docsUrl={WORKTREES_DOCS_URL}
+        class="sessions-hub-header"
+        onSelect={(value) => {
+          if (value === "sessions") {
+            model.context.navigate("sessions");
+          }
+        }}
+      />
       <SettingsWorkspace id="sessions-hub-panel">
         <SettingsPage wide>
           <Show when={!view().operatorAccess.canAdmin}>
@@ -176,7 +126,11 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 <button
                   class="btn"
                   title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                  disabled={!view().operatorAccess.canAdmin || view().operationPending}
+                  disabled={
+                    !model.gateway.connected ||
+                    !view().operatorAccess.canAdmin ||
+                    view().operationPending
+                  }
                   onClick={() => void model.gc()}
                 >
                   {view().loading ? t("common.loading") : t("worktrees.cleanNow")}
@@ -246,7 +200,11 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                 control={
                   <button
                     class="btn btn--sm"
-                    disabled={view().operationPending || !view().createRepoRoot.trim()}
+                    disabled={
+                      !model.gateway.connected ||
+                      view().operationPending ||
+                      !view().createRepoRoot.trim()
+                    }
                     onClick={() => void model.createWorktree()}
                   >
                     {view().operation === "create" ? t("common.loading") : t("common.create")}
@@ -282,9 +240,13 @@ export function WorktreesView(props: { model: WorktreesModel }) {
                           }
                         />
                         <button
-                          class={record().removedAt ? "btn btn--sm" : "btn btn--sm danger"}
+                          class={["btn btn--sm", { danger: !record().removedAt }]}
                           title={view().operatorAccess.canAdmin ? "" : t("worktrees.adminRequired")}
-                          disabled={!view().operatorAccess.canAdmin || view().operationPending}
+                          disabled={
+                            !model.gateway.connected ||
+                            !view().operatorAccess.canAdmin ||
+                            view().operationPending
+                          }
                           onClick={() =>
                             void (record().removedAt
                               ? model.restore(record())
@@ -305,7 +267,3 @@ export function WorktreesView(props: { model: WorktreesModel }) {
     </>
   );
 }
-
-export const WorktreesPage = defineSolidBridge("openclaw-worktrees-page", WorktreesContent, {
-  properties: {},
-});

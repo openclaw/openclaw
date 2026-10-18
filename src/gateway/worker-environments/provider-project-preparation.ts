@@ -24,7 +24,7 @@ export async function prepareWorkerProviderProject(params: {
           assertCurrent: params.requireCurrent,
           signal: params.signal,
           knownRecipe: preparation
-            ? () => ({ project, setupRecipe: preparation.setupRecipe, recipe: preparation.recipe })
+            ? () => ({ setupRecipe: preparation.setupRecipe, recipe: preparation.recipe })
             : undefined,
         })
       : undefined;

@@ -109,9 +109,6 @@ class RosterActivityStore {
   private publish(snapshot: RosterActivitySnapshot) {
     this.current = snapshot;
     for (const listener of Array.from(this.listeners)) {
-      if (this.current !== snapshot) {
-        return;
-      }
       listener();
     }
   }
@@ -171,7 +168,7 @@ class RosterActivityStore {
         connection,
         query: {
           source: "agent-roster",
-          rowMode: "compact",
+          rowMode: "sidebar",
           includeDerivedTitles: true,
           includeLastMessage: true,
           archivedFilter: "all",
@@ -194,10 +191,6 @@ class RosterActivityStore {
           this.project();
         }
       });
-      if (!this.isCurrent(binding)) {
-        binding.observation.dispose();
-        return;
-      }
     }
     if (!this.binding.requested && this.visible()) {
       void this.refreshBinding(this.binding);

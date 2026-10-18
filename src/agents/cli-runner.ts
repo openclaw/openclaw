@@ -1,4 +1,3 @@
-import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { runWithCliHistoryWriter } from "../config/sessions/cli-history-boundary.js";
 import { prepareCronRootSessionGeneration } from "../config/sessions/session-delivery-generation.js";
 import { buildGenericCliContextEngineHostSupport } from "../context-engine/host-compat.js";
@@ -30,13 +29,11 @@ import {
   type CliRecoveryOptions,
 } from "./cli-runner/cli-run-recovery.js";
 import {
-  assertCliRuntimeBinding,
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
   buildCliRunResult,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
-  resolveCliSourceReplyMirror,
   settleCliPreparationError,
   settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
@@ -64,6 +61,7 @@ import {
   loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
+import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner.js";
@@ -77,7 +75,7 @@ import {
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
-import { resolveReplyExpectation } from "./reply-completion.js";
+import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
 
@@ -373,24 +371,26 @@ async function runPreparedCliAgentOwned(
     params.assertCurrent?.();
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
-    const sourceReplyMirror = resolveCliSourceReplyMirror({
-      evidence: output,
-      runParams: params,
-      modelId: context.modelId,
-    });
-    const assistantText = sourceReplyMirror.delivered
-      ? (sourceReplyMirror.visibleText ?? "")
-      : output.text.trim();
+    const preparedReply = prepareCliRunTerminalReply(context, output);
+    const { sourceReplyMirror, completedFinalSource } = preparedReply;
+    const assistantText = preparedReply.text;
+    const replyExpectation = resolveReplyExpectation(params);
     if (
-      (!output.text.trim() || isSilentReplyPayloadText(output.text)) &&
-      resolveSourceReplyDelivery(output) === "missing" &&
-      !output.toolMediaUrls?.length &&
-      !output.yielded &&
-      !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
       !output.terminalInterruption &&
-      resolveReplyExpectation(params) === "required" &&
-      // Strict isolated completion owns valid-empty output after reasoning is removed.
-      !(isolatedCompletion && params.outputTextPolicy === "strict-visible")
+      !output.yielded &&
+      ((replyExpectation === "result-required" &&
+        !params.controlOperation &&
+        !(isolatedCompletion && params.outputTextPolicy === "strict-visible") &&
+        preparedReply.terminalReply.disposition !== "visible" &&
+        !completedFinalSource) ||
+        (isRequiredReplyExpectation(replyExpectation) &&
+          !output.text.trim() &&
+          !params.controlOperation &&
+          resolveSourceReplyDelivery(output) === "missing" &&
+          !output.toolMediaUrls?.length &&
+          !hasCompletionMessageSessionSpawn(output.acceptedSessionSpawns) &&
+          // Strict isolated completion owns valid-empty output after reasoning is removed.
+          !(isolatedCompletion && params.outputTextPolicy === "strict-visible")))
     ) {
       const process = output.diagnostics?.process;
       if (process) {
@@ -433,7 +433,7 @@ async function runPreparedCliAgentOwned(
             stopReason: resolveCliAssistantStopReason(output),
           })
         : undefined;
-    if (assistantText.length > 0 && hasLlmOutputHooks) {
+    if (hasLlmOutputHooks) {
       runAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
@@ -452,6 +452,7 @@ async function runPreparedCliAgentOwned(
     }
     return {
       output,
+      preparedReply,
       assistantText,
       lastAssistant,
       sourceReplyWasDelivered: sourceReplyMirror.delivered,
@@ -482,10 +483,12 @@ async function runPreparedCliAgentOwned(
           `CLI backend ${context.backendResolved.id} cannot ${params.controlOperation} without a reusable native session.`,
         );
       }
-      const { output, usedHistoryPrompt } = await executeCliAttempt(reusableCliSessionId);
+      const { output, preparedReply, usedHistoryPrompt } =
+        await executeCliAttempt(reusableCliSessionId);
       return buildCliRunResult({
         ...resultContext,
         output,
+        preparedReply,
         ...(!isolatedCompletion ? { effectiveCliSessionId: reusableCliSessionId } : {}),
         bindingFlushOk: true,
         assistantTranscriptOwned: false,
@@ -521,14 +524,17 @@ async function runPreparedCliAgentOwned(
       result: Awaited<ReturnType<typeof executeCliAttempt>>,
       fallbackCliSessionId?: string,
     ) => {
-      const { output, assistantText, lastAssistant, sourceReplyWasDelivered, usedHistoryPrompt } =
-        result;
+      const {
+        output,
+        preparedReply,
+        assistantText,
+        lastAssistant,
+        sourceReplyWasDelivered,
+        usedHistoryPrompt,
+      } = result;
       let completed: EmbeddedAgentRunResult | undefined;
       try {
         const terminalInterruption = output.terminalInterruption;
-        if (!terminalInterruption) {
-          await assertCliRuntimeBinding(context);
-        }
         const effectiveCliSessionId = output.sessionId ?? fallbackCliSessionId;
         // Native continuity must be resolved before the final transcript commit.
         const bindingFlushOk = sessionBindingDisabled
@@ -543,15 +549,17 @@ async function runPreparedCliAgentOwned(
           runParams: params,
           // Dispatch owns source-reply transcript mirrors and their idempotency keys.
           // Persisting them here would duplicate the same visible assistant reply.
-          text: sourceReplyWasDelivered ? "" : assistantText,
+          text: sourceReplyWasDelivered ? "" : output.text,
           modelId: context.modelId,
           usage: output.usage,
+          turnUsage: output.diagnosticUsage,
           stopReason: resolveCliAssistantStopReason(output),
           yielded: output.yielded,
         });
         const runResult = buildCliRunResult({
           ...resultContext,
           output,
+          preparedReply,
           effectiveCliSessionId,
           bindingFlushOk,
           assistantTranscriptOwned: assistantTranscript.owned,
@@ -565,7 +573,7 @@ async function runPreparedCliAgentOwned(
         }
         await finalizeCliContextEngineTurn({
           context,
-          historyMessages: context.contextEngine ? contextEngineHistoryMessages : historyMessages,
+          historyMessages: contextEngineHistoryMessages,
           assistantText,
           terminalAnchor: assistantTranscript.terminalAnchor,
           output,

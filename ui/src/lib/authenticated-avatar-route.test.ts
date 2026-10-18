@@ -1,17 +1,30 @@
+import { once } from "node:events";
+import { createServer } from "node:http";
 import { afterEach, beforeEach, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { notifyBrowserAuthRestored } from "../app/browser-http.ts";
 import { AuthenticatedAvatarRouteLoader } from "./authenticated-avatar-route.ts";
 
 const loaders: AuthenticatedAvatarRouteLoader[] = [];
 beforeEach(() => vi.useFakeTimers());
 afterEach(async () => {
-  for (const loader of loaders.splice(0)) {
-    loader.disconnect();
+  try {
+    for (const loader of loaders.splice(0)) {
+      loader.disconnect();
+    }
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+    } else {
+      // Join the zero-delay releases queued by disconnect on the real clock.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
+  } finally {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   }
-  await vi.runOnlyPendingTimersAsync();
-  vi.useRealTimers();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
 });
 
 function mockBlobUrl(url: string) {
@@ -53,17 +66,21 @@ it("cancels an advertised retry when the last consumer releases the route", asyn
 it.each(["auth restoration", "reconnect"])(
   "keeps exhausted retries stable until %s",
   async (recovery) => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
+    const cancel = vi.fn();
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(new ReadableStream({ cancel }), {
+          status: 503,
+          headers: { "retry-after": "1" },
+        }),
+    );
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const loader = createLoader(vi.fn(), { retryUnavailable: true });
 
     expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
     await vi.advanceTimersByTimeAsync(10_000);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(cancel).toHaveBeenCalledTimes(4);
 
     expect(loader.resolve("/avatar/stuck", ["token"])).toBeNull();
     expect(fetchMock).toHaveBeenCalledTimes(4);
@@ -75,7 +92,7 @@ it.each(["auth restoration", "reconnect"])(
     expect(fetchMock).toHaveBeenCalledTimes(4);
 
     mockBlobUrl("blob:restored");
-    fetchMock.mockResolvedValue({ ok: true, blob: async () => new Blob(["icon"]) });
+    fetchMock.mockResolvedValue(new Response(new Blob(["icon"])));
     if (recovery === "reconnect") {
       loader.disconnect();
       await vi.advanceTimersByTimeAsync(0);
@@ -92,6 +109,61 @@ it.each(["auth restoration", "reconnect"])(
     expect(fetchMock).toHaveBeenCalledTimes(5);
   },
 );
+
+it("releases a streaming 404 while a connected consumer retains the cached miss", async () => {
+  vi.useRealTimers();
+  let socketClosed = false;
+  const server = createServer((request, response) => {
+    request.socket.once("close", () => {
+      socketClosed = true;
+    });
+    response.writeHead(404, { "content-type": "text/plain", "cache-control": "no-store" });
+    response.write("Not found");
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const loader = createLoader(vi.fn());
+  try {
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing loopback listener");
+    }
+    const nativeFetch = globalThis.fetch.bind(globalThis);
+    const fetchMock = vi.fn((input: string, init?: RequestInit) =>
+      nativeFetch(new URL(input, `http://127.0.0.1:${address.port}`), init),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    expect(loader.resolve("/api/workspaces/streaming/icon", ["token"])).toBeNull();
+    await vi.waitFor(() => expect(socketClosed).toBe(true), { timeout: 1_000 });
+    expect(loader.resolve("/api/workspaces/streaming/icon", ["token"])).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  } finally {
+    loader.disconnect();
+    const closed = once(server, "close");
+    server.close();
+    server.closeAllConnections();
+    await closed;
+  }
+});
+
+it("keeps a stable miss cached when body cancellation rejects", async () => {
+  const cancel = vi.fn().mockRejectedValue(new Error("cleanup failed"));
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue(new Response(new ReadableStream({ cancel }), { status: 404 }));
+  vi.stubGlobal("fetch", fetchMock);
+  const loader = createLoader(vi.fn());
+  try {
+    expect(loader.resolve("/api/workspaces/rejected-cleanup/icon", ["token"])).toBeNull();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(loader.resolve("/api/workspaces/rejected-cleanup/icon", ["token"])).toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  } finally {
+    loader.disconnect();
+  }
+});
 
 it.each(["rejection", "timeout"])(
   "recovers after a 503 retry ends in a network %s",
@@ -226,34 +298,73 @@ it("releases resolved and pending routes that leave the active render", async ()
   expect(pending[1]?.signal.aborted).toBe(true);
 });
 
-it("falls through to the next credential when the first is rejected", async () => {
-  mockBlobUrl("blob:recovered-avatar");
-  // A saved token can go stale while the session password stays valid; without
-  // ordered recovery the view keeps its fallback for the rest of the session.
-  const fetchMock = vi
-    .fn()
-    .mockResolvedValueOnce({ ok: false, status: 401 })
-    .mockResolvedValueOnce({ ok: true, blob: async () => new Blob(["avatar"]) });
-  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
-  const onUpdate = vi.fn();
-  const loader = createLoader(onUpdate);
+it.each([401, 403])(
+  "recovers from %s without waiting for rejected body cleanup",
+  async (status) => {
+    const createObjectURL = vi
+      .spyOn(URL, "createObjectURL")
+      .mockReturnValue("blob:recovered-avatar");
+    const revokeObjectURL = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    // A saved token can go stale while the session password stays valid; without
+    // ordered recovery the view keeps its fallback for the rest of the session.
+    const cancellation = createDeferred();
+    const cancel = vi.fn(() => cancellation.promise);
+    const success = new Response(new Blob(["avatar"]));
+    const cancelSuccess = vi.spyOn(success.body!, "cancel");
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { status }))
+      .mockResolvedValueOnce(success);
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const onUpdate = vi.fn();
+    const loader = createLoader(onUpdate);
 
-  expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBeNull();
-  await vi.advanceTimersByTimeAsync(0);
-  expect(onUpdate).toHaveBeenCalledTimes(1);
+    const errors: unknown[] = [];
+    try {
+      expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBeNull();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(onUpdate).toHaveBeenCalledTimes(1);
 
-  expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
-    headers: { Authorization: "Bearer stale-token" },
-  });
-  expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
-    headers: { Authorization: "Bearer session-password" },
-  });
-  expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBe(
-    "blob:recovered-avatar",
-  );
-  loader.reset();
-});
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      expect(fetchMock.mock.calls[0]?.[1]).toMatchObject({
+        headers: { Authorization: "Bearer stale-token" },
+      });
+      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+        headers: { Authorization: "Bearer session-password" },
+      });
+      expect(loader.resolve("/avatar/main", ["stale-token", "session-password"])).toBe(
+        "blob:recovered-avatar",
+      );
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(cancelSuccess).not.toHaveBeenCalled();
+    } catch (error) {
+      errors.push(error);
+    } finally {
+      try {
+        cancellation.resolve();
+        loader.disconnect();
+        // Final release is deferred for view handoffs. Join it before the next
+        // credential row can reclaim this route or replace the URL mocks.
+        const signal = fetchMock.mock.calls[0]?.[1]?.signal;
+        await vi.advanceTimersByTimeAsync(0);
+        expect(signal?.aborted).toBe(true);
+        for (const result of createObjectURL.mock.results) {
+          if (result.type === "return") {
+            expect(revokeObjectURL).toHaveBeenCalledWith(result.value);
+          }
+        }
+      } catch (cleanupError) {
+        errors.push(cleanupError);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "avatar assertion and cleanup failed", { cause: errors[0] });
+    }
+  },
+);
 
 it.each([undefined, "0", "invalid", "31"])(
   "keeps 503 without a usable retry hint (%s) stable across renders",

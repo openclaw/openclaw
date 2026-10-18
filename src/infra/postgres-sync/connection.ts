@@ -26,65 +26,92 @@ import { withSqlitePostCommitPublications } from "../sqlite-post-commit.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "../sqlite-worker-operation-admission.js";
 import { currentSqliteWorkerOperationAdmission } from "../sqlite-worker-operation-settlement.js";
+import { recordWorkerMessage } from "../worker-message-metrics.js";
+import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
 import {
   decodePostgresError,
   decodePostgresRows,
   isPostgresConnectionError,
-  rewritePostgresPlaceholders,
+  preparePostgresQuery,
   validatePostgresBindings,
   type BridgeReply,
   type BridgeCommand,
+  type PostgresResult,
 } from "./protocol.js";
 import { runPostgresTransactionSync } from "./transaction.js";
 
 export class PostgresSyncConnection implements PostgresSqlConnection {
   isOpen = true;
   isTransaction = false;
+  mutationRevision = 0;
   readonly advisoryLockKey: bigint;
   private readonly port: MessagePort;
-  private readonly control = new Int32Array(new SharedArrayBuffer(8));
+  private readonly control: Int32Array;
   private readonly worker: Worker;
   private failure: Error | undefined;
   private requestId = 0;
   private outcomeUnknown = true;
+  private readOnlyTransaction = false;
+  // Read handles can share an anchor, but only its writing handle may settle the receipt.
+  private pendingWrite = false;
   private readonly mainThread = threadId === 0;
+  private readonly reuseKey?: string;
+  private readonly onWorkerError = () => this.loseConnection();
 
   constructor(
     url: string,
     readonly schema: string,
     readonly anchor: DatabaseSync,
-    storeId: string,
+    readonly storeId: string,
     options?: {
       lockTimeoutMs?: number;
       statementTimeoutMs?: number;
+      reuse?: boolean;
     },
   ) {
     assertEngineStoreExecutionAllowed();
     Object.defineProperty(this, Symbol.for("openclaw.postgres-sync-connection"), { value: true });
     this.advisoryLockKey = createHash("sha256").update(storeId).digest().readBigInt64BE();
-    const { port1, port2 } = new MessageChannel();
-    this.port = port1;
-    const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
-    this.worker = new Worker(workerUrl, {
-      workerData: {
-        port: port2,
-        signal: this.control.buffer,
-        url,
-        schema,
-        connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
-        lockTimeoutMs: options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS,
-        statementTimeoutMs: options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS,
-      },
-      transferList: [port2],
-      execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
-    });
-    this.worker.on("error", () => this.loseConnection());
+    const lockTimeoutMs = options?.lockTimeoutMs ?? POSTGRES_LOCK_TIMEOUT_MS;
+    const statementTimeoutMs = options?.statementTimeoutMs ?? POSTGRES_STATEMENT_TIMEOUT_MS;
+    this.reuseKey = options?.reuse
+      ? createHash("sha256")
+          .update(JSON.stringify([url, schema, storeId, lockTimeoutMs, statementTimeoutMs]))
+          .digest("hex")
+      : undefined;
+    const idle = this.reuseKey ? takeIdlePostgresBridge(this.reuseKey) : undefined;
+    if (idle) {
+      this.port = idle.port;
+      this.control = idle.control;
+      this.worker = idle.worker;
+      this.requestId = idle.requestId;
+    } else {
+      const { port1, port2 } = new MessageChannel();
+      this.port = port1;
+      this.control = new Int32Array(new SharedArrayBuffer(8));
+      const workerUrl = resolveRuntimeProcessEntrypointUrl("postgresBridge");
+      this.worker = new Worker(workerUrl, {
+        workerData: {
+          port: port2,
+          signal: this.control.buffer,
+          url,
+          schema,
+          connectTimeoutMs: POSTGRES_CONNECT_TIMEOUT_MS,
+          lockTimeoutMs,
+          statementTimeoutMs,
+        },
+        transferList: [port2],
+        execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
+      });
+    }
+    this.worker.on("error", this.onWorkerError);
     this.worker.unref();
     this.port.unref();
     try {
       this.request({ operation: "connect" });
     } catch (error) {
       this.isOpen = false;
+      this.worker.off("error", this.onWorkerError);
       this.port.close();
       void this.worker.terminate();
       throw error;
@@ -99,20 +126,33 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     return runPostgresTransactionSync(this, operation, options, ...modes);
   }
 
+  readRecoveryGeneration(lock = false): string {
+    return this.request({ operation: "recovery-generation", storeId: this.storeId, lock }, false);
+  }
+
   private loseConnection(): Error {
     if (!this.failure && this.outcomeUnknown) {
       // The write may have committed, so invalidate anchor caches before reconnecting.
-      beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
-      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+      this.pendingWrite = true;
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this), true);
     }
+    this.finishWrite();
     this.failure ??= this.outcomeUnknown
       ? new SqliteWorkerError("PostgreSQL connection lost; outcome unknown", "outcome-unknown")
       : new Error("PostgreSQL connection lost; transaction rolled back");
     this.isOpen = false;
     this.isTransaction = false;
+    this.worker.off("error", this.onWorkerError);
     this.port.close();
     void this.worker.terminate();
     return this.failure;
+  }
+
+  private finishWrite(): void {
+    if (this.pendingWrite) {
+      this.pendingWrite = false;
+      finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+    }
   }
 
   private assertOpen(): void {
@@ -124,8 +164,20 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
   }
 
-  private request(request: BridgeCommand, outcomeUnknown = true) {
-    if (this.mainThread && request.operation !== "close") {
+  private request(
+    request: Extract<BridgeCommand, { operation: "recovery-generation" }>,
+    outcomeUnknown?: boolean,
+  ): string;
+  private request(request: Extract<BridgeCommand, { operation: "release" }>): boolean;
+  private request(
+    request: Exclude<BridgeCommand, { operation: "recovery-generation" | "release" }>,
+    outcomeUnknown?: boolean,
+  ): PostgresResult;
+  private request(
+    request: BridgeCommand,
+    outcomeUnknown = true,
+  ): PostgresResult | string | boolean {
+    if (this.mainThread && request.operation !== "close" && request.operation !== "release") {
       assertEngineStoreExecutionAllowed();
     }
     this.assertOpen();
@@ -136,6 +188,7 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     }
     const deadline = performance.now() + 120_000;
     this.port.postMessage({ ...request, id }, []);
+    recordWorkerMessage("sqlite_request", "to_worker");
     // A notify for an earlier request can arrive after this request starts.
     let observed: number;
     while ((observed = Atomics.load(this.control, 0)) !== id) {
@@ -146,6 +199,9 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       Atomics.wait(this.control, 0, observed, remaining);
     }
     const reply: BridgeReply | undefined = receiveMessageOnPort(this.port)?.message;
+    if (reply) {
+      recordWorkerMessage("sqlite_reply", "from_worker");
+    }
     if (!reply || reply.id !== id) {
       throw this.loseConnection();
     }
@@ -158,47 +214,68 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
       }
       if (request.operation === "query" && /^\s*COMMIT\b/i.test(request.sql)) {
         this.isTransaction = false;
+        this.finishWrite();
       }
       throw decodePostgresError(reply.error);
     }
-    return reply.result;
+    if ("reusable" in reply) {
+      return reply.reusable;
+    }
+    return "generation" in reply ? reply.generation : reply.result;
   }
 
   query(sql: string, parameters: readonly SQLInputValue[] = [], readBigInts = false) {
     return observeDatabaseOperation("postgres", "statement", sql, () =>
-      this.execute(sql, parameters, readBigInts),
+      this.execute(preparePostgresQuery(sql), parameters, readBigInts),
     );
   }
 
-  private execute(sql: string, parameters: readonly SQLInputValue[], readBigInts: boolean) {
-    this.assertOpen();
+  private execute(
+    { sql, mutation: hintedMutation }: ReturnType<typeof preparePostgresQuery>,
+    parameters: readonly SQLInputValue[],
+    readBigInts: boolean,
+  ) {
     validatePostgresBindings(parameters);
-    const rewrittenSql = rewritePostgresPlaceholders(sql);
     const wasTransaction = this.isTransaction;
     // A later statement in a combined BEGIN request can fail after BEGIN succeeded.
     if (/^\s*BEGIN\b/i.test(sql)) {
       this.isTransaction = true;
     }
     const result = this.request(
-      { operation: "query", sql: rewrittenSql, parameters },
+      { operation: "query", sql, parameters },
       !wasTransaction || /^\s*COMMIT\b/i.test(sql),
     );
+    const readOnly = this.readOnlyTransaction;
+    this.isTransaction = result.inTransaction;
+    this.readOnlyTransaction =
+      this.isTransaction && (readOnly || /^\s*BEGIN\b[^;]*\bREAD\s+ONLY\b/i.test(sql));
     if (/^\s*(?:COMMIT|ROLLBACK)\s*;?\s*$/i.test(sql)) {
-      this.isTransaction = false;
       if (/^\s*COMMIT\b/i.test(sql) && result.command !== "COMMIT") {
+        this.finishWrite();
         throw new Error("PostgreSQL transaction rolled back instead of committing");
       }
     }
-    const autocommitWrite =
-      !wasTransaction &&
-      /^(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE)$/.test(
-        result.command ?? "",
-      );
-    if (result.command === "COMMIT" || autocommitWrite) {
-      // All confirmed commits advance the anchor, including callers using raw SQL.
+    const mutation =
+      result.mutation === "unscoped" || hintedMutation === "unscoped"
+        ? "unscoped"
+        : (result.mutation ?? hintedMutation);
+    const mutated = mutation !== undefined;
+    if (mutated) {
+      if (readOnly || this.readOnlyTransaction) {
+        // A snapshot must never publish another handle's pending receipt on the shared anchor.
+        throw new Error("PostgreSQL read snapshot cannot execute a mutation");
+      }
+      // Like SQLite's mutation witness, rollback does not rewind local cache invalidation.
+      this.mutationRevision++;
+      // Typed DML borrows its owner's scopes; schema and raw writes fence every reader.
+      this.pendingWrite = true;
+      beginSqliteDatabaseWrite(sqlPublicationAnchor(this), mutation === "unscoped");
+    }
+    const autocommitWrite = !wasTransaction && mutated;
+    if (!this.isTransaction && (mutated || wasTransaction)) {
       withSqlitePostCommitPublications(sqlPublicationAnchor(this), () => {
-        beginSqliteDatabaseWrite(sqlPublicationAnchor(this));
-        finishSqliteDatabaseWrite(sqlPublicationAnchor(this));
+        // No pending mutation means no receipt, including empty writable transactions.
+        this.finishWrite();
         if (autocommitWrite && currentSqliteWorkerOperationAdmission.getStore()?.active) {
           deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(this), {});
         }
@@ -218,11 +295,13 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
 
   prepare(sql: string): SqlStatement {
     this.assertOpen();
-    rewritePostgresPlaceholders(sql);
+    const prepared = preparePostgresQuery(sql);
     let readBigInts = false;
     let columns: { name: string }[] = [];
     const execute = (parameters: SQLInputValue[]) => {
-      const result = this.query(sql, parameters, readBigInts);
+      const result = observeDatabaseOperation("postgres", "statement", sql, () =>
+        this.execute(prepared, parameters, readBigInts),
+      );
       columns = result.columns;
       return result;
     };
@@ -244,16 +323,36 @@ export class PostgresSyncConnection implements PostgresSqlConnection {
     if (!this.isOpen) {
       return;
     }
+    let retained = false;
     try {
-      this.request({ operation: "close" });
+      if (this.reuseKey && !this.isTransaction) {
+        const reusable = this.request({ operation: "release" });
+        if (reusable) {
+          this.worker.off("error", this.onWorkerError);
+          retainIdlePostgresBridge(this.reuseKey, {
+            port: this.port,
+            control: this.control,
+            worker: this.worker,
+            requestId: this.requestId,
+          });
+          retained = true;
+          return;
+        }
+      } else {
+        this.request({ operation: "close" });
+      }
       // Wait for the worker's exit notification after its client and ports close.
       if (Atomics.wait(this.control, 1, 0, 120_000) === "timed-out") {
         throw this.loseConnection();
       }
     } finally {
+      this.finishWrite();
       this.isOpen = false;
       this.isTransaction = false;
-      this.port.close();
+      if (!retained) {
+        this.worker.off("error", this.onWorkerError);
+        this.port.close();
+      }
     }
   }
 }

@@ -64,6 +64,7 @@ describe("buildCronSuggestions", () => {
     cron.cronForm.deliveryMode = scenario.mode;
     cron.cronJobs = [
       createCronViewJob("telegram-job", {
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "Etc/GMT+12" },
         sessionTarget: "isolated",
         payload: { kind: "agentTurn", message: "Daily summary" },
         delivery: {
@@ -99,6 +100,7 @@ describe("buildCronSuggestions", () => {
           ].toSorted(),
     );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
+    expect(suggestions.timezoneSuggestions).toContain("Etc/GMT+12");
   });
 });
 

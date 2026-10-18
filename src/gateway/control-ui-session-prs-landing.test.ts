@@ -39,9 +39,19 @@ describe("resolveBranchLanding", () => {
       mergedHeads: [{ sha: "1".repeat(40), baseRef: "release" }],
       descendantRef: false,
     },
+    {
+      scenario: "an unavailable merged head",
+      mergedHeads: [{ sha: "1".repeat(40), baseRef: "main" }],
+      descendantRef: false,
+      expected: { complete: false, hasLandedPullRequest: true },
+    },
   ])(
     "resolves an unpublished branch with $scenario against captured revisions",
-    async ({ mergedHeads, descendantRef }) => {
+    async ({
+      mergedHeads,
+      descendantRef,
+      expected = { complete: true, hasLandedPullRequest: false },
+    }) => {
       const base = await sha("HEAD");
       await git("checkout", "-b", "feature");
       await fs.appendFile(path.join(root, "a.txt"), "two\n");
@@ -59,7 +69,7 @@ describe("resolveBranchLanding", () => {
         pushedSha: null,
         defaultSha: base,
         statsBase: base,
-        hasLandedPullRequest: false,
+        ...expected,
         provenNewPushedWork: false,
       });
     },
@@ -88,6 +98,7 @@ describe("resolveBranchLanding", () => {
             mergedHeads: [],
           }),
         ).resolves.toEqual({
+          complete: true,
           pushedSha: missingSelectedObject ? missingObject : null,
           defaultSha: base,
           statsBase: base,
@@ -116,6 +127,7 @@ describe("resolveBranchLanding", () => {
     await expect(
       resolveBranchLanding(root, { branch: "feature", defaultBranch: "main", mergedHeads: [] }),
     ).resolves.toEqual({
+      complete: true,
       pushedSha: base,
       defaultSha: base,
       statsBase: base,
@@ -139,6 +151,7 @@ describe("resolveBranchLanding", () => {
     });
 
     expect(landing).toEqual({
+      complete: true,
       pushedSha: mergedHead,
       defaultSha: await sha("refs/remotes/origin/main"),
       statsBase: mergedHead,

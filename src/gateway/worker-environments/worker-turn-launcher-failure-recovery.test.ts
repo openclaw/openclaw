@@ -17,8 +17,7 @@ import { sessionByKeyReadHandlers } from "../server-methods/sessions-read-by-key
 import { requestContext } from "../server-methods/sessions-read-cache.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
-import { placementTurnOwner } from "./placement-record.js";
-import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { placementTurnOwner, projectWorkerSessionTurnClaim } from "./placement-record.js";
 import {
   WorkerRunnerCapacityError,
   WorkerRunnerUnavailableError,
@@ -678,8 +677,16 @@ describe("worker turn launcher failure recovery", () => {
       const finishPartial = createDeferred();
       const warning = vi.spyOn(rootLogger, "logWarn").mockImplementation(() => {});
       onTestFinished(() => warning.mockRestore());
-      const persistAbandonedPartial = vi.fn(async (claim: WorkerSessionTurnClaim) => {
-        expect(placements.validateTurnClaim(claim)).toBe(true);
+      const persistAbandonedPartial = vi.fn<
+        NonNullable<WorkerTurnLauncherOptions["persistAbandonedPartial"]>
+      >(async (claim) => {
+        const current = placements.get(SESSION_ID);
+        const currentClaim = current && projectWorkerSessionTurnClaim(current);
+        if (!currentClaim) {
+          throw new Error("Expected the live interrupted turn claim");
+        }
+        expect(currentClaim).toMatchObject({ sessionId: claim.sessionId, runId: claim.runId });
+        expect(placements.validateTurnClaim(currentClaim)).toBe(true);
         partialStarted.resolve();
         await finishPartial.promise;
         if (saveRejects) {
@@ -848,7 +855,13 @@ describe("worker turn launcher failure recovery", () => {
             if (executionFailure) {
               throw new Error(executionFailure);
             }
-            return { payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } };
+            return {
+              payloads: [{ text: "remote work completed" }],
+              meta: {
+                durationMs: 1,
+                terminalReply: { disposition: "visible", text: "remote work completed" },
+              },
+            };
           },
         ),
       ).rejects.toMatchObject({
@@ -949,7 +962,13 @@ describe("worker turn launcher failure recovery", () => {
             if (executionFailure) {
               throw new Error(executionFailure);
             }
-            return { payloads: [{ text: "remote work completed" }], meta: { durationMs: 1 } };
+            return {
+              payloads: [{ text: "remote work completed" }],
+              meta: {
+                durationMs: 1,
+                terminalReply: { disposition: "visible", text: "remote work completed" },
+              },
+            };
           },
         ),
       ).rejects.toMatchObject({

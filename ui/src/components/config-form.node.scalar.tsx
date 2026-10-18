@@ -110,27 +110,18 @@ type NumericInputState = { parsed?: number; message: string };
 function resolveNumericInputState(
   target: HTMLInputElement,
   { schema, isRequired }: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
+  invalidMessage = t("configForm.invalidNumber"),
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
     return {
-      message: target.validity.badInput || isRequired === true ? t("configForm.invalidNumber") : "",
+      message: target.validity.badInput || isRequired === true ? invalidMessage : "",
     };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
   return typeof parsed === "number"
-    ? { parsed, message: numericConstraintMessage(parsed, schema) }
-    : { message: t("configForm.invalidNumber") };
-}
-
-function applyNumericInputState(
-  target: HTMLInputElement,
-  state: NumericInputState,
-  commit: (candidate: unknown) => unknown,
-): void {
-  if (setControlValidity(target, state.message)) {
-    commit(state.parsed);
-  }
+    ? { parsed, message: isSupportedConfigValueValid(schema, parsed) ? "" : invalidMessage }
+    : { message: invalidMessage };
 }
 
 export function TextInput(props: {
@@ -148,12 +139,11 @@ function ScalarInput(props: {
   inputType: "text" | "number";
   stepped: boolean;
 }): JSX.Element {
-  let input!: HTMLInputElement;
+  let input!: HTMLInputElement | HTMLTextAreaElement;
   let initialized = false;
   const state = createMemo(() => {
-    getLocale();
     const params = props.params;
-    const { schema, value, path, hints } = params;
+    const { schema, value, path, hints, isRequired } = params;
     const hint = hintForPath(path, hints);
     const field = resolveConfigFieldPresentation(params);
     const errorId = configFieldId(path, "scalar-error");
@@ -191,6 +181,11 @@ function ScalarInput(props: {
       : sensitiveState?.isSensitive && !effectiveRedacted
         ? "text"
         : props.inputType;
+    const multiline =
+      hint?.multiline === true &&
+      props.inputType === "text" &&
+      !sensitiveState?.isSensitive &&
+      !sensitiveState?.isSensitiveField;
     const isPhonePresentation = !props.stepped && hint?.presentation === "phone-number";
     const phonePresentation =
       isPhonePresentation && !effectiveRedacted && !masked && typeof value === "string"
@@ -213,6 +208,18 @@ function ScalarInput(props: {
         ].join(":");
     const constraints = props.stepped ? numericInputConstraints(schema) : undefined;
     const numericStep = typeof constraints?.step === "number" ? constraints.step : 1;
+    const inputType = props.inputType;
+    const invalidString = t("configForm.invalidString");
+    const invalidNumber = t("configForm.invalidNumber");
+    const textInputState = (raw: string, editHint: ScalarEditHint) => {
+      const candidate = coerceTextInputValue(raw, schema, effectiveValue, editHint);
+      const valid = isSupportedConfigValueValid(schema, candidate);
+      const clearOptional = raw === "" && !isRequired && !valid;
+      return {
+        candidate: clearOptional ? undefined : candidate,
+        message: valid || clearOptional ? "" : invalidString,
+      };
+    };
     return {
       field,
       errorId,
@@ -224,6 +231,7 @@ function ScalarInput(props: {
       effectiveValue,
       initialBranch,
       effectiveInputType,
+      multiline,
       isPhonePresentation,
       phonePresentation,
       controlIdentity,
@@ -233,33 +241,19 @@ function ScalarInput(props: {
       presentationIdentity,
       constraints,
       numericStep,
+      textInputState,
+      revalidate(this: void, target: HTMLInputElement | HTMLTextAreaElement) {
+        setControlValidity(
+          target,
+          effectiveRedacted
+            ? ""
+            : inputType === "number" && target instanceof HTMLInputElement
+              ? resolveNumericInputState(target, { schema, isRequired }, invalidNumber).message
+              : textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
+        );
+      },
     };
   });
-  const textInputState = (raw: string, editHint: ScalarEditHint) => {
-    const candidate = coerceTextInputValue(
-      raw,
-      props.params.schema,
-      state().effectiveValue,
-      editHint,
-    );
-    const valid = isSupportedConfigValueValid(props.params.schema, candidate);
-    const clearOptional = raw === "" && !props.params.isRequired && !valid;
-    return {
-      candidate: clearOptional ? undefined : candidate,
-      message: valid || clearOptional ? "" : t("configForm.invalidString"),
-    };
-  };
-  const revalidate = (target: HTMLInputElement) => {
-    setControlValidity(
-      target,
-      state().effectiveRedacted
-        ? ""
-        : props.inputType === "number"
-          ? resolveNumericInputState(target, props.params).message
-          : textInputState(target.value, scalarEditHintForInput(target, state().initialBranch))
-              .message,
-    );
-  };
   createEffect(state, (current) => {
     // The first value is set only once; subsequent updates are owned by the
     // existing draft-preserving scalar identity contract.
@@ -274,13 +268,13 @@ function ScalarInput(props: {
       current.controlPathKey,
       current.presentationIdentity,
       current.renderedValue,
-      revalidate,
+      current.revalidate,
     );
   });
   let patchSource = untrack(() => props.params.value);
   let patchedValue = patchSource;
   const commitScalarValue = (
-    target: HTMLInputElement,
+    target: HTMLInputElement | HTMLTextAreaElement,
     candidate: unknown,
     skipUnchanged = false,
   ) => {
@@ -296,15 +290,15 @@ function ScalarInput(props: {
       return true;
     }
     target.value = state().renderedValue;
-    revalidate(target);
+    state().revalidate(target);
     return false;
   };
-  const commitChange = (target: HTMLInputElement, allowClear = true) => {
+  const commitChange = (target: HTMLInputElement | HTMLTextAreaElement, allowClear = true) => {
     if (state().effectiveRedacted) {
       return;
     }
     const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
-    if (props.inputType === "number") {
+    if (props.inputType === "number" && target instanceof HTMLInputElement) {
       const next = resolveNumericInputState(target, props.params);
       if (props.stepped && next.parsed !== undefined) {
         next.parsed = normalizeNumericValue(next.parsed, props.params.schema);
@@ -318,11 +312,11 @@ function ScalarInput(props: {
     }
     const editHint = beginScalarEdit(target, state().initialBranch);
     const raw = target.value;
-    const rawState = textInputState(raw, editHint);
+    const rawState = state().textInputState(raw, editHint);
     let nextState = rawState;
     if (rawState.message || state().isPhonePresentation) {
       const normalized = raw.trim();
-      nextState = textInputState(normalized, editHint);
+      nextState = state().textInputState(normalized, editHint);
       if (!nextState.message) {
         target.value = normalized;
       }
@@ -362,83 +356,100 @@ function ScalarInput(props: {
       )}
     </>
   );
-  const control = (
-    <input
-      ref={(element) => {
-        input = element;
-      }}
-      type={state().effectiveInputType}
-      class={["settings-input", { "cfg-redacted": state().effectiveRedacted }]}
-      aria-label={state().field.label}
-      aria-describedby={[state().field.helpId, state().errorId].filter(Boolean).join(" ")}
-      aria-invalid="false"
-      placeholder={state().placeholder}
-      min={state().constraints?.min}
-      max={state().constraints?.max}
-      step={state().constraints?.step}
-      disabled={props.params.disabled}
-      readonly={state().effectiveRedacted}
-      onClick={() => {
-        if (
-          !state().masked &&
-          state().sensitiveState?.isRedacted &&
-          !state().isStructuredSecretRef
-        ) {
-          props.params.onToggleSensitivePath?.(props.params.path);
-        }
-      }}
-      onKeyDown={(event) => {
-        if (
-          props.stepped &&
-          !props.params.compact &&
-          props.params.value === undefined &&
-          state().effectiveValue !== undefined &&
-          (event.key === "ArrowUp" || event.key === "ArrowDown")
-        ) {
-          event.preventDefault();
-          step(event.key === "ArrowUp" ? 1 : -1);
-        }
-      }}
-      onInput={(event) => {
-        if (state().effectiveRedacted) {
-          return;
-        }
-        const target = event.currentTarget;
-        if (props.params.commitOnBlur) {
-          if (!props.stepped) {
-            beginScalarEdit(target, state().initialBranch);
-          }
-          revalidate(target);
-          return;
-        }
-        if (props.inputType === "number") {
-          applyNumericInputState(
-            target,
-            resolveNumericInputState(target, props.params),
-            (candidate) => commitScalarValue(target, candidate),
-          );
-          return;
-        }
-        const next = textInputState(target.value, beginScalarEdit(target, state().initialBranch));
-        if (setControlValidity(target, next.message)) {
-          commitScalarValue(target, next.candidate);
-        }
-      }}
-      onChange={(event) => {
-        if (!props.params.commitOnBlur && (props.stepped || props.inputType !== "number")) {
-          commitChange(event.currentTarget, !props.stepped);
-        }
-      }}
-      onBlur={(event) => {
-        const target = event.currentTarget;
-        if (props.params.commitOnBlur && target.value !== state().renderedValue) {
-          commitChange(target);
-        }
+  const controlProps = {
+    ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
+      input = element;
+    },
+    get class() {
+      return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
+    },
+    get "aria-label"() {
+      return state().field.label;
+    },
+    get "aria-describedby"() {
+      return [state().field.helpId, state().errorId].filter(Boolean).join(" ");
+    },
+    "aria-invalid": "false" as const,
+    get placeholder() {
+      return state().placeholder;
+    },
+    get disabled() {
+      return props.params.disabled;
+    },
+    get readonly() {
+      return state().effectiveRedacted;
+    },
+    onClick: () => {
+      if (!state().masked && state().sensitiveState?.isRedacted && !state().isStructuredSecretRef) {
+        props.params.onToggleSensitivePath?.(props.params.path);
+      }
+    },
+    onKeyDown: (event: KeyboardEvent) => {
+      if (
+        props.stepped &&
+        !props.params.compact &&
+        props.params.value === undefined &&
+        state().effectiveValue !== undefined &&
+        (event.key === "ArrowUp" || event.key === "ArrowDown")
+      ) {
+        event.preventDefault();
+        step(event.key === "ArrowUp" ? 1 : -1);
+      }
+    },
+    onInput: (event: InputEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
+      if (state().effectiveRedacted) {
+        return;
+      }
+      const target = event.currentTarget;
+      if (props.params.commitOnBlur) {
         if (!props.stepped) {
-          finishScalarEdit(target);
+          beginScalarEdit(target, state().initialBranch);
         }
-      }}
-    />
+        state().revalidate(target);
+        return;
+      }
+      if (props.inputType === "number" && target instanceof HTMLInputElement) {
+        const next = resolveNumericInputState(target, props.params);
+        if (setControlValidity(target, next.message)) {
+          commitScalarValue(target, next.parsed);
+        }
+        return;
+      }
+      const { textInputState, initialBranch } = state();
+      const next = textInputState(target.value, beginScalarEdit(target, initialBranch));
+      if (setControlValidity(target, next.message)) {
+        commitScalarValue(target, next.candidate);
+      }
+    },
+    onChange: (event: Event & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
+      if (!props.params.commitOnBlur && (props.stepped || props.inputType !== "number")) {
+        commitChange(event.currentTarget, !props.stepped);
+      }
+    },
+    onBlur: (event: FocusEvent & { currentTarget: HTMLInputElement | HTMLTextAreaElement }) => {
+      const target = event.currentTarget;
+      if (props.params.commitOnBlur && target.value !== state().renderedValue) {
+        commitChange(target);
+      }
+      if (!props.stepped) {
+        finishScalarEdit(target);
+      }
+    },
+  };
+  const control = (
+    <>
+      {state().multiline ? (
+        <textarea {...controlProps} rows={6} style={{ "min-height": "8rem", resize: "vertical" }} />
+      ) : (
+        <input
+          {...controlProps}
+          type={state().effectiveInputType}
+          min={state().constraints?.min}
+          max={state().constraints?.max}
+          step={state().constraints?.step}
+        />
+      )}
+    </>
   );
   const wrappedInput = (
     <>
@@ -551,7 +562,7 @@ export function SelectInput(props: {
             const accepted =
               nextSelection === unset
                 ? params.isRequired && params.schema.default !== undefined
-                  ? params.onPatch(params.path, structuredClone(params.schema.default))
+                  ? params.onPatch(params.path, params.schema.default)
                   : params.onRemove
                     ? params.onRemove(params.path)
                     : params.onPatch(params.path, undefined)

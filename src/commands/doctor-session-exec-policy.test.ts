@@ -28,6 +28,23 @@ afterEach(async () => {
   state = undefined;
 });
 
+function askOffCase(
+  name: string,
+  cfg: OpenClawConfig,
+  security: ExecSecurity,
+  expected: SessionEntry["permissionMode"],
+  scope: { host?: SessionEntry["execHost"]; sandbox?: SessionEntry["sandbox"] } = {},
+) {
+  return {
+    name,
+    cfg,
+    legacy: { execAsk: "off" },
+    oldPolicy: { security, ask: "off" as const },
+    expected,
+    ...scope,
+  };
+}
+
 describe("doctor legacy session exec policy", () => {
   it.each<{
     name: string;
@@ -38,37 +55,33 @@ describe("doctor legacy session exec policy", () => {
     oldPolicy: { security: ExecSecurity; ask: ExecAsk };
     expected: SessionEntry["permissionMode"];
   }>([
-    {
-      name: "partial ask under global deny",
-      cfg: { tools: { exec: { mode: "deny" } } },
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "deny", ask: "off" },
-      expected: "read-only",
-    },
-    {
-      name: "partial ask under agent deny overriding global full",
-      cfg: {
+    askOffCase(
+      "partial ask under global deny",
+      { tools: { exec: { mode: "deny" } } },
+      "deny",
+      "read-only",
+    ),
+    askOffCase(
+      "partial ask under agent deny overriding global full",
+      {
         tools: { exec: { mode: "full" } },
         agents: { entries: { worker: { tools: { exec: { mode: "deny" } } } } },
       },
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "deny", ask: "off" },
-      expected: "read-only",
-    },
-    {
-      name: "partial ask under allowlist config",
-      cfg: { tools: { exec: { mode: "allowlist" } } },
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "allowlist", ask: "off" },
-      expected: "guarded",
-    },
-    {
-      name: "partial ask under full config",
-      cfg: { tools: { exec: { mode: "full" } } },
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "full", ask: "off" },
-      expected: undefined,
-    },
+      "deny",
+      "read-only",
+    ),
+    askOffCase(
+      "partial ask under allowlist config",
+      { tools: { exec: { mode: "allowlist" } } },
+      "allowlist",
+      "guarded",
+    ),
+    askOffCase(
+      "partial ask under full config",
+      { tools: { exec: { mode: "full" } } },
+      "full",
+      undefined,
+    ),
     {
       name: "partial security inherits global ask always",
       cfg: { tools: { exec: { security: "full", ask: "always" } } },
@@ -86,29 +99,13 @@ describe("doctor legacy session exec policy", () => {
       oldPolicy: { security: "full", ask: "always" },
       expected: "read-only",
     },
-    {
-      name: "partial ask in a required sandbox",
-      cfg: {},
+    askOffCase("partial ask in a required sandbox", {}, "deny", "read-only", {
       sandbox: "required",
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "deny", ask: "off" },
-      expected: "read-only",
-    },
-    {
-      name: "partial ask with unknown auto sandbox availability",
-      cfg: {},
+    }),
+    askOffCase("partial ask with unknown auto sandbox availability", {}, "deny", "read-only", {
       host: "auto",
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "deny", ask: "off" },
-      expected: "read-only",
-    },
-    {
-      name: "partial ask with explicit gateway and no config policy",
-      cfg: {},
-      legacy: { execAsk: "off" },
-      oldPolicy: { security: "full", ask: "off" },
-      expected: undefined,
-    },
+    }),
+    askOffCase("partial ask with explicit gateway and no config policy", {}, "full", undefined),
   ])("does not broaden $name", async ({ cfg, legacy, host, sandbox, oldPolicy, expected }) => {
     state = await createOpenClawTestState({ prefix: "openclaw-doctor-exec-base-" });
     const config: OpenClawConfig = { ...cfg, plugins: { enabled: false } };
@@ -121,11 +118,7 @@ describe("doctor legacy session exec policy", () => {
       ...(sandbox ? { sandbox } : {}),
       ...legacy,
     });
-    await noteSessionTranscriptHealth({
-      cfg: config,
-      env: state.env,
-      shouldRepair: true,
-    });
+    await noteSessionTranscriptHealth({ cfg: config, env: state.env, shouldRepair: true });
     closeOpenClawAgentDatabasesForTest();
     const migrated = listSessionEntriesCore(scope)[0]?.entry;
     expect(migrated?.permissionMode).toBe(expected);
@@ -150,54 +143,37 @@ describe("doctor legacy session exec policy", () => {
     const config: OpenClawConfig = { plugins: { enabled: false } };
     setRuntimeConfigSnapshot(config);
     const env = state.env;
-    const cases: Array<{
-      name: string;
-      legacy: { execSecurity?: string; execAsk?: string };
-      existing?: SessionEntry["permissionMode"];
-      expected: SessionEntry["permissionMode"];
-    }> = [
-      { name: "deny", legacy: { execSecurity: "deny", execAsk: "off" }, expected: "read-only" },
-      {
-        name: "allowlist",
-        legacy: { execSecurity: "allowlist", execAsk: "off" },
-        expected: "guarded",
+    const policyCase = (
+      name: string,
+      execSecurity: string | undefined,
+      execAsk: string | undefined,
+      expected: SessionEntry["permissionMode"],
+      existing?: SessionEntry["permissionMode"],
+    ) => ({
+      name,
+      legacy: {
+        ...(execSecurity === undefined ? {} : { execSecurity }),
+        ...(execAsk === undefined ? {} : { execAsk }),
       },
-      {
-        name: "ask",
-        legacy: { execSecurity: "allowlist", execAsk: "on-miss" },
-        expected: "guarded",
-      },
-      // ask=always required approval for every command; no permission mode encodes
-      // that, so these rows retire to read-only rather than silently allowing
-      // allowlisted commands to run unprompted.
-      {
-        name: "always",
-        legacy: { execSecurity: "full", execAsk: "always" },
-        expected: "read-only",
-      },
-      {
-        name: "allowlist-always",
-        legacy: { execSecurity: "allowlist", execAsk: "always" },
-        expected: "read-only",
-      },
-      { name: "partial-always", legacy: { execAsk: "always" }, expected: "read-only" },
-      { name: "full", legacy: { execSecurity: "full", execAsk: "off" }, expected: undefined },
-      {
-        name: "full-on-miss",
-        legacy: { execSecurity: "full", execAsk: "on-miss" },
-        expected: undefined,
-      },
-      { name: "partial-full", legacy: { execSecurity: "full" }, expected: undefined },
-      { name: "partial-deny", legacy: { execSecurity: "deny" }, expected: "read-only" },
-      { name: "partial-ask", legacy: { execAsk: "on-miss" }, expected: "read-only" },
-      { name: "partial-off", legacy: { execAsk: "off" }, expected: "read-only" },
-      {
-        name: "existing",
-        legacy: { execSecurity: "deny" },
-        existing: "workspace",
-        expected: "workspace",
-      },
-      { name: "canonical", legacy: {}, existing: "full", expected: "full" },
+      expected,
+      existing,
+    });
+    const cases = [
+      policyCase("deny", "deny", "off", "read-only"),
+      policyCase("allowlist", "allowlist", "off", "guarded"),
+      policyCase("ask", "allowlist", "on-miss", "guarded"),
+      // No mode encodes approval for every command; retire ask=always to read-only.
+      policyCase("always", "full", "always", "read-only"),
+      policyCase("allowlist-always", "allowlist", "always", "read-only"),
+      policyCase("partial-always", undefined, "always", "read-only"),
+      policyCase("full", "full", "off", undefined),
+      policyCase("full-on-miss", "full", "on-miss", undefined),
+      policyCase("partial-full", "full", undefined, undefined),
+      policyCase("partial-deny", "deny", undefined, "read-only"),
+      policyCase("partial-ask", undefined, "on-miss", "read-only"),
+      policyCase("partial-off", undefined, "off", "read-only"),
+      policyCase("existing", "deny", undefined, "workspace", "workspace"),
+      policyCase("canonical", undefined, undefined, "full", "full"),
     ];
     for (const testCase of cases) {
       const sessionKey = `agent:main:exec-policy-${testCase.name}`;
@@ -214,11 +190,7 @@ describe("doctor legacy session exec policy", () => {
       await replaceSessionEntry({ agentId: "main", env, sessionKey }, entry);
     }
     const run = (shouldRepair: boolean) =>
-      noteSessionTranscriptHealth({
-        cfg: config,
-        env,
-        shouldRepair,
-      });
+      noteSessionTranscriptHealth({ cfg: config, env, shouldRepair });
     const read = () => listSessionEntriesCore({ agentId: "main", env });
     const before = read();
 
@@ -250,9 +222,6 @@ describe("doctor legacy session exec policy", () => {
     expect(output).toContain("config default applies");
     expect(output).toContain("full permission mode was not granted");
     expect(output).toContain("ask=always has no mode equivalent");
-    // The migrated ask=always row must not merely carry a label: resolving its
-    // exec policy has to deny execution, so no allowlisted command can run
-    // without the human approval the legacy value required.
     for (const name of ["always", "allowlist-always", "partial-always"]) {
       const migrated = repaired.find(
         (row) => row.sessionKey === `agent:main:exec-policy-${name}`,

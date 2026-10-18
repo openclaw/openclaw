@@ -51,7 +51,7 @@ async function check(input: SqliteIntegrityWorkerInput): Promise<SqliteIntegrity
     await sendPhase("checking");
     const startedAt = performance.now();
     try {
-      assertSqliteIntegrity(database, input.databaseLabel);
+      assertSqliteIntegrity(database, input.databaseLabel, input.integrity);
     } finally {
       checkElapsedMs = performance.now() - startedAt;
     }

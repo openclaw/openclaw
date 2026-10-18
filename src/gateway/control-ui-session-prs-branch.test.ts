@@ -125,10 +125,11 @@ describe("session branch diff stats", () => {
         response: () => githubJson({ fork: false }),
       });
     }
+    const fetchImpl = routedFetch(routes);
+    vi.stubGlobal("fetch", fetchImpl);
     return loadControlUiSessionPullRequests(
       { sessionKey: "agent:main:main" },
       {
-        fetchImpl: routedFetch(routes),
         resolveGitContext: async () => ({
           ...context,
           branch: "feature",
@@ -153,6 +154,7 @@ describe("session branch diff stats", () => {
 
   afterEach(async () => {
     await fs.rm(root, { recursive: true, force: true });
+    vi.unstubAllGlobals();
   });
 
   it("discovers GitHub identity locally and skips network for default, non-GitHub, and detached checkouts", async () => {
@@ -161,16 +163,25 @@ describe("session branch diff stats", () => {
     await trackRemote("main");
     await git("symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main");
     const fetchImpl = routedFetch([]);
+    vi.stubGlobal("fetch", fetchImpl);
     const load = () =>
       loadControlUiSessionPullRequests(
         { sessionKey: "agent:main:discovery", refresh: true },
-        { fetchImpl, resolveGitRoot: async () => root },
+        { resolveGitRoot: async () => root },
       );
     await expect(load()).resolves.toEqual({
       pullRequests: [],
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
     });
+    const reads = vi.spyOn(worktreeGit, "runGitBytes");
+    const initial = await load();
+    reads.mockClear();
+    await appendCommit("a.txt", "next commit\n", "advance main");
+    await trackRemote("main");
+    expect(await load()).toEqual(initial);
+    expect(reads).not.toHaveBeenCalled();
+    reads.mockRestore();
     await git("remote", "set-url", "origin", "https://gitlab.com/openclaw/openclaw.git");
     await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
@@ -234,10 +245,11 @@ describe("session branch diff stats", () => {
       { match: "/pulls?head=", response: () => githubJson([]) },
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
+    vi.stubGlobal("fetch", fetchImpl);
     const load = () =>
       loadControlUiSessionPullRequests(
         { sessionKey: "agent:main:snapshot-refs" },
-        { fetchImpl, resolveGitRoot: async () => root },
+        { resolveGitRoot: async () => root },
       );
     const initial = await load();
     expect(initial.branch).toMatchObject({ additions: 1, changedFiles: 1 });
@@ -249,6 +261,27 @@ describe("session branch diff stats", () => {
       await git("pack-refs", "--all", "--prune");
       expect(await load()).toEqual(initial);
       expect(reads.mock.calls.length).toBe(0);
+
+      // File-only edits still refresh statistics, without repeating unchanged ancestry.
+      await appendFile("a.txt", "three\n");
+      await writeFile("new.txt", "new\n");
+      const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 5 * 60_000 + 1);
+      try {
+        const [first, concurrent] = await Promise.all([load(), load()]);
+        expect(first).toEqual(concurrent);
+        expect(first.branch).toMatchObject({ additions: 3, changedFiles: 2 });
+        expect(reads.mock.calls.filter(([, args]) => args[0] === "merge-base")).toHaveLength(0);
+        expect(reads.mock.calls.filter(([, args]) => args.includes("--shortstat"))).toHaveLength(1);
+
+        reads.mockClear();
+        await trackRemote("feature", "refs/remotes/origin/main");
+        const changed = await load();
+        expect(changed.branch).toMatchObject({ additions: 3, changedFiles: 2 });
+        expect(changed.branch?.createUrl).toBeUndefined();
+        expect(reads.mock.calls.some(([, args]) => args[0] === "merge-base")).toBe(true);
+      } finally {
+        clock.mockRestore();
+      }
     } finally {
       reads.mockRestore();
     }

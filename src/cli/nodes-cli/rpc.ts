@@ -17,7 +17,9 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
+import { positiveDurationError } from "../../shared/positive-duration.js";
 import { callGatewayFromCliWithTransport } from "../gateway-rpc.js";
+import { parseDurationMs } from "../parse-duration.js";
 import { parseTimeoutMsWithFallback } from "../parse-timeout.js";
 import type { NodesRpcOpts } from "./types.js";
 
@@ -214,6 +216,16 @@ export function parseOptionalNodeInteger(
     throw new Error(`${flag} must be a ${kind} integer.`);
   }
   return parsed;
+}
+
+export function parseNodeDurationMs(value: string): number {
+  try {
+    const durationMs = parseDurationMs(value);
+    parseOptionalNodeInteger(durationMs, "--duration");
+    return durationMs;
+  } catch {
+    throw positiveDurationError("--duration", "ms");
+  }
 }
 
 /** Parse an optional finite number node CLI flag with optional bounds. */

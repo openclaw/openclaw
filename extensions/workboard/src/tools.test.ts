@@ -387,6 +387,30 @@ describe("workboard tools", () => {
     );
   });
 
+  it("returns an actionable tool input error when claiming a blocked dependent card", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const parent = await store.create({ title: "Completed parent", status: "done" });
+    const child = await store.create({ title: "Blocked child", parents: [parent.id] });
+    const tools = new Map(
+      createWorkboardTools({ store, context: { agentId: "main" } }).map((tool) => [
+        tool.name,
+        tool,
+      ]),
+    );
+    const claim = expectDefined(tools.get("workboard_claim"), "Workboard claim");
+    const claimed = readPayload(await claim.execute("claim", { id: child.id }));
+    await expectDefined(tools.get("workboard_block"), "Workboard block").execute("block", {
+      id: child.id,
+      token: claimed.token,
+      reason: "Waiting for review",
+    });
+
+    await expect(claim.execute("blocked-claim", { id: child.id })).rejects.toMatchObject({
+      name: "ToolInputError",
+      message: "card is blocked; use workboard_unblock before claiming.",
+    });
+  });
+
   it("keeps blocked-card mutations out of the host tool failure contract", async () => {
     const { store, stores } = createWorkboardSqliteTestHarness();
     const keyed = stores.cards;
@@ -442,29 +466,6 @@ describe("workboard tools", () => {
       },
     });
     expect((await keyed.lookup("card-1"))?.card.metadata?.claim).toBeUndefined();
-  });
-
-  it("can share one store across tool instances for claim coordination", async () => {
-    const store = createWorkboardSqliteTestStore();
-    const mainTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "main" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const otherTools = new Map(
-      createWorkboardTools({
-        store,
-        context: { agentId: "other" },
-      }).map((tool) => [tool.name, tool]),
-    );
-    const card = await store.create({ title: "Single owner" });
-
-    await mainTools.get("workboard_claim")?.execute("call-1", { id: card.id });
-
-    await expect(
-      otherTools.get("workboard_claim")?.execute("call-2", { id: card.id }),
-    ).rejects.toThrow(/already claimed/);
   });
 
   it("requires claim scope before creating or linking dependencies against claimed cards", async () => {

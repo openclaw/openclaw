@@ -5,7 +5,7 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { maskLifecycleIdentifier } from "./subagent-registry-lifecycle-log.js";
+import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
 import {
   mutateSubagentRuns,
   SubagentRegistryMutationRejectedError,
@@ -57,7 +57,7 @@ function clearPendingWakeCommit(
     context.options.warn("requester settle wake commit recovered", {
       failures: pending.failures,
       suppressedFailureLogs: suppressed,
-      runIds: pending.entries.map((entry) => maskLifecycleIdentifier(entry.runId, "run")),
+      runIds: pending.entries.map((entry) => entry.runId),
     });
   }
 }
@@ -163,7 +163,6 @@ export function commitRequesterInitialTransfer(
     const result = await mutateSubagentRuns(
       pending.entries.map((entry) => entry.runId),
       (rows) => {
-        params.validateSelection?.();
         const drafts = pending.entries.map((entry) => {
           const current = rows.get(entry.runId);
           if (!current || !isSameSubagentRunOwner(current, entry)) {
@@ -238,19 +237,22 @@ export function commitRequesterInitialTransfer(
 function deferWakeCommit(
   context: SubagentLifecycleWakeContext,
   pending: PendingRequesterSettleWakeCommit,
+  error?: unknown,
 ): void {
   pending.failures += 1;
   if (
     pending.failures >= REQUESTER_SETTLE_WAKE_COMMIT_SUSTAINED_FAILURES &&
     !pending.sustainedFailureReported
   ) {
-    // Explain why per-attempt reporting will go quiet while retries continue.
+    // Explain why per-attempt reporting will go quiet while retries continue. The error tells a
+    // persisted owner divergence apart from a storage outage (#154252).
     pending.sustainedFailureReported = true;
     context.options.warn("requester settle wake commit still failing; retries continue", {
       failures: pending.failures,
+      ...(error === undefined ? {} : { error: buildSafeLifecycleErrorMeta(error) }),
       retryIntervalMs: REQUESTER_SETTLE_WAKE_COMMIT_MAX_BACKOFF_MS,
       suppressingIdenticalFailures: true,
-      runIds: pending.entries.map((entry) => maskLifecycleIdentifier(entry.runId, "run")),
+      runIds: pending.entries.map((entry) => entry.runId),
     });
   }
   // Always a future deadline. The lifecycle owner arms its retry timer from
@@ -355,7 +357,7 @@ function runPendingWakeCommit(
     const shouldRetain =
       typeof retainOnFailure === "function" ? retainOnFailure(error, pending) : retainOnFailure;
     if (shouldRetain) {
-      deferWakeCommit(context, pending);
+      deferWakeCommit(context, pending, error);
     } else {
       clearPendingWakeCommit(context, pending);
     }

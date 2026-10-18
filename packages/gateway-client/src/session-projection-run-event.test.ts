@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import {
   createSessionProjection,
   reduceSessionProjectionRunEvent,
@@ -14,6 +14,31 @@ const scope: SessionProjectionScope = {
 };
 
 describe("session projection Gateway run events", () => {
+  it("clears an existing diagnostic when the terminal owner suppresses its notice", () => {
+    const failed = reduceSessionProjectionRunEvent(createSessionProjection(scope), {
+      runId: "internal-run",
+      state: "error",
+      errorMessage: "No answer was returned",
+    });
+    assert(failed);
+    const suppressed = reduceSessionProjectionRunEvent(failed.projection, {
+      runId: "internal-run",
+      state: "error",
+      errorMessage: "No answer was returned",
+      suppressErrorNotice: true,
+    });
+    assert(suppressed);
+    expect(suppressed.currentRun).toMatchObject({ status: "error", suppressErrorNotice: true });
+    expect(suppressed.currentRun?.errorMessage).toBeUndefined();
+    expect(
+      reduceSessionProjectionRunEvent(suppressed.projection, {
+        runId: "internal-run",
+        state: "error",
+        errorMessage: "No answer was returned",
+      })?.currentRun?.errorMessage,
+    ).toBeUndefined();
+  });
+
   it("reconstructs append-only output without losing rich content or duplicating snapshot text", () => {
     let projection = createSessionProjection(scope);
     const canvas = { type: "canvas", id: "canvas-1" };

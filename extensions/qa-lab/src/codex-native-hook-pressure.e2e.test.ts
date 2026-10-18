@@ -12,14 +12,22 @@ import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { createQaGatewayChild } from "./gateway-child.js";
-import { buildFailedResponseEvents } from "./providers/mock-openai/mock-openai-events.js";
+import {
+  buildFailedResponseEvents,
+  buildStreamingFinalAnswerEvents,
+} from "./providers/mock-openai/mock-openai-events.js";
 import { attachQaMockResponsesWebSocketServer } from "./providers/mock-openai/mock-openai-responses-websocket.js";
 import { MockResponseStream } from "./providers/mock-openai/mock-openai-stream.js";
-import { listMockCodexModelInfos } from "./providers/shared/mock-model-config.js";
+import {
+  createMockProviderMap,
+  listMockCodexModelInfos,
+} from "./providers/shared/mock-model-config.js";
 
 const execFileAsync = promisify(execFile);
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const PLUGIN_ID = "qa-native-hook-pressure";
+const UTILITY_MODEL_ID = "qa-native-hook-utility";
+const UTILITY_MODEL = `mock-openai/${UTILITY_MODEL_ID}`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 type Tool = {
@@ -43,6 +51,7 @@ type ProcessRow = ProcessIdentity & {
   argv: string[];
   rss: number;
   ticks: number;
+  nice: number;
 };
 
 const processKey = (row: ProcessIdentity) => `${row.pid}:${row.startTimeTicks}`;
@@ -83,6 +92,7 @@ async function readProcess(pid: number): Promise<ProcessRow | undefined> {
       argv: cmdline.split("\0"),
       rss: Number(/VmRSS:\s+(\d+)/.exec(status)?.[1] ?? 0) * 1024,
       ticks: Number(fields[11]) + Number(fields[12]),
+      nice: Number(fields[16]),
     };
   } catch (error) {
     if (!isProcessGone(error)) {
@@ -258,13 +268,27 @@ import { hasBeforeToolCallPolicy, nativeHookRelayTesting } from "openclaw/plugin
 // Plugin generation modules have distinct instances; the fixture observer is process-owned.
 const key = Symbol.for("openclaw.test.native-hook-pressure.${randomUUID()}");
 const calls = globalThis[key] ??= [];
+const hookKey = Symbol.for("openclaw.test.native-hook-pressure.hooks.${randomUUID()}");
+const hooks = globalThis[hookKey] ??= [];
 export default {
   id: "${PLUGIN_ID}",
   register(api) {
+    api.agent.events.registerAgentEventSubscription({
+      id: "hook-completion-proof",
+      description: "Captures native hook completion status for pressure failure diagnostics.",
+      streams: ["codex_app_server.hook"],
+      phases: ["started", "completed"],
+      payload: "full",
+      handle(event) {
+        hooks.push({ atMs: event.ts, observedAtMs: Date.now(), runId: event.runId, ...event.data });
+      },
+    });
     if ("${selection}" !== "none") api.on("before_tool_call", async (event) => {
       const serialized = JSON.stringify(event.params);
-      calls.push({ toolName: event.toolName, denied: serialized.includes("PRESSURE_DENIED") });
+      const call = { toolName: event.toolName, toolCallId: event.toolCallId, denied: serialized.includes("PRESSURE_DENIED"), enteredAtMs: Date.now() };
+      calls.push(call);
       await new Promise((resolve) => setTimeout(resolve, 75));
+      call.completedAtMs = Date.now();
       return serialized.includes("PRESSURE_DENIED")
         ? { block: true, blockReason: "PRESSURE_POLICY_DENIED" }
         : undefined;
@@ -272,14 +296,25 @@ export default {
     api.registerHttpRoute({
       path: "/qa/native-hook-pressure", auth: "gateway", match: "exact",
       gatewayRuntimeScopeSurface: "trusted-operator",
-      async handler(_req, res) { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ calls, pid: process.pid, nodeVersion: process.version, hasPolicy: hasBeforeToolCallPolicy(), invocations: nativeHookRelayTesting.getNativeHookRelayInvocationsForTests() })); return true; }
+      async handler(_req, res) { res.setHeader("Content-Type", "application/json"); res.end(JSON.stringify({ calls, hooks, pid: process.pid, nodeVersion: process.version, hasPolicy: hasBeforeToolCallPolicy(), invocations: nativeHookRelayTesting.getNativeHookRelayInvocationsForTests() })); return true; }
     });
   }
 };`,
         );
         let scenario: Scenario | undefined;
+        let utilityRequests = 0;
         const wireTools = new Map<string, Tool>();
         const dispatch = async ({ body }: { body: Record<string, unknown> }) => {
+          if (body.model === UTILITY_MODEL_ID) {
+            utilityRequests++;
+            return {
+              events: buildStreamingFinalAnswerEvents(
+                `msg_utility_${randomUUID()}`,
+                "Native hook pressure",
+              ),
+              model: UTILITY_MODEL_ID,
+            };
+          }
           if (!scenario) {
             throw new Error("provider request outside scenario");
           }
@@ -401,11 +436,18 @@ export default {
         if (!address || typeof address === "string") {
           throw new Error("mock provider failed to bind");
         }
+        const providerBaseUrl = `http://127.0.0.1:${address.port}/v1`;
         const owner = createQaGatewayChild();
         const reports: unknown[] = [];
         const observedRelays = new Map<string, ProcessIdentity>();
         let gatewayPid: number | undefined;
         try {
+          const utilityProvider = createMockProviderMap("mock-openai", providerBaseUrl, [
+            UTILITY_MODEL,
+          ])["mock-openai"];
+          if (!utilityProvider) {
+            throw new Error("mock provider map is missing the utility provider");
+          }
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
             command: {
@@ -414,17 +456,41 @@ export default {
               cwd: REPO_ROOT,
               usePackagedPlugins: true,
             },
-            providerBaseUrl: `http://127.0.0.1:${address.port}/v1`,
+            providerBaseUrl,
             transportBaseUrl: "",
             providerMode: "mock-openai",
             primaryModel: "mock-openai/gpt-5.6-luna",
             alternateModel: "mock-openai/gpt-5.6-luna-alt",
             forcedRuntime: "codex",
+            runtimeSelection: "configured",
             controlUiEnabled: false,
             mutateConfig: (config) => ({
               ...config,
+              models: {
+                ...config.models,
+                providers: {
+                  ...config.models?.providers,
+                  "mock-openai": utilityProvider,
+                },
+              },
+              agents: {
+                ...config.agents,
+                defaults: {
+                  ...config.agents?.defaults,
+                  utilityModel: UTILITY_MODEL,
+                  models: {
+                    ...config.agents?.defaults?.models,
+                    [UTILITY_MODEL]: { agentRuntime: { id: "openclaw" } },
+                  },
+                  modelPolicy: {
+                    ...config.agents?.defaults?.modelPolicy,
+                    allow: [...(config.agents?.defaults?.modelPolicy?.allow ?? []), UTILITY_MODEL],
+                  },
+                },
+              },
               plugins: {
                 ...config.plugins,
+                slots: { ...config.plugins?.slots, memory: "none" },
                 allow: [...(config.plugins?.allow ?? []), PLUGIN_ID],
                 load: { paths: [pluginDir] },
                 entries: {
@@ -466,20 +532,18 @@ export default {
           const cpuTickRate = Number((await execFileAsync("getconf", ["CLK_TCK"])).stdout.trim());
           expect(cpuTickRate).toBeGreaterThan(0);
           const status = await fs.readFile(`/proc/${gateway.pid}/status`, "utf8");
-          console.log(
-            "NATIVE_HOOK_HARDWARE " +
-              JSON.stringify({
-                node: registry.nodeVersion,
-                kernel: os.release(),
-                cpuModel: os.cpus()[0]?.model,
-                logicalCpus: os.cpus().length,
-                availableParallelism: os.availableParallelism(),
-                affinity: /Cpus_allowed_list:\s*(.+)/.exec(status)?.[1],
-                cpuTickRate,
-                compileCacheConfigured: Boolean(process.env.NODE_COMPILE_CACHE),
-                compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE === "1",
-              }),
-          );
+          const hardware = {
+            node: registry.nodeVersion,
+            kernel: os.release(),
+            cpuModel: os.cpus()[0]?.model,
+            logicalCpus: os.cpus().length,
+            availableParallelism: os.availableParallelism(),
+            affinity: /Cpus_allowed_list:\s*(.+)/.exec(status)?.[1],
+            cpuTickRate,
+            compileCacheConfigured: Boolean(process.env.NODE_COMPILE_CACHE),
+            compileCacheDisabled: process.env.NODE_DISABLE_COMPILE_CACHE === "1",
+          };
+          console.log("NATIVE_HOOK_HARDWARE " + JSON.stringify(hardware));
           for (const count of selection === "matched" ? [1, 5, 20, 1] : [5]) {
             const mode = selection === "matched" && reports.length === 3 ? "deny" : "allow";
             scenario = {
@@ -499,6 +563,11 @@ export default {
             const relaySamples = new Map<
               string,
               {
+                pid: number;
+                startTimeTicks: number;
+                argv: string[];
+                nice: number;
+                lastState: string;
                 firstAtMs: number;
                 lastAtMs: number;
                 peakRss: number;
@@ -524,6 +593,11 @@ export default {
                   relayIdentities.add(key);
                   const previous = relaySamples.get(key);
                   relaySamples.set(key, {
+                    pid: relay.pid,
+                    startTimeTicks: relay.startTimeTicks,
+                    argv: relay.argv,
+                    nice: relay.nice,
+                    lastState: relay.state,
                     firstAtMs: previous?.firstAtMs ?? sampledAtMs,
                     lastAtMs: sampledAtMs,
                     peakRss: Math.max(previous?.peakRss ?? 0, relay.rss),
@@ -585,7 +659,37 @@ export default {
                 }
               }
             }
+            const processEvidence = {
+              hardware,
+              scenarioId: scenario.id,
+              selection,
+              count,
+              mode,
+              turnElapsedMs,
+              peakRelays,
+              peakRelayRss,
+              peakTreeRss,
+              sampledRelays: [...relaySamples.values()].map((sample) => ({
+                pid: sample.pid,
+                startTimeTicks: sample.startTimeTicks,
+                argv: sample.argv,
+                nice: sample.nice,
+                lastState: sample.lastState,
+                firstObservedAtMs: performance.timeOrigin + sample.firstAtMs,
+                lastObservedAtMs: performance.timeOrigin + sample.lastAtMs,
+                observedWindowMs: sample.lastAtMs - sample.firstAtMs,
+                peakRss: sample.peakRss,
+                observedCpuMs: ((sample.lastTicks - sample.firstTicks) * 1000) / cpuTickRate,
+              })),
+              observedGatewayCpuMs:
+                gatewayFirstTicks === undefined || gatewayLastTicks === undefined
+                  ? undefined
+                  : ((gatewayLastTicks - gatewayFirstTicks) * 1000) / cpuTickRate,
+              healthMs,
+              healthErrors,
+            };
             if (failures.length > 0) {
+              console.log("NATIVE_HOOK_PRESSURE_FAILURE " + JSON.stringify(processEvidence));
               throw new AggregateError(failures, "native hook pressure scenario failed");
             }
             const calls = (await readCalls()).slice(callsBefore);
@@ -594,8 +698,10 @@ export default {
             if (calls.length !== expectedCalls) {
               failureDetails = JSON.stringify({
                 scenario,
+                utilityRequests,
                 tools: [...wireTools.values()].map(({ name, type }) => ({ name, type })),
                 peakRelays,
+                processEvidence,
                 registry: await (
                   await fetch(`${gateway.baseUrl}/qa/native-hook-pressure`, {
                     headers: { Authorization: `Bearer ${gateway.token}` },
@@ -676,7 +782,7 @@ export default {
               ).stdout.trim();
               const current = await readProcess(row.pid);
               expect(current?.startTimeTicks).toBe(row.startTimeTicks);
-              expect(version).toBe("codex-cli 0.160.0");
+              expect(version).toBe("codex-cli 0.162.0");
               binaryIdentities.push({
                 pid: row.pid,
                 startTimeTicks: row.startTimeTicks,
@@ -713,6 +819,7 @@ export default {
                   : ((gatewayLastTicks - gatewayFirstTicks) * 1000) / cpuTickRate,
               turnElapsedMs,
               policyCalls: calls.length,
+              utilityRequests,
               uniqueSampledRelayProcesses: relayIdentities.size,
               peakRelays,
               peakRelayRss,
@@ -726,6 +833,7 @@ export default {
             });
             console.log("NATIVE_HOOK_PRESSURE " + JSON.stringify(reports.at(-1)));
           }
+          expect(utilityRequests).toBeGreaterThan(0);
         } finally {
           const stopped = await owner.stop();
           await sockets.close();

@@ -165,7 +165,7 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   }
   const unsubscribePrivateAuditEvents = onAgentAuditEvent(auditRecorder.record);
   const unsubscribeToolAuditEvents = onTrustedToolExecutionEvent(auditRecorder.recordTool);
-  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner(params.scheduler);
+  const sessionLifecyclePersistence = createSessionLifecyclePersistenceOwner();
   const agentEventDispatches = new Set<Promise<void>>();
   const eventRowOwners = new WeakMap<
     AgentEventRuntimePayload,
@@ -307,13 +307,13 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             getSessionRowProjection: params.getSessionRowProjection,
             loadGatewaySessionLifecycleSnapshotForEvent: (key, options) => {
               // Tool progress must not wait for optional row enrichment before reply capture.
-              const owner = options?.ownerEvent
-                ? eventRowOwners.get(options.ownerEvent)
-                : undefined;
+              const event = options?.ownerEvent;
+              const owner = event ? eventRowOwners.get(event) : undefined;
+              const projection = params.getSessionRowProjection?.();
               if (
-                options?.ownerEvent
+                event
                   ? !owner?.record || !owner.projection.isCurrent(owner.record)
-                  : params.getSessionRowProjection?.()?.needsMaterialization
+                  : projection?.needsMaterialization
               ) {
                 return { row: null };
               }
@@ -322,19 +322,22 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 key,
                 options?.agentId,
               );
+              if (!scope?.[1]) {
+                return { row: null };
+              }
+              const query = { key, agentId: scope[1] };
               const read = options?.sessionRows;
-              const prepared = scope?.[1] ? read?.describe({ key, agentId: scope[1] }) : undefined;
-              const snapshot = scope?.[1]
-                ? read
-                  ? prepared
-                    ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
-                    : { row: null }
-                  : (params.getSessionRowProjection?.()?.snapshot({ key, agentId: scope[1] }) ?? {
-                      row: null,
-                    })
-                : { row: null };
-              return options?.ownerEvent?.sessionId &&
-                snapshot.row?.sessionId !== options.ownerEvent.sessionId
+              const row = !read && !event ? projection?.capture(query) : undefined;
+              if (row && !row.materialized && !row.privateSource) {
+                return { row: null };
+              }
+              const prepared = read?.describe(query);
+              const snapshot = read
+                ? prepared
+                  ? { row: read.present(prepared), lifecycleRunId: prepared.entry.lifecycleRunId }
+                  : { row: null }
+                : (projection?.snapshot(query) ?? { row: null });
+              return event?.sessionId && snapshot.row?.sessionId !== event.sessionId
                 ? { row: null }
                 : snapshot;
             },
@@ -493,7 +496,8 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
           evt.projectSessionLifecycle !== false &&
           trackedOwnerIsCurrent &&
           claimIsComplete;
-        const { writeContext, track } = captureAgentRunTerminalPersistence(evt.runId);
+        const { writeContext, track } =
+          evt.terminalPersistence ?? captureAgentRunTerminalPersistence(evt.runId);
         const prepareTerminalPersistence = (sessionKey: string, agentId = sessionAgentId) => {
           const persistence = sessionLifecyclePersistence.observe({
             sessionKey,
@@ -645,7 +649,8 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
     // Retire synchronously before later cumulative updates, but retain the wire
     // projection until this committed row has crossed its async publication path.
     const agentHandler = agentEventHandlerLoader.peek();
-    const publication = createDeferredCore();
+    const publication = createDeferredCore<boolean>();
+    let published = true;
     // Committed publication retains Gateway work, not the producer's actor handle.
     const dispatch = runWithRetainedGatewayRootWork(() =>
       runInDetachedAsyncContext(() =>
@@ -657,18 +662,25 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
                 () => undefined,
               );
             }
-            return getTranscriptUpdateHandler();
+            const handler = await getTranscriptUpdateHandler();
+            return async (event) => {
+              published = (await handler(event)) !== false;
+            };
           },
           event: evt,
           log: params.log,
           failureMessage: "Transcript update dispatch failed",
           context: { sessionKey: evt.sessionKey },
+          // Intentional non-publication (hidden/stale/no recipients) keeps its existing semantics.
+          onFailure: () => {
+            published = false;
+          },
         }),
       ),
     );
     agentEventDispatches.add(dispatch);
     void dispatch.then(() => {
-      publication.resolve();
+      publication.resolve(published);
       agentEventDispatches.delete(dispatch);
     });
   });

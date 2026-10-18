@@ -12,6 +12,7 @@ import {
 } from "../../agents/github-tool-identity.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateWriter from "../../state/openclaw-state-worker-owner.js";
 import type { UserGitHubConnection } from "../../state/user-github-connections.js";
 import { updateUserGitHubConnection } from "../../state/user-github-connections.test-support.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -55,6 +56,31 @@ afterEach(() => {
 });
 
 describe("publication receipt reads", () => {
+  it("reads cold personal options while writer dispatch is unavailable", async () => {
+    await withReadFixture(
+      async (fixture) => {
+        fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
+        const writer = vi
+          .spyOn(stateWriter, "getOpenClawStateWorkerOwner")
+          .mockImplementation(() => {
+            throw new Error("Writer dispatch unavailable");
+          });
+        try {
+          const respond = await fixture.invoke("sessions.github.options", { sessionKey });
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, {
+            personal: expect.objectContaining({ state: "disconnected" }),
+            shared: publisher,
+            pendingPersonal: null,
+            latestShared: receipt,
+          });
+        } finally {
+          writer.mockRestore();
+        }
+      },
+      { personal: true },
+    );
+  });
+
   it("reads personal options and receipts while shared identity discovery is pending", async ({
     signal,
   }) => {
@@ -160,6 +186,7 @@ describe("publication receipt reads", () => {
         expect(fixture.latestShared).toHaveBeenCalledWith(
           expect.objectContaining({ sessionKey, sessionId, agentId: "main" }),
           "owned-unknown-attempt",
+          expect.any(Function),
           expect.any(Function),
         );
         expect(fixture.personalPending).not.toHaveBeenCalled();

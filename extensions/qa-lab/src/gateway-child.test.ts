@@ -546,92 +546,97 @@ describe("buildQaRuntimeEnv", () => {
     expect(env.GEMINI_API_KEY).toBe("gemini-live");
   });
 
-  it("preserves Codex CLI auth home for live frontier runs while sandboxing OpenClaw home", async () => {
-    const hostHome = await tempDirs.makeTempDir("qa-host-home-");
-    const codexHome = path.join(hostHome, ".codex");
-    await mkdir(codexHome);
-
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        HOME: hostHome,
-      }),
+  it.each([
+    {
+      name: "derived Codex home",
       providerMode: "live-frontier",
-    });
-
-    expect(env.HOME).toBe("/tmp/openclaw-qa/home");
-    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
-    expect(env.CODEX_HOME).toBe(codexHome);
-  });
-
-  it("forwards host HOME for live Claude CLI runs while keeping OpenClaw home sandboxed", async () => {
-    const hostHome = await tempDirs.makeTempDir("qa-host-home-");
-
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        HOME: hostHome,
-      }),
+      explicitCodexHome: false,
+      forwardHostHome: false,
+      forwardHostHomeForClaudeCli: false,
+    },
+    {
+      name: "explicit Codex home",
       providerMode: "live-frontier",
+      explicitCodexHome: true,
+      forwardHostHome: false,
+      forwardHostHomeForClaudeCli: false,
+    },
+    {
+      name: "Claude CLI home",
+      providerMode: "live-frontier",
+      explicitCodexHome: false,
+      forwardHostHome: false,
       forwardHostHomeForClaudeCli: true,
-    });
-
-    expect(env.HOME).toBe(hostHome);
-    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
-    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
-  });
-
-  it("can forward host HOME for browser-backed QA runs while keeping OpenClaw home sandboxed", async () => {
-    const hostHome = await tempDirs.makeTempDir("qa-host-home-");
-
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        HOME: hostHome,
-      }),
+    },
+    {
+      name: "browser home",
       providerMode: "mock-openai",
+      explicitCodexHome: false,
       forwardHostHome: true,
-    });
+      forwardHostHomeForClaudeCli: false,
+    },
+  ] as const)(
+    "isolates OpenClaw state while preserving $name",
+    async ({ providerMode, explicitCodexHome, forwardHostHome, forwardHostHomeForClaudeCli }) => {
+      const hostHome = await tempDirs.makeTempDir("qa-host-home-");
+      const codexHome = explicitCodexHome ? "/custom/codex-home" : path.join(hostHome, ".codex");
+      if (!explicitCodexHome) {
+        await mkdir(codexHome);
+      }
 
-    expect(env.HOME).toBe(hostHome);
-    expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
-    expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
-  });
+      const env = buildQaRuntimeEnv({
+        ...createParams({
+          HOME: hostHome,
+          ...(explicitCodexHome ? { CODEX_HOME: codexHome } : {}),
+        }),
+        providerMode,
+        forwardHostHome,
+        forwardHostHomeForClaudeCli,
+      });
 
-  it("preserves the live Anthropic key for live Claude CLI runs without writing it into config", async () => {
-    const hostHome = await tempDirs.makeTempDir("qa-host-home-");
+      expect(env.HOME).toBe(
+        forwardHostHome || forwardHostHomeForClaudeCli ? hostHome : "/tmp/openclaw-qa/home",
+      );
+      expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
+      expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
+      expect(env.CODEX_HOME).toBe(providerMode === "live-frontier" ? codexHome : undefined);
+    },
+  );
 
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        HOME: hostHome,
-        OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
-        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: '["SAFE_KEEP"]',
-      }),
-      providerMode: "live-frontier",
-      forwardHostHomeForClaudeCli: true,
+  it.each([
+    {
       claudeCliAuthMode: "api-key",
-    });
-
-    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
-    expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe('["SAFE_KEEP","ANTHROPIC_API_KEY"]');
-    expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("api-key");
-  });
-
-  it("removes preserved Anthropic keys for live Claude CLI subscription runs", async () => {
-    const hostHome = await tempDirs.makeTempDir("qa-host-home-");
-
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        HOME: hostHome,
-        ANTHROPIC_API_KEY: "anthropic-live",
-        OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: '["SAFE_KEEP","ANTHROPIC_API_KEY"]',
-      }),
-      providerMode: "live-frontier",
-      forwardHostHomeForClaudeCli: true,
+      key: "OPENCLAW_LIVE_ANTHROPIC_KEY",
+      preserved: '["SAFE_KEEP"]',
+      expected: '["SAFE_KEEP","ANTHROPIC_API_KEY"]',
+    },
+    {
       claudeCliAuthMode: "subscription",
-    });
+      key: "ANTHROPIC_API_KEY",
+      preserved: '["SAFE_KEEP","ANTHROPIC_API_KEY"]',
+      expected: '["SAFE_KEEP"]',
+    },
+  ] as const)(
+    "selects preserved credentials for Claude CLI $claudeCliAuthMode auth",
+    async ({ claudeCliAuthMode, key, preserved, expected }) => {
+      const hostHome = await tempDirs.makeTempDir("qa-host-home-");
 
-    expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
-    expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe('["SAFE_KEEP"]');
-    expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe("subscription");
-  });
+      const env = buildQaRuntimeEnv({
+        ...createParams({
+          HOME: hostHome,
+          [key]: "anthropic-live",
+          OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: preserved,
+        }),
+        providerMode: "live-frontier",
+        forwardHostHomeForClaudeCli: true,
+        claudeCliAuthMode,
+      });
+
+      expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
+      expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe(expected);
+      expect(env.OPENCLAW_LIVE_CLI_BACKEND_AUTH_MODE).toBe(claudeCliAuthMode);
+    },
+  );
 
   it.runIf(process.platform === "linux")(
     "scrubs inherited shell startup env before the workflow allowlist runs",
@@ -779,18 +784,6 @@ describe("buildQaRuntimeEnv", () => {
         claudeCliAuthMode: "api-key",
       }),
     ).toThrow("Claude CLI API-key QA mode requires ANTHROPIC_API_KEY");
-  });
-
-  it("keeps explicit Codex CLI auth home for live frontier runs", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
-        CODEX_HOME: "/custom/codex-home",
-        HOME: "/host/home",
-      }),
-      providerMode: "live-frontier",
-    });
-
-    expect(env.CODEX_HOME).toBe("/custom/codex-home");
   });
 
   it("scrubs direct and live provider keys in mock mode", () => {
@@ -1163,46 +1156,27 @@ describe("buildQaRuntimeEnv", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
-    "fails closed when forced gateway process-group shutdown times out",
-    async () => {
+  it.runIf(process.platform !== "win32").each([
+    { denied: false, exitCode: null },
+    { denied: true, exitCode: 17 },
+  ])(
+    "does not confirm a live process group (probe denied=$denied)",
+    async ({ denied, exitCode }) => {
       const child = Object.assign(new EventEmitter(), {
         pid: 12345,
-        exitCode: null as number | null,
-        signalCode: null as string | null,
-        kill: vi.fn(() => true),
-      });
-      vi.spyOn(process, "kill").mockImplementation(() => true);
-
-      await expect(
-        stopQaGatewayChildProcessTree(child as never, {
-          gracefulTimeoutMs: 1,
-          forceTimeoutMs: 1,
-          inspectLinuxProcessGroup: () => null,
-        }),
-      ).rejects.toThrow(
-        process.platform === "linux"
-          ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
-          : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
-      );
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "does not confirm shutdown when an exited leader's group probe is denied",
-    async () => {
-      const child = Object.assign(new EventEmitter(), {
-        pid: 12345,
-        exitCode: 17,
+        exitCode,
         signalCode: null,
-        kill: vi.fn(() => false),
+        kill: vi.fn(() => !denied),
       });
       const realKill = process.kill.bind(process);
       const fault = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
-        if (pid === -child.pid) {
-          throw Object.assign(new Error("owned fake group probe denied"), { code: "EPERM" });
+        if (denied) {
+          if (pid === -child.pid) {
+            throw Object.assign(new Error("owned fake group probe denied"), { code: "EPERM" });
+          }
+          return realKill(pid, signal);
         }
-        return realKill(pid, signal);
+        return true;
       });
       try {
         await expect(
@@ -1211,7 +1185,13 @@ describe("buildQaRuntimeEnv", () => {
             forceTimeoutMs: 1,
             inspectLinuxProcessGroup: () => null,
           }),
-        ).rejects.toThrow("process tree remained alive");
+        ).rejects.toThrow(
+          denied
+            ? "process tree remained alive"
+            : process.platform === "linux"
+              ? "qa gateway process tree remained alive after forced shutdown: pgid=12345 members=unknown (/proc unavailable) childExitRecorded=false"
+              : "qa gateway process tree remained alive after forced shutdown: pid=12345 childExitRecorded=false",
+        );
       } finally {
         fault.mockRestore();
       }

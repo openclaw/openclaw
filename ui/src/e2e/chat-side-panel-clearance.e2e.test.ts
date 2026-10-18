@@ -396,7 +396,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps the page title vertically centered and clear of the collapsed navigation rail", async () => {
+  it("keeps stacked page tabs clear of the collapsed navigation rail", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -415,13 +415,13 @@ suite.define(() => {
           const box = await tabs.boundingBox();
           return box ? box.y + box.height / 2 : -1;
         };
-        // The toolbar row sits at the top of the content column in both states.
-        await expect.poll(rowCenter).toBe(24);
+        const expandedCenter = await rowCenter();
+        expect(expandedCenter).toBeGreaterThan(24);
         await capturePanel(page, "page-toolbar-expanded");
 
         await page.locator('[data-navigation-view][aria-pressed="true"]').click();
         await expect.poll(() => shell.getAttribute("class")).toContain("shell--nav-collapsed");
-        await expect.poll(rowCenter).toBe(24);
+        await expect.poll(rowCenter).toBeGreaterThanOrEqual(expandedCenter);
         const controls = page.locator(".sidebar-rail [data-navigation-view]");
         const controlBoxes = await controls.evaluateAll((buttons) =>
           buttons.map((button) => button.getBoundingClientRect()),

@@ -296,7 +296,7 @@ export async function sendMessageMattermost(
   client.assertRequestCurrent?.();
 
   let props = opts.props;
-  if (!props && Array.isArray(opts.buttons) && opts.buttons.length > 0) {
+  if (!props && opts.buttons?.length) {
     setInteractionSecret(accountId, client.token);
     props = buildButtonProps({
       callbackUrl: resolveInteractionCallbackUrl(accountId, {
@@ -328,7 +328,7 @@ export async function sendMessageMattermost(
         channelId,
         buffer: media.buffer,
         fileName: media.fileName ?? `upload${extensionForMime(media.contentType) ?? ""}`,
-        contentType: media.contentType ?? undefined,
+        contentType: media.contentType,
       });
       fileIds = [fileInfo.id];
     } catch (err) {

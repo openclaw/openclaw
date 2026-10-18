@@ -1,7 +1,9 @@
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { Duplex } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
@@ -18,23 +20,50 @@ import type {
 } from "./service-child-protocol.js";
 
 type PreparationFact = {
-  type:
-    | "lineage-loading"
-    | "lineage-loaded"
-    | "spawn"
-    | "command-exit"
-    | "loader-entry"
-    | "loader-match"
-    | "loader-error"
-    | "duplicate-start";
-  url?: string;
-  format?: string;
-  error?: string;
+  type: "lineage-loading" | "lineage-loaded" | "spawn" | "command-exit" | "duplicate-start";
   pid?: number;
 };
 
 type ControlPayload<Message = ServiceChildControlMessage> =
   Message extends ServiceChildControlMessage ? Omit<Message, "generation" | "sequence"> : never;
+
+export function readLines(stream: Duplex, receive: (line: string) => void) {
+  let pending = "";
+  const decoder = new StringDecoder("utf8");
+  stream.on("data", (chunk: Buffer) => {
+    pending += decoder.write(chunk);
+    for (let newline; (newline = pending.indexOf("\n")) >= 0;) {
+      const line = pending.slice(0, newline);
+      pending = pending.slice(newline + 1);
+      receive(line);
+    }
+  });
+}
+
+function observeMessages<Message extends { type: string }>(
+  stream: Duplex,
+  receive?: (message: Message) => void,
+) {
+  const messages: Message[] = [];
+  const events = new EventEmitter();
+  const waitFor = (...types: string[]) => {
+    const received = messages.find((message) => types.includes(message.type));
+    return received
+      ? Promise.resolve(received)
+      : new Promise<Message>((resolve) => {
+          for (const type of types) {
+            events.once(type, resolve);
+          }
+        });
+  };
+  readLines(stream, (line) => {
+    const message = JSON.parse(line) as Message;
+    messages.push(message);
+    receive?.(message);
+    events.emit(message.type, message);
+  });
+  return { messages, waitFor };
+}
 
 export function createHeldAnchorPreparation(
   root: string,
@@ -42,12 +71,7 @@ export function createHeldAnchorPreparation(
 ) {
   const generation = "held-lineage-preparation";
   const commandSource = `
-    process.on("message", message => {
-      if (message.type === "openclaw-worker-start-v1") {
-        process.send({ type: "synthetic-worker-started" });
-        process.disconnect();
-      }
-    });
+    process.on("message", () => process.disconnect());
     process.once("disconnect", () => process.exit(0));
   `;
   const preload = path.join(root, "held-lineage-loader.mjs");
@@ -68,7 +92,6 @@ export function createHeldAnchorPreparation(
       const released = new Promise(resolve => { release = resolve; });
       probe.on("data", () => release());
       if (process.versions.bun) probe.connect({ fd: 6 });
-      emit({ type: "loader-entry", url: process.argv[1] });
       globalThis[Symbol.for("openclaw.anchor-preparation-test")] = {
         emit,
         released,
@@ -91,13 +114,8 @@ export function createHeldAnchorPreparation(
       registerFixtureSourceTransform({
         name: "held-lineage-preparation",
         filter: /[/\\\\]service-child-group-anchor(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
-        transform(url, readSource) {
-          let original;
-          try { original = readSource(); } catch (error) {
-            emit({ type: "loader-error", url, error: error.message });
-            throw error;
-          }
-          emit({ type: "loader-match", url });
+        transform(_url, readSource) {
+          const original = readSource();
           const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
           // Hold the awaited preparation in both source and standalone output,
           // where the bundler inlines the lineage module's initialization.
@@ -124,15 +142,14 @@ export function createHeldAnchorPreparation(
   child.once("exit", (code, signal) => exited.resolve({ code, signal }));
   child.once("error", exited.reject);
   child.once("disconnect", () => disconnected.resolve());
-  const pipesClosed = child.stdio.flatMap((stream) =>
-    stream
-      ? [
-          new Promise<void>((resolve) => {
-            stream.once("close", () => resolve());
-          }),
-        ]
-      : [],
-  );
+  const pipesClosed = child.stdio
+    .filter((stream) => stream != null)
+    .map(
+      (stream) =>
+        new Promise<void>((resolve) => {
+          stream.once("close", () => resolve());
+        }),
+    );
   // Native Node can omit aggregate close after explicit IPC disconnect with extra pipes.
   const closed = Promise.all([exited.promise, disconnected.promise, Promise.all(pipesClosed)]).then(
     ([result]) => result,
@@ -144,16 +161,7 @@ export function createHeldAnchorPreparation(
     child.kill("SIGKILL");
     throw new Error("Missing anchor fixture descriptors");
   }
-  const facts: PreparationFact[] = [];
-  const messages: ServiceChildAnchorMessage[] = [];
-  const firstFact = createDeferred<PreparationFact>();
-  const spawned = createDeferred<PreparationFact>();
-  const loading = createDeferred<PreparationFact>();
-  const prepared = createDeferred<PreparationFact>();
-  const duplicate = createDeferred<PreparationFact>();
-  const startupError = createDeferred<ServiceChildAnchorMessage>();
-  const ready = createDeferred<ServiceChildAnchorMessage>();
-  const rootResult = createDeferred<ServiceChildAnchorMessage>();
+  const { messages: facts, waitFor } = observeMessages<PreparationFact>(probe);
   let sequence = 0;
   let stderr = "";
   const send = (message: ControlPayload) => {
@@ -167,58 +175,16 @@ export function createHeldAnchorPreparation(
   child.stderr?.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  let controlPending = "";
-  control.setEncoding("utf8").on("data", (chunk: string) => {
-    controlPending += chunk;
-    for (;;) {
-      const newline = controlPending.indexOf("\n");
-      if (newline < 0) {
-        return;
-      }
-      // The owned anchor is the sole writer on this fixture's private control pipe.
-      const message = JSON.parse(controlPending.slice(0, newline)) as ServiceChildAnchorMessage;
-      controlPending = controlPending.slice(newline + 1);
-      messages.push(message);
-      if (message.type === "ready") {
-        ready.resolve(message);
-      } else if (message.type === "root-result") {
-        rootResult.resolve(message);
-      } else if (message.type === "startup-error") {
-        startupError.resolve(message);
-        if (options.acknowledgeStartupError !== false) {
-          send({ type: "startup-error-ack" });
-        }
+  const { messages, waitFor: waitForControl } = observeMessages<ServiceChildAnchorMessage>(
+    control,
+    (message) => {
+      if (message.type === "startup-error" && options.acknowledgeStartupError !== false) {
+        send({ type: "startup-error-ack" });
       } else if (message.type === "closing") {
         send({ type: "closing-ack", closingSequence: message.sequence });
       }
-    }
-  });
-  let probePending = "";
-  probe.setEncoding("utf8").on("data", (chunk: string) => {
-    probePending += chunk;
-    for (;;) {
-      const newline = probePending.indexOf("\n");
-      if (newline < 0) {
-        return;
-      }
-      // The fixture preload observes real module evaluation and native child events.
-      const fact = JSON.parse(probePending.slice(0, newline)) as PreparationFact;
-      probePending = probePending.slice(newline + 1);
-      facts.push(fact);
-      if (fact.type === "lineage-loading" || fact.type === "spawn") {
-        firstFact.resolve(fact);
-      }
-      if (fact.type === "spawn") {
-        spawned.resolve(fact);
-      } else if (fact.type === "lineage-loading") {
-        loading.resolve(fact);
-      } else if (fact.type === "lineage-loaded") {
-        prepared.resolve(fact);
-      } else if (fact.type === "duplicate-start") {
-        duplicate.resolve(fact);
-      }
-    }
-  });
+    },
+  );
   lineage.once("end", () => send({ type: "lineage-closed" }));
   lineage.resume();
   const start: ServiceChildStart = {
@@ -256,18 +222,18 @@ export function createHeldAnchorPreparation(
     generation,
     databasePath: start.cleanupBinding.databasePath,
     descriptorsClosed: () => control.destroyed && lineage.destroyed && probe.destroyed,
-    firstFact: () => beforeClose(firstFact.promise),
-    spawned: () => beforeClose(spawned.promise),
-    loading: () => beforeClose(loading.promise),
-    prepared: () => beforeClose(prepared.promise),
-    startupError: () => beforeClose(startupError.promise),
+    firstFact: () => beforeClose(waitFor("lineage-loading", "spawn")),
+    spawned: () => beforeClose(waitFor("spawn")),
+    loading: () => beforeClose(waitFor("lineage-loading")),
+    prepared: () => beforeClose(waitFor("lineage-loaded")),
+    startupError: () => beforeClose(waitForControl("startup-error")),
     duplicateStart: () => {
       child.send({ ...start, generation: `${generation}-replacement` });
-      return beforeClose(duplicate.promise);
+      return beforeClose(waitFor("duplicate-start"));
     },
     parentLoss: () => child.send({ type: "parent-loss", generation }),
-    ready: () => beforeClose(ready.promise),
-    rootResult: () => beforeClose(rootResult.promise),
+    ready: () => beforeClose(waitForControl("ready")),
+    rootResult: () => beforeClose(waitForControl("root-result")),
     closed,
     send,
     release: () => {

@@ -1,5 +1,5 @@
 import { createComponent } from "solid-js";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { BrowserDocumentContent, type BrowserDocumentViewProps } from "./browser-document.tsx";
 
 export { BrowserDocumentContent } from "./browser-document.tsx";

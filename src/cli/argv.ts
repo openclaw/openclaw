@@ -1,6 +1,5 @@
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Low-level CLI argv helpers for root options, help/version detection, and command paths.
-import { isExperimentalClawsEnabled } from "../claws/experimental.js";
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
@@ -14,12 +13,7 @@ import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const ROOT_VERSION_ALIAS_FLAGS = new Set(["-v"]);
 const VERSION_FLAGS = new Set(["-V", "--version", ...ROOT_VERSION_ALIAS_FLAGS]);
-const ROOT_COMMAND_DESCRIPTORS = [
-  ...CORE_CLI_COMMAND_DESCRIPTORS.filter(
-    (descriptor) => descriptor.name !== "claws" || isExperimentalClawsEnabled(),
-  ),
-  ...SUB_CLI_DESCRIPTORS,
-];
+const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
 const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
   ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
 );

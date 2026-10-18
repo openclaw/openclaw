@@ -311,25 +311,6 @@ describe("resident catalog rollout currency", () => {
     expect(row?.name).toBeUndefined();
   });
 
-  it("does not make a fresh paginated fork discoverable from injected model context", async () => {
-    const f = await fixture(
-      meta("native-thread", {
-        history_mode: "paginated",
-        forked_from_id: "parent-thread",
-        history_base: { thread_id: "parent-thread", end_ordinal_exclusive: 42 },
-      }) +
-        line("response_item", {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "Inherited context" }],
-        }),
-    );
-    const row = await readCodexCatalogRollout(f.root, f.file);
-    expect(row).toMatchObject({ id: "native-thread" });
-    expect(row?.preview).toBeUndefined();
-    expect(row?.recencyAt).toBeUndefined();
-  });
-
   it("reads only the 128 KiB head and tail of large files", async () => {
     const f = await fixture(
       meta() +

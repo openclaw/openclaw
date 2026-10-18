@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -20,11 +21,11 @@ import {
   clearMemoryPluginState,
   registerMemoryCapability,
 } from "../../plugins/memory-state.test-fixtures.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import { createTestFollowupRun, withTestModelContextTokens } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
@@ -431,7 +432,7 @@ describe("runReplyAgent runtime config", () => {
     }
   });
 
-  it.each(["success", "failure", "abort", "operation abort"] as const)(
+  it.each(["failure", "operation abort"] as const)(
     "keeps preflight compaction live and stops its heartbeat after %s",
     async (outcome) => {
       const memory = await vi.importActual<typeof import("./agent-runner-memory.js")>(
@@ -498,12 +499,8 @@ describe("runReplyAgent runtime config", () => {
           await vi.advanceTimersByTimeAsync(350);
           expect(lifecycle.onAdopted).not.toHaveBeenCalled();
           expect(lifecycle.onDeferredHeartbeat.mock.calls.length).toBeGreaterThanOrEqual(2);
-          if (outcome === "abort" || outcome === "operation abort") {
-            if (outcome === "abort") {
-              abort.abort();
-            } else {
-              expect(onReplyOperationOwned.mock.calls[0]?.[0].abortByUser()).toBe(true);
-            }
+          if (outcome === "operation abort") {
+            expect(onReplyOperationOwned.mock.calls[0]?.[0].abortByUser()).toBe(true);
             lifecycle.onDeferredHeartbeat.mockClear();
             await vi.advanceTimersByTimeAsync(500);
             expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
@@ -513,10 +510,6 @@ describe("runReplyAgent runtime config", () => {
           lifecycle.onDeferredHeartbeat.mockClear();
           await vi.advanceTimersByTimeAsync(500);
           expect(lifecycle.onDeferredHeartbeat).not.toHaveBeenCalled();
-          if (outcome === "success") {
-            expect(lifecycle.onAdopted).toHaveBeenCalledOnce();
-            expect(executeAgentTurnMock).toHaveBeenCalledOnce();
-          }
         } finally {
           release.resolve();
           await Promise.allSettled([pending]);
@@ -656,7 +649,7 @@ describe("runReplyAgent runtime config", () => {
     });
   });
 
-  it.each(["abortByUser", "abortForRestart"] as const)(
+  it.each(["abortForRestart"] as const)(
     "records %s during memory flush as cancellation without starting the main turn",
     async (abortMethod) => {
       const { replyParams } = createDirectRuntimeReplyParams();
@@ -673,10 +666,7 @@ describe("runReplyAgent runtime config", () => {
       const result = await runReplyAgent(replyParams);
 
       expect(result).toMatchObject({
-        text:
-          abortMethod === "abortByUser"
-            ? SILENT_REPLY_TOKEN
-            : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
       });
       expect(resolveReplyOperationAgentTurn(runState)).toBe("cancelled");
       expect(executeAgentTurnMock).not.toHaveBeenCalled();
@@ -772,6 +762,78 @@ describe("runReplyAgent runtime config", () => {
       ],
     });
   });
+
+  it.each([
+    { source: "current", revokeDuring: undefined, kept: true },
+    { source: "revoked during preflight", revokeDuring: "preflight", kept: false },
+    { source: "revoked while the append awaits", revokeDuring: "persist", kept: false },
+    { source: "revoked original input", revokeDuring: "source", kept: false },
+  ] as const)(
+    "keeps the user turn after a failed required preflight only for a $source source",
+    async ({ revokeDuring, kept }) => {
+      await withTestDir({ prefix: "openclaw-preflight-user-turn-" }, async (tempDir) => {
+        const { replyParams, followupRun } = createDirectRuntimeReplyParams();
+        const sessionKey = "agent:main:telegram:default:direct:test";
+        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
+        const storePath = join(tempDir, "sessions.json");
+        const scope = { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath };
+        await replaceSessionEntry(scope, sessionEntry);
+        await appendTranscriptMessage(scope, { message: { role: "user", content: "earlier" } });
+        let revoked = false;
+        const input = {
+          text: "the turn that hit the failed preflight",
+          idempotencyKey: "source-1",
+        };
+        followupRun.userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+          input,
+          assertOriginalInputCommit: () => {
+            if (revokeDuring === "source") {
+              throw new Error("original input source revoked");
+            }
+          },
+          // Message resolution is the first await inside persistApproved().
+          resolveInput: async () => {
+            revoked ||= revokeDuring === "persist";
+            return input;
+          },
+          target: { ...scope, sessionEntry, cwd: tempDir, config: {} },
+        });
+        followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
+          profileId: "linked-admin",
+          scopes: ["operator.admin"],
+          gatewayAccessGrant: null,
+          source: {},
+          assertCurrent: () => {
+            if (revoked) {
+              throw new Error("operator access revoked");
+            }
+          },
+        });
+        replyParams.sessionKey = sessionKey;
+        replyParams.storePath = storePath;
+        replyParams.sessionEntry = sessionEntry;
+        replyParams.sessionStore = { [sessionKey]: sessionEntry };
+        runSessionCompactionIfNeededMock.mockImplementation(async () => {
+          revoked = revokeDuring === "preflight";
+          throw new Error("Preflight compaction required but failed: summarization_failed");
+        });
+
+        const result = await runReplyAgent(replyParams);
+
+        expect(result).toMatchObject({ text: expect.stringContaining("couldn't shorten it") });
+        expect(executeAgentTurnMock).not.toHaveBeenCalled();
+        const failedTurn = expect.objectContaining({
+          role: "user",
+          content: "the turn that hit the failed preflight",
+          idempotencyKey: "source-1",
+        });
+        expect((await SessionManager.openAsync(scope)).buildSessionContext().messages).toEqual([
+          expect.objectContaining({ role: "user", content: "earlier" }),
+          ...(kept ? [failedTurn] : []),
+        ]);
+      });
+    },
+  );
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
     const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({

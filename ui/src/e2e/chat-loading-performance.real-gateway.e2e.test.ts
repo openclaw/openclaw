@@ -783,14 +783,25 @@ suite.define(() => {
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );
         expect(selectedStartup).toBeDefined();
-        for (const { metrics, identity } of [
-          { metrics: startupMetrics, identity: startupIdentity },
-          { metrics: narrowHomeOpen.startup, identity: narrowHomeOpen.identity },
-          { metrics: narrowHomeClosed.startup, identity: narrowHomeClosed.identity },
+        for (const { stage, metrics, identity } of [
+          { stage: "desktop-home-restored", metrics: startupMetrics, identity: startupIdentity },
+          {
+            stage: "narrow-home-restored",
+            metrics: narrowHomeOpen.startup,
+            identity: narrowHomeOpen.identity,
+          },
+          {
+            stage: "narrow-home-closed",
+            metrics: narrowHomeClosed.startup,
+            identity: narrowHomeClosed.identity,
+          },
         ]) {
           expect(olderHistoryRequests(metrics)).toHaveLength(0);
           const resolutions = metrics.filter((metric) => metric.method === "sessions.resolve");
-          expect(resolutions).toHaveLength(1);
+          expect(
+            resolutions,
+            `${stage} sessions.resolve requests: ${JSON.stringify(resolutions)}`,
+          ).toHaveLength(1);
           const resolved = resolutions[0]!;
           expect(resolved).toMatchObject({
             agentId: "main",

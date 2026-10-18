@@ -1,8 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   assertSqliteSchemaContains,
-  getCanonicalSqliteNamedIndexContracts,
+  getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
 } from "../infra/sqlite-schema-contract.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
@@ -12,6 +13,7 @@ import {
   CLAW_FIRST_USE_ADDITIVE_STATE_COLUMN_DEFINITIONS,
   CLAW_STARTUP_ADDITIVE_STATE_COLUMN_DEFINITIONS,
 } from "./openclaw-state-db-additive-columns.js";
+import { ensureStatePostgresFragment } from "./openclaw-state-db-engine.js";
 import {
   backfillAcpReplayEstimatedBytes,
   backfillCronJobsFromJobJson,
@@ -32,12 +34,15 @@ function ensureTable(
   table: string,
   options?: Parameters<typeof extractSqliteTableSchema>[2],
 ): void {
+  if (isPostgresSqlConnection(database)) {
+    return ensureStatePostgresFragment(database, table);
+  }
   let ensure = tableEnsurers.get(table);
   if (!ensure) {
     const schema = getOpenClawStateFeatureSchemaSql(table, options);
     ensure = createSqliteSchemaEnsurer(() => schema, {
       tables: getCanonicalSqliteTableNames(schema),
-      indexes: getCanonicalSqliteNamedIndexContracts(schema).map(({ name }) => name),
+      indexes: getCanonicalSqliteNamedIndexNames(schema),
     });
     tableEnsurers.set(table, ensure);
   }
@@ -271,8 +276,9 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ) {
     backfillCronRunLogEntryJson(db);
   }
-  if (ensureColumns(db, columns.acpReplay).length > 0 || repairHistoricalRows) {
-    backfillAcpReplayEstimatedBytes(db);
+  const addedAcpReplayColumns = ensureColumns(db, columns.acpReplay).length > 0;
+  if (addedAcpReplayColumns || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db, addedAcpReplayColumns);
   }
   const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
   if (

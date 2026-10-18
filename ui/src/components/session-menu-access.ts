@@ -7,7 +7,7 @@ import {
   type SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import type { CloudWorkerStopAction } from "./cloud-worker-stop.ts";
-import type { SessionMenuActionKind } from "./session-menu.ts";
+import type { SessionMenuActionKind } from "./session-menu-solid.tsx";
 import { sessionPlacementActionReason } from "./session-placement-action.ts";
 
 type SessionMenuAccessRow = Pick<
@@ -60,7 +60,7 @@ export function sessionMenuReasons(params: {
       params: { patch },
     });
   };
-  const unreadReason = batchPatchReason({ unread: true });
+  const unreadReason = batchPatchReason({ unread: true }, true);
   const categoryReason = batchPatchReason({ category: null });
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
@@ -106,7 +106,7 @@ export function sessionMenuReasons(params: {
     ...(unreadReason ? { "toggle-unread": unreadReason } : {}),
     ...(involvementReason ? { "toggle-involving-me": involvementReason } : {}),
     ...(categoryReason ? { "move-to-group": categoryReason } : {}),
-    ...(archiveReason ? { "toggle-archived": archiveReason, "archive-tree": archiveReason } : {}),
+    ...(archiveReason ? { "toggle-archived": archiveReason } : {}),
     ...(promotionReason ? { "move-to-top-level": promotionReason } : {}),
     ...(groupReason || categoryReason ? { "new-group": groupReason ?? categoryReason } : {}),
     ...(forkReason ? { fork: forkReason } : {}),

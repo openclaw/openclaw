@@ -4,6 +4,10 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import {
+  createReloadChannel,
+  observeSettlement,
+} from "./server-plugin-reload.active-call.test-support.js";
+import {
   verifyFailedRecoveryServiceOwnership,
   verifyCandidateCleanupRefusal,
 } from "./server-plugin-reload.managed-candidate.test-support.js";
@@ -63,20 +67,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             // The fixture's main service is registered last and stops first.
             api.registerService({ id: "later-cleanup", start() {}, stop: laterStop });
             api.registerChannel({
-              plugin: {
-                ...createChannelTestPluginBase({
-                  id: "cleanup-recovery",
-                  config: { listAccountIds: () => ["default", "parked"] },
-                }),
-                gateway: {
-                  startAccount: async ({ accountId, abortSignal }) => {
-                    starts.push(accountId);
-                    await new Promise<void>((resolve) => {
-                      abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                    });
-                  },
+              plugin: createReloadChannel(
+                "cleanup-recovery",
+                (account) => {
+                  starts.push(account);
                 },
-              },
+                ["default", "parked"],
+              ),
             });
           },
         });
@@ -92,14 +89,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         assert(original);
         const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
-        let settled = false;
-        const pending = fixture
-          .reload()
-          .catch((error: unknown) => error)
-          .then((result) => {
-            settled = true;
-            return result;
-          });
+        const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
           await entered.promise;
           await vi.advanceTimersByTimeAsync(5_000);
@@ -116,10 +106,10 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           // original cleanup despite having zero observation time remaining.
           if (outcome === "deadline") {
             await vi.advanceTimersByTimeAsync(70_000);
-            expect(settled).toBe(true);
+            expect(pending.settled).toBe(true);
             expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           } else {
-            expect(settled).toBe(false);
+            expect(pending.settled).toBe(false);
             expect(fixture.owner.getReloadStatus()?.phase).toBe("recovering");
           }
           release.resolve();
@@ -135,7 +125,9 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           await admittedWrite;
           expect(completedWrites).toBe(1);
           await vi.advanceTimersByTimeAsync(10_000);
-          expect(await pending).toMatchObject({ details: { committed: false, phase: "drain" } });
+          expect(await pending.promise).toMatchObject({
+            details: { committed: false, phase: "drain" },
+          });
           expect(fixture.owner.currentClaim()).toEqual(generation);
           expect(fixture.firstStop).toHaveBeenCalledOnce();
           expect(laterStop).toHaveBeenCalledOnce();
@@ -161,7 +153,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
           workRelease.resolve();
           await admittedWrite;
           await vi.advanceTimersByTimeAsync(80_000);
-          await pending;
+          await pending.promise;
           vi.useRealTimers();
           await manager.stopChannel("cleanup-recovery");
         }
@@ -207,20 +199,15 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         const original = getPluginInstance(fixture.previousRegistry.plugins[0]!);
         const generation = fixture.owner.currentClaim();
         vi.useFakeTimers();
-        let settled = false;
-        const pending = fixture
-          .reload()
-          .catch((error: unknown) => error)
-          .then((result) => {
-            settled = true;
-            return result;
-          });
+        const pending = observeSettlement(fixture.reload().catch((error: unknown) => error));
         try {
           await entered.promise;
           // Observe the existing service-stop and admitted-work drain deadlines.
           await vi.advanceTimersByTimeAsync(15_000);
-          expect(settled).toBe(true);
-          expect(await pending).toMatchObject({ details: { committed: false, phase: "drain" } });
+          expect(pending.settled).toBe(true);
+          expect(await pending.promise).toMatchObject({
+            details: { committed: false, phase: "drain" },
+          });
           expect(fixture.owner.getReloadStatus()?.phase).toBe("failed");
           expect(original?.acceptingCalls).toBe(false);
           release.resolve();
@@ -237,7 +224,7 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
         } finally {
           release.resolve();
           await vi.advanceTimersByTimeAsync(70_000);
-          await pending;
+          await pending.promise;
           vi.useRealTimers();
           await manager.stopChannel("first");
         }
@@ -259,20 +246,13 @@ export function registerPluginServiceRecoveryTests(createRecoveryFixture: Recove
             });
           }
           api.registerChannel({
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: owner,
-                config: { listAccountIds: () => ["default", "parked"] },
-              }),
-              gateway: {
-                startAccount: async ({ accountId, abortSignal }) => {
-                  starts[owner](accountId);
-                  await new Promise<void>((resolve) => {
-                    abortSignal.addEventListener("abort", () => resolve(), { once: true });
-                  });
-                },
+            plugin: createReloadChannel(
+              owner,
+              (account) => {
+                starts[owner](account);
               },
-            },
+              ["default", "parked"],
+            ),
           });
         },
       });

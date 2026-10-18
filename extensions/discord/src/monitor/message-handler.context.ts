@@ -18,14 +18,13 @@ import {
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { buildAgentSessionKey, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import {
   getSessionEntryAsync,
   readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
@@ -141,11 +140,16 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext, toolPolicy } =
     buildDiscordInboundAccessContext({
+      cfg,
+      accountId,
+      parentId: threadParentId,
       channelConfig,
       guildInfo,
       sender: { id: sender.id, name: sender.name, tag: sender.tag },
+      senderName,
+      senderUsername,
       allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
       isGuild: isGuildMessage,
       channelTopic: channelInfo?.topic,
@@ -371,7 +375,7 @@ export async function buildDiscordMessageProcessContext(params: {
   if (!isHistoryCurrent()) {
     return null;
   }
-  const { deliverTarget, replyTarget, autoThreadContext } = replyPlan;
+  const { replyTarget, autoThreadContext } = replyPlan;
   const conversationParentId = threadChannel
     ? threadParentId
     : autoThreadContext
@@ -498,6 +502,7 @@ export async function buildDiscordMessageProcessContext(params: {
       historyKind: isGuildMessage ? "recent" : "pending",
     },
     access: {
+      toolPolicy,
       mentions: {
         canDetectMention: ctx.canDetectMention,
         wasMentioned: ctx.effectiveWasMentioned,
@@ -574,7 +579,7 @@ export async function buildDiscordMessageProcessContext(params: {
   const persistedSessionKey = ctxPayload.SessionKey ?? route.sessionKey;
   if (ctx.inboundEventKind === "room_event" && shouldIncludeChannelHistory) {
     const nativeMediaText = formatDiscordMediaText({
-      attachments: message.attachments ?? undefined,
+      attachments: message.attachments,
       stickers: resolveDiscordMessageStickers(message),
     });
     const historyText = [text, nativeMediaText].filter(Boolean).join("\n");
@@ -595,13 +600,6 @@ export async function buildDiscordMessageProcessContext(params: {
       media: toHistoryMediaEntries(mediaList, { messageId: message.id }),
       messageId: message.id,
     });
-  }
-
-  if (shouldLogVerbose()) {
-    const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
-    logVerbose(
-      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
-    );
   }
 
   return {

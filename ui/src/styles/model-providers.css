@@ -2,6 +2,14 @@
    provider-usage-* styles from usage.css and .provider-brand-icon from
    components.css. Structural surfaces come from settings.css. */
 
+.model-providers__catalog-feedback {
+  min-block-size: 3.6rem;
+}
+
+.model-providers__installed-agent .settings-row__desc {
+  min-block-size: 2.6em;
+}
+
 .model-providers__catalog-progress {
   display: flex;
   align-items: center;
@@ -19,6 +27,7 @@
   justify-content: space-between;
   gap: var(--space-4);
   min-width: 0;
+  min-block-size: 2.75rem;
 }
 
 .model-providers__identity {
@@ -26,6 +35,12 @@
   align-items: center;
   gap: var(--space-3);
   min-width: 0;
+}
+
+.model-providers__checking {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
 }
 
 .model-providers__icon {
@@ -57,6 +72,7 @@
 .model-providers__global-metrics {
   display: grid;
   gap: var(--space-3);
+  min-block-size: 4rem;
 }
 
 .model-providers__global-metrics-title {

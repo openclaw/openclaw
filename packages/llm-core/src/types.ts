@@ -125,6 +125,8 @@ export interface StreamOptions {
    * its body stream is consumed.
    */
   onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+  /** Local-provider wait observation. Slot waits require request-correlated backend evidence. */
+  onProviderWait?: (reason: "response" | "slot" | null) => void;
   /**
    * Observe a live response that accepts user input before generation finishes.
    * `steer` resolves false only when the input was definitely not admitted;
@@ -357,6 +359,8 @@ export type StopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 /** Stable error codes for provider outcomes that cannot be replayed safely. */
 export const PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE = "PROVIDER_POST_DISPATCH_AMBIGUITY";
 export const PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE = "PROVIDER_FAILURE_WITH_OUTPUT";
+/** The stream owner removed repetitive content before persistence and replay. */
+export const REPETITIVE_OUTPUT_ERROR_CODE = "openclaw_repetitive_output";
 /** Pre-dispatch argument rejection; callers still enforce output and effect guards. */
 export const MALFORMED_TOOL_CALL_ARGUMENTS_ERROR_CODE = "malformed_tool_call_arguments";
 
@@ -541,6 +545,8 @@ export interface AssistantMessage {
   errorCode?: string;
   errorType?: string;
   errorBody?: string;
+  /** Provider retry floor before diagnostic clipping; null means too large to represent. */
+  retryAfterMs?: number | null;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -665,7 +671,7 @@ export interface OpenAICompletionsCompat {
   requiresThinkingAsText?: boolean;
   /** Whether all replayed assistant messages must include an empty reasoning_content field when reasoning is enabled. Default: auto-detected from URL. */
   requiresReasoningContentOnAssistantMessages?: boolean;
-  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking. Default: "openai". */
+  /** Format for reasoning/thinking parameter. "openai" uses reasoning_effort, "openrouter" uses reasoning: { effort }, "deepseek" uses thinking: { type } plus reasoning_effort, "together" uses reasoning: { enabled } plus reasoning_effort when supported, "zai" uses top-level enable_thinking: boolean, "qwen" uses top-level enable_thinking: boolean, and "qwen-chat-template" uses chat_template_kwargs.enable_thinking, plus chat_template_kwargs.reasoning_effort for selected enabled levels when supportedReasoningEfforts is declared. Default: "openai". */
   thinkingFormat?: ModelDataThinkingFormat;
   /** OpenRouter-specific routing preferences. Only used when baseUrl points to OpenRouter. */
   openRouterRouting?: OpenRouterRouting;
@@ -819,6 +825,8 @@ export interface Model<TApi extends Api = Api> {
    * smaller practical window.
    */
   contextTokens?: number;
+  /** Provider/catalog-declared total parameter count, including inactive experts. */
+  parameterCount?: number;
   maxTokens: number;
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;

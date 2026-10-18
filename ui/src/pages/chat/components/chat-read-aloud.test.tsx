@@ -2,10 +2,9 @@
 
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
@@ -198,8 +197,8 @@ it("keeps native transcript speech with its current application context", async 
   ).click();
   await waitForSolid(() => expect(replacementRequest).toHaveBeenCalledOnce());
   expect(request).toHaveBeenCalledOnce();
-  transcript.hostDisconnected();
-  render(nothing, container);
+  transcript.dispose();
+  cleanupSolid();
   // Retained transcript roots retire after the pane disconnection microtask.
   await Promise.resolve();
   flush();

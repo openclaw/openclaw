@@ -1,13 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
+import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-suggestions.js";
+import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
-import { clearConfigSchemaResponseCacheForTests } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { environmentsHandlers } from "./environments.js";
 import { adoptSuggestedWorkerProfile } from "./environments.suggested-profile.js";
@@ -37,6 +38,7 @@ vi.mock("../../config/validation.js", async (importOriginal) => ({
 }));
 vi.mock("../../config/runtime-schema.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/runtime-schema.js")>()),
+  loadGatewayConfigRedactionHints: () => undefined,
   loadGatewayRuntimeConfigSchema: () => ({
     schema: { type: "object" },
     uiHints: {},
@@ -92,6 +94,7 @@ beforeEach(() => {
       writeOptions: ConfigWriteOptions;
     }) => {
       writeOptions.assertCurrent?.();
+      writeOptions.assertBeforePublish?.();
       if (snapshot.hash !== storedHash) {
         throw new ConfigMutationConflictError("config changed since last load");
       }
@@ -107,7 +110,8 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
-  clearConfigSchemaResponseCacheForTests();
+  invalidateGatewayRuntimeConfigSchema();
+  invalidateConfigGetResponseCache();
   vi.clearAllMocks();
 });
 
@@ -332,6 +336,7 @@ describe("suggested cloud profile adoption", () => {
       async ({ writeOptions }: { writeOptions: ConfigWriteOptions }) => {
         current = false;
         writeOptions.assertCurrent?.();
+        writeOptions.assertBeforePublish?.();
         throw new Error("revoked request reached config publication");
       },
     );

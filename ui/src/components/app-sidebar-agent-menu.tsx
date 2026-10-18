@@ -48,8 +48,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   rosterMode: boolean;
   activeName: string;
   connected: boolean;
-  onQueryChange: (query: string) => void;
-  onToggleRoster: () => void;
+  onShowAllAgents: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -124,27 +123,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
           },
         ]
       : []),
-    ...(params.agents.length > 6
-      ? [
-          {
-            id: "search",
-            label: t("agentChip.search"),
-            closeOnSelect: false,
-            render: () => (
-              <input
-                class="sidebar-agent-menu__filter"
-                data-search
-                type="search"
-                role="searchbox"
-                aria-label={t("agentChip.search")}
-                placeholder={t("agentChip.search")}
-                value={params.query}
-                onInput={(event) => params.onQueryChange(event.currentTarget.value)}
-              />
-            ),
-          },
-        ]
-      : []),
     {
       kind: "group",
       id: "agents",
@@ -203,9 +181,6 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       onAfterShow={params.onAfterShow}
       onClose={params.onClose}
       onSelect={(value) => {
-        if (value === "search") {
-          return;
-        }
         params.onClose(value === "scope:all" && params.rosterMode);
         if (value.startsWith(AGENT_VALUE_PREFIX)) {
           params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
@@ -213,9 +188,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
         }
         switch (value) {
           case "scope:all":
-            if (!params.rosterMode) {
-              params.onToggleRoster();
-            }
+            params.onShowAllAgents();
             break;
           case `${COMMAND_VALUE_PREFIX}agents-directory`:
             params.onNavigate("agents-home");

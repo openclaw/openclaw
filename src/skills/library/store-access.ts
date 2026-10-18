@@ -65,7 +65,6 @@ export function captureSkillLibraryAccess(
       params: SkillLibraryReadQueries[K]["input"],
     ) {
       assertCurrent();
-      const capturedParams = structuredClone(params);
       const library = captureSkillLibraryAuthorityRead(context.admission);
       const assertSource = () => {
         assertCurrent();
@@ -75,7 +74,7 @@ export function captureSkillLibraryAccess(
       assertSource();
       const commandInput = {
         kind,
-        params: capturedParams,
+        params,
         authority: input,
       } as SkillLibraryReadInput; // SAFETY: K binds the captured kind and parameters in SkillLibraryReadQueries.
       // Upload progress changes independently of published library entries.
@@ -132,7 +131,7 @@ export function captureSkillLibraryAccess(
       const command = {
         type,
         input: {
-          ...structuredClone(params),
+          ...params,
           authority: input,
         } as SkillLibraryWorkerOperations[K]["input"], // SAFETY: K binds this input to the registry operation.
       };

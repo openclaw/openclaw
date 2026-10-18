@@ -65,9 +65,12 @@ vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
   };
 });
 
-import { ircMessageAdapter, sendFormattedIrcText } from "./message-adapter.js";
+import { ircPlugin } from "./channel.js";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import { sendIrcMessages, sendMessageIrc } from "./send.js";
+
+const ircMessageAdapter = ircPlugin.message!;
+const sendFormattedIrcText = ircPlugin.outbound!.sendFormattedText!;
 
 function resetHoistedMocks() {
   hoisted.loadConfig.mockReset();
@@ -161,6 +164,7 @@ describe("sendMessageIrc cfg threading", () => {
         },
       ],
       sentAt: 123,
+      sourceResults: [{ channel: "irc", messageId: "irc-msg-1" }],
       raw: [
         {
           channel: "irc",
@@ -273,8 +277,8 @@ describe("sendMessageIrc cfg threading", () => {
   it.each(
     [
       { kind: "formatted", sendMessage: sendFormattedIrcText },
-      { kind: "text", sendMessage: ircMessageAdapter.send.text },
-      { kind: "media", sendMessage: ircMessageAdapter.send.media },
+      { kind: "text", sendMessage: ircMessageAdapter.send!.text! },
+      { kind: "media", sendMessage: ircMessageAdapter.send!.media! },
     ].flatMap(({ kind, sendMessage }) =>
       ["connect", "dispatch"].map((phase) => ({ kind, sendMessage, phase })),
     ),

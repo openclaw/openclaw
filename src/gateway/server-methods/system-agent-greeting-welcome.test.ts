@@ -190,10 +190,7 @@ describe("openclaw.chat caretaker welcome", () => {
         1,
       );
 
-      const retry = await callChat(context, {
-        sessionId: "retained",
-        welcomeVariant: "new-agent",
-      });
+      const retry = await callChat(context, { sessionId: "retained", welcomeVariant: "new-agent" });
       expect(retry).toEqual(creation);
       expect(session.engine.historySince(0)).toEqual(history);
       expect(await callChat(context, { sessionId: "retained" })).toEqual(initial);
@@ -246,10 +243,7 @@ describe("openclaw.chat caretaker welcome", () => {
       const proposal = session.engine.getPendingOperatorProposal();
       const approval = session.pendingApproval;
       const before = await callChat(context, { sessionId: "busy" });
-      const creation = await callChat(context, {
-        sessionId: "busy",
-        welcomeVariant: "new-agent",
-      });
+      const creation = await callChat(context, { sessionId: "busy", welcomeVariant: "new-agent" });
       expect(creation).toEqual(before);
       expect(session.engine.historySince(0)).toEqual(history);
       expect(session.engine.getPendingOperatorProposal()).toBe(proposal);
@@ -261,10 +255,7 @@ describe("openclaw.chat caretaker welcome", () => {
       vi.spyOn(session.engine, "decorateRejoinReply").mockImplementation((reply) => reply);
       vi.spyOn(session.engine, "getPendingOperatorProposal").mockReturnValue(null);
       delete session.pendingApproval;
-      const available = await callChat(context, {
-        sessionId: "busy",
-        welcomeVariant: "new-agent",
-      });
+      const available = await callChat(context, { sessionId: "busy", welcomeVariant: "new-agent" });
       expect(available.payload).toMatchObject({
         reply: expect.stringContaining("Let's create an agent."),
       });
@@ -315,10 +306,7 @@ describe("openclaw.chat caretaker welcome", () => {
     });
 
     const context = makeContext(sessions);
-    const call = await callChat(context, {
-      sessionId: "fresh-with-message",
-      message: "status",
-    });
+    const call = await callChat(context, { sessionId: "fresh-with-message", message: "status" });
 
     expect(call.payload).toMatchObject({ reply: "did the thing", action: "none" });
     expect(greetingMocks.resolveSystemAgentGreeting).toHaveBeenCalledWith(

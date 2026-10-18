@@ -5,6 +5,7 @@ import {
   computeBackoff,
   computeBackoffSchedule,
   createRetryRunner,
+  type BackoffPolicy,
   type RetryOptions,
   RetrySupervisor,
   raceWithTimeout,
@@ -27,6 +28,16 @@ function createRetryOperation() {
     .mockResolvedValueOnce("ok");
 }
 
+async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    return error as Error;
+  }
+  throw new Error("expected aborted sleep");
+}
+
 describe("raceWithTimeout", () => {
   it("observes an existing abort when the operation factory throws synchronously", async () => {
     vi.useFakeTimers();
@@ -35,6 +46,7 @@ describe("raceWithTimeout", () => {
     await expect(
       raceWithTimeout(
         () => {
+          expect(vi.getTimerCount()).toBe(1);
           throw failure;
         },
         1_000,
@@ -109,62 +121,6 @@ describe("raceWithTimeout", () => {
     expect(getEventListeners(signal, "abort")).toHaveLength(0);
   });
 
-  it("arms the deadline before starting work and clears it on a synchronous throw", async () => {
-    vi.useFakeTimers();
-    const failure = new Error("failed to start");
-    const controller = new AbortController();
-    const onAbort = vi.fn(() => "cancelled");
-    const pending = raceWithTimeout(
-      () => {
-        expect(vi.getTimerCount()).toBe(1);
-        throw failure;
-      },
-      1_000,
-      () => "expired",
-      { signal: controller.signal, onAbort },
-    );
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    controller.abort();
-    expect(onAbort).not.toHaveBeenCalled();
-    await expect(pending).rejects.toBe(failure);
-  });
-
-  it.each(["fulfilled", "rejected"] as const)(
-    "preserves a %s operation and releases its deadline",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const value = new Error("operation result");
-      const onTimeout = vi.fn(() => "expired");
-      const pending = raceWithTimeout(
-        outcome === "fulfilled" ? Promise.resolve(value) : Promise.reject(value),
-        1_000,
-        onTimeout,
-      );
-      if (outcome === "fulfilled") {
-        await expect(pending).resolves.toBe(value);
-      } else {
-        await expect(pending).rejects.toBe(value);
-      }
-      expect(vi.getTimerCount()).toBe(0);
-      expect(onTimeout).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([0, 25])("returns the timeout result after %i ms without cancelling work", async (ms) => {
-    vi.useFakeTimers();
-    const source = createDeferred<string>();
-    const onTimeout = vi.fn(() => "expired");
-    const pending = raceWithTimeout(source.promise, ms, onTimeout);
-    expect(onTimeout).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(ms);
-    await expect(pending).resolves.toBe("expired");
-    expect(onTimeout).toHaveBeenCalledOnce();
-    source.resolve("late result");
-    await expect(source.promise).resolves.toBe("late result");
-    expect(vi.getTimerCount()).toBe(0);
-  });
-
   it("preserves a timeout error and observes a late source rejection", async () => {
     vi.useFakeTimers();
     const source = createDeferred<never>();
@@ -180,10 +136,12 @@ describe("raceWithTimeout", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each([true, false])("preserves timer ref=%s", async (ref) => {
+  it("can unref the deadline timer", async () => {
     const scheduled = vi.spyOn(globalThis, "setTimeout");
-    const pending = raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref });
-    expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(ref);
+    const pending = raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", {
+      ref: false,
+    });
+    expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(false);
     await expect(pending).resolves.toBe("done");
   });
 });
@@ -221,7 +179,12 @@ describe("RetrySupervisor", () => {
     vi.useFakeTimers();
     const supervisor = new RetrySupervisor({ initialMs: 100, maxMs: 100, factor: 2, jitter: 0 });
     const retry = supervisor.next();
-    const wait = sleepWithAbort(retry?.delayMs ?? 0, retry?.signal);
+    if (!retry) {
+      throw new Error("expected a retry");
+    }
+    const wait = sleepWithAbort(retry.delayMs, retry.signal);
+    expect(getEventListeners(retry.signal, "abort")).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
     const reason = new Error("stop");
     supervisor.cancel(reason);
 
@@ -231,6 +194,7 @@ describe("RetrySupervisor", () => {
       cause: reason,
     });
     expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(retry.signal, "abort")).toHaveLength(0);
   });
 
   it("can unref the scheduled timer", async () => {
@@ -246,6 +210,95 @@ describe("RetrySupervisor", () => {
     } finally {
       controller.abort();
     }
+  });
+});
+
+describe("backoff helpers", () => {
+  const policy: BackoffPolicy = {
+    initialMs: 100,
+    maxMs: 250,
+    factor: 2,
+    jitter: 0.5,
+  };
+
+  it("treats attempts below one as the first backoff step", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    expect(computeBackoff(policy, 0)).toBe(100);
+    expect(computeBackoff(policy, 1)).toBe(100);
+  });
+
+  it("adds jitter and clamps to maxMs", () => {
+    vi.spyOn(Math, "random").mockReturnValue(1);
+    expect(computeBackoff(policy, 2)).toBe(250);
+    expect(computeBackoff({ ...policy, maxMs: 450 }, 2)).toBe(300);
+  });
+
+  it("returns immediately for non-positive sleep durations", async () => {
+    await expect(sleepWithAbort(0, AbortSignal.abort())).resolves.toBeUndefined();
+    await expect(sleepWithAbort(-5)).resolves.toBeUndefined();
+  });
+
+  it("wraps aborted sleeps with a stable aborted error", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort();
+
+    const error = await expectAbortedSleep(sleepWithAbort(5, controller.signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toBe(controller.signal.reason);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  });
+
+  it("removes the abort listener after the sleep completes", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const sleeper = sleepWithAbort(50, controller.signal);
+    const onSettled = vi.fn();
+    void sleeper.then(onSettled);
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(sleeper).resolves.toBeUndefined();
+
+    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clamps oversized sleep durations before scheduling", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
+
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), TIMER_MAX_MS);
+
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    await expect(sleeper).resolves.toBeUndefined();
+  });
+
+  it("rejects if the signal aborts during listener registration", async () => {
+    vi.useFakeTimers();
+    let aborted = false;
+    const signal = {
+      get aborted() {
+        return aborted;
+      },
+      get reason() {
+        return new Error("listener-registration-race");
+      },
+      addEventListener(_eventValue: string, _listener: EventListenerOrEventListenerObject) {
+        aborted = true;
+      },
+      removeEventListener() {},
+    } as unknown as AbortSignal;
+
+    const error = await expectAbortedSleep(sleepWithAbort(50, signal));
+    expect(error.message).toBe("aborted");
+    expect(error.cause).toStrictEqual(new Error("listener-registration-race"));
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

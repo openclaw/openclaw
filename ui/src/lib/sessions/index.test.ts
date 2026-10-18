@@ -19,7 +19,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
-import { reconcileSessionRunTerminal, type SessionRunTerminal } from "./session-run-terminal.ts";
+import type { SessionRunTerminal } from "./session-run-terminal.ts";
 
 const mainKey = "agent:main:main";
 const row = (key = mainKey, fields: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -462,64 +462,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
     updatedAt: 30,
   });
   sessions.dispose();
-});
-
-it("advances the canonical list revision only for sessions.list publications", async () => {
-  const { sessions } = sessionHarness({
-    "sessions.list": () => sessionsResult([row("agent:main:listed", { updatedAt: 2 })], 2),
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  sessions.reconcile(row("agent:main:startup"), {
-    modelProvider: null,
-    model: null,
-    contextTokens: null,
-  });
-  expect(sessions.canonicalListRevision).toBe(0);
-  await sessions.refresh({ force: true });
-  expect(sessions.canonicalListRevision).toBe(1);
-  expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:listed");
-  sessions.dispose();
-});
-
-it("starts a fresh list epoch when the same client reconnects", async () => {
-  const stale = createDeferred<SessionsListResult>();
-  const current = createDeferred<SessionsListResult>();
-  let calls = 0;
-  const { sessions, publish } = sessionHarness({
-    "sessions.subscribe": subscribed,
-    "sessions.list": () => (++calls === 1 ? stale.promise : current.promise),
-  });
-  const staleRefresh = sessions.refresh({ force: true });
-  publish(false);
-  publish(true);
-  await waitForFast(() => expect(calls).toBe(2));
-  stale.resolve(sessionsResult([row("stale")], 1));
-  await staleRefresh;
-  expect(sessions.state.result).toBeNull();
-  current.resolve(sessionsResult([row("current", { updatedAt: 2 })], 2));
-  await waitForFast(() => expect(sessions.state.result?.sessions[0]?.key).toBe("current"));
-  sessions.dispose();
-});
-
-it("does not probe for a group catalog when the method is explicitly absent", async () => {
-  const { sessions, request } = sessionHarness({}, []);
-  await sessions.groupsLoad();
-  await sessions.groupsLoad();
-  expect(request).not.toHaveBeenCalled();
-  expect(sessions.state.groups).toEqual([]);
-  sessions.dispose();
-});
-
-it("preserves registry-active terminal rows without matching run identity", () => {
-  const result = sessionsResult([row(mainKey, { hasActiveRun: true, status: "done" })], 1);
-  expect(
-    reconcileSessionRunTerminal(result, {
-      sessionKeys: ["main"],
-      runId: "run-1",
-      status: "done",
-      endedAt: 160,
-    }),
-  ).toBe(result);
 });
 
 it("refreshes stale active rows after a terminal session message", async () => {

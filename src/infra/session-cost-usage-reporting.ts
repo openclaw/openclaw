@@ -132,6 +132,7 @@ export async function discoverAllSessions(params: {
         sessionId,
         sessionFile,
         mtime: file.mtimeMs,
+        ...(file.transcriptFile ? { transcriptFile: file.transcriptFile } : {}),
       });
     }
   }
@@ -388,7 +389,6 @@ export async function loadSessionLogs(
           content = truncateUtf16Safe(content, maxLen) + "…";
         }
       } catch {
-        // Ignore malformed records.
         continue;
       }
 

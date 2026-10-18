@@ -16,8 +16,20 @@ export const sessionTitleRequests = {
   get(target: SessionTitleTarget) {
     return pending.get(requestKey(target));
   },
-  run(target: SessionTitleTarget, create: () => Promise<boolean>) {
-    return getOrCreatePromise(pending, requestKey(target), create, { evictOnSettled: true });
+  run(target: SessionTitleTarget, create: () => Promise<boolean>, onStateChanged?: () => void) {
+    const key = requestKey(target);
+    const existing = pending.get(key);
+    if (existing) {
+      return existing;
+    }
+    const request = getOrCreatePromise(pending, key, create, { evictOnSettled: true });
+    // Register after the cache eviction handlers so either outcome publishes the
+    // settled state, not the just-completed request still present in the registry.
+    if (onStateChanged) {
+      void request.then(onStateChanged, onStateChanged);
+      onStateChanged();
+    }
+    return request;
   },
 };
 

@@ -1,10 +1,10 @@
 {
   "name": "@openclaw/signal",
-  "version": "2026.10.3",
+  "version": "2026.10.4",
   "description": "OpenClaw Signal channel plugin",
   "type": "module",
   "dependencies": {
-    "@openclaw/fs-safe": "0.26.3",
+    "@openclaw/fs-safe": "0.26.7",
     "ws": "8.22.0",
     "zod": "4.6.5"
   },
@@ -97,10 +97,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.10.3"
+      "pluginApi": ">=2026.10.4"
     },
     "build": {
-      "openclawVersion": "2026.10.3",
+      "openclawVersion": "2026.10.4",
       "bundledDist": false
     },
     "release": {

@@ -301,7 +301,9 @@ it.each([
       const current = subagentRuns.get(child.runId);
       expect.soft(current?.requesterSettleWake).toBeUndefined();
       expect(current?.execution.outcome).toEqual({ status: "ok" });
-      expect(current?.completion?.resultText).toBe("The retained child result.");
+      expect(loadSubagentRegistryFromSqlite().get(child.runId)?.completion?.resultText).toBe(
+        "The retained child result.",
+      );
     }
   } finally {
     admission?.close();

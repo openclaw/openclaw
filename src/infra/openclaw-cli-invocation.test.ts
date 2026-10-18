@@ -19,6 +19,40 @@ const sourceEnv = { TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") };
 const commandArgs = ["sessions", "export-trajectory"];
 
 describe("resolveCurrentOpenClawCliInvocation", () => {
+  it.each(["sidecar", "foreign checkout"])(
+    "uses the standalone sidecar from a %s cwd",
+    async (cwdKind) => {
+      await withTempDir("openclaw-cli-standalone-", async (root) => {
+        const packageRoot = path.join(root, "runtime");
+        await mkdir(packageRoot);
+        await writeFile(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');
+        const execPath = path.join(root, "openclaw");
+        await writeFile(
+          path.join(root, "manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            mode: "aot",
+            executable: { path: "openclaw" },
+            runtime: { path: "runtime" },
+            openclaw: { version: "2026.10.15" },
+            bun: { version: "1.3.0" },
+          }),
+        );
+        expect(
+          resolveCurrentOpenClawCliInvocation(commandArgs, {
+            execPath,
+            argv1:
+              cwdKind === "sidecar"
+                ? path.join(packageRoot, "openclaw.mjs")
+                : "/$bunfs/root/cli.js",
+            execArgv: ["--trace-warnings"],
+            cwd: cwdKind === "sidecar" ? root : repoRoot,
+          }),
+        ).toEqual({ command: execPath, args: commandArgs, cwd: packageRoot });
+      });
+    },
+  );
+
   it("keeps child runtime flags without inheriting debugger ownership", () => {
     expect(
       filterOpenClawChildExecArgv([

@@ -122,6 +122,24 @@ async function catalogFixture() {
 }
 
 describe("session-share receiver catalog", () => {
+  it.each(["runtime", "request snapshot"])(
+    "reports %s node discovery failures and recovers without hiding them as an empty catalog",
+    async (route) => {
+      const fixture = await catalogFixture();
+      const failure = new Error("paired node inventory is unavailable");
+      fixture.list.mockRejectedValueOnce(failure);
+      await expect(
+        fixture.catalog.list(route === "request snapshot" ? { listNodes: fixture.list } : {}),
+      ).rejects.toBe(failure);
+      expect(fixture.invoke).not.toHaveBeenCalled();
+
+      await fixture.hydrate();
+      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([nativeSession]);
+      fixture.list.mockResolvedValueOnce({ nodes: [] });
+      expect(await fixture.catalog.list({})).toEqual([]);
+    },
+  );
+
   it("bounds requested-node admission and refresh concurrency without interrupting admitted work", async () => {
     const fixture = await catalogFixture();
     fixture.list.mockResolvedValue({
@@ -401,12 +419,10 @@ describe("session-share receiver catalog", () => {
     expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([]);
   });
 
-  it.each([1, 2])("stops a %s-host publication when its catalog owner retires", async (count) => {
+  it("stops a multi-host publication when its catalog owner retires", async () => {
     const fixture = await catalogFixture();
     fixture.list.mockResolvedValue({
-      nodes: ["alpha", "beta"]
-        .slice(0, count)
-        .map((nodeId) => ({ nodeId, connected: true, commands })),
+      nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
     });
     const controller = new AbortController();
     const reason = new Error("catalog owner retired");

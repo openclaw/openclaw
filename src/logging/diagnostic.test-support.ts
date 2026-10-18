@@ -1,5 +1,12 @@
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { startGatewayDiagnosticHeartbeat } from "./diagnostic.js";
+import { resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
+import { resetDiagnosticPhasesForTest } from "./diagnostic-phase.js";
+import { resetDiagnosticRunActivityForTest } from "./diagnostic-run-activity.js";
+import { resetDiagnosticActivityForTest } from "./diagnostic-runtime.js";
+import { resetDiagnosticSessionRecoveryCoordinatorForTest } from "./diagnostic-session-recovery-coordinator.js";
+import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
+import { resetDiagnosticStabilityRecorderForTest } from "./diagnostic-stability.js";
+import { startGatewayDiagnosticHeartbeat, stopGatewayDiagnosticHeartbeat } from "./diagnostic.js";
 
 export function startDiagnosticHeartbeatForTest(
   config?: Parameters<typeof startGatewayDiagnosticHeartbeat>[1],
@@ -18,26 +25,13 @@ export function startEnabledDiagnosticHeartbeatForTest(
   return startDiagnosticHeartbeatForTest({ diagnostics: { enabled: true } }, opts);
 }
 
-type DiagnosticTestApi = {
-  resetDiagnosticStateForTest(): void;
-  resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number;
-  resolveStuckSessionWarnMs(): number;
-};
-
-function getTestApi(): DiagnosticTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.diagnosticTestApi")
-  ] as DiagnosticTestApi;
-}
-
 export function resetDiagnosticStateForTest(): void {
-  getTestApi().resetDiagnosticStateForTest();
-}
-
-export function resolveStuckSessionAbortMs(stuckSessionWarnMs: number): number {
-  return getTestApi().resolveStuckSessionAbortMs(stuckSessionWarnMs);
-}
-
-export function resolveStuckSessionWarnMs(): number {
-  return getTestApi().resolveStuckSessionWarnMs();
+  stopGatewayDiagnosticHeartbeat();
+  resetDiagnosticSessionRecoveryCoordinatorForTest();
+  resetDiagnosticSessionStateForTest();
+  resetDiagnosticActivityForTest();
+  resetDiagnosticRunActivityForTest();
+  resetDiagnosticMemoryForTest();
+  resetDiagnosticPhasesForTest();
+  resetDiagnosticStabilityRecorderForTest();
 }

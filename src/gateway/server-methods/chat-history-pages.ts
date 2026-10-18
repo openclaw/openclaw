@@ -42,41 +42,32 @@ function chatHistoryScope(params: ChatHistoryPageParams) {
 export async function readChatHistoryMessageById(input: ChatHistoryMessageParams) {
   const scope = chatHistoryScope(input);
   const memory = captureSessionActorTranscriptRead(scope);
-  if (memory) {
-    const captured = structuredClone(input);
-    let result;
-    if (getCliSessionBinding(captured.entry, "claude-cli")?.sessionId) {
-      const { readProcessHeldCliHistoryMessage } =
-        await import("../cli-session-history.process-held.js");
-      result = await readProcessHeldCliHistoryMessage(prepareChatHistoryParams(captured), memory);
-    } else {
-      result = await createSessionActorTranscriptReader(memory).readSessionMessageByIdAsync(
-        scope,
-        captured.messageId,
-        {
-          allowResetArchiveFallback: true,
-          historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
-        },
-      );
-    }
+  const captured = memory ? structuredClone(input) : input;
+  const binding = getCliSessionBinding(captured.entry, "claude-cli");
+  if (memory && binding?.sessionId) {
+    const { readProcessHeldCliHistoryMessage } =
+      await import("../cli-session-history.process-held.js");
+    const result = await readProcessHeldCliHistoryMessage(
+      prepareChatHistoryParams(captured),
+      memory,
+    );
     memory.assertCurrent();
     return result;
   }
-  const binding = getCliSessionBinding(input.entry, "claude-cli");
   if (
+    memory ||
     !binding?.sessionId ||
     !input.storePath ||
     input.entry?.incognito ||
     isIncognitoSessionKey(input.canonicalKey)
   ) {
-    return sessionTranscriptReaders.readSessionMessageByIdAsync(
-      chatHistoryScope(input),
-      input.messageId,
-      {
-        allowResetArchiveFallback: true,
-        historyVisibility: { sessionStartedAt: input.entry?.sessionStartedAt },
-      },
-    );
+    const readers = memory ? createSessionActorTranscriptReader(memory) : sessionTranscriptReaders;
+    const result = await readers.readSessionMessageByIdAsync(scope, captured.messageId, {
+      allowResetArchiveFallback: true,
+      historyVisibility: { sessionStartedAt: captured.entry?.sessionStartedAt },
+    });
+    memory?.assertCurrent();
+    return result;
   }
   const params = prepareChatHistoryParams(input);
   const { readSessionHistoryPageInWorker } =

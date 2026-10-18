@@ -1,6 +1,6 @@
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import radiusPlugin from "../extensions/radius/index.js";
@@ -41,12 +41,13 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: Discovery and runtime hooks share fixture providers without real plugin loading.
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
   const { matchesProviderPluginRef } = await import("../src/plugins/provider-registry-shared.js");
   const selectProviders = (params: {
-    onlyPluginIds?: string[];
+    onlyPluginIds?: readonly string[];
     providerRefs?: readonly string[];
   }) =>
     discovery.providers.filter(
@@ -55,7 +56,6 @@ vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
         (!params.providerRefs?.length ||
           params.providerRefs.some((ref) => matchesProviderPluginRef(provider, ref))),
     );
-  // Discovery and runtime hooks use the same fixture providers; no plugin loading is under test.
   return createProviderHookRuntime({
     isPluginProvidersLoadInFlight: () => false,
     resolvePluginProviderRegistryCore: (params) => {
@@ -96,6 +96,40 @@ function createCatalogProviderRegistry(providers = discovery.providers) {
 
 function withCatalogProviders<T>(run: () => T): T {
   return withPluginRuntimeRegistryScope(createCatalogProviderRegistry(), run);
+}
+
+function registerProvider(plugin: Pick<typeof chutesPlugin, "register">) {
+  plugin.register(
+    createTestPluginApi({
+      registerProvider: (provider) => {
+        discovery.providers = [provider];
+      },
+    }),
+  );
+}
+
+function authOrder(provider: string, ...profiles: string[]): OpenClawConfig {
+  return { auth: { order: { [provider]: profiles } } };
+}
+
+function mockRefreshFailure(message = "synthetic OAuth refresh failure") {
+  // Diagnostic hints are independent of refresh selection and load the full runtime.
+  vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
+  return vi
+    .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
+    .mockRejectedValue(new Error(message));
+}
+
+function catalogModel(id: string, name: string, maxTokens = 8_192) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 32_768,
+    maxTokens,
+  };
 }
 
 describe("Provider model discovery auth preparation", () => {
@@ -152,13 +186,7 @@ describe("Provider model discovery auth preparation", () => {
   }
 
   async function createChutesCatalogFixture() {
-    chutesPlugin.register(
-      createTestPluginApi({
-        registerProvider: (provider) => {
-          discovery.providers = [provider];
-        },
-      }),
-    );
+    registerProvider(chutesPlugin);
     const profileId = "chutes:oauth";
     const config: OpenClawConfig = { auth: { order: { chutes: [profileId] } } };
     const store = createExpiredOauthStore({
@@ -190,18 +218,28 @@ describe("Provider model discovery auth preparation", () => {
       : undefined;
   }
 
+  function expectRefresh(
+    refresh: MockInstance<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>,
+    provider: string,
+    access: string,
+    token: string,
+  ) {
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(refresh).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider,
+        refresh: true,
+        credential: expect.objectContaining({ type: "oauth", provider, access, refresh: token }),
+      }),
+    );
+  }
+
   it("publishes only the configured first profile's account catalog", async () => {
     const profileA = "openai:profile-a";
     const profileB = "openai:profile-b";
     const keyA = "rejected-profile-a";
     const keyB = "selected-profile-b";
-    const config: OpenClawConfig = {
-      auth: {
-        order: {
-          openai: [profileB, profileA],
-        },
-      },
-    };
+    const config = authOrder("openai", profileB, profileA);
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -243,24 +281,12 @@ describe("Provider model discovery auth preparation", () => {
     "continues from failed $providerId OAuth to $source API-key auth without repeating refresh",
     async ({ providerId, source, modelId }) => {
       if (providerId === "xai") {
-        xaiPlugin.register(
-          createTestPluginApi({
-            registerProvider: (provider) => {
-              discovery.providers = [provider];
-            },
-          }),
-        );
+        registerProvider(xaiPlugin);
       }
       const profileA = `${providerId}:oauth-a`;
       const profileB = `${providerId}:api-key-b`;
       const keyB = "selected-profile-b";
-      const config: OpenClawConfig = {
-        auth: {
-          order: {
-            [providerId]: [profileA, profileB],
-          },
-        },
-      };
+      const config = authOrder(providerId, profileA, profileB);
       const store = createExpiredOauthStore({
         profileId: profileA,
         provider: providerId,
@@ -322,19 +348,7 @@ describe("Provider model discovery auth preparation", () => {
       expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
         expect.objectContaining({ provider: providerId }),
       );
-      expect(refresh).toHaveBeenCalledOnce();
-      expect(refresh).toHaveBeenCalledWith(
-        expect.objectContaining({
-          provider: providerId,
-          refresh: true,
-          credential: expect.objectContaining({
-            type: "oauth",
-            provider: providerId,
-            access: "rejected-oauth-a",
-            refresh: "refresh-a",
-          }),
-        }),
-      );
+      expectRefresh(refresh, providerId, "rejected-oauth-a", "refresh-a");
       const resolvedProfile = source === "profile" ? profileB : undefined;
       expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${resolvedProfile}`, "catalog"]);
       expect({
@@ -428,13 +442,7 @@ describe("Provider model discovery auth preparation", () => {
   it.each(["oauth", "api_key"] as const)(
     "plans the registered Radius catalog with the selected %s credential",
     async (mode) => {
-      radiusPlugin.register(
-        createTestPluginApi({
-          registerProvider: (provider) => {
-            discovery.providers = [provider];
-          },
-        }),
-      );
+      registerProvider(radiusPlugin);
       vi.mocked(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).mockRestore();
       const profileId = "radius:oauth";
       const keyProfileId = "radius:key";
@@ -482,17 +490,7 @@ describe("Provider model discovery auth preparation", () => {
         return authorization === `Bearer ${selectedAccess}`
           ? Response.json({
               baseUrl: "https://radius.pi.dev/v1",
-              models: [
-                {
-                  id: "organization-model",
-                  name: "Organization Model",
-                  reasoning: false,
-                  input: ["text"],
-                  contextWindow: 32_768,
-                  maxTokens: 4096,
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                },
-              ],
+              models: [catalogModel("organization-model", "Organization Model", 4096)],
             })
           : new Response("unauthorized", { status: 401 });
       });
@@ -537,19 +535,7 @@ describe("Provider model discovery auth preparation", () => {
 
     const plan = await planCatalog(config, store, { providerId: "chutes" });
 
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "chutes",
-        refresh: true,
-        credential: expect.objectContaining({
-          type: "oauth",
-          provider: "chutes",
-          access: "expired-chutes-access",
-          refresh: "chutes-refresh-token",
-        }),
-      }),
-    );
+    expectRefresh(refresh, "chutes", "expired-chutes-access", "chutes-refresh-token");
     expect(store.profiles[profileId]).toEqual(capturedCredential);
     expect(readAuthProfileStoreForTest(agentDir).profiles[profileId]).toMatchObject(
       refreshedCredential,
@@ -576,13 +562,7 @@ describe("Provider model discovery auth preparation", () => {
     "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
     async ({ providerId, profileCount, plugin }) => {
       if (plugin) {
-        plugin.register(
-          createTestPluginApi({
-            registerProvider: (provider) => {
-              discovery.providers = [provider];
-            },
-          }),
-        );
+        registerProvider(plugin);
       }
       const profileIds = Array.from(
         { length: profileCount },
@@ -603,12 +583,7 @@ describe("Provider model discovery auth preparation", () => {
       const store: AuthProfileStore = { version: 1, profiles };
       const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
       await state.writeAuthProfiles(store);
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
-      const refresh = vi
-        .spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin")
-        .mockRejectedValue(new Error("synthetic OAuth refresh failure"));
+      const refresh = mockRefreshFailure();
       const runtimeAuth = vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider");
       const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
       const outcomes: ProviderCatalogOutcome[] = [];
@@ -640,7 +615,6 @@ describe("Provider model discovery auth preparation", () => {
         undefined,
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       const plan = await planCatalog(config, store, { providerId, outcomes });
@@ -657,7 +631,6 @@ describe("Provider model discovery auth preparation", () => {
         { ...previous, providers: new Map() },
         auth,
         (provider) => provider,
-        new Map(),
       );
 
       expect(published.catalog.entries).toContainEqual(priorModel);
@@ -816,26 +789,13 @@ describe("Provider model discovery auth preparation", () => {
         key: "independent-source-key",
       };
       await state.writeAuthProfiles(store);
-      vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(
-        undefined,
-      );
-      vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
-        new Error("synthetic OAuth refresh failure"),
-      );
+      mockRefreshFailure();
       const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
       const provider = discovery.providers[0];
       if (!provider) {
         throw new Error("Chutes fixture did not register a provider");
       }
-      const independentModel = {
-        id: "independent-source-model",
-        name: "Independent Source Model",
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 32_768,
-        maxTokens: 8_192,
-      };
+      const independentModel = catalogModel("independent-source-model", "Independent Source Model");
       const explicitOutcome: ProviderCatalogOutcome = {
         provider: "chutes",
         profileId: otherProfileId,
@@ -889,15 +849,7 @@ describe("provider catalog late-result finalization", () => {
   const providerId = "catalog-late-fixture";
   const profileId = `${providerId}:oauth`;
   const peerId = "catalog-peer-fixture";
-  const model = {
-    id: "account-only",
-    name: "Account Model",
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32_768,
-    maxTokens: 8_192,
-  };
+  const model = catalogModel("account-only", "Account Model");
 
   let state: OpenClawTestState;
   let store: AuthProfileStore;
@@ -917,13 +869,10 @@ describe("provider catalog late-result finalization", () => {
       },
     };
     await state.writeAuthProfiles(store);
-    vi.spyOn(providerRuntime, "buildProviderAuthDoctorHintWithPlugin").mockResolvedValue(undefined);
     vi.spyOn(providerRuntime, "resolveProviderOAuthRefreshCapabilityWithPlugin").mockResolvedValue({
       status: "available",
     });
-    vi.spyOn(providerRuntime, "resolveProviderOAuthCredentialWithPlugin").mockRejectedValue(
-      new Error("fixture refresh failed"),
-    );
+    mockRefreshFailure("fixture refresh failed");
   });
 
   afterEach(async () => {

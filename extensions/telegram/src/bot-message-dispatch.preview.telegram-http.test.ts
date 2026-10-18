@@ -511,7 +511,10 @@ describe("Telegram preview, presentation, and progress delivery through HTTP", (
   it("retires a skipped indexed block preview before the next assistant answer", async () => {
     const discarded = "An unaccepted preview from the assistant that chose not to reply.";
     const answer = "The next assistant supplies the answer that must remain visible.";
-    const skipped = setReplyPayloadMetadata({ text: "NO_REPLY" }, { assistantMessageIndex: 0 });
+    const skipped = setReplyPayloadMetadata(
+      { text: "NO_REPLY" },
+      { assistantMessageIndex: 0, silentReply: true },
+    );
     let discardedPreviewId: number | undefined;
     await dispatchProgressTurn(async () => undefined, {
       mode: "partial",

@@ -13,6 +13,8 @@ import type {
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
+import { prepareSkillBundle, readSkillBundleTree } from "../../../../src/skills/library/bundle.js";
+import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -145,13 +147,22 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             return node;
           })();
           void nodeStartup.catch(() => undefined);
+          const events: Array<{ at: string; event: string; receipt: unknown }> = [];
+          const record = (event: string, receipt: unknown) => {
+            events.push({ at: new Date().toISOString(), event, receipt });
+            if (events.length > 24) {
+              events.shift();
+            }
+          };
           const original = executableSkillLibraryBundle();
           console.info("[skill-library-wire] publishing Alice/Bob private bundles");
           const saved = await alice.request<SkillsLibraryReceipt>("skills.library.save", original);
+          record("Alice publication", saved);
           const bobSaved = await bob.request<SkillsLibraryReceipt>(
             "skills.library.save",
             executableSkillLibraryBundle("BOB-PRIVATE-RESOURCE\n"),
           );
+          record("Bob publication", bobSaved);
           const createSession = async (suffix: string) => {
             const key = `agent:qa:skill-library-${suffix}`;
             await aliceAdmin.request("sessions.create", {
@@ -169,6 +180,144 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const localKey = await createSession("local");
           const remoteKey = await createSession("worker");
           console.info("[skill-library-wire] shared managed sessions created");
+          const turnHomes = new Map<string, string>();
+          const failureContext = async (key: string, marker: string) => {
+            const diagnostics: Record<string, unknown> = { providerErrors: provider!.errors };
+            if (
+              provider!.errors.length > 0 ||
+              instance.logs().includes("Selected skill revision is unavailable")
+            ) {
+              const observe = async (name: string, read: () => Promise<unknown>) => {
+                try {
+                  diagnostics[name] = await read();
+                } catch (error) {
+                  diagnostics[name] = { error: String(error) };
+                }
+              };
+              diagnostics.events = events;
+              diagnostics.selectionFailures = instance
+                .logs()
+                .split("\n")
+                .filter((line) => line.includes("Selected skill revision is unavailable"));
+              diagnostics.failedTurn = { key, marker, originalPin: saved.entry };
+              await Promise.all([
+                observe("selectedRevisions", async () => {
+                  const library = await alice.request<SkillsLibraryListResult>(
+                    "skills.library.list",
+                    { sessionKey: key },
+                  );
+                  return { selections: library.session?.selections, entries: library.entries };
+                }),
+                observe("placement", async () => {
+                  const described = await admin.request<{ session: { placement?: unknown } }>(
+                    "sessions.describe",
+                    { key },
+                  );
+                  return described.session.placement;
+                }),
+                observe("gatewayRevisions", async () => {
+                  const read = await alice.request<SkillsLibraryReadResult>("skills.library.read", {
+                    skillId: saved.entry.skillId,
+                  });
+                  return { entry: read.entry, revisions: read.revisions };
+                }),
+                observe("freshDatabaseRows", async () => {
+                  // Compare the Gateway's pooled read with a fresh native connection to fixture-only state.
+                  const { stdout } = await execFileAsync(process.execPath, [
+                    "--input-type=module",
+                    "-e",
+                    `
+                      import { realpathSync, statSync } from "node:fs";
+                      import { DatabaseSync } from "node:sqlite";
+                      const [file, skillId, revision] = process.argv.slice(-3);
+                      const files = () => ["", "-wal", "-shm"].map(suffix => {
+                        try {
+                          const { dev, ino, size, mtimeMs } = statSync(file + suffix);
+                          return { suffix, dev, ino, size, mtimeMs };
+                        } catch (error) {
+                          return { suffix, error: String(error) };
+                        }
+                      });
+                      const before = files();
+                      const db = new DatabaseSync(file, { readOnly: true });
+                      try {
+                        db.exec("BEGIN");
+                        const result = {
+                          at: new Date().toISOString(),
+                          runtime: { node: process.versions.node, bun: process.versions.bun },
+                          file: realpathSync(file),
+                          before,
+                          sqlite: db.prepare("SELECT sqlite_version() AS version").get(),
+                          entry: db.prepare("SELECT skill_id, owner_profile_id, current_revision, removed FROM skill_library_entries WHERE skill_id = ?").get(skillId) ?? null,
+                          revision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
+                          tableRevision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions NOT INDEXED WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
+                          events: db.prepare("SELECT revision, action, created_at FROM skill_library_events WHERE skill_id = ? ORDER BY created_at DESC LIMIT 6").all(skillId),
+                          after: files(),
+                        };
+                        console.log(JSON.stringify(result));
+                      } finally {
+                        if (db.isTransaction) db.exec("ROLLBACK");
+                        db.close();
+                      }
+                    `,
+                    resolveOpenClawStateSqlitePath(instance.env),
+                    saved.entry.skillId,
+                    saved.entry.revision,
+                  ]);
+                  return JSON.parse(stdout) as unknown;
+                }),
+                observe("gatewayRevisionDirectories", () =>
+                  fs.readdir(
+                    path.join(instance.stateDir, "skill-library", saved.entry.skillId, "revisions"),
+                  ),
+                ),
+                observe("nodeLog", async () =>
+                  node
+                    ? (await fs.readFile(node.logFile, "utf8")).slice(-16_000)
+                    : "node not started",
+                ),
+                observe("observedMaterializations", async () => {
+                  // Only inspect paths the model actually received; expected pins are not proof of worker-held bytes.
+                  const locations = new Map<string, string[]>();
+                  for (const [turn, { catalogs }] of provider!.observations) {
+                    for (const { name, location } of catalogs.flat()) {
+                      if (name === saved.entry.name) {
+                        const absolute = location.startsWith("~/")
+                          ? path.join(turnHomes.get(turn)!, location.slice(2))
+                          : location;
+                        locations.set(absolute, [
+                          ...new Set([...(locations.get(absolute) ?? []), turn]),
+                        ]);
+                      }
+                    }
+                  }
+                  return Promise.all(
+                    [...locations].map(async ([location, turns]) => {
+                      try {
+                        return {
+                          location,
+                          turns,
+                          revision: prepareSkillBundle(
+                            await readSkillBundleTree(path.dirname(location)),
+                          ).revision,
+                        };
+                      } catch (error) {
+                        return { location, turns, error: String(error) };
+                      }
+                    }),
+                  );
+                }),
+              ]);
+              diagnostics.failedTurnCatalogs =
+                provider!.observations.get(marker)?.catalogs ??
+                "No provider request observed for this turn; no worker resource path available";
+            }
+            return JSON.stringify(diagnostics, null, 2);
+          };
+          const waitMessage = async (result: { status: string }, key: string, marker: string) =>
+            `agent.wait ${marker}: ${JSON.stringify(result)}${
+              result.status === "ok" ? "" : `\n${await failureContext(key, marker)}`
+            }\n${instance.logs()}`;
           const startTurn = async (
             client: SkillLibraryWireClient,
             key: string,
@@ -185,6 +334,8 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
                 idempotencyKey: runId,
               }),
             ).resolves.toMatchObject({ runId, status: "started" });
+            turnHomes.set(marker, key === remoteKey ? node!.homeDir : instance.homeDir);
+            record("turn started", { key, marker, runId });
             return runId;
           };
           const finishTurn = async (
@@ -193,13 +344,14 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             marker: string,
             runId: string,
           ) => {
-            await expect(
-              client.request(
-                "agent.wait",
-                { runId, timeoutMs: PROOF_TIMEOUT_MS },
-                PROOF_TIMEOUT_MS + 5_000,
-              ),
-            ).resolves.toMatchObject({ status: "ok" });
+            const waitResult = await client.request<{ status: string }>(
+              "agent.wait",
+              { runId, timeoutMs: PROOF_TIMEOUT_MS },
+              PROOF_TIMEOUT_MS + 5_000,
+            );
+            expect(waitResult, await waitMessage(waitResult, key, marker)).toMatchObject({
+              status: "ok",
+            });
             if (key === remoteKey) {
               await settlement.wait(admin, key, signal);
             }
@@ -262,6 +414,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const dispatched = await admin.request<{
             placement: { state: string; remoteWorkspaceDir: string; workerBundleHash: string };
           }>("sessions.dispatch", { key: remoteKey, deviceId: node.nodeId }, PROOF_TIMEOUT_MS);
+          record("worker dispatched", dispatched);
           expect(dispatched.placement.state).toBe("active");
           console.info("[skill-library-wire] node placement active");
           expect(dispatched.placement.workerBundleHash).toMatch(/^[a-f0-9]{64}$/u);
@@ -374,13 +527,15 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               idempotencyKey: authorRunId,
             }),
           ).resolves.toMatchObject({ runId: authorRunId, status: "started" });
-          await expect(
-            bob.request(
-              "agent.wait",
-              { runId: authorRunId, timeoutMs: PROOF_TIMEOUT_MS },
-              PROOF_TIMEOUT_MS + 5_000,
-            ),
-          ).resolves.toMatchObject({ status: "ok" });
+          const authorWait = await bob.request<{ status: string }>(
+            "agent.wait",
+            { runId: authorRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            PROOF_TIMEOUT_MS + 5_000,
+          );
+          expect(
+            authorWait,
+            await waitMessage(authorWait, remoteKey, "bob-worker-author"),
+          ).toMatchObject({ status: "ok" });
           await settlement.wait(admin, remoteKey, signal);
           const authorOutput = provider.authorOutputs.get("bob-worker");
           expect(authorOutput?.describedId).toEqual(expect.stringContaining("skill_workshop"));
@@ -409,6 +564,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               authorProfileId: bobSaved.entry.ownerProfileId,
             },
           });
+          record("Bob Workshop publication", { created, authored });
           expect(created.state).toBe("published");
           expect(authored.entry.skillId).toBe(created.entry.skillId);
           expect(authored.entry.revision).not.toBe(created.entry.revision);
@@ -469,6 +625,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             skillId: saved.entry.skillId,
             expectedRevision: saved.entry.revision,
           });
+          record("Alice revision publication", updated);
           expect(updated.entry.revision).not.toBe(saved.entry.revision);
           expect(
             (await readPin(saved.entry.revision)).revisions.map((entry) => entry.revision),
@@ -500,6 +657,7 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             "skills.library.activate",
             { sessionKey: remoteKey, action: "refresh" },
           );
+          record("session pins refreshed", refreshed);
           expect(refreshed).toMatchObject({
             sessionActivation: "next-turn",
             selections: [{ skillId: saved.entry.skillId, revision: updated.entry.revision }],
@@ -525,22 +683,29 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
               revision: extra.entry.revision,
             },
           );
+          record("session skill attached", attached);
           expect(attached.sessionActivation).toBe("next-turn");
           await turn(alice, remoteKey, "after-attach");
           expect(
             provider.observations.get("after-attach")!.catalogs[0]!.map((skill) => skill.name),
           ).toContain(extra.entry.name);
-          await alice.request("skills.library.activate", {
-            sessionKey: remoteKey,
-            action: "detach",
-            skillId: extra.entry.skillId,
-          });
+          record(
+            "session skill detached",
+            await alice.request("skills.library.activate", {
+              sessionKey: remoteKey,
+              action: "detach",
+              skillId: extra.entry.skillId,
+            }),
+          );
 
-          await alice.request("skills.library.mutate", {
-            skillId: saved.entry.skillId,
-            expectedRevision: updated.entry.revision,
-            action: "remove",
-          });
+          record(
+            "Alice skill removed",
+            await alice.request("skills.library.mutate", {
+              skillId: saved.entry.skillId,
+              expectedRevision: updated.entry.revision,
+              action: "remove",
+            }),
+          );
           expect((await turn(bob, remoteKey, "after-removal")).reference).toBe(
             "ALICE-RESOURCE-2\n",
           );
@@ -549,13 +714,15 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           );
           const removedDefaultKey = await createSession("after-remove");
           const removedRunId = await startTurn(alice, removedDefaultKey, "removed-default");
-          await expect(
-            alice.request(
-              "agent.wait",
-              { runId: removedRunId, timeoutMs: PROOF_TIMEOUT_MS },
-              PROOF_TIMEOUT_MS + 5_000,
-            ),
-          ).resolves.toMatchObject({ status: "ok" });
+          const removedWait = await alice.request<{ status: string }>(
+            "agent.wait",
+            { runId: removedRunId, timeoutMs: PROOF_TIMEOUT_MS },
+            PROOF_TIMEOUT_MS + 5_000,
+          );
+          expect(
+            removedWait,
+            await waitMessage(removedWait, removedDefaultKey, "removed-default"),
+          ).toMatchObject({ status: "ok" });
           expect(
             provider.observations.get("removed-default")!.catalogs[0]!.map((skill) => skill.name),
           ).not.toContain(saved.entry.name);
@@ -579,8 +746,10 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             { runId: cancelledId, timeoutMs: PROOF_TIMEOUT_MS },
             PROOF_TIMEOUT_MS + 5_000,
           );
+          record("worker turn cancelled", { runId: cancelledId, result: cancelled });
           expect(cancelled.status).not.toBe("timeout");
           provider.release("cancelled-worker");
+          // The replacement send can race cancelled-turn persistence; chat admission joins it.
           await settlement.wait(admin, remoteKey, signal);
           expect((await turn(alice, remoteKey, "replacement-worker")).reference).toBe(
             "ALICE-RESOURCE-2\n",

@@ -87,6 +87,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       const app = {
         api: {
           serviceUrl: "https://smba.trafficmanager.net/amer",
+          fromServiceUrl() { return this; },
           conversations: {
             activities: () => ({
               create: async (activity) => {
@@ -129,7 +130,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
       );
 
       const { Client } = await import("@microsoft/teams.common");
-      app.client = new Client({
+      const http = new Client({
         interceptors: [{
           request: ({ config }) => {
             config.adapter = async (request) => {
@@ -146,6 +147,7 @@ describe("sendMSTeamsActivityWithReference SDK import ordering", () => {
           },
         }],
       });
+      app.api = new api.Client("https://smba.trafficmanager.net/amer", http);
       await assert.doesNotReject(() =>
         sendMSTeamsActivityWithReference(
           app,
