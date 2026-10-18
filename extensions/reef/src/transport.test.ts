@@ -1,7 +1,6 @@
 import { createPublicKey, verify as verifySignature } from "node:crypto";
 import { once } from "node:events";
 import http from "node:http";
-import { text } from "node:stream/consumers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -386,23 +385,27 @@ it("redacts setup tokens and bearer sessions from loopback relay errors", async 
   const receivedAuthorization: string[] = [];
   const receivedSignatures: string[] = [];
   const receivedTokens: string[] = [];
-  const server = http.createServer(async (request, response) => {
-    const body = await text(request);
-    const authorization = request.headers.authorization ?? "";
-    receivedAuthorization.push(authorization);
-    const signature = String(request.headers["x-reef-sig"] ?? "");
-    if (signature) {
-      receivedSignatures.push(signature);
-    }
-    const token = body ? (JSON.parse(body) as { token?: string }).token : undefined;
-    if (token) {
-      receivedTokens.push(token);
-    }
-    const reflectedCredential = authorization || token || signature;
-    response.writeHead(401, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({ error: `${reflectedCredential} relay rejected`, marker: "safe" }),
-    );
+  const server = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on("data", (chunk: Buffer) => chunks.push(chunk));
+    request.on("end", () => {
+      const body = Buffer.concat(chunks).toString("utf8");
+      const authorization = request.headers.authorization ?? "";
+      receivedAuthorization.push(authorization);
+      const signature = String(request.headers["x-reef-sig"] ?? "");
+      if (signature) {
+        receivedSignatures.push(signature);
+      }
+      const token = body ? (JSON.parse(body) as { token?: string }).token : undefined;
+      if (token) {
+        receivedTokens.push(token);
+      }
+      const reflectedCredential = authorization || token || signature;
+      response.writeHead(401, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({ error: `${reflectedCredential} relay rejected`, marker: "safe" }),
+      );
+    });
   });
   const port = await listen(server);
   const client = createClient(fetch, () => ts, `http://127.0.0.1:${port}`);

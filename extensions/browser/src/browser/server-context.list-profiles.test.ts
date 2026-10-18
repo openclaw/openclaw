@@ -104,7 +104,7 @@ function createExistingSessionProcessFixture(
     alive.add(pid);
     const session = createSessionStub(callTool, pid);
     session.processCleanup = { status: "open" };
-    vi.mocked(session.client.close).mockImplementation(async () => {
+    vi.spyOn(session.client, "close").mockImplementation(async () => {
       alive.delete(pid);
       Object.assign(session.transport, { pid: null });
     });

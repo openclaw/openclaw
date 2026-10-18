@@ -173,7 +173,7 @@ const { clampProbeTimeoutMs, probeGateway } = await import("./probe.js");
 
 type ProbeGatewayParams = Parameters<typeof probeGateway>[0];
 
-function expectFields<T>(result: T, fields: Partial<T>): void {
+function expectFields(result: unknown, fields: Record<string, unknown>): void {
   expect(result).toEqual(expect.objectContaining(fields));
 }
 

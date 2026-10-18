@@ -32,10 +32,13 @@ vi.mock("./config-refresh-source.js", () => ({
   loadBrowserConfigForRuntimeRefresh: () => buildConfig(),
 }));
 
+// mock-isolation: Exercise lifecycle ownership without starting a browser process.
 vi.mock("./chrome.js", () => ({ stopOpenClawChrome: stopChrome }));
 
+// mock-isolation: MCP transport is outside this profile lifecycle fixture.
 vi.mock("./chrome-mcp.js", () => ({ closeChromeMcpSession: async () => false }));
 
+// mock-isolation: Supply controlled connection retirement without loading Playwright.
 vi.mock("./pw-ai-module.js", () => ({
   getLoadedPwAiModule: () => ({
     retirePlaywrightBrowserConnectionExact: (opts: { cdpUrl: string }) => ({

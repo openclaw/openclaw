@@ -20,7 +20,6 @@ import {
   OpenAIResponsesWebSocketSafeRetryError,
   responsesPromptObserver,
   responsesServiceTierObserver,
-  type OpenAIResponsesOptions,
   type ResponsesPromptObservation,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
@@ -282,7 +281,7 @@ function sdkEvent(event: Record<string, unknown>): SdkResponse {
 
 async function run(
   context: Context,
-  overrides: OpenAIResponsesOptions & {
+  overrides: NonNullable<Parameters<ReturnType<typeof createStreamFn>>[2]> & {
     model?: Model<"openai-responses">;
     observations?: ResponsesPromptObservation[];
     acceptanceObserver?: (acceptance: ProviderAcceptance) => void;

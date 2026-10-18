@@ -133,7 +133,7 @@ describe("repository workspace editor admission", () => {
     const manifestQueued = createDeferredCore();
     const receive = brokerReply.receiveSqliteWorkerReply;
     const dispatch = brokerReply.dispatchSqliteWorkerJob;
-    const predecessorRequests = new WeakSet<object>();
+    const predecessorRequests = new WeakMap<object, Slot>();
     let holding = false;
     let heldSlot: Slot | undefined;
     let deliver: (() => void) | undefined;
@@ -153,7 +153,7 @@ describe("repository workspace editor admission", () => {
           isRecord(command.input) &&
           command.input.workspaceId === f.repository.workspaceId
         ) {
-          predecessorRequests.add(job.request);
+          predecessorRequests.set(job.request, slot);
         }
         return dispatch(slot, job, onRejected);
       });
@@ -169,7 +169,7 @@ describe("repository workspace editor admission", () => {
           !reply.transfer &&
           !reply.input
         ) {
-          heldSlot = slot;
+          heldSlot = predecessorRequests.get(slot.current.request);
           deliver = () => receive(slot, reply, owner);
           predecessorHeld.resolve();
           if (signal.aborted) {

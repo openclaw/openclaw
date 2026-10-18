@@ -200,7 +200,10 @@ it.each<[number, number, FixtureOptions]>([
         }
       }
       const materialized = [
-        ...writes.mock.calls.map(([target]) => String(target)),
+        ...writes.mock.calls.map(([target]) => {
+          assert(typeof target === "string");
+          return target;
+        }),
         ...links.mock.calls.map(([, target]) => String(target)),
       ];
       expect(
@@ -269,6 +272,8 @@ it.each(
           expect(target).toBeGreaterThan(0);
           return flipByte(bytes, target, 1);
         }
+        default:
+          throw new Error(`Unexpected corruption fixture: ${corruption}`);
       }
     });
     const temporary = vi.spyOn(fs, "mkdtemp");

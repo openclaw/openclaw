@@ -103,7 +103,16 @@ type GithubEvent = {
   issue?: { number: number; author_association?: string };
   changes?: Record<string, unknown>;
 };
-type Github = ReturnType<typeof refEvent>;
+type Github = {
+  workflow: string;
+  repository: string;
+  event_name: keyof Workflow["on"];
+  run_id: number;
+  sha: string;
+  ref: string;
+  event: GithubEvent;
+  actor?: string;
+};
 
 function pr(
   workflow: Workflow,
@@ -144,9 +153,8 @@ function refEvent(
   runId: number,
   sha = "a",
   ref = "refs/heads/main",
-) {
+): Github {
   const event: GithubEvent = {};
-  const actor: string | undefined = undefined;
   return {
     workflow: workflow.name,
     repository: "openclaw/openclaw",
@@ -155,7 +163,7 @@ function refEvent(
     sha: sha.repeat(40),
     ref,
     event,
-    actor,
+    actor: undefined,
   };
 }
 

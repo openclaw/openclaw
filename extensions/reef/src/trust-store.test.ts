@@ -53,10 +53,10 @@ function revocableAuthority() {
   const revoked = new Error("trust authority revoked");
   return {
     revoked,
-    setCurrent(value: boolean) {
+    setCurrent: (value: boolean) => {
       current = value;
     },
-    assertCurrent() {
+    assertCurrent: () => {
       if (!current) {
         throw revoked;
       }

@@ -76,7 +76,12 @@ async function createFixture(ids: string[], damage: "missing" | "drifted" | "mis
   );
   setRuntimeConfigSnapshot(config);
   setLoggerOverride({ level: "warn", file: logPath, consoleLevel: "silent" });
-  const agents = [];
+  const agents: Array<{
+    agentId: string;
+    path: string;
+    session: { agentId: string; env: typeof env; sessionKey: string };
+    entry: Awaited<ReturnType<typeof replaceSessionEntry>>;
+  }> = [];
   for (const agentId of ids) {
     const session = { agentId, env, sessionKey: `agent:${agentId}:retained` };
     const entry = await replaceSessionEntry(session, {

@@ -1,4 +1,5 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { SessionEntryCurrentPreparation } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { getBrowserStateRuntime } from "../browser-runtime-state.js";
 import { createBrowserToolSessionTabs } from "../browser-tool-session-tabs.js";
@@ -58,7 +59,7 @@ describe("durable session tab registry", () => {
   };
   const close = (
     registry: RegistryModule,
-    options: Omit<Parameters<Cleanup>[0], "sessionKeys">,
+    options: Omit<Parameters<Cleanup>[0], "sessionKeys"> & SessionEntryCurrentPreparation,
     sessionKeys = ["agent:main:main"],
   ) => registry.closeTrackedBrowserTabsForSessions({ sessionKeys, ...options });
 

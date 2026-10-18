@@ -104,7 +104,7 @@ it.each(["creation", "replacement"] as const)(
       await entered.promise;
     } else {
       const manager = await acquire();
-      assert(manager.close, "Expected a closable memory manager");
+      assert(typeof manager.close === "function", "Expected a closable memory manager");
       const close = manager.close.bind(manager);
       vi.spyOn(manager, "close").mockImplementation(() => wait().then(close));
       nextConfig = {
@@ -138,7 +138,7 @@ it.each(["creation", "replacement"] as const)(
 
 it("rechecks retained writes against their original state owner after cwd changes", async () => {
   const manager = await acquire(config, "cli");
-  assert(manager.sync, "Expected a writable memory manager");
+  assert(typeof manager.sync === "function", "Expected a writable memory manager");
   await manager.sync({ reason: "baseline", force: true });
   const database = openDatabase();
   const before = database.db.prepare("SELECT text FROM memory_index_chunks").all();

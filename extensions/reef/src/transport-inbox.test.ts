@@ -75,6 +75,12 @@ function trackedInbox(
     cleanups.push(async () => {
       release();
       abort.abort();
+      for (const socket of sockets) {
+        socket.emit("close");
+      }
+      if (vi.isFakeTimers()) {
+        await vi.runOnlyPendingTimersAsync();
+      }
       await running;
     });
     return running;
@@ -165,7 +171,7 @@ it("retries a parked live entry after a later separate frame completes", async (
     },
     { initialCursor: 7 },
   );
-  f.start();
+  void f.start();
   const socket = f.sockets[0]!;
   socket.emit("open");
   await vi.advanceTimersByTimeAsync(0);
@@ -198,7 +204,7 @@ it("retries a parked live entry after a later separate frame completes", async (
 it("sends keepalive pings, absorbs pongs, and reconnects on a dead link", async () => {
   vi.useFakeTimers();
   const { sockets, start } = trackedInbox();
-  start();
+  void start();
   await vi.waitFor(() => expect(sockets).toHaveLength(1));
   sockets[0]!.emit("open");
   await vi.advanceTimersByTimeAsync(45_000);
@@ -232,7 +238,7 @@ it("serializes socket frames behind catch-up and skips pull/socket duplicates", 
     return Response.json({ entries: [], cursor: after });
   });
   const f = trackedInbox(client);
-  f.start(() => firstPullGate.resolve());
+  void f.start(() => firstPullGate.resolve());
   const socket = f.sockets[0]!;
   socket.emit("open");
   socket.emit("message", { data: JSON.stringify({ type: "entry", entry: receiptEntry(2) }) });
@@ -246,7 +252,7 @@ it("serializes socket frames behind catch-up and skips pull/socket duplicates", 
 it("reports a socket close immediately while catch-up is still pending", async () => {
   const pull = pendingPull();
   const { start, sockets, states } = trackedInbox(pull.client);
-  start(() => pull.release.resolve());
+  void start(() => pull.release.resolve());
   const socket = sockets[0]!;
   socket.emit("open");
   await vi.waitFor(() => pull.started.promise);
@@ -276,7 +282,7 @@ it("reports unexpected socket close details before retrying", async () => {
 it("resets reconnect backoff after a socket completes catch-up", async () => {
   vi.useFakeTimers();
   const { start, sockets, persisted } = trackedInbox(pageClient(1));
-  start();
+  void start();
   sockets[0]!.emit("close");
   await vi.advanceTimersByTimeAsync(250);
   expect(sockets).toHaveLength(2);

@@ -116,7 +116,10 @@ function runTurnOutsideCollector(run: () => Promise<void>): Promise<void> {
   });
 }
 
-const request = (input: unknown[] = [firstUser]) => ({ model: "gpt-5.6-luna", input });
+const request = (input: unknown[] = [firstUser]) => ({
+  model: "gpt-5.6-luna",
+  input,
+});
 type StreamOptions = Parameters<typeof createOpenAIResponsesWebSocketStream>[0];
 function createStream(body = request(), overrides: Partial<StreamOptions> = {}) {
   return createOpenAIResponsesWebSocketStream({
@@ -253,7 +256,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
     queueCompletions(...(failed ? [] : ["resp_1", "resp_2"]));
     const turn = () => {
       const caller = { turn: 1 };
-      const body = request();
+      const body = { model: "gpt-5.6-luna", input: [firstUser] };
       const restoreRequest = () => body;
       const tracked = failed ? [caller, body, restoreRequest] : [caller];
       references.push(...tracked.map((value) => new WeakRef(value)));

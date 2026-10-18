@@ -31,7 +31,7 @@ function rawCreate(created: ReturnType<typeof rawTab>) {
   return deps.createRemoteRouteHarness(
     vi.fn(async (url: unknown) => {
       if (!String(url).includes("/json/new")) {
-        throw new Error(`unexpected fetch: ${url}`);
+        throw new Error(`unexpected fetch: ${String(url)}`);
       }
       return jsonResponse(created);
     }),

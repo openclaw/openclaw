@@ -93,6 +93,7 @@ export function registerSessionsSendFixedOwnerTests({
   ])(
     "authorizes $sessionKey against its persisted fixed-store owner",
     async ({ sessionKey, ownKey, mainKey }) => {
+      callGatewayMock.mockReset();
       const config = {
         session: {
           ...(mainKey ? { mainKey } : {}),

@@ -18,7 +18,7 @@ async function manifestWorkspace() {
   return {
     home,
     workspace,
-    async capture(prelude: string, args: string[] = [], memo?: Array<[string, string]>) {
+    capture: async (prelude: string, args: string[] = [], memo?: Array<[string, string]>) => {
       const instrument = String.raw`{
         const io = require("node:fs"), open = io.promises.open.bind(io.promises);
         const handles = [], audit = {};
@@ -70,7 +70,11 @@ it("hashes concurrently within four readers and preserves manifest and memo orde
       const handle = await open(...args);
       handles.push(handle);
       const close = handle.close.bind(handle);
-      handle.close = async () => { await close(); active--; };
+      let closed = false;
+      handle.close = async () => {
+        await close();
+        if (!closed) { closed = true; active--; }
+      };
       return handle;
     };
   `;

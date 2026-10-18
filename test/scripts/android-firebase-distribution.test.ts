@@ -107,7 +107,7 @@ function fixture() {
     integrationState: "INTEGRATED",
   };
   vi.mocked(fetch).mockImplementation(async (input, init) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    const url = typeof input === "string" ? input : "url" in input ? input.url : input.href;
     const method = init?.method ?? "GET";
     calls.push({ url, method, body: init?.body, dispatcher: init?.dispatcher });
     const configured = failures.get(`${method} ${url}`);

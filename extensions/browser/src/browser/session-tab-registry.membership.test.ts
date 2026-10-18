@@ -1,5 +1,8 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  SessionEntryCurrentPreparation,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -78,7 +81,7 @@ describe("session tab membership and lifecycle", () => {
           ...(nativeTargetId ? { ownership: ownership(nativeTargetId) } : {}),
           ...options,
         }),
-      close: (options: Omit<CloseOptions, "sessionKeys"> = {}) =>
+      close: (options: Omit<CloseOptions, "sessionKeys"> & SessionEntryCurrentPreparation = {}) =>
         registry.closeTrackedBrowserTabsForSessions({
           sessionKeys: [identity.sessionKey],
           ...options,

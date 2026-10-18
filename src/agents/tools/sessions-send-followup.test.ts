@@ -211,7 +211,9 @@ describe("followup retained session authorization", () => {
       preparedTarget.storeKeys.push(changedKey);
       const request = await prepare();
       const assertRevoked = () =>
-        expect(request.custody.assertCurrent).toThrow(change === "access" ? "revoked" : "archived");
+        expect(() => request.custody.assertCurrent()).toThrow(
+          change === "access" ? "revoked" : "archived",
+        );
       expect(() => request.custody.assertCurrent()).not.toThrow();
       if (change === "access") {
         target().membership = new Set();

@@ -194,7 +194,7 @@ async function flushDebounce(timer: MockInstance<typeof globalThis.setTimeout>, 
   }
   expect(flush).toBeTypeOf("function");
   if (typeof flush === "function") {
-    await flush();
+    await Promise.resolve(flush());
   }
 }
 
@@ -993,13 +993,16 @@ describe("createTelegramBot", () => {
         update_id: 98082,
         poll_answer: pollVote("poll-read-error", { id: 9, first_name: "Ada" }),
       };
-      const { result } = await runWithTelegramUpdateProcessingFrame(() =>
-        runWithTelegramSpooledReplayUpdate(update, () =>
-          getTelegramPollAnswerHandlerForTests()({
-            update,
-            pollAnswer: update.poll_answer,
-          }),
-        ),
+      const { result } = await runWithTelegramUpdateProcessingFrame(
+        async () =>
+          (
+            await runWithTelegramSpooledReplayUpdate(update, () =>
+              getTelegramPollAnswerHandlerForTests()({
+                update,
+                pollAnswer: update.poll_answer,
+              }),
+            )
+          ).value,
       );
 
       expect(result).toEqual({ kind: "failed-retryable", error: readError });

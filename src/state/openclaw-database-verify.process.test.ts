@@ -12,7 +12,6 @@ function failed(error: string, terminal = false) {
 
 function throwOnRead(failure: unknown) {
   vi.spyOn(sqliteSource, "withSqliteSourceReadDatabase").mockImplementationOnce(() => {
-    // oxlint-disable-next-line typescript/only-throw-error -- Exercise non-Error native failures.
     throw failure;
   });
 }
