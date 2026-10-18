@@ -273,7 +273,7 @@ it.each(
           return flipByte(bytes, target, 1);
         }
         default:
-          throw new Error(`Unexpected corruption fixture: ${corruption}`);
+          throw new Error("Unexpected corruption fixture");
       }
     });
     const temporary = vi.spyOn(fs, "mkdtemp");

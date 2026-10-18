@@ -157,6 +157,7 @@ vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
   loadDeviceIdentityIfPresentAsync: loadDeviceIdentity,
 }));
 
+// mock-isolation: Probe credentials come from the fixture, never the local device-auth store.
 vi.mock("../infra/device-auth-store.js", () => ({
   loadDeviceAuthTokenReadOnly: () => deviceIdentityState.cachedToken,
   loadOriginDeviceTokenReadOnly: () => deviceIdentityState.cachedOriginToken,

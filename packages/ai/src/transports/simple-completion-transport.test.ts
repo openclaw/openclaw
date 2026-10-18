@@ -43,6 +43,7 @@ function makeChatGPTModel(baseUrl: string) {
   });
 }
 
+// mock-isolation: Exercise simple-completion routing without creating live provider transports.
 vi.mock("./provider-transport-stream.js", () => ({
   buildTransportAwareSimpleStreamFn: buildStream,
   createOpenClawTransportStreamFnForModel: createStream,
