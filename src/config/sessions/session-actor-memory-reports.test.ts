@@ -49,7 +49,7 @@ afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
 
-function workerBatch(request = createRequest(), assertCurrent = () => {}) {
+function workerBatch(request = createRequest(), assertCurrent = () => undefined) {
   return {
     identity: createTranscriptCommitIdentity(scope.sessionId, 7),
     sessionTarget: scope,
