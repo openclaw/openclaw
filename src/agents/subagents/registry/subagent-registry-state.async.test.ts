@@ -16,21 +16,21 @@ import {
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
-import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
+import { buildControlledSubagentRunsReadContext as readContext } from "./subagent-control-scope.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
-  persistRegistryFixture,
-  saveSubagentRegistryToSqlite,
+  persistRegistryFixture as publish,
+  saveSubagentRegistryToSqlite as save,
 } from "./subagent-registry-state.fixture.test-support.js";
 import {
-  clearSubagentRunsReadCacheForTest,
-  createSubagentSessionListReadView,
-  getSubagentSessionListRunsSnapshotForRead,
-  getSubagentSessionListReadSnapshotIdentity,
-  prepareOptionalSubagentSessionListReadCache,
-  prepareSubagentSessionListReadCache,
-  withSubagentRunReadSnapshot,
-  prepareSubagentRunsSnapshotForRunIds,
+  clearSubagentRunsReadCacheForTest as clearCache,
+  createSubagentSessionListReadView as readView,
+  getSubagentSessionListRunsSnapshotForRead as readSnapshot,
+  getSubagentSessionListReadSnapshotIdentity as snapshotIdentity,
+  prepareOptionalSubagentSessionListReadCache as prepareOptional,
+  prepareSubagentSessionListReadCache as prepare,
+  withSubagentRunReadSnapshot as withSnapshot,
+  prepareSubagentRunsSnapshotForRunIds as prepareSelected,
 } from "./subagent-registry-state.js";
 import * as store from "./subagent-registry.store.sqlite.js";
 
@@ -39,16 +39,16 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ scenario: "minimal", applyEnv: true });
   openOpenClawStateDatabase();
   vi.stubEnv("OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE", "1");
-  clearSubagentRunsReadCacheForTest();
+  clearCache();
 });
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  clearSubagentRunsReadCacheForTest();
+  clearCache();
   await state.cleanup();
 });
 function snapshot() {
-  return getSubagentSessionListRunsSnapshotForRead(new Map());
+  return readSnapshot(new Map());
 }
 
 function record(
@@ -69,6 +69,9 @@ function runMap(...rows: ReturnType<typeof record>[]) {
 function runs(model: string, runId = "one") {
   return runMap(record(runId, { model }));
 }
+function models(rows = snapshot()) {
+  return [...rows].map(([id, row]) => `${id}:${row.model}`);
+}
 function cleanupFailure() {
   return new AggregateError(
     [new Error("query failed"), new Error("reader cleanup failed")],
@@ -79,16 +82,13 @@ function cleanupFailure() {
 it.each(["maintenance", "schema"] as const)(
   "rejects resident session-list reads from an ended %s scope",
   async (kind) => {
-    persistRegistryFixture(runs("retained"));
-    const identity = getSubagentSessionListReadSnapshotIdentity();
+    publish(runs("retained"));
+    const identity = snapshotIdentity();
     const maintenance = createOpenClawDatabaseMaintenanceScope();
     const bind = () => {
-      const prepared = createSubagentSessionListReadView({ env: state.env });
+      const prepared = readView({ env: state.env });
       expect(prepared.snapshotIdentity()).toBe(identity);
-      return {
-        current: AsyncLocalStorage.bind(() => snapshot()),
-        prepared,
-      };
+      return { current: AsyncLocalStorage.bind(snapshot), prepared };
     };
     const read =
       kind === "maintenance"
@@ -102,7 +102,7 @@ it.each(["maintenance", "schema"] as const)(
     expect(read.current).toThrow(failure);
     expect(read.prepared.runs).toThrow(failure);
     await expect(read.prepared.prepare()).rejects.toThrow(failure);
-    expect(getSubagentSessionListReadSnapshotIdentity()).toBe(identity);
+    expect(snapshotIdentity()).toBe(identity);
   },
 );
 
@@ -158,18 +158,16 @@ it("hydrates latest controlled payloads with requester descendant topology", asy
     childSessionKey: "agent:main:subagent:visible",
     requesterSessionKey,
     generation: 2,
-    createdAt: Date.now(),
   });
   const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
   const descendant = record("descendant", {
     requesterSessionKey: latest.childSessionKey,
     controllerSessionKey: latest.childSessionKey,
-    createdAt: Date.now(),
   });
-  saveSubagentRegistryToSqlite(runMap(old, latest, descendant));
+  save(runMap(old, latest, descendant));
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
 
-  const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
+  const context = await readContext(requesterSessionKey);
 
   expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
   expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
@@ -186,26 +184,24 @@ it("hydrates latest controlled payloads with requester descendant topology", asy
     generation: 3,
     requesterSessionKey: "agent:main:moved",
   };
-  persistRegistryFixture(runMap(moved), [moved.runId]);
-  expect((await buildControlledSubagentRunsReadContext(requesterSessionKey)).runs).toEqual([]);
+  publish(runMap(moved), [moved.runId]);
+  expect((await readContext(requesterSessionKey)).runs).toEqual([]);
 });
 
 it("captures parent and yielded-child facts after the final scoped hydration", async () => {
   const parent = record("parent", {
-    model: "before",
     pauseReason: "sessions_yield",
-    execution: { status: "terminal", endedAt: Date.now() },
+    endedAt: Date.now(),
   });
   const child = record("child", {
-    model: "child",
     requesterSessionKey: parent.childSessionKey,
     expectsCompletionMessage: true,
     completion: { required: true },
     delivery: { status: "pending" },
   });
-  saveSubagentRegistryToSqlite(runMap(parent, child));
+  save(runMap(parent, child));
   const gate = holdFirstCompactRead("subagents.runs", "session");
-  const reading = buildControlledSubagentRunsReadContext(parent.requesterSessionKey);
+  const reading = readContext(parent.requesterSessionKey);
   const context = await gate.during(reading, () => {
     const changedParent = { ...parent, task: "published during child hydration" };
     const settledChild = {
@@ -213,7 +209,7 @@ it("captures parent and yielded-child facts after the final scoped hydration", a
       execution: { status: "terminal" as const, endedAt: Date.now() },
       cleanupCompletedAt: Date.now(),
     };
-    persistRegistryFixture(runMap(changedParent, settledChild), [parent.runId, child.runId]);
+    publish(runMap(changedParent, settledChild), [parent.runId, child.runId]);
   });
   expect(context.list.view.latest[0]?.task).toBe("published during child hydration");
   expect(context.list.pendingDescendants.get(parent.childSessionKey)).toBe(0);
@@ -225,63 +221,57 @@ it("captures parent and yielded-child facts after the final scoped hydration", a
 
 it("omits optional hints only for a settled unavailable read without caching an empty roster", async () => {
   openOpenClawStateDatabase().db.exec("DROP TABLE subagent_runs");
-  expect(await prepareOptionalSubagentSessionListReadCache()).toBe(false);
-  expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
+  expect(await prepareOptional()).toBe(false);
+  expect(snapshotIdentity()).toBeUndefined();
 
   const failure = cleanupFailure();
   const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
   read.mockRejectedValueOnce(failure);
-  await expect(prepareOptionalSubagentSessionListReadCache()).rejects.toBe(failure);
+  await expect(prepareOptional()).rejects.toBe(failure);
   read.mockResolvedValueOnce({ ok: true, type: "admit" });
-  await expect(prepareOptionalSubagentSessionListReadCache()).rejects.toThrow(
+  await expect(prepareOptional()).rejects.toThrow(
     "Unexpected compact subagent registry read result",
   );
-  expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
+  expect(snapshotIdentity()).toBeUndefined();
 });
 
 it("rejects newer schema admission before optional compact hints can be omitted", async () => {
-  saveSubagentRegistryToSqlite(runs("retained"));
+  save(runs("retained"));
   const { db } = openOpenClawStateDatabase();
   const version = readSqliteUserVersion(requireNativeSqliteDatabase(db));
   db.exec("PRAGMA user_version = 2147483647");
   try {
-    await expect(prepareOptionalSubagentSessionListReadCache()).rejects.toThrow(
-      "newer schema version",
-    );
-    expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
+    await expect(prepareOptional()).rejects.toThrow("newer schema version");
+    expect(snapshotIdentity()).toBeUndefined();
   } finally {
     db.exec(`PRAGMA user_version = ${version}`);
   }
-  await expect(prepareOptionalSubagentSessionListReadCache()).resolves.toBe(true);
+  await expect(prepareOptional()).resolves.toBe(true);
   expect(snapshot().get("one")?.model).toBe("retained");
 });
 
 it("preserves an optional read cleanup failure when its caller also cancels", async () => {
-  saveSubagentRegistryToSqlite(runs("retained"));
+  save(runs("retained"));
   const failure = cleanupFailure();
   const gate = holdFirstCompactRead("subagents.sessionList", undefined, failure);
   const work = new AsyncWorkScope();
-  const reading = work.track(() => prepareOptionalSubagentSessionListReadCache());
-  const observed = reading.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
+  const observed = work.track(prepareOptional).catch((error: unknown) => error);
   try {
     expect(await gate.during(observed, () => work.beginClose(new Error("request canceled")))).toBe(
       failure,
     );
-    expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
+    expect(snapshotIdentity()).toBeUndefined();
   } finally {
     await work.drain();
   }
 });
 
 it("consumes only selected full rows with current raw ownership after worker hydration", async () => {
-  const retained = record("one", { model: "selected", swarmRunId: "collector" });
-  saveSubagentRegistryToSqlite(runMap(retained, record("other", { model: "unrelated" })));
+  const retained = record("one", { swarmRunId: "collector" });
+  save(runMap(retained, record("other")));
   const memory = new Map<string, typeof retained>();
   const gate = holdFirstCompactRead("subagents.runs");
-  const read = prepareSubagentRunsSnapshotForRunIds(memory, ["collector"]);
+  const read = prepareSelected(memory, ["collector"]);
   const prepared = await gate.during(read, () => {
     memory.set("one", { ...retained, requesterSessionKey: "agent:other:parent" });
   });
@@ -300,33 +290,23 @@ it("consumes only selected full rows with current raw ownership after worker hyd
 });
 
 it.each([
-  [
-    "update",
-    [
-      ["changed", "after"],
-      ["other", "retained"],
-    ],
-  ],
-  ["delete", [["other", "retained"]]],
-  ["replace", [["new", "replacement"]]],
+  ["update", ["changed:after", "other:retained"]],
+  ["delete", ["other:retained"]],
+  ["replace", ["new:replacement"]],
 ])(
   "retains a named %s publication while a real worker fill is pending",
   async (change, expected) => {
-    saveSubagentRegistryToSqlite(
-      new Map([...runs("before", "changed"), ...runs("retained", "other")]),
-    );
+    save(new Map([...runs("before", "changed"), ...runs("retained", "other")]));
     const gate = holdFirstCompactRead();
-    const prepared = prepareSubagentSessionListReadCache();
+    const prepared = prepare();
     await gate.during(prepared, () => {
       if (change === "replace") {
-        persistRegistryFixture(runs("replacement", "new"));
+        publish(runs("replacement", "new"));
       } else {
-        persistRegistryFixture(change === "update" ? runs("after", "changed") : new Map(), [
-          "changed",
-        ]);
+        publish(change === "update" ? runs("after", "changed") : new Map(), ["changed"]);
       }
     });
-    expect([...snapshot()].map(([id, row]) => [id, row.model])).toEqual(expected);
+    expect(models()).toEqual(expected);
     expect(gate.read).toHaveBeenCalledTimes(1);
   },
 );
@@ -337,11 +317,11 @@ it.each(["during", "after a named publication"] as const)(
     await withOpenClawTestState(
       { scenario: "empty", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
-        clearSubagentRunsReadCacheForTest();
+        clearCache();
         const admission = captureOpenClawStateWorkerContext().admission;
         expect(admission.identity.key).toMatch(/^path:/);
         const gate = creation === "during" ? holdFirstCompactRead() : undefined;
-        const prepared = prepareSubagentSessionListReadCache();
+        const prepared = prepare();
         try {
           if (gate) {
             await gate.entered;
@@ -349,15 +329,15 @@ it.each(["during", "after a named publication"] as const)(
             await prepared;
             expect(snapshot().size).toBe(0);
           }
-          saveSubagentRegistryToSqlite(runs("created"));
+          save(runs("created"));
           admission.assertCurrent();
           expect(admission.identity.key).toMatch(/^file:/);
           if (creation === "after a named publication") {
-            persistRegistryFixture(runs("published", "own"), ["own"]);
+            publish(runs("published", "own"), ["own"]);
           }
           gate?.release();
           await prepared;
-          await prepareSubagentSessionListReadCache();
+          await prepare();
           expect(snapshot().get("one")?.model).toBe("created");
           if (creation === "after a named publication") {
             expect(snapshot().get("own")?.model).toBe("published");
@@ -365,7 +345,7 @@ it.each(["during", "after a named publication"] as const)(
         } finally {
           gate?.release();
           await prepared.catch(() => {});
-          clearSubagentRunsReadCacheForTest();
+          clearCache();
         }
       },
     );
@@ -373,54 +353,39 @@ it.each(["during", "after a named publication"] as const)(
 );
 
 it("does not install private snapshot bytes into canonical compact facts", async () => {
-  saveSubagentRegistryToSqlite(runs("snapshot"));
+  save(runs("snapshot"));
   await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
-    saveSubagentRegistryToSqlite(runs("canonical"));
-    const privateRows = await withSubagentRunReadSnapshot(
+    save(runs("canonical"));
+    const privateRows = await withSnapshot(
       new Map(),
       (rows) => ({ rows, runIds: [...rows.keys()], sessionKeys: [] }),
       ({ rows }) => rows,
       "all",
     );
     expect(privateRows.get("one")?.model).toBe("snapshot");
-    expect(getSubagentSessionListReadSnapshotIdentity()).toBeUndefined();
+    expect(snapshotIdentity()).toBeUndefined();
   });
-  await prepareSubagentSessionListReadCache();
+  await prepare();
   expect(snapshot().get("one")?.model).toBe("canonical");
 });
 
 it("keeps published compact facts through a temporary writer scope without reloading", async () => {
-  const original = new Map([...runs("before", "changed"), ...runs("retained", "other")]);
-  const changed = original.get("changed")!;
-  changed.createdAt = 20;
-  original.get("other")!.createdAt = 10;
-  persistRegistryFixture(original);
+  const changed = record("changed", { model: "before", createdAt: 20 });
+  publish(runMap(changed, record("other", { model: "retained", createdAt: 10 })));
   const initial = snapshot();
   const admission = captureOpenClawStateWorkerContext().admission;
   const load = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
-  const observed: Array<Array<[string, string | undefined]>> = [];
-  const stop = subscribeSubagentRunChanges("persistence", () => {
-    observed.push([...snapshot()].map(([id, row]) => [id, row.model]));
-  });
+  const observed: string[][] = [];
+  const stop = subscribeSubagentRunChanges("persistence", () => observed.push(models()));
   const writer = createOpenClawDatabaseMaintenanceScope();
   try {
-    writer.run(() =>
-      persistRegistryFixture(new Map([[changed.runId, { ...changed, model: "after" }]]), [
-        changed.runId,
-      ]),
-    );
+    writer.run(() => publish(runMap({ ...changed, model: "after" }), [changed.runId]));
     await writer.close();
     admission.assertCurrent();
     const current = snapshot();
     expect(load).not.toHaveBeenCalled();
-    expect(observed).toEqual([
-      [
-        ["changed", "after"],
-        ["other", "retained"],
-      ],
-    ]);
-    expect(current.get("changed")?.model).toBe("after");
-    expect(current.get("other")?.model).toBe("retained");
+    expect(observed).toEqual([["changed:after", "other:retained"]]);
+    expect(models(current)).toEqual(["changed:after", "other:retained"]);
     expect(initial.get("changed")?.model).toBe("before");
   } finally {
     stop();
@@ -435,5 +400,5 @@ it("keeps unrelated publication context failures visible", () => {
       throw failure;
     },
   );
-  expect(() => persistRegistryFixture(runs("current"), ["one"])).toThrow(failure);
+  expect(() => publish(runs("current"), ["one"])).toThrow(failure);
 });
