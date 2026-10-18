@@ -87,13 +87,23 @@ Layouts whose pnpm virtual store is outside `node_modules` also use the
 source-only fallback, preserving their ordinary installation contract.
 
 See [Workspace access](/gateway/sandboxing/workspace-access#managed-project-workspaces)
-for write policy, reconciliation, and conflict recovery.
+for write policy, reconciliation, and conflict recovery. To update an existing
+local sandbox workspace from its selected repository base, use `github_publish`
+action `refresh_base` before tests and Auto Review. Resolve reported conflicts and
+repeat it with `conflictsResolved: true` and the returned `baseCommit`. Completion
+stages current source inside the sandbox while retaining its HEAD and commit
+history; use the returned local/base Auto Review target before publishing. The host retains the integrated base ancestry; guest Git metadata,
+host credentials, and unrelated ignored host files remain separate.
 
 The projection binding and pending reconciliation journal are additive SQLite
 state. They do not change the database version. Before downgrading, let pending
 workspace operations settle. Older versions do not reconcile these projections;
 they leave their additive state and private files intact. Return to a supporting
 version to recover pending changes rather than deleting a projection directory.
+Versions that support projections but predate `refresh_base` reject a retained
+result from an interrupted base transfer. After both copies accept, that result is
+cleaned and native merge state owns any remaining conflict resolution. Complete
+refresh and conflict resolution on a supporting version before downgrading.
 
 ## Choose where worktrees are stored
 
@@ -423,6 +433,11 @@ If allocation ownership is lost during creation, cleanup is best effort. Without
 If a checkout's `.git` link points to missing administrative files, OpenClaw preserves its files and refuses to reuse it. Restore the original repository metadata before using `git worktree repair` from that repository. A different clone with the same remote URL does not recover the missing index or unpushed history; do not replace the link or rebuild the index without verifying the original metadata.
 
 ## Snapshots, cleanup, and restore
+
+Registry lookups, pending-slot inspection, and template listings use read-only
+workers so they do not wait in the shared SQLite writer queue. Creation, activity,
+and removal still await their durable writes; an unchanged registry update does
+not rewrite the row. Inspecting an empty registry does not create its database.
 
 Ordinary removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Host-provisioned ignored files do not enter the Git snapshot or repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Idle cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, ordinary removal stops unless `--force` explicitly permits snapshot loss. Cap eviction is best effort and can purge the checkout without a snapshot.
 

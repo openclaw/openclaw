@@ -42,26 +42,30 @@ const native: ModelProviderConfig = {
     },
   ],
 };
-const metadata = createPluginMetadataSnapshotFixture({
-  plugins: [
-    {
-      id: "catalog-owner",
-      providers: ["fixture", "cached-fixture"],
-      modelIdNormalization: {
-        providers: {
-          fixture: { aliases: { latest: "middle", middle: "final" } },
-          "cached-fixture": { aliases: { latest: "middle", middle: "final" } },
+function createMetadata() {
+  return createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "catalog-owner",
+        providers: ["fixture", "cached-fixture"],
+        modelIdNormalization: {
+          providers: {
+            fixture: { aliases: { latest: "middle", middle: "final" } },
+            "cached-fixture": { aliases: { latest: "middle", middle: "final" } },
+          },
         },
       },
-    },
-  ],
-});
+    ],
+  });
+}
 
 describe("manual root catalog authorship", () => {
   let state: OpenClawTestState;
+  let metadata: ReturnType<typeof createMetadata>;
   beforeEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
     state = await createOpenClawTestState({ label: "manual-root-catalog" });
+    metadata = createMetadata();
   });
   afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -243,5 +247,33 @@ describe("manual root catalog authorship", () => {
       rootContents = planned.modelsJsonContents;
       pluginContents = generated.contents;
     }
+  });
+
+  it("keeps discovery output under an unowned hook alias out of the root catalog", async () => {
+    // Discovery copies a {provider} result to every hook alias. No manifest owns this alias, so
+    // the owner lookup fails; the copy must still stay with the plugin that produced it.
+    const provider: ProviderPlugin = {
+      id: "fixture",
+      pluginId: "catalog-owner",
+      hookAliases: ["fixture-alias"],
+      label: "Fixture",
+      auth: [],
+      staticCatalog: { order: "simple", run: async () => ({ provider: native }) },
+    };
+    resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
+
+    const planned = await planOpenClawModelsJsonSource({}, state.agentDir(), {
+      env: state.env,
+      pluginMetadataSnapshot: metadata,
+    });
+
+    assert(planned.modelsJsonContents, "The plan must write a root catalog");
+    expect(JSON.parse(planned.modelsJsonContents)).toEqual({ providers: {} });
+    const generated = planned.pluginCatalogs.find(({ pluginId }) => pluginId === "catalog-owner");
+    assert(generated, "The producing plugin must own the discovery output");
+    expect(Object.keys(JSON.parse(generated.contents).providers).toSorted()).toEqual([
+      "fixture",
+      "fixture-alias",
+    ]);
   });
 });

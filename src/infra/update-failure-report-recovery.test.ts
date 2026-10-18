@@ -18,9 +18,10 @@ import {
   readUpdateFailureReportReceipt,
   reserveUpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
-import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
+import { prepareUpdateFailureReport } from "./update-failure-report.js";
 import {
   createUpdateFailureReportFixture,
+  submitUpdateFailureReportFixture as submitUpdateFailureReport,
   expireUpdateFailureReportReceipt,
   savedReportArtifactPath,
   mockCreatedIssue,
@@ -340,8 +341,10 @@ describe("update failure report receipt recovery", () => {
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
     const readReceipt = vi
-      .fn(readUpdateFailureReportReceipt)
-      .mockImplementationOnce(readUpdateFailureReportReceipt)
+      .fn((...args: Parameters<typeof readUpdateFailureReportReceipt>) =>
+        readUpdateFailureReportReceipt(...args),
+      )
+      .mockImplementationOnce((...args) => readUpdateFailureReportReceipt(...args))
       .mockImplementationOnce(() => {
         throw new Error("simulated state read outage after transport");
       });

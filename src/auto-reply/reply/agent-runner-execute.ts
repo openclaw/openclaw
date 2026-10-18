@@ -148,6 +148,32 @@ type ExecutePreparedReplyAgentRunInput = Omit<
 export async function executePreparedReplyAgentRun(
   context: ExecutePreparedReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const activitySummaryCompletion =
+    !context.isHeartbeat && context.sessionKey && context.storePath
+      ? getGatewayContextResolver(
+          context.replyOperation,
+        )?.()?.sessionActivitySummaries?.beginCompletion(
+          {
+            agentId: context.followupRun.run.agentId,
+            key: context.sessionKey,
+            storePath: context.storePath,
+          },
+          context.getActiveSessionEntry(),
+        )
+      : undefined;
+  try {
+    return await executePreparedReplyAgentRunWithCompletion({
+      ...context,
+      activitySummaryCompletion,
+    });
+  } finally {
+    activitySummaryCompletion?.release();
+  }
+}
+
+async function executePreparedReplyAgentRunWithCompletion(
+  context: ExecutePreparedReplyAgentRunInput,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     activeSessionStore,
     admitUserTurn,

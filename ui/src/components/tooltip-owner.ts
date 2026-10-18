@@ -1,3 +1,4 @@
+import { listen } from "../lib/reactive/listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
 import { isTooltipTextRedundant, normalizeTooltipText } from "./tooltip-content.ts";
@@ -90,6 +91,8 @@ export class TooltipOwner {
   }
 
   #triggerElement: HTMLElement | SVGElement | null = null;
+  #triggerListeners: (() => void)[] = [];
+  #stopEscape: (() => void) | undefined;
   #pinned = false;
   #pending = false;
   #describedElement: Element | null = null;
@@ -172,28 +175,22 @@ export class TooltipOwner {
       owner = root instanceof ShadowRoot ? root.host : null;
     }
     this.#triggerContentObserver.observe(trigger, { childList: true, subtree: true });
-    trigger.addEventListener("pointerenter", this.#handlePointerEnter);
-    trigger.addEventListener("pointerleave", this.#handlePointerLeave);
-    trigger.addEventListener("pointerdown", this.#handlePointerDown);
-    trigger.addEventListener("pointercancel", this.#handlePointerCancel);
-    trigger.addEventListener("focusin", this.handleFocusIn);
-    trigger.addEventListener("focusout", this.handleFocusOut);
-    trigger.addEventListener("click", this.#handleClick, true);
+    this.#triggerListeners = [
+      listen(trigger, "pointerenter", this.#handlePointerEnter),
+      listen(trigger, "pointerleave", this.#handlePointerLeave),
+      listen(trigger, "pointerdown", this.#handlePointerDown),
+      listen(trigger, "pointercancel", this.#handlePointerCancel),
+      listen(trigger, "focusin", this.handleFocusIn),
+      listen(trigger, "focusout", this.handleFocusOut),
+      listen(trigger, "click", this.#handleClick, true),
+    ];
   }
 
   #detachTrigger() {
-    const trigger = this.#triggerElement;
-    if (!trigger) {
-      return;
-    }
     this.#triggerContentObserver.disconnect();
-    trigger.removeEventListener("pointerenter", this.#handlePointerEnter);
-    trigger.removeEventListener("pointerleave", this.#handlePointerLeave);
-    trigger.removeEventListener("pointerdown", this.#handlePointerDown);
-    trigger.removeEventListener("pointercancel", this.#handlePointerCancel);
-    trigger.removeEventListener("focusin", this.handleFocusIn);
-    trigger.removeEventListener("focusout", this.handleFocusOut);
-    trigger.removeEventListener("click", this.#handleClick, true);
+    for (const stop of this.#triggerListeners.splice(0)) {
+      stop();
+    }
     this.#restoreDescription();
     this.#triggerElement = null;
   }
@@ -350,11 +347,7 @@ export class TooltipOwner {
     this.#pending = true;
     this.#observePresentation();
     TooltipOwner.#pendingByDocument.set(this.host.ownerDocument, this);
-    this.host.ownerDocument.defaultView?.addEventListener(
-      "keydown",
-      this.#handleWindowKeyDown,
-      true,
-    );
+    this.#listenForEscape();
   }
 
   /** Apply only lifecycle-admitted state; canceled requests never alter interaction policy. */
@@ -369,11 +362,8 @@ export class TooltipOwner {
       this.#pinned = false;
       this.host.removeAttribute("open");
       this.options.richContainer()?.setAttribute("inert", "");
-      this.host.ownerDocument.defaultView?.removeEventListener(
-        "keydown",
-        this.#handleWindowKeyDown,
-        true,
-      );
+      this.#stopEscape?.();
+      this.#stopEscape = undefined;
       this.#clearTimers();
       if (TooltipOwner.#activeByDocument.get(this.host.ownerDocument) === this) {
         TooltipOwner.#activeByDocument.delete(this.host.ownerDocument);
@@ -388,17 +378,25 @@ export class TooltipOwner {
     this.#syncDescription();
     this.host.setAttribute("open", "");
     this.options.richContainer()?.removeAttribute("inert");
-    this.host.ownerDocument.defaultView?.addEventListener(
-      "keydown",
-      this.#handleWindowKeyDown,
-      true,
-    );
+    this.#listenForEscape();
   }
 
-  // Capture before dialogs/default actions; earlier capture owners use the same consumer.
-  readonly #handleWindowKeyDown = (event: KeyboardEvent) => {
-    TooltipOwner.consumeEscape(event, this.host.ownerDocument);
-  };
+  #listenForEscape() {
+    const view = this.host.ownerDocument.defaultView;
+    // Pending intent and its accepted view share one capture listener, ahead of dialogs.
+    if (view && !this.#stopEscape) {
+      this.#stopEscape = listen(
+        view,
+        "keydown",
+        (event) => {
+          if (event instanceof view.KeyboardEvent) {
+            TooltipOwner.consumeEscape(event, view.document);
+          }
+        },
+        true,
+      );
+    }
+  }
 
   handleInteraction(event: PointerEvent | FocusEvent, target: Node | null) {
     if (event.type === "pointermove") {

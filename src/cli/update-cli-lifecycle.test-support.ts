@@ -236,7 +236,7 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
       onHostPlatform(() => restoreDatabaseBackup(...args)),
     );
     retainUpdateRuntime.mockImplementation(async ({ assertCurrent }) => assertCurrent());
-    systemdPolicy.mockResolvedValue(false);
+    systemdPolicy.mockResolvedValue({ kind: "unchanged" });
     // Service simulations do not provide foreign-platform ACL libraries. Keep
     // real exclusive host creation; actual Windows runs retain the native DACL path.
     if (sqliteHostPlatform !== "win32") {

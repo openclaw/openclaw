@@ -87,31 +87,49 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
 
   let activeConfirmation: AbortController | null = null;
 
+  function clearPresentation() {
+    setSelected(null);
+    dismissed.clear();
+    setView((draft) => {
+      draft.inventory = null;
+      draft.result = null;
+    });
+  }
+
+  function invalidateRequests() {
+    refreshAgain = false;
+    activeLoad = undefined;
+    stopPolling();
+    setView((draft) => {
+      draft.preparing = false;
+      draft.destroying = null;
+      draft.loading = false;
+      draft.recovering = null;
+      draft.mutating = null;
+      draft.error = null;
+      draft.notice = null;
+    });
+    activeConfirmation?.abort();
+  }
+
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
-    invalidateRequests: () => {
-      refreshAgain = false;
-      activeLoad = undefined;
-      stopPolling();
-      setSelected(null);
-      dismissed.clear();
-      setView((draft) => {
-        draft.inventory = null;
-        draft.preparing = false;
-        draft.destroying = null;
-        draft.result = null;
-        draft.loading = false;
-        draft.recovering = null;
-        draft.mutating = null;
-        draft.error = null;
-        draft.notice = null;
-      });
-      activeConfirmation?.abort();
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "environments.list", "operator.admin")
+      ) {
+        gateway.invalidate();
+        invalidateRequests();
+        clearPresentation();
+      }
     },
+    invalidateRequests,
     ensureInitialData: () => queueMicrotask(() => void load()),
     onPageActivation: () => void load(),
   });
-
+  // Config receipts and permissions invalidate the Gateway environment inventory.
   createEffect(
     () =>
       [
@@ -541,8 +559,12 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     <>
       <SettingsPage>
         <Show
-          when={advertised() && canCall("environments.list")}
-          fallback={<SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />}
+          when={(advertised() && canCall("environments.list")) || view.inventory !== null}
+          fallback={
+            gateway.connected ? (
+              <SettingsEmpty message={t("cloudWorkersPage.environments.adminRequired")} />
+            ) : undefined
+          }
         >
           <Show when={view.error}>
             <div class="callout warning" role="alert">

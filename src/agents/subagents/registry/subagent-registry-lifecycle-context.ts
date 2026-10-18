@@ -51,6 +51,7 @@ export type SubagentLifecycleOptions = {
 
 export interface SubagentLifecycleCommonContext {
   readonly options: SubagentLifecycleOptions;
+  runBackgroundWork<T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T>;
   newerGenerationOwnsSession(entry: SubagentRunRecord): boolean;
   shouldSuppressSessionEffects(
     entry: SubagentRunRecord,

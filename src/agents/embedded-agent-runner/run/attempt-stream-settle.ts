@@ -1,9 +1,12 @@
 import { PROVIDER_MODEL_INPUT } from "@openclaw/ai/provider-types";
 import {
   isAnthropicServerToolClearingEnabled,
+  isCompactionReplayCheckpoint,
   resolveCompactionReplayEligibility,
+  stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
 import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
@@ -153,10 +156,9 @@ export async function settleEmbeddedAttemptStream(input: {
 
   // Snapshot only outside compaction. Compaction rewrites history in place and
   // cannot be allowed to leave the timeout result with a half-written view.
-  const wasCompactingBefore = activeSession.isCompacting;
+  const wasCompacting = activeSession.isCompacting;
   const snapshot = activeSession.messages.slice();
-  const wasCompactingAfter = activeSession.isCompacting;
-  const preCompactionSnapshot = wasCompactingBefore || wasCompactingAfter ? null : snapshot;
+  const preCompactionSnapshot = wasCompacting ? null : snapshot;
   const preCompactionSessionId = activeSession.sessionId;
   const aggregateTimeoutMs = 60_000;
 
@@ -378,6 +380,7 @@ export async function settleEmbeddedAttemptStream(input: {
 export async function prepareEmbeddedAttemptTransport(input: {
   assertCronRootCurrent?: () => void;
   attempt: EmbeddedRunAttemptParams;
+  contextEngineInfo?: ContextEngineInfo;
   session: AgentSession;
   settingsManager: SettingsManager;
   providerThinkingLevel: ProviderThinkLevel | undefined;
@@ -438,7 +441,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     model: attempt.model,
     resolvedTransport,
   };
-  const effectiveExtraParams =
+  const resolvedExtraParams =
     attempt.runtimePlan?.transport.resolveExtraParams(extraParamsContext) ??
     resolvePreparedExtraParams({
       ...extraParamsContext,
@@ -450,6 +453,14 @@ export async function prepareEmbeddedAttemptTransport(input: {
       agentDir: input.agentDir,
       auth,
     });
+  const ownsCompaction = input.contextEngineInfo?.ownsCompaction === true;
+  const suppressResponsesCompaction =
+    attempt.model.api === "openai-responses" &&
+    (attempt.trigger === "memory" ||
+      (ownsCompaction && resolvedExtraParams.responsesServerCompaction !== true));
+  const effectiveExtraParams = suppressResponsesCompaction
+    ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
+    : resolvedExtraParams;
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -640,6 +651,19 @@ export async function prepareEmbeddedAttemptTransport(input: {
   // Agent turns carry no credential, and provider wrappers classify auth from
   // options.apiKey (for example Anthropic OAuth identity), so attach it outermost.
   session.agent.streamFn = wrapApiKey(session.agent.streamFn);
+  if (suppressResponsesCompaction) {
+    // Checkpoints already stored by older builds must not replace the engine's selection.
+    session.agent.streamFn = wrapStreamFnWithMessageTransform(session.agent.streamFn, (messages) =>
+      messages.some(
+        (message) =>
+          message.role === "assistant" && isCompactionReplayCheckpoint(message.providerReplay),
+      )
+        ? messages.map((message) =>
+            message.role === "assistant" ? stripCompactionReplayCheckpoint(message) : message,
+          )
+        : messages,
+    );
+  }
   const runtime = attempt.preparedModelRuntime;
   const profileId = attempt.authProfileId;
   const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
@@ -682,10 +706,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
   }
   return {
     serverToolClearingEnabled,
-    compactionReplayEnabled: resolveCompactionReplayEligibility(attempt.model, {
-      extraParams: effectiveExtraParams,
-      apiKey: transportApiKey,
-    }),
+    compactionReplayEnabled:
+      !suppressResponsesCompaction &&
+      resolveCompactionReplayEligibility(attempt.model, {
+        extraParams: effectiveExtraParams,
+        apiKey: transportApiKey,
+      }),
     effectiveAgentTransport,
     effectiveExtraParams,
     effectivePromptCacheRetention,

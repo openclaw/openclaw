@@ -372,7 +372,7 @@ export async function runWorkerEmbeddedTurn(params: RunWorkerEmbeddedTurnParams)
       return params.inference.stream({
         modelRef: params.modelRef,
         context: projected.context,
-        options: structuredClone(params.inferenceOptions),
+        options: params.inferenceOptions,
         ...(options?.signal ? { signal: options.signal } : {}),
       });
     };

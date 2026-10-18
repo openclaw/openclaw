@@ -2,18 +2,14 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import type { RouteLocation } from "@openclaw/uirouter";
 import { onCleanup } from "solid-js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
-import {
-  GatewayRequestError,
-  type GatewayBrowserClient,
-  type GatewayEventFrame,
-} from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { readPresenceEntries, type PresencePayload } from "../../app/user-profile.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectPresencePayload } from "../../lib/presence-users.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { createLiveActivity } from "./live-activity.ts";
 import {
@@ -69,8 +65,6 @@ export function createActivityPageState(context: ApplicationContext) {
       runInspector,
       presencePayload,
       sessionActivity,
-      liveActivity,
-      entries: liveActivity.snapshot.entries,
     }),
     subscribe: (_source, notify) => {
       publish = notify;
@@ -223,15 +217,6 @@ export function createActivityPageState(context: ApplicationContext) {
     void loadRunInspector(gateway, snapshot.client, selector);
   }
 
-  function isUnknownInspectMethod(error: unknown): boolean {
-    return (
-      error instanceof GatewayRequestError &&
-      error.gatewayCode === "INVALID_REQUEST" &&
-      (error.message === "unknown method: audit.run.inspect" ||
-        error.message === "missing scope: operator.admin")
-    );
-  }
-
   async function loadRunInspector(
     gateway: ApplicationContext["gateway"],
     client: GatewayBrowserClient,
@@ -319,15 +304,12 @@ export function createActivityPageState(context: ApplicationContext) {
       }
       runInspector = isMissingOperatorReadScopeError(error)
         ? { status: "unauthorized" }
-        : isUnknownInspectMethod(error)
-          ? { status: "unsupported" }
-          : previousState
-            ? { ...previousState, [pageStatus]: "error" }
-            : {
-                status: "error",
-                recovery:
-                  decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
-              };
+        : previousState
+          ? { ...previousState, [pageStatus]: "error" }
+          : {
+              status: "error",
+              recovery: decisionCursor && isExpiredDecisionCursorError(error) ? "restart" : "retry",
+            };
     } finally {
       if (inspectorAbort === abort) {
         inspectorAbort = null;
@@ -392,25 +374,26 @@ export function createActivityPageState(context: ApplicationContext) {
     }
   }
 
-  const stopActivity = liveActivity.subscribe(() => publish());
-  const stopAgents = context.agents.subscribe(() => publish());
   const gateway = context.gateway;
   applyGatewaySnapshot(gateway, gateway.snapshot, true);
   const stopEvents = gateway.subscribeEvents((event) => applyGatewayEvent(gateway, event));
+  // Gateway receipts retire inspector requests and session presentation before replacement reads start.
   const stopGateway = gateway.subscribe((snapshot) =>
     applyGatewaySnapshot(gateway, snapshot, false),
   );
   onCleanup(() => {
     active = false;
-    stopActivity();
     liveActivity.dispose();
-    stopAgents();
     stopGateway();
     stopEvents();
     cancelInspectorRequest();
     sessionActivity.dispose();
   });
   return {
+    liveActivity: projectOwner(liveActivity, (source) => source.snapshot),
+    retryLiveActivity: () => liveActivity.retry(),
+    clearLiveActivity: () => liveActivity.clear(),
+    agents: projectOwner(context.agents, (source) => source.state),
     read: projection.read,
     revision: projection.revision,
     setRouteLocation,

@@ -11,12 +11,12 @@ import {
 } from "../../../test-helpers/native-gateways.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as diffSyntax from "./chat-diff-highlight.runtime.ts";
-import { SessionDiffPanel } from "./session-diff-panel.ts";
+import { SessionDiffPanel } from "./session-diff-panel.tsx";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
   SessionDiffOwner,
-} from "./session-diff-panel.ts";
+} from "./session-diff-panel.tsx";
 
 type SessionDiffElement = HTMLElement & {
   owner: SessionDiffOwner | null;

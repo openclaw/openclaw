@@ -134,7 +134,8 @@ describe("standalone plugin selection", () => {
   });
 
   it("removes omitted discovery metadata and assets while preserving official installation offers", () => {
-    const { root, write } = fixture();
+    const { root, write, plugin } = fixture();
+    plugin("cloudflare");
     write(
       "dist/cli-startup-metadata.json",
       JSON.stringify({ rootHelpText: "full build cached help" }),
@@ -149,20 +150,27 @@ describe("standalone plugin selection", () => {
       includeChannelConfigs: false,
     });
     expect(bundled.map((entry) => entry.manifest.id)).toEqual(["codex", "core"]);
-    for (const directory of ["dist/extensions/matrix", "extensions/matrix"]) {
-      expect(fs.existsSync(path.join(root, directory))).toBe(false);
+    for (const id of ["cloudflare", "matrix"]) {
+      for (const parent of ["dist/extensions", "extensions"]) {
+        expect(fs.existsSync(path.join(root, parent, id))).toBe(false);
+      }
     }
     expect(fs.existsSync(path.join(root, "dist/extensions/codex/assets/browser.js"))).toBe(true);
     expect(fs.existsSync(path.join(root, "dist/cli-startup-metadata.json"))).toBe(false);
-    expect([...collectRootPackageExcludedExtensionDirs({ cwd: root })]).toEqual(["matrix"]);
+    expect([...collectRootPackageExcludedExtensionDirs({ cwd: root })]).toEqual([
+      "cloudflare",
+      "matrix",
+    ]);
     const retainedCatalog = JSON.parse(
       fs.readFileSync(path.join(root, "dist/channel-catalog.json"), "utf8"),
     );
-    const matrix = retainedCatalog.entries.find(
-      (entry: Parameters<typeof resolveOfficialExternalPluginId>[0]) =>
-        resolveOfficialExternalPluginId(entry) === "matrix",
-    );
-    expect(resolveOfficialExternalPluginInstall(matrix)?.npmSpec).toBe("@openclaw/matrix");
+    for (const id of ["cloudflare", "matrix"]) {
+      const entry = retainedCatalog.entries.find(
+        (candidate: Parameters<typeof resolveOfficialExternalPluginId>[0]) =>
+          resolveOfficialExternalPluginId(candidate) === id,
+      );
+      expect(resolveOfficialExternalPluginInstall(entry)?.npmSpec).toBe(`@openclaw/${id}`);
+    }
   });
 
   it("preserves the package manager runtime closure when plugins are omitted", () => {

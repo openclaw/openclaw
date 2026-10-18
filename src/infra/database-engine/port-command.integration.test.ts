@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import path from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { doctorDatabasePort } from "../../commands/doctor-database-port.js";
@@ -177,24 +178,34 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     assert(connection);
     const proxy = await loseOneCommittedReply(connection);
     try {
-      await fixture(async ({ state, source }) => {
+      await fixture(async ({ state, source, client }) => {
+        assert(client);
         state.envVars.OPENCLAW_P36_TEST_DATABASE_URL = proxy.connection;
         state.applyEnv();
         const before = canonical(source);
         await doctorDatabasePort({ to: "postgres" });
         expect(proxy.dropped()).toBe(1);
-        expect(readBackupEngine(source).engine).toBe("postgres");
-        await doctorDatabasePort({ to: "sqlite" });
-        expect(canonical(source)).toEqual(before);
+        const anchor = readBackupEngine(source);
+        assert(anchor.engine === "postgres");
+        expect(await canonicalPostgres(client, anchor.namespace)).toEqual(before);
       }, true);
     } finally {
       await proxy.close();
     }
   }, 120_000);
 
-  it("rolls back a preparing manifest before any target has been verified", async () => {
+  it("rolls back a preparing manifest including an external configured store before any target has been verified", async () => {
     await fixture(async ({ state, source }) => {
       const before = canonical(source);
+      // Discovery chooses the path; the registered provider still owns its family.
+      const agentDir = state.path("external", "agent");
+      const external = path.join(agentDir, "openclaw-agent.sqlite");
+      await fsp.mkdir(agentDir, { recursive: true });
+      await fsp.copyFile(source, external);
+      await state.writeConfig({
+        ...JSON.parse(fs.readFileSync(state.configPath, "utf8")),
+        agents: { entries: { external: { agentDir } } },
+      });
       const run = tasks.runDatabasePortTask;
       vi.spyOn(tasks, "runDatabasePortTask").mockImplementation(async (...args) => {
         if (args[0].operation === "migrate") {
@@ -207,8 +218,14 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
       const target = manifest(state).targets[0];
       assert(target);
       expect(target.verification).toBeNull();
+      expect(
+        manifest(state).targets.some(
+          (entry) => entry.original.engine === "sqlite" && entry.original.path === external,
+        ),
+      ).toBe(true);
       await doctorDatabasePort({ rollback: recovery.databasePortManifestPath(state.stateDir) });
       expect(canonical(source)).toEqual(before);
+      expect(canonical(external)).toEqual(before);
       expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
     }, true);
   }, 120_000);
@@ -421,6 +438,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
     120_000,
   );
 
+  // Green CI runs 39068774273/39071119824 measured p95 at 82s; retain more than 2× headroom.
   it.each([false, true])(
     "rolls back a reverse port with retained PostgreSQL writes (missing namespace: %s)",
     async (missingNamespace) => {
@@ -476,7 +494,7 @@ describe.skipIf(!connection)("database port command PostgreSQL conformance", () 
         expect(await canonicalPostgres(client, restored.namespace)).toEqual(canonical(expected));
       }, true);
     },
-    120_000,
+    180_000,
   );
 
   it.each(["environment", "absent", "changed environment"])(

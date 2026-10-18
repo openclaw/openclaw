@@ -30,16 +30,6 @@ const PROVIDER_WIDE_FAILURE_STATUSES = new Set(["timeout", "unavailable"]);
 
 type InferenceFallbackDeps = {
   readConfig?: () => Promise<OpenClawConfig>;
-  resolveRoute?: (
-    config: OpenClawConfig,
-    agentId: string,
-  ) => Promise<SystemAgentConfiguredRoute | null>;
-  hasAuth?: typeof hasAvailableAuthForProvider;
-  verify?: (params: {
-    runtime: RuntimeEnv;
-    bindSession: true;
-    agentId: string;
-  }) => Promise<BoundVerifySetupInferenceResult>;
 };
 
 type InferenceFallbackParams = {
@@ -81,14 +71,10 @@ export async function verifySystemAgentInferenceWithFallback(
       : {};
   const requestedAgentId = resolveAmbientOwnerAgentId(config, params.requestingAgentId);
   const candidateAgentIds = new Set([requestedAgentId, ...listAgentIds(config)]);
-  const resolveRoute =
-    deps.resolveRoute ??
-    ((candidateConfig: OpenClawConfig, agentId: string) =>
-      resolveSystemAgentConfiguredRouteFromConfig(candidateConfig, agentId, {}, snapshot));
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =
     [];
   for (const agentId of candidateAgentIds) {
-    const route = await resolveRoute(config, agentId);
+    const route = await resolveSystemAgentConfiguredRouteFromConfig(config, agentId, {}, snapshot);
     if (!route) {
       continue;
     }
@@ -121,8 +107,6 @@ export async function verifySystemAgentInferenceWithFallback(
         )
       ).flat()
     : orderedOwners;
-  const hasAuth = deps.hasAuth ?? hasAvailableAuthForProvider;
-  const verify = deps.verify ?? verifySetupInference;
   let lastFailure: Extract<VerifySetupInferenceResult, { ok: false }> | undefined;
   const failedProviders = new Set<string>();
   const attemptedOwners = new Set<string>();
@@ -148,7 +132,7 @@ export async function verifySystemAgentInferenceWithFallback(
     if (
       !routePolicy &&
       candidate !== first &&
-      !(await hasAuth({
+      !(await hasAvailableAuthForProvider({
         provider: candidate.provider,
         cfg: candidate.route.runConfig,
         preferredProfile: candidate.route.authProfileId,
@@ -166,7 +150,7 @@ export async function verifySystemAgentInferenceWithFallback(
       }
       lastFailure = result;
     } else {
-      const result = await verify({
+      const result = await verifySetupInference({
         runtime: params.runtime,
         bindSession: true,
         agentId: candidate.agentId,

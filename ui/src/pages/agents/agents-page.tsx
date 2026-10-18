@@ -6,7 +6,7 @@ import type { AgentsRouteData } from "./route.ts";
 import { Agents, AgentsPageHeader } from "./view.tsx";
 
 export function AgentsPage(props: { routeData?: AgentsRouteData }) {
-  // The initial route belongs to this mount; subsequent route commits use the effect.
+  // The mount seeds the agents owner; later route receipts retarget its Gateway requests.
   const state = createAgentsPageState(
     useApplication(),
     untrack(() => props.routeData),

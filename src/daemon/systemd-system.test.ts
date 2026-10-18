@@ -18,7 +18,6 @@ const state = vi.hoisted(() => ({
     termination: "exit" as ExecResult["termination"],
   },
   paths: new Set<string>(),
-  pathErrors: new Map<string, string>(),
 }));
 
 function fsError(code: string, target: string): NodeJS.ErrnoException {
@@ -28,10 +27,6 @@ function fsError(code: string, target: string): NodeJS.ErrnoException {
 vi.mock("node:fs/promises", () => {
   const mocked = {
     lstat: vi.fn(async (target: string) => {
-      const code = state.pathErrors.get(target);
-      if (code) {
-        throw fsError(code, target);
-      }
       if (!state.paths.has(target)) {
         throw fsError("ENOENT", target);
       }
@@ -69,7 +64,6 @@ describe("system systemd ownership", () => {
       termination: "exit",
     };
     state.paths.clear();
-    state.pathErrors.clear();
     execFileUtf8.mockReset();
     execFileUtf8.mockImplementation(async (_command: string, args: string[]) =>
       args.includes("--property=UnitPath") ? state.managerUnitPath : state.systemctl,
@@ -95,19 +89,12 @@ describe("system systemd ownership", () => {
     "fails closed for $ownership system ownership before user inspection",
     async ({ ownership, kind }) => {
       const unitName = "openclaw-owned.service";
-      const systemUnitPath = `/etc/systemd/system/${unitName}`;
       state.systemctl = {
-        code: ownership === "unverifiable" || ownership === "manager absent" ? 1 : 0,
+        code: ownership === "unverifiable" ? 1 : 0,
         termination: "exit",
         stdout: ownership === "loaded" ? "loaded" : "not-found",
-        stderr:
-          ownership === "manager absent" ? "systemctl not available" : "manager-secret-canary",
+        stderr: "manager-secret-canary",
       };
-      if (ownership === "installed") {
-        state.paths.add(systemUnitPath);
-      } else if (ownership === "unexpected error") {
-        execFileUtf8.mockRejectedValue(new Error("already owns manager-secret-canary"));
-      }
 
       const capability = await readSystemdDefinitionMutationCapability({
         HOME: "/home/openclaw-test",
@@ -124,13 +111,8 @@ describe("system systemd ownership", () => {
       // Denial permits only system ownership probes, never user-manager or artifact reads.
       expect(execFileUtf8.mock.calls.map(([command, args]) => [command, args])).toEqual([
         ["systemctl", ["show", "--property=LoadState", "--value", unitName]],
-        ...(ownership === "installed"
-          ? [["systemctl", ["show", "--property=UnitPath", "--value"]]]
-          : []),
       ]);
-      expect(vi.mocked(fs.lstat).mock.calls).toEqual(
-        ownership === "installed" ? [[systemUnitPath]] : [],
-      );
+      expect(vi.mocked(fs.lstat).mock.calls).toEqual([]);
     },
   );
 

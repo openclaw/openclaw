@@ -3,7 +3,6 @@ import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actio
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { Type, type Static, type TSchema } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as json } from "./tool-result.js";
 
@@ -362,17 +361,12 @@ export function registerFeishuBitableTools(api: OpenClawPluginApi) {
     registerFeishuTool(api, {
       ...tool,
       family: "bitable",
-      createExecute(ctx, cfg) {
+      createExecute(_ctx, _cfg, createClient) {
         return async (params) => {
           return json(
             await tool.execute({
               params,
-              client: createFeishuToolClient({
-                cfg,
-                executeParams: params,
-                defaultAccountId: ctx.agentAccountId,
-                requiredTool: { family: "bitable", label: "Bitable" },
-              }),
+              client: createClient(params, "Bitable"),
             }),
           );
         };

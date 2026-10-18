@@ -64,7 +64,7 @@ function renderStatusNotice(
 ) {
   return (
     <div
-      class={`chat-composer-neighbor-card chat-composer-neighbor-card--${tone} ${className}`}
+      class={["chat-composer-neighbor-card", `chat-composer-neighbor-card--${tone}`, className]}
       role={tone === "danger" ? "alert" : "status"}
       title={tooltip}
     >
@@ -145,7 +145,11 @@ function ChatErrorNotice(props: {
   const tone = () => props.tone ?? "danger";
   return (
     <div
-      class={`chat-composer-neighbor-card chat-composer-neighbor-card--${tone()} chat-error`}
+      class={[
+        "chat-composer-neighbor-card",
+        `chat-composer-neighbor-card--${tone()}`,
+        "chat-error",
+      ]}
       role={tone() === "warn" ? "status" : "alert"}
     >
       <span class="chat-composer-neighbor-card__icon" aria-hidden="true">

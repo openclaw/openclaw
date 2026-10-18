@@ -53,6 +53,35 @@ const nativeCommand = {
 };
 
 describe("CodexAppServerEventProjector native tool failure recovery", () => {
+  it.each([
+    { status: "completed", outcome: { status: "completed", isError: false, success: true } },
+    { status: "failed", outcome: { status: "failed", isError: true, success: false } },
+    { status: "declined", outcome: { status: "blocked", isError: true, success: false } },
+    { status: "inProgress", outcome: { status: "running", isError: false } },
+    { status: undefined, outcome: { status: "unknown", isError: false } },
+    { status: "unrecognized", outcome: { status: "unknown", isError: false } },
+  ])(
+    "records the native $status outcome without treating running as success",
+    async ({ status, outcome }) => {
+      const recordEvent = vi.fn();
+      const projector = await createProjector(undefined, {
+        trajectoryRecorder: { recordEvent, flush: vi.fn() },
+      });
+      const item = { ...nativeCommand, id: "command-outcome", status, durationMs: 1 };
+      await notify(projector, "item/started", {
+        item: { ...item, status: "inProgress" },
+      });
+      await notify(projector, "item/completed", { item });
+
+      const results = recordEvent.mock.calls.filter(([type]) => type === "tool.result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.[1]).toMatchObject({ toolCallId: item.id, name: "bash", ...outcome });
+      if (!("success" in outcome)) {
+        expect(results[0]?.[1]).not.toHaveProperty("success");
+      }
+    },
+  );
+
   it("orders declined native tool diagnostics after their start event", async () => {
     const onAgentEvent = vi.fn();
     const observeToolTerminal = vi.fn(

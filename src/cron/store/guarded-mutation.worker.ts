@@ -194,8 +194,8 @@ export function mutateCronJobsInWorker(
           ) {
             throw new CronJobsStoreChangedError(input.storeKey);
           }
-          // Compare both state encodings (including legacy lastStatus) without
-          // rerunning an effectful host precondition or normalizing authority.
+          // Compare persisted state without rerunning the host precondition.
+          // Cloning matches its wire representation: authority payloads use null prototypes.
           if (preconditionJob) {
             const current = previous.jobs.find((job) => job.id === preconditionJob.id);
             if (

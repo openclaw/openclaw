@@ -2,6 +2,7 @@ import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createQueryId, sql, SqliteQueryCompiler, type RootOperationNode } from "kysely";
 import { sqliteStringSetEntries } from "../kysely-sync.js";
+import { createSqliteMemoryVectorSchema } from "./sqlite-memory-vector-schema.js";
 import { runVectorKnnInSubprocess } from "./sqlite-vector-subprocess.js";
 import type {
   SqliteVectorPlan,
@@ -178,10 +179,7 @@ export function bindSqliteVectorCapability(
       if (!db) {
         throw new Error("Vector index creation requires the admitted writer");
       }
-      db.exec(
-        `CREATE VIRTUAL TABLE${ifNotExists ? " IF NOT EXISTS" : ""} ${index.table} USING vec0(\n` +
-          `  id TEXT PRIMARY KEY,\n  embedding FLOAT[${dimensions}]\n)`,
-      );
+      createSqliteMemoryVectorSchema(db, index.table, dimensions, ifNotExists);
     },
     write(index, rows) {
       own(index);

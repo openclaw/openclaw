@@ -1,4 +1,3 @@
-import type { ThemeArtwork } from "../../../packages/gateway-protocol/src/theme.ts";
 import { isLobsterDay } from "../../../src/shared/lobster-day.js";
 import { patchSettings } from "../app/settings.ts";
 import * as dex from "./lobster-dex.ts";
@@ -28,19 +27,6 @@ type ResidentTimer =
 
 /** Synchronous animation owner; Solid only observes committed scene snapshots. */
 export class LobsterPetOwner {
-  seed = 0;
-  mode: contract.LobsterPetMode = "idle";
-
-  visitsEnabled = true;
-  residentEnabled = true;
-  critters: readonly string[] | undefined;
-  critterArtwork: ThemeArtwork["critters"];
-  floorEnabled = false;
-  runOutcome: contract.LobsterRunOutcome = "ok";
-  soundsEnabled = false;
-  gatewayVersion: string | null = null;
-  onVisitsDisabled: () => void = () => undefined;
-
   private act: plans.LobsterPetAct | null = null;
   private spotPct = 80;
   private facing: 1 | -1 = 1;
@@ -50,7 +36,7 @@ export class LobsterPetOwner {
   private anchor: plans.LobsterPetAnchor = "top";
   private readonly geometry = new LobsterComposerGeometry(
     this.host,
-    () => this.residentEnabled && this.twinPlanned,
+    () => this.inputs.residentEnabled && this.twinPlanned,
     () => this.refresh(),
   );
   private travel: LobsterSceneTravel | null = null;
@@ -73,15 +59,15 @@ export class LobsterPetOwner {
   private identity: plans.LobsterLoadIdentity | null = null;
   private entranceRng: () => number = lobsterLook.mulberry32(0);
   private readonly traffic = new LobsterLedgeTraffic(() => this.refresh(), {
-    visitsEnabled: () => this.visitsEnabled && !this.dismissed,
+    visitsEnabled: () => this.inputs.visitsEnabled && !this.dismissed,
     passerOptions: () => ({
-      critters: this.critters,
-      strangers: this.residentEnabled,
-      critterArtwork: this.critterArtwork,
+      critters: this.inputs.critters,
+      strangers: this.inputs.residentEnabled,
+      critterArtwork: this.inputs.critterArtwork,
     }),
     onPasserStart: (plan) => {
       this.passerAnchor =
-        plan.floor && this.floorEnabled && this.geometry.scene.floor ? "floor" : "top";
+        plan.floor && this.inputs.floorEnabled && this.geometry.scene.floor ? "floor" : "top";
       this.passerHops =
         this.passerAnchor === "floor" && plan.hops && this.geometry.scene.passage !== null;
     },
@@ -90,8 +76,8 @@ export class LobsterPetOwner {
     onPasserDone: () => this.scheduleNextAct(),
   });
   private readonly interactions = new LobsterPetInteractions(this.host, {
-    soundsEnabled: () => this.soundsEnabled,
-    canHuff: () => this.mode !== "offline",
+    soundsEnabled: () => this.inputs.soundsEnabled,
+    canHuff: () => this.inputs.mode !== "offline",
     canGaze: () => this.presence === "in" && this.act === null && !this.vigil,
     onGrumpyChange: (grumpy) => {
       this.grumpy = grumpy;
@@ -140,6 +126,7 @@ export class LobsterPetOwner {
   constructor(
     private readonly host: HTMLElement,
     private readonly disableVisits: () => void,
+    private inputs: Readonly<contract.LobsterPetProps>,
   ) {}
 
   connect() {
@@ -177,15 +164,9 @@ export class LobsterPetOwner {
   }
 
   update(props: contract.LobsterPetProps) {
-    const changed = new Map<string, unknown>();
-    // SAFETY: the bridge supplies only the declared LobsterPetProps keys (plus unused children).
-    for (const key of Object.keys(props) as (keyof contract.LobsterPetProps)[]) {
-      if (!Object.is(this[key], props[key])) {
-        changed.set(key, this[key]);
-      }
-    }
-    Object.assign(this, props);
-    this.reconcile(changed);
+    const previous = this.inputs;
+    this.inputs = props;
+    this.reconcile(previous);
     if (this.active) {
       this.publish();
     }
@@ -195,34 +176,34 @@ export class LobsterPetOwner {
     if (!this.active) {
       return;
     }
-    this.reconcile(new Map());
+    this.reconcile();
     this.publish();
   }
 
   private wantsVisible(): boolean {
     return (
-      this.visitsEnabled &&
-      this.residentEnabled &&
+      this.inputs.visitsEnabled &&
+      this.inputs.residentEnabled &&
       !this.dismissed &&
-      (this.mode === "offline" ||
+      (this.inputs.mode === "offline" ||
         this.vigil ||
         this.outcomePresenceOwner !== null ||
         this.scheduledVisiting)
     );
   }
 
-  private reconcile(changed: Map<string, unknown>) {
+  private reconcile(previous = this.inputs) {
     if (!this.active) {
       return;
     }
-    const seedChanged = this.look === null || changed.has("seed");
+    const seedChanged = this.look === null || !Object.is(previous.seed, this.inputs.seed);
     if (seedChanged) {
-      this.look = lobsterLook.createLobsterPetLook(this.seed);
-      this.rng = lobsterLook.mulberry32(this.seed ^ 0x9e3779b9);
-      this.motionRng = lobsterLook.mulberry32(this.seed ^ 0xf1002);
-      this.visitRng = lobsterLook.mulberry32(this.seed ^ 0x5eaf00d);
-      this.entranceRng = lobsterLook.mulberry32((this.seed ^ 0xe27a) >>> 0);
-      this.identity = plans.resolveLobsterLoadIdentity(this.seed, this.look);
+      this.look = lobsterLook.createLobsterPetLook(this.inputs.seed);
+      this.rng = lobsterLook.mulberry32(this.inputs.seed ^ 0x9e3779b9);
+      this.motionRng = lobsterLook.mulberry32(this.inputs.seed ^ 0xf1002);
+      this.visitRng = lobsterLook.mulberry32(this.inputs.seed ^ 0x5eaf00d);
+      this.entranceRng = lobsterLook.mulberry32((this.inputs.seed ^ 0xe27a) >>> 0);
+      this.identity = plans.resolveLobsterLoadIdentity(this.inputs.seed, this.look);
       this.look = this.identity.look;
       this.spotPct = this.look.spotPct;
       this.facing = this.look.facing;
@@ -235,73 +216,74 @@ export class LobsterPetOwner {
       this.molted = false;
       this.shellVisible = false;
       this.timers.clear("shellTimer");
-      this.moltPlanned = plans.isLobsterMoltLoad(this.seed) && !this.identity.elder;
-      this.twinPlanned = plans.isLobsterTwinLoad(this.seed);
+      this.moltPlanned = plans.isLobsterMoltLoad(this.inputs.seed) && !this.identity.elder;
+      this.twinPlanned = plans.isLobsterTwinLoad(this.inputs.seed);
       this.geometry.scheduleMeasure();
       this.familiarity = dex.getLobsterFamiliarity();
       this.sailorDay = isLobsterDay(new Date());
       this.greetedThisLoad = false;
       this.scheduleVisits();
-      this.traffic.reset(this.seed);
+      this.traffic.reset(this.inputs.seed);
       // The first update takes this branch, so the mode-change branch below
       // never sees the initial mode: arm the vigil tracker here as well.
       this.vigil = false;
       this.outcomePresenceOwner = null;
       this.trackVigil();
-    } else if (changed.has("mode")) {
-      const previousMode = changed.get("mode");
-      const finished = previousMode === "busy" && this.mode === "idle";
+    } else if (previous.mode !== this.inputs.mode) {
+      const finished = previous.mode === "busy" && this.inputs.mode === "idle";
       const presenceOwner = finished && this.vigil ? "vigil" : null;
       this.trackVigil();
       if (this.presence === "in" && !plans.prefersReducedMotion()) {
-        const finishAct = plans.resolveLobsterFinishAct(this.runOutcome);
+        const finishAct = plans.resolveLobsterFinishAct(this.inputs.runOutcome);
         this.performAct(finished ? finishAct : "startle", presenceOwner);
       }
     }
-    if (changed.has("visitsEnabled") || changed.has("residentEnabled")) {
-      if (this.visitsEnabled && changed.get("visitsEnabled") === false) {
+    if (
+      previous.visitsEnabled !== this.inputs.visitsEnabled ||
+      previous.residentEnabled !== this.inputs.residentEnabled
+    ) {
+      if (this.inputs.visitsEnabled && !previous.visitsEnabled) {
         this.dismissed = false;
-        this.traffic.reset(this.seed);
+        this.traffic.reset(this.inputs.seed);
       }
-      if (!this.visitsEnabled || !this.residentEnabled) {
+      if (!this.inputs.visitsEnabled || !this.inputs.residentEnabled) {
         this.suspendResident();
-      } else if (
-        changed.get("visitsEnabled") === false ||
-        changed.get("residentEnabled") === false
-      ) {
+      } else if (!previous.visitsEnabled || !previous.residentEnabled) {
         this.scheduleVisits();
         this.trackVigil();
       }
     }
-    // SAFETY: update records this typed property before replacing it with the next props.
-    const previousCritters = (changed.get("critters") as readonly string[] | undefined) ?? [];
-    const critters = this.critters ?? [];
+    const previousCritters = previous.critters ?? [];
+    const critters = this.inputs.critters ?? [];
     const crittersChanged =
-      changed.has("critters") &&
+      previous.critters !== this.inputs.critters &&
       (previousCritters.length !== critters.length ||
         previousCritters.some((kind, index) => kind !== critters[index]));
-    if (!seedChanged && (changed.has("residentEnabled") || crittersChanged)) {
-      this.traffic.replanPasser(this.seed);
+    if (
+      !seedChanged &&
+      (previous.residentEnabled !== this.inputs.residentEnabled || crittersChanged)
+    ) {
+      this.traffic.replanPasser(this.inputs.seed);
       this.geometry.scheduleMeasure();
     }
     // A theme without the resident leaves its upgrade marker for a later visit.
-    if (this.residentEnabled && !this.movingDayChecked && this.gatewayVersion) {
+    if (this.inputs.residentEnabled && !this.movingDayChecked && this.inputs.gatewayVersion) {
       this.movingDayChecked = true;
-      this.movingDay = plans.detectLobsterMovingDay(this.gatewayVersion);
+      this.movingDay = plans.detectLobsterMovingDay(this.inputs.gatewayVersion);
     }
     // The completed-Lobsterdex trim lives on the host so it survives the pet
     // being out; the visits setting and dismissals silence it too.
     this.host.toggleAttribute(
       "data-dex-complete",
       (this.identity?.dexComplete ?? false) &&
-        this.visitsEnabled &&
-        this.residentEnabled &&
+        this.inputs.visitsEnabled &&
+        this.inputs.residentEnabled &&
         !this.dismissed,
     );
     // Losing an empty floor is immediate: never animate back through newly
     // entered text, an attachment, or a newly widened footer control.
     if (
-      ((!this.floorEnabled || !this.geometry.scene.floor) && this.anchor === "floor") ||
+      ((!this.inputs.floorEnabled || !this.geometry.scene.floor) && this.anchor === "floor") ||
       (this.travel && this.travelScene !== this.geometry.scene)
     ) {
       this.clearActTimers();
@@ -310,7 +292,7 @@ export class LobsterPetOwner {
       this.restartPending = this.presence === "in";
     }
     this.host.setAttribute("data-spot", this.anchor);
-    this.host.toggleAttribute("data-floor-enabled", this.floorEnabled);
+    this.host.toggleAttribute("data-floor-enabled", this.inputs.floorEnabled);
     this.reconcilePresence();
     this.traffic.update();
   }
@@ -334,8 +316,8 @@ export class LobsterPetOwner {
           );
           dex.recordLobsterVisit(this.look.palette.id, {
             name: this.identity
-              ? plans.lobsterLoadDisplayName(this.identity, this.seed)
-              : lobsterLook.lobsterPetName(this.look, this.seed),
+              ? plans.lobsterLoadDisplayName(this.identity, this.inputs.seed)
+              : lobsterLook.lobsterPetName(this.look, this.inputs.seed),
             shiny: this.look.shiny,
           });
           dex.recordLobsterArrivalStats();
@@ -392,7 +374,12 @@ export class LobsterPetOwner {
 
   private trackVigil() {
     this.timers.clear("vigilTimer");
-    if (this.mode === "busy" && this.visitsEnabled && this.residentEnabled && !this.dismissed) {
+    if (
+      this.inputs.mode === "busy" &&
+      this.inputs.visitsEnabled &&
+      this.inputs.residentEnabled &&
+      !this.dismissed
+    ) {
       this.timers.schedule("vigilTimer", 600_000, () => {
         this.vigil = true;
         this.clearActTimers();
@@ -404,7 +391,7 @@ export class LobsterPetOwner {
   }
 
   private readonly openDismissMenu = (event: MouseEvent) => {
-    if (!this.residentEnabled || !this.visitsEnabled) {
+    if (!this.inputs.residentEnabled || !this.inputs.visitsEnabled) {
       return;
     }
     event.preventDefault();
@@ -419,10 +406,10 @@ export class LobsterPetOwner {
     this.dismissed = true;
     dex.recordLobsterShoo();
     if (permanently) {
-      this.visitsEnabled = false;
+      this.inputs = { ...this.inputs, visitsEnabled: false };
       this.disableVisits();
       patchSettings({ lobsterPetVisits: false });
-      this.onVisitsDisabled();
+      this.inputs.onVisitsDisabled();
     }
     this.refresh();
   }
@@ -451,7 +438,7 @@ export class LobsterPetOwner {
   private scheduleVisits() {
     this.timers.clear("visitTimer", "leaveTimer");
     this.scheduledVisiting = false;
-    if (!this.visitsEnabled || !this.residentEnabled) {
+    if (!this.inputs.visitsEnabled || !this.inputs.residentEnabled) {
       return;
     }
     // A shy share of loads never visits on their own; offline still summons.
@@ -469,7 +456,7 @@ export class LobsterPetOwner {
   }
 
   private armArrival(delayMs: number) {
-    if (!this.active || !this.visitsEnabled || !this.residentEnabled) {
+    if (!this.active || !this.inputs.visitsEnabled || !this.inputs.residentEnabled) {
       return;
     }
     this.timers.schedule("visitTimer", delayMs, () => {
@@ -509,7 +496,7 @@ export class LobsterPetOwner {
       this.presence !== "in" ||
       this.act !== null ||
       this.vigil ||
-      this.mode !== "idle" ||
+      this.inputs.mode !== "idle" ||
       plans.prefersReducedMotion()
     ) {
       return;
@@ -528,8 +515,8 @@ export class LobsterPetOwner {
     // must also stay inert for reduced-motion users and departed pets.
     if (
       !this.active ||
-      !this.visitsEnabled ||
-      !this.residentEnabled ||
+      !this.inputs.visitsEnabled ||
+      !this.inputs.residentEnabled ||
       !this.look ||
       this.presence !== "in" ||
       this.vigil ||
@@ -540,13 +527,16 @@ export class LobsterPetOwner {
     ) {
       return;
     }
-    const profile = plans.resolveLobsterActProfile(this.mode, this.look.personality);
+    const profile = plans.resolveLobsterActProfile(this.inputs.mode, this.look.personality);
     if (!profile) {
       return;
     }
     const delay = lobsterLook.randomBetween(this.rng, profile.delayMs[0], profile.delayMs[1]);
     this.timers.schedule("idleTimer", delay, () => {
-      const nextProfile = plans.resolveLobsterActProfile(this.mode, this.look?.personality ?? null);
+      const nextProfile = plans.resolveLobsterActProfile(
+        this.inputs.mode,
+        this.look?.personality ?? null,
+      );
       // A crossing pauses the fidget loop: the pet is busy watching. The
       // traffic controller's passer-end hook restarts scheduling.
       if (
@@ -557,7 +547,7 @@ export class LobsterPetOwner {
       ) {
         return;
       }
-      if (this.moltPlanned && !this.molted && this.mode === "idle") {
+      if (this.moltPlanned && !this.molted && this.inputs.mode === "idle") {
         this.performAct("molt");
         return;
       }
@@ -566,7 +556,7 @@ export class LobsterPetOwner {
   }
 
   private performAct(act: plans.LobsterPetAct, presenceOwner: "vigil" | null = null) {
-    if (!this.visitsEnabled || !this.residentEnabled || this.presence !== "in") {
+    if (!this.inputs.visitsEnabled || !this.inputs.residentEnabled || this.presence !== "in") {
       return;
     }
     this.clearActTimers();
@@ -634,7 +624,7 @@ export class LobsterPetOwner {
 
   private startFloorHop() {
     if (
-      !this.floorEnabled ||
+      !this.inputs.floorEnabled ||
       this.identity?.elder ||
       (this.anchor === "top" && this.motionRng() >= 0.45)
     ) {
@@ -656,16 +646,16 @@ export class LobsterPetOwner {
         : null;
     return {
       look,
-      mode: this.mode,
+      mode: this.inputs.mode,
       presence: this.presence,
       shellVisible: this.shellVisible,
       shellAnchor: this.shellAnchor,
       scene: this.geometry.scene,
       travel: this.travel,
-      floorEnabled: this.floorEnabled,
-      visitsEnabled: this.visitsEnabled,
-      residentEnabled: this.residentEnabled,
-      critterArtwork: this.critterArtwork,
+      floorEnabled: this.inputs.floorEnabled,
+      visitsEnabled: this.inputs.visitsEnabled,
+      residentEnabled: this.inputs.residentEnabled,
+      critterArtwork: this.inputs.critterArtwork,
       dismissed: this.dismissed,
       passer: this.traffic.passer
         ? {
@@ -690,10 +680,10 @@ export class LobsterPetOwner {
       shellScale: this.shellScale,
       shellSpotPct: this.shellSpotPct,
       familiarityVisits: this.familiarity.visits,
-      seed: this.seed,
+      seed: this.inputs.seed,
       movingDay: this.movingDay,
       sailorDay: this.sailorDay,
-      nameOverride: identity ? plans.lobsterLoadDisplayName(identity, this.seed) : null,
+      nameOverride: identity ? plans.lobsterLoadDisplayName(identity, this.inputs.seed) : null,
       flavor,
       bottle: this.traffic.bottle,
       onPointerDown: this.interactions.handleHoldStart,

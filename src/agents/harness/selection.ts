@@ -1,9 +1,6 @@
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
-/**
- * Selects and invokes native agent harnesses for embedded run attempts.
- */
 import {
   createChildDiagnosticTraceContext,
   createDiagnosticTraceContext,
@@ -56,11 +53,15 @@ import {
   type ResolvedPluginHarnessToolPolicies,
 } from "./execution-environment.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
+import { bindHarnessSettledTurnCallback } from "./host-source-authority.js";
 import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import { withoutPluginHarnessPrivateState } from "./plugin-private-state.js";
+import {
+  prepareHarnessFinalizationParams,
+  withoutPluginHarnessPrivateState,
+} from "./plugin-private-state.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -375,12 +376,6 @@ export async function runAgentHarnessAttempt(
     selection.builtIn,
     selection.ownerPluginId,
   );
-  logAgentHarnessSelection(selection, {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
   let result: EmbeddedRunAttemptResult;
   let assembly: ContextEngineAssemblySnapshot | undefined;
   try {
@@ -608,35 +603,18 @@ function withoutInternalHarnessAuthority(
       })(),
   });
   return {
-    params: { ...pluginParams, hostCapabilities: host.capabilities },
+    params: {
+      ...pluginParams,
+      hostCapabilities: host.capabilities,
+      onSettledTurn: bindHarnessSettledTurnCallback(
+        params.onSettledTurn,
+        host.capabilities.assertActive,
+        params.abortSignal,
+      ),
+    },
     closeHostCapabilities: host.close,
     setInputAttachmentReadAllowed: host.setInputAttachmentReadAllowed,
     runWithHostScope: host.runWithScope,
-  };
-}
-
-function prepareHarnessFinalizationParams(
-  params: EmbeddedRunAttemptParams & { systemAgentTool?: SystemAgentToolOptions },
-  builtIn: boolean,
-): import("./types.js").AgentHarnessSettledTurnFinalizationAttemptParams<
-  import("./types.js").AgentHarnessAttemptParamsV2
-> {
-  const {
-    hostCapabilities: _hostCapabilities,
-    systemAgentTool: _systemAgentTool,
-    ...withoutCapabilities
-  } = params;
-  if (builtIn) {
-    return withoutCapabilities;
-  }
-  const pluginParams = withoutPluginHarnessPrivateState(withoutCapabilities);
-  const boundary = "plugin harness finalization handoff";
-  return {
-    ...pluginParams,
-    model: unwrapModelHeaderSentinelsForProviderEgress(pluginParams.model, boundary),
-    resolvedApiKey: pluginParams.resolvedApiKey
-      ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
-      : pluginParams.resolvedApiKey,
   };
 }
 
@@ -713,23 +691,4 @@ function appendPluginHarnessToolPolicyPrompt(existing: string | undefined, promp
     return prompt;
   }
   return trimmed.includes(prompt) ? trimmed : `${trimmed}\n\n${prompt}`;
-}
-
-function logAgentHarnessSelection(
-  selection: AgentHarnessSelectionDecision,
-  params: { provider: string; modelId?: string; sessionKey?: string; agentId?: string },
-) {
-  if (!log.isEnabled("debug")) {
-    return;
-  }
-  log.debug("agent harness selected", {
-    provider: params.provider,
-    modelId: params.modelId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    selectedHarnessId: selection.selectedHarnessId,
-    selectedReason: selection.selectedReason,
-    runtime: selection.policy.runtime,
-    candidates: selection.candidates,
-  });
 }

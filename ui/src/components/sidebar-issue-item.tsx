@@ -401,7 +401,10 @@ export function SidebarIssueItem(props: {
       when={navigation()}
       fallback={
         <details
-          class={`sidebar-issues-panel__details sidebar-issues-panel__details--${props.item.severity}`}
+          class={[
+            "sidebar-issues-panel__details",
+            `sidebar-issues-panel__details--${props.item.severity}`,
+          ]}
           data-attention-kind={props.item.kind}
         >
           <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
@@ -449,7 +452,10 @@ export function SidebarIssueItem(props: {
     >
       {(action) => (
         <div
-          class={`sidebar-issues-panel__details sidebar-issues-panel__details--${props.item.severity}`}
+          class={[
+            "sidebar-issues-panel__details",
+            `sidebar-issues-panel__details--${props.item.severity}`,
+          ]}
           data-attention-kind={props.item.kind}
         >
           <div class="sidebar-issues-panel__summary sidebar-issues-panel__summary--navigation">

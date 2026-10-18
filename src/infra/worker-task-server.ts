@@ -4,8 +4,7 @@ import { MessagePort, type Transferable } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   serveOwnedWorkerTasks as serveRuntimeWorkerTasks,
-  type WorkerTaskChannel,
-  type WorkerTaskControl,
+  type WorkerTaskHandler,
 } from "@openclaw/worker-runtime/worker";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import { loggingState } from "../logging/state.js";
@@ -15,6 +14,7 @@ import {
   installDeletedAgentDatabaseFences,
 } from "./agent-database-readers.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
+import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
 import { withSqliteDatabaseAdmissionExchange } from "./sqlite-database-admission.js";
 import {
   bindSqliteDatabaseAdmissionUpstream,
@@ -27,27 +27,22 @@ import { WORKER_TASK_PORT_MESSAGE, type WorkerTaskContext } from "./worker-task-
 
 export type { WorkerTaskChannel } from "@openclaw/worker-runtime/worker";
 
-type WorkerTaskHandler<Output> = (
-  input: unknown,
-  channel: WorkerTaskChannel | undefined,
-  control: WorkerTaskControl,
-) => Output | Promise<Output>;
-
 /** Pool dispatch is serial per worker; handlers finish cleanup before returning their result. */
-export function serveWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     retireOnError?: boolean;
     idleGc?: false;
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   serveOwnedWorkerTasks(handler, options);
 }
 
 /** Every served worker closes its agent database readers by path between tasks; owners may add more. */
-export function serveOwnedWorkerTasks<Output>(
-  handler: WorkerTaskHandler<Output>,
+export function serveOwnedWorkerTasks<Output, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
     closeResource?: (key?: string) => void | Promise<void>;
@@ -56,6 +51,8 @@ export function serveOwnedWorkerTasks<Output>(
     retireOnError?: boolean;
     /** Guest runtimes own their heap budget and lifetime across task boundaries. */
     idleGc?: false;
+    /** Cheap owner-held counts and size estimates; never contents, keys, or identities. */
+    retainedData?: () => readonly DiagnosticWorkerRetainedData[];
   } = {},
 ): void {
   let memoryPort: MessagePort;
@@ -87,7 +84,7 @@ export function serveOwnedWorkerTasks<Output>(
       ? withDatabaseEngineSelection(databaseEngineSelection, run)
       : run();
   };
-  serveRuntimeWorkerTasks<Output, WorkerTaskContext>(
+  serveRuntimeWorkerTasks<Output, WorkerTaskContext, Input>(
     (input, channel, control) =>
       withSqliteDatabaseAdmissionWait(
         {
@@ -133,7 +130,7 @@ export function serveOwnedWorkerTasks<Output>(
       },
       onMessage(sampleMemory) {
         if (sampleMemory && !closeMemorySamples) {
-          closeMemorySamples = serveWorkerMemorySamples(memoryPort);
+          closeMemorySamples = serveWorkerMemorySamples(memoryPort, options.retainedData);
         }
         cancelWorkerIdleGc();
       },

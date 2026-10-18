@@ -12,6 +12,7 @@ import {
   parseAgentSessionKeyParts,
   type ParsedAgentSessionKey,
 } from "@openclaw/session-url-contract";
+import type { GatewayHelloOk } from "../../api/gateway.ts";
 
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY };
 export const DEFAULT_AGENT_ID = "main";
@@ -28,15 +29,10 @@ const COMPARISON_KEY_CACHE_LIMIT = 4_096;
 export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null; scope?: string | null } | null;
-  hello?: { snapshot?: unknown } | null;
+  hello?: Pick<GatewayHelloOk, "snapshot"> | null;
 };
 
-type UiSessionDefaults = {
-  defaultAgentId?: string | null;
-  mainKey?: string | null;
-  mainSessionKey?: string | null;
-  modelConfigured?: boolean;
-};
+type UiSessionDefaults = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["sessionDefaults"]>;
 
 export { normalizeAgentId };
 
@@ -123,12 +119,7 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
 export function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
 ): UiSessionDefaults | undefined {
-  const snapshot = host.hello?.snapshot;
-  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
-    return undefined;
-  }
-  const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object" ? (defaults as UiSessionDefaults) : undefined;
+  return host.hello?.snapshot?.sessionDefaults;
 }
 
 export function resolveUiConfiguredMainKey(
@@ -192,7 +183,7 @@ export function isUiGlobalScopeConfigured(
 export function resolveUiConversationIdentity(
   host: UiSessionDefaultsHost,
   sessionKey: string,
-  agentIdOverride?: string,
+  agentIdOverride?: string | null,
 ): { sessionKey: string; agentId?: string } {
   const raw = sessionKey.trim();
   const parsed = parseAgentSessionKey(raw);

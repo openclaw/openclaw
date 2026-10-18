@@ -37,6 +37,7 @@ retirement fails, Doctor reports the error and leaves the private snapshot in pl
 Plugin source captures use the original profile's temporary storage, outside these
 database snapshots. Their plugin-cache owner retains them until plugin inspection
 finishes, so later channel setup checks can reuse admitted native files safely.
+Read-only database checks also keep plugin captures outside the profile's state directory.
 
 ```bash
 openclaw doctor --json

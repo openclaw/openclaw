@@ -1,6 +1,7 @@
 // Shared Gateway connection owner: admission, registration, dispatch, and tracked cleanup.
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolvePreauthHandshakeTimeoutMs } from "../../../packages/gateway-client/src/timeouts.js";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
@@ -307,10 +308,12 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       } else {
         socket.send(encoded, { binary: false });
       }
-      return {
-        kind: "sent",
-        bytes: typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength,
-      } as const;
+      const bytes = typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength;
+      const frame = asOptionalRecord(obj);
+      if (frame?.type === "event" && typeof frame.event === "string") {
+        socket.recordEventSent?.(frame.event, bytes);
+      }
+      return { kind: "sent", bytes } as const;
     } catch {
       socket.terminate();
       retireConnection();

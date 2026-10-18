@@ -94,7 +94,9 @@ export async function terminateCodexAppServerDescendants(
     return undefined;
   }
   // Inspection failures never grant containment or signal authority.
-  const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
+  const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [rootPid]).catch(
+    () => undefined,
+  );
   if (!snapshot || performance.now() >= deadline) {
     return undefined;
   }
@@ -220,7 +222,10 @@ async function quiesceDescendants(
     if (performance.now() >= deadline) {
       return undefined;
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(deadline).catch(() => undefined);
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, undefined, [
+      root.pid,
+      ...provenByPid.keys(),
+    ]).catch(() => undefined);
     if (!snapshot || performance.now() >= deadline) {
       return undefined;
     }

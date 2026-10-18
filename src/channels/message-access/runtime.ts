@@ -444,15 +444,14 @@ async function resolveChannelMessageIngressForOwner(
       // Retained channel callbacks must re-enter their own plugin instance.
       childSessionPublication: wrapCurrentPluginInstance(params.childSessionPublication),
       verifiedPrincipal,
-      requesterProfile:
-        requester && ownerIsCurrent()
-          ? {
-              id: requester.linked.profileId,
-              displayName: requester.linked.displayName,
-              isCurrent: requester.isCurrent,
-            }
-          : undefined,
-      commandOwnerAuthority: ownerIsCurrent() ? commandOwnerAuthority : undefined,
+      requesterProfile: requester
+        ? {
+            id: requester.linked.profileId,
+            displayName: requester.linked.displayName,
+            isCurrent: requester.isCurrent,
+          }
+        : undefined,
+      commandOwnerAuthority,
       promptedAt,
       owner: participantOwner,
       gatewayContext: participantGatewayContext,

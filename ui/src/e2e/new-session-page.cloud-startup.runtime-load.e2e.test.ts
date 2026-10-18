@@ -322,12 +322,16 @@ suite.define(() => {
           const reload = page
             .locator(".lazy-view-error")
             .getByRole("button", { name: "Reload", exact: true });
+          await reload.waitFor();
+          // Route imports may probe to retry in place even when private work
+          // blocks document replacement. Manual reload must still stop at the guard.
+          const probesBeforeManualReload = documentProbes;
           await reload.click();
           const toast = page.locator(".app-toast__message");
           await expect.poll(() => toast.textContent()).toContain(warning);
 
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-          expect(documentProbes).toBe(blockedDocumentProbes);
+          expect(documentProbes).toBe(probesBeforeManualReload);
           if (captureUiProofEnabled) {
             await page.screenshot({
               animations: "disabled",

@@ -20,6 +20,7 @@ import {
   listUserModelAccounts,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
+import { ensureEnterpriseGitHubProfile } from "./user-profile-enterprise-github-write.worker.js";
 import {
   selectProfileAccessEntries,
   selectStoredGitHubIdentities,
@@ -117,6 +118,17 @@ const userProfileWriteOperations = {
         ...owned,
         expectedGitHubAccountId: input.expectedGitHubAccountId,
       }),
+  ),
+  "userProfiles.ensureEnterpriseGitHub": createUserProfileWriteOperation(
+    "userProfiles.ensureEnterpriseGitHub",
+    (
+      input: {
+        principal: string;
+        name: string;
+        verifiedMetadata: { login: string; email?: string };
+      },
+      owned,
+    ) => ensureEnterpriseGitHubProfile(input.principal, input.name, input.verifiedMetadata, owned),
   ),
   "userProfiles.ensureTailscale": createUserProfileWriteOperation(
     "userProfiles.ensureTailscale",

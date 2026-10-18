@@ -8,7 +8,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { withAgentDeletion } from "../../agents/agent-lifecycle-registry.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -126,6 +128,67 @@ afterAll(() => {
 });
 
 describe("session event target custody", () => {
+  it("rejects deletion-revoked events with worker-prepared authority and no native journal reads", async () => {
+    await withTargetFixture(
+      async (state) => {
+        const { env, storePath } = state;
+        const observed = observeHostDataSql();
+        const target = await captureSessionEventTargetForHost("main", sessionKey, { env }).finally(
+          observed.restore,
+        );
+        expect(observed.queries.filter((sql) => /\bagent_deletion_journal\b/i.test(sql))).toEqual(
+          [],
+        );
+        expect(target).toMatchObject({
+          agentId: "main",
+          sessionKey,
+          sessionId: "original-session",
+          lifecycleRevision: "original-revision",
+          storePath,
+          deliveryContext: route,
+          settings: { permissionMode: "full" },
+        });
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        await withAgentDeletion(
+          "main",
+          async (begin) => {
+            const deletion = await begin({
+              agentId: "main",
+              agentDir: state.agentDir("main"),
+              workspaceDir: state.path("workspace"),
+              sessionsDir: state.sessionsDir("main"),
+              phase: "draining",
+            });
+            expect(() => assertSessionEventTargetCurrent(target)).toThrow(
+              "Session event owner is being deleted",
+            );
+            for (const expectedTarget of [target, undefined]) {
+              const receipt = enqueueSessionEventForHost("Process completed", {
+                agentId: "main",
+                sessionKey,
+                source: "exec",
+                expectedTarget,
+              });
+              await expect(receipt.settled).resolves.toMatchObject({
+                status: "failed",
+                executionStarted: false,
+                delivered: false,
+                error: expect.stringContaining("Session event agent is being deleted"),
+              });
+            }
+            expect(dispatch).not.toHaveBeenCalled();
+            expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+            await deletion.rollback();
+          },
+          { env },
+        );
+        expect(() => assertSessionEventTargetCurrent(target)).not.toThrow();
+        expect(target.deliveryContext).toEqual(route);
+      },
+      { native: true },
+    );
+  });
+
   it("preserves cold event capture across an empty usage refresh", async () => {
     const { refreshCostUsageCacheForAgent } =
       await import("../../infra/session-cost-usage-aggregation.js");

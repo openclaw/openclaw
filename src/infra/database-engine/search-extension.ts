@@ -8,11 +8,8 @@ import type { SearchSchema } from "./contract.js";
 import { getPostgresPhysicalFacts, publishPostgresSearchExtensionFacts } from "./physical-facts.js";
 import {
   getAdmittedPostgresSchema,
-  readPostgresSchema,
   retainPostgresSchema,
   verifyAndRecordPostgresSchema,
-  verifyPostgresSchema,
-  withPostgresSearchExtensions,
 } from "./postgres-schema.js";
 import {
   admitPostgresSearch,
@@ -20,6 +17,8 @@ import {
   publishPostgresSearch,
 } from "./postgres-search-schema.js";
 import { bindStoreSearch } from "./search.js";
+import { admitSqliteMemoryVectorSearch } from "./sqlite-memory-vector-schema.js";
+import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
 
 class SearchExtensionDefinitionChangedError extends Error {
   override name = "SearchExtensionDefinitionChangedError";
@@ -32,7 +31,13 @@ export function admitStoreSearchExtension(
   definition: SearchSchema,
 ) {
   if (!isPostgresSqlConnection(db)) {
-    return bindStoreSearch(db, definition);
+    if (name === "memory.vector") {
+      admitSqliteMemoryVectorSearch(db, definition);
+    }
+    return bindStoreSearch(
+      db,
+      name === "memory.text" ? admitSqliteMemoryTextSearch(db, definition) : definition,
+    );
   }
   const base = getAdmittedPostgresSchema(db);
   const facts = getPostgresPhysicalFacts(db);
@@ -42,22 +47,14 @@ export function admitStoreSearchExtension(
   if (JSON.stringify(base.searchExtensions?.[name]) === JSON.stringify(definition)) {
     return bindStoreSearch(db, definition);
   }
+  if (base.searchExtensions?.[name]) {
+    throw new SearchExtensionDefinitionChangedError(
+      `Search extension ${name} changed. Restore its previous definition, or rebuild the derived extension from canonical source data before using the new definition.`,
+    );
+  }
   db.runTransaction(() => {
-    const before = readPostgresSchema(db, facts.namespace, base.id);
-    const current = withPostgresSearchExtensions(base, before);
-    verifyPostgresSchema(db, facts.namespace, current, before);
-    const previous = current.searchExtensions?.[name];
-    if (previous && JSON.stringify(previous) !== JSON.stringify(definition)) {
-      throw new SearchExtensionDefinitionChangedError(
-        `Search extension ${name} changed. Restore its previous definition, or rebuild the derived extension from canonical source data before using the new definition.`,
-      );
-    }
-    const publish = admitPostgresSearch(db, definition, facts.namespace);
-    if (previous) {
-      publish?.();
-      return;
-    }
-    const existing = [current.search, ...Object.values(current.searchExtensions ?? {})].filter(
+    admitPostgresSearch(db, definition, facts.namespace);
+    const existing = [base.search, ...Object.values(base.searchExtensions ?? {})].filter(
       (item) => item !== undefined,
     );
     if (
@@ -68,8 +65,8 @@ export function admitStoreSearchExtension(
       throw new Error("Search extensions must use the store's admitted extension schema");
     }
     const next = {
-      ...current,
-      searchExtensions: { ...current.searchExtensions, [name]: definition },
+      ...base,
+      searchExtensions: { ...base.searchExtensions, [name]: definition },
     };
     db.exec(
       postgresSearchSql(definition, facts.namespace, {
@@ -79,9 +76,9 @@ export function admitStoreSearchExtension(
         ),
       }),
     );
-    if (!("search_extensions" in before.metadata)) {
+    if (!Object.keys(base.searchExtensions ?? {}).length) {
       // sqlite-allow-raw: Engine-owned metadata is outside the application catalog seal.
-      db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN search_extensions TEXT");
+      db.exec("ALTER TABLE openclaw_schema_meta ADD COLUMN IF NOT EXISTS search_extensions TEXT");
     }
     // sqlite-allow-raw: Persist only the admitted owner's definitions, in the same DDL transaction.
     db.prepare("UPDATE openclaw_schema_meta SET search_extensions = ? WHERE store = ?").run(
@@ -91,12 +88,10 @@ export function admitStoreSearchExtension(
     const after = verifyAndRecordPostgresSchema(db, facts.namespace, next);
     invalidateLocalSqliteSchemaAdmissions(db);
     stageSqliteTransactionState(db, {
-      stage: () => {},
-      rollback: () => {},
-      commit: () => {
-        publishSqliteDatabaseSchemaChange(db);
-        retainPostgresSchema(db, next);
-      },
+      // Later admissions in the same owner transaction consume this definition.
+      stage: () => retainPostgresSchema(db, next),
+      rollback: () => retainPostgresSchema(db, base),
+      commit: () => publishSqliteDatabaseSchemaChange(db),
     });
     publishPostgresSearchExtensionFacts(db, facts, after.catalog);
     for (const item of [next.search, ...Object.values(next.searchExtensions)].filter(

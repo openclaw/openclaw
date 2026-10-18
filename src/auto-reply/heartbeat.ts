@@ -96,6 +96,15 @@ export function resolveHeartbeatPromptForResponseTool(raw?: string): string {
 
 type StripHeartbeatMode = "heartbeat" | "message";
 const HEARTBEAT_TRAILING_TOKEN_RE = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
+/** Heartbeats accept only strict token prefixes with at least four characters. */
+function isTruncatedSilentReplyText(text: string | undefined): boolean {
+  const candidate = text?.trim().toUpperCase() ?? "";
+  return (
+    candidate.length >= 4 &&
+    candidate.length < SILENT_REPLY_TOKEN.length &&
+    SILENT_REPLY_TOKEN.startsWith(candidate)
+  );
+}
 
 function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
   let text = raw.trim();
@@ -138,18 +147,25 @@ function stripTokenAtEdges(raw: string): { text: string; didStrip: boolean } {
 /** Strips HEARTBEAT_OK acknowledgements and decides whether visible notification is needed. */
 export function stripHeartbeatToken(
   raw?: string,
-  opts: { mode?: StripHeartbeatMode; maxAckChars?: number } = {},
+  opts: { mode?: StripHeartbeatMode; maxAckChars?: number; allowTruncated?: boolean } = {},
 ) {
   const trimmed = raw?.trim();
   if (!trimmed) {
     return { shouldSkip: true, text: "", didStrip: false };
+  }
+  const mode: StripHeartbeatMode = opts.mode ?? "message";
+  if (
+    mode === "heartbeat" &&
+    opts.allowTruncated !== false &&
+    isTruncatedSilentReplyText(trimmed)
+  ) {
+    return { shouldSkip: true, text: "", didStrip: true };
   }
   // Markup cleanup inserts spaces or removes edge wrappers; it cannot create this token.
   if (!trimmed.includes(HEARTBEAT_TOKEN)) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  const mode: StripHeartbeatMode = opts.mode ?? "message";
   const maxAckCharsRaw = opts.maxAckChars;
   const maxAckChars = Math.max(
     0,
@@ -182,10 +198,11 @@ export function stripHeartbeatToken(
   return { shouldSkip, text: shouldSkip ? "" : rest, didStrip: true };
 }
 
-/** Recognizes canonical silent replies and backwards-compatible heartbeat acknowledgements. */
+/** Truncated acknowledgements require established heartbeat context. */
 export function isHeartbeatAcknowledgementText(
   text: string | undefined,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  allowTruncated = false,
 ): boolean {
-  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars }).shouldSkip;
+  return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars, allowTruncated }).shouldSkip;
 }

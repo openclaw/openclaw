@@ -67,6 +67,9 @@
       "source": "official",
       "kind": "plugin",
       "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
         "plugin": {
           "id": "cloudflare",
           "label": "Cloudflare"

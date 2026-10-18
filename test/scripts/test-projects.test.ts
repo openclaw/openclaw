@@ -2448,7 +2448,7 @@ export const single = {
   it.each(["changed", "explicit"])(
     "routes %s ui support files to the ui lane without dead include globs",
     (mode) => {
-      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/lit-warnings.setup.ts"];
+      const targets = ["ui/src/styles/base.css", "ui/src/test-helpers/dom.setup.ts"];
       const plans = buildVitestRunPlans(
         mode === "changed" ? ["--changed", "origin/main"] : targets,
         process.cwd(),
@@ -3756,7 +3756,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       const gatewayTargets = targetedPlans("test/vitest/vitest.gateway-server.config.ts").map(
         (plan) => plan.forwardedArgs,
       );
-      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+      expect(gatewayTargets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
       expect(gatewayTargets.flat()).toEqual(
         listGitTrackedFiles({ pathspecs: "src/gateway" })
           ?.filter(isGatewayServerTestFile)

@@ -5,89 +5,35 @@ import {
   readNonEmptyStringPreservingWhitespace,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
-import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CronJob, CronRunResult, CronStatus } from "../../api/types.ts";
+import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
-import {
-  formatMissingOperatorReadScopeMessage,
-  isMissingOperatorReadScopeError,
-} from "../gateway-errors.ts";
 import { parseCronDurationMs } from "./decimal.ts";
 import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
-import {
-  DEFAULT_CRON_FORM,
-  isReadOnlyCronPayload,
-  jobToForm,
-  normalizeCronFormState,
-} from "./form.ts";
+import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs.ts";
 import { buildCronPayload, getCronJobPayload } from "./payload.ts";
 import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
+import {
+  DEFAULT_CRON_FORM,
+  loadCronStatus,
+  retireCronSelectedJobRead,
+  retireCronStatusFeedback,
+  retireCronStatusRequest,
+} from "./state.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
 import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 
 export { normalizeCronFormState } from "./form.ts";
+export { createInitialCronState, loadCronStatus } from "./state.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
 export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
-
-export function createInitialCronState<Row = CronJob>(
-  snapshot: Partial<Pick<CronState, "client" | "connected">> = {},
-): CronState<Row> {
-  return {
-    client: snapshot.client ?? null,
-    connected: snapshot.connected ?? false,
-    cronLoading: false,
-    cronJobsError: null,
-    cronJobsLoadingMore: false,
-    cronJobsReloadPending: false,
-    cronJobsReloadPendingTableFilters: false,
-    cronJobs: [],
-    cronJobsSnapshotRevision: null,
-    cronJobsTotal: 0,
-    cronJobsHasMore: false,
-    cronJobsNextOffset: null,
-    cronJobsLimit: 50,
-    cronJobsQuery: "",
-    cronJobsEnabledFilter: "all",
-    cronJobsScheduleKindFilter: "all",
-    cronJobsLastStatusFilter: "all",
-    cronJobsTriggerFilter: "all",
-    cronJobsSortBy: "nextRunAtMs",
-    cronJobsSortDir: "asc",
-    cronAgentId: null,
-    cronStatus: null,
-    cronScopedTotal: null,
-    cronScopedNextWakeAtMs: null,
-    cronError: null,
-    cronForm: { ...DEFAULT_CRON_FORM },
-    cronCreateOpen: false,
-    cronFieldErrors: {},
-    cronEditingJob: null,
-    cronCloningJob: null,
-    cronRunsError: null,
-    cronRunsJobId: null,
-    cronRunsLoadingMore: false,
-    cronRuns: [],
-    cronRunsTotal: 0,
-    cronRunsHasMore: false,
-    cronRunsNextOffset: null,
-    cronRunsLimit: 50,
-    cronRunsScope: "all",
-    cronRunsStatuses: [],
-    cronRunsDeliveryStatuses: [],
-    cronRunsStatusFilter: "all",
-    cronRunsQuery: "",
-    cronRunsSortDir: "desc",
-    cronBusy: false,
-  };
-}
 
 export function validateCronForm(form: CronFormState): CronFieldErrors {
   const errors: CronFieldErrors = {};
@@ -191,112 +137,6 @@ export function hasCronFormErrors(errors: CronFieldErrors): boolean {
   return Object.keys(errors).length > 0;
 }
 
-type CronStatusState = Pick<
-  CronState,
-  | "client"
-  | "connected"
-  | "canRefresh"
-  | "cronAgentId"
-  | "cronEditingJob"
-  | "cronStatus"
-  | "cronError"
-  | "cronBusy"
->;
-
-type CronStatusRequest = {
-  client: GatewayBrowserClient;
-  selectedJob: CronJob | null;
-  reportErrors: boolean;
-  queued?: Deferred;
-};
-const activeCronStatusRequests = new WeakMap<CronStatusState, CronStatusRequest>();
-
-function retireCronStatusRequest(state: CronStatusState) {
-  activeCronStatusRequests.get(state)?.queued?.resolve();
-  activeCronStatusRequests.delete(state);
-}
-
-function retireCronStatusFeedback(state: CronStatusState) {
-  const request = activeCronStatusRequests.get(state);
-  if (request) {
-    request.reportErrors = false;
-  }
-}
-
-export async function loadCronStatus(
-  state: CronStatusState,
-  opts?: { coalesce?: boolean },
-): Promise<void> {
-  const client = state.client;
-  if (!client || !state.connected || state.canRefresh?.() === false) {
-    return;
-  }
-  const active = activeCronStatusRequests.get(state);
-  if (opts?.coalesce && active?.client === client) {
-    return (active.queued ??= createDeferredCore()).promise;
-  }
-  const agentId = state.cronAgentId;
-  const selectedJob = state.cronEditingJob;
-  const request: CronStatusRequest = {
-    client,
-    selectedJob,
-    reportErrors: !opts?.coalesce || !state.cronBusy,
-  };
-  activeCronStatusRequests.set(state, request);
-  const isCurrent = () =>
-    activeCronStatusRequests.get(state) === request &&
-    state.connected &&
-    state.client === client &&
-    state.cronAgentId === agentId;
-  const ownsSelectedJob = () =>
-    isCurrent() && request.selectedJob === selectedJob && state.cronEditingJob === selectedJob;
-  const selectedJobRead = selectedJob
-    ? client.request<CronJob>("cron.get", { id: selectedJob.id }).then(
-        (fresh) => {
-          if (ownsSelectedJob() && fresh.id === selectedJob.id) {
-            // Runtime refresh must not replace the editor's saved definition or dirty form.
-            selectedJob.state = fresh.state;
-          }
-        },
-        (error: unknown) => {
-          if (ownsSelectedJob() && request.reportErrors && (!opts?.coalesce || !request.queued)) {
-            state.cronError = formatUiError(error);
-          }
-        },
-      )
-    : Promise.resolve();
-  try {
-    const res = await client.request<CronStatus>("cron.status", {});
-    if (isCurrent()) {
-      state.cronStatus = res;
-    }
-  } catch (err) {
-    if (!isCurrent() || !request.reportErrors || (opts?.coalesce && request.queued)) {
-      return;
-    }
-    if (isMissingOperatorReadScopeError(err)) {
-      state.cronStatus = null;
-      state.cronError = formatMissingOperatorReadScopeMessage("cron status");
-    } else {
-      state.cronError = formatUiError(err);
-    }
-  } finally {
-    await selectedJobRead;
-    const reload = isCurrent();
-    if (activeCronStatusRequests.get(state) === request) {
-      activeCronStatusRequests.delete(state);
-    }
-    if (request.queued) {
-      const trailing = reload ? loadCronStatus(state, { coalesce: true }) : undefined;
-      // Queued events keep their data freshness without reclaiming retired feedback.
-      if (reload && !request.reportErrors) {
-        retireCronStatusFeedback(state);
-      }
-      request.queued.resolve(trailing);
-    }
-  }
-}
-
 async function withCronBusy(
   state: CronState,
   job: Pick<CronJob, "id" | "name" | "displayName"> | undefined,
@@ -350,7 +190,7 @@ export function updateCronJobsFilter(
     >
   >,
 ) {
-  if (typeof patch.cronJobsQuery === "string") {
+  if (patch.cronJobsQuery !== undefined) {
     state.cronJobsQuery = patch.cronJobsQuery;
   }
   state.cronJobsEnabledFilter = patch.cronJobsEnabledFilter ?? state.cronJobsEnabledFilter;
@@ -360,13 +200,6 @@ export function updateCronJobsFilter(
   state.cronJobsTriggerFilter = patch.cronJobsTriggerFilter ?? state.cronJobsTriggerFilter;
   state.cronJobsSortBy = patch.cronJobsSortBy ?? state.cronJobsSortBy;
   state.cronJobsSortDir = patch.cronJobsSortDir ?? state.cronJobsSortDir;
-}
-
-function retireCronSelectedJobRead(state: CronState) {
-  const request = activeCronStatusRequests.get(state);
-  if (request) {
-    request.selectedJob = null;
-  }
 }
 
 function clearCronEditState(state: CronState) {
@@ -765,4 +598,3 @@ export function cancelCronEdit(state: CronState, agentId: string | null) {
   clearCronEditState(state);
   resetCronFormToDefaults(state, agentId);
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

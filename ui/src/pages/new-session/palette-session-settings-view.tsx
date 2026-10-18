@@ -114,7 +114,7 @@ export function PaletteSessionSettingsView(properties: {
     ) {
       return;
     }
-    // Include native controls supplied by AgentSelect in the panel's DOM order.
+    // AgentSelect owns its native controls; query their rendered order for arrow-key navigation.
     const panel = event.currentTarget;
     const controls = [
       ...panel.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)"),

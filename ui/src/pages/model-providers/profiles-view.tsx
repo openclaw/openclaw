@@ -7,6 +7,7 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
@@ -275,11 +276,7 @@ function startPointerDrag(params: {
       return;
     }
     active = false;
-    grip.removeEventListener("pointermove", update);
-    grip.removeEventListener("pointerup", handleUp);
-    grip.removeEventListener("pointercancel", handleCancel);
-    grip.removeEventListener("lostpointercapture", handleCancel);
-    document.removeEventListener("keydown", handleKeyDown, true);
+    stops.forEach((stop) => stop());
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
@@ -311,12 +308,14 @@ function startPointerDrag(params: {
       finish(params.event, false);
     }
   };
-  grip.addEventListener("pointermove", update);
-  grip.addEventListener("pointerup", handleUp);
-  grip.addEventListener("pointercancel", handleCancel);
-  grip.addEventListener("lostpointercapture", handleCancel);
-  // A drag owns Escape before the Settings shell handles its back shortcut.
-  document.addEventListener("keydown", handleKeyDown, true);
+  const stops = [
+    listen(grip, "pointermove", { handleEvent: update }),
+    listen(grip, "pointerup", { handleEvent: handleUp }),
+    listen(grip, "pointercancel", { handleEvent: handleCancel }),
+    listen(grip, "lostpointercapture", { handleEvent: handleCancel }),
+    // A drag owns Escape before the Settings shell handles its back shortcut.
+    listen(document, "keydown", { handleEvent: handleKeyDown }, true),
+  ];
   return cleanup;
 }
 

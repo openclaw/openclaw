@@ -2,7 +2,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import {
   type AuthProfileStore,
   externalCliDiscoveryForProviderAuth,
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveAuthStatePathForDisplay,
   setAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
@@ -64,7 +64,7 @@ export async function modelsAuthOrderGetCommand(
   runtime: RuntimeEnv,
 ) {
   const { cfg, agentId, agentDir, provider } = await resolveAuthOrderContext(opts, runtime, "read");
-  const store = ensureAuthProfileStore(agentDir, {
+  const store = await ensureAuthProfileStoreAsync(agentDir, {
     externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
   });
   const order = describeOrder(store, provider, cfg);
@@ -100,7 +100,7 @@ export async function modelsAuthOrderUpdateCommand(
   const store =
     opts.order === null
       ? null
-      : ensureAuthProfileStore(agentDir, {
+      : await ensureAuthProfileStoreAsync(agentDir, {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg, provider }),
         });
   const providerKey = resolveProviderIdForAuth(provider, { config: cfg });

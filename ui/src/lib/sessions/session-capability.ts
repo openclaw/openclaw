@@ -31,9 +31,9 @@ import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts"
 import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
 import type {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   GitHubPublicationPresentationBinding,
-} from "./github-publication-controller.ts";
+} from "./github-publication-owner.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
@@ -219,8 +219,7 @@ export type SessionCapability = {
     // The lazy presentation supplies code; this session owner keeps operation custody.
     attach: (
       row: GatewaySessionRow,
-      changed: () => void,
-      Controller: typeof GitHubPublicationController,
+      Owner: typeof GitHubPublicationOwner,
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;

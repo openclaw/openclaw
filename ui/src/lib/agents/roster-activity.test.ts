@@ -3,6 +3,51 @@ import type { AgentsListResult, GatewaySessionRow } from "../../api/types.ts";
 import { agentRosterCards } from "./roster-activity.ts";
 
 describe("agent roster activity", () => {
+  it("selects the latest assistant reply across sessions without using user activity", () => {
+    const cards = agentRosterCards(
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main" }, { id: "unanswered" }],
+      },
+      [
+        {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 100,
+          lastMessagePreview: "New user question",
+          lastAssistantMessage: { text: "Earlier main reply", timestamp: 10 },
+        },
+        {
+          key: "agent:main:work",
+          kind: "direct",
+          updatedAt: 30,
+          lastMessagePreview: "Another user question",
+          lastAssistantMessage: { text: "I have set up the template.", timestamp: 20 },
+        },
+        {
+          key: "agent:main:tied",
+          kind: "direct",
+          updatedAt: 50,
+          lastAssistantMessage: { text: "Tied reply", timestamp: 20 },
+        },
+        {
+          key: "agent:unanswered:main",
+          kind: "direct",
+          updatedAt: 200,
+          lastMessagePreview: "Only a user message",
+        },
+      ],
+    );
+    expect(cards.map((card) => card.assistantPreview)).toEqual([
+      "I have set up the template.",
+      undefined,
+    ]);
+    expect(cards.map((card) => card.sessionCount)).toEqual([3, 1]);
+    expect(cards[0]?.mainKey).toBe("agent:main:main");
+  });
+
   it("preserves row ownership, recency ties, and canonical main precedence", () => {
     const identities: string[] = [];
     const rows: GatewaySessionRow[] = [
@@ -102,6 +147,7 @@ describe("agent roster activity", () => {
       name: "Ember",
       textAvatar: "🔥",
       activeNow: true,
+      sessionCount: 3,
       lastActiveAt: 6,
       preview: "Main summary",
       mainKey: "agent:ember:team",
@@ -111,7 +157,7 @@ describe("agent roster activity", () => {
       lastActiveAt: 9,
       preview: "Recent fallback",
     });
-    expect(cards[2]).toMatchObject({ activeNow: false, lastActiveAt: 0, preview: undefined });
+    expect(cards[2]).toMatchObject({ activeNow: false, sessionCount: 0, lastActiveAt: 0 });
   });
 
   it("honors terminal run state and uses the main flag when its canonical key is absent", () => {

@@ -33,9 +33,7 @@ export function createSyntheticPluginRuntimeClient(
       | "operatorRunAuthority"
       | "operatorAccessAuthority"
       | "cronRunContinuation"
-      | "internalDeliveryMediaUrls"
       | "runtimeContextFragments"
-      | "internalDeliverySuppressText"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
       | "pluginApprovalRequestOwnerId"
@@ -80,12 +78,6 @@ export function createSyntheticPluginRuntimeClient(
       ...(params?.cronRunContinuation === true ? { cronRunContinuation: true } : {}),
       ...(params?.runtimeContextFragments
         ? { runtimeContextFragments: params.runtimeContextFragments }
-        : {}),
-      ...(params?.internalDeliveryMediaUrls
-        ? { internalDeliveryMediaUrls: [...params.internalDeliveryMediaUrls] }
-        : {}),
-      ...(params?.internalDeliverySuppressText === true
-        ? { internalDeliverySuppressText: true }
         : {}),
       ...(params?.internalDeliverySuppressErrors === true
         ? { internalDeliverySuppressErrors: true }

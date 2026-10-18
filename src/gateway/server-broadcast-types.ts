@@ -1,7 +1,7 @@
 import type { GatewayClientCap } from "../../packages/gateway-protocol/src/client-info.js";
 import type { LiveTextProjectionText } from "./live-text-continuity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
-import type { SessionAncestorReferences } from "./session-ancestor-references.js";
+import type { ConnectionSessionRows } from "./session-ancestor-references.js";
 
 export type SessionEventProjection = {
   payload: unknown;
@@ -17,7 +17,7 @@ type SessionEventProjectionScope = {
   agentId?: string;
 };
 
-/** Connection-owned receipts and live run state, consumed within one publication. */
+/** Connection-owned receipts and run display facts, consumed within one publication. */
 type SessionEventProjectionContext = {
   isCurrentProjection: (owner: object) => boolean;
   resolveAgentScope: (
@@ -25,9 +25,9 @@ type SessionEventProjectionContext = {
     agentId?: string,
   ) => readonly [string | undefined, string | undefined, string | undefined] | null;
   forgetAncestors: (key?: string) => void;
-  references: (client: GatewayClient) => SessionAncestorReferences;
+  references: (client: GatewayClient) => ConnectionSessionRows;
   forgetConnectionAncestors: (client: GatewayClient) => void;
-  getRunProjector: () => (selection: {
+  createRunProjector: () => (selection: {
     requestedKey: string;
     canonicalKey: string;
     sessionId?: string;
@@ -56,6 +56,8 @@ export type GatewayBroadcastOpts = {
   excludeClientCapability?: GatewayClientCap;
   /** Canonical subscription keys for session-scoped delivery. */
   sessionKeys?: readonly string[];
+  /** Producer-resolved exact subscription keys for traffic attribution; never changes recipients. */
+  sessionEventSubscriptionKeys?: readonly string[];
   /** Prepared facts remain valid only during this synchronous publication. */
   prepareSessionProjection?: PrepareSessionEventProjection;
   /** Target recipients were selected from subscriptions at ingress. */

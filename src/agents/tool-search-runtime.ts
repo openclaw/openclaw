@@ -64,6 +64,7 @@ import type {
   ToolSearchToolContext,
   UnknownToolErrorOptions,
 } from "./tool-search-types.js";
+import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
 
 type ToolSearchExactCallOptions = Pick<
@@ -209,6 +210,7 @@ function sanitizeToolCallIdPart(value: string): string {
 }
 
 export class ToolSearchRuntime {
+  readonly sourceReplyCell = new ToolSourceReplyCell();
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
@@ -305,54 +307,19 @@ export class ToolSearchRuntime {
     return describeEntry(entry);
   };
 
-  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-      input,
-      options,
-    );
-  };
+  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    await this.callEntry(id, input, options);
 
-  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }, "exact-id"),
-      input,
-      options,
-    );
-  };
+  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    await this.callEntry(id, input, options, false, "exact-id");
 
   callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-          input,
-          options,
-          true,
-        )
-      ).result,
-    );
+    return projectToolResultValue((await this.callEntry(id, input, options, true)).result);
   };
 
   callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
     return projectToolResultValue(
-      (
-        await this.callEntry(
-          findEntry(
-            catalog,
-            id,
-            { ...options, codeModeSkills: this.ctx.codeModeSkills },
-            "exact-id",
-          ),
-          input,
-          options,
-          true,
-        )
-      ).result,
+      (await this.callEntry(id, input, options, true, "exact-id")).result,
     );
   };
 
@@ -401,14 +368,20 @@ export class ToolSearchRuntime {
   };
 
   private readonly callEntry = (
-    entry: ToolSearchCatalogEntry,
+    id: string,
     input?: unknown,
     options?: ToolSearchCallOptions,
     fullValue = false,
+    match: "id-or-name" | "exact-id" = "id-or-name",
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
-      entry,
+      entry: findEntry(
+        resolveCatalog(this.ctx),
+        id,
+        { ...options, codeModeSkills: this.ctx.codeModeSkills },
+        match,
+      ),
       signal: options?.signal,
       execute: (currentEntry, signal) =>
         runWithToolResultDelivery(fullValue, () =>
@@ -457,6 +430,8 @@ export class ToolSearchRuntime {
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+      // Projection failure cannot revoke delivery already committed by the producer.
+      this.sourceReplyCell.observe(candidate);
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;

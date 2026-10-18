@@ -134,7 +134,11 @@ describe("xAI web search auth lifecycle", () => {
       const rejected =
         cancellation === "caller"
           ? expect(searching).rejects.toBe(reason)
-          : expect(searching).rejects.toMatchObject({ code: "ETIMEDOUT" });
+          : expect(searching).rejects.toMatchObject({
+              name: "TimeoutError",
+              code: "ETIMEDOUT",
+              timeoutMs: 60_000,
+            });
       try {
         await started.promise;
         if (cancellation === "caller") {

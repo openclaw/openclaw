@@ -42,9 +42,6 @@ export function executeSessionMaintenance(
   if (command.type === "session.transcript.branch") {
     return runOpenClawAgentWriteTransaction(
       (database) => {
-        if (database.db !== context.database) {
-          throw new Error("Session branch lost its borrowed canonical connection");
-        }
         context.admit("transaction");
         const result = replaceSessionWithBranchedTranscriptInTransaction(
           database,

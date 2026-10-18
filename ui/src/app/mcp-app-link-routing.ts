@@ -1,4 +1,5 @@
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationContext } from "./context.ts";
 
 function looksLikeMcpAppLink(href: string): boolean {
@@ -38,11 +39,11 @@ export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">
         }
       });
   };
-  document.addEventListener("click", click);
+  const stopClick = listen(document, "click", click);
   return {
     dispose: () => {
       disposed = true;
-      document.removeEventListener("click", click);
+      stopClick();
     },
   };
 }

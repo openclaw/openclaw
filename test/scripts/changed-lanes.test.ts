@@ -266,9 +266,10 @@ function runChangedFormatLaneWithRepoOxfmt(cwd: string, changedPaths: string[]) 
 }
 
 // Keep the real gate and managed children; check owners share one synthetic recorder.
+// A direct config-doc input avoids unrelated schema import discovery in this ordering fixture.
 function runChangedCheckWithRecordedCommands(
   failingCommand: string | null,
-  paths = ["src/gateway/server-runtime-state.ts"],
+  paths = ["docs/.generated/config-baseline.counts.json", "src/gateway/server-runtime-state.ts"],
   cwd = repoRoot,
 ) {
   const dir = tempDirs.make("openclaw-changed-check-order-");
@@ -896,7 +897,7 @@ describe("scripts/changed-lanes", () => {
       name: "mixed UI TypeScript and CSS",
       paths: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
       oxlintTargets: ["ui/src/app-routes.ts"],
-      stylelintTargets: ["ui/src/app-routes.ts", "ui/src/styles/base.css"],
+      stylelintTargets: ["ui/src/styles/base.css"],
     },
     {
       name: "UI CSS only",

@@ -5,7 +5,12 @@ import type { ResolvedSessionEntryRow } from "./session-entry-storage.types.js";
 import type { SessionEntryWindowRow } from "./session-entry-window.types.js";
 import type { SessionPendingInputRow } from "./session-pending-input.types.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-projection-append.js";
-import type { SessionTranscriptContextMetadata } from "./session-transcript-projection-facts.types.js";
+import type {
+  SessionTranscriptContextMetadata,
+  SessionTranscriptContextStats,
+} from "./session-transcript-projection-facts.types.js";
+
+export const MAX_SESSION_ACTOR_COMPLETIONS = 512;
 
 export type SessionActorStoredState = {
   agentId: string;
@@ -17,6 +22,8 @@ export type SessionActorStoredState = {
   hasBoard: boolean;
   pendingInputs: Map<string, SessionPendingInputRow>;
   completions: Map<string, Selectable<DB["session_input_completions"]>>;
+  /** Only a complete cache can prove that a durable completion is absent. */
+  completionsComplete: boolean;
   transcript: {
     /** Only a complete window can prove that an identity or history row is absent. */
     complete: boolean;
@@ -30,5 +37,6 @@ export type SessionActorStoredState = {
     /** Current transaction's append bodies; committed receipts own them after settlement. */
     payloads: Map<number, { event: unknown; serializedBytes: number }>;
     contextMetadata?: SessionTranscriptContextMetadata;
+    contextStats?: SessionTranscriptContextStats;
   };
 };

@@ -189,24 +189,33 @@ describe("provider-usage.load", () => {
     }
   });
 
-  it("keeps balance-only summary snapshots", async () => {
-    resolveProviderUsageSnapshotWithPluginMock.mockResolvedValueOnce({
-      provider: "deepseek",
-      displayName: "DeepSeek",
-      windows: [],
-      summary: "Balance ¥42.50",
-    });
+  it("keeps window and balance-only snapshots with injected auth", async () => {
+    const snapshots: ProviderUsageSnapshot[] = [
+      { provider: "anthropic", displayName: "Claude", windows: [{ label: "5h", usedPercent: 20 }] },
+      { provider: "deepseek", displayName: "DeepSeek", windows: [], summary: "Balance ¥42.50" },
+    ];
+    resolveProviderUsageSnapshotWithPluginMock.mockImplementation(
+      async ({ provider }) => snapshots.find((snapshot) => snapshot.provider === provider) ?? null,
+    );
     const mockFetch = createProviderUsageFetch(async () => {
       throw new Error("legacy fetch should not run");
     });
 
     const summary = await loadUsageWithAuth(
       loadProviderUsageSummary,
-      [{ provider: "deepseek", token: "token-d" }],
+      [
+        { provider: "anthropic", token: "token-a" },
+        { provider: "deepseek", token: "token-d" },
+      ],
       mockFetch,
     );
 
     expect(summary.providers).toEqual([
+      {
+        provider: "anthropic",
+        displayName: "Claude",
+        windows: [{ label: "5h", usedPercent: 20 }],
+      },
       {
         provider: "deepseek",
         displayName: "DeepSeek",
@@ -214,6 +223,7 @@ describe("provider-usage.load", () => {
         summary: "Balance ¥42.50",
       },
     ]);
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns live siblings at the deadline while retaining the unfinished provider", async () => {

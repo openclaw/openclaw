@@ -15,9 +15,9 @@ import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-  withUpdateCommandExecutorChild,
+  releaseUpdateCommandPreflightForHandoff as releasePreflight,
+  withUpdateCommandExecutor as withExecutor,
+  withUpdateCommandExecutorChild as withChild,
 } from "./update-command-executor.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
@@ -79,13 +79,15 @@ afterEach(() => {
 });
 
 function write(operation: (database: DatabaseSync) => void) {
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec("PRAGMA busy_timeout=0");
-    operation(database);
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(databasePath);
+  database.exec("PRAGMA busy_timeout=0");
+  operation(database);
+}
+
+function expectLeaseReleased() {
+  write((database) => {
+    expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(0);
+  });
 }
 
 function snapshot() {
@@ -118,18 +120,54 @@ function captureFailure(operation: () => void): unknown {
   }
 }
 
-async function expectRevocationWithoutWrites(mutate: (fence: UpdateRecoveryFence) => void) {
+function withFence<T>(
+  operation: (fence: UpdateRecoveryFence) => Promise<T> | T,
+  preflight = false,
+) {
+  return withExecutor(randomUUID(), async (executor) =>
+    operation(await executor.enter(root, preflight ? { preflight } : undefined)),
+  );
+}
+
+async function expectRevocationWithoutWrites(
+  mutate: (fence: UpdateRecoveryFence) => void,
+  windowsSharingError?: string,
+  warmup = 1,
+) {
   let before: ReturnType<typeof snapshot> | undefined;
   let refusal: unknown;
-  await expect(
-    withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root);
+  let nativeDenial = false;
+  const failure = await withFence((fence) => {
+    for (let index = 0; index < warmup; index++) {
       fence.assertCurrent();
-      mutate(fence);
-      before = snapshot();
-      refusal = captureFailure(fence.assertCurrent);
-    }),
-  ).rejects.toThrow();
+    }
+    const intact = windowsSharingError ? snapshot() : undefined;
+    const mutationError = captureFailure(() => mutate(fence));
+    if (mutationError) {
+      // Windows can deny replacement while SQLite holds the original path open.
+      expect(process.platform).toBe("win32");
+      expect(windowsSharingError).toBeDefined();
+      expect(mutationError).toMatchObject({ code: windowsSharingError });
+      expect(snapshot()).toEqual(intact);
+      fence.assertCurrent();
+      nativeDenial = true;
+      return;
+    }
+    before = snapshot();
+    refusal = captureFailure(fence.assertCurrent);
+  }).then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  if (nativeDenial) {
+    expect(failure).toBeUndefined();
+    return;
+  }
+  // Preserve the original fixture error if admission or mutation failed first.
+  if (refusal === undefined) {
+    throw failure;
+  }
+  expect(failure).toBeInstanceOf(Error);
   expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
   expect(before).toBeDefined();
   expect(snapshot()).toEqual(before);
@@ -137,8 +175,7 @@ async function expectRevocationWithoutWrites(mutate: (fence: UpdateRecoveryFence
 
 describe("invocation-scoped update ownership reader", () => {
   it("keeps native setup bounded across hundreds of real fences without excluding another writer", async () => {
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root);
+    await withFence(async (fence) => {
       const retained = opened.filter((database) => database.isOpen);
       expect(retained).toHaveLength(1);
       const [reader] = retained;
@@ -161,11 +198,7 @@ describe("invocation-scoped update ownership reader", () => {
       expect(preparations).toBeGreaterThan(0);
       expect(preparations).toBeLessThanOrEqual(2);
     });
-    write((database) => {
-      expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-        0,
-      );
-    });
+    expectLeaseReleased();
   });
 
   it.each([false, true])(
@@ -208,9 +241,8 @@ describe("invocation-scoped update ownership reader", () => {
         assert.equal(databases.every(database => !database.isOpen), true);
         process.stdout.write(JSON.stringify({closed: true, failed}));
       `;
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        const result = await withUpdateCommandExecutorChild(fence, root, (grant, beforeInput) =>
+      await withFence(async (fence) => {
+        const result = await withChild(fence, root, (grant, beforeInput) =>
           runUtf8CommandWithTimeout(
             [
               process.execPath,
@@ -241,26 +273,21 @@ describe("invocation-scoped update ownership reader", () => {
     "disposes its reader on %s and releases the original lease",
     async (ending) => {
       const failure = new Error("candidate rejected");
-      const result = withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root, { preflight: true });
+      const result = withFence((fence) => {
         expect(opened.some((database) => database.isOpen)).toBe(true);
         if (ending === "callback failure") {
           throw failure;
         }
-        releaseUpdateCommandPreflightForHandoff(fence);
+        releasePreflight(fence);
         expect(opened.every((database) => !database.isOpen)).toBe(true);
         expect(() => fence.assertCurrent()).toThrow();
-      });
+      }, true);
       if (ending === "callback failure") {
         await expect(result).rejects.toBe(failure);
       } else {
         await result;
       }
-      write((database) => {
-        expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-          0,
-        );
-      });
+      expectLeaseReleased();
     },
   );
 
@@ -271,10 +298,7 @@ describe("invocation-scoped update ownership reader", () => {
     vi.mocked(nodeSqlite.openNodeSqliteDatabase).mockImplementation((location, options) => {
       const database = observeOpen(location, options);
       if (options?.readOnly && ++reads === 2) {
-        // The first read precedes the physical pin; the second belongs to the
-        // newly pinned invocation reader and must not survive failed admission.
-        // Adding a hard link changes physical authority on Windows too, where
-        // SQLite's open handle prevents renaming or replacing the database.
+        // Revoke the newly pinned reader; hard links also work under Windows sharing locks.
         fs.linkSync(databasePath, path.join(root, "linked.sqlite"));
         before = snapshot();
       }
@@ -282,7 +306,7 @@ describe("invocation-scoped update ownership reader", () => {
     });
     let entered = false;
     await expect(
-      withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      withExecutor(randomUUID(), async (executor) => {
         await executor.enter(root);
         entered = true;
       }),
@@ -294,8 +318,7 @@ describe("invocation-scoped update ownership reader", () => {
 
   it("does not reuse a live row as proof of a changed process identity", async () => {
     let refusal: unknown;
-    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-      const fence = await executor.enter(root);
+    await withFence(async (fence) => {
       const start = pidAlive.getFileLockProcessStartTime(process.pid);
       expect(start).not.toBeNull();
       const original = pidAlive.getFileLockProcessStartTime;
@@ -303,18 +326,12 @@ describe("invocation-scoped update ownership reader", () => {
         pid === process.pid ? start! + 1 : original(pid, ...args),
       );
       const before = snapshot();
-      const observed = captureFailure(fence.assertCurrent);
+      refusal = captureFailure(fence.assertCurrent);
       expect(snapshot()).toEqual(before);
-      refusal = observed;
     });
     expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-    // A mismatched start identity proves the old generation dead to the existing
-    // release owner. Refusing its fence must not disable that normal reclamation.
-    write((database) => {
-      expect(database.prepare("SELECT count(*) AS n FROM managed_update_handoffs").get()?.n).toBe(
-        0,
-      );
-    });
+    // The release owner can still reclaim a generation with a mismatched start identity.
+    expectLeaseReleased();
   });
 
   const damage: { name: string; apply: () => void; windowsSharingError?: string }[] = [
@@ -366,51 +383,8 @@ describe("invocation-scoped update ownership reader", () => {
     },
   ];
 
-  it.each(damage)(
-    "preserves authority for $name after warming the reader without repair or sidecars",
-    async ({ apply, windowsSharingError }) => {
-      let before: ReturnType<typeof snapshot> | undefined;
-      let refusal: unknown;
-      let nativeDenial = false;
-      const failure = await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(root);
-        for (let i = 0; i < 3; i++) {
-          fence.assertCurrent();
-        }
-        const intact = snapshot();
-        const mutationError = captureFailure(apply);
-        if (mutationError) {
-          // Native Windows SQLite handles deny path replacement. Prove the
-          // attempted mutation was refused and the original authority still
-          // works; platforms permitting replacement must reject its fence.
-          expect(process.platform).toBe("win32");
-          expect(windowsSharingError).toBeDefined();
-          expect(mutationError).toMatchObject({ code: windowsSharingError });
-          expect(snapshot()).toEqual(intact);
-          fence.assertCurrent();
-          nativeDenial = true;
-          return;
-        }
-        before = snapshot();
-        refusal = captureFailure(fence.assertCurrent);
-      }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      if (nativeDenial) {
-        expect(failure).toBeUndefined();
-        return;
-      }
-      if (refusal === undefined) {
-        // Fixture assertions inside executor settlement must keep their original
-        // diagnostic instead of becoming a misleading missing-fence assertion.
-        throw failure;
-      }
-      expect(failure).toBeInstanceOf(Error);
-      expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-      expect(before).toBeDefined();
-      expect(snapshot()).toEqual(before);
-    },
+  it.each(damage)("rejects $name after warming without repair", ({ apply, windowsSharingError }) =>
+    expectRevocationWithoutWrites(apply, windowsSharingError, 3),
   );
 
   it.skipIf(process.platform === "win32").each([
@@ -468,9 +442,7 @@ describe("invocation-scoped update ownership reader", () => {
       );
       const journal = fs.readFileSync(databasePath + "-journal");
       expect(journal.length).toBeGreaterThan(512);
-      expect(journal.subarray(0, 8)).toEqual(
-        Buffer.from([0xd9, 0xd5, 0x05, 0xf9, 0x20, 0xa1, 0x63, 0xd7]),
-      );
+      expect(journal.subarray(0, 8)).toEqual(Buffer.from("d9d505f920a163d7", "hex"));
     });
   });
 });

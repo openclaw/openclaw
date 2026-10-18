@@ -25,7 +25,6 @@ import {
 import { DEFAULT_RESTART_HEALTH_DELAY_MS } from "../daemon-cli/restart-health.constants.js";
 import {
   inspectGatewayRestart,
-  isSameGatewayRestartGeneration,
   waitForGatewayHealthyRestart,
   waitForGatewayHttpReadiness,
   type GatewayRestartSnapshot,
@@ -119,7 +118,6 @@ export async function verifyPreviousGatewayForUpdate(params: {
         deadline,
         requireRunningService: true,
         waitForStartup: params.waitForStartup,
-        settle: { probes: 1 },
         signal: deadline.signal,
         requirePluginHealth: params.requirePluginHealth,
         assertCurrent,
@@ -203,7 +201,6 @@ export type UpdateGatewayReadinessParams = {
   healthOnly?: boolean;
   /** Observe an existing process without waiting for startup. */
   waitForStartup?: boolean;
-  settle?: { probes: number };
   signal?: AbortSignal;
   assertCurrent?: () => void;
   recoverHealth?: (
@@ -225,9 +222,7 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     health.runtime.status === "running" &&
     (typeof health.runtime.pid === "number" || Boolean(health.gatewayBootId)) &&
     // Only the restart owner can establish startup; an HTTP failure is not progress.
-    ["waiting for Gateway listener", "startup migration", "settling healthy Gateway"].includes(
-      health.startupPhase ?? "",
-    ) &&
+    ["waiting for Gateway listener", "startup migration"].includes(health.startupPhase ?? "") &&
     !health.versionMismatch &&
     !health.buildIdMismatch &&
     !health.activatedPluginErrors?.length &&
@@ -243,18 +238,11 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     observedStartupMs: params.observedStartupMs,
     migrationLeaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
   });
-  const settle = params.settle ?? { probes: 12 };
-  const settleDurationMs = waitForStartup
-    ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
-    : 0;
   const startedAtMs = performance.now();
   const deadline =
     params.deadline ??
     createGatewayRestartDeadline({
-      timeoutMs: Math.max(
-        0,
-        Math.min(timeoutMs + settleDurationMs, (params.deadlineMs ?? Infinity) - startedAtMs),
-      ),
+      timeoutMs: Math.max(0, Math.min(timeoutMs, (params.deadlineMs ?? Infinity) - startedAtMs)),
       signal: params.signal,
     });
   const remainingMs = deadline.remainingMs;
@@ -311,8 +299,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
       deadlineOutcome: "snapshot",
-      // The restart owner adds settling itself; reserve it once in the shared deadline.
-      timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
+      timeoutMs: Math.max(1, remainingMs()),
       onObservation: (snapshot) => {
         health = snapshot;
         retainChannelTimeouts(snapshot);
@@ -322,7 +309,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         );
       },
       requireRunningService: params.requireRunningService,
-      settle,
       supervisorKeepsAlive,
     });
     health = observed;
@@ -383,35 +369,26 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
         health.healthy &&
         (!params.requireRunningService || health.runtime.status === "running")
       ) {
-        // HTTP readiness cannot transfer an earlier settle to a replacement boot.
-        const settled = health;
-        const inspect = () =>
+        const startupPhase = health.startupPhase;
+        health = await deadline.read("final Gateway identity", () =>
           inspectGatewayRestart({
             ...probeParams,
             probeContext: context,
             timeoutMs: Math.max(1, remainingMs()),
-          });
-        const inspected = await deadline.read("final Gateway identity", inspect);
-        assertCurrent();
-        retainChannelTimeouts(inspected);
-        // Bracket the final native observation with health/hello probes so a same-PID
-        // or PID-less reboot during that observation cannot inherit the old boot.
-        health = inspected.healthy
-          ? await deadline.read("final Gateway health", inspect)
-          : inspected;
+          }),
+        );
         assertCurrent();
         retainChannelTimeouts(health);
-        health.startupPhase = settled.startupPhase;
-        const sameGeneration =
-          isSameGatewayRestartGeneration(settled, inspected) &&
-          isSameGatewayRestartGeneration(inspected, health);
-        if (!sameGeneration) {
+        health.startupPhase = startupPhase;
+        if (
+          params.requireRunningService &&
+          (health.runtime.status !== "running" ||
+            (process.platform !== "win32" && health.runtime.pid === undefined))
+        ) {
           health.healthy = false;
-          health.waitOutcome = "generation-changed";
-          health.probeError = "Gateway process changed during final readiness verification.";
         }
       }
-      if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+      if (!readyz || remainingMs() === 0) {
         health = {
           ...health,
           healthy: false,
@@ -443,11 +420,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     }
     const interval = error.phase === "health-wait:interval";
     const waitOutcome: GatewayRestartSnapshot["waitOutcome"] =
-      health.waitOutcome === "generation-changed"
-        ? "generation-changed"
-        : interval && health.waitOutcome === "still-starting"
-          ? "still-starting"
-          : "timeout";
+      interval && health.waitOutcome === "still-starting" ? "still-starting" : "timeout";
     return {
       health: {
         ...health,

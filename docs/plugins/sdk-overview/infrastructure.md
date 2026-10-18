@@ -681,7 +681,10 @@ Contract notes:
   requester. OpenClaw never falls back to another requester's credentials.
 
 Memory prompt supplement builders receive optional `agentId`,
-`agentSessionKey`, and `sandboxed` context. Memory corpus supplement `search`
+`agentSessionKey`, `sandboxed`, and `projectKey` context. `projectKey` is the
+host-resolved repository identity for the current run, or absent outside a
+repository. The host only resolves it; a memory plugin that stores project
+scope decides whether and how to ask the agent to annotate writes with it. Memory corpus supplement `search`
 and `get` calls receive optional `agentId` and `sandboxed` context. Plugins with
 agent-owned storage should resolve that storage for each call instead of
 capturing one global path during registration. If an agent id is required but

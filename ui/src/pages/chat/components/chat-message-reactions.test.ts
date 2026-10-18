@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MessageReactionSummary } from "../../../../../packages/gateway-protocol/src/index.js";
 /* @vitest-environment jsdom */
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
@@ -20,13 +20,10 @@ const reactions: MessageReactionSummary[] = [
   {
     emoji: "🎉",
     count: 5,
-    identities: [
-      { id: "a", label: "Ana" },
-      { id: "b", label: "Ben" },
-      { id: "c", label: "Cy" },
-      { id: "d", label: "Dee" },
-      { id: "e", label: "Eli" },
-    ],
+    identities: ["Ana", "Ben", "Cy", "Dee", "Eli"].map((label, index) => ({
+      id: String.fromCharCode(97 + index),
+      label,
+    })),
   },
 ];
 let host: HTMLDivElement;
@@ -93,6 +90,14 @@ async function customEntry() {
   };
 }
 
+function hidden(picker: Element) {
+  return new Promise<void>((resolve) => {
+    picker
+      .querySelector(".chat-reaction-picker")!
+      .addEventListener("overlay-after-hide", () => resolve(), { once: true });
+  });
+}
+
 describe("transcript message reactions", () => {
   it.each([
     [{ role: "user" }, "writable"],
@@ -135,14 +140,10 @@ describe("transcript message reactions", () => {
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     const pressed = pickerButton(picker, "👍")!;
     expect(pressed.getAttribute("aria-pressed")).toBe("true");
-    const hidden = new Promise<void>((resolve) => {
-      picker
-        .querySelector(".chat-reaction-picker")!
-        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
-    });
+    const didHide = hidden(picker);
     pressed.click();
     expect(onReact).toHaveBeenLastCalledWith("message-1", "👍", true);
-    await hidden;
+    await didHide;
     expect(picker.querySelector(".palette")).toBeNull();
     picker.querySelector<HTMLButtonElement>(".trigger")!.click();
     pickerButton(picker, "🚀")!.click();
@@ -200,13 +201,9 @@ describe("transcript message reactions", () => {
   it("resets a closed custom picker without moving focus into its hidden palette", async () => {
     const { root } = await customEntry();
     const nextControl = host.appendChild(document.createElement("button"));
-    const hidden = new Promise<void>((resolve) => {
-      root
-        .querySelector(".chat-reaction-picker")!
-        .addEventListener("overlay-after-hide", () => resolve(), { once: true });
-    });
+    const didHide = hidden(root);
     nextControl.focus();
-    await hidden;
+    await didHide;
     flush();
     expect(root.querySelector("input")).toBeNull();
     expect(document.activeElement).toBe(nextControl);

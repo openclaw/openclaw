@@ -113,7 +113,6 @@ export type SessionMenuActionsState = {
 export class SessionMenuActions {
   private readonly context = useOptionalApplication();
   private readonly gateway = this.context ? projectGateway(this.context.gateway) : undefined;
-  readonly ownerMenu = createSessionOwnerMenu();
   readonly advanced;
   openCustomSnooze?: () => void;
   customSnoozeKeydown?: (event: KeyboardEvent) => boolean;
@@ -128,6 +127,7 @@ export class SessionMenuActions {
     private readonly readState: () => SessionMenuActionsState,
     private readonly onAction: (action: SessionManagementAction) => void,
     private readonly onClose: () => void,
+    readonly ownerMenu = createSessionOwnerMenu(),
   ) {
     this.advanced = createSessionMenuSettings({
       context: () => {

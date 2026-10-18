@@ -1,7 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveStatePortRoots } from "./state-port.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { resolveStatePortRoots, statePortProvider } from "./state-port.js";
 
 const stateDir = path.resolve("/synthetic/selected");
 const home = path.resolve("/synthetic/home");
@@ -65,3 +67,48 @@ it.each<{
     ),
   );
 });
+
+it.each(
+  [24, 25, 26].flatMap((version) => [
+    { version, profiles: false },
+    { version, profiles: true },
+  ]),
+)(
+  "selects only present fragment catalogs for v$version with profiles=$profiles",
+  async ({ version, profiles }) => {
+    const descriptor = await statePortProvider.loadDescriptor(undefined, version);
+    using source = openNodeSqliteDatabase(":memory:");
+    source.exec(descriptor.sqlite);
+    if (profiles) {
+      source.exec(
+        descriptor.fragments!.find((fragment) => fragment.id === "user_profiles")!.sqlite,
+      );
+    }
+    const admitted = await admitDatabasePortDescriptor(
+      { engine: "sqlite", db: source },
+      descriptor,
+    );
+    expect(admitted.activeFragments).toEqual(profiles ? ["user_profiles"] : []);
+    const tables = source
+      .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'")
+      .all()
+      .map((row) => row.name);
+    expect(
+      admitted.expectedCatalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+    ).toEqual(expect.arrayContaining(tables));
+    expect(admitted.expectedCatalog.filter((fact) => fact.kind === "table")).toHaveLength(
+      tables.length,
+    );
+    for (const table of ["acp_replay_events", "skill_usage"]) {
+      expect(
+        admitted.expectedCatalog.filter((fact) => fact.table === table && fact.kind === "indexes"),
+      ).toEqual([
+        {
+          table,
+          kind: "indexes",
+          value: source.prepare(`PRAGMA index_list(${table})`).all().length,
+        },
+      ]);
+    }
+  },
+);

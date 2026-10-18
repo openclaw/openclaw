@@ -26,7 +26,10 @@ import {
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { publishSqliteDatabaseAdmission } from "./sqlite-database-admission.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
+} from "./sqlite-transaction.js";
 
 export type DeliveryQueueStoredStatus = DeliveryQueueDatabase["delivery_queue_entries"]["status"];
 
@@ -72,17 +75,17 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
           .where("status", "=", "pending")
           .where("enqueued_at", "<=", params.expireBeforeMs),
       );
-      const read = (queueNames: readonly string[]) =>
-        executeSqliteQuerySync(
-          database.db,
-          deliveryQueueEntriesQuery(database, queueNames, "unfinished")
-            .orderBy("enqueued_at", "asc")
-            .orderBy("id", "asc"),
-        ).rows;
-      return {
-        entryRows: read(params.queueNames),
-        stagingRows: read([params.stagingQueueName]),
-      };
+      return executeSqliteQuerySync(
+        database.db,
+        deliveryQueueEntriesQuery(
+          database,
+          [...params.queueNames, params.stagingQueueName],
+          "unfinished",
+        )
+          .select("queue_name")
+          .orderBy("enqueued_at", "asc")
+          .orderBy("id", "asc"),
+      ).rows;
     },
     {
       databaseLabel: "openclaw-state",
@@ -90,8 +93,12 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
     },
   );
   return {
-    entries: inflateDeliveryQueueRows(snapshot.entryRows),
-    stagingEntries: inflateDeliveryQueueRows(snapshot.stagingRows),
+    entries: inflateDeliveryQueueRows(
+      snapshot.filter((row) => row.queue_name !== params.stagingQueueName),
+    ),
+    stagingEntries: inflateDeliveryQueueRows(
+      snapshot.filter((row) => row.queue_name === params.stagingQueueName),
+    ),
   };
 }
 
@@ -408,10 +415,8 @@ export function countPendingDeliveryQueueEntriesInDatabase(
 export function pruneExpiredDeliveryQueueTombstonesInDatabase(
   database: OpenClawStateDatabase,
 ): void {
-  runSqliteImmediateTransactionSync(
-    database.db,
-    () => pruneDeliveryQueueTombstoneAges(database.db, Date.now()),
-    { databaseLabel: "openclaw-state", operationLabel: "expire delivery queue tombstones" },
+  runSqliteSingleStatementSync(database.db, () =>
+    pruneDeliveryQueueTombstoneAges(database.db, Date.now()),
   );
 }
 

@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
-import "./onboarding-memory-import.ts";
+import "./onboarding-memory-import-solid.tsx";
 
 type OnboardingMemoryImportElement = HTMLElement & {
   active: boolean;
@@ -290,6 +290,44 @@ describe("OnboardingMemoryImport", () => {
       },
     ]);
     expect(randomUuid).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses same-turn selection and admits only one import while completion is pending", async () => {
+    let resolveApply!: (result: ReturnType<typeof createApplyResult>) => void;
+    const request = vi.fn(async (method: string) =>
+      method === "migrations.memory.plan"
+        ? createPlan(["codex", "claude"])
+        : await new Promise<ReturnType<typeof createApplyResult>>((resolve) => {
+            resolveApply = resolve;
+          }),
+    );
+    const element = await mount(createContext(request));
+    const button = await waitForAction(element);
+    const codex = element.querySelector<HTMLInputElement>("[data-provider-id='codex'] input")!;
+    codex.checked = false;
+    codex.dispatchEvent(new Event("change", { bubbles: true }));
+    button.click();
+    button.click();
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith(
+      "migrations.memory.apply",
+      expect.objectContaining({ providerId: "claude" }),
+    );
+    const cancel = new Event("modal-cancel", { bubbles: true, cancelable: true });
+    element.querySelector("openclaw-modal-dialog")!.dispatchEvent(cancel);
+    expect(cancel.defaultPrevented).toBe(true);
+    resolveApply(createApplyResult("claude"));
+    await waitForAction(element, "continue");
+    expect(element.textContent).toContain("Migrated 1, skipped 0");
+  });
+
+  it("retires a displayed offer synchronously on disconnect", async () => {
+    const request = successfulRequest();
+    const element = await mount(createContext(request));
+    const button = await waitForAction(element);
+    element.remove();
+    button.click();
+    expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("drops a displayed plan when the gateway context changes", async () => {

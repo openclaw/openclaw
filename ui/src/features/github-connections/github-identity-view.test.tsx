@@ -105,6 +105,7 @@ describe("GitHub identity view", () => {
     identity.sync({
       client,
       connected: true,
+      permissionsReady: true,
       clientRevision: 1,
       target: {
         kind: "shared",

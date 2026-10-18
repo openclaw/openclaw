@@ -274,25 +274,23 @@ export const managedImageRecordOperations = {
     "managedImages.deleteClaimed",
     (db, record: ManagedImageRecord) => mutateManagedImageCleanupInDatabase(db, record, "delete"),
   ),
-  "managedImages.read": ({ attachmentId }: { attachmentId: string }, { open }) =>
-    readManagedImageRecordInDatabase(open().db, attachmentId),
-  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, { open }) =>
-    listManagedImageRecordEntriesInDatabase(open().db, sessionKey),
-  "managedImages.originalMediaIds": (_input: undefined, { open }) =>
-    listManagedImageOriginalMediaIdsInDatabase(open().db),
 } satisfies WorkerOperationHandlers;
 
-export type ManagedImageRecordWorkerOperations = WorkerOperations<
-  typeof managedImageRecordOperations
->;
+export const managedImageRecordReadOperations = {
+  "managedImages.read": ({ attachmentId }: { attachmentId: string }, db) => ({
+    type: "managedImages.read" as const,
+    record: readManagedImageRecordInDatabase(db, attachmentId),
+  }),
+  "managedImages.entries": ({ sessionKey }: { sessionKey?: string }, db) => ({
+    type: "managedImages.entries" as const,
+    entries: listManagedImageRecordEntriesInDatabase(db, sessionKey),
+  }),
+  "managedImages.originalMediaIds": (_input: undefined, db) => ({
+    type: "managedImages.originalMediaIds" as const,
+    mediaIds: listManagedImageOriginalMediaIdsInDatabase(db),
+  }),
+} satisfies WorkerOperationHandlers<EngineConnection>;
 
-export type ManagedImageRecordMutation = Extract<
-  SqliteWorkerCommand<ManagedImageRecordWorkerOperations>,
-  {
-    type:
-      | "managedImages.insert"
-      | "managedImages.attach"
-      | "managedImages.claimCleanup"
-      | "managedImages.deleteClaimed";
-  }
+export type ManagedImageRecordMutation = SqliteWorkerCommand<
+  WorkerOperations<typeof managedImageRecordOperations>
 >;

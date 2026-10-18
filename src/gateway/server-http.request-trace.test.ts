@@ -1,9 +1,23 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { buildControlUiSessionEntryUrl } from "./control-ui-session-entry-path.js";
 import { createGatewayHttpServer } from "./server-http.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
 
 const resolvedAuth: ResolvedGatewayAuth = { mode: "none", allowTailscale: false };
 
@@ -39,6 +53,61 @@ async function closeServer(server: ReturnType<typeof createGatewayHttpServer>): 
 }
 
 describe("gateway HTTP request error cleanup", () => {
+  it("retries a protected session-entry probe after background agent preparation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {}, worker: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "worker",
+        paths: ["/private/worker/openclaw-agent.sqlite"],
+        reason: "Startup inspection and preparation are pending",
+        pending: true,
+      });
+      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const projection = await createSessionRowProjection({ cfg });
+      const context = bindSessionRowProjection(
+        createGatewayRequestContext(makeContextParams()),
+        () => projection,
+      );
+      const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+      const reservation = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer({
+            controlUiEnabled: true,
+            resolvedAuth: { mode: "token", token: "test-token", allowTailscale: false },
+            handleHooksRequest: async () => false,
+            getRuntimeConfig: () => cfg,
+            getGatewayRequestContext: () => context,
+          }),
+      });
+      try {
+        const url = `http://127.0.0.1:${reservation.claim.port}${buildControlUiSessionEntryUrl("/chat/worker/absent", "")}&probe=1`;
+        const headers = {
+          authorization: "Bearer test-token",
+          "x-openclaw-scopes": "operator.admin",
+        };
+        const pending = await fetch(url, { headers });
+        expect(pending.status).toBe(503);
+        expect(pending.headers.get("retry-after")).toBe("1");
+        expect(await pending.text()).toBe("Agent database is starting. Please retry.");
+        expect(errorLog).not.toHaveBeenCalled();
+
+        await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {});
+        const recovered = await fetch(url, { headers });
+        expect(recovered.status).toBe(403);
+        await recovered.text();
+      } finally {
+        reservation.listener.closeAllConnections();
+        await reservation.releaseListener();
+        await reservation.claim.release();
+        projection.dispose();
+        errorLog.mockRestore();
+        recordAgentDatabaseAdmissions([], { source: "startup" });
+      }
+    });
+  });
+
   it.each([
     { label: "completed", destroy: false },
     { label: "destroyed", destroy: true },
@@ -131,9 +200,30 @@ describe("gateway HTTP request error cleanup", () => {
     }
   });
 
-  it.each(["hook", "plugin"] as const)(
-    "replaces staged %s response metadata with a complete plain 500",
-    async (owner) => {
+  it.each([
+    ["hook", "unexpected"],
+    ["plugin", "unexpected"],
+    ["hook", "pending"],
+    ["plugin", "pending"],
+    ["hook", "inspection-failed"],
+    ["plugin", "inspection-failed"],
+  ] as const)(
+    "replaces staged %s response metadata after an error (%s)",
+    async (owner, failureKind) => {
+      const pending = failureKind === "pending";
+      const statusText = pending ? "Service Unavailable" : "Internal Server Error";
+      const body = pending ? "Agent database is starting. Please retry." : statusText;
+      const failure =
+        failureKind === "unexpected"
+          ? new Error("route failed before writing a response")
+          : new AgentDatabaseAdmissionError(
+              createAgentDatabaseInspectionRefusal({
+                agentId: "worker",
+                paths: ["/private/worker/openclaw-agent.sqlite"],
+                reason: "Private inspection details",
+                pending,
+              }),
+            );
       const headers = {
         "Content-Length": "1000",
         "Content-Encoding": "gzip",
@@ -154,8 +244,9 @@ describe("gateway HTTP request error cleanup", () => {
         }
         res.statusMessage = "Download Ready";
         res.setHeader("Access-Control-Allow-Origin", "https://example.test");
-        throw new Error("route failed before writing a response");
+        throw failure;
       };
+      const warn = vi.fn();
       const handlePluginRequest = createGatewayPluginRequestHandler({
         registry: createGatewayTestRegistry({
           httpRoutes: [
@@ -169,9 +260,7 @@ describe("gateway HTTP request error cleanup", () => {
             },
           ],
         }),
-        log: { warn: vi.fn() } as unknown as Parameters<
-          typeof createGatewayPluginRequestHandler
-        >[0]["log"],
+        log: { warn } as unknown as Parameters<typeof createGatewayPluginRequestHandler>[0]["log"],
       });
       const server = createServer({
         handleHooksRequest: owner === "hook" ? route : async () => false,
@@ -186,11 +275,14 @@ describe("gateway HTTP request error cleanup", () => {
           signal: AbortSignal.timeout(1_000),
         });
 
-        expect(response.status).toBe(500);
-        expect.soft(response.statusText).toBe("Internal Server Error");
-        expect(await response.text()).toBe("Internal Server Error");
+        expect(response.status).toBe(pending ? 503 : 500);
+        expect(response.statusText).toBe(statusText);
+        expect(await response.text()).toBe(body);
+        expect(response.headers.get("retry-after")).toBe(pending ? "1" : null);
+        expect(errorLog).toHaveBeenCalledTimes(!pending && owner === "hook" ? 1 : 0);
+        expect(warn).toHaveBeenCalledTimes(!pending && owner === "plugin" ? 1 : 0);
         expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
-        expect(response.headers.get("content-length")).toBe("21");
+        expect(response.headers.get("content-length")).toBe(String(Buffer.byteLength(body)));
         expect(response.headers.get("content-encoding")).toBeNull();
         expect(response.headers.get("transfer-encoding")).toBeNull();
         expect(response.headers.get("trailer")).toBeNull();

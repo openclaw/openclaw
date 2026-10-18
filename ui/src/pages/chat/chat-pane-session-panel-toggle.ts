@@ -21,6 +21,7 @@ import {
   terminalIntentQueue,
   terminalToggleIntent,
 } from "../../components/terminal/terminal-pending-actions.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
@@ -31,7 +32,7 @@ interface ActivePanelOwner {
   state: ChatPageHost;
   linkReaders: readonly ControlUiLinkReaderDescriptor[];
   pluginPanels: readonly `${string}/${string}`[];
-  updateComplete: Promise<unknown>;
+  awaitDomCommit(): Promise<unknown>;
 }
 
 export type PendingSessionPanelToggle = {
@@ -42,8 +43,7 @@ export type PendingSessionPanelToggle = {
 
 interface SessionPanelToggleOptions {
   current: () => ActivePanelOwner | null;
-  pending: Map<SessionPanelToggleSlot, PendingSessionPanelToggle>;
-  requestUpdate: () => void;
+  pending: { requests: Map<SessionPanelToggleSlot, PendingSessionPanelToggle> };
   updateSidebarLayout: (layout: ChatPageHost["sidebarLayout"]) => void;
 }
 
@@ -68,6 +68,12 @@ function canOpenLinkReader(owner: ActivePanelOwner | null, url: string | undefin
 
 /** Owns shell-to-pane panel intent handoff for the active chat presentation. */
 export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOptions): () => void {
+  function deletePending(slot: SessionPanelToggleSlot): void {
+    const requests = new Map(options.pending.requests);
+    requests.delete(slot);
+    options.pending.requests = requests;
+  }
+
   function handlePluginPanel(event: Event): void {
     const owner = options.current();
     if (!owner || !(event instanceof CustomEvent)) {
@@ -121,7 +127,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       event.preventDefault();
     }
     if (detail?.open === false) {
-      options.pending.delete(slot);
+      deletePending(slot);
       options.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, slot));
       return;
     }
@@ -168,7 +174,7 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
       options.updateSidebarLayout(layout);
       return;
     }
-    const existing = options.pending.get(slot);
+    const existing = options.pending.requests.get(slot);
     if (
       slot === "link-reader" &&
       existing?.owner === owner.state &&
@@ -185,19 +191,18 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     };
     const sessionKey = owner.state.sessionKey;
     const isCurrent = () =>
-      options.pending.get(slot) === queue &&
+      options.pending.requests.get(slot) === queue &&
       options.current()?.state === owner.state &&
       owner.state.sessionKey === sessionKey;
-    options.pending.set(slot, queue);
+    options.pending.requests = new Map(options.pending.requests).set(slot, queue);
     options.updateSidebarLayout(layout);
     void Promise.all([
       customElements.whenDefined("openclaw-chat-sidebar-region"),
       customElements.whenDefined(tagName),
     ])
       .then(async () => {
-        options.requestUpdate();
-        // requestUpdate schedules a new commit; the captured owner holds the previous promise.
-        await options.current()?.updateComplete;
+        // Read the live pane fence after lazy registration publishes its readiness.
+        await options.current()?.awaitDomCommit();
         if (!isCurrent()) {
           return;
         }
@@ -228,13 +233,13 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         }
       })
       .finally(() => {
-        if (options.pending.get(slot) === queue) {
-          options.pending.delete(slot);
-          options.requestUpdate();
+        if (options.pending.requests.get(slot) === queue) {
+          deletePending(slot);
         }
       });
   }
 
+  // Deliver buffered shell intents in order after the lazy panel commits.
   function flush(): void {
     const owner = options.current();
     if (!owner) {
@@ -260,25 +265,21 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     }
   }
 
-  const listeners = new AbortController();
-  const listenerOptions = { signal: listeners.signal };
-  for (const [eventName, slot, tagName] of panelToggleEvents) {
-    window.addEventListener(eventName, (event) => handle(slot, tagName, event), listenerOptions);
-  }
-  window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel, listenerOptions);
-  window.addEventListener(
-    TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
-    () => {
+  const stop = panelToggleEvents.map(([eventName, slot, tagName]) =>
+    listen(window, eventName, (event) => handle(slot, tagName, event)),
+  );
+  stop.push(
+    listen(window, PLUGIN_PANEL_TOGGLE_EVENT, handlePluginPanel),
+    listen(window, TERMINAL_PANEL_DOCK_BOTTOM_EVENT, () => {
       const owner = options.current();
       if (owner) {
         owner.state.updateSidebarLayout(closeSlot(owner.state.sidebarLayout, "terminal"));
       }
-    },
-    listenerOptions,
+    }),
   );
   onCleanup(() => {
-    listeners.abort();
-    options.pending.clear();
+    stop.forEach((release) => release());
+    options.pending.requests.clear();
   });
   return flush;
 }

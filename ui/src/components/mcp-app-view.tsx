@@ -1,34 +1,30 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, onCleanup, Show } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
 import {
-  McpAppViewController,
+  createMcpAppView,
+  type McpAppViewOwner,
   type McpAppViewProps,
   type McpAppViewElement,
   type ViewMethods,
-} from "./mcp-app-view-controller.ts";
+} from "./mcp-app-view-owner.ts";
 import "../styles/mcp-app-view.css";
 
-const controllers = new WeakMap<McpAppViewElement, McpAppViewController>();
+const owners = new WeakMap<McpAppViewElement, McpAppViewOwner>();
 
 export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   "mcp-app-view",
   (props, host) => {
     const context = useApplication();
     const gateway = context ? projectGateway(context.gateway) : undefined;
-    const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-    const controller = new McpAppViewController(host, context, () =>
-      setRevision((value) => value + 1),
-    );
-    const read = () => {
-      revision();
-      return controller;
-    };
-    controllers.set(host, controller);
+    const owner = createMcpAppView(host, context);
+    const read = projectOwner(owner, (current) => current.read()).read;
+    owners.set(host, owner);
     const binding = createMemo(
       () => {
         gateway?.read();
@@ -44,26 +40,26 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       { equals: (a, b) => a.every((value, index) => value === b[index]) },
     );
     createEffect(binding, () => {
-      void controller.setup(controller.binding());
+      void owner.setup(owner.currentBinding());
     });
     createEffect(
       () => [props.title, t("mcpApp.title")],
       () => {
-        controller.updateTitle();
+        owner.updateTitle();
       },
     );
     const presentation = createMemo(
       () => [props.height, props.fillContainer, props.displayMode, props.deepLink],
       { equals: (a, b) => a.every((value, index) => value === b[index]) },
     );
-    createEffect(presentation, () => controller.updatePresentation());
+    createEffect(presentation, () => owner.updatePresentation());
     createEffect(
       () => props.surface,
-      () => controller.updateReservedHeight(),
+      () => owner.updateReservedHeight(),
     );
     onCleanup(() => {
-      controllers.delete(host);
-      void controller.teardown();
+      owners.delete(host);
+      void owner.teardown();
     });
     const relaunch = () => (read().inactive === "ended" ? props.onRelaunch : undefined);
     return (
@@ -90,10 +86,10 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
             </Show>
           </div>
         </Show>
-        <McpAppConfirmation confirmation={controller.confirmation} revision={revision()} />
+        <McpAppConfirmation confirmation={owner.confirmation} />
         <div
           ref={(element) => {
-            controller.mount = element;
+            owner.setMount(element);
           }}
           class="mount"
         />
@@ -125,8 +121,8 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       displayMode: { default: "inline", attribute: "display-mode", reflect: true },
     },
     methods: {
-      teardown: (host) => controllers.get(host)?.teardown() ?? Promise.resolve(),
-      restartAfterTeardown: (host) => controllers.get(host)?.restartAfterTeardown(),
+      teardown: (host) => owners.get(host)?.teardown() ?? Promise.resolve(),
+      restartAfterTeardown: (host) => owners.get(host)?.restartAfterTeardown(),
     },
   },
 );

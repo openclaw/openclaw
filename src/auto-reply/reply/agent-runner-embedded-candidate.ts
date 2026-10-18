@@ -5,7 +5,6 @@ import type {
 } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { resolveOpenAIRuntimeProvider } from "../../agents/openai-routing.js";
 import type { ReplyDeliveryState } from "../../agents/reply-completion.js";
 import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
 import { resolveGroupSessionKey } from "../../config/sessions.js";
@@ -106,19 +105,6 @@ export async function runEmbeddedFallbackCandidate(
         agentId: turn.followupRun.run.agentId,
         sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
       });
-  const embeddedRunProvider = resolveOpenAIRuntimeProvider({
-    provider: params.provider,
-    harnessRuntime: agentHarnessPolicy.runtime,
-    authProfileProvider: runBaseParams.authProfileId?.split(":", 1)[0],
-    authProfileId: runBaseParams.authProfileId,
-    config: params.runtimeConfig,
-    workspaceDir: turn.followupRun.run.workspaceDir,
-  });
-  const embeddedRunHarnessOverride =
-    params.agentHarnessRuntimeOverride ??
-    (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== params.provider
-      ? "openclaw"
-      : undefined);
   let attemptCompactionCount = 0;
   let postCompactionModelAttempted = false;
   let compactionAccounting: CompactionAccountingFact | undefined;
@@ -154,9 +140,9 @@ export async function runEmbeddedFallbackCandidate(
         groupSpace: normalizeOptionalString(turn.sessionCtx.GroupSpace),
         ...buildFallbackCandidateTurnParams(params),
         contextWindow: turn.getActiveSessionEntry()?.contextWindow,
-        provider: embeddedRunProvider,
+        provider: params.provider,
         agentHarnessId: resolveSessionPinnedHarnessId(turn.getActiveSessionEntry()),
-        agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         agentHarnessRuntimePreparationHint:
           agentHarnessPolicy.runtimeSource !== "implicit" ? agentHarnessPolicy.runtime : undefined,
         sandboxSessionKey: turn.runtimePolicySessionKey,
@@ -180,6 +166,7 @@ export async function runEmbeddedFallbackCandidate(
         forceHeartbeatTool: turn.opts?.forceHeartbeatTool,
         deferTerminalLifecycle: true,
         onAttemptStart: lifecycleBackstop.beginAttempt,
+        onAttemptTerminalReplaced: lifecycleBackstop.replaceAttemptTerminal,
         onCompactionAccounting: (fact) => {
           compactionAccounting = fact;
         },

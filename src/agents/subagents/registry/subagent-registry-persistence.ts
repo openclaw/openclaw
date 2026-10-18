@@ -228,7 +228,8 @@ export async function runSubagentRegistryWorkerWrite<T>(
   try {
     return await runOpenClawStateWorkerOperation(
       context,
-      async (scope) => write.decode(await write.execute(scope)),
+      async (scope) =>
+        write.kind === "registry" ? write.decode(await write.execute(scope)) : write.execute(scope),
       {
         assertCurrent: write.assertCurrent,
         createAdmission: () => {
@@ -290,7 +291,9 @@ export async function runSubagentRegistryWorkerWrite<T>(
     // Broker failure joins native settlement; a lost reply cannot revoke committed work.
     if (admission?.committed) {
       try {
-        return write.decode(admission.committed.facts);
+        return write.kind === "registry"
+          ? write.decode(admission.committed.facts)
+          : write.decodeCommitted(admission.committed.facts);
       } catch (receiptError) {
         throw new SubagentRegistryCommitReceiptError(receiptError);
       }
@@ -577,7 +580,6 @@ export async function restoreSubagentRunsFromDisk(params: {
         retainSubagentRunRuntimeOwner(params.runs.get(runId), entry);
         params.runs.set(runId, compactSubagentRunForMemory(entry));
         rememberRestoredSubagentRunNotification(entry);
-        subagentRuns.settleCommittedOwnership(entry);
         added += 1;
       }
       publishSubagentRunsAfterAtomicStore(params.runs, undefined, context.admission.databasePath)();

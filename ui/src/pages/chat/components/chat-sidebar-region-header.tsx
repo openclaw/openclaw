@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -97,23 +97,42 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   const id = createUniqueId();
   const openSlots = () =>
     new Set((props.layout.columns[0]?.panels ?? []).map((panel) => panel.slot));
-  const items = createMemo<MenuItem[]>(() =>
-    props.panelDefinitions
-      .filter(
-        (type) =>
-          type.available &&
-          (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
-      )
-      .map((type) => ({
-        id: type.slot,
-        label: type.label,
-        class: "side-panel-type-menu__item session-menu__item",
-        content: <PanelTypeOption type={type} />,
-      })),
+  const types = () =>
+    props.panelDefinitions.filter(
+      (type) =>
+        type.available &&
+        (HOSTED_TAB_REQUESTS.some(([slot]) => slot === type.slot) || !openSlots().has(type.slot)),
+    );
+  const entries = createMemo(
+    () =>
+      mapArray(
+        types,
+        (current): MenuItem => ({
+          get id() {
+            return current().slot;
+          },
+          get label() {
+            return current().label;
+          },
+          class: "side-panel-type-menu__item session-menu__item",
+          icon: <Icon name={current().icon} class="side-panel-type-option__icon" />,
+          labelClass: "side-panel-type-option__label",
+          details: (
+            <Show when={current().shortcut}>
+              {(shortcut) => (
+                <KeyboardShortcut combo={shortcut()} class="side-panel-type-option__shortcut" />
+              )}
+            </Show>
+          ),
+        }),
+        { keyed: (type) => type.slot },
+      ),
+    { lazy: true },
   );
+  const items = createMemo(() => entries()(), { lazy: true });
   return (
     <Menu
-      lazy
+      lazy="while-open"
       id={`side-panel-type-${id}`}
       class="side-panel-type-menu"
       panelClass="side-panel-type-menu__panel"

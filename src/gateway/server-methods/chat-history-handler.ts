@@ -1,3 +1,4 @@
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
@@ -23,12 +24,14 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveInFlightRunSnapshot } from "../chat-abort.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../chat-display-projection.js";
-import { isQueuedChatTurnForSession } from "../chat-queued-turns.js";
+import { isQueuedFollowupChatTurnForSession } from "../chat-queued-turns.js";
 import { resolveClaudeCliBindingSessionId } from "../cli-session-history.claude.js";
 import { projectOperatorModelRead } from "../operator-model-presentation.js";
+import { resolveOperatorRolePolicy } from "../operator-role-policy.js";
 import { SerializedJsonArray } from "../serialized-json.js";
 import { getMaxChatHistoryMessagesBytes } from "../server-constants.js";
 import { readPreparedGatewayModelMetadata } from "../server-model-catalog-view.js";
+import { registerDeflatedSegment } from "../server/ws-compression.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { prepareSessionFastModePresentation } from "../session-fast-mode-presentation.js";
 import { resolveSessionHistoryUnavailableMessage } from "../session-history-error.js";
@@ -72,6 +75,7 @@ export async function handleChatHistoryRequest({
   sessionMutationAuthorization,
   retainedTranscript,
   acceptsSerializedJson,
+  acceptsDeflatedSegments,
   req,
 }: GatewayRequestHandlerOptions & {
   method: ChatHistoryMethod;
@@ -89,6 +93,7 @@ export async function handleChatHistoryRequest({
     limit,
     offset,
     cursor,
+    knownState,
     messageId: wireMessageId,
     sessionId: wireSessionId,
     maxChars,
@@ -223,7 +228,7 @@ export async function handleChatHistoryRequest({
           ).map((receipt) =>
             receipt.state === "pending" &&
             !receipt.cancelled &&
-            isQueuedChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
+            isQueuedFollowupChatTurnForSession(context.chatQueuedTurns, receipt.runId, {
               agentId: sessionAgentId,
               sessionKey: canonicalKey,
               sessionId,
@@ -239,6 +244,13 @@ export async function handleChatHistoryRequest({
         : [],
     );
     let historyPage: Awaited<ReturnType<typeof readChatHistoryPage>>;
+    // Internal adapters may inspect message objects before responding.
+    const encodeResponse = acceptsSerializedJson && method === req.method;
+    // Model projection replaces serialized messages, so their compressed bytes go unused.
+    const deflateResponse =
+      encodeResponse &&
+      acceptsDeflatedSegments &&
+      !resolveOperatorRolePolicy(client, context.getCommittedRuntimeConfig?.() ?? cfg)?.modelPolicy;
     try {
       historyPage =
         deltaCursor !== undefined
@@ -248,8 +260,8 @@ export async function handleChatHistoryRequest({
               () =>
                 readChatHistoryPage(
                   {
-                    // Internal adapters may inspect message objects before responding.
-                    encodeResponse: acceptsSerializedJson && method === req.method,
+                    encodeResponse,
+                    deflateResponse,
                     includePluginSteering,
                     entry: historyEntry,
                     provider: resolvedSessionModel.provider,
@@ -282,6 +294,12 @@ export async function handleChatHistoryRequest({
       respondReadError(error);
       return;
     }
+    if (historyPage.encodedResponse && historyPage.encodedMessagesDeflate) {
+      registerDeflatedSegment(
+        historyPage.encodedResponse.messages,
+        historyPage.encodedMessagesDeflate,
+      );
+    }
     const responsePage = historyPage.encodedResponse
       ? {
           ...historyPage.encodedResponse,
@@ -312,10 +330,36 @@ export async function handleChatHistoryRequest({
       agentId: sessionAgentId,
       catalog: defaultModelCatalog,
     };
-    const query = {
-      key: canonicalKey,
-      agentId: sessionAgentId,
-      storePath,
+    const presentHistory = (
+      payload: Parameters<typeof projectOperatorModelRead>[1] & {
+        pendingInputs: typeof pendingInputs;
+      },
+    ) => {
+      const projected = projectOperatorModelRead(modelReadScope, payload);
+      if (knownState === undefined) {
+        return projected;
+      }
+      // Hash the authorized wire projection: receipts never skip current-state reads or policy.
+      const stateRevision = {
+        commands: startupMetadata ? startupProjection?.commandsRevision : undefined,
+        pendingInputs: sha256StableValue(projected.pendingInputs).digest,
+        sessionInfo: projected.sessionInfo
+          ? sha256StableValue({ ...projected.sessionInfo, snapshotAt: undefined }).digest
+          : undefined,
+      };
+      return {
+        ...projected,
+        stateRevision,
+        ...(stateRevision.commands && knownState.commands === stateRevision.commands
+          ? { metadata: { ...projected.metadata, commands: undefined } }
+          : {}),
+        ...(deltaCursor !== undefined && knownState?.pendingInputs === stateRevision.pendingInputs
+          ? { pendingInputs: undefined }
+          : {}),
+        ...(deltaCursor !== undefined && knownState?.sessionInfo === stateRevision.sessionInfo
+          ? { sessionInfo: undefined, sessionInfoSnapshotAt: projected.sessionInfo?.snapshotAt }
+          : {}),
+      };
     };
     const [unsavedAcpMeta] = entry
       ? []
@@ -331,7 +375,11 @@ export async function handleChatHistoryRequest({
       const sessionInfo = measureDiagnosticsTimelineSpanSync(
         `gateway.${method}.session_info`,
         () =>
-          prepareProjectedSessionPresentation(read, client).snapshot(query).row ??
+          prepareProjectedSessionPresentation(read, client).snapshot({
+            key: canonicalKey,
+            agentId: sessionAgentId,
+            storePath,
+          }).row ??
           (entry
             ? undefined
             : buildGatewaySessionRow({
@@ -359,9 +407,6 @@ export async function handleChatHistoryRequest({
         );
         return undefined;
       }
-      if (sessionInfo) {
-        Object.assign(sessionInfo, currentSharing);
-      }
       const activeRunState = resolveVisibleActiveSessionRunState({
         context,
         requestedKey: sessionKey,
@@ -373,6 +418,7 @@ export async function handleChatHistoryRequest({
         includeTerminalPersistence: true,
       });
       if (sessionInfo) {
+        Object.assign(sessionInfo, currentSharing);
         sessionInfo.hasActiveRun = activeRunState.active;
         if (activeRunState.runIds !== undefined) {
           sessionInfo.activeRunIds = activeRunState.runIds;
@@ -422,8 +468,7 @@ export async function handleChatHistoryRequest({
         if (!projection) {
           continue;
         }
-        const provider = projection.modelProvider;
-        const model = projection.model;
+        const { modelProvider: provider, model } = projection;
         const catalogEntry =
           catalog && provider && model
             ? findModelCatalogEntry(catalog, { provider, modelId: model })
@@ -498,6 +543,7 @@ export async function handleChatHistoryRequest({
             };
             delta = await readChatHistoryDelta(
               {
+                maxChars: effectiveMaxChars,
                 toolResultMaxChars,
                 includePluginSteering,
                 agentId: sessionAgentId,
@@ -553,7 +599,7 @@ export async function handleChatHistoryRequest({
               ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
               ...(startupMetadata ? { metadata: startupMetadata } : {}),
             };
-            respond(true, projectOperatorModelRead(modelReadScope, payload));
+            respond(true, presentHistory(payload));
             return undefined;
           });
         };
@@ -591,10 +637,10 @@ export async function handleChatHistoryRequest({
               ((await retainedTranscript.verifyRetainedState?.()) ?? true),
             requireCurrentSession: retainedTranscript.requireCurrentSession === true,
             sharing: currentSharing,
-            publish: () => respond(true, projectOperatorModelRead(modelReadScope, payload)),
+            publish: () => respond(true, presentHistory(payload)),
           });
       }
-      respond(true, projectOperatorModelRead(modelReadScope, payload));
+      respond(true, presentHistory(payload));
       return undefined;
     });
     await publishDelta?.();

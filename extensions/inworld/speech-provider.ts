@@ -39,7 +39,7 @@ function normalizeInworldTemperature(value: unknown): number | undefined {
 
 function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.inworld) ?? asOptionalRecord(rawConfig.inworld);
+  const raw = asOptionalRecord(providers?.inworld);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
@@ -54,7 +54,7 @@ function normalizeInworldProviderConfig(rawConfig: Record<string, unknown>) {
 
 function readInworldProviderConfig(config: SpeechProviderConfig) {
   return normalizeInworldProviderConfig({
-    inworld: { ...config, apiKey: trimToUndefined(config.apiKey) },
+    providers: { inworld: { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
 }
 

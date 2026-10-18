@@ -1249,7 +1249,6 @@ describe("mcp loopback server", () => {
       expect(
         await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
           timeoutMs: 1_000,
-          admissionGraceMs: 0,
         }),
       ).toBe(true);
       expect(execute).not.toHaveBeenCalled();
@@ -1772,7 +1771,6 @@ describe("mcp loopback server", () => {
     const settled = vi.fn();
     const idle = waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
       timeoutMs: 120,
-      admissionGraceMs: 0,
     }).then(settled);
     try {
       vi.setSystemTime(Date.now() - 60_000);
@@ -1787,30 +1785,27 @@ describe("mcp loopback server", () => {
     }
   });
 
-  it("waits through a quiet admission grace before clearing a failed-turn capture", async () => {
-    const captureKey = "admission-grace";
-    beginMcpLoopbackToolCallCapture({
-      captureKey,
-      onToolCallResult: vi.fn(),
-    });
-    const idlePromise = waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-      timeoutMs: 500,
-      admissionGraceMs: 40,
-    });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 10);
-    });
-    const captureHandle = markMcpLoopbackToolCallStarted({
-      captureKey,
-      toolName: "message",
-      args: { action: "send", target: "late-admission" },
-    });
-    if (!captureHandle) {
-      throw new Error("Expected late MCP capture admission");
+  it("returns when admitted calls settle without waiting for new arrivals", async () => {
+    vi.useFakeTimers();
+    const captureKey = "admitted-request-drain";
+    beginMcpLoopbackToolCallCapture({ captureKey, onToolCallResult: vi.fn() });
+    const call = markMcpLoopbackToolCallStarted({ captureKey, toolName: "message", args: {} });
+    const settled = vi.fn();
+    const idle = waitForMcpLoopbackToolCallCaptureIdle(captureKey, { timeoutMs: 500 }).then(
+      (result) => {
+        settled(result);
+        return result;
+      },
+    );
+    try {
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      markMcpLoopbackToolCallFinished(call);
+      await expect(idle).resolves.toBe(true);
+    } finally {
+      clearMcpLoopbackToolCallCapture(captureKey);
+      vi.useRealTimers();
     }
-    setTimeout(() => markMcpLoopbackToolCallFinished(captureHandle), 10);
-
-    await expect(idlePromise).resolves.toBe(true);
   });
 
   it("keeps capture observer errors from changing tool success", async () => {
@@ -2133,7 +2128,6 @@ describe("mcp loopback server", () => {
         expect(
           await waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
             timeoutMs: 100,
-            admissionGraceMs: 0,
           }),
         ).toBe(true);
         expect(execute).not.toHaveBeenCalled();

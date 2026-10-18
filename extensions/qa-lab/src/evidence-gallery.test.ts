@@ -1,4 +1,3 @@
-// Qa Lab tests cover generic QA evidence gallery behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,11 +14,7 @@ import {
   vitestArtifactEvidence,
   writeJson,
 } from "./evidence-gallery.test-support.js";
-import {
-  QA_EVIDENCE_FILENAME,
-  buildVitestEvidenceSummary,
-  type QaEvidenceSummaryJson,
-} from "./evidence-summary.js";
+import { QA_EVIDENCE_FILENAME, type QaEvidenceSummaryJson } from "./evidence-summary.js";
 
 function producerRootLeakSegments(repoRoot: string) {
   if (process.platform !== "win32") {
@@ -37,6 +32,9 @@ function producerRootLeakSegments(repoRoot: string) {
 function repoRelativePath(repoRoot: string, filePath: string) {
   return path.relative(repoRoot, filePath).split(path.sep).join("/");
 }
+function artifactEvidence(filePath: string, kind = "log", id = "artifact") {
+  return vitestArtifactEvidence({ id, title: id, artifact: { kind, path: filePath } });
+}
 
 function uxMatrixEntry(params: {
   id: string;
@@ -44,27 +42,42 @@ function uxMatrixEntry(params: {
   artifact: { kind: string; path: string; source: string };
   result: QaEvidenceSummaryJson["entries"][number]["result"];
 }): QaEvidenceSummaryJson["entries"][number] {
+  const entry = vitestArtifactEvidence(params).entries[0]!;
   return {
+    ...entry,
     test: {
+      ...entry.test,
       kind: "ux-matrix-cell",
-      id: params.id,
-      title: params.title,
       source: { path: "external/qa/ux-matrix-producer.mjs" },
     },
     coverage: [],
     execution: {
+      ...entry.execution!,
       runner: "ux-matrix-dashboard",
-      environment: { ref: "gallery-test", os: "darwin", nodeVersion: "v24.0.0" },
-      provider: {
-        id: "ux-matrix",
-        live: false,
-        model: { name: null, ref: null },
-        fixture: "mocked-control-ui-and-isolated-cli",
-      },
-      packageSource: { kind: "source-checkout", sha: "abc123" },
       artifacts: [params.artifact],
     },
     result: params.result,
+  };
+}
+
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [file, content] of Object.entries(files)) {
+    const target = path.join(root, file);
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+  }
+}
+const matrixCounts = { pass: 1, blocked: 1, "proof-gap": 1 };
+function matrixCell(overrides: Record<string, unknown>) {
+  return {
+    artifactKinds: [],
+    artifactPaths: [],
+    coverageIds: [],
+    runner: null,
+    testId: null,
+    entryKey: null,
+    title: null,
+    ...overrides,
   };
 }
 
@@ -76,67 +89,29 @@ describe("evidence gallery", () => {
     await fs.writeFile(path.join(outputDir, "runner", "result.json"), '{"ok":true}\n', "utf8");
     await fs.writeFile(path.join(outputDir, "runner", "output.log"), "vitest pass\n", "utf8");
 
-    const evidence: QaEvidenceSummaryJson = buildVitestEvidenceSummary({
-      artifactPaths: [
-        { kind: "runner-result", path: "runner/result.json" },
-        { kind: "log", path: "runner/output.log" },
-      ],
-      env: {
-        OPENCLAW_QA_REF: "gallery-test",
-      } as NodeJS.ProcessEnv,
-      generatedAt: "2026-06-17T12:00:00.000Z",
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      providerMode: "mock-openai",
-      targets: [
-        {
-          id: "qa-lab.generic-vitest",
-          title: "Generic Vitest evidence",
-          sourcePath: "extensions/qa-lab/src/generic.test.ts",
-          primaryCoverageIds: ["qa.generic"],
-        },
-        {
-          id: "qa-lab.no-artifacts",
-          title: "Generic entry without artifacts",
-          sourcePath: "extensions/qa-lab/src/no-artifacts.test.ts",
-          primaryCoverageIds: ["qa.empty"],
-        },
-      ],
-      results: [
-        {
-          id: "qa-lab.generic-vitest",
-          status: "pass",
-          durationMs: 42,
-        },
-        {
-          id: "qa-lab.no-artifacts",
-          status: "skipped",
-          durationMs: 1,
-        },
-      ],
-    });
-    const noArtifactsEntry = expectDefined(evidence.entries[1], "no-artifacts evidence entry");
-    const noArtifactsExecution = expectDefined(
-      noArtifactsEntry.execution,
-      "no-artifacts evidence execution",
+    const evidence = artifactEvidence(
+      "runner/result.json",
+      "runner-result",
+      "qa-lab.generic-vitest",
     );
-    evidence.entries[1] = {
-      ...noArtifactsEntry,
-      execution: {
-        ...noArtifactsExecution,
-        artifacts: [],
-      },
-    };
+    const entry = evidence.entries[0]!;
+    entry.execution!.artifacts.push({ kind: "log", path: "runner/output.log", source: "vitest" });
+    evidence.entries.push({
+      ...entry,
+      test: { ...entry.test, id: "qa-lab.no-artifacts" },
+      execution: { ...entry.execution!, artifacts: [] },
+      result: { status: "skipped" },
+    });
     const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
     await writeJson(evidencePath, evidence);
 
-    const model = await buildQaEvidenceGalleryModel({
-      evidencePath: outputDir,
-      repoRoot,
-    });
+    const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
 
-    expect(model.counts).toMatchObject({ pass: 1, skipped: 1, fail: 0, blocked: 0 });
-    expect(model.evidencePath).toBe(".artifacts/qa-e2e/vitest/qa-evidence.json");
-    expect(model.producerContext).toBeNull();
+    expect(model).toMatchObject({
+      counts: { pass: 1, skipped: 1, fail: 0, blocked: 0 },
+      evidencePath: ".artifacts/qa-e2e/vitest/qa-evidence.json",
+      producerContext: null,
+    });
     expect(model.entries).toHaveLength(2);
     expect(model.entries[0]).toMatchObject({
       id: "qa-lab.generic-vitest",
@@ -157,10 +132,7 @@ describe("evidence gallery", () => {
         }),
       ],
     });
-    expect(model.entries[1]).toMatchObject({
-      id: "qa-lab.no-artifacts",
-      artifacts: [],
-    });
+    expect(model.entries[1]).toMatchObject({ id: "qa-lab.no-artifacts", artifacts: [] });
   });
 
   it.each([
@@ -176,14 +148,7 @@ describe("evidence gallery", () => {
       const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "vitest");
       await fs.mkdir(outputDir, { recursive: true });
       await fs.writeFile(path.join(outputDir, file), content, "utf8");
-      await writeJson(
-        path.join(outputDir, QA_EVIDENCE_FILENAME),
-        vitestArtifactEvidence({
-          id: "qa-lab.artifact-classification",
-          title: "Artifact classification",
-          artifact: { kind, path: file },
-        }),
-      );
+      await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), artifactEvidence(file, kind));
       const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
       expect(model.entries[0]?.artifacts[0]).toMatchObject({
         exists: true,
@@ -210,59 +175,29 @@ describe("evidence gallery", () => {
     const relativeLeakFile = path.resolve(outputDir, relativeLeakArtifactPath);
     await fs.mkdir(path.dirname(relativeLeakFile), { recursive: true });
     await fs.writeFile(relativeLeakFile, "relative artifact\n", "utf8");
-    const evidence: QaEvidenceSummaryJson = vitestArtifactEvidence({
-      id: "qa-lab.absolute-artifact-path",
-      title: "Absolute artifact path",
-      artifact: { kind: "log", path: artifactPath },
-    });
+    const evidence = artifactEvidence(artifactPath);
     evidence.profile = `${repoRoot}/qa-profile`;
-    const absoluteEntry = expectDefined(evidence.entries[0], "absolute-path evidence entry");
-    const absoluteExecution = expectDefined(
-      absoluteEntry.execution,
-      "absolute-path evidence execution",
-    );
-    const absoluteArtifact = expectDefined(
-      absoluteExecution.artifacts[0],
-      "absolute-path evidence artifact",
-    );
-    evidence.entries[0] = {
-      ...absoluteEntry,
-      result: {
-        status: "blocked",
-        failure: {
-          reason: `Command failed at ${repoRoot}/openclaw.mjs and file://${repoRoot}/trace.log`,
-        },
+    const absoluteEntry = evidence.entries[0]!;
+    absoluteEntry.result = {
+      status: "blocked",
+      failure: {
+        reason: `Command failed at ${repoRoot}/openclaw.mjs and file://${repoRoot}/trace.log`,
       },
-      coverage: [{ id: "qa-lab.absolute-artifact-path", role: `${repoRoot}/role` }],
-      execution: {
-        ...absoluteExecution,
-        artifacts: [
-          {
-            ...absoluteArtifact,
-            kind: `${repoRoot}/log`,
-            source: `${repoRoot}/vitest`,
-          },
-          {
-            kind: "log",
-            path: relativeLeakArtifactPath,
-            source: "vitest",
-          },
-        ],
-      },
-      test: {
-        ...absoluteEntry.test,
-        id: `${repoRoot}/qa-lab.absolute-artifact-path`,
-        kind: `${repoRoot}/vitest-test`,
-        source: { path: path.join(repoRoot, "extensions/qa-lab/src/absolute.test.ts") },
-        title: `Absolute artifact path at ${repoRoot}`,
-      },
+    };
+    absoluteEntry.coverage = [{ id: "qa-lab.absolute-artifact-path", role: `${repoRoot}/role` }];
+    absoluteEntry.execution!.artifacts = [
+      { kind: `${repoRoot}/log`, source: `${repoRoot}/vitest`, path: artifactPath },
+      { kind: "log", path: relativeLeakArtifactPath, source: "vitest" },
+    ];
+    absoluteEntry.test = {
+      id: `${repoRoot}/qa-lab.absolute-artifact-path`,
+      kind: `${repoRoot}/vitest-test`,
+      source: { path: path.join(repoRoot, "extensions/qa-lab/src/absolute.test.ts") },
+      title: `Absolute artifact path at ${repoRoot}`,
     };
     await writeJson(path.join(outputDir, QA_EVIDENCE_FILENAME), evidence);
 
-    const model = await buildQaEvidenceGalleryModel({
-      evidencePath: outputDir,
-      repoRoot,
-    });
+    const model = await buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot });
 
     const artifact = model.entries[0]?.artifacts[0];
     expect(artifact).toMatchObject({
@@ -270,10 +205,10 @@ describe("evidence gallery", () => {
       kind: "<repo-root>/log",
       mediaKind: "text",
       path: ".artifacts/qa-e2e/vitest/absolute",
+      href: expect.stringContaining("entryIndex=0&artifactIndex=0"),
       preview: "absolute artifact <repo-root>\nfile://<repo-root>/trace.log\n",
       source: "<repo-root>/vitest",
     });
-    expect(artifact?.href).toContain("entryIndex=0&artifactIndex=0");
     const relativeArtifact = model.entries[0]?.artifacts[1];
     expect(relativeArtifact).toMatchObject({
       exists: true,
@@ -282,8 +217,8 @@ describe("evidence gallery", () => {
     });
     expect(decodeURIComponent(relativeArtifact?.href ?? "")).not.toContain(repoRoot);
     expect(relativeArtifact?.href).toContain("entryIndex=0&artifactIndex=1");
-    expect(model.entries[0]?.sourcePath).toBe("extensions/qa-lab/src/absolute.test.ts");
     expect(model.entries[0]).toMatchObject({
+      sourcePath: "extensions/qa-lab/src/absolute.test.ts",
       coverage: [{ id: "qa-lab.absolute-artifact-path", role: "<repo-root>/role" }],
       id: "<repo-root>/qa-lab.absolute-artifact-path",
       kind: "<repo-root>/vitest-test",
@@ -327,33 +262,20 @@ describe("evidence gallery", () => {
       process.platform === "win32"
         ? ".artifacts/qa-e2e/suite/script/nested"
         : ".artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1/surfaces/cli/stages/error-state/logs.txt";
-    await fs.mkdir(path.join(runDir, "surfaces", "web-ui", "stages", "first-run"), {
-      recursive: true,
+    await writeFiles(runDir, {
+      "surfaces/web-ui/stages/first-run/screenshot.png": "png",
+      "surfaces/cli/stages/error-state/logs.txt": "cli blocked\n",
+      "scorecard.md": "# UX Matrix\n\n- pass: 1\n",
+      "commands.txt":
+        "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix\n",
+      "preflight/memory.txt": "memory ok\n",
+      "preflight/adb-devices.txt": "List of devices\n",
     });
-    await fs.mkdir(path.join(runDir, "surfaces", "cli", "stages", "error-state"), {
-      recursive: true,
-    });
-    await fs.writeFile(
-      path.join(runDir, "surfaces", "web-ui", "stages", "first-run", "screenshot.png"),
-      "png",
-    );
-    await fs.writeFile(
-      path.join(runDir, "surfaces", "cli", "stages", "error-state", "logs.txt"),
-      "cli blocked\n",
-      "utf8",
-    );
     await writeJson(path.join(runDir, "manifest.json"), {
-      run: {
-        runId: "run-1",
-        status: "pass",
-      },
+      run: { runId: "run-1", status: "pass" },
     });
     await writeJson(path.join(runDir, "matrix.json"), {
-      counts: {
-        pass: 1,
-        blocked: 1,
-        "proof-gap": 1,
-      },
+      counts: matrixCounts,
       stages: [
         { id: `${repoRoot}/diagnostics`, label: "Diagnostics" },
         { id: "first-run", label: "First run" },
@@ -394,27 +316,7 @@ describe("evidence gallery", () => {
         { stage: "error-state", status: "blocked", surface: "cli" },
       ],
     });
-    await writeJson(path.join(runDir, "release-ledger.json"), {
-      counts: {
-        pass: 1,
-        blocked: 1,
-        "proof-gap": 1,
-      },
-    });
-    await fs.writeFile(path.join(runDir, "scorecard.md"), "# UX Matrix\n\n- pass: 1\n", "utf8");
-    await fs.writeFile(
-      path.join(runDir, "commands.txt"),
-      "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix\n",
-      "utf8",
-    );
-    await fs.mkdir(path.join(runDir, "preflight"), { recursive: true });
-    await fs.writeFile(path.join(runDir, "preflight", "memory.txt"), "memory ok\n", "utf8");
-    await fs.writeFile(
-      path.join(runDir, "preflight", "adb-devices.txt"),
-      "List of devices\n",
-      "utf8",
-    );
-
+    await writeJson(path.join(runDir, "release-ledger.json"), { counts: matrixCounts });
     await writeJson(path.join(suiteDir, QA_EVIDENCE_FILENAME), {
       kind: "openclaw.qa.evidence-summary",
       schemaVersion: 2,
@@ -454,39 +356,22 @@ describe("evidence gallery", () => {
       ],
     });
 
-    const model = await buildQaEvidenceGalleryModel({
-      evidencePath: suiteDir,
-      repoRoot,
-    });
+    const model = await buildQaEvidenceGalleryModel({ evidencePath: suiteDir, repoRoot });
 
     expect(model.producerContext).toMatchObject({
       kind: "ux-matrix",
-      manifest: {
-        runId: "run-1",
-        runStatus: "pass",
-      },
+      manifest: { runId: "run-1", runStatus: "pass" },
       matrix: {
-        counts: {
-          pass: 1,
-          blocked: 1,
-          "proof-gap": 1,
-        },
+        counts: matrixCounts,
         stages: ["<repo-root>/diagnostics", "first-run", "error-state"],
         surfaces: ["<repo-root>/native", "web-ui", "cli"],
       },
-      releaseLedger: {
-        counts: {
-          pass: 1,
-          blocked: 1,
-          "proof-gap": 1,
-        },
-      },
+      releaseLedger: { counts: matrixCounts },
     });
     expect(model.producerContext?.matrix?.cells).toEqual([
-      {
+      matrixCell({
         artifactKinds: ["screenshot"],
         artifactPaths: [expect.stringContaining(expectedWebScreenshotNeedle)],
-        coverageIds: [],
         runner: {
           availability: "local",
           command:
@@ -500,11 +385,8 @@ describe("evidence gallery", () => {
         testId: "ux-matrix.web-ui.first-run",
         entryKey: "0",
         title: "UX Matrix: web-ui / first-run at <repo-root>",
-      },
-      {
-        artifactKinds: [],
-        artifactPaths: [],
-        coverageIds: [],
+      }),
+      matrixCell({
         runner: {
           availability: "local",
           command:
@@ -515,22 +397,17 @@ describe("evidence gallery", () => {
         stage: "first-run",
         status: "proof-gap",
         surface: "cli",
-        testId: null,
-        entryKey: null,
-        title: null,
-      },
-      {
+      }),
+      matrixCell({
         artifactKinds: ["log"],
         artifactPaths: [expect.stringContaining(expectedCliLogNeedle)],
-        coverageIds: [],
-        runner: null,
         stage: "error-state",
         status: "blocked",
         surface: "cli",
         testId: "qa-lab.wrapper-cli-error",
         entryKey: "1",
         title: "UX Matrix: cli / error-state",
-      },
+      }),
     ]);
     expect(model.producerContext?.scorecard?.preview).toContain("# UX Matrix");
     expect(model.producerContext?.scorecard?.href).toContain("/api/evidence/artifact?");
@@ -564,10 +441,7 @@ describe("evidence gallery", () => {
     await fs.writeFile(outsideCommands, "outside secret\n", "utf8");
     await fs.unlink(path.join(runDir, "commands.txt"));
     await fs.symlink(outsideCommands, path.join(runDir, "commands.txt"));
-    const symlinkModel = await buildQaEvidenceGalleryModel({
-      evidencePath: suiteDir,
-      repoRoot,
-    });
+    const symlinkModel = await buildQaEvidenceGalleryModel({ evidencePath: suiteDir, repoRoot });
     expect(symlinkModel.producerContext?.commands).toBeNull();
     expect(JSON.stringify(symlinkModel)).not.toContain("outside secret");
     await expect(
@@ -583,30 +457,21 @@ describe("evidence gallery", () => {
     const repoRoot = await createTempRepo();
     const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "suite");
     const evidencePath = path.join(outputDir, QA_EVIDENCE_FILENAME);
+    const resolveArtifact = (artifactPath: string) =>
+      resolveQaEvidenceArtifactFile({ artifactPath, evidencePath, repoRoot });
     await fs.writeFile(path.join(repoRoot, "package.json"), '{"private":true}\n', "utf8");
     await fs.mkdir(outputDir, { recursive: true });
     await fs.writeFile(path.join(outputDir, "artifact.log"), "ok\n", "utf8");
-    await writeJson(
-      evidencePath,
-      vitestArtifactEvidence({
-        id: "qa-lab.declared-artifact",
-        title: "Declared artifact",
-        artifact: { kind: "log", path: "artifact.log" },
-      }),
-    );
+    await writeJson(evidencePath, artifactEvidence("artifact.log"));
 
     await expect(
       buildQaEvidenceGalleryModel({ evidencePath: outputDir, repoRoot }),
     ).resolves.toMatchObject({
       counts: { blocked: 0, fail: 0, pass: 1, skipped: 0 },
     });
-    await expect(
-      resolveQaEvidenceArtifactFile({
-        artifactPath: "artifact.log",
-        evidencePath,
-        repoRoot,
-      }),
-    ).resolves.toBe(await fs.realpath(path.join(outputDir, "artifact.log")));
+    await expect(resolveArtifact("artifact.log")).resolves.toBe(
+      await fs.realpath(path.join(outputDir, "artifact.log")),
+    );
     await fs.mkdir(path.join(repoRoot, "runner"), { recursive: true });
     await fs.mkdir(path.join(outputDir, "runner"), { recursive: true });
     await fs.writeFile(path.join(repoRoot, "runner", "result.json"), '{"from":"repo"}\n', "utf8");
@@ -615,19 +480,11 @@ describe("evidence gallery", () => {
       '{"from":"evidence"}\n',
       "utf8",
     );
-    const collisionEvidence = vitestArtifactEvidence({
-      id: "qa-lab.colliding-artifact",
-      title: "Colliding artifact",
-      artifact: { kind: "runner-result", path: "runner/result.json" },
-    });
+    const collisionEvidence = artifactEvidence("runner/result.json", "runner-result");
     await writeJson(evidencePath, collisionEvidence);
-    await expect(
-      resolveQaEvidenceArtifactFile({
-        artifactPath: "runner/result.json",
-        evidencePath,
-        repoRoot,
-      }),
-    ).resolves.toBe(await fs.realpath(path.join(outputDir, "runner", "result.json")));
+    await expect(resolveArtifact("runner/result.json")).resolves.toBe(
+      await fs.realpath(path.join(outputDir, "runner", "result.json")),
+    );
     await fs.rm(path.join(outputDir, "runner", "result.json"));
     const missingBundleModel = await buildQaEvidenceGalleryModel({ evidencePath, repoRoot });
     const missingEntry = expectDefined(missingBundleModel.entries[0], "missing-bundle entry");
@@ -637,54 +494,22 @@ describe("evidence gallery", () => {
       preview: null,
     });
     expect(JSON.stringify(missingBundleModel)).not.toContain('"from":"repo"');
-    await expect(
-      resolveQaEvidenceArtifactFile({
-        artifactPath: "package.json",
-        evidencePath,
-        repoRoot,
-      }),
-    ).rejects.toThrow("Evidence artifact not found.");
+    await expect(resolveArtifact("package.json")).rejects.toThrow("Evidence artifact not found.");
     await fs.writeFile(path.join(outputDir, "undeclared.log"), "undeclared\n", "utf8");
-    await expect(
-      resolveQaEvidenceArtifactFile({
-        artifactPath: "undeclared.log",
-        evidencePath,
-        repoRoot,
-      }),
-    ).rejects.toThrow("Evidence artifact is not declared by this evidence summary.");
+    await expect(resolveArtifact("undeclared.log")).rejects.toThrow(
+      "Evidence artifact is not declared by this evidence summary.",
+    );
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "qa-evidence-outside-artifact-"));
     const outsideArtifact = path.join(outsideDir, "artifact.log");
     await fs.writeFile(outsideArtifact, "outside secret\n", "utf8");
     await fs.symlink(outsideArtifact, path.join(outputDir, "escape.log"));
-    const collisionEntry = expectDefined(collisionEvidence.entries[0], "collision evidence entry");
-    const collisionExecution = expectDefined(
-      collisionEntry.execution,
-      "collision evidence execution",
-    );
-    await writeJson(evidencePath, {
-      ...collisionEvidence,
-      entries: [
-        {
-          ...collisionEntry,
-          execution: {
-            ...collisionExecution,
-            artifacts: [{ kind: "log", path: "escape.log", source: "vitest" }],
-          },
-        },
-      ],
-    });
+    collisionEvidence.entries[0]!.execution!.artifacts = [
+      { kind: "log", path: "escape.log", source: "vitest" },
+    ];
+    await writeJson(evidencePath, collisionEvidence);
+    await expect(resolveArtifact("escape.log")).rejects.toThrow("Evidence artifact not found.");
     await expect(
-      resolveQaEvidenceArtifactFile({
-        artifactPath: "escape.log",
-        evidencePath,
-        repoRoot,
-      }),
-    ).rejects.toThrow("Evidence artifact not found.");
-    await expect(
-      buildQaEvidenceGalleryModel({
-        evidencePath: "/tmp/not-openclaw-evidence.json",
-        repoRoot,
-      }),
+      buildQaEvidenceGalleryModel({ evidencePath: "/tmp/not-openclaw-evidence.json", repoRoot }),
     ).rejects.toThrow("Evidence path not found.");
   });
 });

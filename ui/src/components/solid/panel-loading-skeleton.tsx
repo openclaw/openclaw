@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createRenderEffect, For } from "solid-js";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import panelStyles from "../../styles/panel-loading-skeleton.css?inline";
 
 export type PanelLoadingSkeletonVariant =
@@ -22,7 +22,7 @@ export type PanelLoadingSkeletonProps = {
   overlay?: boolean;
 };
 
-export type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
+type PanelLoadingSkeletonElement = SolidBridgeElement<PanelLoadingSkeletonProps>;
 
 type LineWidth = "short" | "medium" | "long";
 
@@ -182,6 +182,7 @@ export const PanelLoadingSkeleton = defineSolidBridge<PanelLoadingSkeletonProps>
   (props, host) => {
     host.setAttribute("role", "status");
     host.setAttribute("aria-busy", "true");
+    // Native host accessibility attributes must commit with the skeleton content.
     createRenderEffect(
       () => ({ variant: props.variant ?? "files", label: props.label }),
       (value) => {

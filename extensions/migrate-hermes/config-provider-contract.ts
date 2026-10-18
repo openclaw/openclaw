@@ -1,15 +1,10 @@
-// Hermes provider config contract parsing and normalization.
 import { asPositiveFiniteNumber as readPositiveNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   asNonArrayRecord,
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  MCP_ENV_REFERENCE_RE,
-  normalizeHermesEnvReferenceName,
-  resolveMcpEnvReferences,
-} from "./config-env.js";
+import { normalizeHermesEnvReferenceName, resolveMcpEnvReferences } from "./config-env.js";
 import {
   normalizeHermesCustomProviderId,
   normalizeHermesProviderId,
@@ -313,32 +308,25 @@ export function collectProviderModels(raw: Record<string, unknown>): HermesModel
   return [...models.values()];
 }
 
-function modelDefinition(
-  model: HermesModelConfig,
-  entry: HermesProviderConfig,
-): Record<string, unknown> {
-  const baseUrl = normalizeProviderBaseUrl(entry.baseUrl, entry.api);
-  return {
-    id: model.id,
-    name: model.id,
-    api: entry.api,
-    reasoning: false,
-    input: model.supportsVision ? ["text", "image"] : ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: model.contextWindow ?? 128_000,
-    maxTokens: model.maxTokens ?? 8192,
-    baseUrl,
-    metadataSource: "models-add",
-  };
-}
-
 export function providerConfig(entry: HermesProviderConfig): Record<string, unknown> {
   const models = entry.models.length > 0 ? entry.models : [{ id: "default" }];
+  const baseUrl = normalizeProviderBaseUrl(entry.baseUrl, entry.api);
   return {
-    baseUrl: normalizeProviderBaseUrl(entry.baseUrl, entry.api),
+    baseUrl,
     api: entry.api,
     ...(entry.headers ? { headers: entry.headers } : {}),
-    models: models.map((model) => modelDefinition(model, entry)),
+    models: models.map((model) => ({
+      id: model.id,
+      name: model.id,
+      api: entry.api,
+      reasoning: false,
+      input: model.supportsVision ? ["text", "image"] : ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: model.contextWindow ?? 128_000,
+      maxTokens: model.maxTokens ?? 8192,
+      baseUrl,
+      metadataSource: "models-add",
+    })),
   };
 }
 
@@ -350,16 +338,10 @@ export function readProviderBaseUrl(
   if (!value) {
     return { sensitive: false, unresolved: false };
   }
-  const sensitive = MCP_ENV_REFERENCE_RE.test(value);
-  MCP_ENV_REFERENCE_RE.lastIndex = 0;
-  if (!sensitive) {
-    return { baseUrl: value, sensitive: false, unresolved: false };
-  }
   const resolved = resolveMcpEnvReferences(value, env);
   return {
-    baseUrl:
-      !resolved.unresolved && typeof resolved.value === "string" ? resolved.value : undefined,
-    sensitive: true,
+    baseUrl: !resolved.unresolved ? resolved.value : undefined,
+    sensitive: resolved.referenced,
     unresolved: resolved.unresolved,
   };
 }
@@ -403,7 +385,7 @@ export function readProviderHeaders(
     }
     sensitive = true;
     const resolved = resolveMcpEnvReferences(value, env);
-    if (resolved.unresolved || typeof resolved.value !== "string") {
+    if (resolved.unresolved) {
       unresolved = true;
       continue;
     }

@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { onAgentEvent } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   AgentHarnessAttemptParamsV2,
   AgentHarnessAttemptResult,
@@ -13,6 +12,7 @@ import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sd
 import type * as ProviderAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import type * as TranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMuseLifecycleTests } from "./harness-lifecycle.test-support.js";
 import { createMuseAgentHarness, type MuseSessionBinding } from "./harness.js";
 import { createApprovalHandler } from "./src/approvals.js";
 
@@ -150,58 +150,7 @@ describe("Muse native MSP harness", () => {
     ).toBe(supported);
   });
 
-  it("streams reasoning and text, journals native tool pairs, and resumes after restart", async () => {
-    const first = setup();
-    const globalEvents: Array<{ stream: string; data: Record<string, unknown> }> = [];
-    const unsubscribe = onAgentEvent((event) => void globalEvents.push(event));
-    try {
-      const result = await first.harness.runAttempt({ ...first.params, prompt: "tool" });
-      expect(terminal(result).kind).toBe("ok");
-      expect(result.assistantTexts).toEqual(["started: hello"]);
-      for (const events of [first.events, globalEvents]) {
-        expect(
-          events
-            .filter((event) => event.stream === "assistant")
-            .map((event) => event.data.delta)
-            .join(""),
-        ).toBe("started: hello");
-      }
-      expect(globalEvents.at(0)?.data.phase).toBe("start");
-      expect(globalEvents.at(-1)?.data.phase).toBe("end");
-      expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
-        "assistant",
-        "assistant",
-        "toolResult",
-        "assistant",
-      ]);
-      expect(result.toolMetas).toEqual([{ toolName: "read_file" }]);
-      expect(writes.append).toHaveBeenCalledWith(
-        expect.objectContaining({
-          messages: expect.arrayContaining([
-            expect.objectContaining({
-              message: expect.objectContaining({ role: "toolResult", toolCallId: "call-1" }),
-            }),
-          ]),
-        }),
-      );
-    } finally {
-      unsubscribe();
-      await first.harness.dispose?.();
-    }
-    const resumed = createMuseAgentHarness({
-      binaryPath: fixture,
-      sessionStore: first.sessionStore,
-    });
-    try {
-      const result = await resumed.runAttempt(first.params);
-      expect(terminal(result).kind).toBe("ok");
-      expect(result.assistantTexts).toEqual(["resumed: hello"]);
-      const changed = await resumed.runAttempt({ ...first.params, modelId: "muse-other" });
-      expect(changed.assistantTexts).toEqual(["started: hello"]);
-    } finally {
-      await resumed.dispose?.();
-    }
-  });
+  registerMuseLifecycleTests({ setup, getWorkspace: () => workspace, fixture, writes, terminal });
 
   it.each([
     ["global mode", { config: { tools: { exec: { mode: "deny" } } } }],

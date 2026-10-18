@@ -25,7 +25,6 @@ import {
 import {
   disposeSessionReadContexts,
   identifiedClient,
-  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
@@ -143,7 +142,7 @@ test.each([
     };
     if (transcript) {
       const backfilled = observeSessionRowBackfill([sessionKey]);
-      await initializeSessionReadContext(context);
+      await listSessions({ client, context, request });
       await backfilled;
     }
     const result = await listSessions({ client, context, request });

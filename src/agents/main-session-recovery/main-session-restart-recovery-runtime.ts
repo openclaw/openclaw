@@ -421,9 +421,13 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
     );
   };
   const reconcileExhaustedTargets = async (targets: Iterable<ExhaustedRestartRecoveryTarget>) => {
-    const outcomes = await Promise.allSettled(
-      [...targets].map((target) =>
-        runWithGatewayIndependentRootWorkAdmission(
+    // Exact target reads precede lane admission, so keep this final pass serial too.
+    for (const target of targets) {
+      if (!shouldContinue()) {
+        break;
+      }
+      try {
+        await runWithGatewayIndependentRootWorkAdmission(
           async () =>
             recoverExpectedRestartRecovery({
               ...target,
@@ -438,21 +442,17 @@ export function scheduleRestartAbortedMainSessionRecovery(params: {
             }),
           "main-session:target-recovery",
           abortController.signal,
-        ),
-      ),
-    );
-    for (const outcome of outcomes) {
-      if (
-        outcome.status === "rejected" &&
-        !(
+        );
+      } catch (error) {
+        if (
           abortController.signal.aborted &&
-          (outcome.reason === abortController.signal.reason ||
-            (outcome.reason instanceof Error &&
-              outcome.reason.cause === abortController.signal.reason))
-        )
-      ) {
+          (error === abortController.signal.reason ||
+            (error instanceof Error && error.cause === abortController.signal.reason))
+        ) {
+          return;
+        }
         mainSessionRecoveryLog.warn(
-          `main-session exhaustion reconciliation failed: ${String(outcome.reason)}`,
+          `main-session exhaustion reconciliation failed: ${String(error)}`,
         );
       }
     }

@@ -159,6 +159,8 @@ IMAP uses its own cursor and deduplication state, not the channel ingress dead-l
 
 Existing messages are baselined without dispatch when the plugin first starts. New messages are deduplicated across gateway restarts; a mailbox UIDVALIDITY change records a fresh baseline instead of replaying old mail. Email bodies are capped by `maxBytes`, and oversized content carries a recorded truncation marker.
 
+If the server does not provide a usable UIDNEXT, a new baseline uses the last existing message's UID through a read-only metadata fetch, or zero when the mailbox is empty. Messages arriving before that fetch can be included in the initial baseline. If the fetch fails or its result cannot establish a valid UID, the watcher retries through reconnection without replacing the saved cursor. An existing valid cursor with the same UIDVALIDITY resumes directly, preserving mail received while the watcher was offline.
+
 ## Troubleshooting
 
 **The account needs reauthentication.** Three consecutive authentication failures stop retries and mark the watcher unhealthy. Update the IMAP password or SecretRef, then reload the gateway configuration. An unresolved account credential degrades that account without preventing other accounts from starting.

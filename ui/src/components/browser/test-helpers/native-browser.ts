@@ -12,7 +12,7 @@ import {
   stubScreenshotMedia,
   TestBrowserPanelHost,
 } from "../browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "../browser-panel-controller.ts";
+import type { BrowserPanel } from "../browser-panel-owner.ts";
 import "../browser-panel.ts";
 
 export const nativeTab = (
@@ -82,7 +82,7 @@ export function fakeNativeBrowser(tabs: NativeBrowserTab[] = [], legacy = false)
 }
 
 export function setupNativeBrowserPanelTests() {
-  const controllers: BrowserPanelController[] = [];
+  const controllers: BrowserPanel[] = [];
   const cleanups: (() => void)[] = [];
   let hit: Element | null;
   let frames: Map<number, FrameRequestCallback>;
@@ -135,10 +135,13 @@ export function setupNativeBrowserPanelTests() {
     document.body.append(host.renderRoot);
     const stage = host.renderRoot.querySelector<HTMLElement>(".bp-stage")!;
     hit = stage;
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     cleanups.push(controller.native.presentation.mountStage(stage));
     controllers.push(controller);
-    controller.hostConnected();
+    const stopNative = controller.native.mount();
+    if (stopNative) {
+      cleanups.push(stopNative);
+    }
     return { controller, host, request };
   }
 
@@ -155,8 +158,26 @@ export function setupNativeBrowserPanelTests() {
     nextFrame = 0;
     hit = null;
     vi.stubGlobal("localStorage", createStorageMock());
-    vi.stubGlobal("ResizeObserver", undefined);
-    vi.stubGlobal("IntersectionObserver", undefined);
+    // Geometry and hit testing below own this no-layout native presentation.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    vi.stubGlobal(
+      "IntersectionObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+        takeRecords() {
+          return [];
+        }
+      },
+    );
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
       frames.set(++nextFrame, callback);
       return nextFrame;
@@ -171,7 +192,7 @@ export function setupNativeBrowserPanelTests() {
       cleanup();
     }
     for (const controller of controllers.splice(0)) {
-      controller.hostDisconnected();
+      controller.suspendView();
     }
     document.body.replaceChildren();
     vi.useRealTimers();

@@ -3794,7 +3794,7 @@ try {
           ...(options.fixture === "board"
             ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
             : {}),
-          include: ["diff", "lit/directives/repeat.js"],
+          include: ["diff"],
         },
         plugins: [
           ...createStandaloneMockIsolationPlugins(),

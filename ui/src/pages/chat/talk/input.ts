@@ -266,6 +266,7 @@ async function openRealtimeTalkMedia(
   return acquisition;
 }
 
+// Owns microphone acquisition; stop aborts track listeners and releases late permission results.
 export class RealtimeTalkInputOwner {
   private controller: AbortController | null = null;
   private media: MediaStream | null = null;

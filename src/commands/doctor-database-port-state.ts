@@ -24,7 +24,9 @@ export async function withDatabasePortStateOwner<T>(
   const config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
   const shared = path.join(ctx.stateDir, "state", "openclaw.sqlite");
   // Interrupted publication can leave config on the old engine. Custody follows the physical store.
-  const engine = fs.existsSync(shared) ? readBackupEngine(shared).engine : config.database?.engine;
+  const engine = fs.existsSync(shared)
+    ? readBackupEngine(shared).engine
+    : resolveDatabaseFamilyEngines(config).state;
   await selectDatabasePortEngine(ctx, config, engine);
   return withDatabaseEngineSelection(ctx.engineSelection, () =>
     runWithLocalStateOwner({
@@ -48,10 +50,14 @@ export async function selectDatabasePortEngine(
   engine: DatabaseEngineId | undefined,
 ) {
   // This task-scoped holder follows offline publication; boot selections remain frozen.
+  const effectiveEngines = { ...resolveDatabaseFamilyEngines(config), state: engine ?? "sqlite" };
   Object.assign(ctx.engineSelection, {
-    effectiveEngines: Object.freeze(resolveDatabaseFamilyEngines({ database: { engine } })),
+    effectiveEngines: Object.freeze(effectiveEngines),
     postgres:
-      engine === "postgres" ? await resolveDatabaseEngineInput(postgresConfig(config)) : undefined,
+      ctx.engineSelection.postgres ??
+      (Object.values(effectiveEngines).includes("postgres")
+        ? await resolveDatabaseEngineInput(postgresConfig(config), ctx.env)
+        : undefined),
   });
 }
 

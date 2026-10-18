@@ -428,6 +428,7 @@ async function assertHistoricalGatewayOwnerStopped(
         path.join(paths.stateDir, "state", "openclaw.sqlite"),
         undefined,
         describeGatewayLockHolder(payload, lockPath, owner === "alive" ? "live" : "unknown"),
+        { pid: payload.pid, role: payload.role },
       );
     }
   }
@@ -440,7 +441,8 @@ export async function acquireGatewayLock(
   if (opts.allowInTests !== true && (env.VITEST || env.NODE_ENV === "test")) {
     return null;
   }
-  const role = opts.role ?? "gateway";
+  // Ordinary process roles admit database access directly; config repair needs the maintenance guard.
+  const role = opts.databaseAccess === "none" ? "sqlite-maintenance" : (opts.role ?? "gateway");
   const paths = resolveGatewayLockPaths(env, opts.lockDir);
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
   const previousOwner = opts.relocatedMaintenanceOwner;
@@ -534,7 +536,7 @@ export async function acquireGatewayLock(
               projection = previousOwner.retainProjection();
             }
             await assertHistoricalGatewayOwnerStopped(paths, opts, projection);
-            if (!opts.databasePortRecovery) {
+            if (!opts.databasePortRecovery && opts.databaseAccess !== "none") {
               await owner.run(() =>
                 assertGatewayOwnerLeaseStopped(env, owner, role === "sqlite-maintenance"),
               );
@@ -616,6 +618,9 @@ export async function acquireGatewayLock(
   };
   const assertDatabaseAccess = (requestedPath: string) => {
     assertStateOwnerCurrent();
+    if (opts.databaseAccess === "none") {
+      throw new Error("Config-only ownership does not admit database access");
+    }
     stateOwner.assertDatabaseAccess(requestedPath);
   };
   const resources =

@@ -557,6 +557,13 @@ shard executor, using four CPUs, a 12-GiB memory limit, and no swap. Peak memory
 4.23 GiB with no OOMs. This qualifies that file only; any unqualified isolated
 sibling keeps the whole job at its planned capacity. Native latency and billed
 savings for this selection still need post-merge observation.
+The singleton `src/gateway/board-store.test.ts` selection also uses the 16-class
+when it is the job's only group, with two explicit workers and a two-worker
+fallback. Its 28-GiB worker-admission threshold remains intact. A complete replay
+at `ece4639ff930` passed all five tests and joined cleanup in 40.78 seconds on
+four CPUs and 15.42 GiB RAM. Maximum process RSS was 3.17 GiB; this is not an
+aggregate VM peak. This qualifies only that exact selection, not the database
+worker family or mixed jobs. Native billed savings still need observation.
 Ordinary self-hosted groups can share the existing promoted 32-class capacity
 across logical classes, and the existing group exchange fills stranded capacity.
 Hybrid packing keeps descending-cost initial placement when the completed plan

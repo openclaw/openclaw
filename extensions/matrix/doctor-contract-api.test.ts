@@ -456,15 +456,34 @@ describe("matrix doctor contract state migrations", () => {
     await expect(migration.detectLegacyState(createMigrationParams(stateDir))).resolves.toBeNull();
   });
 
-  it("records an empty configured Matrix scan silently and then skips historical databases", async () => {
+  it("does not require inbound dedupe migration for a fresh runtime account root", async () => {
+    const stateDir = tempDirs.make("openclaw-matrix-doctor-");
+    const storageRootDir = accountStorageRoot(stateDir);
+    await writeMatrixIdbSnapshotJson({
+      storageRootDir,
+      snapshotJson: "[]",
+      databaseCount: 0,
+    });
+    await closeOpenClawStateDatabaseAsync();
+
+    const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
+    const params = createMigrationParams(stateDir);
+    params.config = { channels: { matrix: {} } };
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+
+    writeSqliteDedupeSource(accountStorageRoot(stateDir, "legacy"), "legacy", "$old", Date.now());
+    await expect(migration.detectLegacyState(params)).resolves.toEqual({
+      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
+    });
+  });
+
+  it("allows an empty configured Matrix scan and then skips completed historical databases", async () => {
     const stateDir = tempDirs.make("openclaw-matrix-doctor-");
     const migration = migrationById("matrix-inbound-dedupe-to-claimable-dedupe");
     const params = createMigrationParams(stateDir);
     params.config = { channels: { matrix: {} } };
 
-    await expect(migration.detectLegacyState(params)).resolves.toEqual({
-      preview: ["Matrix inbound dedupe legacy sources need a one-time migration scan"],
-    });
+    await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     // Fresh installs scan nothing: the durable receipt is recorded (proven by
     // the historical-database skip below) without a user-visible change line.
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({

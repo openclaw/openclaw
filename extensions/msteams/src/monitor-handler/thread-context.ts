@@ -215,7 +215,7 @@ export async function resolveMSTeamsThreadContext(params: {
         markParentContextInjected(route.sessionKey, threadParentId);
       }
       const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
-      quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id ?? undefined;
+      quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id;
       quoteSenderName =
         parentMsg?.from?.user?.displayName ??
         parentMsg?.from?.application?.displayName ??

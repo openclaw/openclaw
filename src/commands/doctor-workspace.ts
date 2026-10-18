@@ -1,4 +1,3 @@
-/** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import { isUtf8 } from "node:buffer";
 import fs from "node:fs";
 import path from "node:path";

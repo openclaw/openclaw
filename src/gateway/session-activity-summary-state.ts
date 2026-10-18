@@ -15,6 +15,26 @@ import { resolveSessionStoreKey } from "./session-store-key.js";
 
 export type ActivitySummaryTarget = { key: string; agentId: string };
 
+/** The recap pump rechecks every queued state; resolve each agent's path once per store setting. */
+export function createActivitySummaryStorePaths(getConfig: () => OpenClawConfig) {
+  // Keyed by value: config publications can mutate the same object in place.
+  let store: string | undefined;
+  let paths = new Map<string, string>();
+  return (agentId: string): string => {
+    const current = getConfig().session?.store;
+    if (current !== store) {
+      store = current;
+      paths = new Map();
+    }
+    let storePath = paths.get(agentId);
+    if (storePath === undefined) {
+      storePath = resolveSessionStorePathCore(current, { agentId });
+      paths.set(agentId, storePath);
+    }
+    return storePath;
+  };
+}
+
 export function resolveActivitySummaryEventTarget(
   cfg: OpenClawConfig,
   key?: string,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { resolveGatewayRestartProbeContext } from "../cli/daemon-cli/restart-health-probe.js";
 import { verifyPreviousGatewayForUpdate } from "../cli/update-cli/update-command-verification.js";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
@@ -94,9 +94,6 @@ function failure(
     status: "error",
     mode: "npm",
     reason,
-    before: { version: BEFORE_VERSION },
-    after: { version: BEFORE_VERSION },
-    recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     steps: [],
     durationMs: 1,
     ...patch,
@@ -104,19 +101,42 @@ function failure(
   return { result };
 }
 
+async function expectResolution(ok: boolean, saved = failure(), summary?: string) {
+  expect(await validate(saved)).toMatchObject({
+    ok,
+    ...(summary ? { summary: expect.stringContaining(summary) } : {}),
+  });
+}
+function expectStopped(result: UpdateRepairValidation, ...fragments: string[]) {
+  expect(result).toMatchObject({ ok: false, stopReason: result.summary });
+  for (const fragment of fragments) {
+    expect(result.summary).toContain(fragment);
+  }
+}
+
 let failedRun: UpdateRunRecord;
 let latestRun: UpdateRunRecord;
 const validateDoctor = vi.fn<() => Promise<UpdateRepairValidation>>();
+const healthy = { ok: true, score: 0, summary: "Doctor passed." };
+const gitHead = (sha: string) => ({
+  code: 0,
+  stdout: `${sha}\n`,
+  stderr: "",
+  signal: null,
+  killed: false,
+  termination: "exit" as const,
+});
 
 function validate(
   savedFailure = failure(),
   env: NodeJS.ProcessEnv = { OPENCLAW_STATE_DIR: "/fixture/state" },
+  signal = new AbortController().signal,
 ) {
   return validateTriageUpdateResolution({
     failure: savedFailure,
     installRoot: "/fixture/openclaw",
     env,
-    signal: new AbortController().signal,
+    signal,
     validateDoctor,
   });
 }
@@ -137,14 +157,7 @@ function repair() {
       workspaceDir: "/fixture/workspace",
     },
     context: { ...failure(), phase: "verifying", targetVersion: TARGET_VERSION },
-    validate: (signal) =>
-      validateTriageUpdateResolution({
-        failure: failure(),
-        installRoot: "/fixture/openclaw",
-        env: { OPENCLAW_STATE_DIR: "/fixture/state" },
-        signal,
-        validateDoctor,
-      }),
+    validate: (signal) => validate(failure(), undefined, signal),
   });
 }
 
@@ -162,30 +175,14 @@ const successfulTurn = {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([]);
-  validateDoctor.mockResolvedValue({
-    ok: true,
-    score: 0,
-    summary: "Doctor lint reports no errors.",
-  });
+  validateDoctor.mockResolvedValue(healthy);
   failedRun = run();
   latestRun = run({
     runId: SUCCEEDED_RUN_ID,
     createdAtMs: 30,
-    updatedAtMs: 40,
     status: "succeeded",
-    reason: null,
     after: { version: TARGET_VERSION },
     steps: [{ step: "gateway verification", status: "completed", exitCode: 0 }],
-    verification: {
-      serviceRunning: true,
-      runningVersion: TARGET_VERSION,
-      versionMatch: true,
-      settled: true,
-      readyz: true,
-      channelsReady: true,
-      pluginErrors: [],
-    },
-    confirmedAtMs: 40,
     finishedAtMs: 40,
   });
   vi.mocked(getUpdateRun).mockImplementation((runId) =>
@@ -202,310 +199,245 @@ beforeEach(() => {
   vi.mocked(readPackageVersion).mockResolvedValue(TARGET_VERSION);
   vi.mocked(resolveGatewayRestartProbeContext).mockResolvedValue({ config: {}, auth: undefined });
   vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(true);
-  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-    code: 0,
-    stdout: `${TARGET_SHA}\n`,
-    stderr: "",
-    signal: null,
-    killed: false,
-    termination: "exit",
-  });
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(TARGET_SHA));
   repairRuntime.prepareUpdateRepairInference.mockResolvedValue({
     ok: true,
-    route: {
-      runner: "embedded",
-      agentId: "owner",
-      provider: "fixture",
-      model: "repair",
-      modelLabel: "fixture/repair",
-      agentDir: "/fixture/agent",
-      runConfig: {},
-    },
+    route: { provider: "fixture", model: "repair" },
     modelFallbacks: [],
   });
   repairRuntime.runUpdateRepairTurn.mockResolvedValue(successfulTurn);
 });
 
-describe("saved update failure resolution", () => {
-  it.each(["during Doctor", "during verification"])(
-    "prescribes repair when package admission is blocked %s despite a successful last run",
-    async (when) => {
-      const blockAdmission = () => {
-        vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
-          throw new Error("managed handoff lease database identity changed");
-        });
-      };
-      if (when === "during Doctor") {
-        validateDoctor.mockImplementationOnce(async () => {
-          blockAdmission();
-          return { ok: true, score: 0, summary: "Doctor passed." };
-        });
-      } else {
-        vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-          blockAdmission();
-          return true;
-        });
-      }
-      const result = await validate();
-      expect(result.ok).toBe(false);
-      expect(result.summary).toContain("managed handoff lease database identity changed");
-      expect(result.summary).toContain("`openclaw update repair`");
-      expect(result.summary).not.toContain("retry `openclaw update`");
-      expect(result.stopReason).toBe(result.summary);
-    },
-  );
-
-  it("does not certify plugin migrations appearing during verification", async () => {
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
-    vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
-    const pending = [
-      {
-        pluginId: "codex",
-        reason: "The plugin has not reported completion of its retained state migration.",
-        command: "openclaw doctor --fix",
-        requiresStateMigration: true as const,
-      },
-    ];
-    vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-      vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(pending);
-      return true;
-    });
-    const result = await validate(failure(), {
-      OPENCLAW_STATE_DIR: "/fixture/state",
-      OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
-    });
-    expect(result).toMatchObject({
-      ok: false,
-      summary: expect.stringContaining('Plugin "codex" data/settings upgrade is unfinished'),
-    });
-    expect(result.summary).toContain('Run "openclaw doctor --fix" to retry the upgrade.');
-    expect(result.stopReason).toBe(result.summary);
-  });
-
-  it("preserves the caller's post-core convergence context in pending migration guidance", async () => {
-    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(
-      ["first", "second"].map((pluginId) => ({
-        pluginId,
-        reason: "Package repair deferred.",
-        command: "openclaw update repair",
-      })),
-    );
-    const env = {
-      OPENCLAW_STATE_DIR: "/fixture/state",
-      OPENCLAW_UPDATE_IN_PROGRESS: "1",
-      OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+it.each(["during Doctor", "during verification"])(
+  "requires repair for admission blocked %s",
+  async (when) => {
+    const blockAdmission = () => {
+      vi.mocked(assertNoPendingPackageActivation).mockImplementation(() => {
+        throw new Error("managed handoff lease database identity changed");
+      });
     };
-    const result = await validate(failure(), env);
-
-    expect(result).toMatchObject({
-      ok: false,
-      summary: expect.stringContaining('Run "openclaw update repair"'),
-    });
-    expect(result.summary).toContain('Plugin "first"');
-    expect(result.summary).toContain('Plugin "second"');
-    expect(result.summary.match(/Run "openclaw update repair"/g)).toHaveLength(2);
-    expect(result.summary).toContain('then "openclaw doctor --fix" to retry the upgrade.');
-    expect(result.summary).not.toContain("Let the current update or repair finish.");
-    expect(result.stopReason).toBe(result.summary);
-    expect(readDeferredPluginMigrationsAsync).toHaveBeenCalledWith({ env });
-    expect(validateDoctor).not.toHaveBeenCalled();
-  });
-
-  it("keeps mixed plugin installation failures unresolved after Doctor and updater completion", async () => {
-    failedRun.reason = "post-update-failed";
-    failedRun.steps = [{ step: "finalize:doctor", status: "failed" }];
-    vi.mocked(verifyPreviousGatewayForUpdate).mockImplementation(
-      async ({ requirePluginHealth }) => !requirePluginHealth,
-    );
-    const saved = failure("post-update-failed", {
-      postUpdate: {
-        plugins: {
-          status: "error",
-          reason: "post-plugin-doctor-invalid-config",
-          changed: false,
-          sync: {
-            changed: false,
-            switchedToBundled: [],
-            switchedToNpm: [],
-            warnings: [],
-            errors: [],
-          },
-          npm: {
-            changed: false,
-            outcomes: [{ pluginId: "sample", status: "error", message: "Package install failed" }],
-          },
-          integrityDrifts: [],
-        },
-      },
-    });
-    expect(await validate(saved)).toMatchObject({ ok: false });
-  });
-
-  it("verifies a Git target recorded with only its SHA", async () => {
-    useGitTarget();
-    failedRun.target = { kind: "git", sha: TARGET_SHA };
-    expect(await validate(failure("checkout-failed", { mode: "git" }))).toMatchObject({
-      ok: true,
-    });
-  });
-  it.each([
-    "restart-unhealthy",
-    "update-recovery-pending",
-    "package-recovery-permissions-unsafe",
-    "managed-handoff-lease-identity-changed",
-  ])("requires a later verified updater outcome for %s", async (reason) => {
-    failedRun.reason = reason;
-    const savedFailure = failure(reason);
-    const successfulRun = latestRun;
-    latestRun = failedRun;
-    expect(await validate(savedFailure)).toMatchObject({
-      ok: false,
-      summary: expect.stringContaining("Next step:"),
-    });
-    expect(failedRun.status).toBe("failed");
-    expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
-
-    latestRun = successfulRun;
-    expect(await validate(savedFailure)).toMatchObject({ ok: true });
-
-    vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
-    expect(await validate(savedFailure)).toMatchObject({ ok: false });
-  });
-
-  it("does not invent a target for an error-only artifact", async () => {
-    expect(await validate({ error: "Update failed" })).toEqual({
-      ok: false,
-      score: -1,
-      summary: MISSING_TARGET,
-      stopReason: MISSING_TARGET,
-    });
-  });
-
-  it("does not resolve revoked authority from unrelated healthy installation facts", async () => {
-    const reason = "requester-revoked";
-    failedRun.reason = reason;
-    expect(await validate(failure(reason))).toMatchObject({
-      ok: false,
-      summary: expect.stringContaining("`openclaw update repair`"),
-      stopReason: expect.stringContaining(
-        "No resolution predicate for update failure requester-revoked",
-      ),
-    });
-  });
-
-  it("does not report resolution while an updater is active", async () => {
-    vi.mocked(findActiveUpdateRun).mockReturnValue(run({ status: "running", phase: "staging" }));
-    expect(await validate()).toMatchObject({ ok: false });
-  });
-
-  it.each(["new active run", "new terminal run"])(
-    "rejects a %s appearing during service verification",
-    async (change) => {
+    if (when === "during Doctor") {
+      validateDoctor.mockImplementationOnce(async () => {
+        blockAdmission();
+        return healthy;
+      });
+    } else {
       vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
-        if (change === "new active run") {
-          vi.mocked(findActiveUpdateRun).mockReturnValue(
-            run({ status: "running", phase: "staging" }),
-          );
-        } else {
-          latestRun = run({ runId: "10000000-0000-4000-8000-000000000003" });
-        }
+        blockAdmission();
         return true;
       });
-      expect(await validate()).toMatchObject({
-        ok: false,
-        summary: expect.stringContaining("owner changed"),
-      });
-    },
-  );
+    }
+    const result = await validate();
+    expectStopped(
+      result,
+      "managed handoff lease database identity changed",
+      "`openclaw update repair`",
+    );
+    expect(result.summary).not.toContain("retry `openclaw update`");
+  },
+);
 
-  it("rejects current Doctor errors even after the updater recorded success", async () => {
-    validateDoctor.mockResolvedValue({
-      ok: false,
-      score: -1,
-      summary: "Plugin configuration invalid.",
-    });
-    expect(await validate(failure("finalize:doctor"))).toMatchObject({
-      ok: false,
-      summary: expect.stringContaining("Plugin configuration invalid. Next step:"),
-    });
-  });
-
-  it.each(["installed version", "checkout HEAD"])(
-    "rejects mismatched Git %s despite a healthy Gateway",
-    async (identity) => {
-      useGitTarget();
-      if (identity === "installed version") {
-        vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
-      } else {
-        vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-          code: 0,
-          stdout: `${BEFORE_SHA}\n`,
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
-      }
-      expect(await validate(failure("checkout-failed", { mode: "git" }))).toMatchObject({
-        ok: false,
-      });
-    },
-  );
-
-  it("accepts an owner-recorded Git rollback only with the previous runtime currently verified", async () => {
-    useGitTarget();
-    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue({
-      code: 0,
-      stdout: `${BEFORE_SHA}\n`,
-      stderr: "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
-    latestRun.status = "rolled-back";
-    latestRun.after = { ...failedRun.before };
-    latestRun.steps.push({ step: "package rollback", status: "completed", exitCode: 0 });
-    vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
-    const savedFailure = failure("checkout-failed", { mode: "git" });
-    expect(await validate(savedFailure)).toMatchObject({
-      ok: true,
-      summary: expect.stringContaining(`Rollback to ${BEFORE_VERSION}`),
-    });
-
-    latestRun.steps = [];
-    expect(await validate(savedFailure)).toMatchObject({ ok: false });
-  });
-
-  it("returns a zero-attempt result only after the owners verify existing resolution", async () => {
-    const result = await repair();
-    expect(result).toMatchObject({
-      status: "repaired",
-      attempts: [],
-      finalValidation: {
-        ok: true,
-        summary: expect.stringContaining("recorded by the updater"),
+it("rejects migrations appearing during verification", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", undefined);
+  vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_CONVERGENCE", undefined);
+  vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
+    vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue([
+      {
+        pluginId: "codex",
+        reason: "Retained state migration incomplete.",
+        command: "openclaw doctor --fix",
+        requiresStateMigration: true,
       },
-    });
-    expect(repairRuntime.prepareUpdateRepairInference).not.toHaveBeenCalled();
-    expect(repairRuntime.runUpdateRepairTurn).not.toHaveBeenCalled();
-  });
-
-  it("reports repaired after a real turn clears the current runtime verification failure", async () => {
-    let runtimeErrors = ["Missing runtime file"];
-    vi.mocked(collectInstalledGlobalPackageErrors).mockImplementation(async () => [
-      ...runtimeErrors,
     ]);
-    repairRuntime.runUpdateRepairTurn.mockImplementationOnce(async () => {
-      runtimeErrors = [];
-      return successfulTurn;
+    return true;
+  });
+  const result = await validate(failure(), {
+    OPENCLAW_STATE_DIR: "/fixture/state",
+    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+  });
+  expectStopped(
+    result,
+    'Plugin "codex" data/settings upgrade is unfinished',
+    'Run "openclaw doctor --fix" to retry the upgrade.',
+  );
+});
+
+it("preserves post-core migration guidance", async () => {
+  vi.mocked(readDeferredPluginMigrationsAsync).mockResolvedValue(
+    ["first", "second"].map((pluginId) => ({
+      pluginId,
+      reason: "Package repair deferred.",
+      command: "openclaw update repair",
+    })),
+  );
+  const env = {
+    OPENCLAW_STATE_DIR: "/fixture/state",
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+  };
+  const result = await validate(failure(), env);
+  expectStopped(
+    result,
+    'Run "openclaw update repair"',
+    'Plugin "first"',
+    'Plugin "second"',
+    'then "openclaw doctor --fix" to retry the upgrade.',
+  );
+  expect(result.summary.match(/Run "openclaw update repair"/g)).toHaveLength(2);
+  expect(result.summary).not.toContain("Let the current update or repair finish.");
+  expect(readDeferredPluginMigrationsAsync).toHaveBeenCalledWith({ env });
+  expect(validateDoctor).not.toHaveBeenCalled();
+});
+
+it("keeps plugin failures unresolved after Doctor", async () => {
+  failedRun.reason = "post-update-failed";
+  failedRun.steps = [{ step: "finalize:doctor", status: "failed" }];
+  vi.mocked(verifyPreviousGatewayForUpdate).mockImplementation(
+    async ({ requirePluginHealth }) => !requirePluginHealth,
+  );
+  const saved = failure("post-update-failed", {
+    postUpdate: {
+      plugins: {
+        status: "error",
+        changed: false,
+        sync: {
+          changed: false,
+          switchedToBundled: [],
+          switchedToNpm: [],
+          warnings: [],
+          errors: [],
+        },
+        npm: {
+          changed: false,
+          outcomes: [],
+        },
+        integrityDrifts: [],
+      },
+    },
+  });
+  await expectResolution(false, saved);
+});
+
+it("verifies a SHA-only Git target", async () => {
+  useGitTarget();
+  failedRun.target = { kind: "git", sha: TARGET_SHA };
+  await expectResolution(true);
+});
+it.each([
+  "restart-unhealthy",
+  "update-recovery-pending",
+  "package-recovery-permissions-unsafe",
+  "managed-handoff-lease-identity-changed",
+])("requires a verified later outcome for %s", async (reason) => {
+  failedRun.reason = reason;
+  const savedFailure = failure(reason);
+  const successfulRun = latestRun;
+  latestRun = failedRun;
+  await expectResolution(false, savedFailure, "Next step:");
+  expect(failedRun.status).toBe("failed");
+  expect(verifyPreviousGatewayForUpdate).not.toHaveBeenCalled();
+  latestRun = successfulRun;
+  await expectResolution(true, savedFailure);
+  vi.mocked(verifyPreviousGatewayForUpdate).mockResolvedValue(false);
+  await expectResolution(false, savedFailure);
+});
+
+it("does not invent a target for an error-only artifact", async () => {
+  expect(await validate({ error: "Update failed" })).toEqual({
+    ok: false,
+    score: -1,
+    summary: MISSING_TARGET,
+    stopReason: MISSING_TARGET,
+  });
+});
+
+it("does not resolve revoked authority from healthy state", async () => {
+  failedRun.reason = "requester-revoked";
+  expect(await validate()).toMatchObject({
+    ok: false,
+    summary: expect.stringContaining("`openclaw update repair`"),
+    stopReason: expect.stringContaining(
+      "No resolution predicate for update failure requester-revoked",
+    ),
+  });
+});
+
+it("rejects resolution during an active update", async () => {
+  vi.mocked(findActiveUpdateRun).mockReturnValue(run({ status: "running", phase: "staging" }));
+  await expectResolution(false);
+});
+
+it.each(["new active run", "new terminal run"])(
+  "rejects a %s appearing during service verification",
+  async (change) => {
+    vi.mocked(verifyPreviousGatewayForUpdate).mockImplementationOnce(async () => {
+      if (change === "new active run") {
+        vi.mocked(findActiveUpdateRun).mockReturnValue(
+          run({ status: "running", phase: "staging" }),
+        );
+      } else {
+        latestRun = run({ runId: "10000000-0000-4000-8000-000000000003" });
+      }
+      return true;
     });
-    const result = await repair();
-    expect(result).toMatchObject({ status: "repaired", finalValidation: { ok: true } });
-    expect(result.attempts).toHaveLength(1);
-    expect(result.attempts[0]).toMatchObject({
-      turn: 1,
-      toolCalls: 1,
-      validation: { ok: true },
-    });
+    await expectResolution(false, failure(), "owner changed");
+  },
+);
+
+it("rejects Doctor errors after recorded success", async () => {
+  validateDoctor.mockResolvedValue({
+    ok: false,
+    score: -1,
+    summary: "Plugin configuration invalid.",
+  });
+  await expectResolution(false, failure(), "Plugin configuration invalid. Next step:");
+});
+
+it.each(["installed version", "checkout HEAD"])("rejects mismatched Git %s", async (identity) => {
+  useGitTarget();
+  if (identity === "installed version") {
+    vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
+  } else {
+    vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(BEFORE_SHA));
+  }
+  await expectResolution(false);
+});
+
+it("requires a verified runtime and rollback receipt", async () => {
+  useGitTarget();
+  vi.mocked(runUtf8CommandWithTimeout).mockResolvedValue(gitHead(BEFORE_SHA));
+  latestRun.status = "rolled-back";
+  latestRun.after = { ...failedRun.before };
+  latestRun.steps.push({ step: "package rollback", status: "completed", exitCode: 0 });
+  vi.mocked(readPackageVersion).mockResolvedValue(BEFORE_VERSION);
+  await expectResolution(true, failure(), `Rollback to ${BEFORE_VERSION}`);
+  latestRun.steps = [];
+  await expectResolution(false);
+});
+
+it("skips repair after verified resolution", async () => {
+  expect(await repair()).toMatchObject({
+    status: "repaired",
+    attempts: [],
+    finalValidation: {
+      ok: true,
+      summary: expect.stringContaining("recorded by the updater"),
+    },
+  });
+  expect(repairRuntime.prepareUpdateRepairInference).not.toHaveBeenCalled();
+  expect(repairRuntime.runUpdateRepairTurn).not.toHaveBeenCalled();
+});
+
+it("revalidates runtime after a repair turn", async () => {
+  let runtimeErrors = ["Missing runtime file"];
+  vi.mocked(collectInstalledGlobalPackageErrors).mockImplementation(async () => [...runtimeErrors]);
+  repairRuntime.runUpdateRepairTurn.mockImplementationOnce(async () => {
+    runtimeErrors = [];
+    return successfulTurn;
+  });
+  expect(await repair()).toMatchObject({
+    status: "repaired",
+    finalValidation: { ok: true },
+    attempts: [{ turn: 1, toolCalls: 1, validation: { ok: true } }],
   });
 });

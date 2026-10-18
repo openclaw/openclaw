@@ -72,9 +72,8 @@ export class SubagentSessionCleanupRevocationChangedError extends SubagentRegist
   override name = "SubagentSessionCleanupRevocationChangedError";
 }
 
-// Restored rows can arrive in a large burst. Limit only that startup catch-up
-// so ordinary live settles keep their existing latency and concurrency.
-const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
+// Recovery and detached cleanup must leave worker-task admission available to client reads.
+const BACKGROUND_LIFECYCLE_CONCURRENCY = 2;
 
 const COMPLETION_SETTLING_ERROR = "Subagent completion is still settling; retry the session reset.";
 
@@ -95,10 +94,7 @@ export class SubagentLifecycleController {
   readonly cancelledRequesterSettleWakeRuns = new Set<object>();
   readonly scheduledRequesterSettleWakeRuns = new Set<object>();
   private readonly restoredRequesterSettleWakeRuns = new Set<object>();
-  private readonly restoredRequesterSettleWakeLimits = new WeakMap<
-    object,
-    ReturnType<typeof pLimit>
-  >();
+  private readonly backgroundWorkLimits = new WeakMap<object, ReturnType<typeof pLimit>>();
   readonly scheduledRequesterSettleWakeTimers = new Map<string, ScheduledRequesterSettleWake>();
   private readonly terminalCompletionLocks = new Map<object, Promise<void>>();
   private readonly terminalSessionEffects = new WeakMap<object, SubagentSessionEffects>();
@@ -400,19 +396,21 @@ export class SubagentLifecycleController {
       if (!this.restoredRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
         return runCurrent();
       }
-      const resolve = getGatewayContextResolver(entry);
-      // Native caller wrappers share the instance resolver. Standalone bindings
-      // retain their captured resolver; wholly unbound calls belong to this controller.
-      const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
-      // Retired callbacks keep their queue and roots, but cannot consume the
-      // replacement Gateway's capacity while their old async work unwinds.
-      let limit = this.restoredRequesterSettleWakeLimits.get(owner);
-      if (!limit) {
-        limit = pLimit(RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY);
-        this.restoredRequesterSettleWakeLimits.set(owner, limit);
-      }
-      return limit(runCurrent);
+      return this.runBackgroundWork(entry, runCurrent);
     }, "subagents:lifecycle-wake");
+  };
+
+  /** Detached callers retain their Gateway root before queueing and check authority on dispatch. */
+  runBackgroundWork = <T>(entry: SubagentRunRecord, run: () => Promise<T>): Promise<T> => {
+    const resolve = getGatewayContextResolver(entry);
+    // Native caller wrappers share a Gateway budget; retired owners cannot consume its replacement's.
+    const owner = (resolve && getCanonicalGatewayContextResolver(resolve)) ?? resolve ?? this;
+    let limit = this.backgroundWorkLimits.get(owner);
+    if (!limit) {
+      limit = pLimit(BACKGROUND_LIFECYCLE_CONCURRENCY);
+      this.backgroundWorkLimits.set(owner, limit);
+    }
+    return limit(run);
   };
   unmarkRequesterSettleWakeRunScheduled = (entry: SubagentRunRecord): void => {
     this.scheduledRequesterSettleWakeRuns.delete(getSubagentRunRuntimeKey(entry));

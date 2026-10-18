@@ -81,7 +81,7 @@ it("retains project artwork while current labels and selection remain live", () 
     projectSearchLoading: false,
     projectSearchError: null,
     projectId: "",
-    gatewayLabel: "Gateway",
+    browserLabel: "Gateway",
     submitting: false,
     pendingPlacement: false,
     popoverOpen: true,

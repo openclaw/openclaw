@@ -127,7 +127,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   const activeMinutes =
     options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
-      : typeof options.activeMinutes === "number" && options.activeMinutes > 0
+      : options.activeMinutes !== undefined && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
         : 0;
   if (activeMinutes > 0) {
@@ -142,7 +142,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }
-  if (typeof options.offset === "number" && options.offset > 0) {
+  if (options.offset !== undefined && options.offset > 0) {
     params.offset = Math.floor(options.offset);
   }
   return params;
@@ -153,7 +153,7 @@ export function normalizeManagedSessionListQuery(
 ): Readonly<SessionsListParams & { limit: number; pageSize?: number }> {
   const { offset: _offset, append: _append, ...queryOptions } = options;
   const limit =
-    typeof options.limit === "number" && options.limit > 0
+    options.limit !== undefined && options.limit > 0
       ? Math.floor(options.limit)
       : DEFAULT_SESSION_LIST_QUERY.limit;
   return Object.freeze({

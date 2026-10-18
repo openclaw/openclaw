@@ -73,7 +73,9 @@ change chart totals. Selecting sessions narrows the charts while retaining the
 comparison table. JSON export loads the full matching report.
 
 The overview uses a rebuildable usage projection maintained after committed
-transcript changes. Background refresh waits for 30 seconds without new usage
+transcript changes. A refresh that overlaps agent database creation joins that
+database's preparation before writing its projection. An empty store stays absent
+until a transcript needs a rollup. Background refresh waits for 30 seconds without new usage
 or an active agent turn. After five minutes of pending work, it can start in the
 next idle gap without another quiet period. Explicit cost and overview reads
 flush and await pending updates, so a completed turn does not need to wait for

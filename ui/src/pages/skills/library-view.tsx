@@ -10,7 +10,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { libraryFileText } from "./library-files.ts";
+import { libraryFileText } from "./library-file-text.ts";
 import type { SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 
@@ -75,7 +75,10 @@ export function SkillLibrary(props: {
             }
           />
         </label>
-        <Show when={!current().loading} fallback={<p role="status">{t("common.loading")}</p>}>
+        <Show
+          when={Boolean(list()) || !current().loading}
+          fallback={<p role="status">{t("common.loading")}</p>}
+        >
           <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
             <Show
               when={entries().length > 0}
@@ -552,6 +555,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
             type="submit"
             class="btn primary"
             disabled={
+              !props.library.canWrite() ||
               current().busy ||
               (!current().importSource &&
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))

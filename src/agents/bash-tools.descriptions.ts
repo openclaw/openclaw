@@ -1,7 +1,6 @@
 export const EXEC_AUTO_REVIEW_GUIDANCE =
   "An automatic reviewer may deny a command and explain why; if denied, choose a materially safer alternative or ask the user, never work around the denial.";
 
-/** Builds the model-facing exec tool description for the current platform and capabilities. */
 export function describeExecTool(params?: {
   hasCronTool?: boolean;
   hasProcessTool?: boolean;
@@ -30,7 +29,6 @@ export function describeExecTool(params?: {
   return params?.autoReview ? `${description} ${EXEC_AUTO_REVIEW_GUIDANCE}` : description;
 }
 
-/** Builds the model-facing process-control tool description. */
 export function describeProcessTool(params?: { hasCronTool?: boolean }): string {
   return [
     "Control existing exec: list, poll, log, write, send-keys, submit, paste, kill.",

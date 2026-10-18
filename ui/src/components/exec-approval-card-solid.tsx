@@ -16,7 +16,7 @@ import type {
 import { formatCountdown } from "../lib/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { defineSolidBridge } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { Icon } from "./solid/icon.tsx";
 

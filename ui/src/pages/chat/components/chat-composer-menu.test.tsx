@@ -3,17 +3,10 @@ import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import {
-  createSlashMenuState,
-  SlashMenu,
-  type SlashMenuHost,
-} from "./chat-composer-slash-menu.tsx";
+import { createSlashMenu, SlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu.tsx";
 
 it("retains the slash viewport during selection changes and resets it when switching mode", () => {
-  const state = createSlashMenuState();
   const command = { key: "status", name: "status", description: "Show status" };
-  state.slashMenuOpen = true;
-  state.slashMenuItems = [{ key: "help", name: "help", description: "Show help" }, command];
   const host: SlashMenuHost = {
     paneId: "menu-retention",
     getDraft: () => "/",
@@ -23,36 +16,30 @@ it("retains the slash viewport during selection changes and resets it when switc
     runCommand: vi.fn(),
     canRun: () => true,
   };
-  const update = vi.fn();
-  const [args, setArgs] = createSignal<[typeof state, SlashMenuHost, string, () => void]>([
-    state,
-    host,
-    "/",
-    update,
-  ]);
-  const view = mountSolid(() => <SlashMenu args={args()} />);
+  let menu!: ReturnType<typeof createSlashMenu>;
+  const view = mountSolid(() => {
+    menu = createSlashMenu();
+    return <SlashMenu menu={menu} host={host} draft="/" />;
+  });
+  menu.update("/", host);
+  flush();
   const viewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   viewport.scrollTop = 120;
-  state.slashMenuIndex = 1;
-  setArgs([state, host, "/", update]);
+  menu.hover(menu.state.slashMenuItems.findIndex((entry) => entry.key === "status"));
   flush();
   expect(view.container.querySelector(".slash-menu__scroll")).toBe(viewport);
   expect(viewport.scrollTop).toBe(120);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status");
 
-  state.slashMenuMode = "args";
-  state.slashMenuCommand = command;
-  state.slashMenuArgItems = ["on", "off"];
-  state.slashMenuIndex = 0;
-  setArgs([state, host, "/status ", update]);
+  host.resolveArgOptions = () => ["on", "off"];
+  menu.selectCommand(command, host);
   flush();
   const argumentsViewport = view.container.querySelector<HTMLElement>(".slash-menu__scroll")!;
   expect(argumentsViewport).not.toBe(viewport);
   expect(argumentsViewport.scrollTop).toBe(0);
   expect(view.getByRole("option", { selected: true }).textContent).toContain("/status on");
 
-  state.slashMenuOpen = false;
-  setArgs([state, host, "/status on", update]);
+  menu.reset();
   flush();
   expect(view.queryByRole("listbox")).toBeNull();
 });
@@ -269,3 +256,103 @@ it("retains attachment choices while the native menu closes and reopens", async 
   flush();
   expect(view.container.querySelector('[data-value="test-toggle"]')).toBe(choice);
 });
+
+it.each(["item", "external", "closed"] as const)(
+  "preserves newer %s focus after changing capability views",
+  async (target) => {
+    type Menu = Parameters<typeof ChatComposerPlusMenu>[0]["menu"];
+    const [currentView, setView] = createSignal<Menu["view"]>(
+      target === "closed" ? "connectors" : "tools:docs",
+    );
+    const [open, setOpen] = createSignal(true);
+    const view = mountSolid(() => (
+      <>
+        <input aria-label="Newer focus" />
+        <ChatComposerPlusMenu
+          menu={{
+            attachments: {},
+            disabled: false,
+            open: open(),
+            view: currentView(),
+            toolOverrides: null,
+            onOpenChange: setOpen,
+            onViewChange: setView,
+            capabilityMenu: {
+              basePath: "/control",
+              skills: [],
+              skillsLoading: false,
+              skillsError: false,
+              mcpServers: [
+                {
+                  name: "docs",
+                  enabled: true,
+                  transport: "stdio",
+                  target: "docs-server",
+                  auth: null,
+                  signIn: null,
+                  toolFilter: false,
+                  parallel: false,
+                  tls: null,
+                },
+              ],
+              toolsEffectiveResult: null,
+              toolsEffectiveLoading: false,
+              toolsEffectiveError: false,
+              toolAccessMutationBlockedReason: null,
+              webSearchBaseEnabled: true,
+              mutationBlockedReason: null,
+              canAdmin: true,
+              adminBlockedReason: null,
+              onLoadSkills: vi.fn(),
+              onPatchToolOverrides: vi.fn(),
+              onNavigate: vi.fn(),
+            },
+          }}
+        />
+      </>
+    ));
+    const back = view.getByRole("menuitem", { name: "Back", hidden: true });
+    await waitForSolid(() =>
+      expect(back.closest("[data-menu-content]")?.getAttribute("data-phase")).toBe("open"),
+    );
+    const frames: FrameRequestCallback[] = [];
+    const raf = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      back.focus();
+      back.click();
+      let focused: HTMLElement;
+      if (target === "item") {
+        flush();
+        expect(document.activeElement).toBe(back);
+        focused = view.getByRole("menuitemcheckbox", { name: "docs Enabled", hidden: true });
+      } else if (target === "closed") {
+        setOpen(false);
+        focused = document.body;
+      } else {
+        focused = view.getByRole("textbox", { name: "Newer focus" });
+      }
+      if (target !== "closed") {
+        focused.focus();
+      }
+      flush();
+      for (const callback of frames) {
+        callback(0);
+      }
+      expect(document.activeElement).toBe(focused);
+      if (target === "item") {
+        back.focus();
+        back.click();
+        flush();
+        expect(back.isConnected).toBe(false);
+        expect(document.activeElement).toBe(
+          view.getByRole("menuitem", { name: "Take photo", hidden: true }),
+        );
+      }
+    } finally {
+      raf.mockRestore();
+    }
+  },
+);

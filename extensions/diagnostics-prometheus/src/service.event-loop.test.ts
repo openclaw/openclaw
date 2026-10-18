@@ -282,8 +282,25 @@ describe("diagnostics-prometheus runtime metrics", () => {
               },
             ],
             workerHeaps: [
-              { script: "sqlite-store.worker.js", heapUsed: 100, heapTotal: 200 },
-              { script: "sqlite-store.worker.js", heapUsed: 150, heapTotal: 200 },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 100,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 60 },
+                  { space_name: "code_space", space_used_size: 40 },
+                ],
+              },
+              {
+                script: "sqlite-store.worker.js",
+                heapUsed: 150,
+                heapTotal: 200,
+                heapSpaces: [
+                  { space_name: "old_space", space_used_size: 120 },
+                  { space_name: "code_space", space_used_size: 30 },
+                  { space_name: "future_v8_space", space_used_size: 0 },
+                ],
+              },
             ],
             workerMemoryMissing: [
               { script: "sqlite-store.worker.js", threadId: 3, reason: "pending" },
@@ -369,6 +386,16 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(rendered).toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store.worker.js"} 250\n',
       );
+      for (const [space, value] of [
+        ["old_space", 180],
+        ["code_space", 70],
+        ["future_v8_space", 0],
+      ]) {
+        expect(rendered).toContain(
+          `openclaw_worker_heap_space_used_bytes{script="sqlite-store.worker.js",space="${space}"} ${value}\n`,
+        );
+      }
+      expect(rendered).not.toContain('openclaw_worker_heap_space_used_bytes{script="other"');
       expect(rendered).toContain(
         'openclaw_child_process_spawn_total{family="node",operation="none"} 5\n',
       );
@@ -412,6 +439,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
       expect(metrics.render()).toBe(rendered);
       metrics.record(retiredSample, trusted);
       expect(metrics.render()).not.toContain("openclaw_heap_space_bytes");
+      expect(metrics.render()).not.toContain("openclaw_worker_heap_space_used_bytes");
       expect(metrics.render()).not.toContain(
         'openclaw_worker_heap_used_bytes{script="sqlite-store',
       );

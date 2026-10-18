@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as windowsEncoding from "../infra/windows-encoding.js";
 import { decodeWindowsLauncherScript } from "../infra/windows-launcher-encoding.js";
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
 import { stageScheduledTask } from "./schtasks-install.js";
 import { readScheduledTaskCommand } from "./schtasks-layout.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "./systemd-unit.js";
@@ -182,6 +182,13 @@ it.each(["openclaw.mjs", "dist/index.js"])(
       runtimePath: process.execPath,
       port: 18789,
     });
+    const node = await resolveNodeProgramArguments({
+      cliEntrypoint: path.join(original.root, entry),
+      runtime: "node",
+      runtimePath: process.execPath,
+      host: "gateway.example",
+      port: 18789,
+    });
     const unitPath = path.join(home, "openclaw-gateway.service");
     await fs.writeFile(unitPath, buildSystemdUnit({ programArguments }));
 
@@ -200,5 +207,8 @@ it.each(["openclaw.mjs", "dist/index.js"])(
     const savedEntry = saved.at(-4)!;
     await expect(fs.readFile(savedEntry, "utf8")).resolves.toBe('export default "2026.10.2";\n');
     expect(savedEntry).toBe(path.join(projectLink, "node_modules", "openclaw", "dist", "index.js"));
+    const nodeEntry = node.programArguments[1]!;
+    expect(nodeEntry).toBe(path.join(projectLink, "node_modules", "openclaw", "openclaw.mjs"));
+    await expect(fs.readFile(nodeEntry, "utf8")).resolves.toBe('import "./dist/index.js";\n');
   },
 );

@@ -2,6 +2,7 @@ import "./chat-engine.mocks.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import type { SystemAgentTurnRunner } from "./agent-turn.js";
 import {
+  operationMocks,
   fakeOverviewLoader,
   sharedVerifiedInference,
   classifySystemAgentApprovalText,
@@ -84,7 +85,7 @@ describe("SystemAgentChatEngine approval", () => {
       const proposalHash = hashSystemAgentOperation(operation);
       const armed: boolean[] = [];
       const observedInputs: string[] = [];
-      const runConfigSet = vi.fn(async () => {});
+      const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
       const engine = new SystemAgentChatEngine({
         operatorApprovalOnly: true,
         runAgentTurn: async (params) => {
@@ -96,7 +97,7 @@ describe("SystemAgentChatEngine approval", () => {
           }
           return { text: "Change ready." };
         },
-        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       await engine.handle("Change port.");
@@ -123,6 +124,8 @@ describe("SystemAgentChatEngine approval", () => {
           path: "gateway.port",
           value: "19001",
           cliOptions: {},
+          runtime: expect.objectContaining({ exit: expect.any(Function) }),
+          throwOnError: false,
         });
         expect(applied?.text).toContain("[openclaw] done: config.set");
         expect(observedInputs[1]).toContain("was approved");
@@ -153,7 +156,7 @@ describe("SystemAgentChatEngine approval", () => {
     "hatches an agent requested by the $origin with approval-bound provenance",
     async ({ requesterAgentId, expectedCreatorAgentId, expectedDescription }) => {
       useTempStateDir();
-      const createAgent = vi.fn(async () => ({
+      const createAgent = operationMocks.createAgent.mockImplementation(async () => ({
         status: "created" as const,
         agentId: "researcher",
         name: "researcher",
@@ -166,7 +169,7 @@ describe("SystemAgentChatEngine approval", () => {
       const engine = new SystemAgentChatEngine({
         runAgentTurn: async () => ({ text: "noted" }),
         classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-        deps: { createAgent, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
         ...(requesterAgentId ? { requesterAgentId, operatorApprovalOnly: true } : {}),
       });
       engine.propose({
@@ -205,13 +208,13 @@ describe("SystemAgentChatEngine approval", () => {
 
   it("stays in setup when post-write verification flags the config", async () => {
     useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
+    operationMocks.verifyInferenceConfig.mockImplementation(async () => ({
       ok: true as const,
       modelRef: "openai/gpt-5.5",
       latencyMs: 100,
     }));
     let applied = false;
-    const applySetup = vi.fn(async () => {
+    const applySetup = operationMocks.applySetup.mockImplementation(async () => {
       applied = true;
       return {
         configPath: "/tmp/openclaw.json",
@@ -241,8 +244,6 @@ describe("SystemAgentChatEngine approval", () => {
       runAgentTurn: async () => ({ text: "repair suggestion" }),
       classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
       deps: {
-        applySetup,
-        verifyInferenceConfig,
         loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
       },
     });
@@ -275,8 +276,8 @@ describe("SystemAgentChatEngine approval", () => {
   });
 
   it("drops the proposal when the user declines", async () => {
-    const runConfigSet = vi.fn(async () => {});
-    const engine = new SystemAgentChatEngine({ deps: { runConfigSet } });
+    const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
+    const engine = new SystemAgentChatEngine();
     engine.propose({ kind: "config-set", path: "gateway.port", value: "19001" });
 
     const reply = await engine.handle("no thanks");
@@ -409,10 +410,10 @@ describe("SystemAgentChatEngine approval", () => {
     async ({ path, value }) => {
       useTempStateDir();
       const runAgentTurn = vi.fn<SystemAgentTurnRunner>(async () => ({ text: "still pending" }));
-      const runConfigSet = vi.fn(async () => {});
+      const runConfigSet = operationMocks.runConfigSet.mockResolvedValue(undefined);
       const engine = new SystemAgentChatEngine({
         runAgentTurn,
-        deps: { runConfigSet, loadOverview: fakeOverviewLoader() },
+        deps: { loadOverview: fakeOverviewLoader() },
       });
 
       const proposed = await engine.handle(`config set ${path} ${value}`);
@@ -447,7 +448,7 @@ describe("SystemAgentChatEngine approval", () => {
         observedInputs.push(params.input);
         return { text: "still pending" };
       },
-      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(`config set-ref gateway.auth.token exec ${rawRef}`);
@@ -504,7 +505,7 @@ describe("SystemAgentChatEngine approval", () => {
     const runAgentTurn = vi.fn(async () => ({ text: "should never run" }));
     const engine = new SystemAgentChatEngine({
       runAgentTurn: runAgentTurn as never,
-      deps: { runConfigSet: vi.fn(async () => {}), loadOverview: fakeOverviewLoader() },
+      deps: { loadOverview: fakeOverviewLoader() },
     });
 
     const proposed = await engine.handle(command);

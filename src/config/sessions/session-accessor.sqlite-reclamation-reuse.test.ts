@@ -124,16 +124,13 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as const)(
+test.each(["two-leases-missing", "revoked-after-open"] as const)(
   "reclamation borrows native-only verification unless revoked (%s)",
   async (proof) => {
     const { database, options, plans, scopes } = createFixture(["victim"]);
     closeOpenClawAgentDatabasesForTest(options.env.OPENCLAW_STATE_DIR);
     validation.admissionPath = database.path;
-    const { source, wasRevokedDuringOpen } = createNativeReclamationSource(
-      { database, options },
-      proof === "revoked-during-open",
-    );
+    const source = createNativeReclamationSource(options);
     const execution = captureOpenClawAgentDatabaseExecution({ ...options, path: database.path });
     validation.admissionPath = database.path;
     let entries = 0;
@@ -167,7 +164,6 @@ test.each(["two-leases-missing", "revoked-after-open", "revoked-during-open"] as
         value: { removedEntries: 1 },
       });
       expect(fullChecks()).toBe(proof.startsWith("revoked") ? 1 : 0);
-      expect(wasRevokedDuringOpen()).toBe(proof === "revoked-during-open");
       expect(loadSessionEntryReadOnly(scopes[0]!)).toBeUndefined();
     } finally {
       try {

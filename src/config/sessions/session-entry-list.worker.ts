@@ -2,10 +2,7 @@ import { jsonExtractText, jsonPathValue } from "../../infra/database-engine/json
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
-import {
-  runSqliteDeferredTransactionSync,
-  runSqliteReadSnapshotSync,
-} from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -187,7 +184,7 @@ export function readSessionEntryList(
           return entries;
         }
         return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-          runSqliteDeferredTransactionSync(database.db, () => {
+          runSqliteReadSnapshotSync(database.db, () => {
             const identities = executeSqliteQuerySync(
               database.db,
               getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)

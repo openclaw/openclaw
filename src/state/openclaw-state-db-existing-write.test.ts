@@ -8,6 +8,7 @@ import {
 } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import * as maintenance from "../infra/state-database-maintenance.js";
@@ -77,11 +78,40 @@ function readSchemaMarkers(database: DatabaseSync) {
 }
 
 describe("retained existing-state writer", () => {
+  it("admits maintenance with QUICK without lending that receipt to a FULL writer", () => {
+    const options = fixture();
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      runExistingOpenClawStateWriteTransaction(
+        ({ db }) => db.exec("INSERT INTO records VALUES (1, 'quick write')"),
+        options,
+        { ...contract, integrityCheck: "quick" },
+      );
+      expect(reads.queries).toContain("PRAGMA quick_check;");
+      expect(reads.queries).toContain("PRAGMA integrity_check('config_machine_state');");
+      expect(reads.queries).not.toContain("PRAGMA integrity_check;");
+      runExistingOpenClawStateWriteTransaction(
+        ({ db }) => {
+          expect(db.prepare("SELECT value FROM records WHERE id = 1").get()?.value).toBe(
+            "quick write",
+          );
+          db.exec("INSERT INTO records VALUES (2, 'full write')");
+        },
+        options,
+        contract,
+      );
+      expect(reads.queries.filter((query) => query === "PRAGMA integrity_check;")).toHaveLength(1);
+      expect(readValues(options.path)).toEqual([{ value: "quick write" }, { value: "full write" }]);
+    } finally {
+      reads.restore();
+    }
+  });
+
   it("initializes an existing additive subset without repeating DDL on its warm table", () => {
     const options = fixture(true);
     const queries: Array<{ query: string; database?: DatabaseSync }> = [];
     const sql = observeHostDataSql((query, database) => queries.push({ query, database }));
-    let writer: DatabaseSync | undefined;
+    let writer: EngineConnection | undefined;
     try {
       runExistingOpenClawStateWriteTransaction(
         ({ db }) => {
@@ -151,7 +181,7 @@ describe("retained existing-state writer", () => {
           return operation();
         }),
       );
-    const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
+    const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
       db.exec("INSERT INTO records VALUES (1, 'wrong generation')");
     });
     try {
@@ -174,7 +204,7 @@ describe("retained existing-state writer", () => {
     const options = fixture();
     const reads = observeSqliteReadSql(StatementSync.prototype);
     const writer = openExistingOpenClawStateWriter(options, contract);
-    let retained: DatabaseSync | undefined;
+    let retained: EngineConnection | undefined;
     try {
       writer.run(({ db }) => {
         retained = db;
@@ -391,7 +421,7 @@ describe("retained existing-state writer", () => {
       }
       const writer = openExistingOpenClawStateWriter(options, contract);
       try {
-        const mutate = vi.fn(({ db }: { db: DatabaseSync }) => {
+        const mutate = vi.fn(({ db }: { db: EngineConnection }) => {
           db.exec("INSERT INTO records VALUES (2, 'refused')");
         });
         expect(() => writer.run(mutate, options)).toThrow(error);

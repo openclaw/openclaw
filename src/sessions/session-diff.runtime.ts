@@ -1,4 +1,3 @@
-// Session checkout diff collection and session-start baseline filtering.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import nodePath from "node:path";

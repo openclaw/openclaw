@@ -22,9 +22,11 @@ import {
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
 import { recordChildProcessSpawn } from "./service-child-process.js";
+import { recordGatewayWsEvent } from "./service-gateway-ws.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
 import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
   recordSessionDiagnosticEvent,
@@ -69,6 +71,19 @@ function recordDiagnosticEvent(
   }
 
   switch (evt.type) {
+    case "gateway.ws.event":
+    case "gateway.ws.connections":
+      if (metadata.trusted) {
+        recordGatewayWsEvent(store, evt);
+      }
+      return;
+    case "sessions.list.retention":
+    case "sessions.event.retention":
+    case "sessions.event.rows.reset":
+      if (metadata.trusted) {
+        recordSessionRetention(store, evt);
+      }
+      return;
     case "worker.request":
       if (metadata.trusted) {
         recordWorkerRequest(store, evt);
@@ -78,6 +93,7 @@ function recordDiagnosticEvent(
     case "secret.egress":
     case "tool.catalog":
     case "gateway.rpc":
+    case "sessions.list.baseline.retired":
     case "gateway.http.cancelled":
     case "diagnostic.gc":
     case "gateway.event_loop.sample":

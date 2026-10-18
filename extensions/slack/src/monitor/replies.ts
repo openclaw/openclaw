@@ -5,7 +5,11 @@ import {
   createChannelPartialDeliveryError,
   getGroupThreadDeliverySession,
 } from "openclaw/plugin-sdk/channel-inbound";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  ReplyToMode,
+  MarkdownTableMode,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
@@ -121,7 +125,7 @@ export async function deliverReplies(params: {
   textLimit: number;
   mediaMaxBytes?: number;
   replyThreadTs?: string;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
   /** Logical conversation target used by lifecycle hooks when delivery uses a physical Slack id. */
@@ -310,7 +314,7 @@ type SlackRespondFn = (payload: {
 type SlackResponseUrlBudget = ResponseUrlBudget<Parameters<SlackRespondFn>[0]>;
 
 export function createSlackReplyDeliveryPlan(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };

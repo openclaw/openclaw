@@ -179,9 +179,8 @@ async function runBraveSearch(params: {
   }
   logBraveHttp(params.diagnosticsEnabled, "request", {
     mode: params.mode,
-    url: url.toString(),
-    query: url.searchParams.get("q") ?? "",
-    params: Object.fromEntries(url.searchParams.entries()),
+    endpoint: `${url.origin}${url.pathname}`,
+    count: params.count,
   });
   const startedAt = Date.now();
   const withEndpoint =
@@ -369,10 +368,10 @@ export async function executeBraveSearch(
     const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
     const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
     if (cached) {
-      logBraveHttp(diagnosticsEnabled, "cache hit", { mode: braveMode, query, cacheKey });
+      logBraveHttp(diagnosticsEnabled, "cache hit", { mode: braveMode });
       return cached;
     }
-    logBraveHttp(diagnosticsEnabled, "cache miss", { mode: braveMode, query, cacheKey });
+    logBraveHttp(diagnosticsEnabled, "cache miss", { mode: braveMode });
 
     const start = Date.now();
     const response = await runBraveSearch({
@@ -421,8 +420,6 @@ export async function executeBraveSearch(
     writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
     logBraveHttp(diagnosticsEnabled, "cache write", {
       mode: response.mode,
-      query,
-      cacheKey,
       ttlMs: cacheTtlMs,
       count: results.length,
     });

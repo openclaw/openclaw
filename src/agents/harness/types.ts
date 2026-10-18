@@ -109,7 +109,16 @@ type AgentHarnessAttemptParamsBase = Omit<
   | "trajectoryRecorder"
   | "inputAttachmentMedia"
   | "supportsTurnScopedToolRestrictions"
->;
+  | "onSettledTurn"
+> & {
+  /** Awaited in the original attempt scope; core alone decides whether to capture. */
+  onSettledTurn?: (
+    attempt: AgentHarnessCanonicalAttemptResult,
+    captureContext: () => Promise<
+      AgentHarnessCanonicalAttemptResult["settledTurnFinalizationContext"]
+    >,
+  ) => Promise<void>;
+};
 /**
  * @deprecated Use AgentHarnessAttemptParamsV2. The optional capability keeps
  * existing harness source compatible through 2026-10-12.
@@ -140,7 +149,9 @@ export type AgentHarnessAttemptResult =
   | AgentHarnessLegacyAttemptResult;
 export type AgentHarnessSettledTurnFinalizationAttemptParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
-> = Omit<TAttemptParams, "hostCapabilities"> & { hostCapabilities?: never };
+> = Omit<TAttemptParams, "hostCapabilities" | "onSettledTurn"> & {
+  hostCapabilities?: never;
+};
 type AgentHarnessSettledTurnFinalizationParams<
   TAttemptParams extends AgentHarnessAttemptParams = AgentHarnessAttemptParams,
 > = {
@@ -544,7 +555,7 @@ type AgentHarnessContract<
   verifySetup?(ctx: AgentHarnessSetupVerificationContext): Promise<void>;
   /**
    * Synchronous private ownership read; no discovery, auth loading, or native connection setup.
-   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31.
+   * @deprecated Implement resolveSessionRuntimeOwnershipAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release.
    */
   resolveSessionRuntimeOwnership?(params: {
     config?: OpenClawConfig;

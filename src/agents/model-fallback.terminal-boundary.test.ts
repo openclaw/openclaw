@@ -140,6 +140,9 @@ it("records a CLI max-turn stop before provider policy can replace it with a ret
       },
       provider: "fixture-provider",
       model: "fixture-model",
+      classifyErrorCode: () => {
+        throw new Error("terminal stops must bypass backend error classification");
+      },
     });
     assert(error instanceof FailoverError);
     throw error;
@@ -225,6 +228,40 @@ it("still classifies a genuine provider failure through its hook", async () => {
   });
   expect(providerHook).toHaveBeenCalledOnce();
 });
+
+it.each(["throw", "reject"] as const)(
+  "propagates a result classifier %s without provider fallback",
+  async (kind) => {
+    const failure = new Error("result classifier failed");
+    const run = vi.fn().mockResolvedValue("provider-result");
+    const classifyResult = vi.fn(() => {
+      if (kind === "throw") {
+        throw failure;
+      }
+      return Promise.reject(failure);
+    });
+    await expect(
+      runFallbackAttempt({
+        run,
+        classifyResult,
+        provider: "fixture-provider",
+        model: "fixture-model",
+        attempts: [],
+        attempt: 1,
+        total: 2,
+      }),
+    ).rejects.toBe(failure);
+    expect(run).toHaveBeenCalledOnce();
+    expect(classifyResult).toHaveBeenCalledExactlyOnceWith({
+      result: "provider-result",
+      provider: "fixture-provider",
+      model: "fixture-model",
+      attempt: 1,
+      total: 2,
+    });
+    expect(providerHook).not.toHaveBeenCalled();
+  },
+);
 
 it("preserves depth-first error, cause, then aggregate order through cycles", () => {
   const first = maxTurns(),

@@ -30,11 +30,52 @@ export default definePluginEntry({
           hosts: ["github.com"],
           pathPattern: reader.pathPattern,
           detailMethod: "github.detail",
+          progressive: true,
           imageMethod: "github.image",
           ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
         },
         requiredScopes: ["operator.read"],
       });
+    }
+    const host = api.config.gateway?.github?.host?.trim().toLowerCase();
+    if (host && host !== "github.com") {
+      for (const reader of [
+        {
+          id: "github-session",
+          pathPattern: GITHUB_ITEM_PATH_PATTERN,
+          previewMethod: "github.sessionPreview",
+        },
+        { id: "github-session-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
+      ]) {
+        api.session.controls.registerControlUiDescriptor({
+          surface: "link-reader",
+          id: reader.id,
+          label: "GitHub",
+          icon: "github",
+          requiredScopes: ["operator.read"],
+          linkReader: {
+            hosts: [host],
+            pathPattern: reader.pathPattern,
+            sessionScoped: true,
+            detailMethod: "github.sessionDetail",
+            progressive: true,
+            ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
+          },
+        });
+      }
+      for (const [method, kind] of [
+        ["github.sessionPreview", "preview"],
+        ["github.sessionDetail", "detail"],
+      ] as const) {
+        api.registerGatewayMethod(
+          method,
+          async (options) => {
+            const { handleSessionGitHubRequest } = await import("./src/handlers.js");
+            await handleSessionGitHubRequest(kind, host, options);
+          },
+          { scope: "operator.read" },
+        );
+      }
     }
     // Metadata registration stays cheap. Disabling the plugin removes both the
     // descriptors and methods; HTTP readers load only on their first request.

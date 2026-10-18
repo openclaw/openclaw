@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -107,20 +107,21 @@ export function bindSqliteWorkerBackend(
   return bindSqliteWorkerDatabase<TranscriptReportWorkerOperations>(database.db, {
     execute(command) {
       if (command.type === "prepare") {
-        return runSqliteDeferredTransactionSync<
-          Result<PreparedTranscriptReport, TranscriptAppendRefusal>
-        >(database.db, () => {
-          prepared = undefined;
-          const { refusal } = readCurrentEntry();
-          if (refusal) {
-            return err(refusal);
-          }
-          prepared = {
-            facts: prepareTranscriptReportSelection(database, resolved, command.input),
-            version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
-          };
-          return ok(prepared.facts);
-        });
+        return runSqliteReadSnapshotSync<Result<PreparedTranscriptReport, TranscriptAppendRefusal>>(
+          database.db,
+          () => {
+            prepared = undefined;
+            const { refusal } = readCurrentEntry();
+            if (refusal) {
+              return err(refusal);
+            }
+            prepared = {
+              facts: prepareTranscriptReportSelection(database, resolved, command.input),
+              version: readTranscriptContextVersionInTransaction(database, resolved.sessionId),
+            };
+            return ok(prepared.facts);
+          },
+        );
       }
       return runOpenClawAgentWriteTransaction<
         Result<TranscriptReportCommit, TranscriptAppendRefusal>

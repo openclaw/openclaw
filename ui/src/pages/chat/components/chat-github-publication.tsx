@@ -8,7 +8,7 @@ import {
   personalGitHubPublicationSelection,
   selectedGitHubPublisher,
   type GitHubPublicationView,
-} from "../../../lib/sessions/github-publication-controller.ts";
+} from "../../../lib/sessions/github-publication-owner.ts";
 import { GitHubPublicationMenu } from "./chat-github-publication-menu.tsx";
 
 registerGitHubEnglish();

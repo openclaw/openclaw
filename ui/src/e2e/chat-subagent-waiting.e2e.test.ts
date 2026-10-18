@@ -107,41 +107,72 @@ suite.define(() => {
           historyMessages: history,
           inFlightRun: { runId, startedAt: parent.startedAt },
         });
+        const snapshot = (
+          row: GatewaySessionRow,
+          offset: number,
+          changes: Partial<GatewaySessionRow>,
+        ): GatewaySessionRow => ({
+          ...row,
+          ...changes,
+          updatedAt: now + offset,
+          snapshotAt: now + offset,
+        });
+        const changeSession = async (
+          session: GatewaySessionRow,
+          ancestor: GatewaySessionRow | null,
+          reason: "run-start" | "run-settled",
+          siblings: GatewaySessionRow[] = [],
+        ) => {
+          await gateway.setSessionsListResponse(
+            sessionsListResponse(ancestor ? [ancestor, session] : [session, ...siblings]),
+          );
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: session.key,
+            reason,
+            ts: session.updatedAt,
+            session,
+            ancestorSessions: ancestor ? [ancestor] : [],
+          });
+        };
+        const observeChild = (revision: number, offset: number, headline: string) =>
+          gateway.emitGatewayEvent("session.observer", {
+            sessionKey: child.key,
+            agentId: "main",
+            sessionId: child.sessionId,
+            runId: "backend-run",
+            revision,
+            updatedAt: now + offset,
+            health: "on-track",
+            headline,
+          });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         await page
           .getByText("I am delegating the backend implementation.", { exact: true })
           .waitFor();
         const activePane = page.locator(".chat-pane-cache__pane--active");
+        const screenshot = async (name: string, targets: ReturnType<typeof page.locator>[]) => {
+          if (artifactDir) {
+            const frame = await takeControlUiScreenshotFrame(page, activePane, targets, {
+              animations: "disabled",
+            });
+            await writeFile(path.join(artifactDir, name), frame.png);
+          }
+        };
         const indicator = activePane.locator(".chat-working-indicator");
         await indicator.waitFor();
         expect(await indicator.textContent()).not.toContain("Waiting on subagents");
 
-        const runningChild: GatewaySessionRow = {
-          ...child,
+        const runningChild = snapshot(child, 0, {
           status: "running",
           hasActiveRun: true,
           activeRunIds: ["backend-run"],
           startedAt: now,
-          updatedAt: now,
-          snapshotAt: now,
-        };
-        const delegatingParent: GatewaySessionRow = {
-          ...parent,
+        });
+        const delegatingParent = snapshot(parent, 0, {
           hasActiveSubagentRun: true,
           childSessions: [child.key],
-          updatedAt: now,
-          snapshotAt: now,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([delegatingParent, runningChild]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-start",
-          ts: now,
-          session: runningChild,
-          ancestorSessions: [delegatingParent],
         });
+        await changeSession(runningChild, delegatingParent, "run-start");
         // While the parent still works, its own line counts the running subagents.
         await indicator
           .locator(".chat-working-indicator__subagents")
@@ -167,16 +198,7 @@ suite.define(() => {
         await gateway.waitForRequest("chat.history", { match: { sessionKey: child.key } });
         await closePanel();
         const childReadsAfterClose = (await childHistoryReads()).length;
-        await gateway.emitGatewayEvent("session.observer", {
-          sessionKey: child.key,
-          agentId: "main",
-          sessionId: child.sessionId,
-          runId: "backend-run",
-          revision: 1,
-          updatedAt: now + 1,
-          health: "on-track",
-          headline: "Verifying the API response",
-        });
+        await observeChild(1, 1, "Verifying the API response");
         await activityRow.getByText("Verifying the API response", { exact: true }).waitFor();
         expect(await childHistoryReads()).toHaveLength(childReadsAfterClose);
         const launchRow = activePane.locator(".chat-tool-row--subagent");
@@ -263,15 +285,7 @@ suite.define(() => {
           (await indicator.locator(".chat-working-indicator__tokens").textContent())?.trim();
         await reportUsage(runId, 4_100);
         await expect.poll(workingTokens).toBe("4.1k output tokens");
-        if (artifactDir) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            activePane,
-            [activityRow, indicator],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(artifactDir, "working-light-1280.png"), frame.png);
-        }
+        await screenshot("working-light-1280.png", [activityRow, indicator]);
         const activityBounds = await activityRow.boundingBox();
         const statusBounds = await indicator.boundingBox();
         expect(activityBounds).not.toBeNull();
@@ -296,14 +310,11 @@ suite.define(() => {
           __openclaw: { id: "yield-result", seq: 6, runId },
         };
         const yieldedHistory = [...history, yieldCall, yieldResult];
-        const waitingParent: GatewaySessionRow = {
-          ...delegatingParent,
+        const waitingParent = snapshot(delegatingParent, 2, {
           hasActiveRun: false,
           activeRunIds: [],
           endedAt: now + 2,
-          updatedAt: now + 2,
-          snapshotAt: now + 2,
-        };
+        });
         await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, runningChild]));
         await gateway.setMethodResponse("chat.history", {
           messages: yieldedHistory,
@@ -340,13 +351,11 @@ suite.define(() => {
             document.documentElement.style.colorScheme = themeMode;
           }, mode);
           if (artifactDir) {
-            const frame = await takeControlUiScreenshotFrame(
-              page,
-              activePane,
-              [activityRow, turnTimer, activePane.locator(".agent-chat__composer-combobox")],
-              { animations: "disabled" },
-            );
-            await writeFile(path.join(artifactDir, `waiting-${mode}-${width}.png`), frame.png);
+            await screenshot(`waiting-${mode}-${width}.png`, [
+              activityRow,
+              turnTimer,
+              activePane.locator(".agent-chat__composer-combobox"),
+            ]);
             const rightInset = await turnTimer.evaluate((element) => {
               const column = element.closest(".chat-group-messages");
               if (!column) {
@@ -379,16 +388,7 @@ suite.define(() => {
             .locator(".chat-subagent-activity")
             .count(),
         ).toBe(1);
-        await gateway.emitGatewayEvent("session.observer", {
-          sessionKey: child.key,
-          agentId: "main",
-          sessionId: child.sessionId,
-          runId: "backend-run",
-          revision: 2,
-          updatedAt: now + 63_001,
-          health: "on-track",
-          headline: "Running backend regression tests",
-        });
+        await observeChild(2, 63_001, "Running backend regression tests");
         await activityRow.getByText("Running backend regression tests", { exact: true }).waitFor();
         expect(await activePane.locator(".chat-notice").count()).toBe(0);
         await captureWaiting("light", 1280);
@@ -448,42 +448,23 @@ suite.define(() => {
           )
           .toBe("1m 13s");
 
-        const settledChild: GatewaySessionRow = {
-          ...runningChild,
+        const settledChild = snapshot(runningChild, 64_000, {
           status: "done",
           hasActiveRun: false,
           activeRunIds: [],
-          updatedAt: now + 64_000,
-          snapshotAt: now + 64_000,
-        };
-        const settledParent: GatewaySessionRow = {
-          ...waitingParent,
-          hasActiveSubagentRun: false,
-          updatedAt: now + 64_000,
-          snapshotAt: now + 64_000,
-        };
-        await gateway.setSessionsListResponse(sessionsListResponse([settledParent, settledChild]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-settled",
-          ts: now + 64_000,
-          session: settledChild,
-          ancestorSessions: [settledParent],
         });
+        const settledParent = snapshot(waitingParent, 64_000, {
+          hasActiveSubagentRun: false,
+        });
+        await changeSession(settledChild, settledParent, "run-settled");
         await activityRow.waitFor({ state: "detached" });
         // A later child start must update the selected parent's held row without a reload.
-        const restartedChild: GatewaySessionRow = {
-          ...runningChild,
+        const restartedChild = snapshot(runningChild, 64_500, {
           activeRunIds: ["backend-review-run"],
-          updatedAt: now + 64_500,
-          snapshotAt: now + 64_500,
-        };
-        const waitingAgain: GatewaySessionRow = {
-          ...settledParent,
+        });
+        const waitingAgain = snapshot(settledParent, 64_500, {
           hasActiveSubagentRun: true,
-          updatedAt: now + 64_500,
-          snapshotAt: now + 64_500,
-        };
+        });
         const childReads = (await gateway.getRequests("sessions.list", childRosterQuery)).length;
         await gateway.setSessionsListResponse(sessionsListResponse([waitingAgain, restartedChild]));
         await gateway.deferNext("sessions.list", childRosterQuery);
@@ -505,24 +486,12 @@ suite.define(() => {
           match: childRosterQuery,
         });
         await gateway.resolveDeferred("sessions.list", sessionsListResponse([restartedChild]));
-        const resumedParent: GatewaySessionRow = {
-          ...waitingAgain,
+        const resumedParent = snapshot(waitingAgain, 65_000, {
           hasActiveRun: true,
           activeRunIds: ["parent-resumed-run"],
           startedAt: now + 65_000,
-          updatedAt: now + 65_000,
-          snapshotAt: now + 65_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([resumedParent, restartedChild]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: parent.key,
-          reason: "run-start",
-          ts: now + 65_000,
-          session: resumedParent,
-          ancestorSessions: [],
         });
+        await changeSession(resumedParent, null, "run-start", [restartedChild]);
         // The resumed run continues the block that handed off. That holds even
         // before its first output, when the pane cannot name the run yet: the
         // claw is already there, on the request's clock, with the tokens so far.
@@ -567,15 +536,10 @@ suite.define(() => {
         });
         await indicator.waitFor();
         expect(await indicator.textContent()).not.toContain("Waiting on");
-        if (artifactDir) {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            activePane,
-            [indicator, activePane.locator(".agent-chat__composer-combobox")],
-            { animations: "disabled" },
-          );
-          await writeFile(path.join(artifactDir, "resumed-dark-1280.png"), frame.png);
-        }
+        await screenshot("resumed-dark-1280.png", [
+          indicator,
+          activePane.locator(".agent-chat__composer-combobox"),
+        ]);
         // Still one assistant row once it answers, on the same clock, and both
         // runs' tokens count on its line.
         await block.getByText(answerText, { exact: true }).waitFor();
@@ -591,8 +555,7 @@ suite.define(() => {
           timestamp: now + 66_000,
           __openclaw: { id: "answer", seq: 7, runId: "parent-resumed-run" },
         };
-        const finishedParent: GatewaySessionRow = {
-          ...resumedParent,
+        const finishedParent = snapshot(resumedParent, 67_000, {
           status: "done",
           hasActiveRun: false,
           hasActiveSubagentRun: false,
@@ -600,15 +563,10 @@ suite.define(() => {
           lastRunId: "parent-resumed-run",
           runtimeMs: 2_000,
           endedAt: now + 67_000,
-          updatedAt: now + 67_000,
-          snapshotAt: now + 67_000,
-        };
-        const finishedChild = {
-          ...settledChild,
+        });
+        const finishedChild = snapshot(settledChild, 67_000, {
           runtimeMs: 64_000,
-          updatedAt: now + 67_000,
-          snapshotAt: now + 67_000,
-        };
+        });
         await gateway.setSessionsListResponse(
           sessionsListResponse([finishedParent, finishedChild]),
         );

@@ -71,6 +71,7 @@ const enGitHub = {
       openPublishedPr: "Open PR",
       cloudPublicationGuidance:
         "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
+      actions: "Actions for pull request {reference}",
       dismiss: "Dismiss pull request {reference}",
       dismissBranch: "Hide {branch} for this session",
       open: en.chat.pullRequests.open,
@@ -246,6 +247,7 @@ const enGitHub = {
     githubKindNative: "Native GitHub CLI",
     githubKindPat: "Managed personal access token",
     githubKindOAuth: "Managed GitHub authorization",
+    githubKindAppInstallation: "GitHub App installation",
     githubRefreshAvailable: "Available",
     githubRefreshExpired: "Expired — reconnect required",
     githubRefreshUnavailable: "Unavailable — reconnect required",

@@ -14,7 +14,11 @@ import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
 } from "../infra/backup-config-capture.js";
-import { assertHomogeneousDatabaseEngines } from "../infra/database-engine/registry.js";
+import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
+import {
+  getDatabaseEngineInput,
+  withDatabaseEngineSelection,
+} from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -538,7 +542,11 @@ export async function resolveBackupPlanFromDisk(
   } = {},
 ) {
   if (params.onlyConfig) {
-    return await resolveBackupPlanFromState(params);
+    return {
+      ...(await resolveBackupPlanFromState(params)),
+      databaseSelection: undefined,
+      databaseConfig: undefined,
+    };
   }
   assertNotUpdateCapturePath(resolveOpenClawStateSqlitePath(), resolveStateDir());
   // Admit the engine choice without opening state before its stable discovery snapshot.
@@ -546,8 +554,13 @@ export async function resolveBackupPlanFromDisk(
     observe: false,
     pluginValidation: "core-only",
   }).readConfigFileSnapshot();
-  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
-  return await withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params));
+  const selection = await resolveDatabaseEngineSelection(configSnapshot.config);
+  const plan = await withDatabaseEngineSelection(selection, () =>
+    selection.effectiveEngines.state === "postgres"
+      ? resolveBackupPlanFromState(params)
+      : withOpenClawStateDatabaseReadSnapshot(() => resolveBackupPlanFromState(params)),
+  );
+  return { ...plan, databaseSelection: selection, databaseConfig: configSnapshot.config };
 }
 
 async function resolveBackupPlanFromState(params: {
@@ -573,12 +586,16 @@ async function resolveBackupPlanFromState(params: {
   }
 
   // Backup discovery must not initialize or migrate the state DB before snapshot validation.
-  const configRead = await createConfigIO({ observe: false }).readConfigFileSnapshotForWrite();
+  const postgresState = getDatabaseEngineInput("state") !== undefined;
+  const configOptions = {
+    observe: false,
+    ...(postgresState ? { pluginValidation: "core-only" as const } : {}),
+  };
+  const configRead = await createConfigIO(configOptions).readConfigFileSnapshotForWrite();
   const configSnapshot = configRead.snapshot;
-  assertHomogeneousDatabaseEngines(configSnapshot.config, "backup");
   const discoverySnapshot =
     (await resolveLegacyConfigSnapshotForBackup(configSnapshot)) ?? configSnapshot;
-  const configCapture = await resolveBackupConfigCapture(configRead);
+  const configCapture = await resolveBackupConfigCapture(configRead, configOptions);
   if (discoverySnapshot.exists && !discoverySnapshot.valid) {
     throw new Error(
       `Backup discovery failed at ${shortenHomePath(discoverySnapshot.path)}: ${discoverySnapshot.issues.map((issue) => issue.message).join("; ")}. Agent and plugin ownership could not be resolved. Resolve the reported error and retry backup, or use --only-config to save the config alone.`,
@@ -591,12 +608,19 @@ async function resolveBackupPlanFromState(params: {
     oauthDir,
   }).workspaceDirs;
   const agentRoots = await resolveBackupAgentRoots(discoverySnapshot.config);
-  const pluginInventory = resolveActivatedPluginBackupInventory({
+  const discoveryInput = {
     config: discoverySnapshot.config,
     env: process.env,
     stateDir,
     workspaceDirs: discoveredWorkspaceDirs,
-  });
+  };
+  const pluginInventory = postgresState
+    ? (
+        await (
+          await import("../infra/backup-database-discovery.js")
+        ).preparePostgresBackupDiscovery(discoveryInput)
+      ).pluginInventory
+    : resolveActivatedPluginBackupInventory(discoveryInput);
   // Effective agent workspaces can omit their shared base. Exclude it only here
   // so full backups and destructive cleanup retain their existing selection.
   if (!includeWorkspace && discoverySnapshot.valid) {

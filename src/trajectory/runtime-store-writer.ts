@@ -286,7 +286,7 @@ function buildSqliteTrajectoryRuntimeSink(
       backgroundFlush ||
       backgroundFailed ||
       unsettledAppend ||
-      (pendingEvents.size < 32 && queuedBytes < 256 * 1024)
+      (pendingEvents.size < 32 && !discardPrevious)
     ) {
       return;
     }

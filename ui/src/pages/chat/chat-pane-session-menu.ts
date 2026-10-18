@@ -90,6 +90,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       !this.presented ||
       this.onboarding ||
       document.openClawModalLayers?.size ||
+      // Shell modal DOM owns keyboard admission outside this pane.
       document.querySelector(".shell-nav[aria-modal='true']")
     ) {
       return true;
@@ -179,7 +180,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       this.connectedClient === client &&
       this.connectionGeneration === generation
     ) {
-      this.headerPlatform = platform;
+      this.headerPresentation.platform = platform;
     }
   }
 
@@ -355,7 +356,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {
             const patch = headerSessionMetadataPatch(action, currentSession);
-            await operations.patchSession(host, currentSession, patch, scope);
+            await operations.patchSession(host, currentSession, patch, scope, {
+              sessionScope: action.kind === "toggle-unread",
+            });
           }
           break;
         }
@@ -449,25 +452,20 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     if (!result.ok) {
       return;
     }
-    this.continueInTerminalDialog = {
+    this.headerPresentation.continueInTerminalDialog = {
       qualifiedSessionKey: result.qualifiedSessionKey,
       selectedGatewayUrl: this.context.gateway.connection.gatewayUrl,
       clientGatewayUrl: scope.client.gatewayUrl,
       scope,
     };
-    this.requestUpdate();
   }
 
   protected closeContinueInTerminalDialog(): void {
-    if (!this.continueInTerminalDialog) {
-      return;
-    }
-    this.continueInTerminalDialog = null;
-    this.requestUpdate();
+    this.headerPresentation.continueInTerminalDialog = null;
   }
 
   protected currentContinueInTerminalCommand(row: GatewaySessionRow | undefined): string | null {
-    const dialog = this.continueInTerminalDialog;
+    const dialog = this.headerPresentation.continueInTerminalDialog;
     const gateway = this.context.gateway;
     const client = gateway.snapshot.client;
     if (!dialog) {
@@ -481,7 +479,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       gateway.connection.gatewayUrl !== dialog.selectedGatewayUrl ||
       client?.gatewayUrl !== dialog.clientGatewayUrl
     ) {
-      this.continueInTerminalDialog = null;
+      this.headerPresentation.continueInTerminalDialog = null;
       return null;
     }
     return result.command;
@@ -519,6 +517,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
   }
 
   protected beginHeaderRename(row: GatewaySessionRow): void {
+    const header = this.headerPresentation;
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
       method: "sessions.patch",
       params: { key: row.key, label: null },
@@ -530,31 +529,33 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     // The edit belongs to this instance, even if a replacement reuses its key.
-    this.headerRenameSession = { key: row.key, sessionId: row.sessionId, label: row.label };
+    const { key, sessionId, label } = row;
+    header.renameSession = { key, sessionId, label };
     this.headerRenameInitialValue = resolveSessionRenameValue(row);
-    this.headerRenameValue = this.headerRenameInitialValue;
-    void this.updateComplete.then(() => {
-      const input = this.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
+    header.renameValue = this.headerRenameInitialValue;
+    void this.awaitDomCommit().then(() => {
+      // The native pane transfers focus into the independently rendered header.
+      const input = this.element.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
       input?.focus();
       input?.select();
     });
   }
 
   protected cancelHeaderRename(): void {
-    this.headerRenameSession = null;
+    this.headerPresentation.renameSession = null;
   }
 
   protected commitHeaderRename(): void {
-    const session = this.headerRenameSession;
+    const session = this.headerPresentation.renameSession;
     if (!session) {
       return;
     }
     const patch = resolveSessionRenamePatch(
-      this.headerRenameValue,
+      this.headerPresentation.renameValue,
       this.headerRenameInitialValue,
       session.label,
     );
-    this.headerRenameSession = null;
+    this.headerPresentation.renameSession = null;
     const state = this.state;
     if (!state || !patch) {
       return;
@@ -586,6 +587,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     agentWorkspace: string | undefined,
     workspaceGit: boolean,
   ): Promise<void> {
+    const header = this.headerPresentation;
     const client = this.connectedClient;
     if (!client) {
       return;
@@ -600,8 +602,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       null;
     const worktreeId = row.worktree?.id;
     if (worktreeId && !immediateRoot) {
-      const entry = this.headerWorktreePaths.get(worktreeId) ?? {};
-      this.headerWorktreePaths.set(worktreeId, entry);
+      const entry = header.worktreePaths.get(worktreeId) ?? {};
+      header.worktreePaths.set(worktreeId, entry);
       if (entry.path === undefined && !entry.loading) {
         entry.loading = true;
         loads.push(
@@ -618,6 +620,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             })
             .finally(() => {
               entry.loading = false;
+              if (header.worktreePaths.get(worktreeId) === entry) {
+                header.worktreePaths = new Map(header.worktreePaths);
+              }
             }),
         );
       }
@@ -625,7 +630,7 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     const agentRoot = !row.worktree ? agentWorkspace?.trim() : undefined;
     const knownRoot =
       immediateRoot ||
-      (worktreeId ? this.headerWorktreePaths.get(worktreeId)?.path : undefined) ||
+      (worktreeId ? header.worktreePaths.get(worktreeId)?.path : undefined) ||
       agentRoot;
     const remote = Boolean(row.execNode) || isCloudWorkerPlacementState(row.placement?.state);
     // workspaceGit describes the agent workspace only; a session-specific
@@ -634,8 +639,8 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
     // HEAD can move mid-session, so refetch on every open while keeping the
     // last-known branch visible during the refresh to avoid menu flicker.
     if (!row.worktree && !remote && knownRoot && rootMayHaveBranch) {
-      const entry = this.headerBranches.get(knownRoot) ?? {};
-      this.headerBranches.set(knownRoot, entry);
+      const entry = header.branches.get(knownRoot) ?? {};
+      header.branches.set(knownRoot, entry);
       if (!entry.loading) {
         entry.loading = true;
         loads.push(
@@ -649,21 +654,23 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             })
             .finally(() => {
               entry.loading = false;
+              if (header.branches.get(knownRoot) === entry) {
+                header.branches = new Map(header.branches);
+              }
             }),
         );
       }
     }
     await Promise.all(loads);
-    this.requestUpdate();
   }
 
   protected showHeaderCopied(action: ChatPaneHeaderAction): void {
-    this.headerCopiedAction = action;
+    this.headerPresentation.copiedAction = action;
     if (this.headerCopiedTimer !== null) {
       window.clearTimeout(this.headerCopiedTimer);
     }
     this.headerCopiedTimer = window.setTimeout(() => {
-      this.headerCopiedAction = null;
+      this.headerPresentation.copiedAction = null;
       this.headerCopiedTimer = null;
     }, 1_500);
   }
@@ -701,7 +708,6 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
       return;
     }
     this.state.chatError = this.state.lastError = formatUiError(error);
-    this.state.requestUpdate?.();
   }
 
   protected async revealHeaderWorkspace(row: GatewaySessionRow): Promise<void> {

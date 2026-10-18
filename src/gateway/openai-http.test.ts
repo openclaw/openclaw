@@ -6,7 +6,6 @@ import path from "node:path";
 import OpenAI from "openai";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import { resolveEmbeddedRunTerminal } from "../agents/embedded-agent-runner/run/terminal-resolution.js";
 import { makeTerminalInput } from "../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import {
@@ -1175,7 +1174,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
         const res = await postChatCompletions(port, {
           stream: false,
           model: "openclaw",
@@ -2698,7 +2697,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
 
       {
         agentCommandMock.mockClear();
-        agentCommandMock.mockRejectedValueOnce(createClientToolNameConflictError(["exec"]));
+        agentCommandMock.mockRejectedValueOnce(new Error("client tool name conflict: exec"));
 
         const toolConflictRes = await postChatCompletions(port, {
           stream: true,

@@ -156,17 +156,19 @@ function resetEvaluatedModules(
     // Vitest's evaluator records each execution independently (including native ones),
     // using the unprefixed id for automocks. Module resets preserve those records.
     const key = repositoryTestApiPublications.get(node.file);
-    const sqliteKey = sqliteTestSingletonPublications.get(node.file);
+    const sqliteKeys = sqliteTestSingletonPublications.get(node.file) ?? [];
     const execution = retirableModuleExecution(node, modules, executions);
-    if ((key || (sqliteKey && !retainedSqlite)) && execution) {
+    if ((key || (sqliteKeys.length > 0 && !retainedSqlite)) && execution) {
       retiredExecutions.add(execution);
       const publication =
         key === undefined ? undefined : Object.getOwnPropertyDescriptor(globalThis, key);
       if (key && publication?.configurable && "value" in publication) {
         Reflect.deleteProperty(globalThis, key);
       }
-      if (sqliteKey && !retainedSqlite) {
-        retireSqliteTestSingleton(sqliteKey, testFiles);
+      if (!retainedSqlite) {
+        for (const sqliteKey of sqliteKeys) {
+          retireSqliteTestSingleton(sqliteKey, testFiles);
+        }
       }
     }
     // Mock metadata owns factories and cached exports after the registry resets.
@@ -685,7 +687,7 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
       : (key: symbol) =>
           Array.from(modules.idToModuleMap.values()).some(
             (node) =>
-              sqliteTestSingletonPublications.get(node.file) === key &&
+              sqliteTestSingletonPublications.get(node.file)?.includes(key) &&
               retirableModuleExecution(node, modules, executions) !== undefined,
           );
     if (

@@ -4,7 +4,6 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  FaceTimeHelperActionError,
   FaceTimeHelperAmbiguousError,
   FaceTimeHelperUnavailableError,
   type FaceTimeHelperPeer,
@@ -324,7 +323,7 @@ export class FaceTimeHelperSocketServer {
         pending.reject(
           payload.ambiguous === true
             ? new FaceTimeHelperAmbiguousError(payload.error, result)
-            : new FaceTimeHelperActionError(payload.error),
+            : new Error(payload.error),
         );
       } else {
         pending.resolve(result);
@@ -516,7 +515,7 @@ export class FaceTimeHelperSocketServer {
       ),
     });
     if (Buffer.byteLength(envelope) > MAX_FRAME_BYTES) {
-      throw new FaceTimeHelperActionError("FaceTime helper message exceeds the frame limit");
+      throw new Error("FaceTime helper message exceeds the frame limit");
     }
     session.outgoingSequence = sequence;
     socket.write(`${envelope}\r\n`);

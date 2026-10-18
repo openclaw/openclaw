@@ -64,6 +64,7 @@ const enNewSessionSetup = {
     operatingSystem: "Operating system",
     runsOn: "Runs on {place}",
     browse: "Browse folders",
+    browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",

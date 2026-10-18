@@ -231,7 +231,7 @@ export function applySessionActorPhaseWithBackend(
           },
         });
       } else {
-        lifecycle(command.input.sessionId, command.input.expectedState, patch);
+        lifecycle(command.input.sessionId, command.input.expectedState, patch, undefined, true);
       }
       break;
     }
@@ -437,11 +437,24 @@ export function applySessionActorPhaseWithBackend(
       entryUpdate = entry;
     }
   }
-  if (command.type === "session.actor.completeTurn" && command.input.restartClaimCleanup) {
-    const entry = entryUpdate ?? requireEntry();
-    const patch = reduceSessionEntryPatch(command.input.restartClaimCleanup, entry, entry);
-    if (patch) {
-      entryUpdate = { ...entry, ...patch };
+  if (command.type === "session.actor.completeTurn") {
+    if (command.input.restartClaimCleanup) {
+      const entry = entryUpdate ?? requireEntry();
+      const patch = reduceSessionEntryPatch(command.input.restartClaimCleanup, entry, entry);
+      if (patch) {
+        entryUpdate = { ...entry, ...patch };
+      }
+    }
+    if (command.input.activitySummary) {
+      const entry = entryUpdate ?? requireEntry();
+      const patch = reduceSessionEntryPatch(
+        { kind: "activity-summary", summary: command.input.activitySummary, sessionKey },
+        entry,
+        entry,
+      );
+      if (patch) {
+        entryUpdate = { ...entry, ...patch };
+      }
     }
   }
   if (entryUpdate) {

@@ -226,6 +226,22 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("does not revive listening after a stopped data channel reports open", async () => {
+    stubAnswerSdpFetch();
+    const onStatus = vi.fn();
+    const transport = await createOpenAiTransport({}, { onStatus });
+    await transport.start();
+    const peer = requirePeer();
+    peer.channel.dispatchEvent(new Event("open"));
+    expect(onStatus).toHaveBeenCalledWith("listening");
+
+    transport.stop();
+    onStatus.mockClear();
+    peer.channel.dispatchEvent(new Event("open"));
+
+    expect(onStatus).not.toHaveBeenCalled();
+  });
+
   it("sends provider offer headers with the WebRTC SDP request", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

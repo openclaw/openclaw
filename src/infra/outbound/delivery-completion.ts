@@ -44,8 +44,8 @@ import { isGatewayExternallySupervised } from "../gateway-supervision.js";
 import { SqliteWorkerError } from "../sqlite-worker-contract.js";
 import {
   countPhysicalOutboundSends,
+  type OutboundDeliveryBatch as DeliveryEvidenceBatch,
   type OutboundDeliveryResult,
-  type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
 import {
   captureDeliveryPlacementEvidence,
@@ -53,12 +53,6 @@ import {
 } from "./delivery-placement-evidence.js";
 import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 import { normalizeTargetForProvider } from "./target-normalization.js";
-
-type DeliveryEvidenceBatch = {
-  results: readonly OutboundDeliveryResult[];
-  payloadCount: number;
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-};
 
 /** In-process locator captured before delivery preparation; never queue payload data. */
 export type ConversationDeliveryTarget = Pick<

@@ -7,7 +7,9 @@ import "../../components/desktop/desktop-panel.ts";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { formatByteSize, formatTimeAgo } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   resolveSessionPreferredFace,
@@ -149,7 +151,12 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
   const source = createMemo(() => props.controller);
   const isPresented = createMemo(() => props.presented);
   const projection = createMemo(() => projectOwner(source(), (value) => value));
-  const controller = () => projection().read();
+  const config = createMemo(() => projectRuntimeConfig(source().context.runtimeConfig));
+  const controller = () => {
+    config().revision();
+    return projection().read();
+  };
+  // The systems owner starts and parks its Gateway polling with page visibility.
   createEffect(
     () => ({ controller: source(), presented: isPresented() }),
     ({ controller: active, presented }) => {
@@ -205,12 +212,12 @@ export function SystemsPage(props: { controller: Systems; presented: boolean }) 
     if (document.visibilityState !== "hidden") {
       timer = setInterval(tick, 15_000);
     }
-    document.addEventListener("visibilitychange", visibility);
-    window.addEventListener(DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
+    const stopVisibility = listen(document, "visibilitychange", visibility);
+    const stopToggle = listen(window, DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
     return () => {
       clearInterval(timer);
-      document.removeEventListener("visibilitychange", visibility);
-      window.removeEventListener(DESKTOP_PANEL_TOGGLE_EVENT, desktopToggle);
+      stopVisibility();
+      stopToggle();
     };
   });
   return (

@@ -180,6 +180,8 @@ type HarnessContextEngineAssemblyParams = Omit<
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
   sandboxed?: boolean;
+  /** Current repository identity passed to memory prompt sections. */
+  memoryProjectKey?: string;
   modelId: string;
   prompt?: string;
   runtimeContext?: ContextEngineRuntimeContext;
@@ -203,7 +205,11 @@ export async function assembleHarnessContextEngine(params: HarnessContextEngineA
     const assembly = await assembleHarnessContextEngineWithinSourceScope(params, contextEngine);
     const bounded = boundContextEngineAssembly(
       assembly.result,
-      resolveContextEngineTranscriptByteLimit(contextEngine),
+      params.contextEngineHostSupport?.id === "codex-app-server" &&
+        params.runtimeId === "codex" &&
+        !contextEngine.info.ownsCompaction
+        ? undefined
+        : resolveContextEngineTranscriptByteLimit(contextEngine),
       resolveAssemblyHistoryTokenBudget(params),
     );
     return { result: bounded, snapshot: assembly.snapshot };
@@ -294,6 +300,7 @@ async function assembleHarnessContextEngineWithinSourceScope(
             agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
             agentSessionKey: params.sessionKey,
             sandboxed: params.sandboxed,
+            projectKey: params.memoryProjectKey,
           },
           assemble,
         );

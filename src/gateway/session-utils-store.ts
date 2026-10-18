@@ -135,7 +135,6 @@ export function prepareDeletedAgentSessionCheck(params: {
 export function loadIncognitoGatewaySessionEntryReadOnly(
   sessionKey: string,
   opts?: Pick<SessionEntryReadScope, "agentId" | "clone" | "projection" | "env"> & {
-    includeStoreChildEntries?: boolean;
     targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
   },
   cfg: OpenClawConfig = getRuntimeConfig(),
@@ -152,7 +151,6 @@ export function loadIncognitoGatewaySessionEntryReadOnly(
     projection: opts?.projection,
     env: opts?.env,
     targetDiscoveryCache: opts?.targetDiscoveryCache,
-    includeStoreChildEntries: opts?.includeStoreChildEntries,
     ...(opts?.clone === false ? { clone: false } : {}),
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });

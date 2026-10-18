@@ -13,21 +13,30 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 
-function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
+function resolveArgv(
+  params: Pick<
+    Parameters<typeof resolveSystemRunExecArgv>[0],
+    "argv" | "shellCommand" | "segments" | "segmentSatisfiedBy"
+  > &
+    Partial<Parameters<typeof resolveSystemRunExecArgv>[0]>,
+) {
   return resolveSystemRunExecArgv({
     plannedAllowlistArgv: undefined,
-    argv: ["powershell.exe", "-Command", "safe --version"],
     security: "allowlist",
+    isWindows: false,
+    policy: { approvedByAsk: false, analysisOk: true, allowlistSatisfied: true },
+    authorizationPlan: undefined,
+    ...params,
+  });
+}
+
+function resolveWindowsShellExecArgv(segment: ExecCommandSegment) {
+  return resolveArgv({
+    argv: ["powershell.exe", "-Command", "safe --version"],
     isWindows: true,
-    policy: {
-      approvedByAsk: false,
-      analysisOk: true,
-      allowlistSatisfied: true,
-    },
     shellCommand: "safe --version",
     segments: [segment],
     segmentSatisfiedBy: ["allowlist"],
-    authorizationPlan: undefined,
   });
 }
 
@@ -140,16 +149,8 @@ describe("resolveSystemRunExecArgv", () => {
       resolution: {
         kind: "command",
         policyBlocked: true,
-        execution: {
-          kind: "executable",
-          rawExecutable: "safe",
-          executableName: "safe",
-        },
-        policy: {
-          kind: "executable",
-          rawExecutable: "safe",
-          executableName: "safe",
-        },
+        execution: { kind: "executable", rawExecutable: "safe", executableName: "safe" },
+        policy: { kind: "executable", rawExecutable: "safe", executableName: "safe" },
       },
     });
 
@@ -210,10 +211,8 @@ describe("resolveSystemRunExecArgv", () => {
         expect(analysis.analysisOk).toBe(true);
         expect(analysis.allowlistSatisfied).toBe(true);
 
-        const execArgv = await resolveSystemRunExecArgv({
-          plannedAllowlistArgv: undefined,
+        const execArgv = await resolveArgv({
           argv: ["powershell.exe", "-Command", shellCommand],
-          security: "allowlist",
           isWindows: true,
           policy: {
             approvedByAsk: false,
@@ -239,20 +238,11 @@ describe("resolveSystemRunExecArgv", () => {
   it.runIf(process.platform !== "win32")(
     "fails closed when shell rewriting has no authorization plan",
     async () => {
-      const result = await resolveSystemRunExecArgv({
-        plannedAllowlistArgv: undefined,
+      const result = await resolveArgv({
         argv: ["/bin/sh", "-lc", "head -c 16"],
-        security: "allowlist",
-        isWindows: false,
-        policy: {
-          approvedByAsk: false,
-          analysisOk: true,
-          allowlistSatisfied: true,
-        },
         shellCommand: "head -c 16",
         segments: [],
         segmentSatisfiedBy: ["safeBins"],
-        authorizationPlan: undefined,
       });
 
       expect(result).toBeNull();
@@ -273,16 +263,8 @@ describe("resolveSystemRunExecArgv", () => {
         throw new Error(authorizationPlan.reason);
       }
 
-      const result = await resolveSystemRunExecArgv({
-        plannedAllowlistArgv: undefined,
+      const result = await resolveArgv({
         argv: ["nu", "--commands", "head -c 16"],
-        security: "allowlist",
-        isWindows: false,
-        policy: {
-          approvedByAsk: false,
-          analysisOk: true,
-          allowlistSatisfied: true,
-        },
         shellCommand: "head -c 16",
         segments: authorizationPlan.groups.flatMap((group) =>
           group.candidates.map((candidate) => candidate.sourceSegment),
@@ -325,11 +307,8 @@ describe("resolveSystemRunExecArgv", () => {
           autoAllowSkills: false,
         });
         expect(analysis.segmentSatisfiedBy).toEqual(["safeBins"]);
-        return await resolveSystemRunExecArgv({
-          plannedAllowlistArgv: undefined,
+        return await resolveArgv({
           argv,
-          security: "allowlist",
-          isWindows: false,
           policy: {
             approvedByAsk: false,
             analysisOk: analysis.analysisOk,

@@ -14,6 +14,7 @@ import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import type { CiTestRuntimePolicy } from "../../scripts/lib/ci-test-runtime.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
@@ -41,7 +42,7 @@ type PluginPrereleaseMatrixRow = {
   includePatterns: string[];
   requires_bun?: boolean;
   task: string;
-  test_runtime_policy?: "dual" | "node";
+  test_runtime_policy?: CiTestRuntimePolicy;
   vitest_config: string;
 };
 

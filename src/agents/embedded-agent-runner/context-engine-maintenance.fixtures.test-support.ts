@@ -42,14 +42,14 @@ export function expectRecordFields(
 
 export async function loadContextEngineMaintenanceModuleForTest() {
   // Import once and reset the owned singleton state between cases.
-  const { runContextEngineMaintenance, waitForDeferredTurnMaintenanceForSession } =
-    await import("./context-engine-maintenance.js");
+  const { runContextEngineMaintenance } = await import("./context-engine-maintenance.js");
+  const { waitForSessionMaintenance } = await import("../session-maintenance/coordinator.js");
   const { resetDeferredTurnMaintenanceStateForTest } =
     await import("./context-engine-maintenance.test-support.js");
   resetDeferredTurnMaintenanceStateForTest();
   return {
     runContextEngineMaintenance,
-    waitForDeferredTurnMaintenanceForSession,
+    waitForSessionMaintenance,
     resetDeferredTurnMaintenanceStateForTest,
   };
 }

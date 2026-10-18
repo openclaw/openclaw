@@ -40,6 +40,60 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
       containers.splice(0).forEach((container) => container.remove());
     });
 
+    it.each([
+      [390, 844],
+      [768, 1024],
+      [1366, 768],
+      [1440, 900],
+    ])("keeps the agent identity and keyboard context usable at %sx%s", async (width, height) => {
+      const { userEvent } = await import("vitest/browser");
+      await page.viewport(width, height);
+      const { container, props } = mountChatPaneHeader(containers, {
+        mergedChrome: width <= 768,
+        narrow: width <= 768,
+        agent: {
+          id: "research",
+          name: "Research lead for international policy and technology",
+          textAvatar: "🔬",
+        },
+        sessionMenuAction: chatPaneHeaderSessionMenu(),
+      });
+      const header = container.querySelector<HTMLElement>(".chat-pane__header")!;
+      const trigger = container.querySelector<HTMLButtonElement>(
+        ".chat-pane__agent-identity > button",
+      )!;
+      const name = container.querySelector<HTMLElement>(".chat-pane__agent-name")!;
+      const actions = container.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
+      const settings = container.querySelector<HTMLButtonElement>(".chat-pane__agent-settings")!;
+      expect(trigger.checkVisibility()).toBe(true);
+      expect(name.getBoundingClientRect().width).toBeGreaterThan(40);
+      const headerCenter = header.getBoundingClientRect().left + header.clientWidth / 2;
+      const identity = container.querySelector<HTMLElement>(".chat-pane__header-agent")!;
+      const identityCenter = identity.getBoundingClientRect().left + identity.clientWidth / 2;
+      expect(Math.abs(identityCenter - headerCenter)).toBeLessThanOrEqual(2);
+      expect(trigger.getBoundingClientRect().right).toBeLessThanOrEqual(
+        actions.getBoundingClientRect().left,
+      );
+      expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+      const idleBackground = getComputedStyle(settings).backgroundColor;
+      await userEvent.hover(trigger);
+      expect(getComputedStyle(settings).opacity).toBe("1");
+      expect(getComputedStyle(settings).backgroundColor).toBe(idleBackground);
+      expect(getComputedStyle(trigger.querySelector(":scope > svg")!).opacity).toBe("0");
+      trigger.focus();
+      await userEvent.keyboard("{Enter}");
+      const context = container.querySelector<HTMLElement>(".chat-pane__agent-context")!;
+      await expect.poll(() => context.matches(":popover-open")).toBe(true);
+      expect(context.textContent).toContain("Session title");
+      expect(context.getBoundingClientRect().left).toBeGreaterThanOrEqual(0);
+      expect(context.getBoundingClientRect().right).toBeLessThanOrEqual(width);
+      await userEvent.keyboard("{Escape}");
+      await expect.poll(() => context.matches(":popover-open")).toBe(false);
+      expect(document.activeElement).toBe(trigger);
+      settings.click();
+      expect(props.onOpenAgentSettings).toHaveBeenCalledWith("research");
+    });
+
     it("opens the labelled Layout menu and dispatches focus, swap, docking, and panel choices", async () => {
       const onLayoutChange = vi.fn();
       const onBrowser = vi.fn();
@@ -152,13 +206,18 @@ describe.skipIf(typeof HTMLElement.prototype.checkVisibility !== "function")(
           "open-split-view",
         ]);
         const surface = menu.querySelector<HTMLElement>(":scope > .oc-menu")!;
+        // Measure the settled surface, not its opening scale transition.
+        await Promise.all(surface.getAnimations().map((animation) => animation.finished));
         const bounds = surface.getBoundingClientRect();
         expect(bounds.width).toBeCloseTo(264, 0);
-        expect(direction === "ltr" ? bounds.left : window.innerWidth - bounds.right).toBeCloseTo(
-          8,
+        // The phone menu opens from its header trigger, not a viewport corner.
+        const anchor = trigger.getBoundingClientRect();
+        expect(direction === "ltr" ? bounds.right : bounds.left).toBeCloseTo(
+          direction === "ltr" ? anchor.right : anchor.left,
           0,
         );
-        expect(window.innerHeight - bounds.bottom).toBeCloseTo(8, 0);
+        expect(bounds.top).toBeGreaterThanOrEqual(anchor.bottom);
+        expect(bounds.top - anchor.bottom).toBeLessThanOrEqual(12);
         expect(bounds.height).toBeCloseTo(360, 0);
         expect(surface.scrollHeight).toBeGreaterThan(surface.clientHeight);
         const terminalDetails = surface.querySelector<HTMLElement>(

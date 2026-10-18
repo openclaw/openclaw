@@ -4,7 +4,6 @@ import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
-import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import { MAX_WORKSPACE_INVENTORY_ENTRIES } from "./workspace-inventory-limits.js";
 import {
   hasPathAncestor,
@@ -17,7 +16,10 @@ import type {
   WorkspaceManifestValueOutputs,
 } from "./workspace-manifest-computation.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import {
+  isDerivedWorkspacePath,
+  isRuntimeOwnedWorkspacePath,
+} from "./workspace-path-exclusions.js";
 import {
   directoryContainsOnlyWorkspaceEntries,
   localPath,
@@ -52,8 +54,8 @@ async function localWorkspaceDescendantPaths(
       if (pathBytes > MAX_RECONCILIATION_PATH_BYTES) {
         throw new Error("Gateway workspace manifest paths exceed their byte limit");
       }
-      if (isManagedSandboxSkillsPath(childPath)) {
-        // Runtime projections are excluded edits, not disposable cache children.
+      if (isRuntimeOwnedWorkspacePath(childPath)) {
+        // Runtime-owned paths are excluded edits, not disposable cache children.
         // Surface their presence as a conflict before replacing an ancestor.
         if (hasPathAncestor(nonDirectoryReplacements, childPath)) {
           paths.push(childPath);
@@ -179,6 +181,7 @@ export async function preflightWorkspaceApplyImpl(
       local = await localNode(entryPath);
       if (
         local?.type === "directory" &&
+        !isRuntimeOwnedWorkspacePath(entryPath) &&
         (!baseNodes.has(entryPath) || !currentNodes.has(entryPath)) &&
         currentNodes.get(entryPath)?.type !== "directory" &&
         (await directoryContainsOnlyWorkspaceEntries(params.root, entryPath, isRetainedInput))

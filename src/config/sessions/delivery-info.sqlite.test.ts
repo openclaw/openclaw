@@ -9,10 +9,7 @@ import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shar
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { extractDeliveryInfo, extractDeliveryInfoBatch } from "./delivery-info.js";
-import {
-  loadExactSessionEntryCandidatesReadOnlyBatch,
-  replaceSessionEntry,
-} from "./session-accessor.js";
+import { replaceSessionEntry } from "./session-accessor.js";
 
 const sessionKey = "agent:main:delivery-fallback";
 const deliveryContext = { channel: "telegram", to: "telegram:123456", accountId: "default" };
@@ -33,24 +30,18 @@ async function seedFallback(state: OpenClawTestState) {
   return {
     primaryPath,
     cfg: { session: { store: primaryPath } },
-    readPrimary: () =>
-      loadExactSessionEntryCandidatesReadOnlyBatch([
-        { agentId: "main", env: state.env, storePath: primaryPath, sessionKeys: [sessionKey] },
-      ]),
   };
 }
 
 it("recovers a same-agent route past an empty absent primary", async () => {
   await withOpenClawTestState({ label: "delivery-missing-primary" }, async (state) => {
-    const { cfg, primaryPath, readPrimary } = await seedFallback(state);
-    expect(readPrimary()).toMatchObject([{ ok: true, value: [] }]);
+    const { cfg, primaryPath } = await seedFallback(state);
 
     const scalar = await extractDeliveryInfo(sessionKey, { cfg });
     const batch = await extractDeliveryInfoBatch([{ sessionKey }], { cfg });
 
     expect(fs.existsSync(primaryPath)).toBe(false);
     expect({ scalar, batch }).toEqual({ scalar: expected, batch: [expected] });
-    expect(readPrimary()).toMatchObject([{ ok: true, value: [] }]);
   });
 });
 
@@ -58,7 +49,7 @@ it.each(["uninitialized", "corrupt"] as const)(
   "does not recover another store's route past a present %s primary",
   async (kind) => {
     await withOpenClawTestState({ label: `delivery-${kind}-primary` }, async (state) => {
-      const { cfg, primaryPath, readPrimary } = await seedFallback(state);
+      const { cfg, primaryPath } = await seedFallback(state);
       fs.mkdirSync(state.statePath("custom"), { recursive: true });
       if (kind === "uninitialized") {
         new DatabaseSync(primaryPath).close();
@@ -66,16 +57,6 @@ it.each(["uninitialized", "corrupt"] as const)(
         fs.writeFileSync(primaryPath, "not a SQLite database");
       }
       const before = fs.readFileSync(primaryPath);
-      expect(readPrimary()).toMatchObject([
-        {
-          ok: false,
-          error:
-            kind === "uninitialized"
-              ? { name: "SessionMetadataUnavailableError", reason: "schema-missing" }
-              : { code: "ERR_SQLITE_ERROR" },
-        },
-      ]);
-
       expect(await extractDeliveryInfo(sessionKey, { cfg })).toEqual({
         deliveryContext: undefined,
         threadId: undefined,

@@ -228,13 +228,13 @@ describe("createEmbeddedRunFailoverRetryController", () => {
   });
 
   it.each([
-    [true, true, false, false],
-    [false, true, false, true],
-    [true, false, false, true],
-    [true, true, true, true],
+    [true, true, false],
+    [false, true, false],
+    [true, false, false],
+    [true, true, true],
   ])(
-    "handles organization TPM exhaustion (fallback=%s, replaySafe=%s, final=%s)",
-    async (fallback, replaySafe, isFinal, retries) => {
+    "paces organization TPM recovery before failover (fallback=%s, replaySafe=%s, final=%s)",
+    async (fallback, replaySafe, isFinal) => {
       const advanceAuthProfile = vi.fn(async () => true);
       const controller = createController(
         advanceAuthProfile,
@@ -244,39 +244,24 @@ describe("createEmbeddedRunFailoverRetryController", () => {
         isFinal,
       );
       const message =
-        "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 1s.";
-      await expect(
-        controller.maybeRetryTransient({
-          reason: "rate_limit",
-          message,
-          failoverEligible: replaySafe,
-        }),
-      ).resolves.toBe(retries);
-      expect(mocks.sleepWithAbort).toHaveBeenCalledTimes(retries ? 1 : 0);
+        "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 2s.";
+      controller.observeAttempt({ providerRetryMaxRetries: 1 });
+      const retry = {
+        reason: "rate_limit" as const,
+        message,
+        retryAfterMs: resolveRetryAfterMs(message),
+        failoverEligible: replaySafe,
+      };
+      await expect(controller.maybeRetryTransient(retry)).resolves.toBe(true);
+      expect(mocks.sleepWithAbort).toHaveBeenCalledExactlyOnceWith(2000, undefined);
+      await expect(controller.maybeRetryTransient(retry)).resolves.toBe(false);
+      expect(controller.rateLimitRetriesExhausted).toBe(1);
       await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(
-        retries,
+        true,
       );
-      expect(advanceAuthProfile).toHaveBeenCalledTimes(retries ? 1 : 0);
+      expect(advanceAuthProfile).toHaveBeenCalledOnce();
     },
   );
-
-  it("skips credential rotation even when the classifier has already ruled out same-model retry", async () => {
-    const advanceAuthProfile = vi.fn(async () => true);
-    const controller = createController(advanceAuthProfile, true);
-    await expect(
-      controller.maybeRetryTransient({
-        reason: "rate_limit",
-        sameModelRetry: false,
-        message:
-          "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM). Please try again in 90s.",
-      }),
-    ).resolves.toBe(false);
-    await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(
-      false,
-    );
-    expect(advanceAuthProfile).not.toHaveBeenCalled();
-    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
-  });
 
   it("leaves exhausted usage windows to profile failover", async () => {
     const message = "429 daily request limit reached";

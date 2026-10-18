@@ -33,7 +33,10 @@ function ContextRow(props: { category: ContextCategory; limit: number }) {
   const label = () => t("chat.sessionDetails." + labelKeys[props.category.id]);
   const content = () => (
     <>
-      <span class={"chat-context__swatch chat-context__" + props.category.id} aria-hidden="true" />
+      <span
+        class={["chat-context__swatch", `chat-context__${props.category.id}`]}
+        aria-hidden="true"
+      />
       <span class="chat-context__label">
         <span>{label()}</span>
         <Show when={props.category.entries.length > 0}>
@@ -192,7 +195,7 @@ export function ChatContextBreakdown(props: {
                   <For each={categories()} keyed={(category) => category.id}>
                     {(category) => (
                       <span
-                        class={"chat-context__segment chat-context__" + category().id}
+                        class={["chat-context__segment", `chat-context__${category().id}`]}
                         style={{
                           width:
                             Math.min(100, ((category().tokens ?? 0) / props.limit) * 100) + "%",

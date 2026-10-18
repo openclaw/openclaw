@@ -5,6 +5,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
 import { configIncludeOwnsAgentRoster } from "../config/agent-roster-provenance.js";
+import { getDeferredPluginMigrationConfigFacts } from "../config/deferred-plugin-migration-config.js";
 import { readRecentConfigAuditRecords } from "../config/io.audit.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import {
@@ -90,6 +91,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       runDoctorConfigPreflight({
         retiredStateAdmitted: params.retiredStateAdmitted,
         stateSchemaPreparation: params.stateSchemaPreparation,
+        integrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         observe: false,
         invocationPurpose: "doctor",
         repairPrefixedConfig: shouldRepair,
@@ -154,7 +156,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let retiredModelRefConfig: Pick<OpenClawConfig, "agents" | "models"> | undefined;
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
   const changesPanelSink = createDoctorChangesPanelSink(shouldRepair);
-  const configRepairWarnings: string[] = [];
+  const configRepairWarnings: string[] = [...(preflight.warnings ?? [])];
   const applyConfigMutation = (
     mutation: DoctorConfigMutationResult & { warnings?: string[] },
     fixHint: string,
@@ -510,6 +512,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         : {}),
     });
     state = repairSequence.state;
+    configRepairWarnings.push(...repairSequence.warningNotes);
     if (referenceSource) {
       referenceSource.installedPluginIdRecovery = new Map([
         ...installedPluginRecovery.recovery,
@@ -568,6 +571,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     state,
     shouldRepair,
     doctorFixCommand,
+    preservedPaths: getDeferredPluginMigrationConfigFacts(snapshot.sourceConfig)?.flatMap(
+      (pending) => (pending.configPaths ?? []).concat(pending.validationExcludedPaths ?? []),
+    ),
   });
   state = unknownStep.state;
   if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {

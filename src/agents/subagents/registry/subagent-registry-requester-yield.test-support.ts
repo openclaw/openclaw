@@ -18,6 +18,7 @@ export function createRequesterWakeContextFixture(
     throw new Error("Unexpected requester fixture effect");
   };
   return {
+    runBackgroundWork: unexpected,
     options: {
       runs,
       warn,

@@ -84,21 +84,31 @@ it("reports hosted Doctor findings without initializing or repairing operator st
         plugins: { enabled: false },
         memory: { search: { enabled: false } },
       });
-      const snapshot = () =>
-        fs
-          .readdirSync(state.root, { recursive: true, encoding: "utf8" })
-          .toSorted()
-          .map((relative) => {
+      const snapshot = () => {
+        const directories = [""];
+        const entries = [];
+        for (const directory of directories) {
+          for (const name of fs.readdirSync(path.join(state.root, directory))) {
+            const relative = path.join(directory, name);
             const filename = path.join(state.root, relative);
-            const stat = fs.statSync(filename, { bigint: true });
-            return {
+            const stat = fs.lstatSync(filename, { bigint: true });
+            entries.push({
               path: relative,
+              mode: stat.mode,
+              symlinkTarget: stat.isSymbolicLink() ? fs.readlinkSync(filename) : undefined,
               sha256: stat.isFile()
                 ? createHash("sha256").update(fs.readFileSync(filename)).digest("hex")
                 : undefined,
               mtimeNs: stat.isFile() ? stat.mtimeNs : undefined,
-            };
-          });
+            });
+            // Capture links can point outside the fixture, including back to this checkout.
+            if (stat.isDirectory()) {
+              directories.push(relative);
+            }
+          }
+        }
+        return entries.toSorted((left, right) => left.path.localeCompare(right.path));
+      };
       const before = snapshot();
       const { runtime, lines } = createSystemAgentTestRuntime();
       // Findings are expected (gateway.mode is unset); nonzero lint is not a repair.

@@ -295,7 +295,7 @@ export function runDetachedCleanupAttempt(
   // Completion outlives the spawning attempt; inherited lock owners would
   // reject requester transcript writes after that attempt is disposed.
   runWithoutOwnedSessionTranscriptWrites(() => {
-    void runWithSubagentCleanupWorkAdmission(async () => {
+    const execute = async () => {
       try {
         await commitSubagentLifecycleMutation(context, {
           entry,
@@ -366,7 +366,8 @@ export function runDetachedCleanupAttempt(
           );
         }
       }
-    })
+    };
+    void runWithSubagentCleanupWorkAdmission(() => context.runBackgroundWork(entry, execute))
       .catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup admission failed (${runId}): ${String(err)}`);
       })

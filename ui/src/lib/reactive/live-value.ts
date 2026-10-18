@@ -1,6 +1,6 @@
 import { createEffect, untrack } from "@solidjs/signals";
 
-/** Keep native text selection when an owner republishes the displayed value. */
+/** Snapshot the initial native value; later owner updates preserve text selection. */
 export function liveValue(value: () => string) {
   let field: HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement | undefined;
   createEffect(value, (next) => {

@@ -1,7 +1,7 @@
 import { createMemo, createSignal, merge, onCleanup, onSettled, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { SessionCreatedActor } from "../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { activateMenuShortcut } from "./menu-shortcuts.ts";
 import {
   EMPTY_SESSION_MENU_DATA,
@@ -92,7 +92,7 @@ function SessionMenuContent(
     (action) => props.onAction(action),
     close,
   );
-  const view = useSessionMenuEntries(host, actions, readState);
+  const view = useSessionMenuEntries(actions, readState);
   const shortcut = (event: KeyboardEvent) => {
     if (!actions.handleKeydown(event, view.appearance)) {
       activateMenuShortcut(host, event);

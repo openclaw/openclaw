@@ -23,7 +23,7 @@ const origin: Parameters<ReturnType<typeof openXWorkOrigins>["registerIfAbsent"]
   senderTier: "maintainer",
 };
 const expectedGuidance =
-  'X origin: @config_maintainer https://x.com/config_maintainer/status/501\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:"https://x.com/config_maintainer/status/501", accountId:"default", message:"<approved reply>"}. If unanswered, remind once at the end of your final summary.';
+  'X origin: @config_maintainer https://x.com/config_maintainer/status/501\nReplies are manual: draft ≤280 characters with the result and any PR link; show the user and ask. Post only after explicit approval in this session. Use tool message: {action:"send", channel:"x", target:"https://x.com/config_maintainer/status/501", accountId:"default", message:"<approved reply>"}. When useful, attach inspected proof images or video natively with media:"<approved file or URL>" rather than a sign-in-only link; show the attachment with the caption for approval. If unanswered, remind once at the end of your final summary.';
 
 beforeEach(() => client.getXApi.mockReset());
 afterEach(() => clearRuntimeConfigSnapshot());

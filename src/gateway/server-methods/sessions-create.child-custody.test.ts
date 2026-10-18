@@ -270,6 +270,8 @@ async function createHostedChildFixture(
         parentSessionKey: requesterSessionKey,
         spawnDepth,
         task: "Continue independently.",
+        // Automatic naming has its own lifecycle tests; custody must not await a title model.
+        displayName: "Custody fixture",
       },
       {
         via: "spawn",

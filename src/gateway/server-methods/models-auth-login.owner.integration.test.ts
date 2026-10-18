@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
@@ -7,22 +6,23 @@ import type { WizardNextResult } from "../../../packages/gateway-protocol/src/sc
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { loadPersistedAuthProfileStore } from "../../agents/auth-profiles/persisted.js";
 import { readGatewayLoginParams } from "../../commands/models/auth-login-gateway.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as providerPersistence from "../../plugins/provider-auth-persistence.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  startGatewayWithClient,
-} from "../test-helpers.e2e.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { disconnectGatewayClient } from "../test-helpers.e2e.js";
 import type { GatewayClient as ServerGatewayClient } from "./client-types.js";
 import { modelsAuthLoginHandlers } from "./models-auth-login.js";
+import {
+  closeModelsEndpoint,
+  connectModelsReader,
+  createModelsTestState,
+  listenModelsEndpoint,
+  modelsTestConfig,
+  settleModelsWork,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
 
 const provider = "owner-login-fixture";
 const profileId = `${provider}:owner`;
@@ -78,17 +78,10 @@ async function withGatewayOwner<T>(state: OpenClawTestState, operation: () => Pr
 }
 
 async function createState() {
-  return createOpenClawTestState({
-    label: "owner-bound-login",
+  return createModelsTestState("owner-bound-login", {
     layout: "state-only",
     env: {
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
     },
   });
 }
@@ -135,56 +128,44 @@ async function writePlugin(state: OpenClawTestState, baseUrl: string) {
     }); },
   };`,
   );
-  return {
+  return modelsTestConfig(state, token, {
     agents: {
       defaults: { modelPolicy: { allow: [`${provider}/*`] } },
-      entries: { main: { workspace: state.workspaceDir } },
     },
     plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
-    gateway: { mode: "local", auth: { mode: "token", token } },
     models: { catalogRefresh: { enabled: false } },
-  } satisfies OpenClawConfig;
+  });
 }
 
 it("discovers plugins.load.paths using the selected read-only config and honors plugin policy", async () => {
-  const state = await createState();
-  try {
-    const cfg = await writePlugin(state, "http://127.0.0.1:1");
-    await state.writeConfig(cfg);
-    await expect(
-      readGatewayLoginParams(
-        { provider, method: "api-key" },
-        "login",
-        new AbortController().signal,
-      ),
-    ).resolves.toEqual({
-      sessionId: "login",
-      authChoice: `${provider}/fixture-key`,
-      agentId: undefined,
-    });
-    expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
+  await using state = await createState();
+  const cfg = await writePlugin(state, "http://127.0.0.1:1");
+  await state.writeConfig(cfg);
+  await expect(
+    readGatewayLoginParams({ provider, method: "api-key" }, "login", new AbortController().signal),
+  ).resolves.toEqual({
+    sessionId: "login",
+    authChoice: `${provider}/fixture-key`,
+    agentId: undefined,
+  });
+  expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
 
-    await state.writeConfig({
-      ...cfg,
-      plugins: { ...cfg.plugins, entries: { [provider]: { enabled: false } } },
-    });
+  for (const policy of [
+    { entries: { [provider]: { enabled: false } } },
+    { allow: ["another-plugin"] },
+  ]) {
+    await state.writeConfig({ ...cfg, plugins: { ...cfg.plugins, ...policy } });
     await expect(
       readGatewayLoginParams({ provider }, "login", new AbortController().signal),
     ).rejects.toThrow("No Gateway-compatible login");
-    await state.writeConfig({ ...cfg, plugins: { ...cfg.plugins, allow: ["another-plugin"] } });
-    await expect(
-      readGatewayLoginParams({ provider }, "login", new AbortController().signal),
-    ).rejects.toThrow("No Gateway-compatible login");
-    expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
-  } finally {
-    await state.cleanup();
   }
+  expect(existsSync(resolveOpenClawStateSqlitePath(state.env))).toBe(false);
 });
 
 it.for(["allowed", "non-admin", "revoked"] as const)(
   "owner-bound login uses real credential/config writers: %s",
   async (mode, { signal }) => {
-    const state = await createState();
+    await using state = await createState();
     currentMode = mode;
     currentRequester = undefined;
     const atCredentialWrite = createDeferred();
@@ -205,24 +186,13 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
       }
     });
     try {
-      endpoint.listen(0, "127.0.0.1");
-      await once(endpoint, "listening");
-      const address = endpoint.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Fixture endpoint has no TCP address");
-      }
-      const cfg = await writePlugin(state, `http://127.0.0.1:${address.port}`);
+      const cfg = await writePlugin(state, await listenModelsEndpoint(endpoint));
       await state.writeConfig(cfg);
       await withGatewayOwner(state, async () => {
-        const { client, server, port } = await startGatewayWithClient({
-          cfg,
-          configPath: state.configPath,
-          token,
-          scopes: ["operator.admin"],
-        });
-        let closed = false;
+        await using gateway = await startModelsGateway(state, cfg, token);
+        const { client, port } = gateway;
         try {
-          await server.startupSettled;
+          await gateway.server.startupSettled;
           const owner = captureGatewayStateOwner(resolveOpenClawStateSqlitePath(state.env));
           expect(owner?.role).toBe("gateway");
           if (!owner?.ownerId) {
@@ -236,38 +206,29 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
             expectedOwnerId: owner.ownerId,
           };
           if (mode === "non-admin") {
-            const reader = await connectGatewayClient({
-              url: `ws://127.0.0.1:${port}`,
-              token,
-              scopes: ["operator.read"],
-            });
-            try {
-              await expect(reader.request("models.authLogin", params)).rejects.toThrow(
-                /operator.admin|administrator/,
-              );
-            } finally {
-              await disconnectGatewayClient(reader);
-            }
+            await using reader = await connectModelsReader(port, token);
+            await expect(reader.request("models.authLogin", params)).rejects.toThrow(
+              /operator.admin|administrator/,
+            );
             expect(requests).toBe(0);
           } else {
             await client.request("models.authLogin", params);
-            const completion = (async () => {
-              let result = await client.request<WizardNextResult>("wizard.next", {
-                sessionId: params.sessionId,
-              });
-              while (!result.done) {
-                const step = result.step;
-                result = await client.request<WizardNextResult>("wizard.next", {
-                  sessionId: params.sessionId,
-                  ...(step && step.executor !== "gateway" && step.type !== "progress"
-                    ? { answer: { stepId: step.id, value: step.type === "confirm" ? true : null } }
-                    : {}),
-                });
-              }
-              return result;
-            })().then(
-              (result) => ({ result }),
-              (error: unknown) => ({ error }),
+            const completion = settleModelsWork(
+              (async () => {
+                let result: WizardNextResult = { done: false };
+                while (!result.done) {
+                  const step = result.step;
+                  result = await client.request<WizardNextResult>("wizard.next", {
+                    sessionId: params.sessionId,
+                    ...(step && step.executor !== "gateway" && step.type !== "progress"
+                      ? {
+                          answer: { stepId: step.id, value: step.type === "confirm" ? true : null },
+                        }
+                      : {}),
+                  });
+                }
+                return result;
+              })(),
             );
             await withinTest(prepared.promise, signal);
             release.resolve();
@@ -279,12 +240,10 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
             if (mode === "allowed") {
               expect(outcome).toMatchObject({ result: { status: "done" } });
             } else {
-              expect(outcome).toHaveProperty("error");
+              expect(outcome.error).toBeDefined();
             }
           }
-          await disconnectGatewayClient(client);
-          await server.close({ reason: "owner login proof complete" });
-          closed = true;
+          await gateway.close();
           const profiles = loadPersistedAuthProfileStore()?.profiles;
           const afterConfig = await fs.readFile(state.configPath, "utf8");
           if (mode === "allowed") {
@@ -302,27 +261,14 @@ it.for(["allowed", "non-admin", "revoked"] as const)(
           }
         } finally {
           release.resolve();
-          await disconnectGatewayClient(client);
-          if (!closed) {
-            await server.close({ reason: "owner login proof cleanup" });
-          }
         }
       });
     } finally {
       release.resolve();
       endpoint.closeAllConnections();
       if (endpoint.listening) {
-        const closedEndpoint = Promise.withResolvers<void>();
-        endpoint.close((error) => {
-          if (error) {
-            closedEndpoint.reject(error);
-          } else {
-            closedEndpoint.resolve();
-          }
-        });
-        await closedEndpoint.promise;
+        await closeModelsEndpoint(endpoint);
       }
-      await state.cleanup();
     }
   },
 );

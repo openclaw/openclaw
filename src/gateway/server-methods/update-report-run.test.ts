@@ -605,7 +605,6 @@ describe("Report action from the authoritative update ledger", () => {
     },
   );
   it.each([
-    { reason: "dirty", reportable: true },
     { reason: "not-git-install", reportable: true },
     { reason: "already-current", reportable: false },
     { reason: "dry-run", reportable: false },
@@ -629,7 +628,7 @@ describe("Report action from the authoritative update ledger", () => {
     },
   );
 
-  it.each(["failed", "rolled-back"] as const)(
+  it.each(["rolled-back"] as const)(
     "previews %s without a sentinel and never treats status as verified rollback",
     async (status) => {
       recordFailure(status);

@@ -187,6 +187,7 @@ const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 4_096;
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 
+// Owns Web Audio sources and their completion callbacks; stop retires sources before ending them.
 export class RealtimeTalkPcmOutputQueue {
   private context: AudioContext | null = null;
   private sampleRateHz = 0;
