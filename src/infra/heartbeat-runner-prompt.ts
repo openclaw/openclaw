@@ -42,6 +42,7 @@ import {
 import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatScheduledTask,
+  type HeartbeatWakeIntent,
   type HeartbeatWakeSource,
 } from "./heartbeat-wake.js";
 import { heartbeatExecRouteKey } from "./outbound/heartbeat-route-context.js";
@@ -98,27 +99,6 @@ function resolveConversationCompletionRoute(
     : undefined;
 }
 
-/**
- * Terminal no-op preflight (empty scratch, consumed exec events) must resolve
- * before retryable busy guards; wakes carrying heartbeat tasks keep deferral.
- */
-export function shouldPreflightWakeBeforeBusy(
-  source: HeartbeatWakeSource | undefined,
-  scheduledEveryMs: number | undefined,
-  scheduledTaskCount: number,
-): boolean {
-  return (
-    scheduledTaskCount === 0 &&
-    (source === "interval" ||
-      (source === "exec-event" &&
-        !(
-          typeof scheduledEveryMs === "number" &&
-          Number.isSafeInteger(scheduledEveryMs) &&
-          scheduledEveryMs > 0
-        )))
-  );
-}
-
 export async function resolveHeartbeatPreflight(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -126,6 +106,7 @@ export async function resolveHeartbeatPreflight(params: {
   sessionKey?: string;
   reason?: string;
   source?: HeartbeatWakeSource;
+  intent?: HeartbeatWakeIntent;
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
@@ -142,9 +123,6 @@ export async function resolveHeartbeatPreflight(params: {
     log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
   }
   const wakeFlags = resolveHeartbeatWakePayloadFlags(params);
-  const isTargetedSystemEventWake =
-    (params.source === "manual" || params.source === "notifications-event") &&
-    isTargetedUnscheduledWake(params);
   const queue = await resolveHeartbeatSession(
     params.cfg,
     params.agentId,
@@ -178,20 +156,18 @@ export async function resolveHeartbeatPreflight(params: {
         queue,
         false,
       )
-    : isTargetedSystemEventWake &&
-        heartbeatSession.run.kind === "isolated" &&
-        !heartbeatSession.inspectsRunQueue
-      ? { ...heartbeatSession, inspectsRunQueue: true }
-      : heartbeatSession;
+    : heartbeatSession;
+  // Targeted system events keep their queue even when execution uses an isolated session.
+  session.inspectsRunQueue ||=
+    (params.source === "manual" || params.source === "notifications-event") &&
+    isTargetedUnscheduledWake(params);
   const hasTaggedCronEvents = pendingEventEntries.some((event) =>
     event.contextKey?.startsWith("cron:"),
   );
-  // Routine isolated wakes leave the base queue alone; targeted system events opt into it.
-  const shouldInspectWakePendingEvents = wakeFlags.isWakePayload && session.inspectsRunQueue;
   const shouldInspectPendingEvents =
     wakeFlags.isExecEventWake ||
     wakeFlags.isCronWake ||
-    shouldInspectWakePendingEvents ||
+    (wakeFlags.isWakePayload && session.inspectsRunQueue) ||
     hasTaggedCronEvents;
   const firstExec =
     !params.scheduledTasks?.length && shouldInspectPendingEvents

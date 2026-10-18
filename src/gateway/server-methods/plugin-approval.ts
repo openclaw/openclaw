@@ -31,6 +31,10 @@ import {
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import {
+  captureApprovalWorkerOwner,
+  registerPendingApprovalRecord,
+} from "./approval-registration.js";
 import { createApprovalRequestAuthority } from "./approval-request-authority.js";
 import { handlePendingApprovalRequestWithDelivery } from "./approval-request-delivery.js";
 import {
@@ -39,7 +43,6 @@ import {
   handleApprovalResolve,
   handleApprovalWaitDecision,
   listVisiblePendingApprovalRequests,
-  registerPendingApprovalRecord,
   resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -107,6 +110,7 @@ export function createPluginApprovalHandlers(
         return;
       }
 
+      const workerOwner = captureApprovalWorkerOwner(trustedAgentRuntime);
       if (trustedAgentRuntime && !trustedAgentRuntime.approvalOwnerPluginId) {
         reject("signed plugin approval owner is unavailable");
         return;
@@ -234,6 +238,7 @@ export function createPluginApprovalHandlers(
         timeoutMs,
         respond,
         context,
+        workerOwner,
       });
       if (!registration) {
         return;

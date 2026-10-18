@@ -37,12 +37,7 @@ export function ModelAccounts(props: ModelAccountsProps) {
   });
   return (
     <openclaw-model-accounts>
-      <Show
-        when={
-          readState().context.gateway.snapshot.phase === "connected" &&
-          readState().context.gateway.snapshot.client
-        }
-      >
+      <Show when={readState().target || readState().context.gateway.snapshot.phase === "connected"}>
         <ModelAccountsSection readState={readState} />
       </Show>
     </openclaw-model-accounts>

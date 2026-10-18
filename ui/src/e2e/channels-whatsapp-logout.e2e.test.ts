@@ -50,21 +50,41 @@ const objectSchema = (properties: Record<string, unknown>) => ({ type: "object",
 const contextOptions = { locale: "en-US", serviceWorkers: "block" } as const;
 function withChannels(
   responses: Record<string, unknown>,
-  run: (page: Page, gateway: MockGatewayControls) => Promise<void>,
+  run: (
+    page: Page,
+    gateway: MockGatewayControls,
+    assets: Array<{ url: string; status: number }>,
+  ) => Promise<void>,
   options: NonNullable<Parameters<typeof suite.withPage>[0]> = contextOptions,
   featureMethods?: string[],
 ) {
   return suite.withPage(options, async ({ page }) => {
+    const assets: Array<{ url: string; status: number }> = [];
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    page.on("response", (response) => {
+      if (response.url().includes("/assets/plugins/whatsapp/")) {
+        assets.push({ url: new URL(response.url()).pathname, status: response.status() });
+      }
+    });
     const gateway = await installMockGateway(page, {
       featureMethods,
       methodResponses: {
+        "plugins.list": { plugins: [], diagnostics: [], mutationAllowed: true },
+        "plugins.controlUi.list": { plugins: [], diagnostics: [], revision: "empty" },
         "channels.status": whatsappStatus(),
         "channels.pairing.list": pairing,
         ...responses,
       },
     });
     expect((await page.goto(`${suite.server.baseUrl}settings/channels`))?.status()).toBe(200);
-    await run(page, gateway);
+    await run(page, gateway, assets);
+    if (assets.length) {
+      expect(assets.some((asset) => asset.url.endsWith(".js") && asset.status === 200)).toBe(true);
+      expect(assets.every((asset) => asset.status === 200)).toBe(true);
+      expect(await gateway.getRequests("plugins.controlUi.report")).toHaveLength(0);
+    }
+    expect(errors).toEqual([]);
   });
 }
 async function openChannel(page: Page, name = "WhatsApp") {
@@ -214,9 +234,13 @@ suite.define(() => {
           loggedOut: false,
         },
       },
-      async (page, gateway) => {
+      async (page, gateway, assets) => {
         const detail = await openChannel(page);
         const logout = detail.getByRole("button", { name: "Logout" });
+        await logout.waitFor();
+        expect(assets.some((asset) => asset.url.endsWith(".js") && asset.status === 200)).toBe(
+          true,
+        );
 
         await detail.getByRole("button", { name: "Relink" }).click();
         const qr = detail.getByRole("img", { name: "WhatsApp QR" });
@@ -267,6 +291,48 @@ suite.define(() => {
     );
   });
 
+  it("renders the packaged phone identity with raw fallback and no JID fallback", async () => {
+    await withChannels({}, async (page, gateway) => {
+      const detail = await openChannel(page);
+      await detail.getByRole("button", { name: "Relink" }).waitFor();
+      const phone = detail
+        .locator("dt", { hasText: "Phone number" })
+        .locator("xpath=following-sibling::dd[1]");
+      for (const [self, expected] of [
+        [{ e164: "+4930123456", jid: "4930123456@s.whatsapp.net" }, "Germany · +49 30 123456"],
+        [{ e164: "not-a-phone", jid: "account@s.whatsapp.net" }, "not-a-phone"],
+        [{ jid: "account@s.whatsapp.net" }, null],
+      ] as const) {
+        await gateway.setMethodResponse(
+          "channels.status",
+          channelStatus(
+            { whatsapp: "WhatsApp" },
+            { whatsapp: { ...linked, self, authAgeMs: 60000 } },
+          ),
+        );
+        const before = await gateway.getRequests("channels.status", { probe: true });
+        await detail.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.waitForRequest("channels.status", {
+          after: before.length,
+          match: { probe: true },
+        });
+        if (expected === null) {
+          await expect.poll(() => phone.count()).toBe(0);
+        } else {
+          await expect.poll(() => phone.textContent()).toBe(expected);
+        }
+        await expect
+          .poll(() =>
+            detail
+              .locator("dt", { hasText: "Auth age" })
+              .locator("xpath=following-sibling::dd[1]")
+              .textContent(),
+          )
+          .toBe("1m");
+      }
+    });
+  });
+
   it("rejects a captured custom-account logout after the Gateway reconnects", async () => {
     await withChannels(
       {
@@ -286,12 +352,14 @@ suite.define(() => {
       async (page, gateway) => {
         const detail = await openChannel(page);
         await detail.getByRole("button", { name: "Logout" }).click();
-        const confirm = await waitForConfirmModal(page);
-        await expect(confirm.textContent()).resolves.toContain("work");
+        const confirm = (await waitForConfirmModal(page)).filter({
+          has: page.getByText("Log out of WhatsApp account work?", { exact: true }),
+        });
+        await expect.poll(() => confirm.count()).toBe(1);
         const socketCount = await gateway.getSocketCount();
         await gateway.closeLatest(1012, "Reconnect during logout confirmation");
         await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-        await confirm.getByRole("button", { name: "Logout" }).click();
+        await expect.poll(() => confirm.count()).toBe(0);
         await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(1);
         await expect.poll(async () => gateway.getRequests("channels.logout")).toHaveLength(0);
       },

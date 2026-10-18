@@ -6,6 +6,8 @@ import { resolveMainSessionKey } from "../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resetCronActiveJobs } from "../cron/active-jobs.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import {
   createLastTargetConfig,
@@ -336,6 +338,21 @@ describe("Heartbeat event routing", () => {
         return { text: queue === "base" ? "Restart complete" : "HEARTBEAT_OK" };
       });
 
+      const active = busy
+        ? createReplyOperation({
+            sessionKey: isolatedKey,
+            sessionId: "busy-isolated-session",
+            agentId: "main",
+            resetTriggered: false,
+            target: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: isolatedKey,
+              agentId: "main",
+              incarnation: "busy-isolated-session",
+            }),
+          })
+        : undefined;
+      active?.setPhase("running");
       const result = await runHeartbeatOnce({
         cfg,
         agentId: "main",
@@ -346,9 +363,8 @@ describe("Heartbeat event routing", () => {
         deps: {
           getReplyFromConfig: replySpy,
           telegram: sendTelegram,
-          getQueueSize: () => (busy ? 1 : 0),
         },
-      });
+      }).finally(() => active?.complete());
       if (busy) {
         expect(result).toMatchObject({ status: "skipped", reason: "requests-in-flight" });
         expect(replySpy).not.toHaveBeenCalled();
@@ -393,72 +409,40 @@ describe("Heartbeat event routing", () => {
     });
   });
 
-  it.each([
-    {
-      name: "manual CLI wake with cadence disabled",
-      source: "manual" as const,
-      heartbeat: { every: "0m" },
-    },
-    {
-      name: "notification wake",
-      source: "notifications-event" as const,
-      heartbeat: { every: "5m" },
-    },
-  ])(
-    "admits an explicitly targeted system event during an isolated $name",
-    async ({ source, heartbeat }) => {
-      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-        const cfg = createLastTargetConfig({
-          tmpDir,
-          storePath,
-          isolatedSession: true,
-          heartbeat,
-        });
-        const baseKey = resolveMainSessionKey(cfg);
-        const isolatedKey = `${baseKey}:heartbeat`;
-        const eventText = "Background task is ready.";
-        await writeTelegramSessionStore(storePath, baseKey, { sessionId: "base-conversation" });
-        enqueueSystemEvent(eventText, { sessionKey: baseKey });
+  it.each(["manual", "notifications-event"] as const)(
+    "consumes a targeted %s event once during isolated heartbeats with cadence disabled",
+    async (source) => {
+      await withRouting(
+        async ({ cfg, storePath, replySpy, baseKey, sendTelegram, run }) => {
+          const sessionKey = "agent:main:telegram:group:-100155462274:topic:42";
+          const isolatedKey = `${sessionKey}:heartbeat`;
+          const eventText = "Background task is ready.";
+          await writeTelegramSessionStore(storePath, sessionKey, { sessionId: "conversation" });
+          enqueueSystemEvent(eventText, { sessionKey });
+          enqueueSystemEvent("Other conversation event", { sessionKey: baseKey });
+          enqueueSystemEvent("Isolated queue event", { sessionKey: isolatedKey });
+          const formatted: Array<string | undefined> = [];
+          replySpy.mockImplementation(async (ctx, options) => {
+            formatted.push(await formatQueuedEvents(cfg, ctx, options));
+            return { text: "Task complete." };
+          });
+          const wake = { sessionKey, source, intent: "immediate", reason: "wake" } as const;
 
-        const sendTelegram = vi
-          .fn()
-          .mockResolvedValue({ messageId: "wake", chatId: "-100155462274" });
-        let queuedAtReply: string[] | undefined;
-        let promptEvents: string[] | undefined;
-        let formatted: string | undefined;
-        replySpy.mockImplementation(async (ctx, options) => {
-          queuedAtReply = peekSystemEvents(baseKey);
-          promptEvents =
-            getReplySystemEventContext(options)?.events?.map((event) => event.text) ?? [];
-          formatted = await formatQueuedEvents(cfg, ctx, options);
-          return { text: "Task complete." };
-        });
+          expect((await run(wake)).status).toBe("ran");
+          expect(formatted).toEqual([expect.stringContaining(eventText)]);
+          expect(getFirstReplyContext(replySpy).SessionKey).toBe(isolatedKey);
+          expectTelegramSend(sendTelegram, { to: "-100155462274", text: "Task complete." });
+          expect(peekSystemEvents(sessionKey)).toEqual([]);
 
-        const result = await runHeartbeatOnce({
-          cfg,
-          agentId: "main",
-          sessionKey: baseKey,
-          source,
-          intent: "immediate",
-          reason: "wake",
-          deps: {
-            getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
-            getQueueSize: () => 0,
-          },
-        });
-
-        expect(result.status).toBe("ran");
-        expect(replySpy).toHaveBeenCalledTimes(1);
-        expect(queuedAtReply).toEqual([eventText]);
-        expect({ promptEvents, queuedAfterRun: peekSystemEvents(baseKey) }).toEqual({
-          promptEvents: [eventText],
-          queuedAfterRun: [],
-        });
-        expect(formatted).toContain(eventText);
-        expect(getFirstReplyContext(replySpy).SessionKey).toBe(isolatedKey);
-        expectTelegramSend(sendTelegram, { to: "-100155462274", text: "Task complete." });
-      });
+          expect((await run(wake)).status).toBe("ran");
+          expect(formatted).toEqual([expect.stringContaining(eventText), undefined]);
+          expect(peekSystemEvents(sessionKey)).toEqual([]);
+          expect(peekSystemEvents(baseKey)).toEqual(["Other conversation event"]);
+          expect(peekSystemEvents(isolatedKey)).toEqual(["Isolated queue event"]);
+        },
+        true,
+        { every: "0m" },
+      );
     },
   );
 

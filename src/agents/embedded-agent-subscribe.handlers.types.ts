@@ -46,7 +46,6 @@ export type AssistantStreamData = {
   itemId?: string;
 };
 
-/** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;

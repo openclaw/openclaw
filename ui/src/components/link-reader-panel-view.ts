@@ -77,7 +77,13 @@ type PanelView =
   | { status: "idle" | "loading" }
   | { status: "error"; message: string }
   | ReaderReadyView;
-export type ReaderTab = { id: string; history: LinkReaderTarget[]; index: number; view: PanelView };
+export type ReaderTab = {
+  id: string;
+  history: LinkReaderTarget[];
+  index: number;
+  view: PanelView;
+  reloadPending: boolean;
+};
 export function tabTarget(tab: ReaderTab | undefined): LinkReaderTarget | null {
   return tab?.history[tab.index] ?? null;
 }

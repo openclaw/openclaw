@@ -103,6 +103,7 @@ export class TranscriptTestHost extends HTMLElement {
   renderTranscript: () => NativeContent = () => null;
   committedRenders = 0;
   private pending: Promise<boolean> | undefined;
+  private stopTranscript?: () => void;
 
   get updateComplete() {
     return this.pending ?? Promise.resolve(true);
@@ -110,11 +111,14 @@ export class TranscriptTestHost extends HTMLElement {
 
   connectedCallback() {
     this.append(this.transcriptRoot);
+    this.stopTranscript = this.transcript?.subscribe(() => this.requestRender());
     this.transcript?.start();
     this.requestRender();
   }
 
   disconnectedCallback() {
+    this.stopTranscript?.();
+    this.stopTranscript = undefined;
     this.transcript?.dispose();
     queueMicrotask(() => {
       if (!this.isConnected) {

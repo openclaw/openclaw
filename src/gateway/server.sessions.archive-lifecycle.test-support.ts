@@ -1,10 +1,21 @@
-import { expect, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
+import { getRuntimeConfig as getHostRuntimeConfig } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+} from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { markChatAbortTerminalPersistenceError } from "./chat-abort-lifecycle-internal.js";
-import { registerChatAbortController, removeChatAbortControllerEntry } from "./chat-abort.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import type { resolveSessionMutationAuthorization } from "./session-sharing.js";
@@ -14,7 +25,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
-export function activeRunContext(params: {
+export async function activeRunContext(params: {
   runId: string;
   sessionId: string;
   sessionKey: string;
@@ -22,22 +33,44 @@ export function activeRunContext(params: {
   ownerConnId?: string;
   terminalPersistenceError?: Error;
 }) {
-  const chatAbortControllers = new Map();
+  rpcSourceTesting.clear();
   const registration = registerChatAbortController({
-    chatAbortControllers,
     runId: params.runId,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    sourceWork: params.persistence.promise,
+    target: captureSessionTarget({
+      storeScope: resolveSessionStorePathCore(getHostRuntimeConfig().session?.store),
+      sessionKey: params.sessionKey,
+      incarnation: params.sessionId,
+    }),
     timeoutMs: 60_000,
     ownerConnId: params.ownerConnId,
   });
   if (!registration.entry) {
     throw new Error("expected active run registration");
   }
+  onTestFinished(registration.cleanup);
   const entry = registration.entry;
+  let operation: ReturnType<typeof createReplyOperation> | undefined;
+  const claim = await claimSessionControllerTask(entry.input, (mailboxClaim) => {
+    operation = createReplyOperation({
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      resetTriggered: false,
+      target: entry.input.target,
+      mailboxClaim,
+    });
+    markReplyOperationExecutionStarted(operation);
+    operation.setPhase("running");
+  });
+  if (!operation) {
+    throw new Error("expected active run operation");
+  }
+  const activeOperation = operation;
   const aborted = createDeferredCore();
   const onAbort = () => aborted.resolve();
-  entry.controller.signal.addEventListener("abort", onAbort, { once: true });
+  entry.input.abortSignal.addEventListener("abort", onAbort, { once: true });
   const terminalStarted = createDeferredCore();
   const unsubscribe = onAgentEvent((event) => {
     if (
@@ -47,17 +80,19 @@ export function activeRunContext(params: {
     ) {
       return;
     }
-    entry.projectSessionTerminalPending = false;
-    entry.projectSessionTerminalPersistence = params.persistence.promise;
+    entry.adapter.projectSessionTerminalPending = false;
+    entry.adapter.projectSessionTerminalPersistence = params.persistence.promise;
     void params.persistence.promise.then(
       () => {
-        entry.projectSessionTerminalPersistence = undefined;
-        entry.projectSessionTerminalPersisted = true;
-        removeChatAbortControllerEntry(chatAbortControllers, params.runId, entry);
+        entry.adapter.projectSessionTerminalPersistence = undefined;
+        entry.adapter.projectSessionTerminalPersisted = true;
+        activeOperation.complete();
+        releaseSessionControllerClaim(claim);
       },
       (error: unknown) => {
         markChatAbortTerminalPersistenceError(entry, error);
-        removeChatAbortControllerEntry(chatAbortControllers, params.runId, entry);
+        activeOperation.complete();
+        releaseSessionControllerClaim(claim);
       },
     );
     terminalStarted.resolve();
@@ -72,7 +107,7 @@ export function activeRunContext(params: {
       agentRunSeq: new Map([[params.runId, 0]]),
       broadcast: vi.fn(),
       cancelRunBoundApprovals: vi.fn(),
-      chatAbortControllers,
+      rpcSourceTesting,
       chatRunState,
       logGateway: { warn: vi.fn() },
       nodeSendToSession: vi.fn(),
@@ -84,8 +119,11 @@ export function activeRunContext(params: {
     controller: registration.controller,
     terminalStarted: terminalStarted.promise,
     unsubscribe(this: void) {
-      entry.controller.signal.removeEventListener("abort", onAbort);
+      entry.input.abortSignal.removeEventListener("abort", onAbort);
       unsubscribe();
+      activeOperation.complete();
+      releaseSessionControllerClaim(claim);
+      registration.cleanup();
     },
   };
 }
@@ -213,10 +251,9 @@ export async function archiveLifecycleRequestContext(
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const loadGatewayModelCatalog = async () => [];
   return {
+    trackExecution: trackAsyncWork,
     broadcast: vi.fn(),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),
     getRuntimeConfig,

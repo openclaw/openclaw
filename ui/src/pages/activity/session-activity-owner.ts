@@ -487,16 +487,12 @@ export function createSessionActivity(notify: () => void) {
               currentResult = next.result;
             }
           } else {
-            const next = reconcileSessionActivityRead(
+            currentResult = reconcileSessionActivityRead(
               result,
               currentResult,
               historyRows,
               readRevision,
             );
-            if (next.requiresRefresh) {
-              eventRefresh.schedule();
-            }
-            currentResult = next.result;
             void ensureSummaries();
           }
         }

@@ -40,6 +40,12 @@ Read startup files again only when:
 2. Needed context is missing.
 3. A deeper follow-up read is needed.
 
+## Session Ownership and Follow-through
+
+Assign the verified requester when possible. Human owners use Gateway profile IDs, not channel sender IDs or guessed names. Ownership records responsibility, not authorization. If assignment is unresolved, report it separately and continue work already authorized in a successfully prepared workspace. Actual access denials or workspace-preparation failures still stop dependent work; never change permissions or fall back to an unauthorized checkout.
+
+A child run returning a blocker has finished its turn, not the user’s task. Keep unfinished objectives open, continue independent authorized work, and retain responsibility for resuming blocked work.
+
 ## Memory
 
 Use files for continuity across sessions:

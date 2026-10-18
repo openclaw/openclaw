@@ -4,6 +4,7 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { formatCliJsonFailure } from "../../cli/failure-output.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { isDefaultStateDir, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
 import { resolveGatewayAuthToken } from "../../gateway/auth-token-resolution.js";
@@ -12,6 +13,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { resolveUserPath } from "../../utils.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { resolveGatewayStartupTiming } from "../gateway-startup-timing.js";
 import {
@@ -36,8 +38,6 @@ import { rejectOnboardingOption } from "../onboard-options.js";
 import type { OnboardOptions } from "../onboard-types.js";
 import { commitNonInteractiveOnboardConfig } from "./config-write.js";
 import { applyNonInteractiveGatewayConfig } from "./local/gateway-config.js";
-import { applyNonInteractiveSkillsConfig } from "./local/skills-config.js";
-import { resolveNonInteractiveWorkspaceDir } from "./local/workspace.js";
 
 type GatewayHealthFailureDiagnostics = {
   service?: {
@@ -334,11 +334,17 @@ export async function runNonInteractiveLocalSetup(params: {
   const { opts, runtime, baseConfig, sourceConfigBeforeMigrations, baseHash } = params;
   const mode = "local" as const;
 
-  const requestedWorkspaceDir = resolveNonInteractiveWorkspaceDir({
-    opts,
-    baseConfig,
-    defaultWorkspaceDir: DEFAULT_WORKSPACE,
-  });
+  const implicitWorkspaceDir = isDefaultStateDir(process.env)
+    ? DEFAULT_WORKSPACE
+    : path.join(resolveStateDir(process.env), "workspace");
+  const requestedWorkspaceDir = resolveUserPath(
+    (
+      opts.workspace?.trim() ||
+      baseConfig.agents?.defaults?.workspace?.trim() ||
+      process.env.OPENCLAW_WORKSPACE_DIR?.trim() ||
+      implicitWorkspaceDir
+    ).trim(),
+  );
   // Injected main is not authored membership; legacy workspace state still owns its guard.
   const hasAuthoredRoster = listAgentEntries(sourceConfigBeforeMigrations).length > 0;
   if (opts.team && hasAuthoredRoster) {
@@ -420,7 +426,20 @@ export async function runNonInteractiveLocalSetup(params: {
     return;
   }
   nextConfig = gatewayResult.nextConfig;
-  nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts });
+  // Preserve existing skill install config when the operator opted out of the
+  // skills setup phase for this non-interactive run.
+  if (!opts.skipSkills) {
+    nextConfig = {
+      ...nextConfig,
+      skills: {
+        ...nextConfig.skills,
+        install: {
+          ...nextConfig.skills?.install,
+          nodeManager: opts.nodeManager ?? nextConfig.skills?.install?.nodeManager ?? "npm",
+        },
+      },
+    };
+  }
 
   if (authChoice !== "skip") {
     // Auth-choice handling is loaded only when needed so skip-only onboarding

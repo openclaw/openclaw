@@ -18,6 +18,9 @@ import { ModuleGraph, type UpdateCompatibilityOrigin } from "./update-compat-mod
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 const HASHED_CHUNK = /-[A-Za-z0-9_-]{8}\.m?js$/;
 const POST_SWAP_OWNER = /^src\/(?:cli\/update-cli\/|daemon\/|cli\/runtime-cleanup(?:-scope)?\.ts$)/;
+const STANDALONE_ENTRY_FILES = new Set(
+  Object.keys(standaloneRuntimeProcessBuildEntries).map((name) => `${name}.js`),
+);
 const STANDALONE_CHUNK_PREFIXES = Object.keys(standaloneRuntimeProcessBuildEntries).flatMap(
   (name) => {
     const { chunkFileNames } = getStandaloneRuntimeProcessOutputOptions(name);
@@ -572,6 +575,7 @@ export function writeUpdateCompatibilityChunks(params: {
       relative.startsWith("config-doctor/") ||
       relative.startsWith("state-retention/") ||
       relative.startsWith("native-hook-relay/") ||
+      STANDALONE_ENTRY_FILES.has(relative) ||
       STANDALONE_CHUNK_PREFIXES.some((prefix) => relative.startsWith(prefix))
     ) {
       continue;

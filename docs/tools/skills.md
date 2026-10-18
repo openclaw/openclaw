@@ -918,8 +918,14 @@ If bodies are unreadable, omitted, or shortened,
 An empty result with partial coverage does not prove that no applicable skill exists.
 Indexing never executes skill content, and index limits do not truncate `skills_read`.
 
-Sandbox search includes only readable, delivered skills. Discovery does not
-expand the existing worker transfer selection or its 8 MiB total resource limit.
+Sandbox search includes only readable, delivered skills. Remote-exec turns
+transfer eligible discovery skills as well as prompt-listed skills, within the
+existing 8 MiB total resource limit. Delivery includes at most 256 skills;
+prompt-listed, explicitly selected, and pinned library resources take priority
+over additional discovery-only skills. On paired nodes, prompt references, search,
+and instruction reads use the same verified delivery for the admitted turn,
+even without a filesystem bridge. A different placement or a retired turn cannot
+reuse that delivery.
 Dedicated remote workers retain their existing tool protocol; the new search
 tools are not added to that protocol. Use a Gateway run to search its full
 eligible catalog.

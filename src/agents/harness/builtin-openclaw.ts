@@ -1,4 +1,3 @@
-import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
@@ -18,9 +17,12 @@ function buildRestrictedFinalizationAttempt(
 ): EmbeddedRunAttemptParams {
   const internalAttempt =
     attempt as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> &
-      Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
+      Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "replyOperation">;
   return {
     admittedRunContext: internalAttempt.admittedRunContext,
+    // Finalization is another backend attempt of the same admitted turn, so its
+    // native registration borrows that turn instead of needing a second admission.
+    replyOperation: internalAttempt.replyOperation,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,
@@ -86,16 +88,22 @@ export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
     ...BUILTIN_AGENT_HARNESS_METADATA,
     supportsTurnScopedToolRestrictions: true,
-    runAttempt: (params) =>
-      runEmbeddedAttempt({
+    runAttempt: async (params) => {
+      const attempt = {
         ...(params as EmbeddedRunAttemptParams),
         supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
-      }),
+      };
+      // Isolated completions never need the full runner. Capture invocation state before loading it.
+      const { runEmbeddedAttempt } = await import("../embedded-agent-runner/run/attempt.js");
+      return runEmbeddedAttempt(attempt);
+    },
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
-      const result = await runEmbeddedAttempt(buildRestrictedFinalizationAttempt(attempt));
+      const restrictedAttempt = buildRestrictedFinalizationAttempt(attempt);
+      const { runEmbeddedAttempt } = await import("../embedded-agent-runner/run/attempt.js");
+      const result = await runEmbeddedAttempt(restrictedAttempt);
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };

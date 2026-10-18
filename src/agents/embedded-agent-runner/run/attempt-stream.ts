@@ -217,6 +217,11 @@ export function installEmbeddedAttemptStreamGuards(
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            // Turn facts attribute a drop to the kind of turn that changed the prefix.
+            `trigger=${attempt.trigger ?? "unknown"} ` +
+            `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+            `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+            `senderIsOwner=${attempt.senderIsOwner ?? "unset"} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -424,6 +429,7 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    diagnosticOwner: callbacks.diagnosticOwner,
     onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {

@@ -292,7 +292,6 @@ export function createPendingUsageRouteData(
     },
     result: null,
     costSummary: null,
-    providerUsage: { state: "pending" },
     loadedAtMs: null,
     error: null,
   };

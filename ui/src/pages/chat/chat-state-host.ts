@@ -38,7 +38,6 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   SessionWorkspaceHost & {
-    requestUpdate: () => void;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
@@ -132,7 +131,7 @@ export type ChatPageHost = ChatHost &
         persist?: boolean;
         dashboardPresentation?: "personal";
         geometryOnly?: boolean;
-        automaticResource?: "desktop" | "browser";
+        automaticResource?: "desktop";
       },
     ) => void;
     beginImageOpen: () => number;

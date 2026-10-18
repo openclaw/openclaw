@@ -4,7 +4,12 @@ import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixt
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../../sessions/session-controller.lifecycle.js";
+import {
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { withPluginSubagentTestState } from "./agent.spawned-child.test-support.js";
 import {
   backendGatewayClient,
@@ -37,6 +42,37 @@ function expectReactivationFailure(respond: ReturnType<typeof vi.fn>, runId: str
   );
 }
 
+export function setupRestartRecoveryAdmissionFixture(runId: string) {
+  const sessionKey = "agent:main:main";
+  const sessionId = "recovery-session";
+  const storePath = getAgentTestStorePath();
+  const store: Record<string, SessionEntry> = {
+    [sessionKey]: {
+      sessionId,
+      updatedAt: Date.now() - 10_000,
+      status: "interrupted",
+      abortedLastRun: true,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: "interrupted-source-run",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 1,
+        chargedAttempts: 1,
+        reservation: { runId, attempt: 1, lifecycleGeneration: mocks.lifecycleGeneration },
+      },
+    },
+  };
+  mocks.loadSessionEntry.mockImplementation(() => ({
+    cfg: {},
+    agentId: "main",
+    storePath,
+    entry: structuredClone(store[sessionKey]),
+    canonicalKey: sessionKey,
+  }));
+  mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+  return { sessionKey, sessionId, storePath, store };
+}
+
 export function registerAgentPreDispatchFailureTests() {
   it.each([{ acp: false }, { acp: true }, { acp: true, cancel: true }])(
     "keeps pre-dispatch reactivation with its runtime (%j)",
@@ -66,8 +102,15 @@ export function registerAgentPreDispatchFailureTests() {
         const context = makeContext();
         const runId = "idem-abort-reactivation-fails";
         const terminal = createDeferred();
+        const cancellationError = new Error("ACP preparation cancelled");
+        let source: RpcSourceRef | undefined;
         const respond = vi.fn((_ok, payload, error) => {
-          if (error || payload?.status === "ok" || payload?.status === "error") {
+          if (
+            error ||
+            payload?.status === "ok" ||
+            payload?.status === "error" ||
+            payload?.status === "timeout"
+          ) {
             terminal.resolve();
           }
         });
@@ -77,11 +120,12 @@ export function registerAgentPreDispatchFailureTests() {
               .spyOn(acpReads, "readAcpSessionMetaForEntries")
               .mockImplementationOnce(async (...args) => {
                 const result = await read(...args);
-                const active = context.chatAbortControllers.get(runId);
+                const active = rpcSourceTesting.get(runId);
                 if (!active) {
                   throw new Error("Expected the ACP read to retain run admission");
                 }
-                active.controller.abort(new Error("ACP preparation cancelled"));
+                source = active;
+                expect(requestRpcSourceCancellation(active, cancellationError)).toBe(true);
                 return result;
               })
           : undefined;
@@ -95,17 +139,27 @@ export function registerAgentPreDispatchFailureTests() {
             },
             { context, reqId: runId, respond },
           );
+          source ??= rpcSourceTesting.get(runId);
           await terminal.promise;
+          await source?.input.settlement.promise;
 
-          expect(context.chatAbortControllers.has(runId)).toBe(false);
+          expect(rpcSourceTesting.has(runId)).toBe(false);
           if (cancel) {
             expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
             expect(mocks.agentCommand).not.toHaveBeenCalled();
+            expect(source?.input.abortSignal.reason).toBe(cancellationError);
             expect(respond).toHaveBeenCalledWith(
-              false,
-              { runId, status: "error", summary: "ACP preparation cancelled" },
-              { code: "UNAVAILABLE", message: "ACP preparation cancelled" },
-              { runId, error: "ACP preparation cancelled" },
+              true,
+              expect.objectContaining({
+                runId,
+                status: "timeout",
+                summary: "aborted",
+                stopReason: "aborted",
+                timeoutPhase: "queue",
+                providerStarted: false,
+              }),
+              undefined,
+              { runId },
             );
           } else if (acp) {
             expect(mocks.replaceSubagentRunAfterSteer).not.toHaveBeenCalled();
@@ -122,6 +176,7 @@ export function registerAgentPreDispatchFailureTests() {
           }
         } finally {
           cancellation?.mockRestore();
+          await source?.input.settlement.promise;
         }
       });
     },
@@ -130,37 +185,8 @@ export function registerAgentPreDispatchFailureTests() {
   it.each(["pending input admission", "pre-dispatch reactivation"] as const)(
     "restores admitted restart recovery if %s fails",
     async (failurePhase) => {
-      const sessionKey = "agent:main:main";
-      const sessionId = "recovery-session";
       const runId = "recovery-reactivation-fails";
-      const storePath = getAgentTestStorePath();
-      const store: Record<string, SessionEntry> = {
-        [sessionKey]: {
-          sessionId,
-          updatedAt: Date.now() - 10_000,
-          status: "interrupted",
-          abortedLastRun: true,
-          restartRecoveryDeliveryRunId: runId,
-          restartRecoveryDeliverySourceRunId: "interrupted-source-run",
-          mainRestartRecovery: {
-            cycleId: "cycle-1",
-            revision: 1,
-            chargedAttempts: 1,
-            reservation: {
-              runId,
-              attempt: 1,
-              lifecycleGeneration: "test-generation",
-            },
-          },
-        },
-      };
-      mocks.loadSessionEntry.mockImplementation(() => ({
-        cfg: {},
-        storePath,
-        entry: structuredClone(store[sessionKey]),
-        canonicalKey: sessionKey,
-      }));
-      mocks.updateSessionStore.mockImplementation(async (_path, updater) => await updater(store));
+      const { sessionKey, sessionId, store } = setupRestartRecoveryAdmissionFixture(runId);
       const inputError = new Error("Pending input ownership ended; submit a new turn to continue");
       if (failurePhase === "pending input admission") {
         mocks.stageSessionPendingInput.mockImplementationOnce(async () => {
@@ -204,7 +230,7 @@ export function registerAgentPreDispatchFailureTests() {
           chargedAttempts: 1,
         },
       });
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
+      expect(rpcSourceTesting.has(runId)).toBe(false);
       expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
       expect(store[sessionKey]?.restartRecoveryDeliveryRunId).toBeUndefined();
       if (failurePhase === "pending input admission") {
@@ -311,7 +337,7 @@ export function registerAgentPreDispatchFailureTests() {
       ),
     ).rejects.toThrow("owner release write failed");
     await expect(
-      runExclusiveSessionLifecycleMutation("patch", {
+      runSessionMutation({
         scope: storePath,
         identities: [sessionKey, sessionId],
         signal: AbortSignal.timeout(100),

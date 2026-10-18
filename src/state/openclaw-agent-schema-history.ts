@@ -2,6 +2,7 @@ import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
+  AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
@@ -11,6 +12,7 @@ import {
   SESSION_PARTICIPANTS_TABLE,
 } from "./openclaw-agent-db-contract.js";
 import { withLegacyAgentIndexes } from "./openclaw-agent-index-retirement-migration.js";
+import { withLegacyAgentMemoryRevisionTriggers } from "./openclaw-agent-memory-revision-migration.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION,
@@ -303,10 +305,14 @@ function withLegacyAgentWriteLayout(schema: string): string {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const revisionSchemaSql =
+    targetVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION
+      ? withLegacyAgentMemoryRevisionTriggers(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const trajectorySchemaSql =
     targetVersion < AGENT_TRAJECTORY_STORAGE_SCHEMA_VERSION
-      ? withoutTrajectoryPayloadColumns(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
+      ? withoutTrajectoryPayloadColumns(revisionSchemaSql)
+      : revisionSchemaSql;
   const indexSchemaSql =
     targetVersion < AGENT_INDEX_RETIREMENT_SCHEMA_VERSION
       ? withLegacyAgentIndexes(trajectorySchemaSql)
@@ -353,7 +359,7 @@ export const OPENCLAW_AGENT_BOARD_SCHEMA_SQL = extractSqliteTableSchema(
 );
 export const AGENT_V14_BOARD_SCHEMA_SQL = OPENCLAW_AGENT_BOARD_SCHEMA_SQL;
 const OPENCLAW_AGENT_SCHEMA_WITHOUT_BOARD_SQL = withLegacyAgentIndexes(
-  withoutTrajectoryPayloadColumns(OPENCLAW_AGENT_SCHEMA_SQL),
+  withoutTrajectoryPayloadColumns(withLegacyAgentMemoryRevisionTriggers(OPENCLAW_AGENT_SCHEMA_SQL)),
 ).replace(OPENCLAW_AGENT_BOARD_SCHEMA_SQL, "");
 
 export const SESSION_PROGRESS_CARDS_TABLE = "session_progress_cards";

@@ -40,7 +40,7 @@ async function mount(options: { fullscreen?: boolean; earlyExit?: Exit } = {}) {
       }
       return terminalOpenResult(sessionId);
     }
-    return method === "terminal.list" ? { sessions: [] } : {};
+    return method === "terminal.list" ? { sessions: [] } : { ok: true };
   });
   const panel = createTestTerminalPanel(tag);
   panel.client = {
@@ -111,6 +111,21 @@ describe("terminal process exit", () => {
     expect(panel.hostedTabs).toHaveLength(1);
     expect(panel.activeHostedTabId).toBe(remaining);
     expect(panel.terminalPanelOpen).toBe(true);
+  });
+
+  it("allows removing an exited diagnostic tab while offline", async () => {
+    const { panel, request, emit } = await mount();
+    emit("terminal.exit", { sessionId: "session-1", reason: "error", exitCode: 7 });
+    await panel.updateComplete;
+    panel.gatewayConnected = false;
+    await panel.updateComplete;
+    expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
+    const close = panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!;
+    expect(close.disabled).toBe(false);
+    close.click();
+    await panel.updateComplete;
+    expect(panel.hostedTabs).toEqual([]);
+    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
   });
 
   it.each([

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   getConfigValueAtPath,
   parseConfigPath,
@@ -19,6 +20,28 @@ function expectSomeIssueMessageContains(issues: Array<{ message: string }>, text
   expect(issues.map((issue) => issue.message).join("\n")).toContain(text);
 }
 
+function invalid(result: ReturnType<typeof validateConfigObjectRaw>) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected validation to fail");
+  }
+  return result.issues;
+}
+
+const accepts = (config: unknown) => OpenClawSchema.safeParse(config).success;
+const providerOverlay = (id: string) => ({
+  models: { providers: { [id]: { timeoutSeconds: 600 } } },
+});
+async function withSnapshot(
+  config: unknown,
+  check: (snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>) => void,
+) {
+  await withTempHome(async (home) => {
+    await writeOpenClawConfig(home, config);
+    check(await readConfigFileSnapshot());
+  });
+}
+
 describe("MCP disabled config", () => {
   it.each([
     ["root", true, "mcp.servers.example.disabled", "enabled: false"],
@@ -34,11 +57,7 @@ describe("MCP disabled config", () => {
           : { nodeHost: { mcp: { servers: { example: server } } } };
       const result = validateConfigObjectRaw(config);
 
-      expect(result.ok).toBe(false);
-      if (result.ok) {
-        throw new Error("expected disabled MCP server config to fail validation");
-      }
-      expect(result.issues).toContainEqual(
+      expect(invalid(result)).toContainEqual(
         expect.objectContaining({ path, message: expect.stringContaining(replacement) }),
       );
     },
@@ -47,15 +66,7 @@ describe("MCP disabled config", () => {
 
 describe("model provider localService config", () => {
   it("revalidates materialized bundled provider overlays", () => {
-    const first = validateConfigObjectRaw({
-      models: {
-        providers: {
-          google: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
+    const first = validateConfigObjectRaw(providerOverlay("google"));
 
     expect(first.ok).toBe(true);
     if (!first.ok) {
@@ -63,9 +74,7 @@ describe("model provider localService config", () => {
     }
     expect(first.config.models?.providers?.google?.baseUrl).toBe("");
     expect(first.config.models?.providers?.google?.models).toEqual([]);
-
-    const second = validateConfigObjectRaw(first.config);
-    expect(second.ok).toBe(true);
+    expect(validateConfigObjectRaw(first.config).ok).toBe(true);
   });
 
   it("accepts on-demand local provider service settings", () => {
@@ -94,25 +103,11 @@ describe("model provider localService config", () => {
   });
 
   it("still requires baseUrl and models for custom provider declarations", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          custom: {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
+    const result = validateConfigObjectRaw(providerOverlay("custom"));
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(issuePaths(result.issues)).toEqual(
-        expect.arrayContaining([
-          "models.providers.custom.baseUrl",
-          "models.providers.custom.models",
-        ]),
-      );
-    }
+    expect(issuePaths(invalid(result))).toEqual(
+      expect.arrayContaining(["models.providers.custom.baseUrl", "models.providers.custom.models"]),
+    );
   });
 });
 
@@ -134,35 +129,23 @@ describe("accessGroups config", () => {
 });
 
 describe("models.catalogRefresh", () => {
+  const acceptsRefresh = (catalogRefresh: unknown) => accepts({ models: { catalogRefresh } });
   it("accepts the refresh toggle and an http(s) override", () => {
-    expect(
-      OpenClawSchema.safeParse({
-        models: { catalogRefresh: { enabled: false, url: "https://catalog.example.test/v1.json" } },
-      }).success,
-    ).toBe(true);
-    expect(
-      OpenClawSchema.safeParse({
-        models: { catalogRefresh: { url: "http://localhost:8080/catalog.json" } },
-      }).success,
-    ).toBe(true);
+    expect(acceptsRefresh({ enabled: false, url: "https://catalog.example.test/v1.json" })).toBe(
+      true,
+    );
+    expect(acceptsRefresh({ url: "http://localhost:8080/catalog.json" })).toBe(true);
   });
 
   it("rejects invalid refresh values", () => {
-    expect(
-      OpenClawSchema.safeParse({ models: { catalogRefresh: { enabled: "false" } } }).success,
-    ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "file:///tmp/catalog.json" } } })
-        .success,
-    ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({ models: { catalogRefresh: { url: "not a url" } } }).success,
-    ).toBe(false);
-    expect(
-      OpenClawSchema.safeParse({
-        models: { catalogRefresh: { url: "http://catalog.internal.example/catalog.json" } },
-      }).success,
-    ).toBe(false);
+    expect(acceptsRefresh({ enabled: "false" })).toBe(false);
+    for (const url of [
+      "file:///tmp/catalog.json",
+      "not a url",
+      "http://catalog.internal.example/catalog.json",
+    ]) {
+      expect(acceptsRefresh({ url })).toBe(false);
+    }
   });
 });
 
@@ -205,26 +188,23 @@ describe("plugins.entries.*.hooks", () => {
 });
 
 describe("mcp.apps.enabled", () => {
+  const acceptsApps = (apps: unknown) => accepts({ mcp: { apps } });
   it("accepts only a bare HTTP(S) sandbox origin", () => {
     expect(
-      OpenClawSchema.safeParse({
-        mcp: {
-          apps: {
-            enabled: true,
-            sandboxOrigin: "https://mcp-apps.example.com",
-            sandboxPort: 29000,
-          },
-        },
-      }).success,
+      acceptsApps({
+        enabled: true,
+        sandboxOrigin: "https://mcp-apps.example.com",
+        sandboxPort: 29000,
+      }),
     ).toBe(true);
-    expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxPort: 65536 } } }).success).toBe(false);
+    expect(acceptsApps({ sandboxPort: 65536 })).toBe(false);
     for (const sandboxOrigin of [
       "https://mcp-apps.example.com/path",
       "https://mcp-apps.example.com?query=1",
       "https://user:pass@mcp-apps.example.com",
       "data:text/html,hello",
     ]) {
-      expect(OpenClawSchema.safeParse({ mcp: { apps: { sandboxOrigin } } }).success).toBe(false);
+      expect(acceptsApps({ sandboxOrigin })).toBe(false);
     }
   });
 });
@@ -288,64 +268,39 @@ describe("web search provider config", () => {
 describe("gateway.remote.transport", () => {
   it("rejects invalid macOS SSH host-key policy", () => {
     const res = validateConfigObject({
-      gateway: {
-        remote: {
-          sshHostKeyPolicy: "accept-new",
-          transport: "ssh",
-        },
-      },
+      gateway: { remote: { sshHostKeyPolicy: "accept-new", transport: "ssh" } },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
-    }
+    expect(invalid(res)[0]?.path).toBe("gateway.remote.sshHostKeyPolicy");
   });
 });
 
 describe("gateway.remote.edgeAuth", () => {
+  const validateHeaders = (edgeAuth: unknown) =>
+    validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
   it("accepts valid header names with literal and SecretRef values", () => {
-    const res = validateConfigObjectRaw({
-      gateway: {
-        remote: {
-          edgeAuth: {
-            "X-Edge-Literal": "test-secret",
-            "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
-          },
-        },
-      },
+    const res = validateHeaders({
+      "X-Edge-Literal": "test-secret",
+      "X-Edge-Ref": { source: "env", provider: "default", id: "EDGE_AUTH_TOKEN" },
     });
 
     expect(res.ok).toBe(true);
   });
 
   it.each([
-    {
-      name: "empty map",
-      edgeAuth: {},
-      expected: "header map must not be empty",
-    },
-    {
-      name: "transport-owned header",
-      edgeAuth: { Host: "test-secret" },
-      expected: 'transport-owned header "Host"',
-    },
-    {
-      name: "invalid header name",
-      edgeAuth: { "Bad Header": "test-secret" },
-      expected: 'invalid gateway.remote.edgeAuth header name: "Bad Header"',
-    },
-    {
-      name: "case-duplicate headers",
-      edgeAuth: { "X-Edge-Auth": "one", "x-edge-auth": "two" },
-      expected: 'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
-    },
-  ])("rejects $name", ({ edgeAuth, expected }) => {
-    const res = validateConfigObjectRaw({ gateway: { remote: { edgeAuth } } });
-
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.map((issue) => issue.message).join("\n")).toContain(expected);
-    }
+    ["empty map", {}, "header map must not be empty"],
+    ["transport-owned header", { Host: "test-secret" }, 'transport-owned header "Host"'],
+    [
+      "invalid header name",
+      { "Bad Header": "test-secret" },
+      'invalid gateway.remote.edgeAuth header name: "Bad Header"',
+    ],
+    [
+      "case-duplicate headers",
+      { "X-Edge-Auth": "one", "x-edge-auth": "two" },
+      'header names "X-Edge-Auth" and "x-edge-auth" differ only by case',
+    ],
+  ] as const)("rejects %s", (_name, edgeAuth, expected) => {
+    expectSomeIssueMessageContains(invalid(validateHeaders(edgeAuth)), expected);
   });
 });
 
@@ -444,14 +399,8 @@ describe("broadcast", () => {
     },
   ])("accepts $name", ({ key, entry }) => {
     const res = validateConfigObject({
-      agents: {
-        ownership: "explicit",
-        entries: { alfred: {}, baerbel: {} },
-      },
-      broadcast: {
-        strategy: "parallel",
-        [key]: entry,
-      },
+      agents: { ownership: "explicit", entries: { alfred: {}, baerbel: {} } },
+      broadcast: { strategy: "parallel", [key]: entry },
     });
     expect(res.ok).toBe(true);
   });
@@ -492,13 +441,10 @@ describe("broadcast", () => {
       agents: { entries: { alfred: {} } },
       broadcast: { "telegram:-100123": entry },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues).toContainEqual({
-        path,
-        message: 'Unknown agent id "missing" (not in agents.entries).',
-      });
-    }
+    expect(invalid(res)).toContainEqual({
+      path,
+      message: 'Unknown agent id "missing" (not in agents.entries).',
+    });
   });
 
   it.each([
@@ -506,10 +452,7 @@ describe("broadcast", () => {
     { entry: { agents: ["missing"] }, path: "broadcast.telegram:-100123.agents.0" },
   ])("validates qualified participants without a configured roster at $path", ({ entry, path }) => {
     const res = validateConfigObjectRaw({ broadcast: { "telegram:-100123": entry } });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(issuePaths(res.issues)).toContain(path);
-    }
+    expect(issuePaths(invalid(res))).toContain(path);
   });
 });
 
@@ -565,47 +508,23 @@ describe("config strict validation", () => {
   });
 
   it("rejects top-level memorySearch without read-time auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        memorySearch: {
-          provider: "local",
-          fallback: "none",
-          query: { maxResults: 7 },
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
+    const memorySearch = { provider: "local", fallback: "none", query: { maxResults: 7 } };
+    await withSnapshot({ memorySearch }, (snap) => {
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"memorySearch"');
       expect(issuePaths(snap.legacyIssues)).toContain("memorySearch");
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual({
-        provider: "local",
-        fallback: "none",
-        query: { maxResults: 7 },
-      });
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual(memorySearch);
       expect(snap.sourceConfig.memory?.search).toBeUndefined();
     });
   });
 
   it("rejects top-level heartbeat agent settings without read-time auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        heartbeat: {
-          every: "30m",
-          model: "anthropic/claude-3-5-haiku-20241022",
-        },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
+    const heartbeat = { every: "30m", model: "anthropic/claude-3-5-haiku-20241022" };
+    await withSnapshot({ heartbeat }, (snap) => {
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
       expect(issuePaths(snap.legacyIssues)).not.toContain("heartbeat");
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
-        every: "30m",
-        model: "anthropic/claude-3-5-haiku-20241022",
-      });
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual(heartbeat);
       expect(snap.sourceConfig.agents?.defaults?.heartbeat).toBeUndefined();
     });
   });
@@ -634,11 +553,7 @@ describe("config strict validation", () => {
     const raw = {
       plugins: {
         entries: {
-          "lossless-claw": {
-            config: {
-              summaryModel: "anthropic/claude-opus-4-5",
-            },
-          },
+          "lossless-claw": { config: { summaryModel: "anthropic/claude-opus-4-5" } },
         },
       },
     };
@@ -649,72 +564,41 @@ describe("config strict validation", () => {
   });
 
   it("rejects legacy sandbox perSession without read-time auto-migration", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
+    await withSnapshot(
+      {
         agents: {
-          defaults: {
-            sandbox: {
-              perSession: true,
-            },
-          },
-          entries: {
-            openclaw: {
-              sandbox: {
-                perSession: false,
-              },
-            },
-          },
+          defaults: { sandbox: { perSession: true } },
+          entries: { openclaw: { sandbox: { perSession: false } } },
         },
-      });
-
-      const snap = await readConfigFileSnapshot();
-
-      expect(snap.valid).toBe(false);
-      expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
-      expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
-      expect(issuePaths(snap.legacyIssues)).not.toContain("agents.defaults.sandbox");
-      expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
-        perSession: true,
-      });
-      expect(snap.sourceConfigBeforeMigrations?.agents?.entries?.openclaw?.sandbox).toEqual({
-        perSession: false,
-      });
-      expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({
-        perSession: false,
-      });
-    });
+      },
+      (snap) => {
+        expect(snap.valid).toBe(false);
+        expect(issuePaths(snap.issues)).toContain("agents.defaults.sandbox");
+        expect(issuePaths(snap.issues)).toContain("agents.entries.openclaw.sandbox");
+        expect(issuePaths(snap.legacyIssues)).not.toContain("agents.defaults.sandbox");
+        expect(snap.sourceConfigBeforeMigrations?.agents?.defaults?.sandbox).toEqual({
+          perSession: true,
+        });
+        expect(snap.sourceConfigBeforeMigrations?.agents?.entries?.openclaw?.sandbox).toEqual({
+          perSession: false,
+        });
+        expect(snap.sourceConfig.agents?.entries?.openclaw?.sandbox).toEqual({ perSession: false });
+      },
+    );
   });
 
   it("rejects resolved-only gateway.bind aliases as invalid schema values, not legacy", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { bind: "${OPENCLAW_BIND}" },
-      });
-
-      const prev = process.env.OPENCLAW_BIND;
-      process.env.OPENCLAW_BIND = "0.0.0.0";
-      try {
-        const snap = await readConfigFileSnapshot();
+    await withEnvAsync({ OPENCLAW_BIND: "0.0.0.0" }, () =>
+      withSnapshot({ gateway: { bind: "${OPENCLAW_BIND}" } }, (snap) => {
         expect(snap.valid).toBe(false);
         expect(snap.legacyIssues).toHaveLength(0);
         expect(issuePaths(snap.issues)).toContain("gateway.bind");
-      } finally {
-        if (prev === undefined) {
-          delete process.env.OPENCLAW_BIND;
-        } else {
-          process.env.OPENCLAW_BIND = prev;
-        }
-      }
-    });
+      }),
+    );
   });
 
   it("rejects literal gateway.bind host aliases as legacy", async () => {
-    await withTempHome(async (home) => {
-      await writeOpenClawConfig(home, {
-        gateway: { bind: "0.0.0.0" },
-      });
-
-      const snap = await readConfigFileSnapshot();
+    await withSnapshot({ gateway: { bind: "0.0.0.0" } }, (snap) => {
       expect(snap.valid).toBe(false);
       expect(issuePaths(snap.issues)).toContain("gateway.bind");
       expect(issuePaths(snap.legacyIssues)).toContain("gateway.bind");

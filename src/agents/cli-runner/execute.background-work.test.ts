@@ -90,7 +90,7 @@ it("keeps background work alive through model recovery and releases its allowanc
     const clearedAt = await cleared.promise;
     expect(getDiagnosticSessionActivitySnapshot(context.params)).toMatchObject({
       activeBackendLivenessDeadlineAtMs: clearedAt + 180_000,
-      lastProgressAgeMs: 0,
+      lastProgressAgeMs: 390_000,
     });
     finish.resolve();
     await expect(run).resolves.toMatchObject({ text: "background completed" });

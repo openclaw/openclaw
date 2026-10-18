@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import {
   AuthProfileMigrationRequiredError,
@@ -38,6 +38,7 @@ import {
   verifySetupInference,
   verifySetupInferenceConfig,
 } from "./setup-inference-turn.js";
+import * as setupInference from "./setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceBinding,
   resolveSystemAgentVerifiedInferenceRoute,
@@ -374,21 +375,24 @@ it.each([
     };
     vi.mocked(runEmbeddedAgentOwner).mockImplementation(runEmbeddedAgent);
     const deps = { readConfigFileSnapshot: readSnapshot };
-    const attemptedOwners: string[] = [];
+    const attemptedOwners: Array<string | undefined> = [];
+    if (entrypoint === "fallback") {
+      const verify = vi
+        .spyOn(setupInference, "verifySetupInference")
+        .mockImplementation(async (params) => {
+          attemptedOwners.push(params.agentId);
+          return params.agentId === "main"
+            ? { ok: false, status: "auth", error: "Primary owner unavailable" }
+            : verifySetupInference({ ...params, bindSession: true, deps });
+        });
+      onTestFinished(() => verify.mockRestore());
+    }
     const boundVerification =
       entrypoint === "verify"
         ? await verifySetupInference({ agentId: "main", bindSession: true, runtime, deps })
         : entrypoint === "fallback"
           ? await verifySystemAgentInferenceWithFallback({
               runtime,
-              deps: {
-                verify: async (params) => {
-                  attemptedOwners.push(params.agentId);
-                  return params.agentId === "main"
-                    ? { ok: false, status: "auth", error: "Primary owner unavailable" }
-                    : verifySetupInference({ ...params, deps });
-                },
-              },
             })
           : undefined;
     const result =

@@ -73,7 +73,6 @@ export type ChatModelPickerParams = {
   ) => Promise<unknown>;
   onTargetRetry?: (groupId: string) => unknown;
   onTargetSelect?: (groupId: string, value: string) => unknown;
-  onRequestUpdate?: () => void;
 };
 
 function prepareChatModelPicker(params: ChatModelPickerParams) {
@@ -262,15 +261,12 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       event.preventDefault();
       return;
     }
-    void params
-      .onModelSelect(
-        entry.commitValue,
-        params.sessionKey,
-        entry.runtimeOverride ??
-          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
-      )
-      .finally(() => params.onRequestUpdate?.());
-    params.onRequestUpdate?.();
+    void params.onModelSelect(
+      entry.commitValue,
+      params.sessionKey,
+      entry.runtimeOverride ??
+        (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+    );
     closeModelPickerAfterSelection(event);
   };
   const selectTarget = (groupId: string, value: string, event: MouseEvent) => {

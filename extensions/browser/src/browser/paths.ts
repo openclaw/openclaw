@@ -8,27 +8,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 export { resolveExistingPathsWithinRoot };
 
-const DEFAULT_FALLBACK_BROWSER_TMP_DIR = "/tmp/openclaw";
-
-function canUseNodeFs(): boolean {
-  const getBuiltinModule = (
-    process as NodeJS.Process & {
-      getBuiltinModule?: (id: string) => unknown;
-    }
-  ).getBuiltinModule;
-  if (typeof getBuiltinModule !== "function") {
-    return false;
-  }
-  try {
-    return getBuiltinModule("fs") !== undefined;
-  } catch {
-    return false;
-  }
-}
-
-const DEFAULT_BROWSER_TMP_DIR = canUseNodeFs()
-  ? resolvePreferredOpenClawTmpDir()
-  : DEFAULT_FALLBACK_BROWSER_TMP_DIR;
+const DEFAULT_BROWSER_TMP_DIR = resolvePreferredOpenClawTmpDir();
 export const DEFAULT_TRACE_DIR = DEFAULT_BROWSER_TMP_DIR;
 export const DEFAULT_DOWNLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "downloads");
 export const DEFAULT_UPLOAD_DIR = path.join(DEFAULT_BROWSER_TMP_DIR, "uploads");

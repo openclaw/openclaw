@@ -203,7 +203,7 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
-        desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+        desktopSessionRegistry: createDesktopSessionRegistry(),
         startup: workers,
         log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });

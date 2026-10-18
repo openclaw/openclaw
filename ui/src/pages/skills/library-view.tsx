@@ -75,7 +75,10 @@ export function SkillLibrary(props: {
             }
           />
         </label>
-        <Show when={!current().loading} fallback={<p role="status">{t("common.loading")}</p>}>
+        <Show
+          when={Boolean(list()) || !current().loading}
+          fallback={<p role="status">{t("common.loading")}</p>}
+        >
           <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
             <Show
               when={entries().length > 0}
@@ -552,6 +555,7 @@ function LibraryImport(props: { library: SkillLibraryModel }) {
             type="submit"
             class="btn primary"
             disabled={
+              !props.library.canWrite() ||
               current().busy ||
               (!current().importSource &&
                 (!props.library.uploadsEnabled() || current().importSelection.length === 0))

@@ -133,9 +133,12 @@ describe("UsagePage cache convergence", () => {
 
       expect(Boolean(page.querySelector(".usage-loading-card"))).toBe(!committed);
       expect(Boolean(page.querySelector(".usage-overview-card"))).toBe(committed);
-      expect(Boolean(page.querySelector(".usage-header-metrics .usage-metric-badge"))).toBe(
-        committed,
-      );
+      // Badges keep their slots; uncomputed totals show placeholders, never values.
+      expect(
+        [...page.querySelectorAll(".usage-header-metrics .usage-metric-badge strong")].every(
+          (node) => node.textContent === "—",
+        ),
+      ).toBe(!committed);
       expect(page.querySelector(".usage-cache-warning.warning")).toBeNull();
       expect(page.textContent).not.toContain("Select a date range and click Refresh");
 
@@ -419,6 +422,28 @@ describe("UsagePage provider usage outcome", () => {
     },
   );
 
+  it("keeps a failed session read stale after provider plans load", async () => {
+    const request = vi.fn(async (method: string): Promise<unknown> =>
+      method === "usage.status" ? { updatedAt: 1, providers: [] } : cacheSnapshot("fresh").result,
+    );
+    const { page } = await createUsagePageFixture(request, false);
+    page.routeData = {
+      ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
+      // The route's session read failed, so it carries no loaded timestamp.
+      loadedAtMs: null,
+      error: "usage unavailable",
+    };
+    await page.updateComplete;
+    await vi.waitFor(() => expect(usageCalls(request, "usage.status")).toHaveLength(1));
+    await page.updateComplete;
+    const sessionReads = usageCalls(request, "sessions.usage").length;
+    // Provider plans finishing must not mark the failed session read fresh.
+    window.dispatchEvent(new Event("focus"));
+    await vi.waitFor(() =>
+      expect(usageCalls(request, "sessions.usage").length).toBeGreaterThan(sessionReads),
+    );
+  });
+
   it.each([
     { loadSource: "direct", failed: true, aggregateFails: false },
     { loadSource: "preload", failed: true, aggregateFails: false },
@@ -446,26 +471,21 @@ describe("UsagePage provider usage outcome", () => {
       const { page } = await createUsagePageFixture(request, false);
       page.routeData = {
         ...createPendingUsageRouteData(page.context.gateway, "2026-08-07"),
-        providerUsage:
-          loadSource === "preload"
-            ? {
-                state: "settled",
-                result: { ok: false, error: { kind: "request-failed" } },
-              }
-            : { state: "pending" },
+        // A preload leaves fresh session usage; the page still reads provider plans itself.
         loadedAtMs: loadSource === "preload" ? Date.now() : null,
       };
       await page.updateComplete;
       if (loadSource === "direct") {
         await page.refresh();
-        await vi.waitFor(() => {
-          if (failed) {
-            expect(page.read().data.providerUsageUnavailable).toBe(true);
-          } else {
-            expect(page.read().data.providerUsage).toEqual(summary.providers);
-          }
-        });
       }
+      // Provider plans load on the page for both entry paths.
+      await vi.waitFor(() => {
+        if (failed) {
+          expect(page.read().data.providerUsageUnavailable).toBe(true);
+        } else {
+          expect(page.read().data.providerUsage).toEqual(summary.providers);
+        }
+      });
       const previousCalls = usageCalls(request, "usage.status").length;
       phase = 2;
       if (aggregateFails) {

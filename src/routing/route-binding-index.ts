@@ -168,7 +168,7 @@ function buildEvaluatedBindingsIndex(bindings: EvaluatedBinding[]): EvaluatedBin
       pushToIndexMap(byGuildWithRoles, binding.match.guildId, binding);
       continue;
     }
-    if (binding.match.guildId && !binding.match.roles) {
+    if (binding.match.guildId) {
       pushToIndexMap(byGuild, binding.match.guildId, binding);
       continue;
     }

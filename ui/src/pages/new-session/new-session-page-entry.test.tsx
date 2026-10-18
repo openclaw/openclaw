@@ -62,6 +62,37 @@ afterEach(() => {
 });
 
 describe("new-session native route entry", () => {
+  it("offers an in-page retry after a native draft render fails", async () => {
+    // SAFETY: The registered native bridge exposes PageHost properties and updateComplete.
+    const page = document.createElement("openclaw-new-session-page") as PageHost;
+    const data = routeData();
+    let fail = true;
+    Object.defineProperty(page, "data", {
+      get: () => {
+        if (fail) {
+          throw new Error("Synthetic draft render failure");
+        }
+        return data;
+      },
+    });
+    document.body.append(page);
+    try {
+      await page.updateComplete.catch(() => false);
+      await waitForSolid(() =>
+        expect(page.querySelector(".lazy-view-error")?.textContent).toContain(
+          "Synthetic draft render failure",
+        ),
+      );
+      fail = false;
+      page.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+      await waitForSolid(() =>
+        expect(page.querySelector(".new-session-page__message")).not.toBeNull(),
+      );
+    } finally {
+      page.remove();
+    }
+  });
+
   it("updates loader data without replacing the registered page host", async () => {
     const initial = routeData("research");
     const resolved = routeData("main");
@@ -107,6 +138,30 @@ describe("new-session native route entry", () => {
       expect(view.container.querySelector("input")).toBe(input);
       expect(input.value).toBe("Keep this private unsent draft");
       expect(view.container.querySelector("openclaw-new-session-page")).toBeNull();
+    } finally {
+      view.unmount();
+    }
+  });
+
+  it("replaces the displayed restored page when a later rollback supplies another host", async () => {
+    const first = retainedDraft();
+    const second = retainedDraft();
+    const [data, setData] = createSignal<NewSessionRouteData>(first.data);
+    const view = mountSolid(() =>
+      createComponent(renderSolid, {
+        get data() {
+          return data();
+        },
+        loaderPending: false,
+        presented: true,
+      }),
+    );
+    try {
+      await waitForSolid(() => expect(view.container.firstElementChild).toBe(first.page));
+      setData(second.data);
+      await waitForSolid(() => expect(view.container.firstElementChild).toBe(second.page));
+      expect(view.container.contains(first.input)).toBe(false);
+      expect(view.container.contains(second.input)).toBe(true);
     } finally {
       view.unmount();
     }

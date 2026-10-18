@@ -59,6 +59,24 @@ describe("session activity assistant buffering", () => {
     expect(state.assistantBufferDirty).toBe(false);
   });
 
+  it("releases cumulative text after retaining its bounded activity tail", () => {
+    const state = createSessionActivityNoteState();
+    const text = `${"a".repeat(64 * 1024)}😀\ud800tail`;
+    noteSessionActivityEvent(state, assistantEvent(1_000, text, ""));
+    flushSessionActivityAssistantNote(state);
+
+    expect(
+      Object.values(state)
+        .filter((value) => typeof value === "string")
+        .every((value) => value.length <= 4_096),
+    ).toBe(true);
+    expect(state.notes.at(-1)?.text).toBe(`Assistant: ${"a".repeat(233)}😀\ud800tail`);
+
+    noteSessionActivityEvent(state, assistantEvent(1_001, "", " continued"));
+    flushSessionActivityAssistantNote(state);
+    expect(state.notes.at(-1)?.text).toBe(`Assistant: ${"a".repeat(223)}😀\ud800tail continued`);
+  });
+
   it("does not report a signal-only aborted lifecycle end as done", () => {
     const state = createSessionActivityNoteState();
     noteSessionActivityEvent(state, {

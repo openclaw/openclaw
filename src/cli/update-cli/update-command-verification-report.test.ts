@@ -3,6 +3,7 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import {
   createUpdateRun,
   finishUpdateRun,
+  getUpdateRun,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
@@ -84,3 +85,38 @@ it.each([undefined, "2026.9.2", "2026.9.4"])(
     expect(report).toContain("openclaw gateway status --deep");
   },
 );
+
+it("records HTTP-verified activation as success with an authentication warning", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("update-http-verified-") };
+  const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
+  const verified = await verifyObservation(
+    run,
+    {
+      runtime: { status: "running", pid: 12345 },
+      portUsage: { port: 19123, status: "busy", listeners: [], hints: [] },
+      healthy: true,
+      staleGatewayPids: [],
+      expectedVersion: "2026.10.4",
+      gatewayVersion: "2026.10.4",
+      authenticationError: "device identity required",
+    },
+    true,
+  );
+  expect(verified.ok).toBe(true);
+  const observed = getUpdateRun(run.runId, { env });
+  expect(observed?.verification).toMatchObject({
+    runningVersion: "2026.10.4",
+    versionMatch: true,
+    readyz: true,
+    settled: true,
+  });
+  expect(observed?.steps.find((step) => step.step === "gateway verification")).toMatchObject({
+    status: "completed",
+  });
+  expect(
+    observed?.steps.find((step) => step.step === "warning:gateway verification"),
+  ).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining("device identity required"),
+  });
+});

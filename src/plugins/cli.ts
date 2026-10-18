@@ -14,7 +14,7 @@ import {
 } from "./cli-registry-loader.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { registerPluginCliCommandGroups } from "./register-plugin-cli-command-groups.js";
-import { createPluginRuntimeLoaderLogger } from "./runtime/load-context.js";
+import { pluginRuntimeLoaderLogger as logger } from "./runtime/load-context.js";
 
 type PluginCliRegistrationMode = "eager" | "lazy" | "metadata";
 
@@ -24,8 +24,6 @@ type RegisterPluginCliOptions = {
   skipPluginValidation?: boolean;
   session?: PluginCliLoadSession;
 };
-
-const logger = createPluginRuntimeLoaderLogger();
 
 export async function registerPluginCliCommandsFromValidatedConfig(
   program: Command,

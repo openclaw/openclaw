@@ -405,47 +405,6 @@ describe("runtime snapshot state", () => {
     expect(getRuntimeConfigSnapshot()?.gateway?.auth).toEqual({ mode: "token" });
   });
 
-  it.each(["reload", "declined refresh"] as const)(
-    "fences a pending %s without a caller-supplied authority guard",
-    async (phase) => {
-      const initial: OpenClawConfig = { gateway: { port: 18789 } };
-      const replacement: OpenClawConfig = { gateway: { port: 19002 } };
-      const candidate: OpenClawConfig = { gateway: { port: 19001 } };
-      setRuntimeConfigSnapshot(initial, initial);
-      const release = createDeferredCore();
-      if (phase === "declined refresh") {
-        setRuntimeConfigSnapshotRefreshHandler({
-          refresh: () => release.promise.then(() => false),
-        });
-      }
-      const notifyCommittedWrite = vi.fn();
-      const pending = finalizeRuntimeSnapshotWrite({
-        nextSourceConfig: candidate,
-        hadBothSnapshots: true,
-        freshConfig: () =>
-          phase === "reload"
-            ? release.promise.then(() => ({ config: candidate }))
-            : Promise.resolve({ config: candidate }),
-        notifyCommittedWrite,
-        formatRefreshError: String,
-        createRefreshError: (detail, cause) => new Error(detail, { cause }),
-      });
-      try {
-        expect(getRuntimeConfigSnapshot()).toBe(initial);
-        setRuntimeConfigSnapshot(replacement, replacement);
-        const rejected = expect(pending).rejects.toThrow("superseded");
-        release.resolve();
-        await rejected;
-        expect(getRuntimeConfigSnapshot()).toBe(replacement);
-        expect(getRuntimeConfigSourceSnapshot()).toBe(replacement);
-        expect(notifyCommittedWrite).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await pending.catch(() => {});
-      }
-    },
-  );
-
   it("scopes managed write ownership by path and reference count", () => {
     const releaseA = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
     const releaseA2 = registerManagedRuntimeConfigWriteOwner("/tmp/a.json");
@@ -523,7 +482,7 @@ function gatedPreparer() {
   );
   const release = registerRuntimeConfigSnapshotPreparer(syncPrepare, { prepareAsync });
   unregister.push(release);
-  return { started: started.promise, deferred, syncPrepare, prepareAsync, release };
+  return { started: started.promise, deferred, syncPrepare, prepareAsync };
 }
 
 describe("prepared runtime snapshots", () => {
@@ -747,83 +706,27 @@ describe("prepared runtime snapshots", () => {
     expect(getRuntimeConfigSnapshot()).toBe(runtime);
   });
 
-  it.each([
-    "publication",
-    "reset without active snapshot",
-    "registration",
-    "unregistration",
-    "candidate bytes",
-    "candidate facts",
-    "environment",
-    "caller",
-  ])("discards a cold candidate after %s changes during preparation", async (change) => {
-    const candidate: OpenClawConfig = { gateway: { port: 19001 } };
-    const { started, deferred, release, prepareAsync } = gatedPreparer();
-    const contribute = vi.fn();
-    const env = { OPENCLAW_STATE_DIR: "/fixture/prepared-state" };
-    const rollback = Object.assign(vi.fn(), { commit: vi.fn() });
-    const publish = vi.fn(() => rollback);
+  it("retains caller authority across asynchronous preparation", async () => {
+    const { started, deferred } = gatedPreparer();
     let current = true;
-    const runtimeEnv =
-      change === "environment" || change === "caller" ? { env, publish } : undefined;
+    const contribute = vi.fn();
     const pending = loadPinnedRuntimeConfigAsync(
-      async () => ({ config: candidate, runtimeEnv }),
-      change === "caller"
-        ? {
-            assertCurrent: () => {
-              if (!current) {
-                throw new Error("caller superseded");
-              }
-            },
+      async () => ({ config: { gateway: { port: 19001 } } }),
+      {
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("caller superseded");
           }
-        : undefined,
+        },
+      },
     );
     await started;
-    if (runtimeEnv) {
-      expect(prepareAsync).toHaveBeenCalledExactlyOnceWith(candidate, { env });
-      expect(prepareAsync.mock.calls[0]?.[1].env).toBe(env);
-    }
-    switch (change) {
-      case "publication":
-        setRuntimeConfigSnapshot({ gateway: { port: 20000 } });
-        break;
-      case "reset without active snapshot":
-        resetConfigRuntimeState();
-        break;
-      case "registration":
-        unregister.push(registerRuntimeConfigSnapshotPreparer(() => {}));
-        break;
-      case "unregistration":
-        release();
-        break;
-      case "candidate bytes":
-        candidate.gateway = { port: 20000 };
-        break;
-      case "candidate facts":
-        setConfigResolutionFacts(candidate, createConfigResolutionFacts([]));
-        break;
-      case "environment":
-        env.OPENCLAW_STATE_DIR = "/fixture/replaced-state";
-        break;
-      case "caller":
-        current = false;
-        break;
-    }
-    const active = getRuntimeConfigSnapshot();
-    const metadata = getRuntimeConfigSnapshotMetadata();
-    const result = active
-      ? expect(pending).resolves.toBe(active)
-      : expect(pending).rejects.toThrow(change === "caller" ? "caller superseded" : "superseded");
+    current = false;
+    const rejected = expect(pending).rejects.toThrow("caller superseded");
     deferred.resolve(contribute);
-    await result;
+    await rejected;
     expect(contribute).not.toHaveBeenCalled();
-    expect(getRuntimeConfigSnapshot()).toBe(active);
-    expect(getRuntimeConfigSnapshotMetadata()).toBe(metadata);
-    expect(rollback).toHaveBeenCalledTimes(change === "environment" ? 1 : 0);
-    expect(rollback.commit).not.toHaveBeenCalled();
-    if (change === "caller") {
-      expect(publish).not.toHaveBeenCalled();
-    }
+    expect(getRuntimeConfigSnapshot()).toBeNull();
   });
 
   it("joins rejected preparation companions before failing the cold load", async () => {
@@ -856,47 +759,32 @@ describe("prepared runtime snapshots", () => {
 });
 
 describe("async cold runtime pin", () => {
-  it.each(["reset", "newer publication"])("discards a cold load after %s", async (change) => {
+  it("reuses a newer publication that completes during a cold load", async () => {
     const gate = createDeferredCore<{ config: OpenClawConfig }>();
     const pending = loadPinnedRuntimeConfigAsync(() => gate.promise);
-    const candidate: OpenClawConfig = { gateway: { port: 19001 } };
     const current: OpenClawConfig = { gateway: { port: 20001 } };
-    if (change === "reset") {
-      resetConfigRuntimeState();
-      const rejected = expect(pending).rejects.toThrow("superseded");
-      gate.resolve({ config: candidate });
-      await rejected;
-      expect(getRuntimeConfigSnapshot()).toBeNull();
-    } else {
-      setRuntimeConfigSnapshot(current);
-      gate.resolve({ config: candidate });
-      expect(await pending).toBe(current);
-      expect(getRuntimeConfigSnapshot()).toBe(current);
-    }
+    setRuntimeConfigSnapshot(current);
+    gate.resolve({ config: { gateway: { port: 19001 } } });
+    expect(await pending).toBe(current);
+    expect(getRuntimeConfigSnapshot()).toBe(current);
   });
 
-  it.each(["publication", "reset", "admission"] as const)(
-    "does not publish a cold candidate superseded by a contribution's %s",
-    async (change) => {
-      const candidate: OpenClawConfig = { gateway: { port: 19001 } };
-      const newer: OpenClawConfig = { gateway: { port: 20001 } };
-      let admitted = true;
-      const rollback = Object.assign(vi.fn(), { commit: vi.fn() });
-      unregister.push(
-        registerRuntimeConfigSnapshotPreparer(() => {}, {
-          prepareAsync: async () => () => {
-            if (change === "publication") {
-              setRuntimeConfigSnapshot(newer);
-            } else if (change === "reset") {
-              resetConfigRuntimeState();
-            } else {
-              admitted = false;
-            }
-          },
+  it("rechecks caller authority after preparation contributions", async () => {
+    let admitted = true;
+    const rollback = Object.assign(vi.fn(), { commit: vi.fn() });
+    unregister.push(
+      registerRuntimeConfigSnapshotPreparer(() => {}, {
+        prepareAsync: async () => () => {
+          admitted = false;
+        },
+      }),
+    );
+    await expect(
+      loadPinnedRuntimeConfigAsync(
+        async () => ({
+          config: { gateway: { port: 19001 } },
+          runtimeEnv: { env: {}, publish: () => rollback },
         }),
-      );
-      const pending = loadPinnedRuntimeConfigAsync(
-        async () => ({ config: candidate, runtimeEnv: { env: {}, publish: () => rollback } }),
         {
           assertCurrent: () => {
             if (!admitted) {
@@ -904,18 +792,12 @@ describe("async cold runtime pin", () => {
             }
           },
         },
-      );
-      if (change === "publication") {
-        expect(await pending).toBe(newer);
-        expect(getRuntimeConfigSnapshot()).toBe(newer);
-      } else {
-        await expect(pending).rejects.toThrow("superseded");
-        expect(getRuntimeConfigSnapshot()).toBeNull();
-      }
-      expect(rollback).toHaveBeenCalledOnce();
-      expect(rollback.commit).not.toHaveBeenCalled();
-    },
-  );
+      ),
+    ).rejects.toThrow("caller superseded during contribution");
+    expect(getRuntimeConfigSnapshot()).toBeNull();
+    expect(rollback).toHaveBeenCalledOnce();
+    expect(rollback.commit).not.toHaveBeenCalled();
+  });
 });
 
 describe("captured async runtime reads", () => {

@@ -21,12 +21,7 @@ import {
   resolveSessionAgentId,
 } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
-import { resolveActiveEmbeddedRunSessionId } from "../agents/embedded-agent-runner/active-run-projections.js";
-import {
-  claimPendingEmbeddedAgentQuestionAnswer,
-  queueEmbeddedAgentMessageWithOutcomeAsync,
-} from "../agents/embedded-agent-runner/runs.js";
-import { QuestionAnswerUnconfirmedError } from "../agents/harness/gateway-question-dispatch.js";
+import { claimPendingEmbeddedAgentQuestionAnswer } from "../agents/embedded-agent-runner/runs.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { resolvePublishedModelCatalogOwner } from "../agents/prepared-model-catalog-owner.js";
 import {
@@ -114,6 +109,8 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { applyQueueDropPolicy, waitForQueueDebounce } from "../utils/queue-helpers.js";
 import {
@@ -141,6 +138,7 @@ import {
   readEmbeddedHistorySessionInfo,
   readEmbeddedPrivateHistorySessionInfo,
 } from "./embedded-session-reader.js";
+import { steerEmbeddedSessionInput } from "./embedded-session-steering.js";
 import type {
   ChatSendOptions,
   TuiAgentsList,
@@ -324,16 +322,31 @@ export class EmbeddedTuiBackend implements TuiBackend {
     let pendingQueue: LocalRunState["pendingQueue"];
     if (queuedAfter) {
       const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
-      const { cfg, canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+      const {
+        cfg,
+        canonicalKey,
+        entry,
+        storePath,
+        agentId: storedAgentId,
+      } = await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: getRuntimeConfig(),
         key: opts.sessionKey,
         ...loadOptions,
       });
       this.scheduler.signal.throwIfAborted();
-      const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
-      if (activeSessionId) {
+      const activeOperation = getSessionControllerOperation(
+        canonicalKey,
+        captureSessionTarget({
+          storeScope: storePath,
+          sessionKey: canonicalKey,
+          aliases: [opts.sessionKey],
+          agentId: storedAgentId,
+          incarnation: entry?.sessionId,
+        }),
+      );
+      if (activeOperation) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
-          activeSessionId,
+          activeOperation,
           opts.message,
         );
         if (claimed) {
@@ -347,22 +360,22 @@ export class EmbeddedTuiBackend implements TuiBackend {
         sessionEntry: entry,
       });
       if (queueSettings.mode === "steer") {
-        if (activeSessionId) {
-          const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
-            activeSessionId,
-            opts.message,
-            {
-              steeringMode: "all",
-              debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
-              isInboundUserMessage: true,
-            },
-          ).catch((error: unknown) => {
-            if (error instanceof QuestionAnswerUnconfirmedError) {
-              throw error;
-            }
-            return undefined;
+        if (activeOperation) {
+          const steer = await steerEmbeddedSessionInput({
+            operation: activeOperation,
+            text: opts.message,
+            sessionEntry: entry,
+            debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
+            abortSignal: this.scheduler.signal,
           });
-          if (outcome?.queued) {
+          if (steer.status === "indeterminate") {
+            // Consumed without a confirmed commit: queuing it again could duplicate it.
+            throw new Error(steer.errorMessage);
+          }
+          if (steer.status === "accepted") {
+            if (steer.result?.transcriptCommit === "unconfirmed") {
+              throw new Error(steer.result.errorMessage);
+            }
             return { runId: queuedAfter.runId };
           }
         }

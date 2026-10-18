@@ -273,6 +273,40 @@ describe("CLI durable session context", () => {
     },
   );
 
+  it.each(["public", "private"] as const)(
+    "carries the %s session sharing state into the CLI system prompt",
+    async (visibility) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
+      });
+      const { sessionTarget } = fixture.session;
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        skillsSnapshot: { prompt: "", skills: [] },
+        sessionEntry: {
+          sessionId: sessionTarget.sessionId,
+          updatedAt: 1,
+          ...(visibility === "public"
+            ? {
+                publicShare: {
+                  id: "a".repeat(48),
+                  sessionId: sessionTarget.sessionId,
+                  createdAt: 1,
+                },
+              }
+            : {}),
+        },
+        config: { gateway: { publicOrigin: "https://gateway.example" } },
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(context.systemPrompt.includes("https://gateway.example/chat/main")).toBe(
+        visibility === "public",
+      );
+    },
+  );
+
   it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
     const { dir, sessionTarget } = fixture.session;
     const manager = SessionManager.open(sessionTarget, dir);

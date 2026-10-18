@@ -420,7 +420,8 @@ export function resolveDefaultModelPresentation(
   configured: DefaultsDraft,
   draft: DefaultsDraft | null,
 ): { defaults: DefaultsDraft; configuredModels: ModelPickerEntry[] } {
-  if (catalog.retired || catalog.modelSelectionPolicy?.restricted) {
+  // The page retires drafts on identity/access loss, not on catalog invalidation.
+  if ((catalog.retired && !draft) || catalog.modelSelectionPolicy?.restricted) {
     return {
       defaults: {
         ...configured,

@@ -9,7 +9,7 @@ import {
   listOpencodeGoModelCatalogEntries,
 } from "./provider-catalog.js";
 
-const OPENCODE_GO_MODELS_URL = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_GO_MODELS_URL = "https://opencode.ai/inference/go/v1/models";
 const OPENCODE_API_KEY =
   process.env.OPENCODE_API_KEY?.trim() || process.env.OPENCODE_ZEN_API_KEY?.trim() || "";
 const LIVE = isLiveTestEnabled(["OPENCODE_GO_LIVE_TEST"]) && OPENCODE_API_KEY.length > 0;

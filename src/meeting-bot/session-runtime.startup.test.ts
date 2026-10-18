@@ -1,12 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
-import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
-import type { RealtimeVoiceBridge } from "../talk/provider-types.js";
+import { makeBridge, makeVoiceProvider } from "../talk/session-runtime.test-support.js";
 import {
   TEST_CAPTION_SOURCE,
   TEST_MEETING_URL,
@@ -19,6 +18,23 @@ import {
   type TestSession,
 } from "./session-runtime.test-support.js";
 import type { MeetingTranscriptSnapshot } from "./session-types.js";
+
+const participant = { url: "https://meeting.example/room", agentId: "operator" };
+
+function captionSnapshot(
+  lines: MeetingTranscriptSnapshot["lines"],
+  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
+): MeetingTranscriptSnapshot {
+  return { droppedLines: 0, epoch: "page-1", ...options, lines };
+}
+
+async function captionFixture(
+  captureTranscript: NonNullable<Parameters<typeof createTestRuntime>[0]["captureTranscript"]>,
+) {
+  const { runtime } = createParticipationTestRuntime({ captureTranscript, transcribe: true });
+  const { session } = await runtime.join(participant);
+  return { runtime, session };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -59,8 +75,8 @@ describe("MeetingSessionRuntime startup custody", () => {
         if (session.browser?.hasAudioBridge) {
           return undefined;
         }
-        const bridge: RealtimeVoiceBridge = {
-          acknowledgeMark: () => {},
+        const bridge = makeBridge({
+          triggerGreeting: undefined,
           close: () => {
             closedProviders.push(session.id);
             liveProviders.delete(session.id);
@@ -77,33 +93,20 @@ describe("MeetingSessionRuntime startup custody", () => {
               }
             }
           },
-          handleBargeIn: () => {},
           isConnected: () => liveProviders.has(session.id),
-          sendAudio: () => {},
           sendUserMessage: () => {
             spoken.push(session.id);
           },
-          setMediaTimestamp: () => {},
-          submitToolResult: () => {},
-        };
-        const provider: RealtimeVoiceProviderPlugin = {
-          id: "startup-custody-test",
-          label: "Startup custody test",
-          isConfigured: () => true,
-          createBridge: () => {
-            liveProviders.add(session.id);
-            createdProviders.push(session.id);
-            return bridge;
-          },
-        };
+        });
+        const provider = makeVoiceProvider(() => {
+          liveProviders.add(session.id);
+          createdProviders.push(session.id);
+          return bridge;
+        });
         const handle = await startMeetingRealtimeEngine({
           config: {
             chrome: { audioFormat: "pcm16-24khz" },
-            realtime: {
-              strategy: "bidi",
-              provider: provider.id,
-              providers: { [provider.id]: {} },
-            },
+            realtime: { strategy: "bidi", provider: provider.id, providers: { [provider.id]: {} } },
           },
           fullConfig: {},
           runtime: {} as PluginRuntime,
@@ -153,6 +156,11 @@ describe("MeetingSessionRuntime startup custody", () => {
       closedProviders,
       createdProviders,
       spoken,
+      finish: async (pending: Array<Promise<unknown> | undefined>) => {
+        connectAllowed.resolve();
+        await Promise.all(pending.filter((operation) => operation !== undefined));
+        await runtime.leave(session.id);
+      },
     };
   }
 
@@ -187,9 +195,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       await Promise.all([replacing, speaking]);
       expect(priorLiveAtReplacement).toBe(false);
     } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([speaking, replacing]);
-      await f.runtime.leave(f.session.id);
+      await f.finish([speaking, replacing]);
       if (replacement) {
         await f.runtime.leave(replacement.id);
       }
@@ -209,9 +215,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       expect(f.liveProviders.has(f.session.id)).toBe(true);
       expect(f.liveProviders.has(other.id)).toBe(false);
     } finally {
-      f.connectAllowed.resolve();
-      await speaking;
-      await f.runtime.leave(f.session.id);
+      await f.finish([speaking]);
       if (other) {
         await f.runtime.leave(other.id);
       }
@@ -251,9 +255,7 @@ describe("MeetingSessionRuntime startup custody", () => {
         await f.runtime.leave(f.session.id);
         expect(f.closedProviders).toEqual([f.session.id]);
       } finally {
-        f.connectAllowed.resolve();
-        await Promise.all([settled, leaving]);
-        await f.runtime.leave(f.session.id);
+        await f.finish([settled, leaving]);
       }
     },
   );
@@ -269,9 +271,7 @@ describe("MeetingSessionRuntime startup custody", () => {
       await Promise.all([first, second]);
       expect(f.createdProviders).toEqual([f.session.id]);
     } finally {
-      f.connectAllowed.resolve();
-      await Promise.all([first, second]);
-      await f.runtime.leave(f.session.id);
+      await f.finish([first, second]);
     }
   });
 });
@@ -279,10 +279,7 @@ describe("MeetingSessionRuntime startup custody", () => {
 describe("MeetingSessionRuntime participation ownership", () => {
   it("revokes participation as soon as leave starts, while an admitted claim is awaiting storage", async () => {
     const { runtime, store, execute } = createParticipationTestRuntime();
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { session } = await runtime.join(participant);
     const { promise: pending, resolve: release } = createDeferredCore();
     const { promise: entered, resolve: claimed } = createDeferredCore();
     const register = store.registerIfAbsent;
@@ -309,10 +306,7 @@ describe("MeetingSessionRuntime participation ownership", () => {
 
   it("does not transfer an observed source to a replacement browser tab", async () => {
     const { runtime, execute } = createParticipationTestRuntime();
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { session } = await runtime.join(participant);
     const sourceId = runtime.observeParticipationSource(session.id, {
       id: "message",
       epoch: "page",
@@ -378,26 +372,14 @@ describe("MeetingSessionRuntime participation ownership", () => {
       session.state = change === "state" ? "ended" : session.state;
       session.transport = change === "transport" ? "chrome-node" : session.transport;
       session.browser!.nodeId = change === "node" ? "another-node" : undefined;
-      pending.resolve({
-        droppedLines: 0,
-        epoch: "old-page",
-        lines: [
-          {
-            text: "Recovered caption",
-            ...(participation
-              ? {
-                  source: {
-                    id: "old-caption",
-                    epoch: "old-page",
-                    revision: "2",
-                    finalized: true,
-                    ownEcho: false,
-                  },
-                }
-              : {}),
-          },
-        ],
-      });
+      const source = participation
+        ? { id: "old-caption", epoch: "old-page", revision: "2", finalized: true, ownEcho: false }
+        : undefined;
+      pending.resolve(
+        captionSnapshot([{ text: "Recovered caption", ...(source ? { source } : {}) }], {
+          epoch: "old-page",
+        }),
+      );
       if (!participation && change === "tab") {
         await expect(reading).resolves.toMatchObject({ lines: [{ text: "Recovered caption" }] });
       } else {
@@ -415,40 +397,19 @@ describe("MeetingSessionRuntime participation ownership", () => {
   );
 
   it("records a caption's original order before finalization and revokes it on a pending correction", async () => {
-    const source = {
-      id: "caption-1",
-      epoch: "page-1",
-      revision: "1",
-      finalized: false,
-      ownEcho: false,
-    };
+    const source = { ...TEST_CAPTION_SOURCE, epoch: "page-1", revision: "1", finalized: false };
     const completed = {
       text: "Please share the recap",
       source: { ...source, revision: "2", finalized: true },
     };
     const snapshots: MeetingTranscriptSnapshot[] = [
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [],
-        pendingLines: [{ text: "Please share", source }],
-      },
-      { droppedLines: 0, epoch: "page-1", lines: [completed], pendingLines: [] },
-      {
-        droppedLines: 0,
-        epoch: "page-1",
-        lines: [completed],
+      captionSnapshot([], { pendingLines: [{ text: "Please share", source }] }),
+      captionSnapshot([completed], { pendingLines: [] }),
+      captionSnapshot([completed], {
         pendingLines: [{ text: "Please wait", source: { ...source, revision: "3" } }],
-      },
+      }),
     ];
-    const { runtime } = createParticipationTestRuntime({
-      captureTranscript: async () => snapshots.shift(),
-      transcribe: true,
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
     expect(runtime.participationContext(session.id)).toMatchObject({ sourceOrder: 1, sources: [] });
     await runtime.transcript(session.id);
@@ -466,35 +427,21 @@ describe("MeetingSessionRuntime participation ownership", () => {
   });
 
   it("invalidates caption authority on an empty new epoch without minting a source event", async () => {
-    const oldSnapshot: MeetingTranscriptSnapshot = {
-      droppedLines: 0,
-      epoch: "old-page",
-      lines: [
+    const oldSnapshot = captionSnapshot(
+      [
         {
           text: "Please share the recap",
-          source: {
-            id: "caption-1",
-            epoch: "old-page",
-            revision: "2",
-            finalized: true,
-            ownEcho: false,
-          },
+          source: { ...TEST_CAPTION_SOURCE, epoch: "old-page" },
         },
       ],
-    };
+      { epoch: "old-page" },
+    );
     const snapshots: MeetingTranscriptSnapshot[] = [
       oldSnapshot,
-      { droppedLines: 0, epoch: "new-page", lines: [], pendingLines: [] },
+      captionSnapshot([], { epoch: "new-page", pendingLines: [] }),
       oldSnapshot,
     ];
-    const { runtime } = createParticipationTestRuntime({
-      captureTranscript: async () => snapshots.shift(),
-      transcribe: true,
-    });
-    const { session } = await runtime.join({
-      url: "https://meeting.example/room",
-      agentId: "operator",
-    });
+    const { runtime, session } = await captionFixture(async () => snapshots.shift());
     await runtime.transcript(session.id);
     const sourceId = runtime.participationContext(session.id).sources[0]?.sourceId;
     expect(sourceId).toBeTruthy();
@@ -514,14 +461,13 @@ describe("MeetingSessionRuntime observation provenance", () => {
     vi.setSystemTime(firstObservedAt);
     const provenance = testMeetingObservation();
     const expected = { ...provenance };
-    let snapshot: MeetingTranscriptSnapshot = {
-      droppedLines: 0,
-      epoch: "epoch-1",
-      lines: [
+    let snapshot = captionSnapshot(
+      [
         { text: "An invitation", source: { ...TEST_CAPTION_SOURCE }, provenance },
         { text: "Another retained row", provenance },
       ],
-    };
+      { epoch: "epoch-1" },
+    );
     const { runtime } = createParticipationTestRuntime({
       transcribe: true,
       captureTranscript: async () => snapshot,

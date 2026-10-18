@@ -208,10 +208,15 @@ export const gatewayDirectStopEntrypoints = {
     sourceWorkerName: "../agents/embedded-agent-runner/runs",
     distWorkerPath: "agents/embedded-agent-runner/runs.js",
   },
-  activeRunProjections: {
+  sessionControllerAdmission: {
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../agents/embedded-agent-runner/active-run-projections",
-    distWorkerPath: "agents/embedded-agent-runner/active-run-projections.js",
+    sourceWorkerName: "../sessions/session-controller.admission",
+    distWorkerPath: "sessions/session-controller.admission.js",
+  },
+  sessionControllerQueries: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../sessions/session-controller.queries",
+    distWorkerPath: "sessions/session-controller.queries.js",
   },
   runLoop: {
     currentModuleUrl: import.meta.url,

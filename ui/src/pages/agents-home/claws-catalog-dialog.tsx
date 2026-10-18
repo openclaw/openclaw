@@ -41,7 +41,6 @@ type ClawsDialogProps = {
   onClose?: () => void;
   onAdded?: () => void;
   onSelectEntry?: (entry: ClawCatalogEntry) => void;
-  initialEntry?: ClawCatalogEntry | null;
   initialPackageName?: string;
   pageMode?: boolean;
 };
@@ -114,41 +113,17 @@ class ClawsCatalogModel {
   }
 
   ensureInitialData() {
-    if (this.props.initialEntry) {
-      if (
-        this.selected?.packageName !== this.props.initialEntry.packageName ||
-        this.selected?.latestVersion !== this.props.initialEntry.latestVersion
-      ) {
-        this.select(this.props.initialEntry);
-      }
-    } else {
-      void this.loadCatalog();
-    }
+    void this.loadCatalog();
   }
 
-  syncInitialSelection(
-    initialEntry: ClawCatalogEntry | null,
-    initialPackageName: string,
-    pageMode: boolean,
-  ) {
+  syncInitialSelection(initialPackageName: string, pageMode: boolean) {
     if (pageMode && initialPackageName !== this.routedPackageName) {
       this.routedPackageName = initialPackageName;
       this.detailRevision += 1;
       this.searchRevision += 1;
       this.onIdentityChange();
-      if (initialEntry?.packageName === initialPackageName) {
-        this.select(initialEntry);
-      } else {
-        void this.loadCatalog();
-      }
+      void this.loadCatalog();
       return;
-    }
-    if (
-      initialEntry &&
-      (this.selected?.packageName !== initialEntry.packageName ||
-        this.selected?.latestVersion !== initialEntry.latestVersion)
-    ) {
-      this.select(initialEntry);
     }
     if (pageMode && initialPackageName && !this.selected) {
       const entry = this.entries.find((candidate) => candidate.packageName === initialPackageName);
@@ -167,9 +142,6 @@ class ClawsCatalogModel {
   }
 
   private async loadCatalog() {
-    if (this.props.initialEntry) {
-      return;
-    }
     const scope = this.gateway.capture();
     if (!scope) {
       return;
@@ -291,7 +263,7 @@ class ClawsCatalogModel {
   }
 
   private select(entry: ClawCatalogEntry) {
-    if (!this.props.pageMode && !this.props.initialEntry && this.props.onSelectEntry) {
+    if (!this.props.pageMode && this.props.onSelectEntry) {
       this.props.onSelectEntry(entry);
       return;
     }
@@ -317,7 +289,7 @@ class ClawsCatalogModel {
     if (this.applying) {
       return;
     }
-    if (this.props.initialEntry || this.props.pageMode) {
+    if (this.props.pageMode) {
       this.close();
       return;
     }
@@ -602,15 +574,11 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
   // Current route snapshots admit catalog detail requests; request revisions retire late results.
   createEffect(
     () => ({
-      initialEntry: props.initialEntry ?? null,
       initialPackageName: props.initialPackageName ?? "",
       pageMode: props.pageMode ?? false,
       revision: revision(),
     }),
-    (value) =>
-      untrack(() =>
-        model.syncInitialSelection(value.initialEntry, value.initialPackageName, value.pageMode),
-      ),
+    (value) => untrack(() => model.syncInitialSelection(value.initialPackageName, value.pageMode)),
   );
   onCleanup(() => model.dispose());
   const view = createMemo(() => {

@@ -151,7 +151,9 @@ export class ShellOwner
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = createLazyRenderer(() =>
-    import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
+    import("../components/settings-sidebar-shell.tsx").then(
+      (module) => module.ShellSettingsSidebar,
+    ),
   );
   readonly debugOverlayFrame = createLazyRenderer(() =>
     import("../pages/debug/debug-overlay-frame.ts").then(
@@ -589,6 +591,7 @@ export class ShellOwner
     const chatPage = this.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
     if (chatPage) {
       chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
     }
     const context = this.context;
     if (!context) {

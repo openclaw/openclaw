@@ -29,6 +29,7 @@ import {
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
+  transcriptPredicateSql,
   transcriptEventResetNavigationSql,
   transcriptEventWithoutCustomDataBytesSql,
   type TranscriptPayloadRecord,
@@ -116,6 +117,52 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Paylo
 }
 
 describe("transcript payload storage boundary", () => {
+  it("reads legacy predicates lazily and uses the next payload write without JSON work", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    createTable(database);
+    database.exec(`ALTER TABLE transcript_events ADD COLUMN session_id TEXT;
+      ALTER TABLE transcript_events ADD COLUMN created_at INTEGER;
+      INSERT INTO transcript_events (seq, session_id, event_json, created_at)
+      VALUES (1, 'legacy', '{"type":"message","message":{"role":"user"}}', 1)`);
+    using native = openNodeSqliteDatabase(":memory:");
+    const nativeValid = native.prepare("SELECT json_valid(?) AS valid");
+    let validations = 0;
+    database.function("json_valid", { deterministic: true }, (value) => {
+      validations++;
+      return nativeValid.get(value)?.valid ?? 0;
+    });
+    const query = getNodeSqliteKysely<PayloadDatabase>(database)
+      .selectFrom("transcript_events")
+      .select([
+        transcriptPredicateSql(database, "message_role").as("role"),
+        transcriptPredicateSql(database, "navigation_valid").as("valid"),
+      ])
+      .where("seq", "=", 1);
+    const read = () => executeSqliteQueryTakeFirstSync(database, query);
+    expect(read()).toEqual({ role: "user", valid: 1 });
+    expect(validations).toBeGreaterThan(0);
+    createTranscriptPayloadUpdater(
+      database,
+      "legacy",
+    )({
+      seq: 1,
+      ...prepareTranscriptPayload(database, '{"type":"message","message":{"role":"assistant"}}'),
+    });
+    validations = 0;
+    expect(read()).toEqual({ role: "assistant", valid: 1 });
+    expect(validations).toBe(0);
+    createTranscriptPayloadUpdater(
+      database,
+      "legacy",
+    )({
+      seq: 1,
+      ...prepareTranscriptPayload(database, "{"),
+    });
+    validations = 0;
+    expect(read()).toEqual({ role: null, valid: 0 });
+    expect(validations).toBe(0);
+  });
+
   it("publishes predicate columns with inserts and rewrites and rolls both back together", () => {
     const database = openNodeSqliteDatabase(":memory:");
     try {

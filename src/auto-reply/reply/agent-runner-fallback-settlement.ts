@@ -1,6 +1,6 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
@@ -171,7 +171,6 @@ export async function settleAgentFallbackCycle(params: {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
     emitSettledLifecycleError(terminalError, terminalMetadata);
-    turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

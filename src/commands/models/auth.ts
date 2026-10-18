@@ -9,7 +9,7 @@ import {
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { removeProviderAuthProfilesWithLock } from "../../agents/auth-profiles.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
 import { isCliProvider } from "../../agents/model-selection-cli.js";
@@ -454,7 +454,7 @@ async function runProviderAuthMethod(
     provider: params.provider.id,
     providerLabel: params.provider.label,
   });
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const existingProfiles = Object.entries(store.profiles)
     .filter(
       ([profileId, credential]) =>
@@ -921,7 +921,7 @@ async function runModelsAuthLoginFlow(
   });
   // Snapshot before --force removes cached credentials. Provider-owned identity
   // matching may safely keep the old profile id for the same authenticated account.
-  const existingProfiles = snapshotReloginAuthProfiles({
+  const existingProfiles = await snapshotReloginAuthProfiles({
     agentDir: context.agentDir,
     matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
   });

@@ -3,18 +3,125 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import {
   assertSqliteIntegrity,
+  assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
+  SqliteIntegrityError,
   sqliteIntegrityCheckSteps,
   type SqliteIntegrityDiagnostics,
   type SqliteIntegrityOperation,
 } from "./sqlite-integrity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function withMaintenanceCheck(check: "quick" | "full", run: () => void) {
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    sqliteIntegrityCheck: check,
+    assertOwnerCurrent() {},
+  });
+  try {
+    scope.run(run);
+  } finally {
+    await scope.close();
+  }
+}
+
+describe("maintenance table integrity", () => {
+  it("shares passing table checks across handles until a write, and retains QUICK and FK", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-receipt-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER CHECK(value > 0))");
+    using sibling = openNodeSqliteDatabase(filename);
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const scoped = () =>
+      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    try {
+      await withMaintenanceCheck("quick", () => {
+        for (const handle of [database, sibling]) {
+          assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
+        }
+        expect(scoped()).toHaveLength(1);
+        expect(observer.queries.filter((sql) => sql === "PRAGMA quick_check;")).toHaveLength(2);
+        expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+          2,
+        );
+        database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
+        expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
+          /CHECK constraint/u,
+        );
+        expect(scoped()).toHaveLength(2);
+        database.exec("DELETE FROM items");
+        assertSqliteTableIntegrity(sibling, "items", "items");
+        expect(scoped()).toHaveLength(3);
+      });
+      await withMaintenanceCheck("quick", () =>
+        assertSqliteTableIntegrity(database, "items", "items"),
+      );
+      expect(scoped()).toHaveLength(4);
+    } finally {
+      observer.restore();
+    }
+  });
+
+  it("rechecks transaction-local writes, DDL, and rollback", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-transaction-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER)");
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const scoped = () =>
+      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    const check = () => assertSqliteTableIntegrity(database, "items", "items");
+    try {
+      await withMaintenanceCheck("quick", () => {
+        database.exec("BEGIN");
+        check();
+        check();
+        expect(scoped()).toHaveLength(1);
+        database.exec("INSERT INTO items VALUES (1)");
+        check();
+        expect(scoped()).toHaveLength(2);
+        database.exec("CREATE INDEX idx_items ON items(value)");
+        check();
+        expect(scoped()).toHaveLength(3);
+        database.exec("ROLLBACK");
+        check();
+        expect(scoped()).toHaveLength(4);
+        expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
+      });
+    } finally {
+      observer.restore();
+    }
+  });
+
+  it("retains every explicit FULL check", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-full-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER)");
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      await withMaintenanceCheck("full", () => {
+        for (let i = 0; i < 2; i += 1) {
+          assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
+          assertSqliteTableIntegrity(database, "items", "items");
+        }
+      });
+      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
+      expect(
+        observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');"),
+      ).toHaveLength(2);
+      expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(2);
+    } finally {
+      observer.restore();
+    }
+  });
+});
 
 function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
   const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
@@ -49,6 +156,32 @@ function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", 
 }
 
 describe("assertSqliteIntegrity", () => {
+  it("retains every finding for offline repair without repeating the check", () => {
+    withDatabase(
+      `CREATE TABLE damaged (value INTEGER CHECK(value > 0));
+       PRAGMA ignore_check_constraints = ON;
+       WITH RECURSIVE rows(n) AS (VALUES(1) UNION ALL SELECT n + 1 FROM rows WHERE n < 105)
+       INSERT INTO damaged SELECT -n FROM rows;
+       PRAGMA ignore_check_constraints = OFF;`,
+      (database) => {
+        const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          const failure = caught(() =>
+            assertSqliteIntegrity(database, "offline repair", { allFindings: true }),
+          );
+          expect(failure).toBeInstanceOf(SqliteIntegrityError);
+          if (!(failure instanceof SqliteIntegrityError)) {
+            throw new Error("Expected captured integrity findings");
+          }
+          expect(failure.findings).toHaveLength(105);
+          expect(observer.queries).toEqual(["PRAGMA integrity_check(2147483647);"]);
+        } finally {
+          observer.restore();
+        }
+      },
+    );
+  });
+
   it("refuses structural damage in a table outside the migration scope", () => {
     const databasePath = path.join(tempDirs.make("sqlite-quick-damage-"), "database.sqlite");
     const writer = new (requireNodeSqlite().DatabaseSync)(databasePath);

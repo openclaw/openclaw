@@ -209,8 +209,10 @@ counts. A failed full rebuild retains
 its full-retry state; ordinary dirty content does not itself force a rebuild.
 An index built before any content exists remains valid as content arrives;
 restarting does not require a full rebuild just because the index started empty.
-Growing session transcripts retain unchanged indexed chunks and embed only new
-or changed chunks, even when the embedding cache is disabled. An explicit full
+Growing session transcripts and edited memory files retain unchanged indexed
+chunks and embed only new or changed chunks, even when the embedding cache is
+disabled. An edit that changes every chunk of a memory file, such as a line
+inserted at the top, still replaces that file's chunks. An explicit full
 rebuild still replaces the complete index.
 If a memory file changes or disappears during indexing, only that file's
 unfinished work is retried incrementally. Other files finish indexing, and

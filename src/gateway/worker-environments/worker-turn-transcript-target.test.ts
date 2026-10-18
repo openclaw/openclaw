@@ -18,6 +18,7 @@ import { recordSessionParticipantInWorker } from "../../config/sessions/session-
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -331,6 +332,38 @@ it("retains a logical-store worker transcript and refuses writer changes without
     } finally {
       incomingRpc.emitDestroy();
     }
+  });
+});
+
+it("retains logical turn admission while holding the worker's physical transcript database", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = transcriptTarget(
+      path.join(state.sessionsDir(), "sessions.json"),
+      "worker-logical-admission",
+    );
+    await seedTranscript(target);
+    const turn = turnFor(target);
+    await withSessionTurn(target, async (operation) => {
+      const result = await withTranscript(
+        turn,
+        {
+          assertCurrent() {},
+          prepareAuthority: async () => currentAuthority(),
+        },
+        async (pinned) =>
+          withSessionTurn({ ...pinned, replyOperation: operation }, async (borrowed) => {
+            expect(borrowed).toBe(operation);
+            captureSource(pinned)();
+            const options = { agentId: target.agentId, env: state.env };
+            const held = agentDatabase.getOpenClawAgentDatabaseIfOpen(options);
+            expect(held?.path).toBe(agentDatabase.resolveOpenClawAgentSqlitePath(options));
+            expect(held?.db.isOpen).toBe(true);
+            return "executed";
+          }),
+      );
+      expect(result).toBe("executed");
+    });
+    expect(turn.sessionTarget).toBe(target);
   });
 });
 

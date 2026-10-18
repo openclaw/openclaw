@@ -6,6 +6,7 @@ import type { WizardNextResult } from "../../api/types.ts";
 import type { ConfigPatchAck } from "../../lib/config/config-draft-model.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -53,6 +54,31 @@ function agentRow(page: ModelProvidersPageTestElement, id: string) {
 }
 
 describe("ModelProvidersPage installed agents", () => {
+  it("keeps the loaded inventory visible across a same-client reconnect, but not a new client", async () => {
+    const refreshing = deferred<{ agents: ReturnType<typeof agent>[] }>();
+    let replace = false;
+    const { context, snapshot, gatewaySource, publishPhase, request } = createAgentsHarness(
+      async () => (replace ? refreshing.promise : { agents: [agent("opencode", "OpenCode")] }),
+    );
+    const page = appendPage(context);
+    try {
+      await waitForSolid(() => expect(agentRow(page, "opencode")).not.toBeNull());
+      const row = agentRow(page, "opencode");
+      replace = true;
+      publishPhase("offline");
+      await page.updateComplete;
+      expect(agentRow(page, "opencode")).toBe(row);
+      publishPhase("connected");
+      await page.updateComplete;
+      expect(agentRow(page, "opencode")).toBe(row);
+      gatewaySource.publish({ ...snapshot, client: createTestGatewayClient(request) });
+      await page.updateComplete;
+      expect(agentRow(page, "opencode")).toBeNull();
+    } finally {
+      refreshing.resolve({ agents: [] });
+    }
+  });
+
   it("enables for the selected agent through the shared consent wizard", async () => {
     const restoreDialog = installDialogPolyfill();
     let enabled = false;

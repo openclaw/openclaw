@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
+import { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../shared/google-turn-ordering.js";
 import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,

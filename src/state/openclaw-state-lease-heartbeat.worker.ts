@@ -114,6 +114,7 @@ function startHeartbeat(
   let processOwner = params.processOwner;
   let heartbeat: ReturnType<typeof setTimeout> | undefined;
   let closed = false;
+  let fenced = false;
   const scheduledRenewal: StateLeaseRenewal = {
     identity: params.identity,
     leaseMs: params.leaseMs,
@@ -244,6 +245,23 @@ function startHeartbeat(
         return undefined;
       }
       contentionError = error;
+      if (!isPostgresSqlConnection(db) && Atomics.load(shared, state.ownerFence) === 1n) {
+        // The owner holds this file's only writer. Its committed expiry cannot
+        // establish loss until that transaction settles. Keep serving ACKs.
+        clearTimeout(heartbeat);
+        retainedDatabase?.renewals.cancel(scheduledRenewal);
+        if (!fenced) {
+          fenced = true;
+          void Promise.resolve(Atomics.waitAsync(shared, state.ownerFence, 1n).value).then(() => {
+            fenced = false;
+            runAutomatic(renew, "automatic-renewal");
+          });
+        }
+        if (explicit) {
+          throw error;
+        }
+        return Number(Atomics.load(shared, state.expiresAt));
+      }
       expiresAt = readOpenClawStateLeaseExpiry(db, params.identity);
     }
     observeDurableExpiry(expiresAt);
@@ -298,6 +316,7 @@ function startHeartbeat(
       return withDatabaseAdmission(operation);
     } finally {
       Atomics.add(renewalProgress, 0, 1n);
+      Atomics.notify(renewalProgress, 0);
       Atomics.notify(shared, state.ack);
     }
   }
