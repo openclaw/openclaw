@@ -11,6 +11,7 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 
 const mocks = vi.hoisted(() => ({ evaluate: vi.fn<typeof evaluateDecisionV2InRegistry>() }));
+// mock-isolation: Test prefilter policy independently of registry/model preparation; runtime-v2 covers the real host.
 vi.mock("../../../decisions/runtime.js", () => ({ evaluateDecisionV2InRegistry: mocks.evaluate }));
 vi.mock("../../../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRegistryForContext: () => null,
