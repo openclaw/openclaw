@@ -83,6 +83,10 @@ openclaw-desktop-panel {
     width: 15px;
     height: 15px;
   }
+  .desktop-open-window {
+    cursor: pointer;
+    text-decoration: none;
+  }
   .desktop-audio-button {
     display: inline-flex;
     align-items: center;
@@ -116,7 +120,7 @@ openclaw-desktop-panel {
     min-height: 0;
     flex-direction: column;
   }
-  .desktop-toolbar {
+  .desktop-toolbar:not([data-presentation="desktop"]) {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -146,6 +150,254 @@ openclaw-desktop-panel {
   .desktop-touch-toolbar .desktop-sizing {
     height: 44px;
   }
+  .desktop-sizing-menu__trigger {
+    height: 28px;
+    padding: 0 7px;
+  }
+  .desktop-sizing-menu__value {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .desktop-sizing-menu__value > svg {
+    width: 12px;
+    height: 12px;
+    stroke-width: 2;
+  }
+  .desktop-sizing-menu__icon {
+    display: none;
+  }
+  .desktop-presentation--desktop .desktop-content {
+    container-type: inline-size;
+  }
+  .desktop-rail__identity {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+  .desktop-rail__dot {
+    width: 6px;
+    height: 6px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+  .desktop-rail__dot.is-connected {
+    background: var(--ok);
+  }
+  .desktop-rail__dot.is-disconnected {
+    background: var(--danger);
+  }
+  .desktop-rail__machine {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .desktop-rail__name {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .desktop-rail__name.is-overflowing {
+    mask-image: linear-gradient(to right, black calc(100% - 18px), transparent);
+  }
+  .desktop-rail__host {
+    color: var(--muted);
+    font-size: 10px;
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__machine {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 8px;
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__name {
+    min-width: 0;
+    max-width: 100%;
+    color: var(--text);
+    font-weight: 500;
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__host {
+    flex: none;
+    line-height: 12px;
+  }
+  .desktop-rail__actions,
+  .desktop-rail__window,
+  .desktop-rail__pill {
+    display: flex;
+    align-items: center;
+  }
+  .desktop-rail__actions {
+    flex-shrink: 0;
+    gap: var(--session-rail-group-gap, 8px);
+  }
+  .desktop-rail__pill {
+    box-sizing: border-box;
+    height: var(--session-rail-control, 33px);
+    gap: var(--session-rail-gap, 2px);
+    padding: var(--session-rail-inset, 2.5px);
+    box-shadow: inset 0 0 0 1px var(--border);
+    border-radius: var(--radius-full);
+    background: var(--session-rail-pill, var(--bg-hover));
+  }
+  .desktop-rail__pill > :not(:first-child) {
+    border-left: 1px solid var(--session-rail-separator, var(--border-strong));
+  }
+  .desktop-connection-rail .desktop-toolbar-action {
+    height: var(--session-rail-target, 28px);
+    min-width: var(--session-rail-target, 28px);
+    justify-content: center;
+    padding: 0 6px;
+    border-radius: var(--radius-full);
+  }
+  .desktop-connection-rail .desktop-toolbar-action > svg,
+  .desktop-rail__more svg {
+    width: var(--session-rail-icon, 18px);
+    height: var(--session-rail-icon, 18px);
+    stroke-width: 2;
+  }
+  .desktop-rail__tools .desktop-audio-label,
+  .desktop-rail__actions .desktop-rail__action-label {
+    display: none;
+  }
+  .desktop-rail__window {
+    gap: var(--session-rail-gap, 2px);
+  }
+  .desktop-rail__window-group {
+    display: flex;
+  }
+  .desktop-rail__window > :not(:first-child) {
+    border-left: 1px solid var(--session-rail-separator, var(--border-strong));
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-toolbar-action,
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-sizing-menu__value {
+    gap: var(--session-rail-label-gap);
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__more > .oc-menu-item__label {
+    display: inline-flex;
+    align-items: center;
+  }
+  .desktop-connection-rail[data-presentation="desktop"]
+    .desktop-toolbar-action:hover:not(:disabled) {
+    background: var(--session-rail-hover, var(--bg-hover));
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-sizing-menu__value > svg {
+    width: var(--session-rail-icon, 18px);
+    height: var(--session-rail-icon, 18px);
+  }
+  .desktop-connection-rail[data-presentation="desktop"] .desktop-rail__cursor {
+    transform: translate(0.5px, 0.5px);
+  }
+  .desktop-rail__overflow-tools,
+  .desktop-rail__overflow-window {
+    display: none;
+  }
+  .desktop-rail__menu .desktop-toolbar-action {
+    width: 100%;
+    min-height: 32px;
+    justify-content: flex-start;
+  }
+  .desktop-rail__menu .desktop-rail__action-label {
+    display: inline;
+  }
+  .desktop-rail__menu .desktop-sizing-menu__trigger {
+    width: 100%;
+  }
+  .desktop-rail__menu .desktop-sizing-menu__icon {
+    display: block;
+    width: 18px;
+    height: 18px;
+  }
+  .desktop-rail__menu--desktop {
+    width: 330px;
+    padding: 8px;
+    border-radius: 22px;
+  }
+  .desktop-rail__menu--desktop .oc-menu-item,
+  .desktop-rail__menu--desktop .desktop-toolbar-action {
+    min-height: 36px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-size: 13px;
+    line-height: 18px;
+    gap: 10px;
+    color: var(--text);
+    white-space: normal;
+  }
+  .desktop-rail__menu--desktop svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--muted);
+  }
+  .desktop-rail__menu--desktop .oc-menu-item__icon {
+    margin-inline-end: 0;
+  }
+  .desktop-rail__menu--desktop .desktop-rail__menu-section,
+  .desktop-rail__menu--desktop .desktop-rail__overflow-window {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+  .desktop-rail__menu--desktop .desktop-rail__disconnect {
+    margin-top: 6px;
+    border-top: 1px solid var(--border);
+  }
+  .desktop-presentation--desktop .desktop-content:has(> .desktop-connection-rail) > .desktop-note {
+    order: 1;
+  }
+  .desktop-presentation--desktop .desktop-stage {
+    order: 2;
+  }
+  .desktop-presentation--fullscreen .bp-header {
+    display: none;
+  }
+  .desktop-presentation--fullscreen .desktop-connection-rail {
+    position: relative;
+    order: 3;
+    justify-content: center;
+    height: 65px;
+    flex-basis: 65px;
+    border-top: 1px solid var(--border);
+    border-bottom: 0;
+  }
+  .desktop-presentation--fullscreen .desktop-rail__identity {
+    position: absolute;
+    left: 12px;
+    max-width: calc(50% - 225px);
+  }
+  @container (max-width: 900px) {
+    .desktop-presentation--fullscreen .desktop-rail__identity {
+      bottom: calc(100% + 8px);
+      max-width: calc(100% - 24px);
+    }
+  }
+  @container (max-width: 560px) {
+    .desktop-rail__tools {
+      display: none;
+    }
+    .desktop-rail__overflow-tools {
+      display: block;
+    }
+  }
+  @container (width < 420px) {
+    .desktop-rail__window {
+      display: none;
+    }
+    .desktop-rail__window-group:not(:has(.desktop-open-window)) {
+      display: none;
+    }
+    .desktop-rail__window-group > .desktop-open-window {
+      border-left: 0;
+    }
+    .desktop-rail__overflow-window {
+      display: block;
+    }
+  }
   .desktop-button {
     border: 1px solid var(--border);
     border-radius: 6px;
@@ -154,6 +406,292 @@ openclaw-desktop-panel {
     color: var(--text);
     font: inherit;
     font-size: 12px;
+  }
+  .desktop-presentation--desktop .desktop-picker:has(> openclaw-panel-empty-state),
+  .desktop-presentation--mobile .desktop-picker:has(> openclaw-panel-empty-state) {
+    padding: 0;
+  }
+  .desktop-status-surface {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    overflow: auto;
+    text-align: center;
+    color: var(--muted);
+  }
+  .desktop-status-surface > strong {
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .desktop-presentation--desktop .desktop-content > .desktop-status-surface {
+    order: 2;
+  }
+  .desktop-status-surface > p {
+    max-width: 360px;
+    margin: 6px 0 0;
+    font-size: 13px;
+    line-height: 1.5;
+    overflow-wrap: anywhere;
+  }
+  .desktop-status-surface__icon {
+    position: relative;
+    display: flex;
+    margin-bottom: 16px;
+  }
+  .desktop-status-surface__icon > svg {
+    width: 36px;
+    height: 36px;
+    stroke-width: 1.5;
+  }
+  .desktop-status-surface__icon > .desktop-status-surface__spinner {
+    position: absolute;
+    right: -5px;
+    bottom: -4px;
+    width: 15px;
+    height: 15px;
+    padding: 2px;
+    background: var(--bg);
+    border-radius: 50%;
+    animation: desktop-status-spin 1s linear infinite;
+  }
+  .desktop-status-surface__action {
+    margin-top: 20px;
+  }
+  .desktop-status-surface__action .desktop-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    font-size: 13px;
+  }
+  .desktop-status-surface__action svg {
+    width: 14px;
+    height: 14px;
+  }
+  /* The shared empty-state owner supplies Portal's placement; Desktop owns its copy gaps. */
+  .desktop-status-surface--anchored {
+    padding: 0;
+    align-items: stretch;
+    justify-content: flex-start;
+  }
+  .desktop-status-surface--anchored .empty-state__title {
+    font-size: calc(14px * var(--control-ui-text-scale, 1));
+  }
+  .desktop-status-surface--anchored .empty-state__description {
+    max-width: 360px;
+    margin-top: 6px;
+  }
+  .desktop-status-surface--anchored .empty-state__description:empty {
+    display: none;
+  }
+  .desktop-status-surface--anchored .desktop-status-surface__icon {
+    width: 36px;
+    height: 36px;
+    margin-bottom: 16px;
+  }
+  .desktop-status-surface--anchored [slot="action"] {
+    margin-top: 20px;
+  }
+  .desktop-status-surface--anchored .desktop-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--radius-full);
+    background: var(--bg-hover);
+    font-size: 13px;
+  }
+  .desktop-status-surface--anchored .desktop-button > svg {
+    width: 14px;
+    height: 14px;
+  }
+  .desktop-status-surface--overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    background: color-mix(in srgb, var(--bg) 75%, transparent);
+    pointer-events: none;
+  }
+  .desktop-control-transition {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    background: var(--overlay-palette-backdrop);
+    color: var(--text);
+    font-size: 13px;
+    pointer-events: none;
+  }
+  .desktop-control-transition > svg {
+    width: 16px;
+    height: 16px;
+    animation: desktop-status-spin 1s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .desktop-control-transition > svg {
+      animation: none;
+    }
+  }
+  .desktop-presentation--desktop:not(.desktop-presentation--fullscreen) .desktop-surface,
+  .desktop-presentation--desktop:not(.desktop-presentation--fullscreen)
+    .desktop-stage__take-control {
+    top: 28px;
+  }
+  .desktop-viewer-hint {
+    position: absolute;
+    z-index: 3;
+    top: 6px;
+    left: 12px;
+    color: var(--muted);
+    font-size: 11px;
+    line-height: 16px;
+    pointer-events: none;
+    opacity: 0;
+  }
+  .desktop-viewer-hint[data-fullscreen="false"] {
+    right: 12px;
+    left: auto;
+  }
+  .desktop-stage:hover .desktop-viewer-hint[data-active="true"][data-fullscreen="false"],
+  .desktop-viewer-hint[data-active="true"][data-fullscreen="true"][data-positioned="true"] {
+    opacity: 1;
+  }
+  .desktop-viewer-hint[data-fullscreen="true"] {
+    padding: 7px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 13px;
+    box-shadow: var(--overlay-shadow);
+  }
+  .desktop-takeover {
+    order: 1;
+    padding: 9px 12px;
+    background: color-mix(in srgb, var(--warn) 12%, var(--bg));
+    color: var(--warn);
+    font-size: 12px;
+    line-height: 18px;
+  }
+  .desktop-takeover--fullscreen {
+    position: absolute;
+    right: 12px;
+    max-width: calc(50% - 225px);
+    border-radius: 6px;
+  }
+  @container (max-width: 900px) {
+    .desktop-takeover--fullscreen {
+      bottom: calc(100% + 8px);
+      max-width: calc(100% - 24px);
+    }
+    .desktop-presentation--fullscreen
+      .desktop-connection-rail:has(.desktop-takeover)
+      .desktop-rail__identity {
+      bottom: calc(100% + 52px);
+    }
+  }
+  .desktop-presentation--desktop .desktop-credentials {
+    width: min(360px, 100%);
+    gap: 16px;
+  }
+  .desktop-presentation--desktop .desktop-status:has(.desktop-credentials) {
+    padding: 24px;
+  }
+  .desktop-credentials__title {
+    color: var(--text);
+    font-size: 18px;
+    line-height: 24px;
+  }
+  .desktop-credentials__icon {
+    width: 24px;
+    height: 24px;
+  }
+  .desktop-presentation--desktop .desktop-credentials__input {
+    box-sizing: border-box;
+    min-height: 40px;
+  }
+  .desktop-presentation--desktop .desktop-credentials > button {
+    min-height: 40px;
+    border-color: var(--border);
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+  .desktop-credentials-rail > span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .desktop-presentation--mobile .desktop-toolbar {
+    box-sizing: border-box;
+    min-height: 40px;
+    padding: 0 8px;
+    gap: 4px;
+    font-size: 14px;
+  }
+  .desktop-presentation--mobile .desktop-toolbar button {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-height: 32px;
+    border: 0;
+  }
+  .desktop-presentation--mobile .desktop-toolbar svg {
+    width: 16px;
+    height: 16px;
+  }
+  .desktop-connection-rail--mobile {
+    display: flex;
+    box-sizing: border-box;
+    flex: 0 0 40px;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    height: 40px;
+    padding: 0 8px;
+    gap: 6px;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__actions {
+    gap: 4px;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__pill {
+    height: 32px;
+    padding: 0;
+    box-shadow: none;
+    background: transparent;
+    border-radius: 8px;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__pill > :not(:first-child) {
+    border-left-color: var(--border);
+  }
+  .desktop-connection-rail--mobile .desktop-toolbar-action {
+    height: 32px;
+    padding: 0 4px;
+    min-width: 0;
+    border-radius: 4px;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__tools {
+    display: flex;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__window {
+    display: none;
+  }
+  .desktop-connection-rail--mobile .desktop-rail__overflow-tools,
+  .desktop-connection-rail--mobile .desktop-rail__overflow-window {
+    display: block;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .desktop-status-surface__icon > .desktop-status-surface__spinner {
+      animation: none;
+    }
   }
   .desktop-button:hover:not(:disabled) {
     background: color-mix(in srgb, var(--text) 10%, transparent);
@@ -395,6 +933,11 @@ openclaw-desktop-panel {
     transform: rotate(180deg) scale(0.92);
   }
   100% {
+    transform: rotate(360deg);
+  }
+}
+@keyframes desktop-status-spin {
+  to {
     transform: rotate(360deg);
   }
 }

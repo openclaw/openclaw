@@ -1,24 +1,33 @@
-import type {
-  DesktopAvailability,
-  EnvironmentSummary,
-  WorkerDesktopAppId,
-} from "@openclaw/gateway-protocol";
+import type { DesktopAvailability, EnvironmentSummary } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
-import { For, Show, onSettled } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import { PanelEmptyState } from "../solid/panel-empty-state.tsx";
 import { PanelIconButton } from "../solid/panel-icon-button.tsx";
 import { PanelLoadingSkeleton } from "../solid/panel-loading-skeleton.tsx";
-import type { DesktopSizingMode } from "./desktop-client.ts";
+import {
+  DesktopConnectionRail,
+  DesktopOpenWindow,
+  DesktopSizing,
+  type DesktopConnectionControls,
+  type DesktopConnectionRailOptions,
+} from "./desktop-panel-rail.tsx";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
+import { DesktopStatusSurface, DesktopViewerHint } from "./desktop-panel-status.tsx";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
 import { hostDesktopSetupCopy, type DesktopHostSetup } from "./host-desktop-setup.ts";
+
+export { DesktopSizing } from "./desktop-panel-rail.tsx";
+export type { DesktopSizingOptions, DesktopSizingMenuMode } from "./desktop-panel-rail.tsx";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
 export function DesktopPanelView(props: {
   embedded: boolean;
+  desktopPresentation?: boolean;
+  mobilePresentation?: boolean;
   workspaceControls?: boolean;
   dock: "bottom" | "right";
   height: number;
@@ -33,10 +42,28 @@ export function DesktopPanelView(props: {
   content: Omit<Parameters<typeof DesktopPanelContent>[0], "connection">;
   connection: Omit<Parameters<typeof DesktopConnection>[0], "state">;
 }) {
+  const statusRail = () =>
+    props.connection.rail &&
+    (props.connection.rail.machine || props.connection.rail.openWindowHref) && (
+      <DesktopConnectionRail
+        {...props.connection}
+        recovery
+        state={props.content.state}
+        options={props.connection.rail}
+      />
+    );
   return (
     <section
       ref={(element) => props.sectionRef(element)}
-      class={["bp", `bp--${props.embedded ? "embedded" : props.dock}`]}
+      class={[
+        "bp",
+        `bp--${props.embedded ? "embedded" : props.dock}`,
+        {
+          "desktop-presentation--desktop": props.desktopPresentation,
+          "desktop-presentation--mobile": props.mobilePresentation,
+          "desktop-presentation--fullscreen": props.desktopPresentation && props.fullscreen,
+        },
+      ]}
       style={
         props.embedded || props.fullscreen
           ? ""
@@ -81,6 +108,18 @@ export function DesktopPanelView(props: {
       )}
       <DesktopPanelContent
         {...props.content}
+        credentials={() => (
+          <>
+            {props.desktopPresentation && statusRail()}
+            {props.content.credentials()}
+          </>
+        )}
+        recovery={() => (
+          <>
+            {statusRail()}
+            {props.content.recovery()}
+          </>
+        )}
         connection={() => (
           <DesktopConnection
             {...props.connection}
@@ -202,42 +241,87 @@ export function DesktopPicker(props: {
   environments: EnvironmentSummary[];
   hostSetup?: DesktopHostSetup | null;
   loading: boolean;
+  presentation?: "desktop" | "mobile";
+  genuineEmpty?: boolean;
+  openWindowHref?: string;
   onConnect: (environmentId: string) => void;
   onRefresh: () => void;
 }) {
   return (
     <>
-      {props.automatic && props.hostSetup ? (
-        <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
-      ) : props.automatic ? (
-        <div class="desktop-status" role="status">
-          <button class="desktop-button" type="button" onClick={props.onRefresh}>
-            {t("common.retry")}
-          </button>
-        </div>
+      {props.automatic ? (
+        <>
+          {props.openWindowHref && (
+            <div class="desktop-toolbar session-panel-rail" data-presentation="desktop">
+              <span class="desktop-toolbar__spacer" />
+              <DesktopOpenWindow href={props.openWindowHref} />
+            </div>
+          )}
+          {props.hostSetup ? (
+            <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
+          ) : (
+            <div class="desktop-status" role="status">
+              <button class="desktop-button" type="button" onClick={props.onRefresh}>
+                {t("common.retry")}
+              </button>
+            </div>
+          )}
+        </>
       ) : (
         <>
-          <div class="desktop-toolbar">
-            <span>{t("desktop.pickerTitle")}</span>
+          <div
+            class={["desktop-toolbar", { "session-panel-rail": props.presentation === "desktop" }]}
+            data-presentation={props.presentation === "desktop" ? "desktop" : undefined}
+          >
+            <span>
+              {t(
+                props.presentation === "mobile"
+                  ? "desktop.availableDesktops"
+                  : "desktop.pickerTitle",
+              )}
+            </span>
             <span class="desktop-toolbar__spacer" />
             <button
-              class="desktop-button"
+              class={
+                props.presentation === "desktop"
+                  ? "session-panel-rail__button session-panel-rail__button--labelled"
+                  : "desktop-button"
+              }
               type="button"
               disabled={props.loading}
               onClick={props.onRefresh}
             >
+              {props.presentation === "mobile" && <Icon name="refresh" />}
               {props.loading ? t("desktop.refreshing") : t("desktop.refresh")}
             </button>
+            {props.openWindowHref && <DesktopOpenWindow href={props.openWindowHref} />}
           </div>
           <div class="desktop-picker">
             {props.loading && props.environments.length === 0 ? (
-              <PanelLoadingSkeleton variant="desktop" label={t("desktop.loading")} />
+              props.presentation === "desktop" ? (
+                <DesktopStatusSurface heading={t("desktop.loading")} pending />
+              ) : (
+                <PanelLoadingSkeleton variant="desktop" label={t("desktop.loading")} />
+              )
             ) : props.environments.length === 0 ? (
-              <div class="desktop-status">{t("desktop.empty")}</div>
+              props.presentation && props.genuineEmpty ? (
+                <PanelEmptyState
+                  presentation={props.presentation}
+                  icon={<Icon name="monitor" />}
+                  heading={t("desktop.emptyTitle")}
+                  description={t("desktop.empty")}
+                />
+              ) : (
+                <div class="desktop-status">{t("desktop.empty")}</div>
+              )
             ) : (
               <For each={props.environments} keyed={(environment) => environment.id}>
                 {(environment) => (
-                  <DesktopEnvironment environment={environment()} onConnect={props.onConnect} />
+                  <DesktopEnvironment
+                    environment={environment()}
+                    onConnect={props.onConnect}
+                    useLabel={props.presentation === "desktop"}
+                  />
                 )}
               </For>
             )}
@@ -251,14 +335,17 @@ export function DesktopPicker(props: {
 function DesktopEnvironment(props: {
   environment: EnvironmentSummary;
   onConnect: (environmentId: string) => void;
+  useLabel?: boolean;
 }) {
   return (
     <div class="desktop-environment">
       <div class="desktop-environment__details">
         <div class="desktop-environment__id">
-          {desktopSourceForEnvironment(props.environment).kind === "host"
-            ? t("desktop.thisMachine")
-            : props.environment.id}
+          {props.useLabel && props.environment.label
+            ? props.environment.label
+            : desktopSourceForEnvironment(props.environment).kind === "host"
+              ? t("desktop.thisMachine")
+              : props.environment.id}
         </div>
         <div class="desktop-environment__meta">
           <span>{props.environment.worker?.state ?? props.environment.status}</span>
@@ -289,174 +376,194 @@ export function DesktopCredentials(props: {
   ardAccount: boolean;
   username: string;
   onSubmit: (event: SubmitEvent) => void;
-}) {
-  return (
-    <div class="desktop-status">
-      <form class="desktop-credentials" onSubmit={(event) => props.onSubmit(event)}>
-        <div>{t(props.ardAccount ? "desktop.accountPrompt" : "desktop.passwordPrompt")}</div>
-        {props.ardAccount && (
-          <label class="desktop-credentials__label">
-            {t("desktop.usernameLabel")}
-            <input
-              class="desktop-credentials__input"
-              name="username"
-              type="text"
-              autocomplete="off"
-              value={props.username}
-              required
-            />
-          </label>
-        )}
-        <label class="desktop-credentials__label">
-          {t(props.ardAccount ? "desktop.accountPasswordLabel" : "desktop.passwordLabel")}
-          <input
-            class="desktop-credentials__input"
-            name="password"
-            type="password"
-            autocomplete="off"
-            required
-          />
-        </label>
-        <button class="desktop-button desktop-button--primary" type="submit">
-          {t("desktop.connect")}
-        </button>
-      </form>
-    </div>
-  );
-}
-
-function DesktopConnection(props: {
-  state: DesktopPanelState;
-  surfaceRef: (element: HTMLElement | undefined) => void;
-  controlling: boolean;
-  desktopApps: WorkerDesktopAppId[];
-  launchingApp: WorkerDesktopAppId | null;
-  showApps: boolean;
-  sizing: DesktopSizingOptions;
-  pictureInPictureControl: JSX.Element;
-  audioControl?: JSX.Element;
-  presentationControls?: JSX.Element;
-  onDisconnect: () => void;
-  onLaunch: (app: WorkerDesktopAppId) => void;
-  onTakeControl: () => void;
-  onControlToggle: () => void;
+  presentation?: "desktop" | "mobile";
+  machineName?: string;
+  onBack?: () => void;
 }) {
   return (
     <>
-      <div class="desktop-toolbar desktop-toolbar--connection">
-        {props.showApps && props.desktopApps.length > 0 && (
-          <div class="desktop-apps">
-            <For each={props.desktopApps} keyed={(app) => app}>
-              {(app) => (
-                <button
-                  class="desktop-app-button"
-                  type="button"
-                  title={t(app() === "browser" ? "browser.title" : "terminal.title")}
-                  aria-label={t(app() === "browser" ? "browser.title" : "terminal.title")}
-                  aria-busy={props.launchingApp === app() ? "true" : "false"}
-                  disabled={props.launchingApp === app()}
-                  onClick={() => props.onLaunch(app())}
-                >
-                  <span
-                    class={[
-                      "desktop-app-button__icon",
-                      { "desktop-app-button__icon--launching": props.launchingApp === app() },
-                    ]}
-                    aria-hidden="true"
+      {props.presentation === "mobile" && (
+        <div class="desktop-toolbar desktop-credentials-rail">
+          {props.onBack && (
+            <PanelIconButton
+              class="desktop-toolbar-action"
+              label={t("desktop.back")}
+              icon={<Icon name="chevronLeft" />}
+              onClick={props.onBack}
+            />
+          )}
+          <span title={props.machineName}>{props.machineName}</span>
+        </div>
+      )}
+      <div class="desktop-status">
+        <form class="desktop-credentials" onSubmit={(event) => props.onSubmit(event)}>
+          {props.presentation === "desktop" && (
+            <>
+              <Icon name="lock" class="desktop-credentials__icon" />
+              <strong class="desktop-credentials__title">{t("desktop.credentialsTitle")}</strong>
+            </>
+          )}
+          <div>{t(props.ardAccount ? "desktop.accountPrompt" : "desktop.passwordPrompt")}</div>
+          {props.ardAccount && (
+            <label class="desktop-credentials__label">
+              {t("desktop.usernameLabel")}
+              <input
+                class="desktop-credentials__input"
+                name="username"
+                type="text"
+                autocomplete="off"
+                value={props.username}
+                required
+              />
+            </label>
+          )}
+          <label class="desktop-credentials__label">
+            {t(props.ardAccount ? "desktop.accountPasswordLabel" : "desktop.passwordLabel")}
+            <input
+              class="desktop-credentials__input"
+              name="password"
+              type="password"
+              autocomplete="off"
+              required
+            />
+          </label>
+          <button class="desktop-button desktop-button--primary" type="submit">
+            {t("desktop.connect")}
+          </button>
+        </form>
+      </div>
+    </>
+  );
+}
+
+function DesktopConnection(
+  props: DesktopConnectionControls & {
+    surfaceRef: (element: HTMLElement | undefined) => void;
+    pictureInPictureControl: JSX.Element;
+    audioControl?: JSX.Element;
+    presentationControls?: JSX.Element;
+    rail?: DesktopConnectionRailOptions;
+  },
+) {
+  let stage!: HTMLDivElement;
+  const hasRail = createMemo(() => props.rail !== undefined);
+  const desktop = createMemo(() => props.rail?.platform === "desktop");
+  return (
+    <>
+      {hasRail() ? (
+        <DesktopConnectionRail {...props} options={props.rail!} />
+      ) : (
+        <div class="desktop-toolbar desktop-toolbar--connection">
+          {props.showApps && props.desktopApps.length > 0 && (
+            <div class="desktop-apps">
+              <For each={props.desktopApps} keyed={(app) => app}>
+                {(app) => (
+                  <button
+                    class="desktop-app-button"
+                    type="button"
+                    title={t(app() === "browser" ? "browser.title" : "terminal.title")}
+                    aria-label={t(app() === "browser" ? "browser.title" : "terminal.title")}
+                    aria-busy={props.launchingApp === app() ? "true" : "false"}
+                    disabled={props.launchingApp === app()}
+                    onClick={() => props.onLaunch(app())}
                   >
-                    <Icon name={app() === "browser" ? "chrome" : "terminal"} />
-                  </span>
-                  <span>{t(app() === "browser" ? "browser.title" : "terminal.title")}</span>
-                </button>
-              )}
-            </For>
-          </div>
-        )}
-        <span class="desktop-toolbar__spacer" />
-        {props.controlling ? (
+                    <span
+                      class={[
+                        "desktop-app-button__icon",
+                        { "desktop-app-button__icon--launching": props.launchingApp === app() },
+                      ]}
+                      aria-hidden="true"
+                    >
+                      <Icon name={app() === "browser" ? "chrome" : "terminal"} />
+                    </span>
+                    <span>{t(app() === "browser" ? "browser.title" : "terminal.title")}</span>
+                  </button>
+                )}
+              </For>
+            </div>
+          )}
+          <span class="desktop-toolbar__spacer" />
+          {props.controlling ? (
+            <button
+              class="desktop-toolbar-action"
+              type="button"
+              aria-label={t("desktop.switchToViewOnly")}
+              disabled={props.state !== "connected"}
+              onClick={props.onControlToggle}
+            >
+              {t("desktop.control")}
+            </button>
+          ) : (
+            props.state === "connected" && (
+              <span class="desktop-toolbar-mode" role="status">
+                {t("desktop.viewOnly")}
+              </span>
+            )
+          )}
+          <DesktopSizing {...props.sizing} />
+          {props.audioControl}
+          {props.pictureInPictureControl}
+          {props.presentationControls}
           <button
             class="desktop-toolbar-action"
             type="button"
-            aria-label={t("desktop.switchToViewOnly")}
-            disabled={props.state !== "connected"}
-            onClick={props.onControlToggle}
+            title={t("desktop.disconnect")}
+            aria-label={t("desktop.disconnect")}
+            onClick={() => props.onDisconnect()}
           >
-            {t("desktop.control")}
+            {t("desktop.disconnect")}
           </button>
-        ) : (
-          props.state === "connected" && (
-            <span class="desktop-toolbar-mode" role="status">
-              {t("desktop.viewOnly")}
-            </span>
-          )
-        )}
-        <DesktopSizing {...props.sizing} />
-        {props.audioControl}
-        {props.pictureInPictureControl}
-        {props.presentationControls}
-        <button
-          class="desktop-toolbar-action"
-          type="button"
-          title={t("desktop.disconnect")}
-          aria-label={t("desktop.disconnect")}
-          onClick={() => props.onDisconnect()}
-        >
-          {t("desktop.disconnect")}
-        </button>
-      </div>
-      <div class="desktop-stage">
+        </div>
+      )}
+      {desktop() && props.rail?.takeoverText && !props.rail.fullscreen && (
+        <div class="desktop-takeover" role="status">
+          {props.rail.takeoverText}
+        </div>
+      )}
+      <div
+        class="desktop-stage"
+        ref={(element) => {
+          stage = element;
+        }}
+      >
         {/* noVNC owns this island's children for the entire connection. */}
         <DesktopSurface bind={props.surfaceRef} />
         {!props.controlling && (
           <button
             class="desktop-stage__take-control"
             type="button"
-            title={t("desktop.takeControl")}
+            title={desktop() ? undefined : t("desktop.takeControl")}
             aria-label={t("desktop.takeControl")}
             disabled={props.state !== "connected"}
             onClick={props.onTakeControl}
           />
         )}
-        {props.state === "connecting" && (
-          <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
+        {desktop() && (
+          <DesktopViewerHint
+            stage={() => stage}
+            active={props.state === "connected" && !props.controlling}
+            fullscreen={props.rail?.fullscreen ?? false}
+          />
         )}
+        {props.state === "connecting" &&
+          (desktop() ? (
+            props.rail?.controlTransition ? (
+              <div class="desktop-control-transition" role="status">
+                <Icon name="loader" />
+                <span>{props.rail.pendingLabel}</span>
+              </div>
+            ) : (
+              <DesktopStatusSurface
+                heading={props.rail?.pendingLabel ?? t("desktop.connecting")}
+                pending
+                overlay
+              />
+            )
+          ) : (
+            <PanelLoadingSkeleton variant="desktop" label={t("desktop.connecting")} overlay />
+          ))}
       </div>
     </>
-  );
-}
-
-export type DesktopSizingOptions = {
-  mode: DesktopSizingMode;
-  canResize: boolean;
-  onChange: (mode: DesktopSizingMode) => void;
-};
-
-export function DesktopSizing(props: DesktopSizingOptions) {
-  // Retain Match during reconnect so Fit can cancel it before authentication completes.
-  return (
-    <select
-      class="desktop-sizing"
-      aria-label={t("desktop.sizing")}
-      title={t("desktop.matchRequirement")}
-      onChange={(event) => {
-        const mode = event.currentTarget.value;
-        if (mode === "fit" || mode === "actual" || (mode === "match" && props.canResize)) {
-          props.onChange(mode);
-        }
-      }}
-    >
-      <option value="fit" selected={props.mode === "fit"}>
-        {t("desktop.fit")}
-      </option>
-      <option value="actual" selected={props.mode === "actual"}>
-        {t("desktop.actual")}
-      </option>
-      {(props.canResize || props.mode === "match") && (
-        <option value="match" selected={props.mode === "match"} disabled={!props.canResize}>
-          {t("desktop.match")}
-        </option>
-      )}
-    </select>
   );
 }
 
@@ -497,24 +604,51 @@ export function DesktopPanelRecovery(props: {
   inventoryError: boolean;
   reason: string | null;
   onRetry: () => void;
+  presentation?: "desktop" | "mobile";
+  kind?: "error" | "lost" | "closed" | null;
 }) {
+  const retry = () => (
+    <button class="desktop-button" type="button" onClick={props.onRetry}>
+      <Icon name="refresh" />
+      {t(props.inventoryError ? "common.retry" : "desktop.reconnect")}
+    </button>
+  );
   return (
-    <div class="desktop-status">
-      {!props.inventoryError && (
-        <div>
-          {props.reason
-            ? t("desktop.disconnected", { reason: props.reason })
-            : t("desktop.disconnectedClean")}
+    <Show
+      when={props.presentation === "desktop"}
+      fallback={
+        <div class="desktop-status">
+          {!props.inventoryError && (
+            <div>
+              {props.reason
+                ? t("desktop.disconnected", { reason: props.reason })
+                : t("desktop.disconnectedClean")}
+            </div>
+          )}
+          <button
+            class="desktop-button desktop-button--primary"
+            type="button"
+            onClick={() => props.onRetry()}
+          >
+            {t(props.inventoryError ? "common.retry" : "desktop.reconnect")}
+          </button>
         </div>
-      )}
-      <button
-        class="desktop-button desktop-button--primary"
-        type="button"
-        onClick={() => props.onRetry()}
-      >
-        {t(props.inventoryError ? "common.retry" : "desktop.reconnect")}
-      </button>
-    </div>
+      }
+    >
+      <DesktopStatusSurface
+        heading={t(
+          props.inventoryError
+            ? "desktop.inventoryError"
+            : props.kind === "error"
+              ? "desktop.connectionError"
+              : props.kind === "lost"
+                ? "desktop.connectionLost"
+                : "desktop.disconnectedClean",
+        )}
+        description={props.reason}
+        action={retry()}
+      />
+    </Show>
   );
 }
 
