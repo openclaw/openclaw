@@ -40,6 +40,7 @@ import {
   resolveBuildRequirement,
   resolveRuntimePostBuildRequirement,
 } from "../../../../scripts/run-node.mts";
+import { resolveRuntimeScriptPosition } from "../../../../src/daemon/runtime-binary.js";
 
 const DEFAULT_EXPECTED_ORIGIN = "openclaw/openclaw";
 const FULL_SHA_RE = /^[0-9a-f]{40}$/u;
@@ -1235,8 +1236,14 @@ function resolveManagedGatewayCommand(
     prefix = [envFilePath];
   }
   const runtime = programArguments[commandStartIndex];
-  const entrypoint = programArguments[commandStartIndex + 1];
-  const command = programArguments[commandStartIndex + 2];
+  const runtimeArguments = programArguments.slice(commandStartIndex);
+  const { position } = resolveRuntimeScriptPosition(runtimeArguments);
+  if (typeof position !== "number") {
+    return null;
+  }
+  const entrypointIndex = commandStartIndex + position;
+  const entrypoint = programArguments[entrypointIndex];
+  const command = programArguments[entrypointIndex + 1];
   // Arbitrary --wrapper executables contain no checkout entrypoint, so their
   // ownership cannot be proven and conversion must remain a manual operation.
   return typeof runtime === "string" &&
@@ -1245,10 +1252,12 @@ function resolveManagedGatewayCommand(
     command === "gateway"
     ? {
         entrypoint,
-        entrypointIndex: commandStartIndex + 1,
+        entrypointIndex,
         envFilePath,
         executable,
-        invocationPrefix: wrapperPath ? [...prefix, runtime, entrypoint] : [entrypoint],
+        invocationPrefix: wrapperPath
+          ? [...prefix, ...runtimeArguments.slice(0, position + 1)]
+          : runtimeArguments.slice(1, position + 1),
         runtime,
         stateDir: path.dirname(envDir),
         wrapperPath,
@@ -1830,7 +1839,6 @@ export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
     executable,
     invocationPrefix,
     port,
-    runtime,
     serviceEnvironment = {},
     workingDirectory,
     wrapperPath,
@@ -1891,8 +1899,7 @@ export function runBuiltGatewayCli(checkout, args, deployment, options = {}) {
             "-u",
             "OPENCLAW_GATEWAY_URL",
             ...envOverrides,
-            runtime,
-            entrypoint,
+            ...invocationPrefix.slice(executable === "/bin/sh" ? 2 : 1),
             ...args,
           ]
         : [...invocationPrefix, ...args];

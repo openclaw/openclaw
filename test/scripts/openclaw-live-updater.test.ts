@@ -854,45 +854,63 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     }
   });
 
-  test("pins managed Gateway calls with a backward-compatible local overlay", () => {
-    const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
-    const checkout = path.join(root, "checkout");
-    const entrypoint = path.join(checkout, "dist/index.js");
-    const capture = path.join(root, "capture.mjs");
-    const configPath = path.join(root, "openclaw.json");
-    mkdirSync(path.dirname(entrypoint), { recursive: true });
-    writeFileSync(configPath, "{}\n");
-    writeFileSync(
-      capture,
-      'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
-    );
+  test.each(["direct", "shell", "executable"])(
+    "pins managed Gateway calls with a backward-compatible local overlay (%s)",
+    (layout) => {
+      const root = realpathSync(tempDirs.make("openclaw-gateway-call-"));
+      const checkout = path.join(root, "checkout");
+      const entrypoint = path.join(checkout, "dist/index.js");
+      const capture = path.join(root, "capture.mjs");
+      const configPath = path.join(root, "openclaw.json");
+      mkdirSync(path.dirname(entrypoint), { recursive: true });
+      writeFileSync(configPath, "{}\n");
+      writeFileSync(
+        capture,
+        'import fs from "node:fs"; console.log(JSON.stringify({ argv: process.argv.slice(2), execArgv: process.execArgv, config: JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), hasToken: Boolean(process.env.OPENCLAW_GATEWAY_TOKEN), url: process.env.OPENCLAW_GATEWAY_URL ?? null }));\n',
+      );
 
-    const result = JSON.parse(
-      runBuiltGatewayCall(
-        checkout,
-        "gateway.suspend.prepare",
-        { requestId: "request-1" },
-        {
-          ...gatewayCliDeployment(root, checkout),
-          invocationPrefix: [capture],
-          port: 19001,
-          serviceEnvironment: {
-            OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
-            OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+      const wrapper = path.join(root, "env-wrapper.sh");
+      const envFile = path.join(root, "gateway.env");
+      writeFileSync(wrapper, '#!/bin/sh\nshift\nexec "$@"\n', { mode: 0o700 });
+      writeFileSync(envFile, "");
+      const runtimePrefix = [process.execPath, "--max-old-space-size=128", capture];
+      const invocationPrefix =
+        layout === "direct"
+          ? runtimePrefix.slice(1)
+          : layout === "shell"
+            ? [wrapper, envFile, ...runtimePrefix]
+            : [envFile, ...runtimePrefix];
+      const result = JSON.parse(
+        runBuiltGatewayCall(
+          checkout,
+          "gateway.suspend.prepare",
+          { requestId: "request-1" },
+          {
+            ...gatewayCliDeployment(root, checkout),
+            invocationPrefix,
+            executable:
+              layout === "direct" ? process.execPath : layout === "shell" ? "/bin/sh" : wrapper,
+            envFilePath: layout === "direct" ? null : envFile,
+            port: 19001,
+            serviceEnvironment: {
+              OPENCLAW_GATEWAY_TOKEN: ["fixture", "value"].join("-"),
+              OPENCLAW_GATEWAY_URL: "https://foreign.invalid",
+            },
+            wrapperPath: layout === "direct" ? null : wrapper,
           },
-          wrapperPath: null,
-        },
-      ),
-    );
+        ),
+      );
 
-    expect(result).toMatchObject({
-      config: { gateway: { mode: "local", port: 19001 } },
-      hasToken: true,
-      url: null,
-    });
-    expect(result.argv).not.toContain("--port");
-    expect(result.argv).not.toContain("--url");
-  });
+      expect(result).toMatchObject({
+        execArgv: ["--max-old-space-size=128"],
+        config: { gateway: { mode: "local", port: 19001 } },
+        hasToken: true,
+        url: null,
+      });
+      expect(result.argv).not.toContain("--port");
+      expect(result.argv).not.toContain("--url");
+    },
+  );
 
   test.each<[string, string, (fixture: Omit<Fixture, "seed">) => void]>([
     [
@@ -1021,11 +1039,26 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
     const customEnvFile = `${customState}/service-env/ai.openclaw.gateway.env`;
     const layouts: [string[], string | null][] = [
       [nodeCommand, entrypoint],
+      [[nodeCommand[0]!, "--max-old-space-size=131072", ...nodeCommand.slice(1)], entrypoint],
+      [
+        [
+          "/bin/sh",
+          wrapper,
+          envFile,
+          nodeCommand[0]!,
+          "--max-old-space-size",
+          "131072",
+          ...nodeCommand.slice(1),
+        ],
+        entrypoint,
+      ],
       [["/opt/homebrew/bin/bun", entrypoint, "gateway"], entrypoint],
       [["/bin/sh", wrapper, envFile, ...nodeCommand], entrypoint],
       [[wrapper, envFile, ...nodeCommand], entrypoint],
       [["/bin/sh", customWrapper, customEnvFile, ...nodeCommand], entrypoint],
       [["/usr/bin/python3", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--eval", "0", entrypoint, "gateway"], null],
+      [[nodeCommand[0]!, "--unknown-option", "value", entrypoint, "gateway"], null],
       [["/bin/sh", foreignWrapper, envFile, ...nodeCommand], null],
     ];
     for (const [args, expected] of layouts) {
