@@ -1,5 +1,6 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { crmRequest } from "./client.js";
@@ -14,7 +15,7 @@ import {
   readFilters,
   readOptionalBoolean,
   readOptionalInteger,
-  readOptionalString,
+  readCrmTextParam,
   readRequiredString,
   requireDealStage,
   requireField,
@@ -36,7 +37,7 @@ export function crmSearchTool(api: OpenClawPluginApi): AnyAgentTool {
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
       const query = readRequiredString(
-        params as Record<string, unknown>,
+        asOptionalRecord(params) ?? {},
         "query",
         "name, email, domain, or deal title",
       );
@@ -83,11 +84,11 @@ export function crmListRecordsTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const entity = readEntity(args);
       const body: Record<string, unknown> = {};
 
-      const query = readOptionalString(args, "query");
+      const query = readCrmTextParam(args, "query");
       if (query !== undefined) {
         body.q = query;
       }
@@ -140,7 +141,7 @@ export function crmGetRecordTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const entity = readEntity(args);
       const id = readRequiredString(args, "id", "CRM record id");
       return jsonResult(
@@ -172,7 +173,7 @@ export function crmCreateRecordTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const entity = readEntity(args);
       const data = readData(args, entity, "create");
 
@@ -220,7 +221,7 @@ export function crmUpdateRecordTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const entity = readEntity(args);
       const id = readRequiredString(args, "id", "CRM record id");
       const data = readData(args, entity, "update");

@@ -38,7 +38,7 @@ describe("crm client", () => {
     ).resolves.toEqual({ id: "contact-1" });
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(String(url)).toBe("http://crm.test:3001/rest/contacts");
+    expect(url).toBe("http://crm.test:3001/rest/contacts");
     expect(init?.method).toBe("POST");
     expect(init?.headers).toMatchObject({
       accept: "application/json",

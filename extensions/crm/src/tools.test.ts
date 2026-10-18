@@ -69,6 +69,11 @@ function mockJson(payload: unknown, status = 200) {
     .mockImplementation(async () => Response.json(payload, { status }));
 }
 
+function requestBody(fetchMock: ReturnType<typeof mockJson>, index: number): unknown {
+  const body = fetchMock.mock.calls[index]?.[1]?.body;
+  return typeof body === "string" ? JSON.parse(body) : undefined;
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
@@ -96,9 +101,9 @@ describe("crm tools", () => {
       filters: { owner: ["user-1"], activity: ["30"] },
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe("http://crm.test:3001/rest/search?q=acme");
-    expect(String(fetchMock.mock.calls[1]?.[0])).toBe("http://crm.test:3001/rest/contacts/search");
-    expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://crm.test:3001/rest/search?q=acme");
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("http://crm.test:3001/rest/contacts/search");
+    expect(requestBody(fetchMock, 1)).toEqual({
       q: "ada",
       page: 2,
       pageSize: 10,
@@ -155,7 +160,7 @@ describe("crm tools", () => {
       },
     });
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(requestBody(fetchMock, 0)).toEqual({
       name: "Renewal",
       companyId: "company-1",
       ownerId: "user-1",
@@ -175,10 +180,8 @@ describe("crm tools", () => {
       data: { stage: "CLOSED_LOST", closedReason: "Budget" },
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      "http://crm.test:3001/rest/deals/deal-1/stage",
-    );
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://crm.test:3001/rest/deals/deal-1/stage");
+    expect(requestBody(fetchMock, 0)).toEqual({
       stage: "CLOSED_LOST",
       closedReason: "Budget",
     });
@@ -194,10 +197,8 @@ describe("crm tools", () => {
       data: { title: "CTO" },
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
-      "http://crm.test:3001/rest/contacts/contact-1",
-    );
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("http://crm.test:3001/rest/contacts/contact-1");
+    expect(requestBody(fetchMock, 0)).toEqual({
       data: { title: "CTO" },
     });
   });
@@ -212,7 +213,7 @@ describe("crm tools", () => {
       companyId: "company-1",
     });
 
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(requestBody(fetchMock, 0)).toEqual({
       type: "NOTE",
       body: "Called about renewal",
       companyId: "company-1",
@@ -247,10 +248,10 @@ describe("crm tools", () => {
       id: "activity-1",
     });
 
-    expect(String(fetchMock.mock.calls[0]?.[0])).toBe(
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
       "http://crm.test:3001/rest/activities/activity-1/complete",
     );
-    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+    expect(requestBody(fetchMock, 0)).toEqual({
       completed: true,
     });
   });

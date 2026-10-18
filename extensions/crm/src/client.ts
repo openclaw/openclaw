@@ -1,3 +1,8 @@
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CrmConfig } from "./config.js";
 
 export type CrmMethod = "GET" | "POST" | "PATCH" | "DELETE";
@@ -24,16 +29,12 @@ export class CrmApiError extends Error {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function parseJson(text: string): unknown {
   if (!text.trim()) {
     return undefined;
   }
   try {
-    return JSON.parse(text) as unknown;
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
@@ -113,25 +114,37 @@ export async function crmRequest<T>(config: CrmConfig, options: CrmRequestOption
       headers["content-type"] = "application/json";
     }
 
-    const response = await fetch(buildCrmUrl(config, options.path, options.query), {
-      method: options.method,
-      headers,
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      signal: controller.signal,
+    const { response, release } = await fetchWithSsrFGuard({
+      url: buildCrmUrl(config, options.path, options.query).toString(),
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(config.baseUrl),
+      auditContext: "crm.request",
+      init: {
+        method: options.method,
+        headers,
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        signal: controller.signal,
+      },
     });
-    const responseText = await response.text();
-    options.signal?.throwIfAborted();
 
-    const payload = parseJson(responseText);
-    if (!response.ok) {
-      throw new CrmApiError(
-        response.status,
-        formatApiError(response.status, payload, responseText, options.method, options.path),
-        payload,
-      );
+    try {
+      const responseText = await response.text();
+      options.signal?.throwIfAborted();
+
+      const payload = parseJson(responseText);
+      if (!response.ok) {
+        throw new CrmApiError(
+          response.status,
+          formatApiError(response.status, payload, responseText, options.method, options.path),
+          payload,
+        );
+      }
+
+      // SAFETY: crmRequest is generic over the caller's expected REST payload, and
+      // parseJson only ever returns parsed JSON values or undefined.
+      return payload as T;
+    } finally {
+      await release();
     }
-
-    return payload as T;
   } catch (error) {
     if (error instanceof CrmApiError) {
       throw error;

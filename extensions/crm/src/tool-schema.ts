@@ -1,4 +1,8 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Type } from "typebox";
 import {
   resolveCrmConfig,
@@ -141,10 +145,7 @@ export function readRequiredString(
   return value.trim();
 }
 
-export function readOptionalString(
-  params: Record<string, unknown>,
-  key: string,
-): string | undefined {
+export function readCrmTextParam(params: Record<string, unknown>, key: string): string | undefined {
   const value = params[key];
   if (value === undefined || value === null) {
     return undefined;
@@ -152,8 +153,7 @@ export function readOptionalString(
   if (typeof value !== "string") {
     throw new Error(`${key} must be a string.`);
   }
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  return normalizeOptionalString(value);
 }
 
 export function readOptionalInteger(
@@ -198,10 +198,11 @@ export function readOptionalRecord(
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value !== "object" || Array.isArray(value)) {
+  const record = asOptionalRecord(value);
+  if (!record) {
     throw new Error(`${key} must be an object.`);
   }
-  return value as Record<string, unknown>;
+  return record;
 }
 
 function normalizeStringArray(value: unknown): string[] | undefined {
@@ -278,18 +279,26 @@ export function requireField(data: Record<string, unknown>, key: string, entity:
 }
 
 export function requireDealStage(value: unknown): string {
-  if (typeof value !== "string" || !DEAL_STAGES.includes(value as (typeof DEAL_STAGES)[number])) {
+  if (typeof value !== "string" || !isDealStage(value)) {
     throw new Error(`stage must be one of: ${DEAL_STAGES.join(", ")}.`);
   }
   return value;
 }
 
+function isDealStage(value: string): value is (typeof DEAL_STAGES)[number] {
+  return DEAL_STAGES.some((stage) => stage === value);
+}
+
 export function readActivityType(params: Record<string, unknown>): CrmActivityType {
   const value = params.type;
-  if (typeof value === "string" && ACTIVITY_TYPES.includes(value as CrmActivityType)) {
-    return value as CrmActivityType;
+  if (typeof value === "string" && isCrmActivityType(value)) {
+    return value;
   }
   throw new Error(`type must be one of: ${ACTIVITY_TYPES.join(", ")}.`);
+}
+
+function isCrmActivityType(value: string): value is CrmActivityType {
+  return ACTIVITY_TYPES.some((type) => type === value);
 }
 
 export function readTimelineFilter(params: Record<string, unknown>): string | undefined {
@@ -297,10 +306,14 @@ export function readTimelineFilter(params: Record<string, unknown>): string | un
   if (value === undefined || value === null) {
     return undefined;
   }
-  if (typeof value !== "string" || !TIMELINE_FILTERS.includes(value as never)) {
+  if (typeof value !== "string" || !isTimelineFilter(value)) {
     throw new Error(`filter must be one of: ${TIMELINE_FILTERS.join(", ")}.`);
   }
   return value;
+}
+
+function isTimelineFilter(value: string): value is (typeof TIMELINE_FILTERS)[number] {
+  return TIMELINE_FILTERS.some((filter) => filter === value);
 }
 
 export function createConfig(api: OpenClawPluginApi, ctx?: CrmToolConfigContext): CrmConfig {

@@ -1,5 +1,6 @@
 import type { AnyAgentTool } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-runtime";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import { crmRequest } from "./client.js";
@@ -10,7 +11,7 @@ import {
   readActivityType,
   readOptionalBoolean,
   readOptionalInteger,
-  readOptionalString,
+  readCrmTextParam,
   readRequiredString,
   readTimelineFilter,
 } from "./tool-schema.js";
@@ -50,37 +51,37 @@ export function crmLogActivityTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const type = readActivityType(args);
       const body: Record<string, unknown> = {
         type: ACTIVITY_TYPE_TO_API[type],
       };
 
-      const subject = readOptionalString(args, "subject");
+      const subject = readCrmTextParam(args, "subject");
       if (subject !== undefined) {
         body.subject = subject;
       }
-      const text = readOptionalString(args, "body");
+      const text = readCrmTextParam(args, "body");
       if (text !== undefined) {
         body.body = text;
       }
-      const occurredAt = readOptionalString(args, "occurredAt");
+      const occurredAt = readCrmTextParam(args, "occurredAt");
       if (occurredAt !== undefined) {
         body.occurredAt = occurredAt;
       }
-      const dueAt = readOptionalString(args, "dueAt");
+      const dueAt = readCrmTextParam(args, "dueAt");
       if (dueAt !== undefined) {
         body.dueAt = dueAt;
       }
-      const companyId = readOptionalString(args, "companyId");
+      const companyId = readCrmTextParam(args, "companyId");
       if (companyId !== undefined) {
         body.companyId = companyId;
       }
-      const contactId = readOptionalString(args, "contactId");
+      const contactId = readCrmTextParam(args, "contactId");
       if (contactId !== undefined) {
         body.contactId = contactId;
       }
-      const dealId = readOptionalString(args, "dealId");
+      const dealId = readCrmTextParam(args, "dealId");
       if (dealId !== undefined) {
         body.dealId = dealId;
       }
@@ -143,11 +144,11 @@ export function crmTimelineTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const query: Record<string, string | number | undefined> = {};
 
       for (const key of ["companyId", "contactId", "dealId"] as const) {
-        const value = readOptionalString(args, key);
+        const value = readCrmTextParam(args, key);
         if (value !== undefined) {
           query[key] = value;
         }
@@ -161,7 +162,7 @@ export function crmTimelineTool(api: OpenClawPluginApi): AnyAgentTool {
       if (filter !== undefined) {
         query.filter = filter;
       }
-      const cursor = readOptionalString(args, "cursor");
+      const cursor = readCrmTextParam(args, "cursor");
       if (cursor !== undefined) {
         query.cursor = cursor;
       }
@@ -208,9 +209,9 @@ export function crmMyTasksTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const query: Record<string, string | number | undefined> = {};
-      const window = readOptionalString(args, "window");
+      const window = readCrmTextParam(args, "window");
       if (window !== undefined && !["overdue", "upcoming", "all"].includes(window)) {
         throw new Error('window must be "overdue", "upcoming", or "all".');
       }
@@ -251,7 +252,7 @@ export function crmCompleteActivityTool(api: OpenClawPluginApi): AnyAgentTool {
     resultContentSource: "network",
     async execute(_toolCallId, params, signal) {
       signal?.throwIfAborted();
-      const args = params as Record<string, unknown>;
+      const args = asOptionalRecord(params) ?? {};
       const id = readRequiredString(args, "id", "activity id");
       const completed = readOptionalBoolean(args, "completed") ?? true;
       return jsonResult(
