@@ -1,4 +1,3 @@
-// Tests dotenv file loading and environment merge behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,20 +44,19 @@ const BUNDLED_TRUST_ROOT_ENV_KEYS = BUNDLED_TRUST_ROOT_ENV_LINES.map(
 
 const WINDOWS_SHELL_TRUST_ROOT_ENV_KEYS = [
   "AppData",
-  "APPDATA",
   "ComSpec",
-  "COMSPEC",
   "LocalAppData",
-  "LOCALAPPDATA",
   "ProgramFiles",
-  "PROGRAMFILES",
   "ProgramW6432",
-  "PROGRAMW6432",
   "SystemRoot",
-  "SYSTEMROOT",
   "windir",
-  "WINDIR",
-] as const;
+].flatMap((key) => [key, key.toUpperCase()]);
+
+function envContents(values: Record<string, string>) {
+  return Object.entries(values)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
 
 async function writeEnvFile(filePath: string, contents: string) {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -106,25 +104,17 @@ async function expectBlockedWorkspaceEnv(directory: string, lines: readonly stri
 }
 
 describe("loadDotEnv", () => {
-  it("loads ~/.openclaw/.env as fallback without overriding CWD .env", async () => {
+  it.each([
+    ["CWD", "from-cwd"],
+    ["shell", "from-shell"],
+  ])("keeps %s precedence over the global fallback", async (source, expected) => {
     await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\nBAR=1\n");
     await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
-
+    if (source === "shell") {
+      process.env.FOO = "from-shell";
+    }
     loadDotEnv({ quiet: true });
-
-    expect(process.env.FOO).toBe("from-cwd");
-    expect(process.env.BAR).toBe("1");
-  });
-
-  it("does not override an already-set env var from the shell", async () => {
-    process.env.FOO = "from-shell";
-
-    await writeEnvFile(path.join(stateDir, ".env"), "FOO=from-global\n");
-    await writeEnvFile(path.join(cwdDir, ".env"), "FOO=from-cwd\n");
-
-    loadDotEnv({ quiet: true });
-
-    expect(process.env.FOO).toBe("from-shell");
+    expect(process.env).toMatchObject({ FOO: expected, BAR: "1" });
   });
 
   it("lets the state dotenv replace only explicitly service-managed inherited values", async () => {
@@ -220,12 +210,7 @@ describe("loadDotEnv", () => {
       SLACK_API_URL: "http://trusted-slack.example.com/api/",
       ZALO_API_URL: "http://trusted-zalo.example.com/",
     };
-    await writeEnvFile(
-      path.join(stateDir, ".env"),
-      Object.entries(trusted)
-        .map(([key, value]) => `${key}=${value}`)
-        .join("\n"),
-    );
+    await writeEnvFile(path.join(stateDir, ".env"), envContents(trusted));
     clearEnv(Object.keys(trusted));
     loadDotEnv({ quiet: true });
     expect(process.env).toMatchObject(trusted);
@@ -253,45 +238,32 @@ describe("loadCliDotEnv", () => {
   });
 
   it("blocks workspace .env takeover vars before loading the global fallback", async () => {
-    const bundledPluginsDir = path.join(base, "attacker-bundled");
+    const blocked = {
+      OPENCLAW_CONFIG_PATH: "./evil-config.json",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(base, "attacker-bundled"),
+      NODE_OPTIONS: "--require ./evil.js",
+      NODE_REDIRECT_WARNINGS: "./warnings.log",
+      NODE_REPL_EXTERNAL_MODULE: "./evil-repl.js",
+      NODE_REPL_HISTORY: "./repl-history",
+      NODE_V8_COVERAGE: "./coverage",
+      ANTHROPIC_BASE_URL: "https://evil.example.com/v1",
+      UV_PYTHON: "./attacker-python",
+      uv_python: "./attacker-python-lower",
+    };
     await writeEnvFile(
       path.join(cwdDir, ".env"),
-      [
-        "SAFE_KEY=from-cwd",
-        "OPENCLAW_STATE_DIR=./evil-state",
-        "OPENCLAW_CONFIG_PATH=./evil-config.json",
-        `OPENCLAW_BUNDLED_PLUGINS_DIR=${bundledPluginsDir}`,
-        "NODE_OPTIONS=--require ./evil.js",
-        "NODE_REDIRECT_WARNINGS=./warnings.log",
-        "NODE_REPL_EXTERNAL_MODULE=./evil-repl.js",
-        "NODE_REPL_HISTORY=./repl-history",
-        "NODE_V8_COVERAGE=./coverage",
-        "ANTHROPIC_BASE_URL=https://evil.example.com/v1",
-        "UV_PYTHON=./attacker-python",
-        "uv_python=./attacker-python-lower",
-      ].join("\n"),
+      envContents({ SAFE_KEY: "from-cwd", OPENCLAW_STATE_DIR: "./evil-state", ...blocked }),
     );
     await writeEnvFile(path.join(stateDir, ".env"), "BAR=from-global\n");
-
-    const blocked = [
-      "OPENCLAW_CONFIG_PATH",
-      "OPENCLAW_BUNDLED_PLUGINS_DIR",
-      "NODE_OPTIONS",
-      "NODE_REDIRECT_WARNINGS",
-      "NODE_REPL_EXTERNAL_MODULE",
-      "NODE_REPL_HISTORY",
-      "NODE_V8_COVERAGE",
-      "ANTHROPIC_BASE_URL",
-      "UV_PYTHON",
-      "uv_python",
-    ];
-    clearEnv(["SAFE_KEY", "BAR", ...blocked]);
+    clearEnv(["SAFE_KEY", "BAR", ...Object.keys(blocked)]);
 
     loadCliDotEnv({ quiet: true });
 
-    expect(process.env.SAFE_KEY).toBe("from-cwd");
-    expect(process.env.BAR).toBe("from-global");
-    expect(process.env.OPENCLAW_STATE_DIR).toBe(stateDir);
-    expectEnvUndefined(blocked);
+    expect(process.env).toMatchObject({
+      SAFE_KEY: "from-cwd",
+      BAR: "from-global",
+      OPENCLAW_STATE_DIR: stateDir,
+    });
+    expectEnvUndefined(Object.keys(blocked));
   });
 });
