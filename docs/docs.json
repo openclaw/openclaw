@@ -1855,6 +1855,7 @@
                       "plugins/admin-http-rpc",
                       "plugins/beam",
                       "plugins/cloudflare",
+                      "plugins/crm",
                       "plugins/geolocation",
                       "plugins/logbook",
                       "plugins/mcp-relay",

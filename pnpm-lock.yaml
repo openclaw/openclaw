@@ -6,6 +6,9 @@ importers:
   .:
     configDependencies: {}
     packageManagerDependencies:
+      '@pnpm/exe':
+        specifier: 12.11.1
+        version: 12.11.1
       pnpm:
         specifier: 12.11.1
         version: 12.11.1
@@ -89,6 +92,11 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@pnpm/exe@12.11.1':
+    resolution: {integrity: sha512-cEdtGHyBr6IUGGmt8Gi7yo5e0F8XlKzGPWqMNV7H0ZrtFcbsJDKVKnMYaYdTcX4qMti+Nr/EV/9EVqpBHusRUg==}
+    engines: {node: '>=18.*'}
+    hasBin: true
+
   pnpm@12.11.1:
     resolution: {integrity: sha512-Ww4yiCOafqQVXSCU9UcGbhIqE3azzXhaaAyREuEWkT5kqq7PIN2DzDQDD6ZwE/XFUR+c9DDdg4QYi0xguKKtHg==}
     engines: {node: '>=18.*'}
@@ -137,6 +145,23 @@ snapshots:
 
   '@pnpm/exe.win32-x64@12.11.1':
     optional: true
+
+  '@pnpm/exe@12.11.1':
+    optionalDependencies:
+      '@pnpm/exe.android-arm64': 12.11.1
+      '@pnpm/exe.android-x64': 12.11.1
+      '@pnpm/exe.darwin-arm64': 12.11.1
+      '@pnpm/exe.darwin-x64': 12.11.1
+      '@pnpm/exe.freebsd-x64': 12.11.1
+      '@pnpm/exe.linux-arm64': 12.11.1
+      '@pnpm/exe.linux-arm64-musl': 12.11.1
+      '@pnpm/exe.linux-ppc64': 12.11.1
+      '@pnpm/exe.linux-riscv64': 12.11.1
+      '@pnpm/exe.linux-s390x': 12.11.1
+      '@pnpm/exe.linux-x64': 12.11.1
+      '@pnpm/exe.linux-x64-musl': 12.11.1
+      '@pnpm/exe.win32-arm64': 12.11.1
+      '@pnpm/exe.win32-x64': 12.11.1
 
   pnpm@12.11.1:
     optionalDependencies:
@@ -1041,6 +1066,16 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/crabbox:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/crm:
+    dependencies:
+      typebox:
+        specifier: 1.3.36
+        version: 1.3.36
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*

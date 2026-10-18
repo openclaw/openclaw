@@ -1,0 +1,74 @@
+{
+  "id": "crm",
+  "name": "CRM",
+  "description": "Read and write contacts, companies, deals, activities, and tasks in a self-hosted trycompai/crm instance.",
+  "categories": ["sales-marketing"],
+  "activation": {
+    "onStartup": true
+  },
+  "uiHints": {
+    "baseUrl": {
+      "label": "CRM API Base URL",
+      "help": "Base URL of the CRM API process, for example http://localhost:3001 (fallback: CRM_BASE_URL).",
+      "placeholder": "http://localhost:3001"
+    },
+    "apiKey": {
+      "label": "CRM API Key",
+      "help": "Create an API key in the CRM under Settings → API keys (fallback: CRM_API_KEY).",
+      "sensitive": true,
+      "placeholder": "crm_..."
+    },
+    "timeoutSeconds": {
+      "label": "Request Timeout (s)",
+      "help": "Maximum time to wait for a CRM API response. Defaults to 30 seconds.",
+      "advanced": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "contracts": {
+    "tools": [
+      "crm_search",
+      "crm_list_records",
+      "crm_get_record",
+      "crm_create_record",
+      "crm_update_record",
+      "crm_log_activity",
+      "crm_timeline",
+      "crm_my_tasks",
+      "crm_complete_activity"
+    ]
+  },
+  "configGroups": [
+    {
+      "id": "connection",
+      "title": "Connection",
+      "order": 10,
+      "properties": ["baseUrl", "apiKey", "timeoutSeconds"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string"
+      },
+      "apiKey": {
+        "type": ["string", "object"]
+      },
+      "timeoutSeconds": {
+        "type": "number"
+      }
+    }
+  }
+}
