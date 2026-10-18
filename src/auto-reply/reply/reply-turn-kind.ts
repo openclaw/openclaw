@@ -1,4 +1,4 @@
-import type { ReplyTurnKind } from "./reply-run-registry.js";
+import type { ReplyTurnKind } from "../../sessions/session-controller.js";
 
 export function resolveReplyTurnKind(opts?: {
   isHeartbeat?: boolean;

@@ -1,5 +1,6 @@
 // Real process death is required: an in-process abort cannot prove durable startup custody.
 import { once } from "node:events";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -108,7 +109,9 @@ function writeExec(response: ServerResponse, command: string, ordinal: number) {
 
 async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
   const toolStarted = createDeferred();
-  const resetResponseClosed = createDeferred();
+  const toolCheckpoint = createDeferred();
+  const toolCancelled = createDeferred();
+  const releaseToolCheckpoint = createDeferred();
   const failed = createDeferred<never>();
   const fourRecoveriesSeen = createDeferred();
   const recoveryStarts = new Set<Scenario>();
@@ -138,6 +141,17 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
           }
           if (request.url === "/forbidden-effect") {
             forbiddenEffects += 1;
+            response.writeHead(204).end();
+            return;
+          }
+          if (request.url === "/tool-checkpoint") {
+            toolCheckpoint.resolve();
+            await withinTest(releaseToolCheckpoint.promise, signal);
+            response.writeHead(204).end();
+            return;
+          }
+          if (request.url === "/tool-cancelled") {
+            toolCancelled.resolve();
             response.writeHead(204).end();
             return;
           }
@@ -214,27 +228,22 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
           if (recoveryStarts.size === 4) {
             fourRecoveriesSeen.resolve();
           }
-          if (scenario.name === "reset") {
-            response.once("close", () => resetResponseClosed.resolve());
-          }
           scenario.recoverySeen.resolve();
           if (scenario.phase === "held-recovery") {
             writePartial(response, scenario, ordinal);
             return;
           }
-          await withinTest(scenario.releaseResponse.promise, signal);
           if (scenario.name === "reset") {
-            if (!response.destroyed) {
-              writeExec(
-                response,
-                nodeCommand(
-                  `fetch(${JSON.stringify(`${origin}/forbidden-effect`)}, {method:"POST"})`,
-                ),
-                ordinal,
-              );
-            }
+            writeExec(
+              response,
+              nodeCommand(
+                `fetch(${JSON.stringify(`${origin}/forbidden-effect`)}, {method:"POST"})`,
+              ),
+              ordinal,
+            );
             return;
           }
+          await withinTest(scenario.releaseResponse.promise, signal);
           if (scenario.name === "raw-tool") {
             const recoveryCalls = scenario.calls.filter((call) => call.phase === "recovery");
             if (recoveryCalls.length === 1) {
@@ -274,12 +283,15 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
     recoveryStarts: () => [...recoveryStarts],
     peakRecoveryConcurrency: () => peakRecoveryConcurrency,
     toolStarted: toolStarted.promise,
-    resetResponseClosed: resetResponseClosed.promise,
+    toolCheckpoint: toolCheckpoint.promise,
+    toolCancelled: toolCancelled.promise,
+    releaseToolCheckpoint: () => releaseToolCheckpoint.resolve(),
     effects: () => effects,
     forbiddenEffects: () => forbiddenEffects,
     close: () =>
       runQaGatewayFixture(
         async () => {
+          releaseToolCheckpoint.resolve();
           for (const scenario of scenarios) {
             scenario.releaseResponse.resolve();
           }
@@ -294,7 +306,8 @@ async function startProvider(scenarios: Scenario[], signal: AbortSignal) {
 it(
   "preserves unfinished task custody across process shutdown, but respects Stop and reset",
   { timeout: 180_000 },
-  async ({ signal }) => {
+  async (context) => {
+    const { signal } = context;
     const stream = createScenario("raw-stream");
     const tool = createScenario("raw-tool");
     const stopped = createScenario("stop");
@@ -305,8 +318,27 @@ it(
     const managed = createScenario("managed");
     const killed = createScenario("killed");
     const scenarios = [...rawRecoveries, stopped, managed, killed];
+    let phase = "provider-start";
+    let readLogs = () => "Gateway instance not created";
+    const pendingCompletions = new Set<string>();
+    // Timeout reporting must not wait for the suspended test body to unwind.
+    context.onTestFailed(() => {
+      console.error(
+        "[process-shutdown-recovery]",
+        JSON.stringify({
+          phase,
+          pendingCompletions: [...pendingCompletions],
+          calls: scenarios.map(({ name, calls }) => ({
+            name,
+            phases: calls.map((call) => call.phase),
+          })),
+          logs: readLogs(),
+        }),
+      );
+    });
     const provider = await startProvider(scenarios, signal);
     const model = buildMockOpenAiResponsesProvider(provider.baseUrl);
+    phase = "fixture-create";
     const instance = await createOpenClawTestInstance({
       name: "gateway-process-shutdown-recovery",
       entrypoint: ["dist/index.js"],
@@ -323,8 +355,8 @@ it(
         OPENCLAW_NO_RESPAWN: "1",
       },
     });
+    readLogs = () => instance.logs().replaceAll(instance.gatewayToken, "[fixture token]");
     let client: GatewayClient | undefined;
-    let phase = "startup";
     const gate = <T>(promise: Promise<T>) =>
       withinTest(Promise.race([promise, provider.failed]), signal);
     const connect = async () => {
@@ -333,7 +365,8 @@ it(
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          mode: "backend",
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
+          mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
             path: instance.state.path("device.sqlite"),
@@ -369,6 +402,7 @@ it(
       await client.request("sessions.subscribe", { agentId: "main" });
     };
     const start = async (scenario: Scenario) => {
+      phase = `start-${scenario.name}:create-session`;
       const created = await client!.request<{ sessionId: string }>("sessions.create", {
         key: scenario.key,
         agentId: "main",
@@ -376,6 +410,7 @@ it(
         permissionMode: "full",
       });
       scenario.sessionId = created.sessionId;
+      phase = `start-${scenario.name}:admit`;
       const accepted = await client!.request<{ runId: string }>(
         "agent",
         {
@@ -389,6 +424,7 @@ it(
         { expectFinal: false },
       );
       scenario.runId = accepted.runId;
+      phase = `start-${scenario.name}:wait-first-output`;
       await gate(scenario === tool ? provider.toolStarted : scenario.partialSeen.promise);
     };
     const stopProcess = async (mode: "raw" | "managed" | "kill") => {
@@ -396,6 +432,7 @@ it(
       if (!child?.pid) {
         throw new Error("Owned Gateway process unavailable");
       }
+      phase = `shutdown-${mode}:close-client`;
       await client?.stopAndWait();
       client = undefined;
       const closed = once(child, "close");
@@ -409,6 +446,7 @@ it(
         ).toBe(true);
       }
       expect(child.kill(mode === "kill" ? "SIGKILL" : "SIGTERM")).toBe(true);
+      phase = `shutdown-${mode}:wait-process-close`;
       const outcome = await gate(closed);
       expect(outcome, instance.logs()).toEqual(mode === "kill" ? [null, "SIGKILL"] : [0, null]);
       return child.pid;
@@ -431,7 +469,9 @@ it(
     };
     const finish = async (scenario: Scenario) => {
       scenario.releaseResponse.resolve();
+      pendingCompletions.add(scenario.name);
       await gate(scenario.completed.promise);
+      pendingCompletions.delete(scenario.name);
       const listed = await client!.request<SessionsListResult>("sessions.list", {
         agentId: "main",
       });
@@ -460,12 +500,58 @@ it(
     await runQaGatewayFixture(
       async () => {
         try {
+          const pluginId = "shutdown-tool-checkpoint";
+          const pluginDir = instance.state.path("checkpoint-plugin");
+          await mkdir(pluginDir, { recursive: true });
+          await writeFile(
+            path.join(pluginDir, "openclaw.plugin.json"),
+            JSON.stringify({
+              id: pluginId,
+              activation: { onStartup: true },
+              configSchema: { type: "object", additionalProperties: false, properties: {} },
+            }),
+          );
+          // A public policy hook ignores cancellation until released, so reset must
+          // revoke execution before the pending tool can reach its effect boundary.
+          await writeFile(
+            path.join(pluginDir, "index.mjs"),
+            `export default {
+              id: ${JSON.stringify(pluginId)},
+              register(api) {
+                api.on("before_tool_call", async (event, ctx) => {
+                  if (ctx.sessionKey !== ${JSON.stringify(reset.key)}) return;
+                  const onAbort = () => {
+                    void fetch(${JSON.stringify(provider.baseUrl.replace("/v1", "/tool-cancelled"))}, {
+                      method: "POST",
+                    }).catch(() => {});
+                  };
+                  ctx.abortSignal?.addEventListener("abort", onAbort, { once: true });
+                  try {
+                    if (ctx.abortSignal?.aborted) onAbort();
+                    await fetch(${JSON.stringify(provider.baseUrl.replace("/v1", "/tool-checkpoint"))}, {
+                      method: "POST",
+                    });
+                  } finally {
+                    ctx.abortSignal?.removeEventListener("abort", onAbort);
+                  }
+                }, { matcher: ["exec"] });
+              },
+            };`,
+          );
           await instance.state.writeConfig({
             update: { checkOnStart: false },
             browser: { enabled: false },
             discovery: { mdns: { mode: "off" } },
-            plugins: { enabled: false },
+            plugins: {
+              enabled: true,
+              allow: [pluginId],
+              load: { paths: [pluginDir] },
+              entries: { [pluginId]: { enabled: true } },
+              slots: { memory: "none" },
+            },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -503,15 +589,19 @@ it(
               controlUi: { enabled: false },
             },
           });
+          phase = "initial:gateway-start";
           await instance.startGateway();
+          phase = "initial:client-connect";
           await connect();
           phase = "raw-sigterm";
           await start(stream);
           await start(tool);
           await start(stopped);
+          phase = "explicit-stop:abort";
           expect(await client!.request("sessions.abort", { key: stopped.key })).toMatchObject({
             status: "aborted",
           });
+          phase = "explicit-stop:wait-terminal";
           expect(
             await client!.request("agent.wait", { runId: stopped.runId, timeoutMs: 60_000 }),
           ).toMatchObject({ status: "error" });
@@ -533,10 +623,13 @@ it(
           expect(readStoppedEntry(stopped)).toMatchObject({ status: "killed" });
           const resetRevision = readStoppedEntry(reset).lifecycleRevision;
           expect(resetRevision).toBeTypeOf("string");
+          phase = "raw-recovery:gateway-start";
           await instance.startGateway();
           expect(instance.child?.pid).not.toBe(predecessor);
+          phase = "raw-recovery:client-connect";
           await connect();
           // Four distinct turns must reach the provider while every response is held.
+          phase = "raw-recovery:wait-four-provider-requests";
           await gate(provider.fourRecoveriesSeen);
           const firstRecoveries = provider.recoveryStarts();
           expect(firstRecoveries).toHaveLength(4);
@@ -545,7 +638,9 @@ it(
           if (!firstFinished) {
             throw new Error("Expected a started recovery that is not being reset");
           }
+          phase = `raw-recovery:finish-first-${firstFinished.name}`;
           await finish(firstFinished);
+          phase = "raw-recovery:wait-all-provider-requests";
           await gate(Promise.all(rawRecoveries.map((scenario) => scenario.recoverySeen.promise)));
           const finishing = Promise.all(
             rawRecoveries
@@ -553,20 +648,29 @@ it(
               .map(finish),
           );
           void finishing.catch(() => {});
+          phase = "raw-recovery:wait-reset-provider-request";
+          await gate(reset.recoverySeen.promise);
+          phase = "recovery-tool-checkpoint";
+          await gate(provider.toolCheckpoint);
           phase = "revoke-recovery";
-          const resetResult = await client!.request<{
+          const resetting = client!.request<{
             ok: boolean;
             entry: { sessionId: string; lifecycleRevision: string };
           }>("sessions.reset", { key: reset.key, reason: "reset" });
+          void resetting.catch(() => {});
+          phase = "revoke-recovery:wait-tool-cancel";
+          await gate(provider.toolCancelled);
+          provider.releaseToolCheckpoint();
+          phase = "revoke-recovery:wait-reset-result";
+          const resetResult = await gate(resetting);
           expect(resetResult).toMatchObject({
             ok: true,
             entry: { sessionId: reset.sessionId, lifecycleRevision: expect.any(String) },
           });
           expect(resetResult.entry.lifecycleRevision).not.toBe(resetRevision);
           expect(resetResult.entry).not.toHaveProperty("mainRestartRecovery");
-          await gate(provider.resetResponseClosed);
-          reset.releaseResponse.resolve();
           reset.phase = "cancelled";
+          phase = "raw-recovery:wait-remaining-completions";
           await gate(finishing);
           const afterReset = await client!.request<SessionsListResult>("sessions.list", {
             agentId: "main",
@@ -588,8 +692,11 @@ it(
             sessionId: managed.sessionId,
           });
           managed.phase = "held-recovery";
+          phase = "managed-recovery:gateway-start";
           await instance.startGateway();
+          phase = "managed-recovery:client-connect";
           await connect();
+          phase = "managed-recovery:wait-provider-request";
           await gate(managed.recoverySeen.promise);
           // Kill both an admitted original turn and a turn already recovering from restart.
           phase = "sigkill-during-recovery";
@@ -597,8 +704,11 @@ it(
           await stopProcess("kill");
           managed.phase = "recovery";
           killed.phase = "recovery";
+          phase = "second-recovery:gateway-start";
           await instance.startGateway();
+          phase = "second-recovery:client-connect";
           await connect();
+          phase = "second-recovery:wait-completions";
           await gate(Promise.all([finish(managed), finish(killed)]));
           expect(stopped.calls).toHaveLength(1);
           expect(reset.calls).toHaveLength(2);
@@ -624,6 +734,7 @@ it(
               sigkill: true,
               secondRestartDuringRecovery: true,
               explicitStop: "terminal",
+              revocationBoundary: "before_tool_call",
               effectsAfterReset: 0,
               acceptedEffects: 1,
               processes: 4,
@@ -644,6 +755,7 @@ it(
         }
       },
       async () => {
+        provider.releaseToolCheckpoint();
         for (const scenario of scenarios) {
           scenario.releaseResponse.resolve();
         }

@@ -30,6 +30,8 @@ export class AgentHarnessSessionCleanupError extends Error {
 
 /** A model-independent harness preflight failed before an attempt could start. */
 export class AgentHarnessPreflightError extends Error {
+  /** Stable machine-readable reason when the owner provides one. */
+  readonly code?: string;
   /** Opts fallback into skipping only candidates owned by the selected harness. */
   readonly scope?: "harness";
   /** Owner-authored public explanation; message and cause remain diagnostic. */
@@ -43,6 +45,18 @@ export class AgentHarnessPreflightError extends Error {
     this.name = "AgentHarnessPreflightError";
     this.scope = options?.scope;
     this.userMessage = options?.userMessage;
+  }
+}
+
+/** A native session registration attempted to bypass the host's turn admission. */
+export class SessionControllerAdmissionRequiredError extends AgentHarnessPreflightError {
+  override readonly code = "SESSION_CONTROLLER_ADMISSION_REQUIRED";
+
+  constructor() {
+    const message =
+      "Session-keyed native runs require a host-admitted harness turn. Register this run from the host-provided runAttempt callback; use detached execution only for sessionless work.";
+    super(message, { userMessage: message });
+    this.name = "SessionControllerAdmissionRequiredError";
   }
 }
 

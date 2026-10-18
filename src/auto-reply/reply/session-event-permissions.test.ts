@@ -780,7 +780,8 @@ it.for([
           releaseFirst.resolve();
           await expect(first.settled).resolves.toMatchObject({ status: "completed" });
           for (const notice of cancelledBatch ? [] : notices) {
-            await expect(notice.settled).resolves.toMatchObject({
+            const outcome = await notice.settled;
+            expect(outcome, outcome.error).toMatchObject({
               status: "completed",
               executionStarted: true,
             });

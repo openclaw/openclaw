@@ -152,8 +152,6 @@ async function withDemandFixture(
         async (_request, dispatch) => await dispatch(),
       );
     const context = makeDispatchTestContext({
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       agentRunSeq: new Map(),

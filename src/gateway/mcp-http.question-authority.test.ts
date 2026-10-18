@@ -16,11 +16,11 @@ import {
 import { claimPendingAgentQuestionAnswerFromCaller } from "../agents/harness/gateway-question.js";
 import { withQuestionGateway } from "../agents/harness/gateway-question.test-support.js";
 import { resetPendingAskUserQuestionsForTest } from "../agents/tools/ask-user-tool.test-support.js";
-import type { ReplyToolAuthorityOverlay } from "../auto-reply/reply/reply-run-registry.contracts.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import type { ReplyToolAuthorityOverlay } from "../sessions/session-controller.contracts.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   activateMcpLoopbackClientGrantCapture,

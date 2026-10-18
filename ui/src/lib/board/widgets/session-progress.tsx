@@ -9,7 +9,7 @@ import {
   resolveSessionProgressCardTarget,
   sessionProgressCardsForGateway,
 } from "../../session-progress-cards.ts";
-import { isSessionRunActive } from "../../session-run-state.ts";
+import { isSessionRunStateActive } from "../../session-run-state.ts";
 import { parseAgentSessionKey } from "../../sessions/session-key.ts";
 import { sessionProgressTargetQuery } from "../../sessions/session-requests.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../solid-bridge.ts";
@@ -191,7 +191,7 @@ function SessionProgressWidgetContent(
                 sessionStatus={row()?.status}
                 startedAt={row()?.startedAt}
                 endedAt={row()?.endedAt}
-                hasActiveRun={isSessionRunActive(row() ?? {})}
+                hasActiveRun={isSessionRunStateActive(row() ?? {})}
               />
             )}
           </Show>

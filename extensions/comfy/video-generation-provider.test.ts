@@ -1,7 +1,6 @@
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildComfyConfig, fetchGuardJson } from "./test-helpers.js";
-import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
+import { buildComfyConfig, fetchGuardJson, registerComfyProviders } from "./test-helpers.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -11,6 +10,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
+
+const comfyProviders = registerComfyProviders();
 
 function fetchGuardParams(call: number): { url?: unknown; auditContext?: unknown } {
   const params = fetchWithSsrFGuardMock.mock.calls[call]?.[0];
@@ -50,7 +51,7 @@ function mockLocalVideoResponses(params: {
 }
 
 function generateLocalVideo(outputNodeId?: string) {
-  const provider = buildComfyVideoGenerationProvider();
+  const provider = comfyProviders.video;
   return provider.generateVideo({
     provider: "comfy",
     model: "workflow",
@@ -80,7 +81,7 @@ describe("comfy video-generation provider", () => {
   });
 
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildComfyVideoGenerationProvider());
+    expectExplicitVideoGenerationCapabilities(comfyProviders.video);
   });
 
   it("returns only MP4 video entries from mixed images buckets", async () => {

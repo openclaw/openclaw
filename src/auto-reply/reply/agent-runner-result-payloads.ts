@@ -26,6 +26,7 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
 import {
@@ -65,7 +66,6 @@ import {
   recordReplyOperationAgentTurn,
   resolveReplyOperationRunState,
 } from "./reply-operation-run-state.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
@@ -381,7 +381,6 @@ export async function prepareReplyAgentPayloads(state: {
       return undefined;
     }
     if (!replyOperation.result) {
-      replyOperation.retainFailureUntilComplete();
       replyOperation.fail(
         "run_failed",
         new Error(
@@ -400,7 +399,6 @@ export async function prepareReplyAgentPayloads(state: {
   const recordMissingReply = () => {
     const emptyHeartbeat = isHeartbeat && completion.outcome === "empty";
     if ((completion.outcome === "missing" || emptyHeartbeat) && !replyOperation.result) {
-      replyOperation.retainFailureUntilComplete();
       replyOperation.fail("run_failed", new Error(MISSING_REPLY_NOTICE_TEXT));
       recordReplyOperationAgentTurn(followupRun.replyOperationRunStates, replyOperation, {
         kind: "settled",

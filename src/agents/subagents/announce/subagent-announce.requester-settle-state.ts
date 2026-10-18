@@ -7,11 +7,42 @@ import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatc
 
 export type RequesterSettleWakeBatchState = Omit<RequesterSettleWakeState, "retireAfterSettle">;
 
+export const REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS = 3;
+const REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS = [30_000, 120_000] as const;
+
+/** Only a known missing result may mint another public continuation; private retries reconcile. */
+export function resolveRequesterSettleRetryState(params: {
+  state: RequesterSettleWakeBatchState;
+  delivery: SubagentAnnounceDeliveryResult;
+  attemptCount: number;
+  parentOnly: boolean;
+  now: number;
+}): RequesterSettleWakeBatchState | undefined {
+  const { state, delivery, attemptCount, parentOnly } = params;
+  const retryDelay = REQUESTER_SETTLE_WAKE_RETRY_DELAYS_MS[attemptCount - 1];
+  if (
+    delivery.disposition !== "retryable" ||
+    (!parentOnly && delivery.reason !== "visible_reply_missing") ||
+    delivery.reason === "requester_abandoned" ||
+    attemptCount >= REQUESTER_SETTLE_WAKE_MAX_ATTEMPTS ||
+    retryDelay === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    ...state,
+    status: "pending",
+    attemptCount,
+    nextAttemptAt: params.now + retryDelay,
+    lastError: delivery.error ?? delivery.reason ?? "undelivered",
+  };
+}
+
 export type RequesterSettleWakeBatchCallbacks = {
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
-    onPublished: (entries: readonly SubagentRunRecord[]) => void,
+    onPublished?: (entries: readonly SubagentRunRecord[]) => void,
   ) => void | Promise<void>;
   completeBatch: (
     batch: readonly SubagentRunRecord[],
@@ -20,76 +51,6 @@ export type RequesterSettleWakeBatchCallbacks = {
     onCommitted?: () => void,
   ) => void | Promise<void>;
 };
-
-const activeRequesterSettleWakeBatches = new Map<string, () => boolean>();
-
-/** Reads stay independent; the first prepared decision owns mutation and delivery. */
-export function createRequesterSettleBatchClaim(
-  key: string,
-  isGatewayCurrent: (() => boolean) | undefined,
-) {
-  const hadGatewayContext = isGatewayCurrent?.() === true;
-  if (isGatewayCurrent && !hadGatewayContext) {
-    return undefined;
-  }
-  const isGatewayClosed = () => {
-    try {
-      return hadGatewayContext && !isGatewayCurrent?.();
-    } catch {
-      // An incompatible captured batch cannot block a fresh Gateway owner.
-      return hadGatewayContext;
-    }
-  };
-  return {
-    isGatewayClosed,
-    claim: (): boolean => {
-      const owner = activeRequesterSettleWakeBatches.get(key);
-      if (owner === isGatewayClosed) {
-        return true;
-      }
-      if (owner?.() === false) {
-        return false;
-      }
-      activeRequesterSettleWakeBatches.set(key, isGatewayClosed);
-      return true;
-    },
-    release(): void {
-      if (activeRequesterSettleWakeBatches.get(key) === isGatewayClosed) {
-        activeRequesterSettleWakeBatches.delete(key);
-      }
-    },
-  };
-}
-
-export function retainedYieldIdentity(state: RequesterSettleWakeBatchState) {
-  return {
-    ...(state.pauseNotice ? { pauseNotice: state.pauseNotice } : {}),
-    ...(state.requesterYieldBatch === true ? { requesterYieldBatch: true as const } : {}),
-    ...(state.afterRequesterYield === true ? { afterRequesterYield: true as const } : {}),
-    ...(state.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true as const } : {}),
-    ...(state.rearmGeneration !== undefined ? { rearmGeneration: state.rearmGeneration } : {}),
-  };
-}
-
-export function startRequesterSettleWakeAttempt(
-  state: RequesterSettleWakeBatchState,
-  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"],
-  admissionMarker: Pick<RequesterSettleWakeBatchState, "yieldedFinalDeliverable">,
-): RequesterSettleWakeBatchState {
-  return {
-    status: "dispatching",
-    attemptCount: state.attemptCount + 1,
-    batchRunIds,
-    ...retainedYieldIdentity(state),
-    ...admissionMarker,
-  };
-}
-
-export function deferRequesterSettleWakePreparation(
-  state: RequesterSettleWakeBatchState,
-): RequesterSettleWakeBatchState {
-  return { ...state, nextAttemptAt: Date.now() + 30_000 };
-}
 
 export function waitForRequesterDescendants(
   facts: { unsettled: boolean; active: number; deliveryWaitUntil?: number },
@@ -104,42 +65,22 @@ export function waitForRequesterDescendants(
   return true;
 }
 
-/** Backoff for an admitted requester turn or a pause notice that changed owners. */
-export function createRequesterSettleBatchDeferral(params: {
-  claimCurrentBatch: () => boolean;
-  readState: () => RequesterSettleWakeBatchState;
-  transitionBatch: (state: RequesterSettleWakeBatchState) => Promise<void>;
-  batchRunIds: RequesterSettleWakeBatchState["batchRunIds"];
-}) {
-  return async (
-    overrides: Partial<Pick<RequesterSettleWakeBatchState, "status" | "lastError">> = {},
-  ) => {
-    if (params.claimCurrentBatch()) {
-      await params.transitionBatch(
-        deferRequesterSettleWakePreparation({
-          ...params.readState(),
-          ...overrides,
-          batchRunIds: params.batchRunIds,
-        }),
-      );
-    }
-  };
-}
-
 export function readSharedBatchState(
   batch: readonly SubagentRunRecord[],
 ): RequesterSettleWakeBatchState {
   const states = batch
     .map((entry) => entry.requesterSettleWake)
     .filter((state): state is RequesterSettleWakeState => Boolean(state));
-  const dispatching = states.find((state) => state.status === "dispatching");
-  const source = dispatching ?? states[0];
+  const source = states.find((state) => state.status === "dispatching") ?? states[0];
   return {
     status: source?.status ?? "pending",
-    ...(source?.pauseNotice ? { pauseNotice: source.pauseNotice } : {}),
-    attemptCount: Math.max(0, ...states.map((state) => state.attemptCount)),
+    attemptCount: Math.max(0, ...states.map((state) => state.attemptCount ?? 0)),
+    ...(source?.privateInput ? { privateInput: source.privateInput } : {}),
     ...(source?.replayCount !== undefined ? { replayCount: source.replayCount } : {}),
     ...(source?.nextAttemptAt !== undefined ? { nextAttemptAt: source.nextAttemptAt } : {}),
+    ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
+    ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),
+    ...(source?.pauseNotice ? { pauseNotice: source.pauseNotice } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
@@ -149,7 +90,6 @@ export function readSharedBatchState(
       : {}),
     ...(source?.yieldedFinalDeliverable === true ? { yieldedFinalDeliverable: true } : {}),
     ...(source?.rearmGeneration !== undefined ? { rearmGeneration: source.rearmGeneration } : {}),
-    ...(source?.lastError !== undefined ? { lastError: source.lastError } : {}),
   };
 }
 

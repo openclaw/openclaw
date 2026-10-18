@@ -7,12 +7,15 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import * as sessions from "../../../config/sessions/session-accessor.js";
 import {
-  beginSessionWorkAdmission,
-  getActiveSessionLifecycleMutationCount,
-  getActiveSessionWorkAdmissionCount,
-} from "../../../sessions/session-lifecycle-admission.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
+  beginSessionEffect,
+  getSessionMutationCount,
+  getSessionControllerWorkCount,
+} from "../../../sessions/session-controller.lifecycle.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
+import {
+  attachActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+} from "./subagent-control-native.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./subagent-control.types.js";
@@ -72,7 +75,7 @@ it.each(
   async ({ boundary, phase }) => {
     const storePath = await seed();
     const entered = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [key("child"), "child-session"],
       assertAllowed: () => {},
@@ -206,8 +209,8 @@ it.each(
         ownerReader.mockRestore();
         writer.mockRestore();
       }
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expect(getSessionControllerWorkCount()).toBe(0);
+      expect(getSessionMutationCount()).toBe(0);
     }
   },
 );
@@ -217,7 +220,7 @@ it.each([false, true])(
   async (sameTextSibling) => {
     const storePath = await seed();
     const entered = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [key("root"), "root-session"],
       assertAllowed: () => {},
@@ -225,9 +228,9 @@ it.each([false, true])(
     });
     const rootHandle = createEmbeddedRunHandle({ runId: "root", isAbortable: false });
     const healthyHandle = createEmbeddedRunHandle({ runId: "healthy", isAbortable: false });
-    setActiveEmbeddedRun("root-session", rootHandle, key("root"));
+    attachActiveEmbeddedRun("root-session", rootHandle, key("root"));
     if (sameTextSibling) {
-      setActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
+      attachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
     }
     const read = registryRead.withSubagentRunReadSnapshot;
     let armed = false;
@@ -289,11 +292,11 @@ it.each([false, true])(
         await pending;
       } finally {
         reader.mockRestore();
-        clearActiveEmbeddedRun("root-session", rootHandle, key("root"));
-        clearActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
+        await detachActiveEmbeddedRun("root-session", rootHandle, key("root"));
+        await detachActiveEmbeddedRun("healthy-session", healthyHandle, key("healthy"));
       }
-      expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-      expect(getActiveSessionLifecycleMutationCount()).toBe(0);
+      expect(getSessionControllerWorkCount()).toBe(0);
+      expect(getSessionMutationCount()).toBe(0);
     }
   },
 );

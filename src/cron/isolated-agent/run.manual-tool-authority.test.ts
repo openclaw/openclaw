@@ -36,10 +36,12 @@ import { createNoopLogger } from "../service.test-harness.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
+  makeCronSession,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
   resolveConfiguredModelRefMock,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
@@ -85,8 +87,10 @@ describe("manual run tool authority after the initiating invocation closes", () 
     },
   ])("$name", async ({ toolsAllow, withdraw, senderIsOwner }) => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const sessionStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
     const config: OpenClawConfig = {
       ...cfg,
+      session: { store: sessionStorePath },
       models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
       agents: {
         defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
@@ -99,6 +103,7 @@ describe("manual run tool authority after the initiating invocation closes", () 
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
     };
     setRuntimeConfigSnapshot(config);
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
     // Capture and execution must address the same canonical credential owner.
     vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
     resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
@@ -254,7 +259,12 @@ describe("manual run tool authority after the initiating invocation closes", () 
       );
       expect(accepted).toMatchObject({ ok: true, payload: { enqueued: true } });
       // Preparation finished under the stored job; now the admin request ends.
-      await toolsReady.promise;
+      await Promise.race([
+        toolsReady.promise,
+        finished.promise.then((event) => {
+          throw new Error(`Cron finished before tool construction: ${event.error ?? event.status}`);
+        }),
+      ]);
       source.release();
       if (withdraw === "disable") {
         await execution.update(jobId, { enabled: false });

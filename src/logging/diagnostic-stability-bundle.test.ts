@@ -392,7 +392,7 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
-  it("preserves worker memory attribution and unavailable samples in exported bundles", () => {
+  it("preserves OS and worker memory attribution and unavailable samples in exported bundles", () => {
     startDiagnosticStabilityRecorder();
     emitDiagnosticEvent({
       type: "diagnostic.memory.pressure",
@@ -404,6 +404,8 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
       memory: {
         rssBytes: 4096,
+        anonymousRssBytes: 3072,
+        anonymousSwapBytes: 0,
         heapTotalBytes: 1024,
         heapUsedBytes: 512,
         externalBytes: 32,
@@ -467,6 +469,8 @@ describe("diagnostic stability bundles", () => {
       workerThreadId: 2,
     });
     expect(readback.bundle.snapshot.events[0]?.memory).toMatchObject({
+      anonymousRssBytes: 3072,
+      anonymousSwapBytes: 0,
       workerCount: 2,
       workerHeapSampledCount: 1,
       workerHeapUsedBytes: 1024,

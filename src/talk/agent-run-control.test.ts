@@ -128,41 +128,52 @@ describe("controlRealtimeVoiceAgentRun", () => {
     },
   );
 
-  it("controls the exact live owner and queries only its session diagnostics", async () => {
-    const deps = createDeps({ activeSessionId: "another-agent-session" });
-    const abort = vi.fn(() => true);
-    const resolveActiveEmbeddedRunOwnerByRunId = vi.fn(() => ({
-      runId: "owned-run",
-      sessionId: "owned-session",
-      sessionKey: "global",
-      abort,
-    }));
-    const result = await control(
-      {
+  it.each(["provided callback", "legacy adapter"])(
+    "controls the exact live owner through %s",
+    async (route) => {
+      const deps = createDeps({ activeSessionId: "another-agent-session" });
+      const abort = vi.fn(() => true);
+      const cancelRun = route === "provided callback" ? vi.fn(async () => true) : undefined;
+      const resolveActiveEmbeddedRunOwnerByRunId = vi.fn(() => ({
+        runId: "owned-run",
+        sessionId: "owned-session",
         sessionKey: "global",
-        runTarget: createRunTarget(),
-        text: "cancel",
-        mode: "cancel",
-      },
-      { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
-    );
-    expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
-    expect([...new Set(resolveActiveEmbeddedRunOwnerByRunId.mock.calls.flat())]).toEqual([
-      "owned-run",
-    ]);
-    expect(abort).toHaveBeenCalledOnce();
-    expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
-      sessionId: "owned-session",
-    });
-    expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
-    expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
-  });
+        abort,
+      }));
+      const result = await control(
+        {
+          sessionKey: "global",
+          runTarget: createRunTarget(),
+          text: "cancel",
+          mode: "cancel",
+          cancelRun,
+        },
+        { ...deps, resolveActiveEmbeddedRunOwnerByRunId },
+      );
+      expect(result).toMatchObject({ ok: true, sessionId: "owned-session", aborted: true });
+      expect([...new Set(resolveActiveEmbeddedRunOwnerByRunId.mock.calls.flat())]).toEqual([
+        "owned-run",
+      ]);
+      if (cancelRun) {
+        expect(cancelRun).toHaveBeenCalledExactlyOnceWith("owned-run");
+        expect(abort).not.toHaveBeenCalled();
+      } else {
+        expect(abort).toHaveBeenCalledOnce();
+      }
+      expect(deps.getDiagnosticSessionActivitySnapshot).toHaveBeenCalledExactlyOnceWith({
+        sessionId: "owned-session",
+      });
+      expect(deps.resolveActiveEmbeddedRunSessionId).not.toHaveBeenCalled();
+      expect(deps.abortEmbeddedAgentRun).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([undefined, null])(
     "answers read-only status without mutating commands (target=%s)",
     async (runTarget) => {
       if (runTarget === null) {
-        vi.doMock("../agents/embedded-agent-runner/active-run-projections.js", () => {
+        // mock-isolation: A null exact-run target must answer status even when global session-key projections cannot load.
+        vi.doMock("../sessions/session-controller.queries.js", () => {
           throw new Error("session-key projections unavailable");
         });
       }
@@ -171,7 +182,7 @@ describe("controlRealtimeVoiceAgentRun", () => {
           control({ sessionKey: "agent:status-probe:main", runTarget }),
         ).resolves.toMatchObject({ ok: true, mode: "status", active: false, speak: true });
       } finally {
-        vi.doUnmock("../agents/embedded-agent-runner/active-run-projections.js");
+        vi.doUnmock("../sessions/session-controller.queries.js");
       }
     },
   );

@@ -24,6 +24,9 @@ import { normalizeLegacySessionEntryDelivery } from "../../../infra/state-migrat
 import * as hookRunnerGlobal from "../../../plugins/hook-runner-global.js";
 import { createHookRunner, type HookRunner } from "../../../plugins/hooks.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import * as sessionNativeRuntime from "../../../sessions/session-controller.native-runtime.js";
+import * as sessionQueries from "../../../sessions/session-controller.queries.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
 import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
@@ -35,7 +38,6 @@ import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "../../announce-idempotency.js";
-import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { FailoverError } from "../../failover-error.js";
 import { buildAgentInternalEventContext, type AgentInternalEvent } from "../../internal-events.js";
 import {
@@ -94,15 +96,18 @@ const resolveStorePathSpy = vi.spyOn(configSessions, "resolveSessionStorePathCor
 const resolveMainSessionKeySpy = vi.spyOn(configSessions, "resolveMainSessionKey");
 const callGatewaySpy = vi.spyOn(gatewayCall, "callGateway");
 const getGlobalHookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner");
-const readLatestAssistantReplyMock = vi.fn<(sessionKey?: string) => Promise<string | undefined>>();
+const isEmbeddedAgentRunActiveSpy = vi.spyOn(sessionQueries, "isSessionRunActive");
+const waitForEmbeddedAgentRunEndSpy = vi.spyOn(sessionNativeRuntime, "waitForSessionRunEnd");
+const readLatestAssistantReplyMock = vi.fn(
+  async (_sessionKey?: string): Promise<string | undefined> => "raw subagent reply",
+);
+const embeddedAgentRunActiveMock = vi.fn<typeof sessionQueries.isSessionRunActive>(() => false);
+const waitForEmbeddedAgentRunEndMock = vi.fn<typeof sessionNativeRuntime.waitForSessionRunEnd>(
+  async (_sessionId: string, _timeoutMs?: number | null) => true,
+);
 const embeddedRunMock = {
-  isEmbeddedAgentRunActive: vi.spyOn(embeddedRuns, "isEmbeddedAgentRunActive"),
-  isEmbeddedAgentRunStreaming: vi.spyOn(embeddedRuns, "isEmbeddedAgentRunStreaming"),
-  queueEmbeddedAgentMessageWithOutcome: vi.spyOn(
-    embeddedRuns,
-    "queueEmbeddedAgentMessageWithOutcome",
-  ),
-  waitForEmbeddedAgentRunEnd: vi.spyOn(embeddedRuns, "waitForEmbeddedAgentRunEnd"),
+  isSessionRunActive: embeddedAgentRunActiveMock,
+  waitForSessionRunEnd: waitForEmbeddedAgentRunEndMock,
 };
 const { subagentRegistryMock } = vi.hoisted(() => ({
   subagentRegistryMock: {
@@ -360,16 +365,25 @@ const deliveryDeps = {
   ...gatewayDeps,
   loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
   loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
-  getRequesterSessionActivity: (requesterSessionKey: string) => {
+  getRequesterSessionActivity: (requesterSessionKey: string, requester) => {
     const entry = readSessionFixture(requesterSessionKey);
     const sessionId = entry?.sessionId;
     return {
       sessionId,
-      isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
+      target: captureSessionTarget({
+        storeScope:
+          requester.storePath ??
+          configSessions.resolveSessionStorePathCore(configOverride.session?.store, {
+            agentId: requester.agentId ?? "main",
+          }),
+        sessionKey: requester.canonicalKey,
+        aliases: [requesterSessionKey],
+        agentId: requester.agentId,
+        incarnation: sessionId,
+      }),
+      isActive: Boolean(sessionId && embeddedRunMock.isSessionRunActive(sessionId)),
     };
   },
-  queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
-    embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
 } satisfies Parameters<typeof subagentAnnounceDeliveryTesting.setDepsForTest>[0];
 
 function expectParentAnnounce() {
@@ -448,7 +462,7 @@ describe("subagent announce formatting", () => {
     subagentRuns.clear();
     vi.useRealTimers();
     agentSpy
-      .mockClear()
+      .mockReset()
       .mockImplementation(async (_req: AgentCallRequest) => visibleAgentResponse());
     sendSpy
       .mockClear()
@@ -491,18 +505,22 @@ describe("subagent announce formatting", () => {
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
     resolveStorePathSpy.mockReset().mockImplementation(() => "/tmp/sessions.json");
     resolveMainSessionKeySpy.mockReset().mockImplementation(() => "agent:main:main");
-    getGlobalHookRunnerSpy.mockReset().mockReturnValue(hookRunnerMock);
-    embeddedRunMock.isEmbeddedAgentRunActive.mockClear().mockReturnValue(false);
-    embeddedRunMock.isEmbeddedAgentRunStreaming.mockClear().mockReturnValue(false);
-    embeddedRunMock.queueEmbeddedAgentMessageWithOutcome
-      .mockClear()
-      .mockImplementation((sessionId) => ({
-        queued: false,
-        sessionId,
-        reason: "not_streaming",
-        gatewayHealth: "live",
-      }));
-    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockClear().mockResolvedValue(true);
+    getGlobalHookRunnerSpy
+      .mockReset()
+      .mockImplementation(
+        () => hookRunnerMock as unknown as ReturnType<typeof hookRunnerGlobal.getGlobalHookRunner>,
+      );
+    isEmbeddedAgentRunActiveSpy
+      .mockReset()
+      .mockImplementation((sessionId) => embeddedRunMock.isSessionRunActive(sessionId));
+    waitForEmbeddedAgentRunEndSpy
+      .mockReset()
+      .mockImplementation(
+        async (sessionId, timeoutMs) =>
+          await embeddedRunMock.waitForSessionRunEnd(sessionId, timeoutMs),
+      );
+    embeddedRunMock.isSessionRunActive.mockClear().mockReturnValue(false);
+    embeddedRunMock.waitForSessionRunEnd.mockClear().mockResolvedValue(true);
     subagentRegistryMock.isSubagentSessionRunActive.mockClear().mockReturnValue(true);
     subagentRegistryMock.shouldIgnorePostCompletionAnnounceForSession
       .mockClear()
@@ -884,7 +902,7 @@ describe("subagent announce formatting", () => {
 
   it.each([
     {
-      name: "retries transient channel-unavailable errors",
+      name: "reports transient channel-unavailable errors after one attempt",
       errors: () => [
         new Error("Error: No active WhatsApp Web listener (account: default)"),
         new Error("UNAVAILABLE: listener reconnecting"),
@@ -896,7 +914,7 @@ describe("subagent announce formatting", () => {
         roundOneReply: "final answer",
         terminalReply: { disposition: "visible", text: "final answer" } as const,
       },
-      outcome: "delivered",
+      outcome: "retryable",
     },
     {
       name: "does not retry permanent channel errors",
@@ -911,7 +929,7 @@ describe("subagent announce formatting", () => {
       outcome: "permanent_failure",
     },
     {
-      name: "retries fallback cooldown exhaustion",
+      name: "reports fallback cooldown exhaustion after one attempt",
       errors: () => [
         new FailoverError(
           "All models failed (1): anthropic/claude-opus-4-7: Provider anthropic is in cooldown (all profiles unavailable) (overloaded)",
@@ -936,7 +954,7 @@ describe("subagent announce formatting", () => {
         roundOneReply: "worker result",
         terminalReply: { disposition: "visible", text: "worker result" } as const,
       },
-      outcome: "delivered",
+      outcome: "retryable",
     },
   ])("direct agent announce $name", async ({ errors, params, outcome }) => {
     const failures = errors();
@@ -944,7 +962,7 @@ describe("subagent announce formatting", () => {
       agentSpy.mockRejectedValueOnce(error);
     }
     expect(await runSubagentAnnounceFlow({ ...defaultOutcomeAnnounce, ...params })).toBe(outcome);
-    expect(agentSpy).toHaveBeenCalledTimes(failures.length + (outcome === "delivered" ? 1 : 0));
+    expect(agentSpy).toHaveBeenCalledOnce();
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
@@ -1533,8 +1551,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("uses the producer's complete reply after the child settles without rereading history", async () => {
-    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValue(false);
-    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    embeddedRunMock.isSessionRunActive.mockReturnValueOnce(true).mockReturnValue(false);
+    embeddedRunMock.waitForSessionRunEnd.mockResolvedValue(true);
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-1",
@@ -1558,10 +1576,7 @@ describe("subagent announce formatting", () => {
       outcome: { status: "ok" },
     });
 
-    expect(embeddedRunMock.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith(
-      "child-session-1",
-      1000,
-    );
+    expect(embeddedRunMock.waitForSessionRunEnd).toHaveBeenCalledWith("child-session-1", 1000);
     const call = getAgentCall();
     const context = getAgentCallContext(call);
     expect(context).toContain("Read #12 complete.");
@@ -1863,8 +1878,8 @@ describe("subagent announce formatting", () => {
   });
 
   it("defers completion announce when the child stays active after settle timeout", async () => {
-    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(true);
-    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
+    embeddedRunMock.isSessionRunActive.mockReturnValue(true);
+    embeddedRunMock.waitForSessionRunEnd.mockResolvedValue(false);
     sessionStore = { "agent:main:subagent:test": { sessionId: "child-session-active" } };
     const didAnnounce = await runSubagentAnnounceFlow({
       ...defaultOutcomeAnnounce,

@@ -17,7 +17,10 @@ import { resolveAgentScopedOutboundMediaAccess } from "./read-capability.js";
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMediaRaw } from "./web-media.js";
 
-vi.mock("../agents/sandbox.js", () => ({
+vi.mock("../agents/sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../agents/sandbox/context.js")>(
+    "../agents/sandbox/context.js",
+  )),
   ensureSandboxWorkspaceForSession: vi.fn(async () => undefined),
 }));
 vi.mock("../channels/plugins/index.js", () => ({

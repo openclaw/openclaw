@@ -2,17 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -28,11 +27,11 @@ import {
   createAgentAccountingPersistenceFixture,
   observeCompletionCommands,
 } from "./agent-runner-result-accounting.persistence.test-support.js";
+import { registerAccountingReplacementRaceCases } from "./agent-runner-result-accounting.replacement.cases.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import { createFollowupRunner } from "./followup-runner.js";
-import * as followupAdmission from "./followup-turn-admission.js";
 import * as followupExecution from "./followup-turn-execution.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import * as followupAdmission from "./reply-agent-turn-preparation.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -140,8 +139,8 @@ it("retains an accepted rejected followup's recovery claim until source delivery
   });
   turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver };
   const admission = vi
-    .spyOn(followupAdmission, "admitFollowupTurn")
-    .mockResolvedValue({ kind: "admitted", turn });
+    .spyOn(followupAdmission, "prepareReplyAgentTurn")
+    .mockResolvedValue({ kind: "admitted", configured: undefined, turn });
   const execution = vi.spyOn(followupExecution, "executeFollowupTurn").mockResolvedValue({
     commentaryPayloadsEnabled: false,
     execution: {
@@ -433,7 +432,7 @@ it.each([
       };
       await fixture.replace(previous);
       fixture.context.activeSessionEntry = previous;
-      fixture.turn.session.adopt(previous);
+      fixture.turn.session.publish(previous);
       fixture.context.followupRun.run.model = "unlisted-model";
       fixture.context.execution.resolved.model = "unlisted-model";
     }
@@ -834,7 +833,7 @@ describe("followup context-pressure accounting", () => {
       const successor = { ...fixture.context.activeSessionEntry!, sessionId };
       await fixture.replace(successor);
       fixture.context.activeSessionEntry = successor;
-      fixture.turn.session.adopt(successor);
+      fixture.turn.session.publish(successor);
       fixture.context.replyOperation.updateSessionId(sessionId);
       await fixture.account(lane, {
         sessionId,
@@ -879,82 +878,4 @@ it.each([{ name: "unavailable", contextBudgetStatus: undefined }])(
   },
 );
 
-describe.each(["ordinary", "followup"] as const)("%s accounting replacement races", (lane) => {
-  it.each([
-    { name: "session", replacement: { sessionId: "replacement-session" } },
-    { name: "lifecycle", replacement: { lifecycleRevision: "generation-2" } },
-    { name: "writer", replacement: { activeWriterRunId: "newer-writer" } },
-  ])(
-    "does not compact replacement $name telemetry after the old owner resumes",
-    async ({ name, replacement }) => {
-      const fixture = await createFixture();
-      fixture.recordCompaction();
-      const pendingTool = createDeferred();
-      fixture.context.pendingToolTasks.add(pendingTool.promise);
-      const accounting = fixture.account(lane, {
-        compactionCount: 1,
-        usage: { input: 120 },
-        lastCallUsage: { input: 120 },
-      });
-      // Simulate an old closure surviving forced terminal-settlement release.
-      // Normal competing reset/delete waits for admission; this is the resumed
-      // owner's write fence after replacement, not a claim that reset bypasses it.
-      const next: SessionEntry = {
-        ...fixture.context.activeSessionEntry!,
-        ...(name === "session" ? { sessionId: `${fixture.sessionId}-replacement` } : replacement),
-        updatedAt: 30,
-        contextBudgetStatus: {
-          ...diagnostic,
-          updatedAt: 30,
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 100,
-          remainingPromptBudgetTokens: 800,
-          overflowTokens: 0,
-        },
-        compactionCount: 9,
-        totalTokens: 666,
-        totalTokensFresh: true,
-        inputTokens: 500,
-        outputTokens: 70,
-        cacheRead: 50,
-        cacheWrite: 5,
-        estimatedCostUsd: 7,
-      };
-      await fixture.replace(next);
-      const persisted = fixture.read();
-      pendingTool.resolve();
-      await expect(accounting).rejects.toThrow("Terminal accounting session changed");
-      expect(fixture.read()).toEqual(persisted);
-    },
-  );
-
-  it("keeps the admitted generation while pending tool work drains", async () => {
-    const fixture = await createFixture();
-    const pendingTool = createDeferred();
-    fixture.context.pendingToolTasks.add(pendingTool.promise);
-    const accounting = fixture.account(lane, { usage: { input: 120 } });
-    const replacement = {
-      ...fixture.context.activeSessionEntry!,
-      lifecycleRevision: "generation-2",
-      contextBudgetStatus: undefined,
-    };
-    await fixture.replace(replacement);
-    Object.assign(fixture.context.activeSessionEntry!, replacement);
-    const persisted = fixture.read();
-    pendingTool.resolve();
-    await expect(accounting).rejects.toThrow("Terminal accounting session changed");
-    expect(fixture.read()).toEqual(persisted);
-  });
-
-  it("does not recreate a deleted session while accounting a completed result", async () => {
-    const fixture = await createFixture();
-    await applySessionEntryLifecycleMutation({
-      storePath: fixture.context.storePath!,
-      removals: [{ sessionKey: fixture.context.sessionKey! }],
-      skipMaintenance: true,
-    });
-    await expect(fixture.account(lane, { usage: { input: 120 } })).rejects.toThrow();
-    expect(fixture.read()).toBeUndefined();
-  });
-});
+registerAccountingReplacementRaceCases(createFixture);

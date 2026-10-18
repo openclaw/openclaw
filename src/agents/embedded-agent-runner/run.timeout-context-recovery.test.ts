@@ -2,21 +2,32 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import { testing as deliveryTesting } from "../subagents/announce/subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "../subagents/announce/subagent-announce-direct-delivery.js";
 import { makeAttemptResult, makeCompactionSuccess } from "./run.overflow-compaction.fixture.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import { recoverEmbeddedRunTimeout } from "./run/timeout-context-recovery.js";
 import {
-  clearActiveEmbeddedRun,
-  isEmbeddedAgentRunActive,
-  resolveEmbeddedRunAbandonment,
+  attachActiveEmbeddedRun,
   markActiveEmbeddedRunAbandoned,
   markEmbeddedRunRecoveringTimeout,
+  resolveEmbeddedRunAbandonment,
   restoreEmbeddedRunTimeoutAbandonment,
-  setActiveEmbeddedRun,
 } from "./runs.js";
-import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  testing as runsTesting,
+} from "./runs.test-support.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const mocks = vi.hoisted(() => ({ compact: vi.fn(), postCompactionSideEffects: vi.fn() }));
@@ -250,7 +261,20 @@ describe("timeout recovery", () => {
   it("defers completion during recovery, delivers to the successor, and restores terminal suppression", async () => {
     const sessionId = "session-timeout-delivery";
     const sessionKey = "agent:main:timeout-delivery";
-    const sendCompletion = () =>
+    const target = captureSessionTarget({
+      storeScope: "/tmp/workspace/openclaw-agent.sqlite",
+      sessionKey,
+      incarnation: sessionId,
+      agentId: "main",
+    });
+    let deliveryAttempt = 0;
+    const reserveCompletion = () =>
+      reserveSessionControllerSource(sessionKey, {
+        target,
+        reservationId: `timeout-recovery-completion:${++deliveryAttempt}`,
+        policy: { mode: "followup" },
+      });
+    const sendCompletionWithInput = (controllerInput: ReturnType<typeof reserveCompletion>) =>
       sendSubagentAnnounceDirectly({
         requesterSessionKey: sessionKey,
         targetRequesterSessionKey: sessionKey,
@@ -258,15 +282,33 @@ describe("timeout recovery", () => {
         expectsCompletionMessage: true,
         requesterIsSubagent: true,
         directIdempotencyKey: "timeout-recovery-completion",
+        controllerInput,
       });
+    const sendCompletion = async () => {
+      const controllerInput = reserveCompletion();
+      try {
+        return await sendCompletionWithInput(controllerInput);
+      } finally {
+        if (!controllerInput.custody.rpcAdopted) {
+          retireSessionControllerInput(controllerInput);
+        }
+      }
+    };
     const abandon = (runId: string) => {
       const handle = createEmbeddedRunHandle({ runId });
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
+      const operation = createReplyOperation({
+        sessionId,
+        sessionKey,
+        target,
+        resetTriggered: false,
+      });
+      attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
       expect(
         markActiveEmbeddedRunAbandoned({ sessionId, handle, sessionKey, reason: "timeout" }),
       ).toBe(true);
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId });
+      operation.complete();
+      const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId, operation });
       expect(marker).toBeDefined();
       return marker!;
     };
@@ -276,7 +318,8 @@ describe("timeout recovery", () => {
       getRuntimeConfig: () => ({}),
       getRequesterSessionActivity: () => ({
         sessionId,
-        isActive: isEmbeddedAgentRunActive(sessionId),
+        target,
+        isActive: isSessionRunActive(sessionId),
       }),
       loadRequesterSessionEntry: (requestedKey) => ({
         cfg: {},
@@ -285,25 +328,73 @@ describe("timeout recovery", () => {
         agentId: "main",
       }),
     });
-    abandon("run-timeout");
-    await expect(sendCompletion()).resolves.toMatchObject({
-      delivered: false,
-      path: "none",
-      reason: "completion_handoff_pending",
-      disposition: "retryable",
+    const otherTarget = captureSessionTarget({
+      storeScope: "/tmp/other-workspace/openclaw-agent.sqlite",
+      sessionKey,
+      incarnation: sessionId,
     });
-    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    const otherOperation = createReplyOperation({
+      sessionId,
+      sessionKey,
+      target: otherTarget,
+      resetTriggered: false,
+    });
+    const otherHandle = createEmbeddedRunHandle({ runId: "other-store-timeout" });
+    attachActiveEmbeddedRun(sessionId, otherHandle, sessionKey, undefined, "main", otherOperation);
+    expect(
+      markActiveEmbeddedRunAbandoned({
+        sessionId,
+        sessionKey,
+        handle: otherHandle,
+        reason: "timeout",
+      }),
+    ).toBe(true);
+    clearActiveEmbeddedRun(sessionId, otherHandle, sessionKey);
+    otherOperation.complete();
+    abandon("run-timeout");
+    // Delivery is recorded once and never retried (c6ecb5f9f2a), so a recovering requester
+    // receives the completion through one dispatch that waits in its mailbox.
+    dispatchGatewayMethodInProcess.mockResolvedValueOnce({
+      status: "ok",
+      result: { payloads: [{ text: "Recovered requester reviewed the child." }], meta: {} },
+    });
+    await expect(sendCompletion()).resolves.toMatchObject({ delivered: true, path: "direct" });
+    expect(dispatchGatewayMethodInProcess).toHaveBeenCalledOnce();
+    expect(resolveEmbeddedRunAbandonment({ sessionKey, target: otherTarget })).toBe("timeout");
+    expect(dispatchGatewayMethodInProcess.mock.calls[0]?.[0]).toBe("agent");
+    dispatchGatewayMethodInProcess.mockClear();
     const queueMessage = vi.fn(async () => undefined);
     const successor = createEmbeddedRunHandle({
       runId: "run-successor",
       queueMessage,
       supportsTranscriptCommitWait: true,
     });
-    setActiveEmbeddedRun(sessionId, successor, sessionKey);
-    await expect(sendCompletion()).resolves.toMatchObject({ delivered: true, path: "steered" });
+    successor.messageInjectionV2 = {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (_text, _options, assertCurrent) => {
+        assertCurrent();
+        await queueMessage();
+      },
+    };
+    const successorDelivery = withSessionTurn(
+      { sessionKey, sessionId, target },
+      async (operation) => {
+        setActiveEmbeddedRun(sessionId, successor, sessionKey, undefined, "main", operation);
+        const controllerInput = reserveCompletion();
+        try {
+          return await sendCompletionWithInput(controllerInput);
+        } finally {
+          if (!controllerInput.custody.rpcAdopted) {
+            retireSessionControllerInput(controllerInput);
+          }
+          clearActiveEmbeddedRun(sessionId, successor, sessionKey);
+        }
+      },
+    );
+    await expect(successorDelivery).resolves.toMatchObject({ delivered: true, path: "steered" });
     expect(queueMessage).toHaveBeenCalledOnce();
     expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
-    clearActiveEmbeddedRun(sessionId, successor, sessionKey);
     expect(restoreEmbeddedRunTimeoutAbandonment(abandon("run-terminal"))).toBe(true);
     await expect(sendCompletion()).resolves.toMatchObject({
       delivered: false,

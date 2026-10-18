@@ -12,7 +12,7 @@ import { DESKTOP_PANEL_TOGGLE_EVENT } from "../panel-toggle-contract.ts";
 import { createDesktopAppLauncher } from "./desktop-app-launcher.ts";
 import { DesktopAudioControl, DesktopAudioNotice } from "./desktop-audio-view.tsx";
 import { createDesktopAudio } from "./desktop-audio.ts";
-import { DesktopClient } from "./desktop-client.ts";
+import { desktopCanvas, DesktopClient } from "./desktop-client.ts";
 import { DesktopDocumentView } from "./desktop-document-view.tsx";
 import { openDesktopFocus } from "./desktop-focus-window.ts";
 import { createDesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
@@ -58,7 +58,7 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       pictureInPicture: createDesktopPictureInPicture(host, () => {
         const target = panel.launchTarget();
         return host.available && target.state === "connected" && target.presented
-          ? (panel.surface()?.querySelector<HTMLCanvasElement>("canvas") ?? null)
+          ? desktopCanvas(panel.surface())
           : null;
       }),
       launcher: createDesktopAppLauncher(panel.launchTarget),
@@ -79,13 +79,6 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       },
     );
     createEffect(
-      () => !inputs.embedded,
-      (standalone) =>
-        standalone
-          ? listen(window, DESKTOP_PANEL_TOGGLE_EVENT, panel.handleToggleRequest)
-          : undefined,
-    );
-    createEffect(
       () => (inputs.available && inputs.suppliedEnvironments === null ? inputs.client : null),
       (client) => (client ? panel.sessionSource.subscribe(client) : undefined),
     );
@@ -97,7 +90,13 @@ defineSolidBridge<DesktopPanelInputs, Methods>(
       }
       setMounted(true);
       const stopLocale = i18n.subscribe(panel.notify);
+      const stopToggle = listen(window, DESKTOP_PANEL_TOGGLE_EVENT, (event) => {
+        if (!inputs.embedded) {
+          panel.handleToggleRequest(event);
+        }
+      });
       return () => {
+        stopToggle();
         stopLocale();
         state.dispose();
         detachPanel();

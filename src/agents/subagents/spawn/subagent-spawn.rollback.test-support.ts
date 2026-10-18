@@ -4,12 +4,17 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { prepareGatewayRunShutdown } from "../../../gateway/server-run-shutdown.js";
 import { withTimeout } from "../../../infra/fs-safe.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
+import {
+  getRpcSourceIdentity,
+  requestRpcSourceCancellation,
+  type RpcSourceRef,
+} from "../../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
@@ -175,16 +180,16 @@ export function registerOperatorSpawnRollbackCases(options: {
             childRunId = record.run_id;
             expect(subagentRuns.has(record.run_id)).toBe(false);
             const acceptedRun = expectDefined(
-              context.chatAbortControllers.get(record.run_id),
+              rpcSourceTesting.get(record.run_id),
               "accepted child execution owner",
             );
-            expect(acceptedRun.sessionKey).toBe(record.child_session_key);
+            expect(getRpcSourceIdentity(acceptedRun).sessionKey).toBe(record.child_session_key);
             if (phase === "uncertain registration") {
               await embeddedStarted.promise;
               expect(expectDefined(embeddedSignal, "running child abort signal").aborted).toBe(
                 false,
               );
-              expect(context.chatAbortControllers.get(record.run_id)).toBe(acceptedRun);
+              expect(rpcSourceTesting.get(record.run_id)).toBe(acceptedRun);
               const childEntry = expectDefined(
                 loadSessionEntry({
                   storePath: bound.storePath,
@@ -196,7 +201,7 @@ export function registerOperatorSpawnRollbackCases(options: {
                 sessionId: childEntry.sessionId,
                 lifecycleRevision: childEntry.lifecycleRevision,
               };
-              expect(acceptedRun).toMatchObject({
+              expect(getRpcSourceIdentity(acceptedRun)).toMatchObject({
                 sessionKey: record.child_session_key,
                 sessionId: childEntry.sessionId,
               });
@@ -266,7 +271,7 @@ export function registerOperatorSpawnRollbackCases(options: {
           expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
         } else {
           const runId = expectDefined(childRunId, "accepted child run");
-          expect(context.chatAbortControllers.has(runId)).toBe(false);
+          expect(rpcSourceTesting.has(runId)).toBe(false);
           expect(context.dedupe.get(`agent:${runId}`)).toMatchObject({
             payload: { runId, status: expect.stringMatching(/^(error|timeout)$/) },
           });
@@ -284,9 +289,9 @@ export function registerOperatorSpawnRollbackCases(options: {
         embeddedStarted.resolve();
         spawnTesting.setDepsForTest();
         registrationWrite?.restore();
-        for (const entry of context.chatAbortControllers.values()) {
+        for (const entry of rpcSourceTesting.values()) {
           if (entry !== bound.parent.entry) {
-            entry.controller.abort(new Error("spawn rollback fixture cleanup"));
+            requestRpcSourceCancellation(entry, new Error("spawn rollback fixture cleanup"));
           }
         }
         if (preserveSession) {
@@ -328,7 +333,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         | {
             runId: string;
             sessionKey: string;
-            entry: ChatAbortControllerEntry;
+            entry: RpcSourceRef;
             sessionIdentity: { sessionId: string; lifecycleRevision?: string };
           }
         | undefined;
@@ -368,7 +373,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         bound.parentSessionKey,
         async (record) => {
           const entry = expectDefined(
-            context.chatAbortControllers.get(record.run_id),
+            rpcSourceTesting.get(record.run_id),
             "accepted child execution owner",
           );
           const session = expectDefined(
@@ -410,7 +415,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         expect(abortAttempts).toBe(1);
         expect(signal.aborted).toBe(false);
         expect(embeddedSettled).toBe(false);
-        expect(context.chatAbortControllers.get(accepted.runId)).toBe(accepted.entry);
+        expect(rpcSourceTesting.get(accepted.runId)).toBe(accepted.entry);
         expect(subagentRuns.has(accepted.runId)).toBe(false);
         expect(
           loadSessionEntry({ storePath: bound.storePath, sessionKey: accepted.sessionKey }),
@@ -424,9 +429,7 @@ export function registerOperatorSpawnRollbackCases(options: {
         bound.execution.beginClose();
         runtime.close();
         await prepareGatewayRunShutdown({
-          resolveGatewayContext: () => bound.gatewayBinding.current,
-          chatAbortControllers: context.chatAbortControllers,
-          chatQueuedTurns: context.chatQueuedTurns,
+          resolveGatewayContext: bound.resolveGatewayContext,
           chatRunState: context.chatRunState,
           removeChatRun: context.removeChatRun,
           agentRunSeq: context.agentRunSeq,
@@ -442,16 +445,18 @@ export function registerOperatorSpawnRollbackCases(options: {
         );
         expect(signal.aborted).toBe(true);
         expect(embeddedSettled).toBe(true);
-        expect(context.chatAbortControllers.has(accepted.runId)).toBe(false);
+        expect(rpcSourceTesting.has(accepted.runId)).toBe(false);
         expect(abortAttempts).toBe(1);
       } catch (error) {
         failures.push(error);
       } finally {
         embeddedStarted.resolve();
-        child?.entry.controller.abort(new Error("uncertain spawn fixture cleanup"));
-        for (const entry of context.chatAbortControllers.values()) {
+        if (child) {
+          requestRpcSourceCancellation(child.entry, new Error("uncertain spawn fixture cleanup"));
+        }
+        for (const entry of rpcSourceTesting.values()) {
           if (entry !== bound.parent.entry) {
-            entry.controller.abort(new Error("uncertain spawn fixture cleanup"));
+            requestRpcSourceCancellation(entry, new Error("uncertain spawn fixture cleanup"));
           }
         }
         registrationWrite.restore();

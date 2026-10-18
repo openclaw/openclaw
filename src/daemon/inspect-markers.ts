@@ -28,6 +28,8 @@ export const EXTRA_MARKERS = ["openclaw", "clawdbot"] as const;
 
 export type Marker = (typeof EXTRA_MARKERS)[number];
 
+type SystemdExecution = { path: string; programArguments: readonly string[] };
+
 export function classifyGatewayCommand(
   programArguments: string[],
 ): "run" | "maintenance" | "unknown" {
@@ -110,6 +112,28 @@ export function hasGatewayServiceMarker(value: unknown): boolean {
   return (
     environment?.OPENCLAW_SERVICE_MARKER === GATEWAY_SERVICE_MARKER &&
     environment.OPENCLAW_SERVICE_KIND === GATEWAY_SERVICE_KIND
+  );
+}
+
+export function detectSystemdGatewayExecutionMarker(
+  commands: readonly SystemdExecution[],
+): Marker | null {
+  // Text is only a conservative discovery hint; exclusion uses typed commands.
+  const commandText = commands
+    .map((command) => `${command.path} ${command.programArguments.join(" ")}`)
+    .join(" ")
+    .toLowerCase();
+  return /(?:^|[\s;])gateway(?:[\s;]|$)/.test(commandText)
+    ? (EXTRA_MARKERS.find((value) => commandText.includes(value)) ?? null)
+    : null;
+}
+
+export function areSystemdCommandsMaintenance(commands: readonly SystemdExecution[]): boolean {
+  // ExecStart can override argv[0]; every actual executable must prove maintenance.
+  return commands.every(
+    (command) =>
+      classifyGatewayCommand([command.path, ...command.programArguments.slice(1)]) ===
+      "maintenance",
   );
 }
 

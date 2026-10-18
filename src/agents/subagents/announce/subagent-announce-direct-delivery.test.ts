@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
@@ -10,10 +10,20 @@ import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  clearSessionControllerMailbox,
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
-import type { EmbeddedAgentQueueMessageOutcome } from "../../embedded-agent-runner/runs.js";
+import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
+import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
 
@@ -93,12 +103,6 @@ describe("late exact requester recovery", () => {
       mediaUrl: null,
       result: { messageId: "unexpected-replay" },
     });
-    const steer = vi.fn((sessionId: string): EmbeddedAgentQueueMessageOutcome => ({
-      queued: false,
-      sessionId,
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    }));
     testing.setDepsForTest({
       getRuntimeConfig: () => cfg,
       loadRequesterSessionEntry: (key) => ({
@@ -111,10 +115,14 @@ describe("late exact requester recovery", () => {
       getRequesterSessionActivity: () => ({
         sessionId: initialEntry.sessionId,
         isActive: state.active,
+        target: captureSessionTarget({
+          storeScope: storePath,
+          sessionKey,
+          incarnation: initialEntry.sessionId,
+        }),
       }),
       dispatchGatewayMethodInProcess: dispatch,
       sendMessage: send,
-      queueEmbeddedAgentMessageWithOutcome: steer,
     });
     const params: Parameters<typeof deliverSubagentAnnouncement>[0] = {
       requesterSessionKey: sessionKey,
@@ -125,7 +133,6 @@ describe("late exact requester recovery", () => {
       sourceTool: "subagent_settle",
       requesterIsSubagent: false,
       expectsCompletionMessage: false,
-      requireDirectDelivery: true,
       requireVisibleReply: true,
       directIdempotencyKey: sourceRunId,
       isSourceSessionEffectsAllowed: () => state.allowed,
@@ -151,9 +158,337 @@ describe("late exact requester recovery", () => {
       readEntered,
       readDone,
       send,
-      steer,
     };
   }
+
+  it.each([
+    {
+      name: "committed steering",
+      requireDirectDelivery: false,
+      unconfirmed: false,
+      expected: { delivered: true, path: "steered" },
+    },
+    {
+      name: "unconfirmed steering",
+      requireDirectDelivery: false,
+      unconfirmed: true,
+      expected: { delivered: false, path: "steered", error: "commit outcome unknown" },
+    },
+    {
+      name: "required direct delivery",
+      requireDirectDelivery: true,
+      unconfirmed: false,
+      expected: { delivered: true, path: "direct" },
+    },
+  ])(
+    "preserves the completion dispatch phase for $name without replacing controller custody",
+    async ({ requireDirectDelivery, unconfirmed, expected }) => {
+      const fixture = setup();
+      const target = captureSessionTarget({
+        storeScope: "/synthetic/requester-recovery/sessions.json",
+        sessionKey,
+        agentId: "main",
+        incarnation: fixture.state.entry.sessionId,
+      });
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: fixture.state.entry.sessionId,
+        resetTriggered: false,
+        target,
+      });
+      operation.setPhase("running");
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+          return unconfirmed
+            ? { transcriptCommit: "unconfirmed" as const, errorMessage: "commit outcome unknown" }
+            : undefined;
+        },
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        cancel() {},
+        supportsTranscriptCommitWait: true,
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      const input = reserveSessionControllerSource(sessionKey, {
+        target,
+        policy: { mode: "steer" },
+      });
+      onTestFinished(() => {
+        operation.complete();
+        retireSessionControllerInput(input);
+        clearSessionControllerMailbox(input.mailbox, () => {});
+      });
+      fixture.state.active = true;
+      fixture.dispatchDone.resolve({
+        status: "ok",
+        result: { payloads: [{ text: "Completed directly" }], deliveryStatus: sentDeliveryStatus },
+      });
+      const result = await deliverSubagentAnnouncement({
+        ...fixture.params,
+        sourceTool: "subagent_announce",
+        expectsCompletionMessage: true,
+        controllerInput: input,
+        requireDirectDelivery,
+      });
+      expect(result).toMatchObject(expected);
+      expect(result.phases).toEqual([
+        {
+          phase: "direct-primary",
+          ...expected,
+          deliveredAt: undefined,
+          enqueuedAt: undefined,
+          ...(!unconfirmed ? { error: undefined } : {}),
+        },
+      ]);
+      expect(queueMessage).toHaveBeenCalledTimes(requireDirectDelivery ? 0 : 1);
+      expect(fixture.dispatch).toHaveBeenCalledTimes(requireDirectDelivery ? 1 : 0);
+      if (requireDirectDelivery) {
+        expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+      }
+    },
+  );
+
+  it.for(["current", "revoked"] as const)(
+    "settles a rejected recovery handoff before releasing the parent turn (%s source)",
+    async (source, { signal }) => {
+      const fixture = setup();
+      const target = captureSessionTarget({
+        storeScope: "/synthetic/requester-recovery/sessions.json",
+        sessionKey,
+        agentId: "main",
+        incarnation: fixture.state.entry.sessionId,
+      });
+      const recoveryEntered = createDeferredCore();
+      const releaseRecovery = createDeferredCore();
+      const retirementEntered = createDeferredCore();
+      const releaseRetirement = createDeferredCore();
+      const recovery = withSessionTurn(
+        { target, sessionKey, sessionId: fixture.state.entry.sessionId },
+        async (operation) => {
+          if (!operation) {
+            throw new Error("Timeout recovery requires its retained controller operation");
+          }
+          operation.setPhase("preflight_compacting");
+          recoveryEntered.resolve();
+          await releaseRecovery.promise;
+        },
+      );
+      const abandonment = vi
+        .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+        .mockReturnValue("recovering_timeout");
+      fixture.state.active = true;
+      fixture.dispatch.mockRejectedValue(
+        new Error("Completion must not dispatch behind held timeout recovery"),
+      );
+      fixture.readDone.resolve();
+      let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+      let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+      let handoffSettled = false;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            recoveryEntered.promise,
+            recovery,
+            "Recovery exited before retaining its controller turn",
+          ),
+          signal,
+        );
+        input = reserveSessionControllerSource(sessionKey, {
+          target,
+          policy: { mode: "followup" },
+          adapter: {
+            onSettled: async () => {
+              retirementEntered.resolve();
+              await releaseRetirement.promise;
+            },
+          },
+        });
+        const parentClaim = input.mailbox.claim;
+        expect(parentClaim).toBeDefined();
+        expect(parentClaim?.operation?.phase).toBe("preflight_compacting");
+        expect(parentClaim?.operation?.result).toBeNull();
+        fixture.params.sourceTool = "subagent_announce";
+        fixture.params.expectsCompletionMessage = true;
+        fixture.params.controllerInput = input;
+        delivery = fixture.startDelivery().finally(() => {
+          handoffSettled = true;
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            retirementEntered.promise,
+            delivery,
+            "Completion returned before retiring its rejected controller input",
+          ),
+          signal,
+        );
+        expect(handoffSettled).toBe(false);
+        expect(input.mailbox.entries).toContain(input);
+        expect(input.mailbox.claim).toBe(parentClaim);
+        expect(parentClaim?.operation?.result).toBeNull();
+        if (source === "revoked") {
+          fixture.state.allowed = false;
+        }
+        releaseRetirement.resolve();
+        const result = await withinTest(
+          awaitGateBeforeSettlement(
+            delivery,
+            recovery,
+            "Recovery released before the completion handoff settled",
+          ),
+          signal,
+        );
+        await input.settlement.promise;
+        expect(result).toMatchObject(
+          source === "current"
+            ? { delivered: false, reason: "completion_handoff_pending", disposition: "retryable" }
+            : {
+                delivered: false,
+                reason: "source_owner_changed",
+                terminal: true,
+                disposition: "intentional_non_delivery",
+              },
+        );
+        expect(input.phase).toBe("consumed");
+        expect(input.mailbox.entries).not.toContain(input);
+        expect(input.mailbox.claim).toBe(parentClaim);
+        expect(parentClaim?.released).toBe(false);
+        expect(parentClaim?.operation?.phase).toBe("preflight_compacting");
+        expect(parentClaim?.operation?.result).toBeNull();
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+        expect(fixture.send).not.toHaveBeenCalled();
+        releaseRecovery.resolve();
+        await recovery;
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+        expect(fixture.send).not.toHaveBeenCalled();
+      } finally {
+        releaseRetirement.resolve();
+        releaseRecovery.resolve();
+        if (input) {
+          retireSessionControllerInput(input);
+        }
+        await Promise.allSettled([
+          recovery,
+          ...(delivery ? [delivery] : []),
+          ...(input ? [input.settlement.promise] : []),
+        ]);
+        abandonment.mockRestore();
+      }
+    },
+  );
+
+  it("reports no attempted completion phase when cancelled before dispatch", async () => {
+    const fixture = setup();
+    fixture.controller.abort();
+    await expect(fixture.startDelivery()).resolves.toEqual({
+      delivered: false,
+      path: "none",
+      phases: [],
+    });
+    expect(fixture.dispatch).not.toHaveBeenCalled();
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+
+  it("preserves the pending requester reason for a settle response", async () => {
+    const fixture = setup();
+    fixture.dispatchDone.resolve({ status: "accepted", runId: "pending-requester" });
+    await expect(fixture.startDelivery()).resolves.toMatchObject({
+      delivered: false,
+      path: "direct",
+      reason: "requester_turn_pending",
+      disposition: "session_queued",
+    });
+    expect(fixture.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.send).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { outcome: "accepted", change: "admission" },
+    { outcome: "indeterminate", change: "admission" },
+    { outcome: "accepted", change: "effects" },
+    { outcome: "indeterminate", change: "effects" },
+    { outcome: "accepted", change: "yield" },
+    { outcome: "indeterminate", change: "yield" },
+    { outcome: "accepted", change: "before admission" },
+  ] as const)(
+    "preserves $outcome steering evidence when $change closes",
+    async ({ outcome, change }) => {
+      const fixture = setup();
+      const target = captureSessionTarget({
+        storeScope: "/synthetic/requester-recovery/sessions.json",
+        sessionKey,
+        agentId: "main",
+        incarnation: fixture.state.entry.sessionId,
+      });
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: fixture.state.entry.sessionId,
+        resetTriggered: false,
+        target,
+      });
+      let admission = change !== "before admission";
+      let yielded = false;
+      operation.setPhase("running");
+      const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
+        async (_text, options, assertCurrent) => {
+          assertCurrent();
+          options?.onQueueAccepted?.(true);
+          admission = false;
+          fixture.state.allowed = change !== "effects";
+          yielded = change === "yield";
+          return outcome === "indeterminate"
+            ? { transcriptCommit: "unconfirmed" as const, errorMessage: "commit outcome unknown" }
+            : undefined;
+        },
+      );
+      operation.attachBackend({
+        kind: "embedded",
+        cancel() {},
+        supportsTranscriptCommitWait: true,
+        messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+      });
+      const input = reserveSessionControllerSource(sessionKey, {
+        target,
+        policy: { mode: "steer" },
+      });
+      onTestFinished(() => {
+        operation.complete();
+        retireSessionControllerInput(input);
+        clearSessionControllerMailbox(input.mailbox, () => {});
+      });
+      fixture.state.active = true;
+      const result = await sendSubagentAnnounceDirectly({
+        ...fixture.params,
+        sourceTool: "subagent_announce",
+        expectsCompletionMessage: true,
+        controllerInput: input,
+        isSourceSessionAdmissionAllowed: () => admission,
+        isCompletionOwnedByRequesterYield: () => yielded,
+      });
+      if (change === "before admission") {
+        expect(result).toMatchObject({ delivered: false, reason: "completion_handoff_pending" });
+        expect(queueMessage).not.toHaveBeenCalled();
+      } else {
+        expect(queueMessage).toHaveBeenCalledOnce();
+        expect(result).toMatchObject(
+          change === "admission"
+            ? outcome === "accepted"
+              ? { delivered: true, path: "steered" }
+              : {
+                  delivered: false,
+                  path: "steered",
+                  disposition: "ambiguous",
+                  error: "commit outcome unknown",
+                }
+            : { delivered: false, reason: "source_owner_changed" },
+        );
+      }
+      expect(fixture.dispatch).not.toHaveBeenCalled();
+      expect(fixture.send).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["subagent_settle", "subagent_announce"])(
     "joins an interrupted %s continuation and consumes its final receipt without replay",
@@ -176,6 +511,7 @@ describe("late exact requester recovery", () => {
       await expect(fixture.startDelivery()).resolves.toMatchObject({
         delivered: false,
         reason: "requester_turn_pending",
+        disposition: "session_queued",
       });
       expect(fixture.dispatch).not.toHaveBeenCalled();
       fixture.state.active = true;
@@ -191,7 +527,6 @@ describe("late exact requester recovery", () => {
       });
       expect(fixture.dispatch).not.toHaveBeenCalled();
       expect(fixture.send).not.toHaveBeenCalled();
-      expect(fixture.steer).not.toHaveBeenCalled();
     },
   );
 
@@ -308,8 +643,6 @@ describe("late exact requester recovery", () => {
     },
     ...[
       { name: "empty final", response: { status: "ok", result: { payloads: [] } } },
-      { name: "accepted turn", response: { status: "accepted" } },
-      { name: "in-flight turn", response: { status: "in_flight" } },
       { name: "restart interruption", response: { status: "error", stopReason: "restart" } },
       { name: "old keyed-input rejection", error: new Error("old keyed input rejected") },
     ].map((outcome) =>
@@ -326,7 +659,7 @@ describe("late exact requester recovery", () => {
           restartRecoveryDeliveryRunId: "successor",
         },
         reason: "requester_turn_pending",
-        disposition: "retryable",
+        disposition: "session_queued",
       },
       {
         name: "terminal without receipt",
@@ -338,19 +671,19 @@ describe("late exact requester recovery", () => {
         name: "unrelated source",
         patch: { restartRecoveryTerminalRunIds: ["another-source"] },
         reason: "visible_reply_missing",
-        disposition: undefined,
+        disposition: "retryable",
       },
       {
         name: "replacement session",
         patch: { ...finalReceipt, sessionId: "replacement" },
         reason: "visible_reply_missing",
-        disposition: undefined,
+        disposition: "retryable",
       },
       {
         name: "replacement lifecycle",
         patch: { ...finalReceipt, lifecycleRevision: "replacement" },
         reason: "visible_reply_missing",
-        disposition: undefined,
+        disposition: "retryable",
       },
       {
         name: "unsent external final",
@@ -360,12 +693,12 @@ describe("late exact requester recovery", () => {
           ],
         } satisfies Partial<SessionEntry>,
         reason: "visible_reply_missing",
-        disposition: undefined,
+        disposition: "retryable",
       },
     ].map(({ reason, ...outcome }) =>
       Object.assign(outcome, {
         response: { status: "ok", result: { payloads: [] } },
-        expected: { delivered: false, reason },
+        expected: { delivered: false, ...(reason ? { reason } : {}) },
       }),
     ),
   ])("reconciles the exact late receipt for $name without replay", async (outcome) => {
@@ -388,7 +721,6 @@ describe("late exact requester recovery", () => {
     expect(result.disposition).toBe(outcome.disposition);
     expect(fixture.dispatch).toHaveBeenCalledOnce();
     expect(fixture.send).not.toHaveBeenCalled();
-    expect(fixture.steer).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -520,7 +852,7 @@ describe("late exact requester recovery", () => {
       const delivery = fixture.startDelivery();
       await fixture.dispatchEntered.promise;
       fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
-      fixture.dispatchDone.resolve({ status: "accepted" });
+      fixture.dispatchDone.reject(new Error("gateway unavailable before admission"));
       await Promise.race([
         fixture.readEntered.promise,
         delivery.then(() => {
@@ -540,13 +872,7 @@ describe("late exact requester recovery", () => {
       }
       const result = await delivery;
       expect(result).toMatchObject({ delivered: false });
-      expect(result.reason).toBe(
-        change === "source retired"
-          ? "source_owner_changed"
-          : change === "read failed"
-            ? "requester_turn_pending"
-            : undefined,
-      );
+      expect(result.reason).toBe(change === "source retired" ? "source_owner_changed" : undefined);
       expect(fixture.dispatch).toHaveBeenCalledOnce();
       expect(fixture.send).not.toHaveBeenCalled();
     },

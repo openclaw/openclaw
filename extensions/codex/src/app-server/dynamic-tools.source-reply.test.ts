@@ -212,6 +212,65 @@ describe("Codex dynamic-tool source replies", () => {
     },
   );
 
+  describe("a delivered send to a configured delivery target", () => {
+    // Shape of a cron send: automatic mode, the delivery target as current source,
+    // and the message tool confirming the source reply.
+    const deliveryTarget = "-1001234567890";
+    const createDeliveryTargetBridge = (messageToolFinalByDefault?: boolean) =>
+      createBridgeWithToolResult(
+        "message",
+        textToolResult('{"ok":true,"messageId":"4242"}', {
+          ok: true,
+          messageId: "4242",
+          chatId: deliveryTarget,
+          messageDelivery: {
+            status: "settled",
+            primaryPlatformMessageId: "4242",
+            deliveredTargets: [deliveryTarget],
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+        }),
+        {
+          currentChannelProvider: "telegram",
+          currentChannelId: deliveryTarget,
+          ...(messageToolFinalByDefault === undefined ? {} : { messageToolFinalByDefault }),
+        },
+      );
+
+    it.each([
+      { finalByDefault: false, final: undefined, ends: false },
+      { finalByDefault: false, final: false, ends: false },
+      { finalByDefault: false, final: true, ends: true },
+      // Chat turns keep the default: an omitted final ends the turn.
+      { finalByDefault: undefined, final: undefined, ends: true },
+    ])(
+      "ends the turn only when final resolves true (default $finalByDefault, final $final)",
+      async ({ finalByDefault, final, ends }) => {
+        const bridge = createDeliveryTargetBridge(finalByDefault);
+
+        const result = await handleMessageToolCall(bridge, {
+          action: "send",
+          channel: "telegram",
+          target: deliveryTarget,
+          message: "daily drop",
+          ...(final === undefined ? {} : { final }),
+        });
+
+        expect(result.terminate).toBe(ends ? true : undefined);
+        expect(result.finalSourceReplyDelivered).toBe(ends ? true : undefined);
+        expect(bridge.telemetry.finalSourceReplyDelivered).toBe(ends ? true : undefined);
+        // Delivery facts do not depend on whether the turn ends.
+        expect(bridge.telemetry.sourceReplyDelivered).toBe(true);
+        expect(bridge.telemetry.messagingToolSentTargets.at(-1)).toMatchObject({
+          to: deliveryTarget,
+          sourceReplyFinal: ends,
+        });
+      },
+    );
+  });
+
   it("ends automatic mode after a confirmed final source reaction", async () => {
     const bridge = createBridgeWithToolResult(
       "message",

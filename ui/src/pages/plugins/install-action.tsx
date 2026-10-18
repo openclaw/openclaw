@@ -1,10 +1,11 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, For } from "solid-js";
+import { createMemo, createSignal, onSettled, For } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../components/solid/popover.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
 import { formatUnit } from "../../lib/format.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import { createInterval } from "../../lib/reactive/timers.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import "./install-action.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
@@ -44,14 +45,10 @@ export function PluginInstallAction(props: PluginInstallActionProps): SolidJSX.E
     popover = undefined;
   });
   const running = createMemo(() => props.progress && props.progress.finishedAt === undefined);
-  // The timer supplies elapsed wall-clock time while the installer is running.
-  createEffect(running, (active) => {
-    if (!active) {
-      return undefined;
-    }
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  });
+  createInterval(
+    () => setNow(Date.now()),
+    () => (running() ? 1000 : undefined),
+  );
   const progress = () => props.progress;
   const failed = () => props.progress?.finishedAt !== undefined;
   const active = () => Boolean(progress()) || props.busy;

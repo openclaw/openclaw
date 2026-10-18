@@ -3,6 +3,7 @@
  * Covers identity safety, main-store adoption, refresh persistence, fallback
  * recovery, and external profile overlays.
  */
+import "./external-auth.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,7 +31,6 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { oidcIdentity } from "./credential-fixtures.test-support.js";
-import { testing as externalAuthTesting } from "./external-auth.test-support.js";
 import { createOAuthManager } from "./oauth-manager.js";
 import { isSettledOAuthRefreshFailure, OAuthManagerRefreshError } from "./oauth-refresh-failure.js";
 import { isOAuthRefreshFence, isPendingOAuthRefreshFence } from "./oauth-refresh-marker.js";
@@ -46,6 +46,8 @@ import {
 } from "./store-runtime.js";
 import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+
+const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
 
 function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
   const shared = openOpenClawStateDatabase();

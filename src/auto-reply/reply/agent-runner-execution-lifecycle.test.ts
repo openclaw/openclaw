@@ -2,18 +2,24 @@ import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  isEmbeddedAgentRunActive,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "../../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-identity-admission.js";
 import { createChannelAdmissionAudit } from "../../channels/message-access/admission-evidence.js";
 import { getDiagnosticSessionActivitySnapshot } from "../../logging/diagnostic-run-activity.js";
 import { useBundledProviderPolicyArtifactsForTest } from "../../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
+import {
+  createReplyOperation,
+  hasReplyOperationExecutionStarted,
+  getSessionControllerOperation,
+  type ReplyOperation,
+} from "../../sessions/session-controller.js";
+import { isSessionRunActive } from "../../sessions/session-controller.queries.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   setupAgentRunnerExecutionTestState,
@@ -34,12 +40,6 @@ import type {
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import {
-  createReplyOperation,
-  hasReplyOperationExecutionStarted,
-  replyRunRegistry,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
 import { withReplySystemEventContext } from "./system-event-session-key.js";
 
 useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
@@ -133,7 +133,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         target: { ...compactionTarget, sessionId: "accepted-successor" },
       };
       const sessionId = "session";
-      const sessionKey = "agent:main:main";
+      const sessionKey = "main";
       const handle: EmbeddedAgentQueueHandle = {
         runId: "restart-after-adoption",
         queueMessage: async () => undefined,
@@ -141,8 +141,9 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         isCompacting: () => false,
         abort: vi.fn(),
       };
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+        // The native handle belongs to the turn already admitted by execution.
+        setActiveEmbeddedRun(sessionId, handle, sessionKey);
         params.onDeferredLifecycleOwner?.({
           beginRetryWait: () => undefined,
           complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
@@ -164,7 +165,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
           compaction: { count: 1, durable: [fact] },
         });
         expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
-        expect(isEmbeddedAgentRunActive(sessionId)).toBe(false);
+        expect(isSessionRunActive(sessionId)).toBe(false);
         const terminals = vi
           .mocked(emitAgentEvent)
           .mock.calls.map(([event]) => event)
@@ -531,7 +532,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         };
         expect(replyOperation.abortSignal.aborted).toBe(true);
         expect(replyOperation.result).toEqual(expectedAbortResult);
-        expect(replyRunRegistry.get(replyOperation.key)).toBe(replyOperation);
+        expect(getSessionControllerOperation(replyOperation.key)).toBe(replyOperation);
         fallbackRelease.resolve();
 
         expect((await pending).outcome).toEqual({
@@ -540,7 +541,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
           ...(compactions > 0 ? { compaction: { count: compactions, durable: [] } } : {}),
         });
         expect(replyOperation.result).toEqual(expectedAbortResult);
-        expect(replyRunRegistry.get(replyOperation.key)).toBe(replyOperation);
+        expect(getSessionControllerOperation(replyOperation.key)).toBe(replyOperation);
         expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
         expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
           expect.objectContaining({ outcome: "mute", runStatus: "aborted" }),
@@ -549,7 +550,7 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         fallbackRelease.resolve();
         replyOperation.complete();
       }
-      expect(replyRunRegistry.get(replyOperation.key)).toBeUndefined();
+      expect(getSessionControllerOperation(replyOperation.key)).toBeUndefined();
     },
   );
 

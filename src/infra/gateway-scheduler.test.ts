@@ -2,6 +2,8 @@ import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { withSessionTurn } from "../sessions/session-controller.admission.js";
+import type { ReplyOperation } from "../sessions/session-controller.contracts.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -17,7 +19,15 @@ function expectCalls(...calls: Array<[unknown, number]>) {
     expect(run).toHaveBeenCalledTimes(count);
   }
 }
-const schedulerLog = vi.hoisted(() => ({ debug: vi.fn(), trace: vi.fn(), error: vi.fn() }));
+const schedulerLog = vi.hoisted(() => ({
+  debug: vi.fn(),
+  trace: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  // Session-controller diagnostics share this mocked subsystem logger.
+  isEnabled: () => false,
+}));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => schedulerLog,
 }));
@@ -461,6 +471,44 @@ describe("Gateway timed work", () => {
     await initial;
     expect(scheduler.nextWakeAtMs).toBeNull();
     await scheduler.stop();
+  });
+
+  it("keeps request context but admits scheduled work independently after its registering turn", async () => {
+    // A job outlives the turn that registered it; resuming that retired owner would
+    // reject its admission with "Session turn no longer owns controller admission".
+    schedulerLog.error.mockClear();
+    const { time, scheduler } = fixture();
+    const turn = {
+      storePath: "/synthetic/scheduled-after-turn/sessions.json",
+      sessionKey: "agent:main:scheduled-after-turn",
+      sessionId: "scheduled-after-turn-session",
+    };
+    let registrant: ReplyOperation | undefined;
+    const admitted: Array<ReplyOperation | undefined> = [];
+    const requestContext = new AsyncLocalStorage<string>();
+    const observedRequests: Array<string | undefined> = [];
+    await requestContext.run("scheduled-request", () =>
+      withSessionTurn(turn, async (operation) => {
+        registrant = operation;
+        scheduler.schedule({
+          id: "after-turn",
+          delayMs: 100,
+          run: () =>
+            withSessionTurn(turn, async (scheduled) => {
+              admitted.push(scheduled);
+              observedRequests.push(requestContext.getStore());
+            }),
+        });
+      }),
+    );
+    expect(registrant?.result?.kind).toBe("completed");
+    await time.advanceBy(100);
+    await scheduler.stop();
+    expect(schedulerLog.error).not.toHaveBeenCalled();
+    expect(admitted).toHaveLength(1);
+    expect(admitted[0]).toBeDefined();
+    expect(admitted[0]).not.toBe(registrant);
+    expect(observedRequests).toEqual(["scheduled-request"]);
   });
 
   it("retains a distant deadline across the host timer delay ceiling", async () => {

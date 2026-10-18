@@ -29,6 +29,7 @@ import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+import { registerTerminalReservationPublicationTests } from "./server-runtime-subscriptions.terminal-reservation.test-support.js";
 import type { createSubscriptionTestFixture } from "./server-runtime-subscriptions.test-support.js";
 import { registerSubscriptionChatRun } from "./server-runtime-subscriptions.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
@@ -706,4 +707,6 @@ export function registerSessionPublicationTests(fixture: {
       await (shutdown ?? unsubs.agentUnsub());
     }
   });
+
+  registerTerminalReservationPublicationTests(fixture);
 }

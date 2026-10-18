@@ -116,10 +116,8 @@ export function hasGatewayContextOwner(
   gatewayOwner: GatewayContextResolver,
 ): boolean {
   const resolver = getGatewayContextResolver(owner);
-  // A lifetime wrapper records one canonical host owner; it remains the execution binding.
-  return (
-    resolver !== undefined && (getGatewayContextResolver(resolver) ?? resolver) === gatewayOwner
-  );
+  // Nested lifetime wrappers retain their execution binding but share one canonical host.
+  return resolver !== undefined && getCanonicalGatewayContextResolver(resolver) === gatewayOwner;
 }
 
 export function clearGatewayContextResolver(owner: object): boolean {

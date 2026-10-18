@@ -1,3 +1,5 @@
+import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { render } from "@solidjs/web";
 import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
 import type {
@@ -11,6 +13,9 @@ import {
   resolveControlUiAuthCandidates,
 } from "../../app/control-ui-auth.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { resolveChannelAccounts } from "../../lib/channels/index.ts";
+import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
@@ -78,6 +83,17 @@ export function createChannelSettingsPresentation(
     return {
       channelId,
       status: props.channels.channelsSnapshot?.channels[channelId],
+      defaultAccountId: props.channels.channelsSnapshot?.channelDefaultAccountId[channelId],
+      ...(channelId === "whatsapp"
+        ? {
+            login: {
+              message: props.channels.whatsappLoginMessage,
+              qrDataUrl: props.channels.whatsappLoginQrDataUrl,
+              connected: props.channels.whatsappLoginConnected,
+              busy: props.channels.whatsappBusy,
+            },
+          }
+        : {}),
       accounts: Array.isArray(accounts) ? accounts : [],
       connected: hooks.getContext().gateway.snapshot.phase === "connected",
       canAdmin: props.canAdmin,
@@ -158,6 +174,46 @@ export function createChannelSettingsPresentation(
           },
           { once: true },
         );
+        const captureAction = () => {
+          current();
+          const connection = hooks.getConnection();
+          const scope = connection.capture();
+          const signal = AbortSignal.any([loaded.signal, entry.transport.signal]);
+          const assertCurrent = () => {
+            signal.throwIfAborted();
+            current();
+            if (
+              !scope ||
+              !connection.isCurrent(scope) ||
+              gateway.snapshot.phase !== "connected" ||
+              !hasOperatorAdminAccess(gateway.snapshot.hello?.auth ?? null)
+            ) {
+              throw new DOMException("Channel Settings action has ended", "AbortError");
+            }
+          };
+          assertCurrent();
+          return { signal, assertCurrent };
+        };
+        const logoutAccount = () => {
+          const wizardAccountId = hooks.getProps().wizardHost.whatsappAccountId();
+          const status = channels.state.channelsSnapshot;
+          const accountId =
+            wizardAccountId ?? status?.channelDefaultAccountId.whatsapp ?? "default";
+          const account = resolveChannelAccounts(status?.channelAccounts, channelId).find(
+            (candidate) => candidate.accountId === accountId,
+          );
+          if (!account && wizardAccountId !== undefined) {
+            return null;
+          }
+          return {
+            accountId,
+            linked:
+              account?.linked ??
+              (wizardAccountId === undefined
+                ? asNullableRecord(status?.channels[channelId])?.linked
+                : undefined),
+          };
+        };
         const context: ControlUiChannelSettingsContext = {
           signal: loaded.signal,
           props: snapshot(channelId),
@@ -209,6 +265,65 @@ export function createChannelSettingsPresentation(
               data: result.data,
               errorMessage: result.errorMessage,
             };
+          },
+          ...(channelId === "whatsapp"
+            ? {
+                login: {
+                  async start(force: boolean) {
+                    captureAction().assertCurrent();
+                    await channels.startWhatsApp(
+                      force,
+                      hooks.getProps().wizardHost.whatsappAccountId(),
+                    );
+                  },
+                  async wait() {
+                    captureAction().assertCurrent();
+                    await channels.waitWhatsApp(hooks.getProps().wizardHost.whatsappAccountId());
+                  },
+                  captureLogout() {
+                    const { assertCurrent } = captureAction();
+                    const account = logoutAccount();
+                    if (!account) {
+                      return null;
+                    }
+                    return {
+                      accountId: account.accountId,
+                      async logout() {
+                        assertCurrent();
+                        const latest = logoutAccount();
+                        if (
+                          !latest ||
+                          latest.accountId !== account.accountId ||
+                          latest.linked !== account.linked
+                        ) {
+                          return;
+                        }
+                        await channels.logoutWhatsApp(account.accountId);
+                      },
+                    };
+                  },
+                },
+              }
+            : {}),
+          async confirm(options) {
+            const { signal, assertCurrent } = captureAction();
+            const confirmed = await showConfirmDialog({
+              title: options.title,
+              message: options.message,
+              confirmLabel: options.confirmLabel,
+              danger: options.danger,
+              signal,
+            });
+            assertCurrent();
+            return confirmed;
+          },
+          formatPhoneNumber(value) {
+            current();
+            return formatInternationalPhoneNumberForDisplay(value, getLocale()) ?? value;
+          },
+          formatDuration(milliseconds) {
+            current();
+            return formatDurationHuman(milliseconds);
           },
           mountConfig(container) {
             current();

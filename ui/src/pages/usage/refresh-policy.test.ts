@@ -116,4 +116,31 @@ describe("UsageRefreshPolicy", () => {
       expect(reload).toHaveBeenCalledTimes(reason === "connection" ? 1 : 0);
     },
   );
+
+  it("replays a deferred provider retry as a provider-only retry", async () => {
+    let loading = true;
+    const { policy, reload } = createPolicy(() => loading);
+
+    await policy.request("poll");
+    expect(reload).not.toHaveBeenCalled();
+    loading = false;
+    policy.flushPending();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenLastCalledWith("poll");
+  });
+
+  it("lets a deferred broader refresh outrank a deferred provider retry", async () => {
+    let loading = true;
+    const { policy, reload } = createPolicy(() => loading);
+    policy.setLastLoadedAtMs(null);
+
+    await policy.request("poll");
+    await policy.request("focus");
+    await policy.request("poll");
+    loading = false;
+    policy.flushPending();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenLastCalledWith("focus");
+  });
 });
