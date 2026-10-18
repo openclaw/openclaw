@@ -21,6 +21,11 @@ import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
 
+function responseMessage(id: string, text: string) {
+  const content = [{ type: "output_text", text, annotations: [] }];
+  return { type: "message", id, role: "assistant", status: "completed", content };
+}
+
 it("preserves signed empty Responses messages before reasoning across a cold runner reopen", async () => {
   await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
     const sessionId = "responses-cold-prefix";
@@ -151,23 +156,11 @@ it("preserves signed empty Responses messages before reasoning across a cold run
                 name: "cache_probe",
                 arguments: "{}",
               }
-            : {
-                type: "message",
-                id: "msg_" + id,
-                role: "assistant",
-                status: "completed",
-                content: [{ type: "output_text", text: "synthetic answer", annotations: [] }],
-              },
+            : responseMessage("msg_" + id, "synthetic answer"),
         ];
         // A provider-owned empty message precedes encrypted reasoning in the last warm turn.
         if (requests.length === 7) {
-          output.unshift({
-            type: "message",
-            id: "msg_empty",
-            role: "assistant",
-            status: "completed",
-            content: [{ type: "output_text", text: "", annotations: [] }],
-          });
+          output.unshift(responseMessage("msg_empty", ""));
         }
         history.set(id, [...effectiveInput, ...output]);
         const events = [
@@ -194,16 +187,11 @@ it("preserves signed empty Responses messages before reasoning across a cold run
     try {
       for (let turn = 1; turn <= 4; turn++) {
         turnRequests = 0;
+        const revision = turn < 3 ? "initial" : "updated";
         await fs.writeFile(
           path.join(state.workspaceDir, "AGENTS.md"),
-          instructions +
-            "\n\n## Skills\nSynthetic skill " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n## Temporal Context\nSynthetic day " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n## Runtime\nSynthetic runtime " +
-            (turn < 3 ? "initial" : "updated") +
-            ".\n",
+          `${instructions}\n\n## Skills\nSynthetic skill ${revision}.\n` +
+            `## Temporal Context\nSynthetic day ${revision}.\n## Runtime\nSynthetic runtime ${revision}.\n`,
         );
         if (turn === 4) {
           clearEmbeddedSessionPromptStates([sessionId]);

@@ -1,6 +1,5 @@
-// Covers OpenRouter-specific extra-params payload and header behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it } from "vitest";
 import {
   createOpenRouterSystemCacheWrapper,
   createOpenRouterWrapper,
@@ -10,8 +9,6 @@ import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js
 import { testing as extraParamsTesting } from "./embedded-agent-runner/extra-params.test-support.js";
 
 beforeEach(() => {
-  // OpenRouter behavior is supplied through the provider-runtime seam so tests
-  // exercise the same wrapper boundary as production.
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
     resolveProviderExtraParamsForTransport: () => undefined,
@@ -33,56 +30,46 @@ afterEach(() => {
   extraParamsTesting.resetProviderRuntimeDepsForTest();
 });
 
-describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
-  it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
-    const calls: Array<{ headers?: Record<string, string> }> = [];
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      calls.push({ headers: options?.headers });
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+it("honors narrower camelCase response cache params over wider snake_case aliases", () => {
+  const calls: Array<Parameters<StreamFn>[2]> = [];
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    calls.push(options);
+    return {} as ReturnType<StreamFn>;
+  };
+  const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(
-      agent,
-      {
-        agents: {
-          defaults: {
+  const config = {
+    agents: {
+      defaults: {
+        params: {
+          response_cache: false,
+          response_cache_ttl_seconds: 60,
+          response_cache_clear: false,
+        },
+        models: {
+          "openrouter/auto": {
             params: {
-              response_cache: false,
-              response_cache_ttl_seconds: 60,
-              response_cache_clear: false,
-            },
-            models: {
-              "openrouter/auto": {
-                params: {
-                  responseCache: true,
-                  responseCacheTtlSeconds: 600,
-                  responseCacheClear: true,
-                },
-              },
+              responseCache: true,
+              responseCacheTtlSeconds: 600,
+              responseCacheClear: true,
             },
           },
         },
       },
-      "openrouter",
-      "auto",
-    );
+    },
+  };
+  applyExtraParamsToAgent(agent, config, "openrouter", "auto");
 
-    void agent.streamFn?.(
-      {
-        api: "openai-completions",
-        provider: "openrouter",
-        id: "auto",
-      } as never,
-      { messages: [] } as never,
-      {},
-    );
+  void agent.streamFn?.(
+    { api: "openai-completions", provider: "openrouter", id: "auto" } as never,
+    { messages: [] } as never,
+    {},
+  );
 
-    expect(calls[0]?.headers).toMatchObject({
-      "X-OpenRouter-Cache": "true",
-      "X-OpenRouter-Cache-Clear": "true",
-      "X-OpenRouter-Cache-TTL": "600",
-    });
+  expect(calls[0]?.headers).toMatchObject({
+    "X-OpenRouter-Cache": "true",
+    "X-OpenRouter-Cache-Clear": "true",
+    "X-OpenRouter-Cache-TTL": "600",
   });
 
   it("forwards Fusion plugin config through extraBody", () => {
