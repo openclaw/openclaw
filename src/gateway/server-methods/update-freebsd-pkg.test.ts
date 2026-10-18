@@ -28,40 +28,32 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("FreeBSD pkg RPC admission", () => {
+describe("system package RPC admission", () => {
   it.each([
-    { ownership: "owned", managed: false },
-    { ownership: "owned", managed: true },
-    { ownership: "unknown", managed: false },
-    { ownership: "unknown", managed: true },
-  ])(
-    "refuses $ownership pkg ownership before campaign or handoff (managed=$managed)",
-    async ({ ownership, managed }) => {
+    { managed: false, platform: "linux", manager: "pacman" },
+    { managed: false, platform: "freebsd", manager: "pkg" },
+    { managed: true, platform: "freebsd", manager: "pkg" },
+  ] as const)(
+    "refuses $manager ownership before campaign or handoff (managed=$managed)",
+    async ({ managed, platform, manager }) => {
       mockGlobalInstallSurface();
       detectRespawnSupervisorMock.mockReturnValue(managed ? "systemd" : null);
       const query = vi
         .spyOn(exec, "runCommandBuffered")
-        .mockResolvedValue(
-          pkgQueryResult(
-            ownership === "owned" ? "/tmp/openclaw-global/package.json\n" : "",
-            ownership === "unknown" ? { code: 1 } : {},
-          ),
-        );
-      await withMockedPlatform("freebsd", async () => {
+        .mockResolvedValue(pkgQueryResult("/tmp/openclaw-global/package.json\n"));
+      await withMockedPlatform(platform, async () => {
         const response = expectDefined(await captureUpdateRunPayload(), "update response");
-        const reason = ownership === "owned" ? "pkg-owned-install" : "pkg-ownership-unavailable";
+        const reason = `${manager}-owned-install`;
         expect(response).toMatchObject({
           ok: false,
           message: expect.stringContaining(
-            ownership === "owned"
-              ? "Update it through pkg"
-              : "Restore access to the active pkg database",
+            manager === "pkg" ? "Update it through pkg" : "pacman -Syu",
           ),
-          result: { status: "error", reason },
+          result: { status: "skipped", reason },
           restart: null,
         });
         expect(getUpdateRun(response.runId)).toMatchObject({
-          status: "failed",
+          status: "skipped",
           reason,
           origin: { nextAction: response.message },
         });
@@ -74,9 +66,14 @@ describe("FreeBSD pkg RPC admission", () => {
     },
   );
 
-  it.each(["linux", "darwin", "win32"] as const)(
-    "preserves %s update admission without a pkg query",
-    async (platform) => {
+  it.each([
+    { platform: "darwin", unavailable: false },
+    { platform: "win32", unavailable: false },
+    { platform: "linux", unavailable: true },
+    { platform: "freebsd", unavailable: true },
+  ] as const)(
+    "preserves $platform update admission (inspection unavailable=$unavailable)",
+    async ({ platform, unavailable }) => {
       // Platform simulation does not change the real ledger's SQLite VFS.
       vi.spyOn(nodeSqlite, "resolveExistingSqliteFileUri").mockImplementation((file) =>
         existingHostUri(file, sqliteHostPlatform),
@@ -84,13 +81,16 @@ describe("FreeBSD pkg RPC admission", () => {
       vi.spyOn(nodeSqlite, "resolveImmutableSqliteFileUri").mockImplementation((file) =>
         immutableHostUri(file, sqliteHostPlatform),
       );
-      const query = vi
-        .spyOn(exec, "runCommandBuffered")
-        .mockRejectedValue(new Error("unexpected pkg query"));
+      const query = vi.spyOn(exec, "runCommandBuffered").mockImplementation(async () => {
+        if (!unavailable) {
+          throw new Error("unexpected pkg query");
+        }
+        return pkgQueryResult("", { code: 1 });
+      });
       await withMockedPlatform(platform, async () => {
         await expect(captureUpdateRunPayload()).resolves.toMatchObject({ ok: true });
       });
-      expect(query).not.toHaveBeenCalled();
+      expect(query).toHaveBeenCalledTimes(unavailable ? 1 : 0);
       expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
     },
   );

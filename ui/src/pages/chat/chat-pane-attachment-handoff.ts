@@ -10,7 +10,7 @@ import {
 import type { ChatComposerRecoveryOwner } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
+import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import {
   isIncognitoComposerScope,
   isChatComposerOwnerCurrent,
@@ -21,6 +21,7 @@ import {
   loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
 
@@ -224,8 +225,10 @@ export class ChatPaneComposerHandoff {
     target.custody = this.custody;
     target.scope = target.currentScope();
     target.host.resume();
-    sourceState.requestUpdate?.();
-    targetState.requestUpdate?.();
+    publishQueuedMessageEdit(sourceState);
+    publishQueuedMessageEdit(targetState);
+    sourceState.composerDraftChanged?.();
+    targetState.composerDraftChanged?.();
   }
 }
 
@@ -354,7 +357,7 @@ export function replacePaneStagedAttachmentGatewayOwner(
     for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
       fallback.attachments = dropAnnotations(fallback.attachments);
     }
-    state.requestUpdate?.();
+    state.composerDraftChanged?.();
   }
   context.chatAttachmentHandoff.clearPane(paneId);
   return nextOwner;
@@ -371,6 +374,7 @@ export function resumeStagedPanes(
   narrow: boolean,
 ): void {
   const visiblePaneIds = new Set(visiblePanesOf(layout, narrow).map((pane) => pane.id));
+  // The page resumes retained native pane hosts across their renderer boundaries.
   for (const pane of root.querySelectorAll<StagedAttachmentPane>("openclaw-chat-pane")) {
     if (visiblePaneIds.has(pane.paneId)) {
       pane.resumeStagedAttachments?.();

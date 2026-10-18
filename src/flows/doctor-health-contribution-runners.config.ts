@@ -12,6 +12,7 @@ import {
   recordUpdateDoctorConfigWriteRefusal,
   runUpdateDoctorIncludeWrite,
 } from "../infra/update-doctor-result.js";
+import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
@@ -123,12 +124,21 @@ export async function runWriteConfigHealth(
   }
   if (shouldWriteConfig) {
     const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+    const { readDeferredPluginMigrationsAsync } =
+      await import("../infra/deferred-plugin-migrations.js");
+    const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
+      env: ctx.env ?? process.env,
+    });
     const { restoreDoctorConfigEnvRefs } =
       await import("../commands/doctor/shared/config-flow-steps.js");
     const { prepareDoctorConfigWriteStage } =
       await import("../commands/doctor/shared/roster-include-write.js");
     let stageSnapshot = configResultWritePending
-      ? await readConfigFileSnapshot({ observe: false, skipPluginValidation: true })
+      ? await readConfigFileSnapshot({
+          observe: false,
+          skipPluginValidation: true,
+          deferredPluginMigrations,
+        })
       : undefined;
     let stage = stageSnapshot
       ? prepareDoctorConfigWriteStage({
@@ -146,7 +156,10 @@ export async function runWriteConfigHealth(
     if (stage) {
       ctx.configResult.skipWizardMetadataForIncludeWrite = true;
     }
-    if (ctx.configResult.skipWizardMetadataForIncludeWrite !== true) {
+    if (
+      ctx.configResult.skipWizardMetadataForIncludeWrite !== true &&
+      !resolveUpdateRehearsalRoot(ctx.env ?? process.env)
+    ) {
       ctx.cfg = applyWizardMetadata(ctx.cfg, {
         command: "doctor",
         mode: resolveDoctorMode(ctx.cfg),
@@ -212,6 +225,7 @@ export async function runWriteConfigHealth(
         const savedStage = await readConfigFileSnapshot({
           observe: false,
           skipPluginValidation: true,
+          deferredPluginMigrations,
         });
         if (
           savedStage.path !== ctx.configResult.confirmedConfigSource?.path ||
@@ -256,7 +270,11 @@ export async function runWriteConfigHealth(
       );
       const authority = getUpdateDoctorConfigWriteAuthority(ctx.configPath);
       const includeSnapshot = authority
-        ? await readConfigFileSnapshot({ skipPluginValidation: updateDoctorRun, observe: false })
+        ? await readConfigFileSnapshot({
+            skipPluginValidation: updateDoctorRun,
+            observe: false,
+            deferredPluginMigrations,
+          })
         : undefined;
       const resolveIncludeBoundary = (
         snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
@@ -321,6 +339,7 @@ export async function runWriteConfigHealth(
           },
           afterWrite: { mode: "auto" },
           writeOptions: {
+            deferredPluginMigrations,
             assertCurrent,
             ...(installedPluginIdRecovery?.size
               ? {
@@ -447,9 +466,7 @@ export async function runWriteConfigHealth(
       if (isConfigValidationFailedError(error)) {
         const { note } = await import("../../packages/terminal-core/src/note.js");
         const { formatConfigIssueLines } = await import("../config/issue-format.js");
-        const issueLines = Array.isArray(error.issues)
-          ? formatConfigIssueLines(error.issues, "-", { normalizeRoot: true })
-          : [error.message];
+        const issueLines = formatConfigIssueLines(error.issues, "-", { normalizeRoot: true });
         note(
           [
             "Doctor could not apply config fixes: the repaired config still fails validation.",
@@ -682,9 +699,15 @@ function isDirectoryPath(path: string): boolean {
 
 export async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
+  const { readDeferredPluginMigrationsAsync } =
+    await import("../infra/deferred-plugin-migrations.js");
+  const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
+    env: ctx.env ?? process.env,
+  });
   const finalSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
     preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+    deferredPluginMigrations,
   });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
     ctx.runtime.error("Invalid config:");

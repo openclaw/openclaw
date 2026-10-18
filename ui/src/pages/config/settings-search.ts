@@ -20,6 +20,7 @@ import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { schemaType, type JsonSchema } from "../../lib/config-form-utils.ts";
 import { settingsSearchTextMatches } from "../../lib/settings-navigation.ts";
+import { PLUGIN_SETTINGS_VISIBLE_KEYS } from "../plugins/settings-model.ts";
 import { configPageForSection } from "./config-sections.ts";
 import { MEMORY_SETTINGS_KEYS } from "./memory-schema.ts";
 import { SETTINGS_SEARCH_TARGETS, type SettingsSearchTarget } from "./settings-targets.ts";
@@ -67,7 +68,7 @@ function resolveStaticSettingsBlock(
 // dead-end.
 const CURATED_ROUTE_VISIBLE_KEYS: Partial<Record<string, readonly string[]>> = {
   memory: MEMORY_SETTINGS_KEYS,
-  "plugin-settings": ["enabled", "allow", "deny", "load", "slots"],
+  "plugin-settings": PLUGIN_SETTINGS_VISIBLE_KEYS,
   updates: ["channel", "checkOnStart", "auto"],
 };
 
@@ -198,6 +199,7 @@ export function findSettingsSearchBlocks(params: {
       ...(routeId === "memory"
         ? {
             pathname: pathForMemoryTab("settings", params.basePath),
+            ...(matchesAdvanced ? { search: "?advanced=1" } : {}),
             hash: editorHash,
           }
         : routeId === "plugin-settings"

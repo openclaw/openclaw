@@ -12,14 +12,13 @@ import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { getAgentDeletionDatabaseCleanup } from "./agent-deletion-cleanup.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
-import {
-  assertAgentDatabaseMaintenanceAuthority,
-  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation,
-} from "./openclaw-agent-db-lease.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "./openclaw-agent-db-lease.js";
+import { assertAgentDatabaseMaintenanceAuthority } from "./openclaw-agent-db-maintenance-authority.js";
 import {
   assertExistingAgentSchemaOwner,
   assertOpenClawAgentSchemaContains,
@@ -85,18 +84,20 @@ export function assertOpenClawAgentDatabaseForMaintenance(
 
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
 export async function migrateOpenClawAgentDatabaseForMaintenance(
-  options: { agentId: string; pathname: string },
+  options: { agentId: string; pathname: string; env?: NodeJS.ProcessEnv; register?: boolean },
   maintenance: OpenClawStateLeaseContext,
 ): Promise<void> {
   const agentId = normalizeAgentId(options.agentId);
   const pathname = options.pathname;
-  const env = { ...process.env };
+  const env = { ...(options.env ?? process.env) };
+  const cleanup = getAgentDeletionDatabaseCleanup({ agentId, path: pathname, env });
   const assertOwned = () => {
     maintenance.signal.throwIfAborted();
     assertAgentDatabaseMaintenanceAuthority(maintenance);
+    cleanup?.assertCurrent();
   };
   assertOwned();
-  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname, env);
+  invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
   const database = openNodeSqliteDatabase(pathname);
   try {
     invalidateSqliteSchemaFacts(database);
@@ -105,6 +106,9 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const metadata = readExistingAgentSchemaMeta(database);
     if (!metadata) {
+      if (options.register) {
+        assertOpenClawAgentDatabaseForMaintenance(database, { agentId, pathname });
+      }
       return;
     }
     assertExistingAgentSchemaOwner(metadata, agentId, pathname);
@@ -119,6 +123,9 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
       userVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
       metadataVersion === userVersion;
     if (!hasCurrentVersion && !hasSupportedOlderVersion) {
+      if (options.register) {
+        assertOpenClawAgentDatabaseForMaintenance(database, { agentId, pathname });
+      }
       return;
     }
     const repairIndexes = () => {
@@ -144,6 +151,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
       agentId,
       path: pathname,
       env,
+      register: options.register,
     });
     await runSqliteIntegrityOperationInWorker(operation, {
       busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -165,4 +173,50 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     clearNodeSqliteKyselyCacheForDatabase(database);
     database.close();
   }
+}
+
+/** Doctor prepares pending stores through their deletion owner without completing cleanup. */
+export async function preparePendingAgentDeletionDatabasesForMaintenance(
+  options: { targets: readonly { agentId: string; path: string }[]; env: NodeJS.ProcessEnv },
+  maintenance: OpenClawStateLeaseContext,
+): Promise<string[]> {
+  const [{ withAgentDeletion }, { listPendingAgentDeletionJournalsAsync }] = await Promise.all([
+    import("../agents/agent-lifecycle-registry.js"),
+    import("./agent-deletion-journal.js"),
+  ]);
+  const { env } = options;
+  const pending = await listPendingAgentDeletionJournalsAsync({ env });
+  const pendingByAgent = new Map<string, string[]>();
+  for (const target of options.targets) {
+    const paths = pendingByAgent.get(target.agentId) ?? [];
+    paths.push(target.path);
+    pendingByAgent.set(target.agentId, paths);
+  }
+  const changes: string[] = [];
+  for (const [agentId, paths] of pendingByAgent) {
+    maintenance.assertOwned();
+    const journal = pending.entries.find((entry) => entry.agentId === agentId);
+    if (!journal) {
+      throw new Error(`Agent ${agentId} deletion changed before schema preparation.`);
+    }
+    await withAgentDeletion(
+      agentId,
+      async (begin) => {
+        const deletion = await begin(journal, { recoveryOperationId: journal.operationId });
+        for (const pathname of paths) {
+          await deletion.runDatabaseCleanup({ agentId, path: pathname }, () =>
+            migrateOpenClawAgentDatabaseForMaintenance(
+              { agentId, pathname, env, register: true },
+              maintenance,
+            ),
+          );
+          changes.push(
+            `Prepared agent database schema in ${pathname} for pending deletion recovery.`,
+          );
+        }
+      },
+      { env },
+    );
+  }
+  return changes;
 }

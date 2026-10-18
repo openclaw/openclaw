@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -8,12 +8,19 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
+import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
 import { hasPreJournalStateSchema } from "./agent-deletion-journal-history.js";
 import { readAgentDeletionRecoveryHolds } from "./agent-deletion-journal-recovery.kernel.js";
+import {
+  getAgentDeletionJournalStatus,
+  loadAgentDeletionJournalStatus,
+  seedAgentDeletionDiscovery,
+} from "./agent-deletion-journal-status.js";
 import type {
   AgentDatabaseDeletionSnapshot,
   AgentDatabaseDeletionWorkerSnapshot,
@@ -46,9 +53,6 @@ export async function readAgentDeletionRecoveryHoldsInWorker(
     { type: "agentRecovery.holds", input: { statePath } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.holds")) {
-    throw new Error("Unexpected agent recovery holds result");
-  }
   return reply?.held ?? [];
 }
 
@@ -61,17 +65,18 @@ export async function readAgentDeletionJournalForCreation(
     { type: "agentRecovery.creationJournal", input: { agentId: normalizeAgentId(agentId) } },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.creationJournal")) {
-    throw new Error("Unexpected agent creation journal result");
-  }
   return reply?.journal;
 }
 
 /** Completed cleanup still retains a deletion tombstone. */
 export function readAgentDeletionJournalStatusInDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   agentId: string,
 ): AgentDeletionJournalStatus {
+  const cached = getAgentDeletionJournalStatus(database, agentId);
+  if (cached) {
+    return cached;
+  }
   if (!tableExists(database, "agent_deletion_journal")) {
     return "absent";
   }
@@ -90,23 +95,20 @@ export async function readAgentDeletionJournalStatusInWorker(
   options: OpenClawStateDatabaseOptions = {},
   signal?: AbortSignal,
 ): Promise<AgentDeletionJournalStatus> {
-  const reply = await executeExistingOpenClawStateRead(
-    options,
-    { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
-    { current: true, signal },
-  );
-  if (reply && (!reply.ok || reply.type !== "agentDeletionJournal.status")) {
-    throw new Error("Unexpected agent deletion journal read result");
-  }
-  return reply?.status ?? "absent";
+  signal?.throwIfAborted();
+  return loadAgentDeletionJournalStatus(resolveDatabasePath(options), agentId, async () => {
+    const reply = await executeExistingOpenClawStateRead(
+      options,
+      { type: "agentDeletionJournal.status", agentId: normalizeAgentId(agentId) },
+      { current: true, signal },
+    );
+    return reply?.status ?? "absent";
+  });
 }
 
 export function parseAgentDeletionDatabasePaths(value: string): string[] {
   const parsed: unknown = JSON.parse(value);
-  if (
-    Array.isArray(parsed) &&
-    parsed.every((entry): entry is string => typeof entry === "string")
-  ) {
+  if (isStringArray(parsed)) {
     return parsed;
   }
   throw new Error("Invalid agent deletion database path journal.");
@@ -114,7 +116,7 @@ export function parseAgentDeletionDatabasePaths(value: string): string[] {
 
 /** Read existing deletion history without initializing or repairing the journal. */
 export function readRetainedAgentDeletionsFromDatabase(
-  database: DatabaseSync,
+  database: EngineConnection,
   statePath: string,
   purpose: AgentDeletionJournalPurpose = "maintenance",
 ): AgentDeletionJournalDisposition {
@@ -128,9 +130,14 @@ export function readRetainedAgentDeletionsFromDatabase(
         database,
         getNodeSqliteKysely<Pick<DB, "agent_deletion_journal">>(database)
           .selectFrom("agent_deletion_journal")
-          .select(["agent_id", "agent_dir", "database_paths_json"])
-          .where("cleanup_completed", "=", 1)
-          .where("delete_files", "=", 0)
+          .selectAll()
+          .where((eb) => {
+            const retained = eb.and([eb("cleanup_completed", "=", 1), eb("delete_files", "=", 0)]);
+            // Pending stores leave runtime discovery as soon as deletion commits.
+            return purpose !== "runtime"
+              ? eb.or([retained, eb("cleanup_completed", "=", 0)])
+              : retained;
+          })
           .orderBy("agent_id", "asc"),
       ).rows.map((row) => {
         let databasePaths: string[] = [];
@@ -142,11 +149,20 @@ export function readRetainedAgentDeletionsFromDatabase(
           }
           // Unreadable path details cannot erase this row's known deleted identity.
         }
-        return {
+        const entry: RetainedAgentDeletion = {
           agentId: row.agent_id,
           agentDir: row.agent_dir,
           databasePaths: [path.join(row.agent_dir, "openclaw-agent.sqlite"), ...databasePaths],
+          cleanupCompleted: row.cleanup_completed === 1,
         };
+        if (
+          row.cleanup_completed === 0 &&
+          row.phase == null &&
+          hasClawDeletionOwnership({ db: database }, row.agent_id)
+        ) {
+          entry.manualClawRemoval = true;
+        }
+        return entry;
       });
     }
   } catch (error) {
@@ -233,8 +249,8 @@ export function prepareAgentDatabaseDeletionSnapshotRead(
       { context: readContext, current: true },
     );
     assertReadCurrent();
-    if (reply && (!reply.ok || reply.type !== "agentDatabaseDeletion.snapshot")) {
-      throw new Error("Unexpected agent database deletion snapshot result");
+    if (purpose === "runtime-discovery" && reply) {
+      seedAgentDeletionDiscovery(options.path, reply.snapshot.retainedDeletions);
     }
     return { snapshot: reply?.snapshot, assertCurrent: assertReadCurrent };
   };

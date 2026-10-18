@@ -4,6 +4,7 @@ import type {
   EnvironmentSummary,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -11,7 +12,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { DesktopClient } from "../../components/desktop/desktop-client.ts";
 import { createConnectionHandle } from "../../components/desktop/desktop-panel.test-support.ts";
 import { DESKTOP_PANEL_TOGGLE_EVENT } from "../../components/panel-toggle-contract.ts";
-import type { SparklineSample } from "../../components/sparkline-tile.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
@@ -20,13 +21,16 @@ import {
   createSessions,
 } from "../../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { SystemsController } from "./systems-controller.ts";
-import "./systems-page.ts";
-import "./systems-sidebar.ts";
+import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { renderSidebar, renderSolid } from "./systems-route-view.tsx";
+import { createSystems, type Systems, type SystemsRouteData } from "./systems-state.ts";
+import "./systems-sidebar.tsx";
 
 setupSidebarTest();
 const runtimeConfigs: ReturnType<typeof createRuntimeConfigCapability>[] = [];
 afterEach(() => {
+  cleanup();
   for (const config of runtimeConfigs.splice(0)) {
     config.dispose();
   }
@@ -89,32 +93,34 @@ function harness(
     locations: [],
   }),
 ) {
-  const request = vi.fn(async (method: string) => {
-    if (method === "environments.list") {
-      return { environments: await inventory() };
-    }
-    if (method === "system.info") {
-      return systemInfo;
-    }
-    if (method === "node.list") {
-      return { nodes: nodes() };
-    }
-    if (method === "backup.status") {
-      return backups();
-    }
-    if (method === "storage.locations.probe") {
-      return { state: "ok", freeBytes: 1024 ** 3 };
-    }
-    if (method === "desktop.observe") {
-      return {
-        transport: "rfb",
-        wsPath: "/desktop/proof",
-        expiresAtMs: Date.now() + 60000,
-        control: false,
-      };
-    }
-    throw new Error("Unexpected request: " + method);
-  });
+  const request = vi.fn(
+    async (method: string, _params?: unknown, _options?: { signal?: AbortSignal }) => {
+      if (method === "environments.list") {
+        return { environments: await inventory() };
+      }
+      if (method === "system.info") {
+        return systemInfo;
+      }
+      if (method === "node.list") {
+        return { nodes: nodes() };
+      }
+      if (method === "backup.status") {
+        return backups();
+      }
+      if (method === "storage.locations.probe") {
+        return { state: "ok", freeBytes: 1024 ** 3 };
+      }
+      if (method === "desktop.observe") {
+        return {
+          transport: "rfb",
+          wsPath: "/desktop/proof",
+          expiresAtMs: Date.now() + 60000,
+          control: false,
+        };
+      }
+      throw new Error("Unexpected request: " + method);
+    },
+  );
   const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
   gateway.publish({
     hello: gatewayHelloForMethods(
@@ -133,20 +139,20 @@ function harness(
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
   Object.assign(context, { basePath: "", navigate: vi.fn(), runtimeConfig });
-  const controller = new SystemsController(context);
+  const controller = createSystems(context);
   return { controller, gateway, context, request };
 }
 
-async function mount(controller: SystemsController) {
-  const page = document.createElement("openclaw-systems-page");
-  const sidebar = document.createElement("openclaw-systems-sidebar");
-  page.routeData = { controller };
-  sidebar.controller = controller;
-  document.body.append(page, sidebar);
-  await vi.waitFor(() => expect(controller.inventory).not.toBeNull());
-  await page.updateComplete;
+async function mount(controller: Systems) {
+  const sidebar = renderSidebar({ controller })!;
+  const mounted = mountSolid(() => [
+    createComponent(renderSolid, { data: { controller }, loaderPending: false, presented: true }),
+    sidebar,
+  ]);
+  await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
   await sidebar.updateComplete;
-  return { page, sidebar };
+  const page = mounted.container.querySelector<HTMLElement>("openclaw-systems-page")!;
+  return { page, sidebar, unmount: mounted.unmount };
 }
 
 describe("Systems workspace", () => {
@@ -168,12 +174,12 @@ describe("Systems workspace", () => {
     expect(page.querySelector(".systems-backups")?.textContent).toContain("Loading backups…");
     pending.reject(new Error("Backup history unavailable"));
     await pending.promise.catch(() => {});
-    await page.updateComplete;
+    flush();
     expect(page.querySelector('.systems-backups [role="alert"]')?.textContent).toContain(
       "Backup history unavailable",
     );
     await controller.refreshBackups();
-    await page.updateComplete;
+    flush();
     expect(page.querySelector(".systems-backups")?.textContent).toContain("No backups recorded —");
     expect(page.querySelector(".systems-backups code")?.textContent).toBe(
       "openclaw backup enable --to <location>",
@@ -324,13 +330,13 @@ describe("Systems workspace", () => {
     const probe = createDeferred<{ state: "ok"; freeBytes: number }>();
     request.mockReturnValueOnce(probe.promise);
     section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')!.click();
-    await page.updateComplete;
+    flush();
     expect(section.querySelector<HTMLButtonElement>('[aria-label="Check offsite"]')?.disabled).toBe(
       true,
     );
     probe.resolve({ state: "ok", freeBytes: 1024 ** 3 });
     await probe.promise;
-    await page.updateComplete;
+    flush();
     expect(section.textContent).toContain("Available");
     expect(section.textContent).toContain("1 GB free");
     expect(request).toHaveBeenCalledWith(
@@ -339,7 +345,7 @@ describe("Systems workspace", () => {
       expect.anything(),
     );
     controller.select(worker.id);
-    await page.updateComplete;
+    flush();
     expect(page.querySelector(".systems-backups")).toBeNull();
   });
 
@@ -354,8 +360,8 @@ describe("Systems workspace", () => {
       locations: [{ name: "old-host", provider: "filesystem", encrypted: false }],
     });
     await pending.promise;
-    await page.updateComplete;
-    expect(controller.backups).toBeNull();
+    flush();
+    expect(controller.state.backups).toBeNull();
     expect(page.querySelector(".systems-backups")?.textContent).not.toContain("old-host");
   });
 
@@ -366,23 +372,23 @@ describe("Systems workspace", () => {
     const gatewayHost = { ...host, desktop: false };
     let environments = [gatewayHost, worker, offline];
     const { controller, gateway, request } = harness(async () => environments);
-    const page = document.createElement("openclaw-systems-page");
-    page.routeData = { controller };
-    document.body.append(page);
-    await page.updateComplete;
+    mountSolid(() =>
+      createComponent(renderSolid, { data: { controller }, loaderPending: false, presented: true }),
+    );
+    flush();
     await vi.advanceTimersByTimeAsync(0);
     const statusReads = () => request.mock.calls.filter(([method]) => method === "system.info");
     expect(statusReads()).toHaveLength(0);
-    expect(controller.inventory).toBeNull();
+    expect(controller.state.inventory).toBeNull();
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(1);
-    const inventory = controller.inventory;
+    const inventory = controller.state.inventory;
     expect(inventory?.gatewaySystemInfo).toEqual(systemInfo);
-    controller.updatePresentation({ showStats: !controller.showStats });
-    expect(controller.showStats || controller.showDetails).toBe(false);
+    controller.updatePresentation({ showStats: !controller.state.showStats });
+    expect(controller.state.showStats || controller.state.showDetails).toBe(false);
 
     visibility = "hidden";
     document.dispatchEvent(new Event("visibilitychange"));
@@ -390,25 +396,102 @@ describe("Systems workspace", () => {
     gateway.publishEvent("presence", {});
     await vi.advanceTimersByTimeAsync(30_000);
     expect(statusReads()).toHaveLength(1);
-    expect(controller.inventory).toBe(inventory);
-    expect(controller.inventory?.errors).toEqual({});
+    expect(controller.state.inventory).toBe(inventory);
+    expect(controller.state.inventory?.errors).toEqual({});
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
 
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(0);
     expect(statusReads()).toHaveLength(2);
-    expect(controller.inventory?.errors).toEqual({});
-    expect(controller.sampledAtMs).toBe(Date.now());
-    expect(controller.rows.map((row) => row.environment.id)).toEqual([
+    expect(controller.state.inventory?.errors).toEqual({});
+    expect(controller.sampledAtMs()).toBe(Date.now());
+    expect(controller.state.rows.map((row) => row.environment.id)).toEqual([
       "gateway",
       "worker-after-hidden",
     ]);
     expect(
-      controller.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
+      controller.state.rows.find((row) => row.environment.id === "worker-after-hidden")?.environment
         .desktop,
     ).toBe(false);
-    expect(controller.needsInventoryRefresh).toBe(false);
+    expect(controller.needsInventoryRefresh()).toBe(false);
+  });
+
+  it("keeps desktop setup active through route refreshes and renders rejected writes", async () => {
+    const pending = createDeferred<boolean>();
+    const { controller, context } = harness(async () => [
+      { ...host, desktopSetup: { state: "ready" } },
+    ]);
+    vi.spyOn(context.runtimeConfig, "ensureLoaded").mockResolvedValue();
+    const patch = vi.spyOn(context.runtimeConfig, "patch").mockReturnValue(pending.promise);
+    const [route, setRoute] = createSignal({
+      data: { controller },
+      loaderPending: false,
+      presented: true,
+    });
+    const mounted = mountSolid(() =>
+      createComponent(renderSolid, {
+        get data() {
+          return route().data;
+        },
+        get loaderPending() {
+          return route().loaderPending;
+        },
+        get presented() {
+          return route().presented;
+        },
+      }),
+    );
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
+    const enable = mounted.container.querySelector<HTMLButtonElement>(".systems-state button")!;
+    enable.click();
+    await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
+    setRoute({ data: { controller }, loaderPending: true, presented: true });
+    flush();
+    expect(mounted.container.querySelector(".systems-state button")).toBe(enable);
+    expect(enable.disabled).toBe(true);
+    pending.reject(new Error("Desktop configuration could not be saved"));
+    await waitForSolid(() =>
+      expect(mounted.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Desktop configuration could not be saved",
+      ),
+    );
+    expect(enable.disabled).toBe(false);
+  });
+
+  it("updates desktop setup when only the configuration owner publishes", async () => {
+    const { controller, context } = harness(async () => [
+      { ...host, desktopSetup: { state: "ready" } },
+    ]);
+    const { page } = await mount(controller);
+    expect(page.querySelector(".systems-state button")?.textContent).toContain(
+      "Enable desktop access in OpenClaw",
+    );
+    const request = vi.spyOn(context.gateway.snapshot.client!, "request");
+    request.mockResolvedValueOnce({
+      config: { desktop: { host: { enabled: true } } },
+      hash: "enabled",
+      valid: true,
+    });
+    await context.runtimeConfig.refresh();
+    await waitForSolid(() =>
+      expect(page.querySelector(".systems-state h2")?.textContent).toBe(
+        "Desktop access is enabled",
+      ),
+    );
+    expect(page.querySelector(".systems-state button")).toBeNull();
+
+    request.mockResolvedValueOnce({
+      config: { desktop: { host: { enabled: false } } },
+      hash: "disabled",
+      valid: true,
+    });
+    await context.runtimeConfig.refresh();
+    await waitForSolid(() =>
+      expect(page.querySelector(".systems-state button")?.textContent).toContain(
+        "Enable desktop access in OpenClaw",
+      ),
+    );
   });
 
   it.each(["selection", "authority"])(
@@ -423,7 +506,7 @@ describe("Systems workspace", () => {
       const patch = vi.spyOn(context.runtimeConfig, "patch");
       const { page } = await mount(controller);
       page.querySelector<HTMLButtonElement>(".systems-state button")!.click();
-      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(true));
+      await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(true));
       if (change === "selection") {
         controller.select(worker.id);
       } else {
@@ -435,12 +518,14 @@ describe("Systems workspace", () => {
         });
       }
       loaded.resolve();
-      await vi.waitFor(() => expect(controller.desktopSetupBusy).toBe(false));
+      await waitForSolid(() => expect(controller.desktopSetupBusy()).toBe(false));
       expect(patch).not.toHaveBeenCalled();
     },
   );
 
   it("sorts and filters the machine inventory without replacing the selected machine", async () => {
+    // Open menus need frame boundaries instead of the sidebar fixture's recursive microtasks.
+    vi.useFakeTimers({ toFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
     const environments: EnvironmentSummary[] = [
       host,
       { ...offline, id: "node:delta", label: "Delta laptop" },
@@ -465,18 +550,26 @@ describe("Systems workspace", () => {
       },
     ];
     const { controller, request } = harness(async () => environments);
-    let { page, sidebar } = await mount(controller);
+    const initial = await mount(controller);
+    let { page, sidebar } = initial;
+    expect(renderSidebar({ controller })).toBe(sidebar);
     const names = (selector = ".systems-machine__name") =>
       [...sidebar.querySelectorAll(selector)].map((entry) => entry.textContent?.trim());
     const nodeNames = () => names(".systems-group:first-of-type .systems-machine__name");
     const counts = () => names(".systems-group__count");
     const choose = async (value: string) => {
       const menu = sidebar.querySelector(".systems-filter-menu");
-      const item = menu?.querySelector(`wa-dropdown-item[value="${value}"]`);
+      const trigger = menu?.querySelector<HTMLButtonElement>(".oc-menu-trigger");
+      expect(trigger).toBeTruthy();
+      trigger!.click();
+      await waitForSolid(() => expect(trigger!.getAttribute("aria-expanded")).toBe("true"));
+      vi.advanceTimersToNextFrame();
+      const item = menu?.querySelector<HTMLButtonElement>(`.oc-menu-item[data-value="${value}"]`);
       expect(item).toBeTruthy();
-      menu!.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
+      item!.click();
+      vi.advanceTimersToNextFrame();
       await sidebar.updateComplete;
-      await page.updateComplete;
+      flush();
     };
     const search = async (value: string) => {
       const input = sidebar.querySelector<HTMLInputElement>('input[type="search"]')!;
@@ -491,7 +584,7 @@ describe("Systems workspace", () => {
       (button) => button.querySelector(".systems-machine__name")?.textContent === "Zulu laptop",
     );
     selected!.click();
-    await page.updateComplete;
+    flush();
 
     await choose("sort:name");
     expect(nodeNames()).toEqual(["Alpha laptop", "Beta laptop", "Delta laptop", "Zulu laptop"]);
@@ -516,13 +609,12 @@ describe("Systems workspace", () => {
     await choose("status:offline");
     expect(names()).toEqual(["Alpha laptop"]);
     expect(counts()).toEqual(["1"]);
-    expect(controller.selectedId).toBe(offline.id);
+    expect(controller.state.selectedId).toBe(offline.id);
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
 
-    page.remove();
-    sidebar.remove();
+    initial.unmount();
     ({ page, sidebar } = await mount(controller));
-    await vi.waitFor(() => expect(controller.loading).toBe(false));
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
     await sidebar.updateComplete;
     expect(names()).toEqual(["Alpha laptop"]);
     expect(page.querySelector(".systems-heading h1")?.textContent).toBe("Zulu laptop");
@@ -553,13 +645,13 @@ describe("Systems workspace", () => {
         disks,
       });
       await controller.refreshTelemetry();
-      await page.updateComplete;
+      flush();
     };
     type DiskTile = HTMLElement & { samples: readonly SparklineSample[] };
     const disk = (path: string) =>
       page.querySelector<DiskTile>(`.systems-vital--disk[title="${path}"]`);
     await publish([root, archive]);
-    await vi.waitFor(() => expect(disk(archive.path)?.textContent).toContain("800 GB"));
+    await waitForSolid(() => expect(disk(archive.path)?.textContent).toContain("800 GB"));
     expect(page.querySelectorAll(".systems-vital--disk")).toHaveLength(2);
     const rootTile = disk(root.path);
     const archiveTile = disk(archive.path);
@@ -569,7 +661,7 @@ describe("Systems workspace", () => {
       { ...archive, availableBytes: 750 * 1024 ** 3 },
       { ...root, availableBytes: 90 * 1024 ** 3 },
     ]);
-    await vi.waitFor(() => expect(disk(archive.path)?.textContent).toContain("750 GB"));
+    await waitForSolid(() => expect(disk(archive.path)?.textContent).toContain("750 GB"));
     expect(disk(root.path)).toBe(rootTile);
     expect(disk(archive.path)).toBe(archiveTile);
     expect(rootTile?.samples.map((sample) => sample.value / 1024 ** 3)).toEqual([100, 90]);
@@ -578,7 +670,7 @@ describe("Systems workspace", () => {
     await publish([root]);
     expect(disk(archive.path)).toBeNull();
     await publish([root, archive]);
-    await vi.waitFor(() => expect(disk(archive.path)?.textContent).toContain("800 GB"));
+    await waitForSolid(() => expect(disk(archive.path)?.textContent).toContain("800 GB"));
     expect(disk(archive.path)?.samples).toHaveLength(1);
     expect(disk(archive.path)?.querySelector(".sparkline-tile__chart")).toBeNull();
     await publish([]);
@@ -593,7 +685,7 @@ describe("Systems workspace", () => {
     clock.mockReturnValue(now + 15_000);
     request.mockResolvedValueOnce({ ...systemInfo, loadAverage: [2, 1, 0.5] });
     await controller.refreshTelemetry();
-    await vi.waitFor(() =>
+    await waitForSolid(() =>
       expect(page.querySelector(".sparkline-tile__value")?.textContent?.trim()).toBe("2.00"),
     );
     const points = () =>
@@ -603,7 +695,7 @@ describe("Systems workspace", () => {
     clock.mockReturnValue(now + 30_000);
     request.mockRejectedValueOnce(new Error("Telemetry unavailable"));
     await controller.refreshTelemetry();
-    await page.updateComplete;
+    flush();
     expect(points()).toHaveLength(2);
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
     expect(page.querySelector(".systems-sample-time")?.textContent).toContain("Last reported");
@@ -632,23 +724,23 @@ describe("Systems workspace", () => {
     controller.select(node.id);
     const readings = () =>
       [...page.querySelectorAll(".sparkline-tile__value")].map((tile) => tile.textContent?.trim());
-    await vi.waitFor(() => expect(readings()).toEqual(["2.00", "8.0 GB", "256 GB"]));
+    await waitForSolid(() => expect(readings()).toEqual(["2.00", "8.0 GB", "256 GB"]));
     expect(page.querySelector('.systems-metrics[data-stale="false"]')).not.toBeNull();
     expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0);
 
     stats = { ...stats, loadAverage: [4, 2, 1], updatedAtMs: stats.updatedAtMs + 60_000 };
     await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()[0]).toBe("4.00"));
+    await waitForSolid(() => expect(readings()[0]).toBe("4.00"));
     const chartPoints = () =>
       page.querySelector(".sparkline-tile__chart polyline")?.getAttribute("points")?.split(" ");
     expect(chartPoints()).toHaveLength(2);
     await controller.refreshTelemetry();
-    await page.updateComplete;
+    flush();
     expect(chartPoints()).toHaveLength(2);
     controller.select(host.id);
-    await vi.waitFor(() => expect(readings()[0]).toBe("0.50"));
+    await waitForSolid(() => expect(readings()[0]).toBe("0.50"));
     controller.select(node.id);
-    await vi.waitFor(() => expect(readings()[0]).toBe("4.00"));
+    await waitForSolid(() => expect(readings()[0]).toBe("4.00"));
     expect(chartPoints()).toHaveLength(2);
 
     stats = {
@@ -659,25 +751,27 @@ describe("Systems workspace", () => {
       updatedAtMs: stats.updatedAtMs + 60_000,
     };
     await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()).toEqual(["–", "8.0 GB", "–"]));
+    await waitForSolid(() => expect(readings()).toEqual(["–", "8.0 GB", "–"]));
     expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(1);
     stats = { ...stats, loadAverage: [3, 2, 1], updatedAtMs: stats.updatedAtMs + 60_000 };
     await controller.refreshTelemetry();
-    await vi.waitFor(() => expect(readings()[0]).toBe("3.00"));
+    await waitForSolid(() => expect(readings()[0]).toBe("3.00"));
     expect(
       page.querySelector("openclaw-sparkline")?.querySelector(".sparkline-tile__chart"),
     ).toBeNull();
 
     node = { ...node, status: "unavailable" };
     await controller.refresh();
-    await page.updateComplete;
+    flush();
     expect(page.textContent).toContain("This machine is offline");
     expect(page.textContent).toContain("Last reported");
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
     expect(connect).not.toHaveBeenCalled();
 
     gateway.publish({ phase: "offline" });
-    await vi.waitFor(() => expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0));
+    await waitForSolid(() =>
+      expect(page.querySelectorAll(".sparkline-tile__chart")).toHaveLength(0),
+    );
     expect(readings()[0]).toBe("3.00");
     expect(page.querySelector('.systems-metrics[data-stale="true"]')).not.toBeNull();
   });
@@ -695,7 +789,7 @@ describe("Systems workspace", () => {
       });
     const mounted = await mount(controller);
     let page = mounted.page;
-    const { sidebar } = mounted;
+    const { sidebar, unmount } = mounted;
     expect(sidebar.querySelectorAll(".systems-machine")).toHaveLength(3);
     expect(page.textContent).toContain("No desktop available");
     expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(1);
@@ -703,7 +797,7 @@ describe("Systems workspace", () => {
       (button) => button.textContent?.includes("Cloud worker"),
     );
     entry!.click();
-    await vi.waitFor(() => expect(connect).toHaveBeenCalledOnce());
+    await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     expect(request).toHaveBeenCalledWith("desktop.observe", {
       source: { kind: "environment", environmentId: worker.id },
       control: false,
@@ -711,64 +805,98 @@ describe("Systems workspace", () => {
     const viewer = page.querySelector("openclaw-desktop-panel");
     expect(viewer?.hasAttribute("embedded")).toBe(true);
     expect(viewer?.embedded).toBe(true);
-    controller.updatePresentation({ showStats: !controller.showStats });
-    controller.updatePresentation({ showDetails: !controller.showDetails });
+    controller.updatePresentation({ showStats: !controller.state.showStats });
+    controller.updatePresentation({ showDetails: !controller.state.showDetails });
     await controller.refresh();
-    await page.updateComplete;
+    flush();
     expect(page.querySelector("openclaw-desktop-panel")).toBe(viewer);
     expect(connect).toHaveBeenCalledOnce();
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
-    page.remove();
-    sidebar.remove();
+    unmount();
     ({ page } = await mount(controller));
-    await vi.waitFor(() => expect(controller.loading).toBe(false));
-    await page.updateComplete;
-    expect(controller.selectedId).toBe(worker.id);
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
+    flush();
+    expect(controller.state.selectedId).toBe(worker.id);
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe(worker.id);
     expect(page.querySelector("openclaw-desktop-panel")?.requestedSource).toBe(worker.id);
-    await vi.waitFor(() => expect(connect).toHaveBeenCalledTimes(2));
+    await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
     disconnect.mockClear();
     environments = [host, offline];
     await controller.refresh();
-    await page.updateComplete;
-    expect(controller.selectedId).toBe(worker.id);
+    flush();
+    expect(controller.state.selectedId).toBe(worker.id);
     expect(page.textContent).toContain("This machine is no longer listed");
     expect(page.querySelector<HTMLSelectElement>(".systems-mobile-picker")?.value).toBe("");
     expect(page.querySelector("openclaw-desktop-panel")).toBeNull();
-    expect(handle.disconnect).toHaveBeenCalled();
+    await waitForSolid(() => expect(handle.disconnect).toHaveBeenCalled());
     window.dispatchEvent(
       new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, {
         detail: { open: true, environmentId: "worker-no-longer-known" },
       }),
     );
-    await page.updateComplete;
-    expect(controller.selectedId).toBe("worker-no-longer-known");
+    flush();
+    expect(controller.state.selectedId).toBe("worker-no-longer-known");
     expect(page.textContent).toContain("This machine is no longer listed");
     expect(connect).toHaveBeenCalledTimes(2);
   });
 
   it("keeps selection across route activation and drops late work after departure or gateway replacement", async () => {
     const delayed = createDeferred<EnvironmentSummary[]>();
-    const { controller, gateway } = harness(() => delayed.promise);
-    controller.setPresented(true);
-    controller.setPresented(false);
-    delayed.resolve([host, worker]);
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(controller.inventory).toBeNull();
-    controller.setPresented(true);
-    await vi.waitFor(() => expect(controller.inventory).not.toBeNull());
+    const { controller, gateway, request } = harness(() => delayed.promise);
+    const [data, setData] = createSignal<SystemsRouteData>();
+    const [presented, setPresented] = createSignal(true);
+    const mounted = mountSolid(() =>
+      createComponent(renderSolid, {
+        get data() {
+          return data();
+        },
+        loaderPending: false,
+        get presented() {
+          return presented();
+        },
+      }),
+    );
+    flush();
+    expect(mounted.container.querySelector("openclaw-systems-page")).toBeNull();
+    setData({ controller });
+    flush();
+    const page = mounted.container.querySelector("openclaw-systems-page");
+    expect(page).not.toBeNull();
+    setPresented(false);
+    flush();
+    const initialRead = request.mock.calls.find(([method]) => method === "environments.list");
+    expect(initialRead?.[2]?.signal?.aborted).toBe(true);
+    delayed.resolve([host, { ...worker, desktop: false }]);
+    await delayed.promise;
+    flush();
+    expect(controller.state.inventory).toBeNull();
+    setPresented(true);
+    await waitForSolid(() => expect(controller.state.inventory).not.toBeNull());
     controller.select(worker.id);
-    controller.setPresented(false);
-    controller.setPresented(true);
-    await vi.waitFor(() => expect(controller.loading).toBe(false));
-    expect(controller.selectedId).toBe(worker.id);
+    setPresented(false);
+    flush();
+    setPresented(true);
+    await waitForSolid(() => expect(controller.loading()).toBe(false));
+    expect(controller.state.selectedId).toBe(worker.id);
+    expect(mounted.container.querySelector("openclaw-systems-page")).toBe(page);
     // Simulate a new revision from the Gateway owner; consumers only read this property.
     Object.defineProperty(gateway.gateway, "connectionRevision", { value: 1 });
     gateway.publish({});
-    expect(controller.rows).toEqual([]);
-    expect(controller.selected).toBeUndefined();
-    controller.setPresented(false);
+    expect(controller.state.rows).toEqual([]);
+    expect(controller.selected()).toBeUndefined();
+    const replacement = harness(async () => [host]);
+    setData({ controller: replacement.controller });
+    await waitForSolid(() => expect(replacement.controller.state.inventory).not.toBeNull());
+    expect(mounted.container.querySelector("openclaw-systems-page")).toBe(page);
+    mounted.unmount();
+    const calls = replacement.request.mock.calls.length;
+    window.dispatchEvent(
+      new CustomEvent(DESKTOP_PANEL_TOGGLE_EVENT, {
+        detail: { open: true, environmentId: worker.id },
+      }),
+    );
+    replacement.gateway.publishEvent("presence", {});
+    expect(replacement.request.mock.calls).toHaveLength(calls);
+    expect(replacement.controller.state.selectedId).toBe(host.id);
   });
 });

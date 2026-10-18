@@ -83,6 +83,11 @@ inside every shard.
     diagnostics. Requires live OpenAI auth such as `OPENAI_API_KEY`. In
     hydrated Testbox sessions it automatically sources the Testbox live-auth
     profile when the `openclaw-testbox-env` helper is present.
+    The helper is for live lanes; non-live Vitest workers drop credential env
+    variables. Wrapper Testbox runs redact hydrated profile values from streamed
+    output, which also cleans Crabbox failure bundles. Direct `crabbox` or
+    `blacksmith testbox` runs and downloaded artifacts are not stream-redacted;
+    Vitest reports pass through the redacting reporter.
 - `pnpm test:gateway:cpu-scenarios`
   - Runs the gateway startup bench plus a small mock QA Lab scenario pack
     (`channel-chat-baseline`, `memory-failure-fallback`,

@@ -59,6 +59,7 @@ export type {
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
   GetReplyOptions,
+  PreparedAgentRunStart,
   BlockReplyContext,
   SourceReplyDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";

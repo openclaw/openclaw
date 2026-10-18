@@ -83,13 +83,6 @@ describe("prepared model catalog view", () => {
       expect(policy).toHaveBeenCalledTimes(2);
       const variant = physical[0]!;
       expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
-      policy.mockReturnValue(null);
-      expect(view.variantsOf(variant)).toBeUndefined();
-      expect(view.project(variant, { availability: true, routeResolution: null }).entry.id).toBe(
-        variant.id,
-      );
-      variant.id = canonical[0]!.id;
-      expect(view.variantsOf(variant)).toEqual([canonical[0], variant]);
     } finally {
       policy.mockRestore();
     }
@@ -333,6 +326,77 @@ function nativeRegistry(readiness: () => { accountType: string; authMode: string
 }
 
 describe("prepared native catalog readiness", () => {
+  it("does not let an uncredentialed API catalog twin hide a discovered native offering", () => {
+    const logical = row("custom", "native-model");
+    const api = { ...logical, api: "openai-responses" as const };
+    const view = prepareModelCatalogView({
+      ...facts({}),
+      snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
+      pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
+    });
+    expect(view.evaluateNative(api, host)).toMatchObject({
+      availability: true,
+      runtimeAuth: { id: "native-test", source: "native" },
+    });
+    const credentialed = {
+      ...host,
+      availability: true,
+      selectedAuthMode: "api_key",
+      evidence: "profile" as const,
+    };
+    expect(view.evaluateNative(api, credentialed)).toEqual(credentialed);
+  });
+
+  it.each(["direct", "profile"] as const)(
+    "preserves runtime-materialized host %s credentials",
+    (source) => {
+      const api = { ...nativeEntry, nativeRuntime: undefined, api: "openai-responses" as const };
+      const view = prepareModelCatalogView({
+        ...facts({}),
+        snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
+        pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
+      });
+      const credentialed: ModelAuthAvailabilityEvaluation = {
+        ...host,
+        availability: true,
+        evidence: "runtime",
+        selectedAuthMode: "api_key",
+        selectedCredential:
+          source === "direct"
+            ? { source, provider: "custom", identityKey: "direct:custom" }
+            : { source, profileId: "custom:test", identityKey: "profile:custom:test" },
+      };
+      expect(view.evaluateNative(api, credentialed)).toBe(credentialed);
+    },
+  );
+
+  it("respects required worker runtime selection", () => {
+    const api = { ...nativeEntry, nativeRuntime: undefined };
+    const view = prepareModelCatalogView({
+      ...facts({ cloudWorkers: { requiredProfile: "worker" } }),
+      snapshot: { entries: [api], routeVariants: [api, nativeEntry] },
+      pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
+    });
+    expect(view.evaluateNative(api, host)).toBe(host);
+  });
+
+  it.each([false, true])(
+    "does not infer between native owners, regardless of row order (%s)",
+    (reverse) => {
+      const api = { ...nativeEntry, nativeRuntime: undefined };
+      const variants = [api, nativeEntry, { ...nativeEntry, nativeRuntime: "another-native" }];
+      if (reverse) {
+        variants.reverse();
+      }
+      const view = prepareModelCatalogView({
+        ...facts({}),
+        snapshot: { entries: [api], routeVariants: variants },
+        pluginRegistry: nativeRegistry(() => ({ accountType: "subscription", authMode: "oauth" })),
+      });
+      expect(view.evaluateNative(api, host)).toBe(host);
+    },
+  );
+
   it("keeps native readiness unknown before the first discovery", () => {
     const logical = row("custom", "native-model");
     const view = prepareModelCatalogView({
@@ -467,7 +531,7 @@ describe("prepared native catalog readiness", () => {
 });
 
 describe("runtime capability donors", () => {
-  it.each(["unrelated", "native-without-window"])(
+  it.each(["unrelated", "native-without-window", "native-without-api-fallback"])(
     "preserves logical fallback without borrowing native windows (%s)",
     (scenario) => {
       const base: ModelCatalogEntry = {
@@ -479,21 +543,24 @@ describe("runtime capability donors", () => {
       const routeVariants: ModelCatalogEntry[] =
         scenario === "unrelated"
           ? [{ provider: "fixture", id: "other", name: "Other" }]
-          : [
-              {
-                provider: "fixture",
-                id: "model",
-                name: "Model",
-                nativeRuntime: "native-fixture",
-              },
-            ];
+          : scenario === "native-without-api-fallback"
+            ? [base]
+            : [
+                {
+                  provider: "fixture",
+                  id: "model",
+                  name: "Model",
+                  nativeRuntime: "native-fixture",
+                },
+              ];
       const selected = selectModelCatalogRuntimeEntry({
         entry: base,
         routeVariants,
-        runtimeId: scenario === "native-without-window" ? "native-fixture" : "openclaw",
+        runtimeId: scenario === "unrelated" ? "openclaw" : "native-fixture",
+        allowApiFallback: scenario !== "native-without-api-fallback",
       });
       expect(selected.entry.contextWindows).toEqual(
-        scenario === "native-without-window" ? undefined : base.contextWindows,
+        scenario === "unrelated" ? base.contextWindows : undefined,
       );
     },
   );

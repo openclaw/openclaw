@@ -29,6 +29,15 @@ it("keeps the released raw SDK transaction synchronous through its deprecation w
             parameter((input) => input.id),
           ),
     );
+    const preparationWarnings = () =>
+      warning.mock.calls.filter(([message]) =>
+        String(message).includes("sqlite-runtime.prepareSqliteQuerySync is deprecated"),
+      );
+    expect(preparationWarnings()).toHaveLength(1);
+    expect(preparationWarnings()[0]?.[0]).toContain("openOpenClawAgentSqliteWorkerStoreV2");
+    expect(preparationWarnings()[0]?.[0]).toContain("first January 2027 stable release");
+    prepareSqliteQuerySync(database, () => query.selectFrom("items").select("value"));
+    expect(preparationWarnings()).toHaveLength(1);
     const returned = runSqliteImmediateTransactionSync(database, () => {
       executeSqliteQuerySync(database, query.insertInto("items").values({ id: 1, value: "first" }));
       const inside = executeSqliteQueryTakeFirstSync(
@@ -58,7 +67,7 @@ it("keeps the released raw SDK transaction synchronous through its deprecation w
       { id: 1, value: "prepared" },
     ]);
     expect(warning).toHaveBeenCalledWith(
-      expect.stringContaining("removed in the next Plugin SDK major"),
+      expect.stringContaining("Final compatibility day: 2026-12-31"),
       { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
     );
   } finally {

@@ -16,11 +16,9 @@ import {
   clearSessionLifecycleQueues,
   prepareSessionFollowupCleanup,
 } from "../../auto-reply/reply/queue/cleanup.js";
-import {
-  isConfiguredSessionStoreAgentId,
-  resolveExistingAgentSessionStoreTargetsSync,
-} from "../../config/sessions.js";
+import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { resolveExistingAgentSessionStoreTargetsAsync } from "../../config/sessions/targets-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -43,7 +41,7 @@ import {
   resolveStoredSessionKeyForAgentStore,
   resolveStoredSessionOwnerAgentId,
 } from "../session-store-key.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { withGatewaySessionEntry } from "../session-utils-store.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
 import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
@@ -265,7 +263,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     const configuredTarget = isConfiguredSessionStoreAgentId(cfg, targetAgentId);
     const existingTargets = configuredTarget
       ? []
-      : resolveExistingAgentSessionStoreTargetsSync(cfg, targetAgentId);
+      : await resolveExistingAgentSessionStoreTargetsAsync(cfg, targetAgentId);
     const stableTargetOwner = tryResolveSessionCompatibilityOwnerAgentId(cfg, key);
     const hasExactActiveRun = requestedRunId
       ? (scopedActiveRunSessionKey === key &&
@@ -298,7 +296,12 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // neither config nor persistence owns it; that edge is the only one that could create state.
     const loadedSession =
       configuredTarget || existingTargets.length > 0
-        ? loadSessionEntry(key, { agentId: targetAgentId })
+        ? await withGatewaySessionEntry(
+            key,
+            { agentId: targetAgentId },
+            (selected) => selected,
+            cfg,
+          )
         : undefined;
     const canonicalKey =
       loadedSession?.canonicalKey ??
@@ -393,6 +396,9 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         sessionKey: embeddedRun.sessionKey ?? canonicalKey,
         agentId: targetAgentId,
         requesterTurnRunId: embeddedRun.runId,
+        sessionId: embeddedRun.sessionId,
+        lifecycleRevision:
+          sessionEntry?.sessionId === embeddedRun.sessionId ? lifecycleRevision : undefined,
         assertCurrent: assertAbortCurrent,
         // A captured handle may decline Stop. Hold its children before signaling,
         // but authorize their cancellation only when this exact parent accepts.
@@ -443,11 +449,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       loadedSession &&
       sessionEntry &&
       captureYieldedMainSessionContinuation({
-        cfg,
-        agentId: targetAgentId,
-        sessionKey: canonicalKey,
-        storePath: loadedSession.storePath,
         entry: sessionEntry,
+        requester: { agentId: targetAgentId, sessionKey: canonicalKey },
       })
         ? {
             runId: yieldedRunId,
@@ -455,6 +458,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             startedAtMs: sessionEntry.startedAt,
           }
         : undefined;
+    const nativeYieldedCandidate =
+      !requestedRunId &&
+      yieldedRunId &&
+      !preAbortRuns.has(yieldedRunId) &&
+      sessionEntry?.status === undefined &&
+      Number.isFinite(sessionEntry?.endedAt) &&
+      sessionEntry?.pendingFinalDelivery === undefined &&
+      sessionEntry
+        ? {
+            runId: yieldedRunId,
+            sessionId: sessionEntry.sessionId,
+            startedAtMs: sessionEntry.startedAt,
+          }
+        : undefined;
+    let nativeYieldedParent: typeof nativeYieldedCandidate;
     let mcpRetirement: Promise<boolean> | undefined;
     let pendingMcpController: ChatAbortControllerEntry | undefined;
     const settleAbortPersistence = async (runIds: readonly string[]) => {
@@ -476,6 +494,8 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         if (descendantsCancelled && yieldedParent && !embeddedStop?.capturedRunId) {
           // Child cancellation consumes the wake; join its parent's terminal write too.
           await persistSessionAbort(yieldedParent);
+        } else if (nativeYieldedParent && !embeddedStop?.capturedRunId) {
+          await persistSessionAbort(nativeYieldedParent, true);
         }
       } catch (error) {
         throw abortedPartialPersistenceError(error, abortWarning);
@@ -626,8 +646,21 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
         ...(onAuthorizedBeforeEmbeddedAbort ? { onAuthorizedBeforeEmbeddedAbort } : {}),
         ...(onAuthorizedAfterQueuedAbort ? { onAuthorizedAfterQueuedAbort } : {}),
         ...(!requestedRunId ? { cascadeDescendants: true as const } : {}),
-        onDescendantsCancelled: () => {
+        onDescendantsCancelled: (result) => {
           descendantsCancelled = true;
+          if (
+            nativeYieldedCandidate &&
+            result.cancelledRequesters.some(
+              (fact) =>
+                fact.agentId === targetAgentId &&
+                fact.sessionKey === canonicalKey &&
+                fact.sessionId === nativeYieldedCandidate.sessionId &&
+                fact.lifecycleRevision === lifecycleRevision &&
+                fact.requesterTurnRunId === nativeYieldedCandidate.runId,
+            )
+          ) {
+            nativeYieldedParent = nativeYieldedCandidate;
+          }
         },
       },
     );

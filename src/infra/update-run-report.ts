@@ -240,6 +240,15 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
+  // Health cannot readmit Doctor custody; report steps omit the settlement's authority fields.
+  const runtimeVerificationRecovered =
+    run.status === "failed" &&
+    currentHealth?.kind === "responding" &&
+    Boolean(run.after.version) &&
+    currentHealth.version === run.after.version &&
+    run.verification.recovery?.serviceRestartSafe === false &&
+    run.verification.recovery.reason === "runtime-verification-failed" &&
+    !run.steps.some((step) => step.step === "doctor process settlement");
   // Keep the version visible and distinguish Git updates within the same version.
   const before = formatUpdateVersion(run.before);
   const after = formatUpdateVersion(run.after);
@@ -260,13 +269,20 @@ export function renderUpdateRunReport(
     run.status === "failed" &&
     (run.reason === "node-runtime-preflight" ||
       run.reason === "preflight-node-runtime-incompatible");
+  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
   let headline: string;
   switch (run.status) {
-    case "succeeded":
+    case "succeeded": {
+      // A skipped post-swap step keeps the version change; the headline must not read as clean.
+      const attention =
+        warnings.length > 0
+          ? `; ${warnings.length} warning${warnings.length === 1 ? " needs" : "s need"} attention`
+          : "";
       headline = after
-        ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}.`
-        : "✅ OpenClaw updated.";
+        ? `✅ OpenClaw updated to ${after}${before ? ` (from ${before})` : ""}${attention}.`
+        : `✅ OpenClaw updated${attention}.`;
       break;
+    }
     case "failed":
       headline = reconciled
         ? "ℹ️ OpenClaw abandoned update reconciled."
@@ -295,12 +311,19 @@ export function renderUpdateRunReport(
   }
   headline = bounded(headline, 500);
   const markdownLimit = opts.markdownLimit ?? 1500;
-  const warnings = updateRunWarningMessages(run.steps).map((message) => `Warning: ${message}`);
   // Successful activation must not bury recovery constraints behind snapshot inventory.
   // Failed runs keep their failure diagnostics ahead of warnings in the short report.
   const lines: string[] = run.status === "succeeded" ? [...warnings] : [];
-  if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
+  if (
+    currentHealth &&
+    (runtimeVerificationRecovered || (!run.origin.nextAction && !opts.nextAction))
+  ) {
     lines.push(formatUpdateRunCurrentHealth(currentHealth));
+    if (runtimeVerificationRecovered) {
+      lines.push(
+        "The target version is serving; the saved runtime verification failure no longer applies. The recorded update outcome is unchanged.",
+      );
+    }
   }
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
@@ -390,7 +413,8 @@ export function renderUpdateRunReport(
   }
   const facts = run.verification;
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
-  const recovery = observation && formatUpdateRunRecovery(facts, observation);
+  const recovery =
+    !runtimeVerificationRecovered && observation && formatUpdateRunRecovery(facts, observation);
   if (recovery) {
     lines.push(`Recorded recovery: ${recovery}.`);
   }
@@ -432,7 +456,10 @@ export function renderUpdateRunReport(
     Object.hasOwn(UPDATE_INSTALL_SKIP_GUIDANCE, run.reason)
       ? UPDATE_INSTALL_SKIP_GUIDANCE[run.reason]
       : undefined;
-  const savedAction = opts.nextAction ?? run.origin.nextAction ?? skipGuidance;
+  const savedAction =
+    opts.nextAction ??
+    (runtimeVerificationRecovered ? undefined : run.origin.nextAction) ??
+    skipGuidance;
   const nextAction =
     savedAction && currentHealth
       ? `${formatUpdateRunCurrentHealth(currentHealth)} ${

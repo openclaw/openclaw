@@ -21,14 +21,10 @@ export function createBrowserToolDefinition(
     | undefined,
   getConfig: () => OpenClawConfig | undefined,
 ) {
-  const parsed =
+  const binding =
     opts?.runToolBinding === undefined
       ? undefined
       : parseBrowserTabToolBinding(opts.runToolBinding);
-  if (parsed && !parsed.ok) {
-    throw new Error(`invalid browser run binding: ${parsed.error}`);
-  }
-  const binding = parsed?.binding;
   const config = getConfig();
   const capabilities =
     opts?.toolCapabilities ??

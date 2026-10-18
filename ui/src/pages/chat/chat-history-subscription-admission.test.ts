@@ -2,6 +2,7 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import {
   disposeSelectedSessionMessageSubscription,
@@ -35,61 +36,78 @@ function admissionFixture() {
 }
 
 describe("foreground history subscription admission", () => {
-  it("retries a compensated subscription timeout before history without replacing cached input", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
-    });
-    const key = "agent:main:timeout-recovery";
-    const cached = [{ role: "assistant", content: "Cached conversation" }];
-    let attempts = 0;
-    const compensated = createDeferred();
-    const state = makeChatHost({
-      sessionKey: key,
-      chatMessages: cached,
-      chatMessage: "Unsent draft",
-      requestHandlers: {
-        "sessions.messages.subscribe": () => {
-          attempts += 1;
-          if (attempts === 1) {
-            throw new GatewayProtocolRequestTimeoutError({
-              method: "sessions.messages.subscribe",
-              timeoutMs: 30_000,
-              requestSent: true,
-            });
-          }
-          return { key, agentId: "main" };
+  it.each(["timeout", "session changed"])(
+    "retries %s before history without replacing cached input",
+    async (failure) => {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      const key = "agent:main:timeout-recovery";
+      const cached = [{ role: "assistant", content: "Cached conversation" }];
+      const completed = [
+        ...cached,
+        { role: "assistant", content: "Completed while admission changed." },
+      ];
+      let attempts = 0;
+      const requested = createDeferred();
+      const state = makeChatHost({
+        sessionKey: key,
+        chatMessages: cached,
+        chatMessage: "Unsent draft",
+        requestHandlers: {
+          "sessions.messages.subscribe": () => {
+            attempts += 1;
+            if (attempts === 1) {
+              requested.resolve();
+              if (failure === "session changed") {
+                throw new GatewayRequestError({
+                  code: "INVALID_REQUEST",
+                  message: "session changed before sessions.messages.subscribe; retry the request",
+                  details: {
+                    code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                    method: "sessions.messages.subscribe",
+                    sessionKey: key,
+                  },
+                });
+              }
+              throw new GatewayProtocolRequestTimeoutError({
+                method: "sessions.messages.subscribe",
+                timeoutMs: 30_000,
+                requestSent: true,
+              });
+            }
+            return { key, agentId: "main" };
+          },
+          "sessions.messages.unsubscribe": () => ({}),
+          "chat.startup": () => ({ messages: completed }),
         },
-        "sessions.messages.unsubscribe": () => {
-          compensated.resolve();
-          return {};
-        },
-        "chat.startup": () => ({ messages: cached }),
-      },
-    });
-    state.chatError = null;
-    onTestFinished(() => state.sessions.dispose());
-    const subscription = syncSelectedSessionMessageSubscription(state);
-    const history = loadChatHistory(state, { startup: true, deferBranches: true });
-    await compensated.promise;
-    await vi.advanceTimersByTimeAsync(0);
-    expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(1);
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
-    expect(state.chatMessages).toEqual(cached);
-    expect(state.chatError).toBeNull();
-    expect(state.lastError).toBeNull();
-    state.chatMessage = "Newer draft while recovering";
-    await vi.advanceTimersByTimeAsync(500);
-    await expect(subscription).resolves.toBe(true);
-    await history;
-    expect(attempts).toBe(2);
-    expect(requestCalls(state.request, "chat.startup")).toHaveLength(1);
-    expect(getChatHistoryLoadState(state).phase).toBe("committed");
-    expect(state.chatMessage).toBe("Newer draft while recovering");
-    disposeSelectedSessionMessageSubscription(state);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
-  });
+      });
+      state.chatError = null;
+      onTestFinished(() => state.sessions.dispose());
+      const subscription = syncSelectedSessionMessageSubscription(state);
+      const history = loadChatHistory(state, { startup: true, deferBranches: true });
+      await requested.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(requestCalls(state.request, "sessions.messages.unsubscribe")).toHaveLength(0);
+      expect(requestCalls(state.request, "chat.startup")).toHaveLength(0);
+      expect(state.chatMessages).toEqual(cached);
+      expect(state.chatError).toBeNull();
+      expect(state.lastError).toBeNull();
+      state.chatMessage = "Newer draft while recovering";
+      await vi.advanceTimersByTimeAsync(500);
+      await expect(subscription).resolves.toBe(true);
+      await history;
+      expect(attempts).toBe(2);
+      expect(requestCalls(state.request, "chat.startup")).toHaveLength(1);
+      expect(getChatHistoryLoadState(state).phase).toBe("committed");
+      expect(state.chatMessages).toEqual(completed);
+      expect(state.chatMessage).toBe("Newer draft while recovering");
+      disposeSelectedSessionMessageSubscription(state);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+    },
+  );
 
   it.each([false, true])(
     "reads pre-admission activity after the full-stream upgrade ACK (startup: %s)",

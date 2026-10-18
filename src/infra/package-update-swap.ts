@@ -52,7 +52,6 @@ import {
   resolveStagedPackageSwapTarget,
 } from "./package-update-swap-target.js";
 import { runPackagePostInstallVerification } from "./package-update-verification-step.js";
-import { FreeBsdPkgOwnershipError } from "./update-freebsd-pkg-ownership.js";
 import { verifyPackageUpdateRecovery } from "./update-global.js";
 import {
   finalizeNativePackageStage,
@@ -60,6 +59,7 @@ import {
 } from "./update-native-package-stage.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
+import { SystemPackageOwnershipError } from "./update-system-package-ownership.js";
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
@@ -329,12 +329,10 @@ export async function swapStagedPackageInstall(
     packageRollbackVerified = hadPackage && previousVersion !== null;
   };
   try {
-    await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
+    await readBaseline();
     // The optional tree scan must not consume the launcher backup's deadline.
     const launcherReader = createPackageIntegrityReader(params.timeoutMs);
-    await launcherReader.observe("baseline", () =>
-      capturePackageLaunchers(launchers, params, targetLayout, launcherReader),
-    );
+    await capturePackageLaunchers(launchers, params, targetLayout, launcherReader);
     const retireLegacyBackups = params.onTransaction
       ? await captureLegacyPackageBackupRetirement(
           targetLayout.globalRoot,
@@ -448,9 +446,9 @@ export async function swapStagedPackageInstall(
             }
           }
         : rootLink?.verifyRuntime;
-      await params.onTransaction({
+      const transaction: PackageUpdateTransaction = {
         backupRoot,
-        ...(activation ? { databaseBackupRoot } : {}),
+        databaseBackupRoot,
         ...(assertRollbackSafe ? { assertRollbackSafe } : {}),
         rollback: (assertion) => {
           const assertCurrent = retainAuthority(assertion);
@@ -528,7 +526,7 @@ export async function swapStagedPackageInstall(
             previousRoot,
             backupRoot,
             // Rollback snapshots remain recovery evidence even after successful restoration.
-            databaseBackupRoot: rollbackResult ? undefined : databaseBackupRoot,
+            databaseBackupRoot: rollbackResult ? undefined : transaction.databaseBackupRoot,
             retireLegacyBackups: rollbackResult ? undefined : retireLegacyBackups,
             launchers,
             packageBackedUp,
@@ -538,7 +536,8 @@ export async function swapStagedPackageInstall(
           });
           return await retirement;
         },
-      });
+      };
+      await params.onTransaction(transaction);
     }
     const restorePackage = async (assertCurrent: () => void) => {
       if (!native && hadPackage) {
@@ -671,6 +670,7 @@ export async function swapStagedPackageInstall(
       }
     }
     activationCompleted = true;
+    await results.verifyLaunchers(shims);
     const postVerifyStep = params.postVerifyStep
       ? await runPackagePostInstallVerification(targetPackageRoot, params.postVerifyStep)
       : null;
@@ -706,7 +706,7 @@ export async function swapStagedPackageInstall(
     }
     if (
       error instanceof PackageUpdateActivationError ||
-      error instanceof FreeBsdPkgOwnershipError
+      error instanceof SystemPackageOwnershipError
     ) {
       if (activation && !retained && !liveMutationStarted) {
         const refusal = error instanceof PackageUpdateActivationError ? error.cause : error;

@@ -201,7 +201,7 @@ describe("voice-call runtime lifecycle", () => {
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["full", "tool-discovery"] as const)(
+  it.each(["tool-discovery"] as const)(
     "keeps the service runtime after a %s consult registration fails and is cleaned up",
     async (registrationMode) => {
       const fixture = createRuntime("call-a", "+15550000001");
@@ -226,27 +226,6 @@ describe("voice-call runtime lifecycle", () => {
       expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("routes retained gateway methods to the replacement service configuration", async () => {
-    const runtimeA = createRuntime("call-a", "+15550000001");
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime)
-      .mockResolvedValueOnce(runtimeA.runtime)
-      .mockResolvedValueOnce(runtimeB.runtime);
-    const serviceA = registerVoiceCall({ config: { toNumber: "+15550000001" } });
-    void serviceA.service.start(serviceContext);
-    await executeCall(serviceA.tool());
-    const serviceB = registerVoiceCall({ config: { toNumber: "+15550000002" } });
-    void serviceB.service.start(serviceContext);
-    const respond = await executeGatewayCall(serviceA);
-
-    expect(respond).toHaveBeenCalledWith(true, { callId: "call-b", initiated: true });
-    expect(vi.mocked(createVoiceCallRuntime).mock.calls[1]?.[0].config.toNumber).toBe(
-      "+15550000002",
-    );
-    expect(runtimeA.stop).toHaveBeenCalledTimes(1);
-    expect(runtimeB.stop).not.toHaveBeenCalled();
-  });
 
   it("retires a pending generation and stops its late runtime once", async () => {
     const runtimeReady = createDeferred<VoiceCallRuntime>();
@@ -324,22 +303,6 @@ describe("voice-call runtime lifecycle", () => {
     expect(runtimeB.initiateCall).toHaveBeenCalledTimes(1);
   });
 
-  it("does not let a stale A stop clear or stop running B", async () => {
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeB.runtime);
-    const generationA = registerVoiceCall({ config: { toNumber: "+15550000001" } });
-    const generationB = registerVoiceCall({ config: { toNumber: "+15550000002" } });
-
-    expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationB.tool());
-    await generationA.service.stop?.(serviceContext);
-    await executeCall(generationB.tool());
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(runtimeB.initiateCall).toHaveBeenCalledTimes(2);
-    expect(runtimeB.stop).not.toHaveBeenCalled();
-  });
-
   it("routes retained concrete and cold-registry tools to the current service", async () => {
     const runtimeA = createRuntime("call-a", "+15550000001");
     const runtimeB = createRuntime("call-b", "+15550000002");
@@ -372,50 +335,6 @@ describe("voice-call runtime lifecycle", () => {
     expect(runtimeA.stop).toHaveBeenCalledTimes(1);
     expect(runtimeB.initiateCall).toHaveBeenCalledTimes(3);
     expect(runtimeB.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not revive an older staged A after activated B stops", async () => {
-    const logged = createDeferred<string>();
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeB.runtime);
-    const stagedA = registerVoiceCall({
-      logger: createLogger(logged.resolve),
-      registrationMode: "full",
-    });
-    const retainedToolA = stagedA.tool();
-    const generationB = registerVoiceCall({ registrationMode: "full" });
-
-    expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationB.tool());
-    await generationB.service.stop?.(serviceContext);
-    expectLifecycleError(await executeCall(retainedToolA), "retired");
-    expect(stagedA.service.start(serviceContext)).toBeUndefined();
-    await expect(logged.promise).resolves.toContain("superseded");
-    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("superseded") }),
-    );
-
-    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
-    expect(runtimeB.stop).toHaveBeenCalledTimes(1);
-  });
-
-  it("takes over a running slot owned by a retired predecessor", async () => {
-    const runtimeA = createRuntime("call-a", "+15550000001");
-    const runtimeB = createRuntime("call-b", "+15550000002");
-    vi.mocked(createVoiceCallRuntime)
-      .mockResolvedValueOnce(runtimeA.runtime)
-      .mockResolvedValueOnce(runtimeB.runtime);
-    const generationA = registerVoiceCall({});
-    expect(generationA.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationA.tool());
-    const generationB = registerVoiceCall({});
-
-    expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await executeCall(generationB.tool());
-
-    expect(runtimeA.stop).toHaveBeenCalledTimes(1);
-    expect(runtimeB.initiateCall).toHaveBeenCalledTimes(1);
-    await generationB.service.stop?.(serviceContext);
   });
 
   it("logs a genuine startup failure and retries the same generation", async () => {

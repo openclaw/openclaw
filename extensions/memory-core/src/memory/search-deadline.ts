@@ -1,3 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+
 export const DEFAULT_MEMORY_SEARCH_TIMEOUT_MS = 30_000;
 export function resolveMemorySearchAbortError(signal: AbortSignal): Error {
   const { reason } = signal;
@@ -38,62 +40,33 @@ export async function runMemorySearchWithDeadline<T>(params: {
   const timeoutError = createMemorySearchDeadlineError(
     `memory_search timed out after ${Math.round(params.timeoutMs / 1000)}s`,
   );
-  const timeoutOutcome = { type: "timeout" } as const;
-  const parentAbortOutcome = { type: "parent-abort" } as const;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  const cancellation = createDeferred<never>();
   const deadlineStartedAt = Date.now();
-  let removeParentAbort: (() => void) | undefined;
-  let resolveTimeout!: (outcome: typeof timeoutOutcome) => void;
-  const timeoutPromise = new Promise<typeof timeoutOutcome>((resolve) => {
-    resolveTimeout = resolve;
-  });
-  const reachDefaultDeadline = () => {
-    // Resolve before aborting so abort-aware tasks cannot replace the stable
+  const abort = (error: Error) => {
+    // Reject before aborting so abort-aware tasks cannot replace the stable
     // deadline error with a provider-wrapped cancellation error.
-    resolveTimeout(timeoutOutcome);
-    controller.abort(timeoutError);
+    cancellation.reject(error);
+    controller.abort(error);
   };
-  timer = setTimeout(() => {
-    timer = undefined;
-    reachDefaultDeadline();
-  }, params.timeoutMs);
+  const timer = setTimeout(() => abort(timeoutError), params.timeoutMs);
   timer.unref?.();
   const parentSignal = params.parentSignal;
-  const parentAbortPromise = parentSignal
-    ? new Promise<typeof parentAbortOutcome>((resolve) => {
-        const onAbort = () => {
-          resolve(parentAbortOutcome);
-          controller.abort(resolveMemorySearchAbortError(parentSignal));
-        };
-        parentSignal.addEventListener("abort", onAbort, { once: true });
-        removeParentAbort = () => parentSignal.removeEventListener("abort", onAbort);
-      })
-    : undefined;
+  const onParentAbort = () => abort(resolveMemorySearchAbortError(parentSignal!));
+  parentSignal?.addEventListener("abort", onParentAbort, { once: true });
   const task = Promise.resolve().then(() => params.run(controller.signal));
-  task.catch(() => undefined);
 
   try {
-    const result = await Promise.race(
-      parentAbortPromise ? [task, timeoutPromise, parentAbortPromise] : [task, timeoutPromise],
-    );
-    if (result === parentAbortOutcome) {
-      throw resolveMemorySearchAbortError(parentSignal!);
-    }
-    if (result === timeoutOutcome) {
-      throw timeoutError;
-    }
+    const result = await Promise.race([task, cancellation.promise]);
     if (parentSignal?.aborted) {
       throw resolveMemorySearchAbortError(parentSignal);
     }
-    if (timer !== undefined && Date.now() - deadlineStartedAt >= params.timeoutMs) {
-      reachDefaultDeadline();
+    if (Date.now() - deadlineStartedAt >= params.timeoutMs) {
+      controller.abort(timeoutError);
       throw timeoutError;
     }
-    return result as T;
+    return result;
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-    removeParentAbort?.();
+    clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", onParentAbort);
   }
 }

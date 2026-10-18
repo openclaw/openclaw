@@ -102,6 +102,37 @@ function capturePolicyConfig(params: { scriptPath: string; capturePath: string }
 }
 
 describe("installSkillFromSource", () => {
+  it.each(["", "Display name with spaces"])(
+    "uses the source label for display name %j",
+    async (name) => {
+      await withTestDir({ prefix: "openclaw-skill-source-name-" }, async (root) => {
+        const sourceDir = path.join(root, "source-label");
+        await writeSkill(sourceDir, { name });
+        const result = await installSkillFromSource({
+          workspaceDir: path.join(root, "workspace"),
+          spec: sourceDir,
+        });
+        expect(result.slug).toBe("source-label");
+        await expect(
+          fs.readFile(path.join(result.targetDir, "SKILL.md"), "utf8"),
+        ).resolves.toContain("A local skill");
+      });
+    },
+  );
+
+  it("rejects an invalid explicit slug before inspecting malformed source content", async () => {
+    await withTestDir({ prefix: "openclaw-skill-source-explicit-priority-" }, async (root) => {
+      const sourceDir = path.join(root, "source");
+      const workspaceDir = path.join(root, "workspace");
+      await fs.mkdir(sourceDir);
+      await fs.writeFile(path.join(sourceDir, "SKILL.md"), "description: unfenced\n");
+      await expect(
+        installSkillFromSource({ workspaceDir, spec: sourceDir, slug: "../invalid" }),
+      ).rejects.toThrow("Invalid skill slug: ../invalid");
+      await expect(fs.access(path.join(workspaceDir, "skills"))).rejects.toThrow();
+    });
+  });
+
   it.each(["active", "stopped"])(
     "installs local sources with a %s document-only adapter",
     async (state) => {
@@ -117,7 +148,6 @@ describe("installSkillFromSource", () => {
         }
         try {
           expect(await installSkillFromSource({ workspaceDir, spec: sourceDir })).toMatchObject({
-            ok: true,
             slug: "local-guide",
             source: "path",
           });
@@ -137,8 +167,8 @@ describe("installSkillFromSource", () => {
     },
   );
 
-  it.each(["unfenced", "oversized"] as const)(
-    "rejects an %s SKILL.md before copying it",
+  it.each(["unfenced", "oversized", "comment-only", "indented-comment-only"] as const)(
+    "rejects %s SKILL.md before copying it",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-skill-source-invalid-" }, async (root) => {
         const workspaceDir = path.join(root, "workspace");
@@ -150,24 +180,27 @@ describe("installSkillFromSource", () => {
             path.join(sourceDir, "SKILL.md"),
             "name: probe-x\nversion: 1.0.0\ndescription: probe\n\n---\n\nUse when testing.\n",
           );
+        } else if (kind === "comment-only" || kind === "indented-comment-only") {
+          await writeSkill(sourceDir, {
+            name: slug,
+            description:
+              kind === "comment-only" ? "# Add a description here" : "\n  # Add a description here",
+          });
         } else {
           await writeSkill(sourceDir, { name: slug, description: "x".repeat(80) });
         }
-        const result = await installSkillFromSource({
+        const result = installSkillFromSource({
           workspaceDir,
           spec: sourceDir,
-          ...(kind === "unfenced"
-            ? { slug }
-            : { config: { skills: { limits: { maxSkillFileBytes: 64 } } } }),
+          ...(kind === "oversized"
+            ? { config: { skills: { limits: { maxSkillFileBytes: 64 } } } }
+            : { slug }),
         });
-        expect(result).toMatchObject({
-          ok: false,
-          error: expect.stringContaining(
-            kind === "unfenced" ? "description is required" : "File exceeds 64 bytes",
-          ),
-        });
+        await expect(result).rejects.toThrow(
+          kind === "oversized" ? "File exceeds 64 bytes" : "description is required",
+        );
         if (kind === "oversized") {
-          expect(result.ok ? "" : result.error).not.toContain("invalid frontmatter");
+          await expect(result).rejects.not.toThrow("invalid frontmatter");
         }
         await expect(fs.access(path.join(workspaceDir, "skills", slug))).rejects.toThrow();
       });
@@ -189,7 +222,6 @@ describe("installSkillFromSource", () => {
       });
 
       expect(result).toMatchObject({
-        ok: true,
         slug: "linked-skill",
         source: "path",
         targetDir: path.join(workspaceDir, "skills", "linked-skill"),
@@ -202,7 +234,7 @@ describe("installSkillFromSource", () => {
     });
   });
 
-  it.each(["regular", "hardlink", "frontmatter"])(
+  it.each(["hardlink", "frontmatter"])(
     "resolves source-installed skill keys with %s metadata",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-skill-source-as-" }, async (root) => {
@@ -217,7 +249,6 @@ describe("installSkillFromSource", () => {
         });
 
         expect(result).toMatchObject({
-          ok: true,
           slug: "custom-name",
           source: "path",
           targetDir: path.join(workspaceDir, "skills", "custom-name"),
@@ -258,7 +289,7 @@ describe("installSkillFromSource", () => {
           slug: "custom-name",
         });
 
-        expect(result).toMatchObject({ ok: true });
+        expect(result).toMatchObject({ slug: "custom-name" });
         const marker = path.join(
           workspaceDir,
           "skills",
@@ -315,7 +346,7 @@ describe("installSkillFromSource", () => {
           spec: sourceDir,
           slug: "custom-name",
         });
-        expect(result).toMatchObject({ ok: true });
+        expect(result).toMatchObject({ slug: "custom-name" });
         const skillDir = path.join(workspaceDir, "skills", "custom-name");
         const metadataDir = path.join(skillDir, ".openclaw");
         const marker = path.join(metadataDir, "source-origin.json");
@@ -384,10 +415,7 @@ describe("installSkillFromSource", () => {
             workspaceDir,
             spec: `git:file://${repoDir}`,
           });
-          expect(result).toMatchObject({ ok: true, slug: "good-skill", source: "git" });
-          if (!result.ok) {
-            throw new Error(result.error);
-          }
+          expect(result).toMatchObject({ slug: "good-skill", source: "git" });
           expect(result.git?.commit).toBe(expectedCommit);
         } finally {
           if (previous === undefined) {
@@ -452,10 +480,7 @@ describe("installSkillFromSource", () => {
 
         const slug = entry.ref === "feature/skill" ? "feature-skill" : "git-skill";
         const targetDir = path.join(workspaceDir, "skills", slug);
-        expect(result).toMatchObject({ ok: true, slug, source: "git", targetDir });
-        if (!result.ok) {
-          throw new Error(result.error);
-        }
+        expect(result).toMatchObject({ slug, source: "git", targetDir });
         expect(result.git?.commit).toMatch(/^[0-9a-f]{40}$/);
         await expect(fs.readFile(path.join(targetDir, "SKILL.md"), "utf8")).resolves.toContain(
           entry.ref === "feature/skill" ? "Feature branch skill" : "git-skill",
@@ -512,7 +537,6 @@ describe("installSkillFromSource", () => {
       });
 
       expect(result).toMatchObject({
-        ok: true,
         slug: "frontmatter-skill",
       });
       const lock = JSON.parse(
@@ -529,19 +553,16 @@ describe("installSkillFromSource", () => {
     "rejects a source spec containing %s",
     async (kind) => {
       await withTestDir({ prefix: "openclaw-skill-source-invalid-spec-" }, async (root) => {
-        const result = await installSkillFromSource({
+        const result = installSkillFromSource({
           workspaceDir: path.join(root, "workspace"),
           spec:
             kind === "missing path"
               ? "./missing-skill"
               : `git:--upload-pack=${path.join(root, "payload.git")}`,
         });
-        expect(result).toMatchObject({
-          ok: false,
-          error: expect.stringContaining(
-            kind === "missing path" ? "Skill path not found" : "Unsupported git skill spec",
-          ),
-        });
+        await expect(result).rejects.toThrow(
+          kind === "missing path" ? "Skill path not found" : "Unsupported git skill spec",
+        );
       });
     },
   );

@@ -63,6 +63,3 @@ export type SkillLibraryReadOutput = {
     profileIds: string[];
   };
 }[keyof SkillLibraryReadQueries];
-export type SkillLibraryReadOperations = {
-  "skillLibrary.read": { input: SkillLibraryReadInput; output: SkillLibraryReadOutput };
-};

@@ -1,5 +1,5 @@
 /** Frozen backup ownership and resource policy shared by archive traversal and SQLite discovery. */
-import { realpathSync, statSync, type Dirent, type Stats } from "node:fs";
+import { realpathSync, statSync, type BigIntStats, type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -34,13 +34,13 @@ type BackupRegenerableRoot = Readonly<{
 export type BackupCoreDatabase = Readonly<
   {
     sourcePath: string;
-    identity?: Stats;
-  } & ({ role: "global" | "quarantine" } | { role: "agent"; agentId: string })
+    identity?: BigIntStats;
+  } & ({ role: "global" | "quarantine" | "client" } | { role: "agent"; agentId: string })
 >;
 
 /** Ephemeral coverage of a captured canonical image; never part of the archive manifest. */
 export type BackupSqliteSnapshotFact = Readonly<
-  { sourcePath: string; dev: number; ino: number } & (
+  { sourcePath: string; dev: bigint; ino: bigint } & (
     | { role: "global" }
     | { role: "agent"; agentId: string }
   )
@@ -69,7 +69,7 @@ export type BackupResourceInventory = BackupResourcePolicy &
     coreDatabaseSourcePaths: readonly string[];
     resolveSqliteSource: (
       sourcePath: string,
-      identity?: Stats,
+      identity?: BigIntStats,
     ) => BackupCoreDatabase | { role: "plugin" } | { role: "unresolvable-link" } | undefined;
   }>;
 
@@ -230,11 +230,7 @@ function createBackupPathPolicy({
   BackupResourcePlan,
   "stateDir" | "agentRoots" | "regenerableRoots" | "protectedPaths" | "excludedPaths"
 >): BackupResourcePolicy {
-  const isIncluded = (sourcePath: string): boolean => {
-    const candidate = path.resolve(sourcePath);
-    if (isUpdateCapturePath(candidate, stateDir)) {
-      return false;
-    }
+  const isIncludedByOwner = (candidate: string): boolean => {
     const exclusion = excludedPaths.find((excludedPath) => isPathInside(excludedPath, candidate));
     if (!exclusion) {
       return true;
@@ -246,13 +242,18 @@ function createBackupPathPolicy({
         isPathInside(protectedPath, candidate) && isPathInside(exclusion, protectedPath),
     );
   };
+  const isIncluded = (sourcePath: string): boolean => {
+    const candidate = path.resolve(sourcePath);
+    return !isUpdateCapturePath(candidate, stateDir) && isIncludedByOwner(candidate);
+  };
   const isTraversable = (sourcePath: string): boolean => {
     const candidate = path.resolve(sourcePath);
     if (isUpdateCapturePath(candidate, stateDir)) {
       return false;
     }
     return (
-      isIncluded(candidate) ||
+      // Privacy was checked for this entry; protected descendants cannot override it.
+      isIncludedByOwner(candidate) ||
       protectedPaths.some((protectedPath) => isPathInside(candidate, protectedPath))
     );
   };
@@ -369,7 +370,7 @@ export function sealBackupResourceInventory(
     let unresolvableLink = false;
     if (!exact && !current) {
       try {
-        current = statSync(candidate, { throwIfNoEntry: false });
+        current = statSync(candidate, { bigint: true, throwIfNoEntry: false });
       } catch (error) {
         if (!hasErrnoCode(error, "ELOOP")) {
           throw error;
@@ -412,7 +413,9 @@ export function describeCapturedBackupSqliteSnapshots(
   const capturedPaths = new Set(capturedSourcePaths);
   return Object.freeze(
     inventory.coreDatabases.flatMap((owner) =>
-      owner.role !== "quarantine" && owner.identity && capturedPaths.has(owner.sourcePath)
+      (owner.role === "global" || owner.role === "agent") &&
+      owner.identity &&
+      capturedPaths.has(owner.sourcePath)
         ? [
             Object.freeze({
               sourcePath: owner.sourcePath,

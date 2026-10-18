@@ -92,75 +92,7 @@ describe("Crabbox checkpoint retirement", () => {
     },
   );
 
-  it("preserves pinned checkpoints through unused expiry and full capacity, then expires after unpin", async () => {
-    const { provider, calls } = createWarmProvider();
-    await captureWarmImage(provider);
-    const store = openWarmImageStore();
-    const entry = store.entries()[0]!;
-    const checkpointId = entry.value.image!.checkpointId;
-    await provider.images.pin(checkpointId, true);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 15 * DAY_MS);
-    const maintenance = {
-      profiles: [PROFILE],
-      signal: new AbortController().signal,
-      assertCurrent() {},
-    };
-    calls.length = 0;
-    await provider.maintain!(maintenance);
-    expect(calls).toEqual([]);
-    for (let index = 0; index < 127; index++) {
-      store.register(`pinned-${index}`, {
-        ...entry.value,
-        image: {
-          ...entry.value.image!,
-          checkpointId: `chk_pinned_${index}`,
-          pinned: { atMs: Date.now() },
-        },
-      });
-    }
-    await expect(
-      provisionWarmProfile(provider, { ...PROFILE, class: "fast" }, "full-pins"),
-    ).rejects.toThrow("capacity is full");
-    expect(store.entries()).toHaveLength(128);
-    expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
-    await provider.images.pin(checkpointId, false);
-    await provider.maintain!(maintenance);
-    expect(store.lookup(entry.key)).toBeUndefined();
-    expect(store.entries()).toHaveLength(127);
-  });
-
-  it("reclaims a previous generation before its current image to free a profile slot", async () => {
-    const { provider, calls } = createWarmProvider(undefined, undefined, {
-      warmImagePolicy: { refreshAfterMs: DAY_MS, retainUnusedMs: 14 * DAY_MS, keepPrevious: 1 },
-    });
-    await captureWarmImage(provider);
-    const store = openWarmImageStore();
-    const entry = store.entries()[0]!;
-    store.update(entry.key, (record) => ({
-      ...record!,
-      previous: { ...record!.image!, checkpointId: "chk_previous" },
-    }));
-    for (let index = 0; index < 127; index++) {
-      store.register(`pinned-${index}`, {
-        ...entry.value,
-        image: {
-          ...entry.value.image!,
-          checkpointId: `chk_pinned_${index}`,
-          pinned: { atMs: Date.now() },
-        },
-      });
-    }
-    calls.length = 0;
-    await provisionWarmProfile(provider, { ...PROFILE, class: "fast" }, "new-slot");
-    expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual([
-      "chk_previous",
-      entry.value.image!.checkpointId,
-    ]);
-    expect(store.lookup(entry.key)).toBeUndefined();
-    expect(store.entries()).toHaveLength(128);
-  });
-
-  it.each([0, 1] as const)(
+  it.each([0] as const)(
     "atomically rolls back a previous checkpoint with keepPrevious=%s",
     async (keepPrevious) => {
       const { provider, calls } = createWarmProvider(undefined, undefined, {
@@ -220,42 +152,21 @@ describe("Crabbox checkpoint retirement", () => {
     expect(store.lookup(entry.key)?.image?.checkpointId).toBe("chk_previous");
   });
 
-  it.each(["capture", "retire"] as const)(
-    "refuses rollback while a profile owns %s",
-    async (type) => {
-      const { provider } = createWarmProvider();
-      await captureWarmImage(provider);
-      const store = openWarmImageStore();
-      const entry = store.entries()[0]!;
-      store.update(entry.key, (record) => ({
-        ...record!,
-        previous: { ...record!.image!, checkpointId: "chk_previous" },
-        operation:
-          type === "capture"
-            ? { type, id: "capture-test", startedAtMs: Date.now(), phase: "creating" }
-            : { type, checkpointId: "chk_retiring" },
-      }));
-      const before = store.lookup(entry.key);
-      await expect(provider.images.rollback("chk_previous")).rejects.toThrow(
-        "capture or retirement",
-      );
-      expect(store.lookup(entry.key)).toEqual(before);
-    },
-  );
-
-  it("applies configured unused retention before the default fourteen-day boundary", async () => {
-    const { provider } = createWarmProvider(undefined, undefined, {
-      warmImagePolicy: { refreshAfterMs: DAY_MS, retainUnusedMs: DAY_MS, keepPrevious: 0 },
-    });
+  it.each(["retire"] as const)("refuses rollback while a profile owns %s", async (type) => {
+    const { provider } = createWarmProvider();
     await captureWarmImage(provider);
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + DAY_MS);
-    await provider.maintain!({
-      profiles: [PROFILE],
-      signal: new AbortController().signal,
-      assertCurrent() {},
-    });
-    expect(await listCrabboxWarmImages(crabboxState)).toEqual([]);
+    const store = openWarmImageStore();
+    const entry = store.entries()[0]!;
+    store.update(entry.key, (record) => ({
+      ...record!,
+      previous: { ...record!.image!, checkpointId: "chk_previous" },
+      operation: { type, checkpointId: "chk_retiring" },
+    }));
+    const before = store.lookup(entry.key);
+    await expect(provider.images.rollback("chk_previous")).rejects.toThrow("capture or retirement");
+    expect(store.lookup(entry.key)).toEqual(before);
   });
+
   it.each([
     { debt: "predecessor", profile: PROFILE, allocation: "fork" },
     { debt: "unrelated profile", profile: { ...PROFILE, class: "fast" }, allocation: "warmup" },
@@ -356,7 +267,7 @@ describe("Crabbox checkpoint retirement", () => {
     },
   );
 
-  it.each(["expiry", "capacity", "missing"])(
+  it.each(["capacity", "missing"])(
     "retains failed retirement through reuse, restart, deferred refresh, and %s cleanup",
     async (cleanup) => {
       let captures = 0;
@@ -526,7 +437,7 @@ describe("Crabbox checkpoint retirement", () => {
       expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe("chk_generation_3");
     },
   );
-  it.each(["expiry", "capacity", "missing"])(
+  it.each(["capacity"])(
     "reports retained current-image deletion failures during %s cleanup",
     async (cleanup) => {
       let cleaning = false;

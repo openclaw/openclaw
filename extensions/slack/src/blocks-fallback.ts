@@ -56,7 +56,7 @@ function readControlElementText(
   if (type === "button" || type === "workflow_button") {
     return normalizeOptionalString(element?.text) ?? readTextObject(element?.text, options);
   }
-  if (type && SLACK_SELECT_ELEMENT_TYPES.has(type)) {
+  if (type && (SLACK_SELECT_ELEMENT_TYPES.has(type) || type === "overflow")) {
     if (!options.includeSelectOptions) {
       return readTextObject(element?.placeholder, options);
     }

@@ -102,7 +102,7 @@ describe("requestExecHostViaSocket", () => {
     });
   });
 
-  it("accepts only exec response messages and maps malformed matches to null", async () => {
+  it("accepts only complete exec response messages", async () => {
     requestJsonlSocketMock.mockImplementationOnce(async ({ accept }) => {
       expect(accept({ type: "ignore" })).toBeUndefined();
       expect(accept({ type: "exec-res", ok: true, payload: { success: true } })).toEqual({
@@ -113,7 +113,7 @@ describe("requestExecHostViaSocket", () => {
         ok: false,
         error: { code: "DENIED" },
       });
-      expect(accept({ type: "exec-res", ok: true })).toBeNull();
+      expect(accept({ type: "exec-res", ok: true })).toBeUndefined();
       return null;
     });
 
@@ -128,4 +128,24 @@ describe("requestExecHostViaSocket", () => {
 
     expect(requireJsonlSocketCall().timeoutMs).toBe(123);
   });
+
+  it.each([
+    [30_000, 50_000],
+    [1_000, 21_000],
+    [0, 0],
+    [undefined, 20_000],
+  ])(
+    "derives the socket deadline from command timeout %s when no transport override is supplied",
+    async (commandTimeoutMs, expectedTimeoutMs) => {
+      requestJsonlSocketMock.mockResolvedValueOnce(null);
+
+      await requestExecHostViaSocket({
+        socketPath: "/tmp/socket",
+        token: "secret",
+        request: { command: ["sleep", "30"], timeoutMs: commandTimeoutMs },
+      });
+
+      expect(requireJsonlSocketCall().timeoutMs).toBe(expectedTimeoutMs);
+    },
+  );
 });

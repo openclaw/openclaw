@@ -1,10 +1,12 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelCatalogResult } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
-import { renderChatModelControls } from "./chat-model-controls.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
+import { ChatModelControls } from "./chat-model-controls.tsx";
 
 const models = ["primary", "fallback", "custom"].map((id) => ({
   id,
@@ -14,7 +16,6 @@ const models = ["primary", "fallback", "custom"].map((id) => ({
 }));
 
 function mountControls(catalog: ModelCatalogResult, retired = false) {
-  const container = document.createElement("div");
   const sessions = createSessionsListResult({
     model: "forbidden-current",
     modelProvider: "fixture",
@@ -24,8 +25,8 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
   const selectedSession = { ...sessions.sessions[0]!, modelOverrideSource: "user" as const };
   const onModelSelect = vi.fn(async () => undefined);
   const before = JSON.stringify(selectedSession);
-  render(
-    renderChatModelControls({
+  const { container } = mountSolid(() =>
+    createComponent(ChatModelControls, {
       activeRunId: null,
       connected: true,
       gatewayAvailable: true,
@@ -38,6 +39,7 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
         modelSelectionPolicy: catalog.modelSelectionPolicy,
       },
       modelSwitching: false,
+      modelPickerOpen: true,
       sending: false,
       sessionKey: "main",
       selectedSession,
@@ -46,8 +48,8 @@ function mountControls(catalog: ModelCatalogResult, retired = false) {
       onModelSelect,
       onModelSetup: vi.fn(),
     }),
-    container,
   );
+  flush();
   expect(JSON.stringify(selectedSession)).toBe(before);
   return { container, onModelSelect };
 }

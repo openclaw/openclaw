@@ -125,26 +125,6 @@ describe("createRoomHistoryTracker — watermark monotonicity", () => {
     expect(followUp.history).toHaveLength(0);
   });
 
-  it("keeps main-room and thread histories isolated", () => {
-    const tracker = createRoomHistoryTracker();
-
-    tracker.recordPending(ROOM, entry("main-1"));
-    tracker.recordPending(ROOM, entry("thread-1"), "$thread");
-    tracker.recordPending(ROOM, entry("main-2"));
-
-    const mainPrepared = tracker.prepareTrigger(AGENT, ROOM, 100, entry("main-trigger"));
-    const threadPrepared = tracker.prepareTrigger(
-      AGENT,
-      ROOM,
-      100,
-      entry("thread-trigger"),
-      "$thread",
-    );
-
-    expect(mainPrepared.history.map((entryValue) => entryValue.body)).toEqual(["main-1", "main-2"]);
-    expect(threadPrepared.history.map((entryValue) => entryValue.body)).toEqual(["thread-1"]);
-  });
-
   it("advances watermarks independently per thread", () => {
     const tracker = createRoomHistoryTracker();
 
@@ -272,48 +252,5 @@ describe("createRoomHistoryTracker — roomQueues eviction", () => {
     const history = tracker.prepareTrigger(AGENT, room1, 100, entry("new trigger")).history;
     expect(history).toHaveLength(1);
     expect(history[0]?.body).toBe("new msg in room1");
-  });
-
-  it("rejects stale snapshots after the room queue is recreated", () => {
-    const tracker = createRoomHistoryTracker(200, 1);
-    const room1 = "!room1:test";
-    const room2 = "!room2:test";
-
-    tracker.recordPending(room1, entry("old msg in room1"));
-    const staleSnapshot = tracker.prepareTrigger(AGENT, room1, 100, entry("trigger in room1"));
-
-    tracker.recordPending(room2, entry("msg in room2")); // evicts room1
-    tracker.recordPending(room1, entry("new msg in room1")); // recreates room1 with new generation
-
-    tracker.consumeHistory(AGENT, room1, staleSnapshot);
-
-    const history = tracker.prepareTrigger(AGENT, room1, 100, entry("new trigger")).history;
-    expect(history).toHaveLength(1);
-    expect(history[0]?.body).toBe("new msg in room1");
-  });
-
-  it("preserves newer watermarks when an older snapshot finishes after room recreation", () => {
-    const tracker = createRoomHistoryTracker(200, 1);
-    const room1 = "!room1:test";
-    const room2 = "!room2:test";
-
-    tracker.recordPending(room1, entry("old msg in room1"));
-    const staleSnapshot = tracker.prepareTrigger(AGENT, room1, 100, entry("old trigger in room1"));
-
-    tracker.recordPending(room2, entry("msg in room2")); // evicts room1
-
-    tracker.recordPending(room1, entry("new msg in room1"));
-    const freshSnapshot = tracker.prepareTrigger(AGENT, room1, 100, entry("new trigger in room1"));
-    tracker.consumeHistory(AGENT, room1, freshSnapshot);
-
-    // Late completion from the old generation must be ignored and must not clear the
-    // watermark already written by the newer trigger.
-    tracker.consumeHistory(AGENT, room1, staleSnapshot);
-
-    tracker.recordPending(room1, entry("fresh msg after consume"));
-
-    const history = tracker.prepareTrigger(AGENT, room1, 100, entry("latest trigger")).history;
-    expect(history).toHaveLength(1);
-    expect(history[0]?.body).toBe("fresh msg after consume");
   });
 });

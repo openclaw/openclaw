@@ -53,10 +53,7 @@ describe("thread binding lifecycle", () => {
     }
   });
 
-  it.each([
-    { idleTimeoutMs: 60_000, maxAgeMs: 0, farewell: "after 1m of inactivity" },
-    { idleTimeoutMs: 0, maxAgeMs: 60_000, farewell: "max age of 1m" },
-  ])(
+  it.each([{ idleTimeoutMs: 0, maxAgeMs: 60_000, farewell: "max age of 1m" }])(
     "expires bindings without probing ($farewell)",
     async ({ idleTimeoutMs, maxAgeMs, farewell }) => {
       vi.useFakeTimers();

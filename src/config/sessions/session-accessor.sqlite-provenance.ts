@@ -1,65 +1,51 @@
-import { expressionBuilder, type Selectable } from "kysely";
-import { jsonObjectFrom } from "kysely/helpers/sqlite";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { hasStoredTranscriptEvents } from "./session-accessor.sqlite-transcript-presence.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
+import {
+  sessionEntryWindowColumns,
+  type SessionEntryWindowFacts,
+  type SessionEntryWindowRow,
+} from "./session-entry-window.types.js";
 import type { SessionEntry } from "./types.js";
 
-const sessionEntryWindowColumns = [
-  "session_id",
-  "session_key",
-  "reason",
-  "created_at",
-  "updated_at",
-  "session_entry_provenance",
-  "acp_owned",
-  "plugin_owner_id",
-  "hook_external_content_source",
-  "previous_session_id",
-  "session_scope",
-  "started_at",
-  "ended_at",
-  "status",
-  "chat_type",
-  "channel",
-  "account_id",
-  "model_provider",
-  "model",
-  "agent_harness_id",
-  "parent_session_key",
-  "spawned_by",
-  "display_name",
-  "primary_conversation_id",
-  "transcript_observed_at",
-  "transcript_updated_at",
-] as const;
+type SessionEntryWindowFactSelection = {
+  [Column in keyof SessionEntryWindowRow]: `session_windows.${Column} as window_${Column}`;
+}[keyof SessionEntryWindowRow];
 
-export function sessionEntryWindowFactsExpression() {
-  const eb = expressionBuilder<OpenClawAgentKyselyDatabase, "session_nodes">();
-  return jsonObjectFrom(
-    eb
-      .selectFrom("session_windows")
-      .select(sessionEntryWindowColumns)
-      .whereRef("session_windows.session_id", "=", "session_nodes.current_session_id"),
-  )
-    .$castTo<string | null>()
-    .as("window_json");
+const sessionEntryWindowFactSelections = sessionEntryWindowColumns.map(
+  // SAFETY: The column and its prefixed alias are generated together from the typed schema keys.
+  (column) => `session_windows.${column} as window_${column}` as SessionEntryWindowFactSelection,
+);
+
+export function selectSessionEntryWindowFacts(database: Pick<OpenClawAgentDatabase, "db">) {
+  return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db)
+    .selectFrom("session_windows")
+    .select(sessionEntryWindowFactSelections)
+    .as("entry_window");
 }
 
-export type SessionEntryWindowRow = Pick<
-  Selectable<OpenClawAgentKyselyDatabase["session_windows"]>,
-  (typeof sessionEntryWindowColumns)[number]
->;
-
-export type SessionEntryWindowFacts = {
-  database: OpenClawAgentDatabase["db"];
-  revision: number;
-  sessionId: string;
-  row: SessionEntryWindowRow | null;
+type JoinedSessionEntryWindow = {
+  [Column in keyof SessionEntryWindowRow as `window_${Column}`]?:
+    | SessionEntryWindowRow[Column]
+    | null;
 };
+
+/** Detach the scalar LEFT JOIN projection from the canonical node columns. */
+export function takeSessionEntryWindowFacts(
+  row: JoinedSessionEntryWindow & { session_key: string },
+): SessionEntryWindowRow | null {
+  const present = row.window_session_id !== null;
+  const entries = sessionEntryWindowColumns.map((column) => {
+    const alias = `window_${column}` as const;
+    const value = row[alias];
+    delete row[alias];
+    return [column, value];
+  });
+  // SAFETY: The join selects every typed window column; Object.fromEntries erases those known keys.
+  return present ? (Object.fromEntries(entries) as SessionEntryWindowRow) : null;
+}
 
 type SessionProvenanceRow = {
   acp_owned: number;
@@ -87,14 +73,21 @@ export function bindSessionEntryProvenance(entry: SessionEntry): SessionProvenan
   };
 }
 
-export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(params: {
+export function prepareSessionEntryWindowRow<
+  T extends Omit<SessionEntryWindowRow, "transcript_observed_at" | "transcript_updated_at">,
+>(params: {
   boundSessionRow: T;
   database: OpenClawAgentDatabase;
   entry: SessionEntry;
   previousEntry?: SessionEntry;
   retainOwner: boolean;
   prepared?: SessionEntryWindowFacts;
-}): { row: T & { transcript_observed_at: number }; changed: boolean } {
+  stagedTranscriptUpdatedAt?: number;
+}): {
+  row: T & { transcript_observed_at: number };
+  postimage: SessionEntryWindowRow;
+  changed: boolean;
+} {
   const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(params.database.db);
   const actor = readSessionActorTransactionState(params.database, {
     sessionId: params.entry.sessionId,
@@ -102,9 +95,7 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
   const prepared = params.prepared;
   const existingRoot = actor
     ? actor.window
-    : prepared?.database === params.database.db &&
-        prepared.sessionId === params.entry.sessionId &&
-        prepared.revision === readSqliteNativeMutationRevision(params.database.db)
+    : prepared?.sessionId === params.entry.sessionId
       ? prepared.row
       : executeSqliteQueryTakeFirstSync(
           params.database.db,
@@ -113,11 +104,15 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
             .select(sessionEntryWindowColumns)
             .where("session_id", "=", params.entry.sessionId),
         );
+  const transcriptUpdatedAt =
+    existingRoot && !actor && params.stagedTranscriptUpdatedAt !== undefined
+      ? Math.max(existingRoot.transcript_updated_at ?? 0, params.stagedTranscriptUpdatedAt)
+      : (existingRoot?.transcript_updated_at ?? null);
   // Registry writes snapshot the current transcript watermark so recovery can
   // distinguish same-millisecond transcript writes before and after this row.
   let row = {
     ...params.boundSessionRow,
-    transcript_observed_at: existingRoot?.transcript_updated_at ?? params.entry.updatedAt,
+    transcript_observed_at: transcriptUpdatedAt ?? params.entry.updatedAt,
   };
   // Updates cannot prove provenance for a migrated transcript. Known exclusion metadata is monotonic.
   if (
@@ -144,6 +139,12 @@ export function prepareSessionEntryWindowRow<T extends SessionProvenanceRow>(par
   const previous = new Map(Object.entries(existingRoot ?? {}));
   return {
     row,
+    postimage: {
+      ...row,
+      created_at: existingRoot?.created_at ?? row.created_at,
+      session_key: params.retainOwner && existingRoot ? existingRoot.session_key : row.session_key,
+      transcript_updated_at: transcriptUpdatedAt,
+    },
     changed:
       !existingRoot ||
       Object.entries(row).some(

@@ -7,7 +7,7 @@ import {
   setAgentEffectiveModelPrimary,
 } from "../agents/agent-scope.js";
 import { withSetupCredentialAccess } from "../agents/auth-profiles/setup-access.js";
-import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-profiles/store-runtime.js";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
@@ -34,6 +34,7 @@ import type { SystemAgentVerifiedInferenceBinding } from "../system-agent/verifi
 import { t } from "./i18n/index.js";
 import type { WizardPrompter } from "./prompts.js";
 import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { readSetupConfigAuthority } from "./setup.shared.js";
 
 export async function completeSetupModelAuth(params: {
   config: OpenClawConfig;
@@ -46,17 +47,23 @@ export async function completeSetupModelAuth(params: {
   keepExistingModelConfig: boolean;
   importedInferenceVerified: boolean;
   configTarget: SetupInferenceConfigTarget;
+  assertCurrent?: () => void;
 }): Promise<{ config: OpenClawConfig; verified: boolean; persisted: boolean }> {
   const { stagedCandidate, opts, baseConfig } = params;
   const replacementTarget = resolveOnboardingSetupTarget(baseConfig);
-  const replacesCredential =
-    stagedCandidate?.authProfiles.some(({ credential }) =>
-      isSetupCredentialReplacement({
+  let replacesCredential = false;
+  for (const { credential } of stagedCandidate?.authProfiles ?? []) {
+    if (
+      await isSetupCredentialReplacement({
         provider: credential.provider,
         baseConfig,
         agentDir: replacementTarget.agentDir,
-      }),
-    ) === true;
+      })
+    ) {
+      replacesCredential = true;
+      break;
+    }
+  }
   // The keep-model choice predates auth setup, distinguishing an imported route
   // from one selected normally after the import.
   if (
@@ -80,6 +87,7 @@ export async function completeSetupModelAuth(params: {
       runtime: params.runtime,
       configTarget: params.configTarget,
       required: params.usedImportFlow && params.keepExistingModelConfig,
+      assertCurrent: params.assertCurrent,
     });
     let config = verification.config;
     if (!verification.verified && verification.attempted && stagedCandidate) {
@@ -108,6 +116,7 @@ export async function offerLiveModelVerification(params: {
   stateDir?: string;
   configTarget: SetupInferenceConfigTarget;
   required?: boolean;
+  assertCurrent?: () => void;
 }): Promise<{
   config: OpenClawConfig;
   attempted: boolean;
@@ -115,6 +124,15 @@ export async function offerLiveModelVerification(params: {
   verified: boolean;
   modelRef?: string;
 }> {
+  const assertCurrent =
+    params.assertCurrent ??
+    (params.opts.nonInteractive
+      ? undefined
+      : (
+          await readSetupConfigAuthority(
+            params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined,
+          )
+        ).assertCurrent);
   const requiresCandidateVerification = (config: OpenClawConfig) => {
     const provider = resolveDefaultModelForAgent({ cfg: config }).provider;
     return (
@@ -124,13 +142,19 @@ export async function offerLiveModelVerification(params: {
   };
   const agentDir =
     params.agentDir ?? resolveAgentDir(params.config, resolveAmbientOwnerAgentId(params.config));
-  const replacesCredential = params.initialCandidate?.authProfiles.some(({ credential }) =>
-    isSetupCredentialReplacement({
-      provider: credential.provider,
-      baseConfig: params.baseConfig ?? params.config,
-      agentDir,
-    }),
-  );
+  let replacesCredential = false;
+  for (const { credential } of params.initialCandidate?.authProfiles ?? []) {
+    if (
+      await isSetupCredentialReplacement({
+        provider: credential.provider,
+        baseConfig: params.baseConfig ?? params.config,
+        agentDir,
+      })
+    ) {
+      replacesCredential = true;
+      break;
+    }
+  }
   let required =
     params.required ||
     (params.initialCandidate !== undefined &&
@@ -196,7 +220,7 @@ export async function offerLiveModelVerification(params: {
         resolveAgentEffectiveModelPrimary(config, agentId) ?? "",
       ).profile;
       const credential = profileId
-        ? loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId]
+        ? (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)).profiles[profileId]
         : undefined;
       savedProfile = profileId && credential ? { profileId, credential } : undefined;
       verifiedBinding = undefined;
@@ -223,8 +247,9 @@ export async function offerLiveModelVerification(params: {
         ? await withSetupCredentialAccess({ profileId, agentDir }, runVerification)
         : await runVerification();
       if (result.ok && profileId) {
-        const verifiedCredential =
-          loadAuthProfileStoreWithoutExternalProfiles(agentDir).profiles[profileId];
+        const verifiedCredential = (
+          await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)
+        ).profiles[profileId];
         savedProfile = verifiedCredential
           ? { profileId, credential: verifiedCredential }
           : undefined;
@@ -322,9 +347,6 @@ export async function offerLiveModelVerification(params: {
       // Saved model rows stay sparse; compare runtime defaults while retaining authored plugin policy.
       const projectRoute = (config: OpenClawConfig) =>
         projectInferenceRoute(materializeRuntimeConfig(config), undefined, {}, config);
-      const verifiedRoute = savedProfile?.credential.setup?.replacement
-        ? await projectRoute(candidate.config)
-        : undefined;
       const config = await commitSetupInferenceActivation({
         config: candidate.config,
         configTarget: {
@@ -332,10 +354,12 @@ export async function offerLiveModelVerification(params: {
           write: verifiedConfig?.write ?? params.configTarget.write,
         },
         assertCurrent: () => {},
-        activate: async () => {
-          if (savedProfile?.credential.setup?.replacement && verifiedRoute) {
+        activate: async (_assertCurrent, committedConfig) => {
+          if (savedProfile?.credential.setup?.replacement) {
             const latest = (await params.configTarget.read()).config;
-            if (!isDeepStrictEqual(await projectRoute(latest), verifiedRoute)) {
+            if (
+              !isDeepStrictEqual(await projectRoute(latest), await projectRoute(committedConfig))
+            ) {
               throw new Error(
                 "The connection changed before activation. Test the saved sign-in again.",
               );
@@ -381,6 +405,7 @@ export async function offerLiveModelVerification(params: {
       opts: { ...params.opts, authChoice: undefined },
       prompter: params.prompter,
       runtime: params.runtime,
+      assertCurrent,
       ...(params.agentDir ? { agentDir: params.agentDir } : {}),
       ...(params.stateDir ? { stateDir: params.stateDir } : {}),
     });

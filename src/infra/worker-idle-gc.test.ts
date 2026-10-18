@@ -17,7 +17,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("lets task bursts finish before collecting and retains the heap-growth threshold", async () => {
+it("lets task bursts finish and only schedules collection after sufficient heap growth", async () => {
   vi.useFakeTimers();
   const memory = process.memoryUsage();
   let heapUsed = 64 * 1024 * 1024;
@@ -41,12 +41,14 @@ it("lets task bursts finish before collecting and retains the heap-growth thresh
   cancelWorkerIdleGc();
   heapUsed += 32 * 1024 * 1024;
   scheduleWorkerIdleGc();
+  expect(vi.getTimerCount()).toBe(0);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(collect).toHaveBeenCalledTimes(1);
 
   cancelWorkerIdleGc();
   heapUsed++;
   scheduleWorkerIdleGc();
+  expect(vi.getTimerCount()).toBe(1);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(collect).toHaveBeenCalledTimes(2);
 });

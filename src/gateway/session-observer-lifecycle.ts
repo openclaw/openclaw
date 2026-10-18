@@ -1,12 +1,12 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { createSessionActivityNoteState } from "../agents/session-activity-notes.js";
+import { resolveSessionObserverDigestForLifecycle } from "../config/sessions/observer-digest.js";
 import type { SessionObserverEvent } from "./session-observer-contract.js";
 import {
   isSameSessionObserverLifecycle,
   markSessionObserverRunSuperseded,
   rememberSessionObserverRevisionFloor,
-  resolveSessionObserverDigestForLifecycle,
   snapshotSessionObserverRevisionFloor,
 } from "./session-observer-model.js";
 import type {

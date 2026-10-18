@@ -17,7 +17,7 @@ export async function settleExecProcessExit({
   session: ProcessSession;
   outcome: ExecProcessOutcome;
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void;
+  notifyOnExit: (session: ProcessSession, status: "completed" | "failed") => void | Promise<void>;
   failureOutcome: (error: unknown) => ExecProcessOutcome;
 }): Promise<ExecProcessOutcome> {
   let finalOutcome = outcome;
@@ -39,7 +39,7 @@ export async function settleExecProcessExit({
     }
     if (shouldNotify) {
       markProcessExited();
-      notifyOnExit(session, finalOutcome.status);
+      await notifyOnExit(session, finalOutcome.status);
     }
   } catch (error) {
     session.finalizationFailed = true;
@@ -59,7 +59,6 @@ export async function settleExecProcessExit({
       // Notifications need start-time routing, but completed logs must not
       // retain it, including when a task callback or notification throws.
       delete session.sessionKey;
-      delete session.agentId;
       delete session.eventRouting;
       delete session.notifyDeliveryContext;
       delete session.notifySessionTarget;

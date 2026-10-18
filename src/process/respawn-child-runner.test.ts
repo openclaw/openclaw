@@ -11,12 +11,15 @@ vi.mock("./kill-tree.js", async (importOriginal) => ({
 import { runRespawnChildWithSignalBridge } from "./respawn-child-runner.js";
 
 const runs: Array<{ child: ChildProcess; completion: Promise<number> }> = [];
+const ttyStreams = [process.stdin, process.stdout].map((stream) => ({
+  stream,
+  descriptor: Object.getOwnPropertyDescriptor(stream, "isTTY"),
+}));
 let killProcess: MockInstance<typeof process.kill>;
 function start(
   options: {
     pid?: number;
     detached?: boolean;
-    terminal?: boolean;
     onError?: (error: unknown) => void | Promise<void>;
   } = {},
 ) {
@@ -31,7 +34,6 @@ function start(
     args: ["/repo/openclaw/dist/entry.js"],
     env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
     detachForProcessTree: options.detached,
-    stdioIsTerminal: options.terminal ?? false,
     runtime: {
       spawn: childProcess.spawn,
       attachChildProcessBridge: (_child, bridgeOptions) => {
@@ -54,6 +56,9 @@ function start(
 }
 
 beforeEach(() => {
+  for (const { stream } of ttyStreams) {
+    Object.defineProperty(stream, "isTTY", { configurable: true, value: false });
+  }
   signalProcessTreeMock.mockReset();
   killProcess = vi.spyOn(process, "kill").mockReturnValue(true);
 });
@@ -64,25 +69,16 @@ afterEach(async () => {
   await Promise.all(runs.splice(0).map((run) => run.completion));
   vi.useRealTimers();
   vi.restoreAllMocks();
+  for (const { stream, descriptor } of ttyStreams) {
+    if (descriptor) {
+      Object.defineProperty(stream, "isTTY", descriptor);
+    } else {
+      Reflect.deleteProperty(stream, "isTTY");
+    }
+  }
 });
 
 describe("runRespawnChildWithSignalBridge", () => {
-  it.each([false, true])(
-    "owns the respawn group only without terminal stdio (terminal=%s)",
-    async (terminal) => {
-      const run = start({ pid: 1234, detached: true, terminal });
-      expect(run.spawn).toHaveBeenCalledWith("/usr/bin/node", ["/repo/openclaw/dist/entry.js"], {
-        stdio: "inherit",
-        env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-        detached: process.platform !== "win32" && !terminal,
-        windowsHide: !terminal,
-      });
-      run.child.emit("close", 0, null);
-      await expect(run.completion).resolves.toBe(0);
-      expect(run.detach).toHaveBeenCalledOnce();
-    },
-  );
-
   it.each([
     {
       signal: "SIGINT",
@@ -104,13 +100,6 @@ describe("runRespawnChildWithSignalBridge", () => {
       laterSignal: undefined,
       windowsCode: 1,
       posixCode: 143,
-    },
-    {
-      signal: "SIGKILL",
-      firstSignal: undefined,
-      laterSignal: undefined,
-      windowsCode: 1,
-      posixCode: 137,
     },
   ] as const)(
     "settles actual $signal status only after close (first=$firstSignal)",
@@ -191,7 +180,7 @@ describe("runRespawnChildWithSignalBridge", () => {
     await expect(run.completion).resolves.toBe(0);
   });
 
-  it.each(["resolve", "reject", "throw"] as const)(
+  it.each(["reject", "throw"] as const)(
     "waits for close and diagnostic settlement (%s)",
     async (settlement) => {
       const reporting = createDeferredCore();

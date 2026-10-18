@@ -1,4 +1,8 @@
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
@@ -20,8 +24,12 @@ vi.mock("../plugins/loader-runtime-load.js", () => {
 
 // mock-isolation: Exercise recovery reducers without native persistence or transcript writes.
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  patchSessionEntryTarget: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),
+}));
+
+// mock-isolation: Exercise the recovery reducer without opening the session database.
+vi.mock("../config/sessions/session-accessor.sqlite-entry.js", () => ({
+  applySessionEntryTargetOperation: persistenceMocks.updateSessionEntry,
 }));
 
 // mock-isolation: Controlled entries isolate recovery projection from database admission.
@@ -49,6 +57,9 @@ function persistLifecycle(
     event: { sessionId: "session-id", ts: 2_000, ...event },
   });
 }
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
 
 const recovery = { cycleId: "cycle-1", revision: 2, chargedAttempts: 2 };
 const interrupted = { runId: "interrupted-run", lifecycleGeneration: "pre-restart" };

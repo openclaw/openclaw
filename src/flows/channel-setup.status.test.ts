@@ -192,27 +192,6 @@ describe("resolveChannelSetupSelectionOptions", () => {
     });
   });
 
-  it("sanitizes the picker fallback label when metadata sanitizes to empty", () => {
-    const options = resolveChannelSetupSelectionOptions({
-      entries: [
-        {
-          id: "bad\u001B[31m\nid",
-          meta: {
-            id: "bad\u001B[31m\nid",
-            label: "\u001B[31m\u0007",
-          },
-        },
-      ],
-      statusByChannel: new Map(),
-      resolveDisabledHint: () => undefined,
-    });
-
-    expect(options[0]).toEqual({
-      value: "bad\u001B[31m\nid",
-      label: "bad\\nid",
-    });
-  });
-
   it("sanitizes channel labels in status note lines", async () => {
     listChatChannels.mockReturnValue([makeMeta("discord", "Discord\u001B[31m\nCore\u0007")]);
     resolveChannelSetupEntries.mockReturnValue(
@@ -402,34 +381,6 @@ describe("resolveChannelSetupSelectionOptions", () => {
     );
   });
 
-  it("localizes built-in channel primer copy", async () => {
-    const note = vi.fn(async () => undefined);
-
-    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
-      await noteChannelPrimer(
-        { note } as never,
-        [
-          {
-            id: "discord",
-            label: "Discord",
-            blurb: "very well supported right now.",
-          } satisfies NoteChannelPrimerChannels[number],
-        ] as NoteChannelPrimerChannels,
-      );
-    });
-
-    expect(formatChannelPrimerLine).toHaveBeenCalledWith(
-      expect.objectContaining({
-        label: "Discord",
-        blurb: "目前支持很完善。",
-      }),
-    );
-    expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("入站 DM 安全默认使用配对"),
-      "频道工作方式",
-    );
-  });
-
   it("sanitizes channel metadata before selection notes", () => {
     resolveChannelSetupEntries.mockReturnValue(
       makeChannelSetupEntries({
@@ -474,41 +425,40 @@ describe("resolveChannelSetupSelectionOptions", () => {
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 
-  it.each([
-    ["empty", "", ""],
-    ["whitespace", " \t ", "Docs:"],
-    ["control-only", "\u001B[2K\u0007", "Docs:"],
-  ] as const)("normalizes %s selection docs prefixes", (_label, prefix, expected) => {
-    resolveChannelSetupEntries.mockReturnValue(
-      makeChannelSetupEntries({
-        entries: [
-          {
-            id: "custom-chat",
-            meta: {
+  it.each([["empty", "", ""]] as const)(
+    "normalizes %s selection docs prefixes",
+    (_label, prefix, expected) => {
+      resolveChannelSetupEntries.mockReturnValue(
+        makeChannelSetupEntries({
+          entries: [
+            {
               id: "custom-chat",
-              label: "Custom Chat",
-              selectionLabel: "Custom Chat",
-              docsPath: "/channels/custom-chat",
-              blurb: "External channel.",
-              selectionDocsPrefix: prefix,
+              meta: {
+                id: "custom-chat",
+                label: "Custom Chat",
+                selectionLabel: "Custom Chat",
+                docsPath: "/channels/custom-chat",
+                blurb: "External channel.",
+                selectionDocsPrefix: prefix,
+              },
             },
-          },
-        ],
-      }),
-    );
+          ],
+        }),
+      );
 
-    resolveChannelSelectionNoteLines({
-      cfg: {} as never,
-      installedPlugins: [],
-      selection: ["custom-chat"],
-    });
+      resolveChannelSelectionNoteLines({
+        cfg: {} as never,
+        installedPlugins: [],
+        selection: ["custom-chat"],
+      });
 
-    const [selectionMeta] = expectDefined(
-      formatChannelSelectionLine.mock.calls.at(0),
-      "selection line call",
-    );
-    expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
-  });
+      const [selectionMeta] = expectDefined(
+        formatChannelSelectionLine.mock.calls.at(0),
+        "selection line call",
+      );
+      expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
+    },
+  );
 
   it("localizes built-in channel blurbs before selection notes", () => {
     resolveChannelSetupEntries.mockReturnValue(

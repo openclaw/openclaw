@@ -3,7 +3,6 @@ import { listAgentIds } from "../agents/agent-scope-config.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../routing/session-key.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { formatErrorMessage } from "./errors.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
@@ -59,11 +58,9 @@ export type HeartbeatRunner = {
 export function startHeartbeatRunner(opts: {
   cfg?: OpenClawConfig;
   readCurrentConfig?: () => OpenClawConfig;
-  runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   runOnce?: typeof runHeartbeatOnce;
 }): HeartbeatRunner {
-  const runtime = opts.runtime ?? defaultRuntime;
   const runOnce = opts.runOnce;
   // Cron owns monitor anchors and due slots; local cooldown only limits event
   // follow-ups. Persisted monitor ticks bypass it.
@@ -277,17 +274,13 @@ export function startHeartbeatRunner(opts: {
           ...(scheduledEveryMs !== undefined ? { scheduledEveryMs } : {}),
           ...(targeted ? { sessionKey: requestedSessionKey } : {}),
           tasks: requestedTasks,
-          deps: { runtime },
         };
         const execute = runOnce ?? (await loadHeartbeatExecution()).runHeartbeatOnce;
-        // Import can outlive this runner or its wake generation. The wake owner
-        // retains/requeues canceled work; a late loader must not dispatch it too.
-        if (
-          state.stopped ||
-          opts.abortSignal?.aborted ||
-          wakeSignal?.aborted ||
-          !areHeartbeatsEnabled()
-        ) {
+        // A stopped runner has not executed this wake yet; hand it to its successor.
+        if (state.stopped || opts.abortSignal?.aborted || wakeSignal?.aborted) {
+          return { result: { status: "skipped", reason: "preempted" } };
+        }
+        if (!areHeartbeatsEnabled()) {
           return { result: { status: "skipped", reason: "disabled" } };
         }
         res = await execute(runOptions);

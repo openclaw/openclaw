@@ -111,57 +111,31 @@ type CatalogListOperation = ReturnType<NonNullable<SessionCatalogProvider["creat
 function withCatalogListScope(
   initialize: () => Promise<CatalogListOperation>,
 ): CatalogListOperation {
-  let create: typeof initialize | undefined = initialize;
+  let initialization: Promise<CatalogListOperation> | undefined;
   let operation: CatalogListOperation | undefined;
   let scope: ReturnType<typeof createCodexCatalogListScope> | undefined;
-  let running = false;
   let closed = false;
   let completed = false;
   return {
     async next() {
-      if (closed || running) {
+      if (closed) {
         throw new Error("Codex catalog list operation cannot advance");
       }
-      running = true;
-      try {
-        scope ??= createCodexCatalogListScope();
-        return await scope.run(async () => {
-          if (create) {
-            const initializeOnce = create;
-            create = undefined;
-            operation = await initializeOnce();
-          }
-          if (!operation) {
-            throw new Error("Codex catalog list operation did not initialize");
-          }
-          const step = await operation.next();
-          completed ||= step.done;
-          return step;
-        });
-      } finally {
-        running = false;
-      }
+      scope ??= createCodexCatalogListScope();
+      return scope.run(async () => {
+        operation ??= await (initialization ??= initialize());
+        const step = await operation.next();
+        completed ||= step.done;
+        return step;
+      });
     },
     close() {
       if (closed) {
         return;
       }
-      if (running) {
-        throw new Error("Cannot close an active Codex catalog list step");
-      }
+      scope?.run(() => operation?.close());
       closed = true;
-      create = undefined;
-      const current = operation;
-      operation = undefined;
-      const currentScope = scope;
-      scope = undefined;
-      try {
-        if (currentScope) {
-          currentScope.run(() => current?.close());
-        }
-      } finally {
-        currentScope?.finish(completed ? "resolved" : "rejected");
-      }
+      scope?.finish(completed ? "resolved" : "rejected");
     },
   };
 }

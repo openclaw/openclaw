@@ -2,217 +2,152 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { MessageChannel } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { afterEach, describe, expect, it } from "vitest";
-import { encodeNativeWorkerFailure } from "./worker-native-error.js";
+import { afterEach, expect, it, vi } from "vitest";
+import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
-import type {
-  NativeWorkerReply,
-  NativeWorkerRequest,
-  NativeWorkerRuntime,
-} from "./worker-native-lifecycle.types.js";
+import type { NativeWorkerRequest, NativeWorkerRuntime } from "./worker-native-lifecycle.types.js";
+
+// These endpoints run on the Gateway main thread; Vitest itself runs in a worker.
+vi.mock("node:worker_threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:worker_threads")>()),
+  isMainThread: true,
+}));
 
 const cleanups: Array<() => void> = [];
-afterEach(() => {
-  for (const cleanup of cleanups.splice(0)) {
-    cleanup();
-  }
-});
+const workerUrl = new URL("file:///synthetic/direct-task.worker.mjs");
+const messageMetrics = () =>
+  getWorkerMessageMetrics().find(
+    (entry) => entry.kind === "other" && entry.direction === "from_worker",
+  );
+afterEach(() => cleanups.splice(0).forEach((cleanup) => cleanup()));
 
 function fixture() {
-  const { port1, port2 } = new MessageChannel();
+  const { port1: port, port2: peer } = new MessageChannel();
   const context = new AsyncLocalStorage<string>();
-  const controls: NativeWorkerReply[] = [];
   const sent: NativeWorkerRequest[] = [];
-  const errors: Error[] = [];
   const references: boolean[] = [];
   const handles = new Set([1]);
   const runtime: NativeWorkerRuntime = {
     handles,
-    service() {
-      for (;;) {
-        const reply = controls.shift();
-        if (!reply) {
-          break;
-        }
-        worker.receive(reply);
-      }
-      worker.serviceTaskPort();
-    },
-    post(message) {
-      sent.push(message);
-    },
-    refreshReference() {
-      references.push(worker.needsReference);
-    },
+    service: () => worker.serviceTaskPort(),
+    post: (message) => sent.push(message),
+    refreshReference: () => references.push(worker.needsReference),
     resourceBroker() {
       throw new Error("This fixture owns only a task port");
     },
   };
   const worker = context.run(
     "constructor",
-    () =>
-      new NativeWorker(
-        runtime,
-        1,
-        new URL("file:///synthetic/direct-task.worker.mjs"),
-        false,
-        false,
-        undefined,
-        port1,
-      ),
+    () => new NativeWorker(runtime, 1, workerUrl, false, false, undefined, port),
   );
-  worker.on("error", (error) => errors.push(error));
+  worker.on("error", () => {});
   cleanups.push(() => {
     worker.ownerJoined(new Error("Fixture native owner joined"));
-    port1.close();
-    port2.close();
+    port.close();
+    peer.close();
   });
-  return {
-    worker,
-    port: port1,
-    peer: port2,
-    context,
-    controls,
-    sent,
-    errors,
-    handles,
-    runtime,
-    references,
-  };
+  return { worker, port, peer, context, sent, handles, runtime, references };
 }
 
-describe("retained worker direct task transport", () => {
-  it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
-    const { worker, port, peer, context, controls } = fixture();
-    const events: unknown[] = [];
-    worker.on("message", (message) => events.push([message, context.getStore()]));
-    worker.on("started", () => {
-      events.push(["started", context.getStore()]);
-      worker.service();
-      expect(events).toHaveLength(3);
-    });
-    const buffered = once(port, "message");
-    peer.postMessage("buffered", []);
-    await buffered;
-    expect(events).toEqual([]);
-    peer.postMessage("queued", []);
-    controls.push({ type: "created", id: 1, threadId: 101 });
-    context.run("servicing", () => worker.service());
-    expect(events).toEqual([
-      ["started", "constructor"],
-      ["buffered", "constructor"],
-      ["queued", "constructor"],
-    ]);
-  });
-
-  it("discards buffered data when its native owner fails before startup without inventing exit", async () => {
-    const { worker, port, peer, handles } = fixture();
-    const events: unknown[] = [];
-    worker.on("message", (value) => events.push(value));
-    worker.on("started", () => events.push("started"));
-    worker.on("error", (error) => events.push(error.message));
-    worker.on("execution-exit", () => events.push("execution-exit"));
-    worker.on("exit", () => events.push("exit"));
-    const buffered = once(port, "message");
-    peer.postMessage("final reply", []);
-    await buffered;
-    expect(events).toEqual([]);
-    worker.ownerFailed(new Error("native failure"));
-    expect(events).toEqual(["native failure"]);
-    expect(worker.started).toBe(false);
-    expect(worker.executionStopped).toBe(false);
-    expect(handles.size).toBe(1);
-    worker.ownerJoined(new Error("native owner joined"));
-    expect(events).toEqual(["native failure", "execution-exit", "exit"]);
-    expect(worker.stop().read()).toEqual({ status: "fulfilled", value: undefined });
-    expect(handles.size).toBe(0);
-  });
-
-  it("keeps pending native control order when a data callback reenters synchronous servicing", () => {
-    const { worker, peer, context, controls } = fixture();
-    const events: unknown[] = [];
-    controls.push({ type: "created", id: 1, threadId: 102 });
+it("retains pre-start messages and permits synchronous delivery from the started callback", async () => {
+  const { worker, port, peer, context } = fixture();
+  const before = messageMetrics();
+  const events: unknown[] = [];
+  worker.on("message", (message) => events.push([message, context.getStore()]));
+  worker.on("started", () => {
+    events.push(["started", context.getStore()]);
     worker.service();
-    worker.on("message", (value) => {
-      events.push([value, context.getStore()]);
-      worker.service();
-      expect(worker.stop().read().status).toBe("fulfilled");
-    });
-    worker.on("error", (error) => events.push([error.message, context.getStore()]));
-    worker.on("execution-exit", () => events.push(["execution-exit", context.getStore()]));
-    worker.on("exit", () => events.push(["exit", context.getStore()]));
-    peer.postMessage("first", []);
-    peer.postMessage("second", []);
-    controls.push(
-      { type: "error", id: 1, error: encodeNativeWorkerFailure(new Error("native failure")) },
-      { type: "execution-exit", id: 1, code: 1 },
-      { type: "stopped", id: 1, code: 1 },
-    );
-    context.run("servicing", () => worker.service());
-    expect(events).toEqual([
-      ["first", "constructor"],
-      ["second", "constructor"],
-      ["native failure", "constructor"],
-      ["execution-exit", "constructor"],
-      ["exit", "constructor"],
-    ]);
+    expect(events).toHaveLength(3);
   });
-
-  it("reports task-port loss without stopping native work or inventing its exit receipt", async () => {
-    const { worker, peer, controls, sent } = fixture();
-    controls.push({ type: "created", id: 1, threadId: 103 });
-    worker.service();
-    const failed = once(worker, "error");
-    peer.close();
-    const [failure] = await failed;
-    expect(failure).toMatchObject({ message: "Native worker task channel closed" });
-    expect(() => worker.ref()).toThrow("Native worker task channel closed");
-    expect(worker.executionStopped).toBe(false);
-    expect(sent.some((message) => message.type === "stop")).toBe(false);
-    const stopping = worker.stop();
-    expect(stopping.read().status).toBe("pending");
-    controls.push({ type: "execution-exit", id: 1, code: 0 }, { type: "stopped", id: 1, code: 0 });
-    worker.service();
-    expect(stopping.read()).toEqual({ status: "fulfilled", value: undefined });
+  const buffered = once(port, "message");
+  peer.postMessage("buffered", []);
+  await buffered;
+  expect(events).toEqual([]);
+  peer.postMessage("queued", []);
+  context.run("servicing", () => worker.receive({ type: "created", id: 1, threadId: 101 }));
+  expect(events).toEqual([
+    ["started", "constructor"],
+    ["buffered", "constructor"],
+    ["queued", "constructor"],
+  ]);
+  expect(messageMetrics()).toEqual({
+    kind: "other",
+    direction: "from_worker",
+    messages: (before?.messages ?? 0) + 2,
+    payloadBytes: (before?.payloadBytes ?? 0) + 28,
+    unmeasuredMessages: before?.unmeasuredMessages ?? 0,
   });
+});
 
-  it("sends reference transitions while retaining pending samples and checking repeated admission", async () => {
-    const { worker, controls, sent, runtime, references } = fixture();
-    controls.push({ type: "created", id: 1, threadId: 104 });
-    worker.service();
-    worker.ref();
-    worker.ref();
-    worker.unref();
-    worker.unref();
-    expect(references.at(-1)).toBe(false);
+it("discards buffered data when its native owner fails before startup without inventing exit", async () => {
+  const { worker, port, peer, handles } = fixture();
+  const events: unknown[] = [];
+  worker.on("message", (value) => events.push(value));
+  worker.on("started", () => events.push("started"));
+  worker.on("error", (error) => events.push(error.message));
+  worker.on("execution-exit", () => events.push("execution-exit"));
+  worker.on("exit", () => events.push("exit"));
+  const buffered = once(port, "message");
+  peer.postMessage("final reply", []);
+  await buffered;
+  expect(events).toEqual([]);
+  worker.ownerFailed(new Error("native failure"));
+  expect(events).toEqual(["native failure"]);
+  expect(worker).toMatchObject({ started: false, executionStopped: false });
+  expect(handles.size).toBe(1);
+  worker.ownerJoined(new Error("native owner joined"));
+  expect(events).toEqual(["native failure", "execution-exit", "exit"]);
+  expect(worker.stop().read()).toEqual({ status: "fulfilled", value: undefined });
+  expect(handles.size).toBe(0);
+});
 
-    const cpu = worker.cpuUsage();
-    const sample = expectDefined(
-      sent.find((message) => message.type === "cpu"),
-      "native CPU request",
-    );
-    worker.unref();
-    expect(references.at(-1)).toBe(true);
-    controls.push({
-      type: "cpu",
-      id: 1,
-      requestId: sample.requestId,
-      value: { user: 3, system: 1 },
-    });
-    worker.service();
-    await expect(cpu).resolves.toEqual({ user: 3, system: 1 });
-    expect(references.at(-1)).toBe(false);
+it("reports task-port loss without stopping native work or inventing its exit receipt", async () => {
+  const { worker, peer, sent } = fixture();
+  worker.receive({ type: "created", id: 1, threadId: 103 });
+  const failed = once(worker, "error");
+  peer.close();
+  const [failure] = await failed;
+  expect(failure).toMatchObject({ message: "Native worker task channel closed" });
+  expect(() => worker.ref()).toThrow("Native worker task channel closed");
+  expect(worker.executionStopped).toBe(false);
+  expect(sent.some((message) => message.type === "stop")).toBe(false);
+  const stopping = worker.stop();
+  expect(stopping.read().status).toBe("pending");
+  worker.receive({ type: "execution-exit", id: 1, code: 0 });
+  worker.receive({ type: "stopped", id: 1, code: 0 });
+  expect(stopping.read()).toEqual({ status: "fulfilled", value: undefined });
+});
 
-    worker.ref();
-    worker.ref();
-    expect(sent.filter((message) => message.type === "ref")).toEqual([
-      { type: "ref", id: 1, referenced: false },
-      { type: "ref", id: 1, referenced: true },
-    ]);
-    const unavailable = new Error("Native source no longer owns execution");
-    runtime.failure = unavailable;
-    expect(() => worker.ref()).toThrow(unavailable);
-    expect(() => worker.unref()).toThrow(unavailable);
-    expect(() => worker.unref()).toThrow(unavailable);
-  });
+it("sends reference transitions while retaining pending samples and checking repeated admission", async () => {
+  const { worker, sent, runtime, references } = fixture();
+  worker.receive({ type: "created", id: 1, threadId: 104 });
+  worker.ref();
+  worker.ref();
+  worker.unref();
+  worker.unref();
+  expect(references.at(-1)).toBe(false);
+
+  const cpu = worker.cpuUsage();
+  const { requestId } = expectDefined(
+    sent.find((m) => m.type === "cpu"),
+    "CPU request",
+  );
+  const value = { user: 3, system: 1 };
+  worker.unref();
+  expect(references.at(-1)).toBe(true);
+  worker.receive({ type: "cpu", id: 1, requestId, value });
+  await expect(cpu).resolves.toEqual(value);
+  expect(references.at(-1)).toBe(false);
+
+  worker.ref();
+  worker.ref();
+  expect(sent.filter((message) => message.type === "ref")).toEqual([
+    { type: "ref", id: 1, referenced: false },
+    { type: "ref", id: 1, referenced: true },
+  ]);
+  const unavailable = new Error("Native source no longer owns execution");
+  runtime.failure = unavailable;
+  expect(() => worker.ref()).toThrow(unavailable);
+  expect(() => worker.unref()).toThrow(unavailable);
+  expect(() => worker.unref()).toThrow(unavailable);
 });

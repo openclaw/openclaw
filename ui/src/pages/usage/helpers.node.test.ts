@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { extractQueryTerms, filterSessionsByQuery, parseToolSummary } from "./helpers.ts";
+import { extractQueryTerms, filterSessionsByQuery } from "../../../../src/shared/usage-query.js";
+import { parseSessionLog } from "./helpers.ts";
 
 describe("usage-helpers", () => {
   it("tokenizes query terms including quoted strings", () => {
@@ -78,16 +79,6 @@ describe("usage-helpers", () => {
     }
   });
 
-  it("matches key: glob filters against session keys", () => {
-    const session = {
-      key: "agent:main:cron:16234bc?token=dev-token",
-      label: "agent:main:cron:16234bc?token=dev-token",
-      usage: { totalTokens: 100, totalCost: 0 },
-    };
-    const matches = filterSessionsByQuery([session], "key:agent:main:cron*");
-    expect(matches.sessions).toEqual([session]);
-  });
-
   it("supports numeric filters like minTokens/maxTokens", () => {
     const a = {
       key: "a",
@@ -117,6 +108,22 @@ describe("usage-helpers", () => {
       expect(result.sessions).toEqual([b]);
       expect(result.warnings).toEqual([]);
     }
+  });
+
+  it("does not classify unknown usage as zero or as its known subtotal", () => {
+    const interrupted = {
+      key: "interrupted",
+      usage: {
+        usageReport: { state: "unavailable" as const },
+        totalTokens: 100,
+        totalCost: 0,
+        messageCounts: { total: 2 },
+      },
+    };
+    for (const query of ["minTokens:10", "maxTokens:1000", "minCost:0", "maxCost:1"]) {
+      expect(filterSessionsByQuery([interrupted], query).sessions).toEqual([]);
+    }
+    expect(filterSessionsByQuery([interrupted], "minMessages:1").sessions).toEqual([interrupted]);
   });
 
   it("supports every has predicate and warns on unknown values", () => {
@@ -164,9 +171,11 @@ describe("usage-helpers", () => {
   });
 
   it("parses tool summaries from compact session logs", () => {
-    const res = parseToolSummary(
-      "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
-    );
+    const { toolInfo: res } = parseSessionLog({
+      timestamp: 0,
+      role: "assistant",
+      content: "[Tool: read]\n[Tool Result]\n[Tool: exec]\n[Tool: read]\n[Tool Result]",
+    });
     expect(res.summary).toBe("Tools: read×2, exec×1 (3 calls)");
     expect(res.cleanContent).toBe("");
     expect(res.tools[0]).toEqual(["read", 2]);

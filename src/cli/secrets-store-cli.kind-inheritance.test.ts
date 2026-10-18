@@ -88,7 +88,8 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
     // Same kernel the state worker runs, applied directly so the write needs no
     // host-broker worker thread (the CLI test pool runs files off the main thread).
     purgeExpiredSecretStoreEntries: () =>
-      purgeExpiredSecretStoreEntriesInDatabase(captureSecretStoreExpiryCutoffs(), mocks.database),
+      purgeExpiredSecretStoreEntriesInDatabase(captureSecretStoreExpiryCutoffs(), mocks.database)
+        .removed,
   };
 });
 

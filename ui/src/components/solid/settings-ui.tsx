@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { children, For, Show } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -11,7 +11,6 @@ import {
   settingsSwitchChange,
   settingsSwitchClick,
   settingsSwitchKeyDown,
-  settingsToggleRowClick,
   type SettingsSegmentedProps,
   type SettingsToggleControl,
 } from "../settings-controls.ts";
@@ -34,6 +33,7 @@ type SettingsRowProps = {
   carapace?: boolean;
   stacked?: boolean;
   stackedOnNarrow?: boolean;
+  nested?: boolean;
 };
 
 export function SettingsPage(props: {
@@ -63,31 +63,6 @@ export function DocsLink(props: { url: string; children: JSX.Element }) {
   );
 }
 
-export function SettingsHelpTrigger(props: {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon: "question" | "info";
-  popoverId: string;
-}) {
-  return (
-    <openclaw-tooltip prop:content={props.tooltip}>
-      <button
-        id={props.id}
-        type="button"
-        class="settings-section__help-button"
-        aria-label={props.label}
-        aria-controls={props.popoverId}
-        aria-haspopup="dialog"
-      >
-        <span aria-hidden="true">
-          <Icon name={props.icon === "info" ? "info" : "circleQuestionMark"} />
-        </span>
-      </button>
-    </openclaw-tooltip>
-  );
-}
-
 export function LearnMoreLink(props: { url: string }) {
   return (
     <a
@@ -105,10 +80,17 @@ export function SettingsPageHeader(props: {
   title: JSX.Element;
   subtitle?: JSX.Element;
   actions?: JSX.Element;
+  /** Keep title and subtitle together below floating shell chrome. */
+  stacked?: boolean;
 }) {
   return (
-    <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-      <section class="content-header content-header--settings">
+    <ShellLayoutBoundary traits={{ toolbarHeader: !props.stacked }}>
+      <section
+        class={[
+          "content-header content-header--settings",
+          { "content-header--stacked": props.stacked },
+        ]}
+      >
         <div>
           <h1 class="page-title">{props.title}</h1>
           <Show when={props.subtitle}>
@@ -226,6 +208,7 @@ function SettingsRowText(
 }
 
 export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status" }) {
+  const control = children(() => props.control);
   return (
     <div
       class={[
@@ -233,6 +216,7 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         {
           "settings-row--stacked": props.stacked,
           "settings-row--stacked-on-narrow": props.stackedOnNarrow,
+          "settings-row--nested": props.nested,
           "oc-settings-row": props.carapace,
           "oc-settings-row-stacked": props.carapace && props.stacked,
         },
@@ -244,9 +228,9 @@ export function SettingsRow(props: SettingsRowProps & { role?: "alert" | "status
         description={props.description}
         carapace={props.carapace}
       />
-      <Show when={props.control !== undefined && props.control !== null && props.control !== false}>
+      <Show when={control() !== undefined && control() !== null && control() !== false}>
         <div class={["settings-row__control", { "oc-settings-row-control": props.carapace }]}>
-          {props.control}
+          {control()}
         </div>
       </Show>
     </div>
@@ -270,12 +254,17 @@ export function SettingsNavRow(
 }
 
 function ToggleControl(
-  props: SettingsToggleControl & { label?: JSX.Element; labelledBy?: string },
+  props: SettingsToggleControl & {
+    label?: JSX.Element;
+    labelledBy?: string;
+    inputRef?: (element: HTMLInputElement) => void;
+  },
 ) {
   const labelId = nextSettingsRadioName();
   return (
     <span class="settings-toggle">
       <input
+        ref={(element) => props.inputRef?.(element)}
         class="settings-toggle__input"
         type="checkbox"
         role="switch"
@@ -297,15 +286,7 @@ function ToggleControl(
 }
 
 export function SettingsToggle(props: SettingsToggleControl & { ariaLabel: string }) {
-  return (
-    <ToggleControl
-      checked={props.checked}
-      disabled={props.disabled}
-      onChange={(checked) => props.onChange(checked)}
-      onAct={(checked) => props.onAct?.(checked)}
-      label={props.ariaLabel}
-    />
-  );
+  return <ToggleControl {...props} label={props.ariaLabel} />;
 }
 
 export function SettingsToggleRow(
@@ -314,22 +295,36 @@ export function SettingsToggleRow(
     title: JSX.Element;
     ariaLabel?: JSX.Element;
     description?: JSX.Element;
+    /** Secondary actions beside the switch, such as opening related settings. */
+    actions?: JSX.Element;
   },
 ) {
   const titleId = nextSettingsRadioName();
+  let input: HTMLInputElement | undefined;
   return (
     <div
       class="settings-row settings-row--toggle"
-      onClick={(event) => settingsToggleRowClick(event, props)}
+      onClick={(event) => {
+        // Links, buttons, and fields own their clicks; plain row areas toggle the input.
+        if (
+          event.target instanceof Element &&
+          event.target.closest(".settings-toggle, a, button, input, select, textarea")
+        ) {
+          return;
+        }
+        if (!input || input.matches(":disabled") || props.disabled) {
+          return;
+        }
+        input.click();
+      }}
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
       <div class="settings-row__control">
+        {props.actions}
         <ToggleControl
-          checked={props.checked}
-          disabled={props.disabled}
-          onChange={(checked) => props.onChange(checked)}
-          onAct={(checked) => props.onAct?.(checked)}
+          {...props}
+          inputRef={(element) => (input = element)}
           label={props.ariaLabel}
           labelledBy={props.ariaLabel == null ? titleId : undefined}
         />
@@ -368,6 +363,7 @@ export function SettingsSegmented<T extends string>(props: SettingsSegmentedProp
                 data-test-id={option().testId}
               >
                 <input
+                  ref={(element) => props.inputRef?.(option().value, element)}
                   class="settings-segmented__input"
                   type="radio"
                   name={name}

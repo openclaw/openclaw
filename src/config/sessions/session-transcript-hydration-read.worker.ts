@@ -1,10 +1,28 @@
 import type { WorkerTaskControl } from "@openclaw/worker-runtime/worker";
 import type { WorkerTaskChannel } from "../../infra/worker-task-server.js";
 import type { SessionTranscriptHydrationWorkerRequest } from "./session-transcript-hydration.types.js";
+import type { SessionEntryWorkerInput } from "./session-transcript-worker-read.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
   type SessionTranscriptWorkerValues,
 } from "./session-transcript-worker.types.js";
+
+export async function readSessionEntrySnapshotRequest(
+  request: Extract<SessionEntryWorkerInput, { mode: "snapshot" }>,
+) {
+  const { readTranscriptExportSnapshotReadOnlySync } =
+    await import("./session-accessor.sqlite-read.js");
+  const { projectSessionEntryRecord } =
+    await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+  const { prepareAssistantTranscriptText } = await import("../../shared/chat-message-content.js");
+  return {
+    snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
+      projectEvent: request.includeOriginalMessages
+        ? undefined
+        : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
+    }),
+  };
+}
 
 /** Read each hydrated view under the same worker-owned quarantine and snapshot admission. */
 export async function readSessionTranscriptHydrationRequest(
@@ -80,11 +98,15 @@ export async function readSessionTranscriptHydrationRequest(
       SessionTranscriptWorkerValues["transcript-hydration"],
       { kind: "bounded" }
     >["transcript"];
+    let residentRows: Array<{ rawSeq: number; serializedBytes: number }> | undefined;
     const snapshot = readSessionTranscriptBoundedActiveContextCore(request.target, {
       ...request.limits,
       readOnly: true,
       resolvedScope: request.resolvedScope,
-      onRead: (projection) => {
+      onRead: (projection, rows, messagePresence) => {
+        if (!projection.hasUnindexedPrefix) {
+          residentRows = rows;
+        }
         const { database, resolved } = projection;
         if (request.expectedIdentity) {
           assertOpenClawAgentDatabaseIdentity(database, request.expectedIdentity);
@@ -96,6 +118,8 @@ export async function readSessionTranscriptHydrationRequest(
             selection,
             undefined,
             projection,
+            request.preparedEntry,
+            messagePresence,
           );
         }
       },
@@ -103,6 +127,7 @@ export async function readSessionTranscriptHydrationRequest(
     return {
       kind: "bounded" as const,
       snapshot,
+      residentRows,
       ...(selection ? { transcript } : {}),
     };
   }

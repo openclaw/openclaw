@@ -1,5 +1,5 @@
 import { parseLocalSchemaRefPointer } from "@openclaw/normalization-core/json-schema";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { TSchema } from "typebox";
 import {
   evaluateSchemaWalk,
@@ -7,6 +7,13 @@ import {
   walkSchemaValue,
   type SchemaWalk,
 } from "./schema-walk.js";
+import {
+  MAX_TOOL_SCHEMA_DEPTH,
+  inheritToolSchemaTruncation,
+  reportToolSchemaTruncation,
+  truncateToolSchemaDepth,
+} from "./tool-schema-depth.js";
+import { extendSchemaDefs, type SchemaDefs } from "./tool-schema-refs.js";
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -129,28 +136,6 @@ function isNullSchema(variant: unknown): boolean {
   );
 }
 
-type SchemaDefs = Map<string, unknown>;
-
-function extendSchemaDefs(
-  defs: SchemaDefs | undefined,
-  schema: Record<string, unknown>,
-): SchemaDefs | undefined {
-  const defsEntry = isRecord(schema.$defs) ? schema.$defs : undefined;
-  const legacyDefsEntry = isRecord(schema.definitions) ? schema.definitions : undefined;
-
-  if (!defsEntry && !legacyDefsEntry) {
-    return defs;
-  }
-
-  const next = new Map(defs);
-  for (const entry of [defsEntry, legacyDefsEntry]) {
-    for (const [key, value] of Object.entries(entry ?? {})) {
-      next.set(key, value);
-    }
-  }
-  return next;
-}
-
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) {
     return undefined;
@@ -160,7 +145,7 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   if (tokens?.length !== 2 || (table !== "$defs" && table !== "definitions") || !name) {
     return undefined;
   }
-  return defs.get(name);
+  return defs[table].get(name);
 }
 
 function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }):
@@ -225,11 +210,17 @@ function* cleanSchemaForGeminiWithDefs(
   defs: SchemaDefs | undefined,
   refStack: Set<string> | undefined,
   ancestors: Set<object>,
+  budget: { truncated: boolean },
+  depth = 0,
 ): SchemaWalk {
+  if (depth > MAX_TOOL_SCHEMA_DEPTH) {
+    budget.truncated = true;
+    return {};
+  }
   return yield walkSchemaValue(schema, ancestors, function* (obj) {
     const nextDefs = extendSchemaDefs(defs, obj);
     const visit = (value: unknown) =>
-      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors);
+      cleanSchemaForGeminiWithDefs(value, nextDefs, refStack, ancestors, budget, depth + 1);
 
     const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
     if (refValue) {
@@ -248,6 +239,8 @@ function* cleanSchemaForGeminiWithDefs(
           nextDefs,
           nextRefStack,
           new Set<object>(),
+          budget,
+          depth + 1,
         );
         if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
           return cleaned;
@@ -302,11 +295,7 @@ function* cleanSchemaForGeminiWithDefs(
       if (key === "type" && (unions.anyOf || unions.oneOf)) {
         continue;
       }
-      if (
-        key === "type" &&
-        Array.isArray(value) &&
-        value.every((entry) => typeof entry === "string")
-      ) {
+      if (key === "type" && isStringArray(value)) {
         const types = value.filter((entry) => entry !== "null");
         cleaned.type = types.length === 1 ? types[0] : types;
         continue;
@@ -370,8 +359,14 @@ function flattenUnionFallback(
   return copySchemaMeta(obj, merged);
 }
 
-export function cleanSchemaForGemini(schema: unknown): TSchema {
-  return evaluateSchemaWalk(
-    cleanSchemaForGeminiWithDefs(schema, undefined, undefined, new Set<object>()),
+export function cleanSchemaForGemini(schema: unknown, toolName?: string): TSchema {
+  const budget = { truncated: false };
+  const boundedSchema = truncateToolSchemaDepth(schema, toolName);
+  const normalized = evaluateSchemaWalk(
+    cleanSchemaForGeminiWithDefs(boundedSchema, undefined, undefined, new Set<object>(), budget),
   ) as TSchema;
+  if (budget.truncated) {
+    reportToolSchemaTruncation(schema, toolName);
+  }
+  return inheritToolSchemaTruncation(boundedSchema, normalized, budget.truncated);
 }

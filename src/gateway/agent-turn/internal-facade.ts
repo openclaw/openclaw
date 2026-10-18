@@ -80,6 +80,9 @@ export function createInternalAgentTurnFacade(
         context,
         methodRegistry,
       });
+      // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
       throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {
@@ -230,7 +233,7 @@ export function createInternalAgentTurnFacade(
               dispatchOptions.assertAdmissionCurrent?.();
               entry?.release();
               const principal = captureAgentTurnPrincipal(options.client);
-              const preflight = prepareAgentRequestPreflight({
+              const preflight = await prepareAgentRequestPreflight({
                 request,
                 context,
                 client: principal,
@@ -253,6 +256,7 @@ export function createInternalAgentTurnFacade(
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
+                replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
               });
             },
@@ -363,6 +367,8 @@ export function createInternalAgentTurnFacade(
               context,
               methodRegistry,
             });
+            authorization.sessionMutationAuthorization?.release?.();
+            authorization.sessionAccessAuthority?.release();
             throwIfGatewayDispatchAborted(method, signal);
             entry?.assertOpen();
             if (authorization.error) {

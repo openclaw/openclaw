@@ -7,6 +7,7 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
@@ -253,27 +254,24 @@ export function createSessionCapability(
         revision,
         agentId,
       );
-      const sources = roster.observations.observeReadRows(
-        admitted?.sessions ?? [],
-        revision,
-        agentId,
-      );
+      roster.observations.observeReadRows(admitted?.sessions ?? [], revision, agentId);
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observeArchiveRead(row);
+      }
       const projected = permissions.reconcileList(admitted, revision, agentId);
       roster.observations.inherit(projected, admitted);
       if (!projected) {
         return projected;
       }
-      const sessions = roster.observations.projectRows(projected.sessions);
-      sessions.forEach((row, index) => {
-        const source = sources[index];
-        if (source) {
-          mutations.observePendingFields(
-            source.row,
-            source.select(row, optimisticSessionRowFields),
-            agentId,
-          );
-        }
-      });
+      for (const row of admitted?.sessions ?? []) {
+        mutations.observePendingFields(
+          row,
+          row.rowMode
+            ? optimisticSessionRowFields.filter((field) => Object.hasOwn(row, field))
+            : optimisticSessionRowFields,
+          agentId,
+        );
+      }
       return projected;
     },
     onCanonicalList(result, requestRevision, agentId, observed) {
@@ -393,7 +391,6 @@ export function createSessionCapability(
     createSessionReconciliation({
       readState: () => state,
       publish,
-      canonicalListRevision: () => canonicalListRevision,
       connection,
       snapshot: () => gateway.snapshot,
       permissions,
@@ -582,7 +579,6 @@ export function createSessionCapability(
       hasActiveRun === false || (status !== null && status !== undefined && status !== "running");
     const isTerminalMessage = event.event === "session.message" && runEnded;
     const primarySnapshotApplied = reconciled.applied && canApplySnapshot;
-    let primaryPublished = false;
     if (
       claimChanged ||
       swarmChanged ||
@@ -595,10 +591,9 @@ export function createSessionCapability(
       const result = decorateRows(reconciled.result);
       if (claimChanged || result !== state.result) {
         publishReconciledState({ ...state, result });
-        primaryPublished = true;
       }
     }
-    notifyManaged?.(primaryPublished);
+    notifyManaged?.();
     if (eventObservation.scope && !connection.isCurrent(eventObservation.scope)) {
       return;
     }
@@ -620,6 +615,7 @@ export function createSessionCapability(
       primarySnapshotApplied,
       affectsPrimary: eventObservation.affectsPrimary,
       affectedLists: eventObservation.lists,
+      immediate: event.event === "sessions.changed" && eventReason === "create",
     });
     notifyEvent?.(event);
   });
@@ -671,6 +667,9 @@ export function createSessionCapability(
     observeRow,
     inheritRow: roster.observations.inheritRow,
     projectRows: roster.observations.projectRows,
+    // Answer/finishing progress can precede the final stream tail. Only the
+    // shared run owner settles roster activity, including passive sessions.
+    isRunVisuallyActive: isSessionRunActive,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,
@@ -698,7 +697,6 @@ export function createSessionCapability(
     deletionState: deletions.deletionState,
     reset: mutations.reset,
     groupsLoad: groups.load,
-    groupsGeneration: groups.generation,
     groupsStatus: groups.status,
     groupsInvalidate: groups.invalidate,
     groupsPut: groups.put,

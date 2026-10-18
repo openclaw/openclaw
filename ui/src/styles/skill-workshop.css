@@ -1,19 +1,16 @@
 /* Skill Workshop: one list/detail pair. The list carries each skill's latest change; the
  * detail pane owns instructions, support files, and the change history. */
 
-.sw-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
-
+.sw-toolbar,
 .sw-toolbar__end {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: var(--space-3);
+}
+
+.sw-toolbar {
+  justify-content: space-between;
 }
 
 .sw-learning,

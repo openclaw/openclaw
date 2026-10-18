@@ -9,6 +9,7 @@ import {
   sessionsListResponse,
   waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 import { chooseSidebarOwner, closeSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
@@ -99,11 +100,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
         await waitForSessionRosterHydration(page);
-        // This scenario intentionally compares sessions beyond the current human's Mine scope.
-        await page
-          .locator(".sidebar-navigation-scope")
-          .getByRole("button", { name: "All", exact: true })
-          .click();
+        await selectAllSidebarSessions(page);
         const target = page.locator('[data-session-key="' + sessionKey + '"]');
         await expectBrowser(target).toBeVisible();
         const chooseFilter = async (value: "all" | "involving-me") => {

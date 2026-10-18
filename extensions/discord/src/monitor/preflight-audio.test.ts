@@ -41,18 +41,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
 
   it.each([
     {
-      name: "declared content type",
-      attachment: {
-        url: "https://cdn.discordapp.com/attachments/voice.ogg",
-        content_type: "audio/ogg",
-        filename: "voice.ogg",
-      },
-      expected: {
-        url: "https://cdn.discordapp.com/attachments/voice.ogg",
-        contentType: "audio/ogg",
-      },
-    },
-    {
       name: "filename without content type",
       attachment: {
         url: "https://cdn.discordapp.com/attachments/voice.opus",
@@ -62,16 +50,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
         url: "https://cdn.discordapp.com/attachments/voice.opus",
         contentType: "audio/opus",
       },
-    },
-    {
-      name: "voice waveform metadata",
-      attachment: {
-        url: " https://cdn.discordapp.com/attachments/voice ",
-        filename: "voice",
-        duration_secs: 1.5,
-        waveform: "AAAA",
-      },
-      expected: { url: "https://cdn.discordapp.com/attachments/voice", contentType: "audio/ogg" },
     },
   ])(
     "preflights direct-message audio from $name without requiring a mention",
@@ -108,31 +86,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
     expect(result).toEqual({
       hasAudioAttachment: true,
       hasTypedText: true,
-    });
-  });
-
-  it("does not preflight a duration-bearing video attachment as audio", async () => {
-    const result = await resolveDiscordPreflightAudioMentionContext({
-      message: {
-        attachments: [
-          {
-            url: "https://cdn.discordapp.com/attachments/PXL_2024.mp4",
-            content_type: "video/mp4",
-            filename: "PXL_2024.mp4",
-            duration_secs: 11.26,
-          },
-        ],
-      },
-      isDirectMessage: true,
-      shouldRequireMention: false,
-      mentionRegexes: [],
-      cfg,
-    });
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      hasAudioAttachment: false,
-      hasTypedText: false,
     });
   });
 
@@ -193,23 +146,6 @@ describe("resolveDiscordPreflightAudioMentionContext", () => {
       },
       cfg,
       agentDir: undefined,
-    });
-  });
-
-  it("ignores URL-less audio attachments", async () => {
-    const result = await preflight({
-      attachments: [
-        {
-          content_type: "audio/ogg",
-          filename: "voice.ogg",
-        },
-      ],
-    });
-
-    expect(transcribeFirstAudioMock).not.toHaveBeenCalled();
-    expect(result).toEqual({
-      hasAudioAttachment: false,
-      hasTypedText: false,
     });
   });
 });

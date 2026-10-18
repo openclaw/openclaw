@@ -2,10 +2,14 @@ import type { PluginHookReplyDispatchEvent } from "openclaw/plugin-sdk/core";
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { PLUGIN_COMMAND_DISPATCH } from "../plugins/plugin-command-dispatch-contract.js";
 import type { PluginRuntimeChannel } from "../plugins/runtime/types-channel.js";
+import type * as ReplyChunking from "./reply-chunking.js";
+import type * as ReplyRuntime from "./reply-runtime.js";
 import {
   createReplyDispatcher,
   dispatchInboundMessage,
+  isSilentReplyText,
   type GetReplyOptions,
+  type PreparedAgentRunStart,
   type ReplyDispatcher,
 } from "./reply-runtime.js";
 
@@ -25,8 +29,26 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onCompactionStart"
   | "onCompactionEnd"];
 
+describe("reply SDK silence surface", () => {
+  it("exposes only the exact helper from reply-runtime", () => {
+    type ChunkingExports = keyof typeof ReplyChunking;
+    type RuntimeExports = keyof typeof ReplyRuntime;
+    expectTypeOf<"SILENT_REPLY_TOKEN">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"SILENT_REPLY_TOKEN">().toExtend<RuntimeExports>();
+    expectTypeOf<"isSilentReplyText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<ChunkingExports>();
+    expectTypeOf<"isSilentReplyPayloadText">().not.toExtend<RuntimeExports>();
+    expectTypeOf(isSilentReplyText).parameters.toEqualTypeOf<[text?: string]>();
+  });
+});
+
 describe("reply runtime public progress contracts", () => {
-  it("retains released run-start callback arguments and synchronous completion acknowledgment", () => {
+  it("retains released lifecycle callback arguments and synchronous completion acknowledgment", () => {
+    type Deferral = NonNullable<
+      NonNullable<GetReplyOptions["turnAdoptionLifecycle"]>["onDeferred"]
+    >;
+    expectTypeOf<Parameters<Deferral>>().toEqualTypeOf<[]>();
+    expectTypeOf<ReturnType<Deferral>>().toEqualTypeOf<boolean | void>();
     type AgentRunStart = NonNullable<GetReplyOptions["onAgentRunStart"]>;
     type LegacyAgentRunStart = (
       runId: string,
@@ -39,6 +61,13 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<LegacyAgentRunStart>().toExtend<AgentRunStart>();
     expectTypeOf<AgentRunStart>().toExtend<LegacyAgentRunStart>();
     expectTypeOf<AgentRunStart>().returns.toEqualTypeOf<unknown>();
+  });
+
+  it("requires prepared transcript facts on the modern run-start contract", () => {
+    type Callback = NonNullable<GetReplyOptions["onPreparedAgentRunStart"]>;
+    expectTypeOf<Parameters<Callback>>().toEqualTypeOf<[PreparedAgentRunStart]>();
+    expectTypeOf<{ runId: string }>().not.toExtend<PreparedAgentRunStart>();
+    expectTypeOf<Callback>().returns.toEqualTypeOf<unknown>();
   });
 
   it("retains released synchronous visibility contracts beside awaited companions", () => {

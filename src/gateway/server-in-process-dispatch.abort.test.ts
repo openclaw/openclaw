@@ -2,7 +2,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import { WorkerTaskError } from "../../packages/worker-runtime/src/worker-task-error.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { NodeRegistry } from "./node-registry.js";
 import { dispatchGatewayRequestInProcessRaw } from "./server-in-process-dispatch.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "./server-methods/types.js";
@@ -32,10 +34,8 @@ function registerPairedNode(): { registry: NodeRegistry; frames: string[] } {
       usesSharedGatewayAuth: false,
       socket: {
         readyState: WebSocket.OPEN,
-        send(frame: unknown) {
-          if (typeof frame === "string") {
-            frames.push(frame);
-          }
+        send(frame: string | Buffer) {
+          frames.push(frame.toString());
         },
       },
       connect: {
@@ -138,6 +138,64 @@ describe("in-process paired-node invocation cancellation", () => {
     expect(handleGatewayRequest).toHaveBeenCalledWith(
       expect.objectContaining({ signal: controller.signal }),
     );
+  });
+
+  it.each([undefined, 10_000])(
+    "observes a worker failure after its caller aborts during dispatch (timeout=%s)",
+    async (timeoutMs) => {
+      const controller = new AbortController();
+      const aborted = new Error("history caller disconnected");
+      const result = createDeferredCore();
+      const unhandled = vi.fn();
+      handleGatewayRequest.mockImplementation(async () => {
+        controller.abort(aborted);
+        await result.promise;
+      });
+      process.on("unhandledRejection", unhandled);
+      try {
+        const request = dispatchGatewayRequestInProcessRaw(
+          "chat.history",
+          { sessionKey: "synthetic" },
+          {
+            client: null,
+            context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+            signal: controller.signal,
+            timeoutMs,
+          },
+        );
+        await expect(request).rejects.toBe(aborted);
+        result.reject(
+          new WorkerTaskError("ERR_WORKER_OUT_OF_MEMORY: synthetic worker failure", "unavailable"),
+        );
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(unhandled).not.toHaveBeenCalled();
+      } finally {
+        process.off("unhandledRejection", unhandled);
+      }
+    },
+  );
+
+  it("keeps cancellation ahead of an already-delivered response with a deadline", async () => {
+    const controller = new AbortController();
+    const aborted = new Error("history caller disconnected");
+    handleGatewayRequest.mockImplementation(async (options: GatewayRequestOptions) => {
+      options.respond(true, { messages: [] });
+      controller.abort(aborted);
+    });
+    await expect(
+      dispatchGatewayRequestInProcessRaw(
+        "chat.history",
+        { sessionKey: "synthetic" },
+        {
+          client: null,
+          context: { trackExecution: trackAsyncWork } as GatewayRequestContext,
+          signal: controller.signal,
+          timeoutMs: 10_000,
+        },
+      ),
+    ).rejects.toBe(aborted);
   });
 
   it("rejects an already-canceled invocation without dispatching a Gateway request", async () => {

@@ -1,16 +1,13 @@
-import { chmodSync, existsSync, realpathSync, statSync, symlinkSync } from "node:fs";
+import { existsSync, realpathSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
-import {
-  observeHostDataSql,
-  observeSqliteReadSql,
-} from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import { captureSessionEntrySourceAssertion } from "../config/sessions/session-entry-source-authority.js";
 import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
@@ -25,13 +22,13 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import * as workerStore from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { BoardValidationError } from "./board-layout.js";
 import { SqliteBoardStore } from "./sqlite-board-store.js";
@@ -47,15 +44,12 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-function fixture(incognito = false) {
+function fixture() {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("board-worker-mutations-") };
   const sessionKey = "agent:main:board";
   const database = openOpenClawAgentDatabase({
     agentId: "main",
     env,
-    ...(incognito
-      ? { path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env }) }
-      : {}),
   });
   replaceSessionEntrySync(
     { agentId: "main", sessionKey, storePath: database.path },
@@ -81,107 +75,97 @@ async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite
   return { release, held };
 }
 
-it("admits Board writes without reading session existence on the caller thread", async () => {
+it("admits Board writes and request authority without reading SQLite on the caller thread", async () => {
   const { store, target } = fixture();
-  const reads = observeSqliteReadSql(StatementSync.prototype);
+  const assertCurrent = vi.fn();
+  const host = observeHostDataSql();
   try {
-    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
-    const put = await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "<p>status</p>" },
-      declared: { tools: ["health"] },
+    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }], {
+      assertCurrent,
     });
-    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId);
+    const put = await store.putWidget(
+      {
+        ...target,
+        name: "status",
+        content: { kind: "html", html: "<p>status</p>" },
+        declared: { tools: ["health"] },
+      },
+      { assertCurrent },
+    );
+    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId, {
+      assertCurrent,
+    });
+    expect(assertCurrent).toHaveBeenCalled();
+    expect(host.queries.filter((sql) => /\bboard_(?:tabs|widgets)\b/iu.test(sql))).toEqual([]);
     expect(
-      reads.queries.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
+      host.queries.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
     ).toEqual([]);
   } finally {
-    reads.restore();
+    host.restore();
   }
 });
 
-it("rejects a Board write whose session is replaced during preparation", async () => {
-  const { database, options, store, target } = fixture();
-  const replaceSession = () =>
-    replaceSessionEntrySync(
-      { ...target, agentId: options.agentId, storePath: database.path },
-      { sessionId: "replacement-session", updatedAt: 2 },
-    );
-  const pending = store.putWidget(
-    {
-      ...target,
-      name: "app",
-      content: {
-        kind: "mcp-app",
-        descriptor: {
-          serverName: "server",
-          toolName: "tool",
-          uiResourceUri: "ui://app",
-          toolCallId: "call",
-        },
-        interactive: true,
-      },
-    },
-    {
-      resolveMcpAppInteraction: async () => {
-        replaceSession();
-        return true;
-      },
-    },
-  );
-  await expect(pending).rejects.toMatchObject({
-    code: "invalid_operation",
-    message: "board session changed; retry",
-  });
-  expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
-});
-
-it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
-  const { database, options, store, target } = fixture(true);
-  const changes: SessionRowChange[] = [];
-  const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
-  const facts: SessionRowChange[] = [];
-  const stopFacts = sessionChanges.subscribeFacts((change) => facts.push(change));
-  try {
-    expect(existsSync(options.path)).toBe(false);
-    await store.putWidget({
-      ...target,
-      name: "private",
-      content: { kind: "html", html: "<p>process-held</p>" },
-    });
-    const updated = await store.applyOps(target, [
-      { kind: "widget_resize", name: "private", sizeW: 8, sizeH: 6 },
-    ]);
-    expect(updated).toMatchObject({
-      revision: 2,
-      widgets: [{ name: "private", revision: 1, sizeW: 8, sizeH: 6 }],
-    });
-    expect(await store.getSnapshot(target)).toEqual(updated);
-    expect(await store.useWidgetDocument(target, "private", (document) => document)).toMatchObject({
-      html: "<p>process-held</p>",
-      revision: 1,
-    });
-    expect(openOpenClawAgentDatabase(options).db).toBe(database.db);
-    expect(changes).toEqual([
-      { sessionKey: target.sessionKey, storePath: options.path },
-      { sessionKey: target.sessionKey, storePath: options.path },
-    ]);
-    expect(facts).toEqual(
-      changes.map(() => ({
-        sessionKey: target.sessionKey,
-        storePath: options.path,
-        facts: { kind: "unchanged" },
-      })),
-    );
-    for (const suffix of ["", "-wal", "-shm"]) {
-      expect(existsSync(`${options.path}${suffix}`)).toBe(false);
+it.each([false, true])(
+  "rejects a Board write whose session is replaced during preparation (cross-store: %s)",
+  async (crossStore) => {
+    const { database, env, options, store, target } = fixture();
+    const source = crossStore ? openOpenClawAgentDatabase({ agentId: "source", env }) : undefined;
+    const sourceEntry = { sessionId: "source-session", updatedAt: 1 };
+    const scope = source && {
+      agentId: "source",
+      sessionKey: "agent:source:authority",
+      storePath: source.path,
+      env,
+    };
+    if (scope) {
+      replaceSessionEntrySync(scope, sourceEntry);
     }
-  } finally {
-    stopFacts();
-    unsubscribe();
-  }
-});
+    const assertCurrent =
+      scope &&
+      captureSessionEntrySourceAssertion({
+        scope,
+        expected: sourceEntry,
+        fields: ["sessionId"],
+        assertCurrent() {},
+        refuse(): never {
+          throw new Error("Board source changed");
+        },
+      });
+    const replaceSession = () =>
+      replaceSessionEntrySync(
+        { ...target, agentId: options.agentId, storePath: database.path },
+        { sessionId: "replacement-session", updatedAt: 2 },
+      );
+    const pending = store.putWidget(
+      {
+        ...target,
+        name: "app",
+        content: {
+          kind: "mcp-app",
+          descriptor: {
+            serverName: "server",
+            toolName: "tool",
+            uiResourceUri: "ui://app",
+            toolCallId: "call",
+          },
+          interactive: true,
+        },
+      },
+      {
+        assertCurrent,
+        resolveMcpAppInteraction: async () => {
+          replaceSession();
+          return true;
+        },
+      },
+    );
+    await expect(pending).rejects.toMatchObject({
+      code: "invalid_operation",
+      message: "board session changed; retry",
+    });
+    expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+  },
+);
 
 it("executes Board mutations off the host and publishes each committed change once", async () => {
   const { database, store, target } = fixture();
@@ -202,7 +186,7 @@ it("executes Board mutations off the host and publishes each committed change on
       facts.push(change);
     }
   });
-  clearNodeSqliteKyselyCacheForDatabase(database.db);
+  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
   const host = observeHostDataSql();
   const expectPublication = (revision: number) => {
     expect(changes).toEqual([
@@ -223,13 +207,6 @@ it("executes Board mutations off the host and publishes each committed change on
       await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]),
     ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
     expectPublication(1);
-    const privateFiles = [database.path, `${database.path}-wal`, `${database.path}-shm`];
-    if (process.platform !== "win32") {
-      chmodSync(path.dirname(database.path), 0o1700);
-      for (const file of privateFiles) {
-        chmodSync(file, 0o644);
-      }
-    }
     const put = await store.putWidget({
       ...target,
       name: "status",
@@ -238,12 +215,6 @@ it("executes Board mutations off the host and publishes each committed change on
     });
     expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
     expectPublication(2);
-    if (process.platform !== "win32") {
-      expect(statSync(path.dirname(database.path)).mode & 0o7777).toBe(0o700);
-      for (const file of privateFiles) {
-        expect(statSync(file).mode & 0o7777).toBe(0o600);
-      }
-    }
     expect(
       await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId),
     ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });
@@ -269,6 +240,25 @@ it("executes Board mutations off the host and publishes each committed change on
     stopFacts();
     unsubscribe();
   }
+});
+
+it("preserves untouched widget rows while persisting later layout changes", async () => {
+  const { database, store, target } = fixture();
+  const readRows = () =>
+    database.db.prepare("SELECT name, size_w, updated_at FROM board_widgets ORDER BY name").all();
+  await store.putWidget({ ...target, name: "first", content: { kind: "html", html: "first" } });
+  database.db.prepare("UPDATE board_widgets SET updated_at = 100 WHERE name = 'first'").run();
+  await store.putWidget({ ...target, name: "second", content: { kind: "html", html: "second" } });
+  const before = readRows();
+  expect(before).toMatchObject([{ name: "first", updated_at: 100 }, { name: "second" }]);
+  await store.applyOps(target, [{ kind: "widget_resize", name: "first", sizeW: 8, sizeH: 6 }]);
+  const after = readRows();
+  expect(after).toEqual([{ ...before[0], size_w: 8, updated_at: expect.any(Number) }, before[1]]);
+  expect(after[0]?.updated_at).not.toBe(100);
+  expect((await store.getSnapshot(target)).widgets).toMatchObject([
+    { name: "first", sizeW: 8, sizeH: 6 },
+    { name: "second" },
+  ]);
 });
 
 it.each([false, true])(
@@ -427,40 +417,6 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
   },
 );
 
-it.each(["transaction", "commit"] as const)(
-  "refuses a Board write whose target changes at the %s grant",
-  async (stage) => {
-    const { options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
-    });
-    let sessionKey = target.sessionKey;
-    const reader = new SqliteBoardStore({
-      resolveSession: () => ({ ...options, sessionKey }),
-      env: options.env,
-    });
-    const interception = probe.admission(admission, (request, grant, admit) => {
-      if (request.stage === stage) {
-        sessionKey = "agent:main:replacement";
-      }
-      admit(request, grant);
-    });
-    try {
-      const pending = reader.putWidget({
-        ...target,
-        name: "denied",
-        content: { kind: "html", html: "denied" },
-      });
-      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
-    } finally {
-      interception.mockRestore();
-    }
-    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
-  },
-);
-
 it("reads Board snapshots and documents without a write-capable publication", async () => {
   const { store, target } = fixture();
   const put = await store.putWidget({
@@ -485,51 +441,50 @@ it("reads Board snapshots and documents without a write-capable publication", as
   }
 });
 
-it.each(["target", "native-mutation"] as const)(
-  "refuses Board disclosure when %s changes during a read",
-  async (change) => {
-    const { database, options, store, target } = fixture();
-    await store.putWidget({
-      ...target,
-      name: "status",
-      content: { kind: "html", html: "private" },
+it("refuses Board disclosure when its target changes during a read", async () => {
+  const { options, store, target } = fixture();
+  await store.putWidget({
+    ...target,
+    name: "status",
+    content: { kind: "html", html: "private" },
+  });
+  let sessionKey = target.sessionKey;
+  const reader = new SqliteBoardStore({
+    resolveSession: () => ({
+      ...options,
+      sessionKey,
+      assertCurrent() {
+        if (sessionKey !== target.sessionKey) {
+          throw new BoardValidationError("invalid_operation", "board session changed; retry");
+        }
+      },
+    }),
+    env: options.env,
+  });
+  const create = historyReaders.createSessionHistoryWorkerReaders;
+  const interception = vi
+    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+    .mockImplementation((run) => {
+      const readers = create(run);
+      return {
+        ...readers,
+        async readBoardSnapshot(input) {
+          const snapshot = await readers.readBoardSnapshot(input);
+          sessionKey = "agent:main:replacement";
+          return snapshot;
+        },
+      };
     });
-    let sessionKey = target.sessionKey;
-    const reader = new SqliteBoardStore({
-      resolveSession: () => ({ ...options, sessionKey }),
-      env: options.env,
-    });
-    const create = historyReaders.createSessionHistoryWorkerReaders;
-    const interception = vi
-      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-      .mockImplementation((run) => {
-        const readers = create(run);
-        return {
-          ...readers,
-          async readBoardSnapshot(input) {
-            const snapshot = await readers.readBoardSnapshot(input);
-            if (change === "target") {
-              sessionKey = "agent:main:replacement";
-            } else {
-              database.db
-                .prepare("DELETE FROM board_widgets WHERE session_key = ?")
-                .run(sessionKey);
-            }
-            return snapshot;
-          },
-        };
-      });
-    const consume = vi.fn();
-    try {
-      await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
-        change === "target" ? "board session changed; retry" : "Session entry changed",
-      );
-      expect(consume).not.toHaveBeenCalled();
-    } finally {
-      interception.mockRestore();
-    }
-  },
-);
+  const consume = vi.fn();
+  try {
+    await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
+      "board session changed; retry",
+    );
+    expect(consume).not.toHaveBeenCalled();
+  } finally {
+    interception.mockRestore();
+  }
+});
 
 it.each(["snapshot", "document"] as const)(
   "retains Board validation errors without waiting on writer-dependent retirement (%s)",

@@ -3,12 +3,37 @@ import { z } from "zod";
 import { buildGatewayInstallEntrypointCandidates } from "../../daemon/gateway-entrypoint.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../../daemon/program-args.js";
 import { resolvePinnedDaemonRuntimePath } from "../../daemon/runtime-paths.js";
+import type { DaemonRuntimePinSnapshot } from "../../daemon/runtime-pin-types.js";
 import { isUpdateOwnedGatewayServiceCommand } from "../../daemon/service-update-authority.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { isRegularFile } from "../../infra/executable-path.js";
 import { resolveStableNodePath } from "../../infra/stable-node-path.js";
 import { safeParseJsonWithSchema } from "../../utils/zod-parse.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+const expectedRuntimePinSchema = z.strictObject({
+  revision: z.string(),
+  definition: z.string().nullable(),
+});
+
+export function assertExpectedRuntimePin(
+  raw: string,
+  current: DaemonRuntimePinSnapshot,
+  service: "Gateway" | "Node",
+): void {
+  const expected = safeParseJsonWithSchema(expectedRuntimePinSchema, raw);
+  if (!expected) {
+    throw new Error("Invalid expected runtime pin snapshot.");
+  }
+  if (
+    expected.revision !== current.revision ||
+    expected.definition !== (current.definition ?? null)
+  ) {
+    throw new Error(
+      `${service} service or runtime pin changed before installation. The newer selection was preserved; inspect it before retrying.`,
+    );
+  }
+}
 
 const serviceFile = z
   .string()

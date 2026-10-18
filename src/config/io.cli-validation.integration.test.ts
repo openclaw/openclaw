@@ -11,9 +11,42 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as metadata from "./io.plugin-metadata.js";
+import { REDACTED_SENTINEL } from "./redact-sentinel.js";
 import type { OpenClawConfig } from "./types.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it.each(["get", "validate"] as const)(
+  "keeps core config %s independent of plugin metadata while preserving secret redaction",
+  async (command) => {
+    vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockRejectedValue(
+      new Error("Plugin metadata is unavailable"),
+    );
+    const output: unknown[] = [];
+    vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
+      output.push(value);
+    });
+    await withOpenClawTestState({ prefix: "config-cli-core-only-" }, async (state) => {
+      await state.writeConfig({
+        gateway: { mode: "local", auth: { mode: "token", token: "synthetic-core-token" } },
+      });
+      const program = new Command();
+      program.exitOverride();
+      registerConfigCli(program);
+      await program.parseAsync(
+        command === "get"
+          ? ["config", "get", "gateway.auth.token", "--json"]
+          : ["config", "validate", "--json"],
+        { from: "user" },
+      );
+      if (command === "get") {
+        expect(output.at(-1)).toBe(REDACTED_SENTINEL);
+      } else {
+        expect(output.at(-1)).toMatchObject({ valid: true, warnings: [] });
+      }
+    });
+  },
+);
 
 async function validateThroughCli(
   config: OpenClawConfig,

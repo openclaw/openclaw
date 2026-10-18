@@ -4,14 +4,14 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { getAdmittedRunDelegatedAuthority } from "../../admitted-run-context.js";
 import { retireSessionMcpRuntime } from "../../agent-bundle-mcp-tools.js";
 import type { ContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import { forgetPromptBuildDrainCacheForRun } from "../../plugin-turn-context.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 import { log } from "../logger.js";
 import { clearProviderPromptState } from "../provider-prompt-state.js";
-import { forgetPromptBuildDrainCacheForRun } from "./attempt-prompt-helpers.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import type { CompactionAccountingFact } from "./internal-params.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import type { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 type SessionPromptState = Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
@@ -26,7 +26,10 @@ export async function settleEmbeddedRun(input: {
     state: Pick<EmbeddedRunContextRecoveryState, "autoCompactionCount" | "currentContextSnapshot">;
     session: Pick<
       SessionPromptState,
-      "sessionId" | "committedCompactionSuccessor" | "sessionWriterFence"
+      | "sessionId"
+      | "committedCompactionSuccessor"
+      | "committedCompactionTransitions"
+      | "sessionWriterFence"
     >;
     originalTarget: NonNullable<SessionPromptState["sessionTarget"]>;
     durable: boolean;
@@ -63,6 +66,9 @@ export async function settleEmbeddedRun(input: {
             ? { previousSessionId: committed.previousSessionId }
             : {}),
           ...(committed ? { hostCompactionCommitted: true } : {}),
+          ...(compaction.session.committedCompactionTransitions.length
+            ? { admissionTransitions: compaction.session.committedCompactionTransitions }
+            : {}),
           target: {
             agentId: target.agentId,
             sessionId: committed?.entry.sessionId ?? target.sessionId,

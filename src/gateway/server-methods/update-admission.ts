@@ -14,10 +14,6 @@ import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
-import {
-  createFreeBsdPkgOwnershipInspection,
-  FreeBsdPkgOwnershipError,
-} from "../../infra/update-freebsd-pkg-ownership.js";
 import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import {
@@ -26,6 +22,7 @@ import {
   type UPDATE_PREFLIGHT_DETAILS,
 } from "../../infra/update-preflight-details.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
+import { getUpdateRunAsync as getUpdateRun } from "../../infra/update-run-reader.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import {
   recordUpdateRunDiagnosticsAsync as recordUpdateRunDiagnostics,
@@ -35,6 +32,10 @@ import {
 } from "../../infra/update-run-write.async.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
+import {
+  createSystemPackageOwnershipInspection,
+  SystemPackageOwnershipError,
+} from "../../infra/update-system-package-ownership.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -168,8 +169,9 @@ export function retainUpdateRequesterAuthority(
 
 export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: number) {
   await recordUpdateRunStep(runId, { step: "installation-inspection", status: "in_progress" });
-  const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
-    resolveStartupInstallStatus(false, signal),
+  const lifecycle = currentUpdateCheckLifecycle();
+  const { root, status } = await lifecycle.run((signal) =>
+    resolveStartupInstallStatus(false, signal, lifecycle.installStatus),
   );
   if (status.error?.timeoutMs) {
     throw new Error(status.error.message);
@@ -184,7 +186,7 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   });
   // Status discovery is read-only; admit ownership before campaign adoption
   // or a managed handoff can select and launch an updater.
-  await createFreeBsdPkgOwnershipInspection(timeoutMs).assertUnowned(root);
+  await createSystemPackageOwnershipInspection(timeoutMs).assertUnowned(root);
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
@@ -257,8 +259,13 @@ export async function recordHandoffFailure(
     undefined,
     "managed-service",
   );
+  const completed = await getUpdateRun(runId).catch(() => undefined);
   const reason =
-    error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    completed?.status === "failed" && completed.reason
+      ? completed.reason
+      : error instanceof UpdatePreMutationError
+        ? error.reason
+        : "managed-service-handoff-failed";
   const failureFacts = [
     ...(error instanceof UpdatePreMutationError ? error.failureFacts : [cause]).slice(0, 4),
     ...classified.failureFacts,
@@ -311,9 +318,12 @@ export async function createUnexpectedUpdateFailureResult(
   error: unknown,
   warn: (message: string) => void,
 ): Promise<UpdateRunResult> {
+  if (error instanceof SystemPackageOwnershipError && error.owned) {
+    return { ...previous, status: "skipped", reason: error.reason };
+  }
   const activeStep = current.steps.findLast((step) => step.status === "in_progress");
   const name = activeStep?.step ?? current.phase;
-  const reason = error instanceof FreeBsdPkgOwnershipError ? error.reason : "unexpected-error";
+  const reason = error instanceof SystemPackageOwnershipError ? error.reason : "unexpected-error";
   const step = {
     name,
     command: "",

@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
@@ -19,6 +20,7 @@ import {
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { withChildProcessOperation } from "../process/spawn-diagnostics.js";
 import type { SpawnInitiation } from "../process/spawn-initiation.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
@@ -29,7 +31,6 @@ import type {
 } from "../secrets/egress-proxy/proxy-server.js";
 import { registerSecretEgressProxyProcess } from "../secrets/egress-proxy/registry.js";
 /**
- * Bash exec runtime.
  * Spawns host/sandbox processes, manages session updates/backgrounding,
  * approval messaging constants, environment safety, and exit outcome shaping.
  */
@@ -39,7 +40,10 @@ import {
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
-import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import {
+  captureAgentToolSourceExecutionGuard,
+  runWithAgentToolSourceExecutionScope,
+} from "./agent-tool-source-execution-guard.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import {
   addSession,
@@ -101,7 +105,6 @@ export const DEFAULT_PENDING_MAX_OUTPUT = clampWithDefault(
 /** Fallback PATH used when the process environment has no PATH. */
 export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
-/** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
 export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = DEFAULT_APPROVAL_TIMEOUT_MS + 10_000;
@@ -258,7 +261,6 @@ export function buildApprovalPendingMessage(params: {
   return lines.join("\n");
 }
 
-/** Normalizes the delay before showing a running approval notice. */
 export function resolveApprovalRunningNoticeMs(value?: number) {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return DEFAULT_APPROVAL_RUNNING_NOTICE_MS;
@@ -294,7 +296,6 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
-/** Formats a user-facing reason for a failed exec process exit. */
 function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
@@ -329,7 +330,6 @@ function formatExecFailureReason(params: {
   throw new Error("Unsupported exec failure kind");
 }
 
-/** Converts a supervisor exit record into a normalized exec process outcome. */
 function buildExecExitOutcome(params: {
   exit: RunExit;
   aggregated: string;
@@ -382,7 +382,6 @@ function buildExecExitOutcome(params: {
   };
 }
 
-/** Converts spawn/runtime errors into a normalized failed exec outcome. */
 export function buildExecRuntimeErrorOutcome(params: {
   error: unknown;
   aggregated: string;
@@ -461,7 +460,7 @@ export async function runExecProcess({
     requestSignal && initialStartupSignal
       ? AbortSignal.any([requestSignal, initialStartupSignal])
       : (requestSignal ?? initialStartupSignal);
-  let assertSourceActive: (() => void) | undefined =
+  let assertSourceActive: SessionSourceAssertion | undefined =
     captureAgentToolSourceExecutionGuard(startupSignal);
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
@@ -639,11 +638,13 @@ export async function runExecProcess({
         errors.push(artifacts.reason);
       }
       if (errors.length > 0) {
-        throw new AggregateError(errors, errors.map(formatErrorMessage).join("\n"));
+        const message = errors.map((error) => formatErrorMessage(error)).join("\n");
+        throw new AggregateError(errors, message);
       }
     } catch (error) {
       session.finalizationFailed = true;
       recordAgentCleanupFailure();
+      // Mask host cleanup diagnostics before they enter retained process output.
       const detail = redactToolPayloadText(formatErrorMessage(error));
       if (outcome.status === "completed") {
         finalOutcome = runtimeErrorOutcome(detail);
@@ -651,7 +652,7 @@ export async function runExecProcess({
         finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
       }
-      // Failed commands must retain cleanup failures in the same bounded, redacted output.
+      // Failed commands retain cleanup failures in the same bounded tool output.
       appendOutput(session, "stderr", `\n${detail}\n`);
       finalOutcome.aggregated = session.aggregated.trim();
     } finally {
@@ -732,42 +733,45 @@ export async function runExecProcess({
       target: diagnosticTarget,
     });
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
-  const spawn = async (input: SpawnInput) => {
-    const assertSourceCurrent = assertSourceActive;
-    const assertOperatorCurrent = operatorAuthority?.assertCurrent;
-    const assertRuntimeCurrent = assertSandboxCurrent;
-    const assertHostPolicyCurrent = assertPolicyCurrent;
-    const assertCurrent = () => {
-      assertSourceCurrent?.();
-      assertOperatorCurrent?.();
-      assertRuntimeCurrent?.();
-    };
-    // Source authority covers construction; approval policy ends at native launch.
-    assertCurrent();
-    assertHostPolicyCurrent?.();
-    const grant = opts.secretEgressBindings
-      ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
-      : undefined;
-    secretEgressGrant = grant;
-    try {
-      return await withoutGatewayToolCallerIdentity(() =>
-        supervisor.spawn({
-          ...input,
-          ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
-          onCancel: () => {
-            beginSandboxTermination();
-            grant?.revoke();
-          },
-          assertCurrent,
-          beforeSpawn: assertHostPolicyCurrent,
-          initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
-        }),
-      );
-    } catch (error) {
-      grant?.revoke();
-      throw error;
-    }
-  };
+  const spawn = (input: SpawnInput) =>
+    runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
+      const assertSourceCurrent = assertSourceActive;
+      const assertOperatorCurrent = operatorAuthority?.assertCurrent;
+      const assertRuntimeCurrent = assertSandboxCurrent;
+      const assertHostPolicyCurrent = assertPolicyCurrent;
+      const assertCurrent = () => {
+        assertSourceCurrent?.();
+        assertOperatorCurrent?.();
+        assertRuntimeCurrent?.();
+      };
+      // Source authority covers construction; approval policy ends at native launch.
+      assertCurrent();
+      assertHostPolicyCurrent?.();
+      const grant = opts.secretEgressBindings
+        ? await registerSecretEgressProxyProcess(opts.secretEgressBindings)
+        : undefined;
+      secretEgressGrant = grant;
+      try {
+        return await withChildProcessOperation("agent.exec", () =>
+          withoutGatewayToolCallerIdentity(() =>
+            supervisor.spawn({
+              ...input,
+              ...(grant ? { env: { ...input.env, ...grant.env } } : {}),
+              onCancel: () => {
+                beginSandboxTermination();
+                grant?.revoke();
+              },
+              assertCurrent,
+              beforeSpawn: assertHostPolicyCurrent,
+              initiateSpawn: launchLifecycle.wrap(assertCurrent, assertHostPolicyCurrent),
+            }),
+          ),
+        );
+      } catch (error) {
+        grant?.revoke();
+        throw error;
+      }
+    });
 
   try {
     assertSourceActive?.();

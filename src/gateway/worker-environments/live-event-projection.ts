@@ -1,10 +1,6 @@
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isDefinitiveRunLifecycle } from "../../agents/agent-run-terminal-outcome.js";
-import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-tool-results.js";
+import { capLiveExecResult, sanitizeToolResult } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -25,7 +21,7 @@ export function prepareWorkerLiveEventData(
   const toolName = normalizeToolPolicyName(event.payload.name);
   payload.name = toolName;
   if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
+    payload.args = event.payload.args;
   } else if (event.payload.phase === "update") {
     const partialResult = sanitizeToolResult(event.payload.partialResult);
     payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;

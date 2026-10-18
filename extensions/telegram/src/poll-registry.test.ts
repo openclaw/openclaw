@@ -1,13 +1,10 @@
 // Telegram tests cover poll registry plugin behavior.
 import {
   createPluginStateKeyedStoreForTests,
-  executeSqliteQuerySync,
-  getNodeSqliteKysely,
-  openOpenClawStateDatabase,
+  createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
-  type OpenClawStateKyselyDatabaseForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   findTelegramPollRegistryEntry,
   recordTelegramPollRegistryEntry,
@@ -63,17 +60,17 @@ describe("telegram poll registry", () => {
       threadSpec: { scope: "forum", id: 88 },
     });
 
-    // The database worker owns expiry; changing the parent clock cannot expire its rows.
-    const { db } = openOpenClawStateDatabase();
-    executeSqliteQuerySync(
-      db,
-      getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabaseForTests, "plugin_state_entries">>(db)
-        .updateTable("plugin_state_entries")
-        .set({ expires_at: 1 })
-        .where("plugin_id", "=", "telegram")
-        .where("namespace", "=", TELEGRAM_POLL_REGISTRY_NAMESPACE)
-        .where("entry_key", "=", entry.key),
-    );
+    // Publish expiry through the native owner so cached reads see the same deadline.
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1);
+    try {
+      createPluginStateSyncKeyedStoreForTests<TelegramPollRegistryEntry>("telegram", {
+        namespace: TELEGRAM_POLL_REGISTRY_NAMESPACE,
+        maxEntries: TELEGRAM_POLL_REGISTRY_MAX_ENTRIES,
+        overflowPolicy: "reject-new",
+      }).register(entry.key, entry.value, { ttlMs: 1 });
+    } finally {
+      clock.mockRestore();
+    }
     await expect(findTelegramPollRegistryEntry({ pollId: "poll-closed" })).resolves.toBeNull();
   });
 

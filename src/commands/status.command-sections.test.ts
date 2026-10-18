@@ -275,6 +275,6 @@ it("warns when deep health says the retained Node executable is gone", () => {
   expect(rows[1]).toEqual({
     Item: "Gateway runtime",
     Status: "warn(WARN)",
-    Detail: `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+    Detail: `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
   });
 });

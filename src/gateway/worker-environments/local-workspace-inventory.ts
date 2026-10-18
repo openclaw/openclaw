@@ -1,4 +1,5 @@
 import { isUtf8 } from "node:buffer";
+import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { requireGitBuffer } from "../../agents/worktrees/git.js";
 import { manifestNodes } from "./workspace-manifest-comparison.js";
 import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
@@ -33,7 +34,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   root: string;
   admittedPaths: string;
   baseline?: WorkerWorkspaceManifest;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   assertCurrent: () => void;
 }): Promise<Set<string>> {
   const listed = await requireGitBuffer(params.root, ["ls-files", "--cached", "-z"], {
@@ -44,7 +45,7 @@ export async function selectLocalWorkspaceCanonicalPaths(params: {
   // Only the host owns this index; the guest has independent Git metadata. A
   // host can deliberately admit a new path with git add, even if it is ignored.
   const admitted: unknown = JSON.parse(params.admittedPaths);
-  if (!Array.isArray(admitted) || !admitted.every((entry) => typeof entry === "string")) {
+  if (!isStringArray(admitted)) {
     throw new Error("Invalid local workspace source admission");
   }
   const paths = new Set<string>([...admitted, ...decodeGitPaths(listed)]);

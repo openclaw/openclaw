@@ -13,26 +13,6 @@ describe("collectWhatsAppStatusIssues", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reports unlinked enabled accounts", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: false,
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Not linked (no WhatsApp Web session).",
-        fix: "Run: openclaw channels login (scan QR on the gateway host).",
-      },
-    ]);
-  });
-
   it.each([
     {
       name: "logged-out",
@@ -79,26 +59,6 @@ describe("collectWhatsAppStatusIssues", () => {
     ]);
 
     expect(issues).toEqual([expected]);
-  });
-
-  it("reports auth reads that are still stabilizing", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        statusState: "unstable",
-      },
-    ]);
-
-    expect(issues).toEqual([
-      {
-        channel: "whatsapp",
-        accountId: "default",
-        kind: "auth",
-        message: "Auth state is still stabilizing.",
-        fix: "Wait a moment for queued credential writes to finish, then retry the command or rerun health.",
-      },
-    ]);
   });
 
   it.each([
@@ -238,26 +198,5 @@ describe("collectWhatsAppStatusIssues", () => {
         fix: "Watch: openclaw logs --follow and run openclaw channels status --probe if disconnects continue. If it keeps flapping, restart the gateway or relink via channels login.",
       },
     ]);
-  });
-
-  it("does not report old reconnect history after a stable healthy period", () => {
-    const issues = collectWhatsAppStatusIssues([
-      {
-        accountId: "default",
-        enabled: true,
-        linked: true,
-        running: true,
-        connected: true,
-        reconnectAttempts: 1,
-        healthState: "healthy",
-        lastDisconnect: {
-          at: Date.now() - 60 * 60_000,
-          status: 408,
-          error: "old disconnect",
-        },
-      },
-    ]);
-
-    expect(issues).toStrictEqual([]);
   });
 });

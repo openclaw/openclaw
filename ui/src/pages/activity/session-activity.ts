@@ -1,23 +1,23 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../api/types.ts";
 import {
   ACTIVITY_PERSON_PARAM,
   activityPersonFromPath,
   activityPersonLocation,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
-import {
-  createSessionWriteObservation,
-  type createSessionRowProvenance,
-} from "../../lib/sessions/session-row-provenance.ts";
-import { matchesExistingSession } from "../../lib/sessions/session-row-reconcile.ts";
+import type { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import type { CurrentWorkChange } from "./current-work.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
@@ -109,7 +109,7 @@ function compareSessionActivity(a: GatewaySessionRow, b: GatewaySessionRow): num
 
 type ActivityRowProvenance = ReturnType<typeof createSessionRowProvenance>;
 
-/** Reads own membership; field receipts preserve observations made while the read was pending. */
+/** List reads own membership; events update the held window until the next read. */
 export function reconcileSessionActivityRead(
   incoming: SessionsListResult,
   previous: SessionsListResult | undefined,
@@ -126,10 +126,7 @@ export function reconcileSessionActivityRead(
   const sessions = incoming.sessions.map((row) => {
     const identity = provenance.identity(row);
     const existing = identity ? held.get(identity) : undefined;
-    provenance.observeReadRow(row, revision, row.agentId, existing ? [existing] : []);
-    if (identity) {
-      held.delete(identity);
-    }
+    provenance.observeReadRow(row, revision, row.agentId);
     const merged = existing ? provenance.mergeRow(existing, row, row.agentId) : row;
     orderChanged ||= sessionActivityTimestamp(merged) !== sessionActivityTimestamp(row);
     return merged;
@@ -139,15 +136,7 @@ export function reconcileSessionActivityRead(
       ...incoming,
       sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
     },
-    requiresRefresh: [...held.values()].some((row) => {
-      const sample = provenance.fieldObservation(row, "updatedAt").source.snapshotAt;
-      return (
-        (sample === undefined ? provenance.hasNewerFacts(row, revision) : sample > incoming.ts) &&
-        !incoming.sessions.some((replacement) =>
-          matchesExistingSession(replacement, row.key, provenance.owner(row)),
-        )
-      );
-    }),
+    requiresRefresh: false,
   };
 }
 
@@ -177,17 +166,13 @@ export function reconcileSessionActivity(
       nextResult,
       change.snapshot,
       { archivedFilter: "all" },
-      (row, existing, fields, info) => {
-        provenance.inheritRow(row, existing);
-        provenance.observeFields(
-          row,
-          (info.isAncestorReference ? provenance.fieldNames(existing) : fields).filter(
-            (field) => field !== "activitySummary" || info.hasActivitySummary,
-          ),
-          createSessionWriteObservation(revision, info.updatedAt, undefined, info.snapshotAt),
-          info.agentId,
-        );
-        return provenance.mergeRow(existing, row, info.agentId);
+      (row, existing, _fields, info) => {
+        provenance.observeReadRow(row, revision, info.agentId);
+        return !info.hasActivitySummary &&
+          row.activitySummary === undefined &&
+          existing.activitySummary
+          ? provenance.inheritRow({ ...row, activitySummary: existing.activitySummary }, row)
+          : row;
       },
     ).result;
     if (next) {
@@ -197,18 +182,22 @@ export function reconcileSessionActivity(
   return { result: nextResult, requiresRefresh };
 }
 
-export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
+export function sessionActivityOwner(
+  row: GatewaySessionRow,
+  agentsList: AgentsListResult | null | undefined,
+  agentIdentity?: AgentIdentityResult | null,
+): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
   const agentId = normalizeOptionalString(row.agentId);
-  const { resourceBasePath } = readAvatarGatewayContext();
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
     name: normalizeOptionalString(actor?.label) ?? agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
-      : agentId
-        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
-        : undefined,
+      : (resolveAgentAvatarUrl(
+          agentsList?.agents.find((agent) => agent.id === agentId) ?? {},
+          agentIdentity,
+        ) ?? undefined),
     watchedSessions: [],
   };
 }

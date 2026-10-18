@@ -144,21 +144,21 @@ function collectConfiguredTargetRefPaths(params: {
   return configuredTargetRefPaths;
 }
 
-function classifyConfiguredTargetRefs(params: {
+async function classifyConfiguredTargetRefs(params: {
   config: OpenClawConfig;
   configuredTargetRefPaths: Set<string>;
   agentId?: string;
   forcedActivePaths?: ReadonlySet<string>;
   optionalActivePaths?: ReadonlySet<string>;
-}): {
+}): Promise<{
   needsResolution: boolean;
   diagnostics: string[];
-} {
+}> {
   const context = createResolverContext({
     sourceConfig: params.config,
     env: process.env,
   });
-  collectConfigAssignments({
+  await collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -332,7 +332,7 @@ async function resolveCommandSecretRefsLocally(
   const runtimeWebTargets = discoveredTargets.filter((target) =>
     targetsRuntimeWebPath(target.path),
   );
-  collectConfigAssignments({
+  await collectConfigAssignments({
     config: cloneConfigWithResolutionFacts(params.config),
     context,
     agentId: params.agentId,
@@ -569,7 +569,7 @@ export async function resolveCommandSecretRefsViaGateway(
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths(params);
   const preflight =
     configuredTargetRefPaths.size > 0
-      ? classifyConfiguredTargetRefs({ ...params, configuredTargetRefPaths })
+      ? await classifyConfiguredTargetRefs({ ...params, configuredTargetRefPaths })
       : { needsResolution: false, diagnostics: [] };
   if (!preflight.needsResolution) {
     return {
@@ -608,6 +608,7 @@ export async function resolveCommandSecretRefsViaGateway(
   } catch (err) {
     const forcedActiveCompatFailure =
       Boolean(params.forcedActivePaths?.size) && isAllowedPathsSecretsResolveCompatError(err);
+    let localFailure = "Local resolution also failed.";
     try {
       const fallback = await resolveLocally();
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
@@ -626,8 +627,8 @@ export async function resolveCommandSecretRefsViaGateway(
           ]),
         };
       }
-    } catch {
-      // Fall through to original gateway-specific error reporting.
+    } catch (error) {
+      localFailure = `Local resolution also failed (${formatErrorMessage(error)}).`;
     }
     if (forcedActiveCompatFailure) {
       throw new Error(
@@ -642,7 +643,7 @@ export async function resolveCommandSecretRefsViaGateway(
       );
     }
     throw new Error(
-      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). Local resolution also failed. Check the configured secret sources and gateway access, then retry.`,
+      `${params.commandName}: failed to resolve secrets from the active gateway snapshot (${formatErrorMessage(err)}). ${localFailure} Check the configured secret sources and gateway access, then retry.`,
       { cause: err },
     );
   }
@@ -748,15 +749,10 @@ export async function resolveCommandSecretRefsViaGateway(
       if (enforceResolved) {
         throw error;
       }
-      const unresolvedDiagnostics = handleUnresolvedAssignments(
-        resolution,
-        resolvedConfig,
-        analyzed.unresolved,
-      );
       diagnostics = normalizeUniqueStringEntries([
         ...diagnostics,
         `${params.commandName}: local fallback after incomplete gateway snapshot failed (${formatErrorMessage(error)}).`,
-        ...unresolvedDiagnostics,
+        ...handleUnresolvedAssignments(resolution, resolvedConfig, analyzed.unresolved),
       ]);
     }
   }

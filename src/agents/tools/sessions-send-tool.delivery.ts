@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithInProcessGatewaySessionMutation } from "../../gateway/server-plugin-in-process-dispatch.js";
 import type { GatewaySessionStoreTarget } from "../../gateway/session-utils-store.types.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEventEntry } from "../../infra/system-events.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
@@ -155,7 +155,7 @@ export type SessionsSendStart =
       steeredRunId?: string;
       a2aSessionKey?: string;
     }
-  | { ok: false; result: ReturnType<typeof jsonResult> };
+  | { ok: false; result: ReturnType<typeof jsonResult<Record<string, unknown>>> };
 
 /** Decide steering before preparing custody for a new turn. */
 export async function trySessionsSendActiveRunDelivery(

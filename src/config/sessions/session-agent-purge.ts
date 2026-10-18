@@ -2,7 +2,7 @@ import { isMainThread } from "node:worker_threads";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  captureOpenClawAgentDatabaseExecution,
+  captureAgentDeletionDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
@@ -13,7 +13,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   captureNativeSessionWorkerDeletion,
-  preparedSessionDeletionRequiresNativeTransaction,
   runSqliteSessionDeletionTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
@@ -66,7 +65,7 @@ export async function purgeDeletedAgentSessionEntries(
   const database = { ...toDatabaseOptions(resolved), path: resolved.path };
   const execution =
     isMainThread && supportsOpenClawAgentDatabaseExecution(database)
-      ? captureOpenClawAgentDatabaseExecution(database)
+      ? await captureAgentDeletionDatabaseExecution(database)
       : undefined;
   const selection = {
     cfg: structuredClone(params.cfg),
@@ -109,7 +108,7 @@ export async function purgeDeletedAgentSessionEntries(
       resolved,
       entries,
       async (assertSourceCurrent) => {
-        const native = !execution || preparedSessionDeletionRequiresNativeTransaction();
+        const native = !execution;
         const preservation = await prepareSessionMaintenancePreservation(params.storePath, {
           native,
         });
@@ -167,7 +166,6 @@ export async function purgeDeletedAgentSessionEntries(
               preservation: sentPreservation,
               storePath: params.storePath,
             },
-            maintenanceRunBasis: preservation.subagentRunBasis,
           };
           const operation: Omit<
             Parameters<

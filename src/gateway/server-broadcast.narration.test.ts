@@ -351,15 +351,21 @@ describe("narration delivery through the Gateway broadcaster", () => {
     publish(mainKey, "main", "Literal retired.");
     publish("global", "ops", "Ops retained.");
     h.subscribers.unsubscribe("narration", mainKey, "raw");
-    h.subscribers.unsubscribe("narration", mainKey, "literal");
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames).toHaveLength(8);
-    expect(h.narration.frames.at(-1)?.payload.text).toBe("Ops retained.");
+    expect(h.narration.frames.slice(-3).map(({ payload }) => payload.text)).toEqual([
+      "Raw retired.",
+      "Literal retired.",
+      "Ops retained.",
+    ]);
+    expect(h.narration.frames).toHaveLength(10);
 
+    publish("global", "main", "Raw retired on final release.");
+    publish(mainKey, "main", "Literal retired on final release.");
+    h.subscribers.unsubscribe("narration", mainKey, "literal");
     publish("global", "ops", "Retired on foreground admission.");
     h.subscribers.subscribe("narration", opsKey, { subscriptionId: "ops" });
     vi.advanceTimersByTime(2_000);
-    expect(h.narration.frames).toHaveLength(8);
+    expect(h.narration.frames).toHaveLength(10);
     publish("global", "ops", "Full transcript.");
     expect(h.narration.frames.at(-1)?.event).toBe("chat");
   });

@@ -19,6 +19,11 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import { isChannelPartialDeliveryError } from "../../channels/turn/partial-delivery-error.js";
+import {
+  composeSessionSourceAssertion,
+  runWithSessionSourceScope,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeMessagePresentation } from "../../interactive/payload.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -62,11 +67,26 @@ const MESSAGE_ACTION_RECONCILIATION_TIMEOUT_MS = 60_000;
 const MESSAGE_ACTION_RECONCILIATION_MAX_MS = 9 * 60_000;
 const MESSAGE_ACTION_INITIAL_SEND_TIMEOUT_MAX_MS = 30_000;
 
-export function assertMessageDeliveryCurrent(input: MessageActionInput): void {
+function assertMessageDeliveryCurrent(input: MessageActionInput): void {
   throwIfAborted(input.abortSignal);
   input.assertDirectAdapterHandoff?.();
   input.messageActionAuthorization?.scheduled?.assertCurrent();
   input.messageActionAuthorization?.deliveryAttempt?.assertCurrent();
+}
+
+/** Keep the occurrence's prepared sources through transcript and transport commits. */
+export function captureMessageDeliveryAuthority(input: MessageActionInput): SessionSourceAssertion {
+  return composeSessionSourceAssertion(
+    [
+      input.assertDirectAdapterHandoff,
+      input.messageActionAuthorization?.scheduled?.assertCurrent,
+      input.messageActionAuthorization?.deliveryAttempt?.assertCurrent,
+    ],
+    (assertSources) => {
+      throwIfAborted(input.abortSignal);
+      assertSources();
+    },
+  );
 }
 
 export async function beforeMessageDeliveryAttempt(input: MessageActionInput): Promise<void> {
@@ -85,6 +105,7 @@ async function callGatewayMessageAction<T>(params: {
   agentRuntimeIdentityToken?: string;
   requestContext?: OutboundGatewayRequestContext;
   abortSignal?: AbortSignal;
+  assertDirectAdapterHandoff?: SessionSourceAssertion;
   onUnknownDeliveryOutcome?: () => void;
 }): Promise<T> {
   const { callGatewayLeastPrivilege, isGatewayTransportError } = await loadMessageGatewayRuntime();
@@ -110,7 +131,14 @@ async function callGatewayMessageAction<T>(params: {
       ? params.gateway.request<R>(options, params.requestContext)
       : callGatewayLeastPrivilege<R>(options);
   try {
-    return await request<T>(call);
+    return await runWithSessionSourceScope(
+      params.assertDirectAdapterHandoff,
+      async () => {
+        assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+        return request<T>(call);
+      },
+      { checkAfter: false },
+    );
   } catch (error) {
     if (
       !(
@@ -320,10 +348,10 @@ export async function executeGatewayAction(
   let hadUnknownDeliveryOutcome = false;
   let payload: unknown;
   try {
-    assertOutboundHandoffCurrent(ctx.input.assertDirectAdapterHandoff);
     payload = await callGatewayMessageAction<unknown>({
       gateway: ctx.gateway,
       abortSignal: ctx.input.abortSignal,
+      assertDirectAdapterHandoff: ctx.input.assertDirectAdapterHandoff,
       agentRuntimeIdentityToken,
       requestContext,
       onUnknownDeliveryOutcome: () => {

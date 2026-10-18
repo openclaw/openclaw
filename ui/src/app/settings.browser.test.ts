@@ -20,7 +20,7 @@ it("persists canonical bubble sessions only for their Gateway", () => {
       "agent:main:main",
       "agent:main:other",
     ]);
-    expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main")).toBe(true);
+    expect(isChatBubbleMode(loadSettings(settings.gatewayUrl), "main", true)).toBe(true);
     const otherGateway = "ws://other-bubbles.example:18789";
     localStorage.removeItem(settingsKeyForGateway(otherGateway));
     expect(loadSettings(otherGateway).chatBubbleSessionKeys).toBeUndefined();
@@ -35,6 +35,10 @@ it("persists canonical bubble sessions only for their Gateway", () => {
     expect(JSON.parse(localStorage.getItem(scopedKey) ?? "{}")).not.toHaveProperty(
       "chatBubbleSessionKeys",
     );
+    expect(loadSettings(settings.gatewayUrl).chatBubbleDisabledSessionKeys).toEqual([
+      "agent:main:main",
+      "agent:main:other",
+    ]);
   } finally {
     localStorage.clear();
     for (const [key, value] of stored) {
@@ -69,7 +73,7 @@ it("preserves pre-bubble v1 preferences when opting a session into bubbles", () 
     saveSettings({ ...loaded, ...setChatBubbleMode(loaded, "main", true) });
     const reopened = loadSettings(gatewayUrl);
     expect(reopened).toMatchObject(preferences);
-    expect(isChatBubbleMode(reopened, "main")).toBe(true);
+    expect(isChatBubbleMode(reopened, "main", true)).toBe(true);
     expect(JSON.parse(localStorage.getItem(key) ?? "{}")).toMatchObject({
       ...preferences,
       chatBubbleSessionKeys: ["agent:main:main"],

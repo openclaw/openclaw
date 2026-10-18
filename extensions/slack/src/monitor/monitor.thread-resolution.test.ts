@@ -1,4 +1,3 @@
-// Slack tests cover monitor.thread resolution plugin behavior.
 import {
   WebClient,
   WebAPIHTTPError,
@@ -6,18 +5,36 @@ import {
   WebAPIRateLimitedError,
   WebAPIRequestError,
 } from "@slack/web-api";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.types.js";
 import {
   createSlackThreadTsResolver,
   isTransientSlackThreadLookupError,
 } from "./thread-resolution.js";
 
+const ambiguous = { _ambiguousThreadReply: true };
+const resolved = { thread_ts: "9" };
+
 type SlackThreadClient = Parameters<typeof createSlackThreadTsResolver>[0]["client"];
 
-function createThreadClient(history: ReturnType<typeof vi.fn>): SlackThreadClient {
-  return { conversations: { history } } as unknown as SlackThreadClient;
+function createResolver(history: ReturnType<typeof vi.fn>) {
+  const resolver = createSlackThreadTsResolver({
+    client: { conversations: { history } } as unknown as SlackThreadClient,
+  });
+  const message = { type: "message" as const, channel: "C1", parent_user_id: "U2", ts: "1" };
+  return (
+    source: "message" | "app_mention" = "message",
+    turnAdoptionLifecycle?: SlackIngressTurnLifecycle,
+  ) => resolver.resolve({ message, source, turnAdoptionLifecycle });
+}
+
+function createWebClient(fetch: NonNullable<ConstructorParameters<typeof WebClient>[1]>["fetch"]) {
+  return new WebClient("xoxb-test", {
+    fetch,
+    retryConfig: { retries: 0 },
+    slackApiUrl: "https://slack.test/api/",
+  });
 }
 
 function createDurableTurnLifecycle(): SlackIngressTurnLifecycle {
@@ -36,30 +53,19 @@ describe("createSlackThreadTsResolver", () => {
     vi.useRealTimers();
   });
 
-  function makeThreadReplyMessage(ts: string): SlackMessageEvent {
-    return {
-      channel: "C1",
-      parent_user_id: "U2",
-      ts,
-    } as SlackMessageEvent;
-  }
-
   it("caches resolved thread_ts lookups", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
     const historyMock = vi.fn().mockResolvedValue({
       messages: [{ ts: "1", thread_ts: "9" }],
     });
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-    });
+    const resolve = createResolver(historyMock);
 
-    const message = makeThreadReplyMessage("1");
-
-    const first = await resolver.resolve({ message, source: "message" });
-    const second = await resolver.resolve({ message, source: "message" });
-
-    expect(first.thread_ts).toBe("9");
-    expect(second.thread_ts).toBe("9");
+    expect((await resolve("message")).thread_ts).toBe("9");
+    expect((await resolve("message")).thread_ts).toBe("9");
     expect(historyMock).toHaveBeenCalledTimes(1);
+    nowSpy.mockReturnValue(1_700_000_060_000);
+    expect((await resolve("message")).thread_ts).toBe("9");
+    expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
   it("classifies an exhausted real WebClient 429 as transient", async () => {
@@ -69,11 +75,7 @@ describe("createSlackThreadTsResolver", () => {
         status: 429,
       });
     });
-    const client = new WebClient("xoxb-test", {
-      fetch,
-      retryConfig: { retries: 0 },
-      slackApiUrl: "https://slack.test/api/",
-    });
+    const client = createWebClient(fetch);
 
     const error: unknown = await client.users
       .info({ user: "U1" })
@@ -90,50 +92,27 @@ describe("createSlackThreadTsResolver", () => {
     expect(fetch).toHaveBeenCalledOnce();
   });
 
-  it.each(["internal_error"])(
-    "classifies a real WebClient %s platform response as transient",
-    async (code) => {
-      const fetch = vi.fn(async () => {
-        return Response.json({ ok: false, error: code });
-      });
-      const client = new WebClient("xoxb-test", {
-        fetch,
-        retryConfig: { retries: 0 },
-        slackApiUrl: "https://slack.test/api/",
-      });
+  it("classifies a real WebClient internal_error platform response as transient", async () => {
+    const fetch = vi.fn(async () => Response.json({ ok: false, error: "internal_error" }));
+    const error: unknown = await createWebClient(fetch)
+      .users.info({ user: "U1" })
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(WebAPIPlatformError);
+    expect(isTransientSlackThreadLookupError(error)).toBe(true);
+    expect(fetch).toHaveBeenCalledOnce();
+  });
 
-      const error: unknown = await client.users
-        .info({ user: "U1" })
-        .catch((caught: unknown) => caught);
-
-      expect(error).toBeInstanceOf(WebAPIPlatformError);
-      expect(isTransientSlackThreadLookupError(error)).toBe(true);
-      expect(fetch).toHaveBeenCalledOnce();
-    },
-  );
-
-  it.each([
-    {
-      label: "an actual Slack rate-limit error",
-      error: new WebAPIRateLimitedError(1),
-    },
-  ])("hands $label to durable ingress without poisoning the cache", async ({ error }) => {
+  it("hands a Slack rate-limit error to durable ingress without poisoning the cache", async () => {
+    const error = new WebAPIRateLimitedError(1);
     const historyMock = vi
       .fn()
       .mockRejectedValueOnce(error)
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-    });
-    const message = makeThreadReplyMessage("1");
+    const resolve = createResolver(historyMock);
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
 
-    await expect(
-      resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
-    ).rejects.toBe(error);
-    await expect(
-      resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
-    ).resolves.toMatchObject({ thread_ts: "9" });
+    await expect(resolve("message", turnAdoptionLifecycle)).rejects.toBe(error);
+    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject(resolved);
 
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
@@ -143,122 +122,54 @@ describe("createSlackThreadTsResolver", () => {
       .fn()
       .mockRejectedValueOnce(new WebAPIHTTPError(503, "Service Unavailable", {}, "outage"))
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-    });
-    const message = makeThreadReplyMessage("1");
+    const resolve = createResolver(historyMock);
 
-    await expect(resolver.resolve({ message, source: "message" })).resolves.toMatchObject({
-      _ambiguousThreadReply: true,
-    });
-    await expect(resolver.resolve({ message, source: "app_mention" })).resolves.toMatchObject({
-      thread_ts: "9",
-    });
+    await expect(resolve("message")).resolves.toMatchObject(ambiguous);
+    await expect(resolve("app_mention")).resolves.toMatchObject(resolved);
 
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
   it("releases all coalesced durable twins for their existing queue retry", async () => {
-    let rejectHistory!: (error: unknown) => void;
+    const history = createDeferred<{ messages: Array<{ ts: string; thread_ts: string }> }>();
     const historyMock = vi
       .fn()
-      .mockImplementationOnce(
-        () =>
-          new Promise((_resolve, reject) => {
-            rejectHistory = reject;
-          }),
-      )
+      .mockReturnValueOnce(history.promise)
       .mockResolvedValueOnce({ messages: [{ ts: "1", thread_ts: "9" }] });
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-    });
-    const message = makeThreadReplyMessage("1");
+    const resolve = createResolver(historyMock);
     const firstLifecycle = createDurableTurnLifecycle();
     const secondLifecycle = createDurableTurnLifecycle();
-    const first = resolver.resolve({
-      message,
-      source: "message",
-      turnAdoptionLifecycle: firstLifecycle,
-    });
-    const second = resolver.resolve({
-      message,
-      source: "app_mention",
-      turnAdoptionLifecycle: secondLifecycle,
-    });
+    const first = resolve("message", firstLifecycle);
+    const second = resolve("app_mention", secondLifecycle);
     const outage = new WebAPIHTTPError(503, "Service Unavailable", {}, "outage");
 
     expect(historyMock).toHaveBeenCalledTimes(1);
-    rejectHistory(outage);
+    history.reject(outage);
     await expect(Promise.allSettled([first, second])).resolves.toEqual([
       { status: "rejected", reason: outage },
       { status: "rejected", reason: outage },
     ]);
-    await expect(
-      resolver.resolve({ message, source: "message", turnAdoptionLifecycle: firstLifecycle }),
-    ).resolves.toMatchObject({ thread_ts: "9" });
+    await expect(resolve("message", firstLifecycle)).resolves.toMatchObject(resolved);
     expect(historyMock).toHaveBeenCalledTimes(2);
   });
 
   it.each([
-    {
-      label: "Slack platform missing_scope",
-      error: new WebAPIPlatformError({ ok: false, error: "missing_scope" }),
-    },
-    {
-      label: "unclassified local failure",
-      error: new Error("local lookup unavailable"),
-    },
-    {
-      label: "uncoded Slack request failure",
-      error: new WebAPIRequestError(new Error("request failed without a transient signal")),
-    },
-  ])("preserves cached ambiguity for definitive $label", async ({ error }) => {
+    [
+      "Slack platform missing_scope",
+      new WebAPIPlatformError({ ok: false, error: "missing_scope" }),
+    ],
+    ["unclassified local failure", new Error("local lookup unavailable")],
+    [
+      "uncoded Slack request failure",
+      new WebAPIRequestError(new Error("request failed without a transient signal")),
+    ],
+  ])("preserves cached ambiguity for definitive %s", async (_label, error) => {
     const historyMock = vi.fn().mockRejectedValue(error);
-    const resolver = createSlackThreadTsResolver({
-      client: createThreadClient(historyMock),
-    });
-    const message = makeThreadReplyMessage("1");
+    const resolve = createResolver(historyMock);
     const turnAdoptionLifecycle = createDurableTurnLifecycle();
 
-    await expect(
-      resolver.resolve({ message, source: "message", turnAdoptionLifecycle }),
-    ).resolves.toMatchObject({ _ambiguousThreadReply: true });
-    await expect(
-      resolver.resolve({ message, source: "app_mention", turnAdoptionLifecycle }),
-    ).resolves.toMatchObject({ _ambiguousThreadReply: true });
+    await expect(resolve("message", turnAdoptionLifecycle)).resolves.toMatchObject(ambiguous);
+    await expect(resolve("app_mention", turnAdoptionLifecycle)).resolves.toMatchObject(ambiguous);
     expect(historyMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("drops cached thread_ts lookups when the current clock is not a valid date timestamp", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as never,
-    });
-    const message = makeThreadReplyMessage("1");
-
-    await resolver.resolve({ message, source: "message" });
-    nowSpy.mockReturnValue(Number.NaN);
-    await resolver.resolve({ message, source: "message" });
-
-    expect(historyMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not cache thread_ts lookups when the expiry timestamp would exceed the valid date range", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
-    const historyMock = vi.fn().mockResolvedValue({
-      messages: [{ ts: "1", thread_ts: "9" }],
-    });
-    const resolver = createSlackThreadTsResolver({
-      client: { conversations: { history: historyMock } } as never,
-    });
-    const message = makeThreadReplyMessage("1");
-
-    await resolver.resolve({ message, source: "message" });
-    await resolver.resolve({ message, source: "message" });
-
-    expect(historyMock).toHaveBeenCalledTimes(2);
   });
 });

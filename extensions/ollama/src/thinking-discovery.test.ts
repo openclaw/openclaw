@@ -22,7 +22,10 @@ type ThinkingLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
 afterEach(() => vi.unstubAllGlobals());
 
 function mockOllama(modelId: string, thinking: unknown) {
-  const metadata = { digest: "first", thinking };
+  const metadata: { digest: string; thinking: unknown; parameterCount?: number } = {
+    digest: "first",
+    thinking,
+  };
   const requests: string[] = [];
   const chatBodies: Record<string, unknown>[] = [];
   vi.stubGlobal(
@@ -35,7 +38,10 @@ function mockOllama(modelId: string, thinking: unknown) {
       }
       if (pathname === "/api/show") {
         return jsonResponse({
-          model_info: { "test.context_length": 32768 },
+          model_info: {
+            "test.context_length": 32768,
+            "general.parameter_count": metadata.parameterCount,
+          },
           capabilities: ["completion", "thinking"],
           ...(metadata.thinking === undefined ? {} : { thinking: metadata.thinking }),
         });
@@ -58,20 +64,32 @@ function mockOllama(modelId: string, thinking: unknown) {
     metadata,
     requests,
     chatBodies,
-    async discover(api: "ollama" | "openai-completions" = "ollama"): Promise<ProviderRuntimeModel> {
+    async discover(
+      api: "ollama" | "openai-completions" = "ollama",
+      configuredModel?: Parameters<typeof toDynamicOllamaModel>[0]["model"],
+    ): Promise<ProviderRuntimeModel> {
       const result = await ollamaProviderDiscovery.catalog.run({
-        config: { models: { providers: { ollama: { baseUrl, api, models: [] } } } },
+        config: {
+          models: {
+            providers: {
+              ollama: { baseUrl, api, models: configuredModel ? [configuredModel] : [] },
+            },
+          },
+        },
         agentDir: "/unused",
         env: { OLLAMA_API_KEY: "ollama-local" },
         resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
         resolveProviderAuth: () => ({ apiKey: "ollama-local", mode: "api_key", source: "env" }),
       });
-      expect(result?.outcomes).toEqual([{ provider: "ollama", status: "ready" }]);
+      expect(result?.outcomes).toMatchObject([{ provider: "ollama", status: "ready" }]);
       const provider = expectDefined(
         result && "provider" in result ? result.provider : undefined,
         "discovered provider",
       );
-      const model = expectDefined(provider.models[0], "discovered thinking model");
+      const model = expectDefined(
+        provider.models[0] ?? configuredModel,
+        "discovered or configured thinking model",
+      );
       return toDynamicOllamaModel({ provider: "ollama", providerConfig: provider, model });
     },
   };
@@ -108,6 +126,34 @@ function profileFor(model: ProviderRuntimeModel) {
 }
 
 describe("Ollama discovered thinking contracts", () => {
+  it("keeps manual model settings while discovering the mandatory native thinking format", async () => {
+    const fixture = mockOllama("manual-mandatory-thinking:latest", {
+      values: [true],
+      default: true,
+    });
+    fixture.metadata.parameterCount = 70_000_000_000;
+    const model = await fixture.discover("ollama", {
+      id: "manual-mandatory-thinking:latest",
+      name: "Manual thinking model",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 2048,
+      compat: { supportsTools: false },
+    });
+    expect(model).toMatchObject({
+      name: "Manual thinking model",
+      parameterCount: 70_000_000_000,
+      contextWindow: 8192,
+      maxTokens: 2048,
+      compat: { supportsTools: false },
+    });
+    await sendThinking(model, "off");
+    await sendThinking(model, "high");
+    expect(fixture.chatBodies.map((body) => body.think)).toEqual([true, true]);
+  });
+
   it("keeps native boolean mappings off the legacy OpenAI-compatible transport", async () => {
     const fixture = mockOllama("thinking-openai-compatible:latest", { values: [false, true] });
     const model = await fixture.discover("openai-completions");

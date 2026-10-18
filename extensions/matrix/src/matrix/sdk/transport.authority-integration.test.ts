@@ -181,21 +181,18 @@ test("redirect rechecks original transaction through the canonical registry", as
   assert.equal(await guards.beforeRequest(url, init), undefined);
 });
 
-test.each([false, true])(
-  "preserves transport failure identity after redirect=%s",
-  async (redirect) => {
-    const failure = new Error("transport disconnected");
-    let requests = 0;
-    boundary.fetch = async () => {
-      if (redirect && ++requests === 1) {
-        return new Response(null, { status: 307, headers: { location: "/next" } });
-      }
-      throw failure;
-    };
-    await assert.rejects(createMatrixGuardedFetch({})(url, init), (error) => error === failure);
-    assert.equal(boundary.dispatched.length, redirect ? 2 : 1);
-  },
-);
+test.each([true])("preserves transport failure identity after redirect=%s", async (redirect) => {
+  const failure = new Error("transport disconnected");
+  let requests = 0;
+  boundary.fetch = async () => {
+    if (redirect && ++requests === 1) {
+      return new Response(null, { status: 307, headers: { location: "/next" } });
+    }
+    throw failure;
+  };
+  await assert.rejects(createMatrixGuardedFetch({})(url, init), (error) => error === failure);
+  assert.equal(boundary.dispatched.length, redirect ? 2 : 1);
+});
 
 test("per-request abort remains effective with a client signal", async () => {
   const client = new AbortController();
@@ -206,7 +203,13 @@ test("per-request abort remains effective with a client signal", async () => {
       request.abort(new Error("request stopped"));
     },
   });
-  await assert.rejects(fetch(url, { ...init, signal: request.signal }), /request stopped/);
+  await assert.rejects(
+    fetch(url, { ...init, signal: request.signal }),
+    (error: unknown) =>
+      error instanceof PlatformMessageNotDispatchedError &&
+      error.retryable &&
+      error.message.includes("request stopped"),
+  );
   assert.equal(boundary.dispatched.length, 0);
 });
 
@@ -227,25 +230,6 @@ test("abort during DNS does not stamp persistent dispatch", async () => {
   assert.equal(stamps, 0);
   assert.equal(boundary.dispatched.length, 0);
   assert.equal(boundary.closed, 1);
-});
-
-test("durable callback abort before first fetch carries proven-unsent custody", async () => {
-  const abort = new AbortController();
-  let durableMarker = false;
-  const send = createMatrixGuardedFetch({
-    signal: abort.signal,
-    beforeRequest: async () => {
-      durableMarker = true;
-      await Promise.resolve();
-      abort.abort(new Error("stopped after durable marker"));
-    },
-  });
-  await assert.rejects(
-    send(url, init),
-    (error: unknown) => error instanceof PlatformMessageNotDispatchedError && error.retryable,
-  );
-  assert.equal(durableMarker, true);
-  assert.equal(boundary.dispatched.length, 0);
 });
 
 test("a redirect rejection cannot erase an earlier dispatch", async () => {

@@ -15,7 +15,12 @@ const fixture = vi.hoisted(() => ({
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => fixture.config }));
+// mock-isolation: The synthetic auth owner controls config reads and writes without accessing operator state.
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => fixture.config,
+  loadConfig: () => fixture.config,
+  captureRuntimeConfigAsyncReader: () => async () => fixture.config,
+}));
 vi.mock("../commands/config-validation.js", () => ({
   requireValidConfigForWrite: async () => ({
     snapshot: { sourceConfig: fixture.config, hash: "fixture" },

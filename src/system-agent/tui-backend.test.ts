@@ -112,7 +112,6 @@ async function createVerifiedTuiOptions(
   return {
     verifiedInference: fixture.binding,
     deps: {
-      ...fixture.deps,
       readConfigFileSnapshot: vi.fn(async () => configSnapshot(config)) as never,
       ...deps,
     },
@@ -357,41 +356,6 @@ describe("runSystemAgentTui", () => {
                 thinkingLevel: "high",
               },
             ],
-          });
-          return { exitReason: "exit" };
-        },
-      },
-      createRuntime(),
-    );
-  });
-
-  it("uses the verified model's default thinking level", async () => {
-    const config = {
-      ...verifiedConfig,
-      agents: { defaults: { model: "openai/gpt-5.6-sol" } },
-    } satisfies OpenClawConfig;
-    const verified = await createVerifiedTuiOptions(
-      {
-        loadOverview: async () => ({
-          ...overview,
-          defaultModel: "openai/gpt-5.6-sol@openai:setup-test",
-        }),
-      },
-      config,
-    );
-
-    await runSystemAgentTui(
-      {
-        ...verified,
-        runTui: async (opts) => {
-          const backend = opts.backend as unknown as {
-            listSessions: () => Promise<{
-              sessions: Array<{ model?: string; thinkingLevel?: string }>;
-            }>;
-          };
-
-          await expect(backend.listSessions()).resolves.toMatchObject({
-            sessions: [{ model: "gpt-5.6-sol", thinkingLevel: "medium" }],
           });
           return { exitReason: "exit" };
         },

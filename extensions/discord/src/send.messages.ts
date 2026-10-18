@@ -9,8 +9,9 @@ import {
   getChannelMessage,
   pinChannelMessage,
   unpinChannelMessage,
-} from "./internal/discord.js";
+} from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import { isUnknownDiscordMessageError } from "./internal/rest-errors.js";
 import { parseDiscordRetryAfterBodySeconds } from "./retry-after.js";
 import {
   classifyDiscordDeliveryFailure,
@@ -69,11 +70,26 @@ function assertDiscordResponseArray<T>(value: unknown, label: string): T[] {
   return value as T[];
 }
 
-function assertDiscordResponseObject(value: unknown, label: string): Record<string, unknown> {
+function assertDiscordSearchResponse(
+  value: unknown,
+): asserts value is Record<string, unknown> & { messages: unknown[] } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Unexpected Discord response for ${label}: expected object.`);
+    throw new Error("Unexpected Discord response for message search: expected object.");
   }
-  return value as Record<string, unknown>;
+  const result = value as Record<string, unknown>;
+  // Discord returns HTTP 202 with code 110000 while the guild search index is warming.
+  if (result.code === 110000) {
+    const message =
+      typeof result.message === "string" && result.message.trim()
+        ? result.message.trim()
+        : "Discord search index is not yet available";
+    const retryAfter = parseDiscordRetryAfterBodySeconds(result.retry_after);
+    const retryHint = retryAfter === undefined ? "" : ` (retry after ${retryAfter}s)`;
+    throw new Error(`Discord message search unavailable: ${message}${retryHint}`);
+  }
+  if (!Array.isArray(result.messages)) {
+    throw new Error("Unexpected Discord response for message search: expected messages array.");
+  }
 }
 
 function describeDiscordThreadInitialMessageFailure(
@@ -105,12 +121,7 @@ export class DiscordThreadInitialMessageError extends Error {
       describeDiscordThreadInitialMessageFailure(initialMessageDelivery);
     super(`${initialMessageWarning}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
-    this.initialMessageDelivery = initialMessageDelivery
-      ? {
-          ...initialMessageDelivery,
-          deliveredMessageIds: [...initialMessageDelivery.deliveredMessageIds],
-        }
-      : undefined;
+    this.initialMessageDelivery = initialMessageDelivery;
     this.initialMessageError = initialMessageError;
     this.initialMessageWarning = initialMessageWarning;
     this.thread = thread;
@@ -159,27 +170,52 @@ export async function editMessageDiscord(
   payload: DiscordMessageEdit,
   opts: DiscordReactOpts,
 ): Promise<APIMessage> {
-  const rest = resolveDiscordRest(opts);
-  return await editChannelMessage(rest, channelId, messageId, {
-    body: {
-      content: payload.content,
-      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
-      ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
-    },
-  });
+  const { rest, request } = createDiscordClient(opts);
+  return await request(
+    () =>
+      editChannelMessage(rest, channelId, messageId, {
+        body: {
+          content: payload.content,
+          ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+          ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
+        },
+      }),
+    "message-edit",
+  );
 }
 
-function messageMutation(operation: typeof deleteChannelMessage) {
+function messageMutation(operation: typeof deleteChannelMessage, label: string) {
   return async (channelId: string, messageId: string, opts: DiscordReactOpts) => {
-    const rest = resolveDiscordRest(opts);
-    await operation(rest, channelId, messageId);
+    const { rest, request } = createDiscordClient(opts);
+    await request(() => operation(rest, channelId, messageId), label);
     return { ok: true };
   };
 }
 
-export const deleteMessageDiscord = messageMutation(deleteChannelMessage);
-export const pinMessageDiscord = messageMutation(pinChannelMessage);
-export const unpinMessageDiscord = messageMutation(unpinChannelMessage);
+export const pinMessageDiscord = messageMutation(pinChannelMessage, "message-pin");
+export const unpinMessageDiscord = messageMutation(unpinChannelMessage, "message-unpin");
+
+export async function deleteMessageDiscord(
+  channelId: string,
+  messageId: string,
+  opts: DiscordReactOpts,
+): Promise<{ ok: boolean }> {
+  const { rest, request } = createDiscordClient(opts);
+  let mayHaveApplied = false;
+  await request(async () => {
+    try {
+      await deleteChannelMessage(rest, channelId, messageId);
+    } catch (err) {
+      // A lost response can hide an applied delete; the replay then reports Unknown Message.
+      if (mayHaveApplied && isUnknownDiscordMessageError(err)) {
+        return;
+      }
+      mayHaveApplied ||= classifyDiscordDeliveryFailure(err) === "ambiguous";
+      throw err;
+    }
+  }, "message-delete");
+  return { ok: true };
+}
 
 export async function listPinsDiscord(
   channelId: string,
@@ -345,22 +381,7 @@ export async function searchMessagesDiscord(query: DiscordSearchQuery, opts: Dis
     const limit = Math.min(Math.max(Math.floor(query.limit), 1), 25);
     params.set("limit", String(limit));
   }
-  const result = assertDiscordResponseObject(
-    await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`),
-    "message search",
-  );
-  // Discord returns HTTP 202 with code 110000 while the guild search index is warming.
-  if (result.code === 110000) {
-    const message =
-      typeof result.message === "string" && result.message.trim()
-        ? result.message.trim()
-        : "Discord search index is not yet available";
-    const retryAfter = parseDiscordRetryAfterBodySeconds(result.retry_after);
-    const retryHint = retryAfter === undefined ? "" : ` (retry after ${retryAfter}s)`;
-    throw new Error(`Discord message search unavailable: ${message}${retryHint}`);
-  }
-  if (!Array.isArray(result.messages)) {
-    throw new Error("Unexpected Discord response for message search: expected messages array.");
-  }
+  const result = await rest.get(`/guilds/${query.guildId}/messages/search?${params.toString()}`);
+  assertDiscordSearchResponse(result);
   return result;
 }

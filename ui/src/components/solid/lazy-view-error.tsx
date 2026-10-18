@@ -2,7 +2,6 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import "../modal-dialog.ts";
 import { Icon } from "./icon.tsx";
 import { LoadingState } from "./loading-state.tsx";
 
@@ -43,22 +42,28 @@ export function LazyElementStateView(props: {
 }
 
 export function LazyElementModal(props: {
-  controller: {
-    visibleState: LazyElementState | undefined;
-    retry(): void;
-    close(): void;
-  };
+  state: LazyElementState | undefined;
+  onRetry: () => void;
+  onClose: () => void;
 }) {
-  const close = () => props.controller.close();
   return (
-    <Show when={props.controller.visibleState}>
+    <Show when={props.state}>
       {(state) => (
         <openclaw-modal-dialog
           class={state().status === "loading" ? "lazy-element-loading-modal" : undefined}
           label={state().element.label}
-          onModal-cancel={close}
+          onModal-cancel={props.onClose}
         >
-          {state().status === "loading" ? (
+          <Show
+            when={state().status === "loading"}
+            fallback={
+              <LazyElementStateView
+                state={state()}
+                onRetry={props.onRetry}
+                onClose={props.onClose}
+              />
+            }
+          >
             <section class="lazy-element-loading">
               <header class="lazy-element-loading__header">
                 <h2>{state().element.label}</h2>
@@ -66,7 +71,7 @@ export function LazyElementModal(props: {
                   class="btn btn--ghost btn--icon"
                   type="button"
                   aria-label={t("common.close")}
-                  onClick={close}
+                  onClick={props.onClose}
                 >
                   <Icon name="x" />
                 </button>
@@ -81,13 +86,7 @@ export function LazyElementModal(props: {
                 <span>{t("common.loading")}</span>
               </div>
             </section>
-          ) : (
-            <LazyElementStateView
-              state={state()}
-              onRetry={() => props.controller.retry()}
-              onClose={close}
-            />
-          )}
+          </Show>
         </openclaw-modal-dialog>
       )}
     </Show>
@@ -100,6 +99,7 @@ export function LazyViewError(props: {
   onClose?: (event: Event) => void;
   onRetry: (event: Event) => void;
   render?: () => SolidJSX.Element;
+  inline?: boolean;
   stale?: boolean;
   subtitle?: string;
 }) {
@@ -125,7 +125,7 @@ export function LazyViewError(props: {
           </>
         }
         detail={formatUiError(props.error)}
-        inline={Boolean(props.render)}
+        inline={props.inline ?? Boolean(props.render)}
         stale={props.stale}
       />
     </>
@@ -134,7 +134,7 @@ export function LazyViewError(props: {
 
 export function PanelErrorState(props: {
   actions?: SolidJSX.Element;
-  className?: string;
+  class?: string;
   detail?: string;
   inline?: boolean;
   role?: "alert" | "status";
@@ -146,7 +146,7 @@ export function PanelErrorState(props: {
     <div
       class={[
         "lazy-view-error",
-        props.className,
+        props.class,
         { "lazy-view-error--inline": props.inline, "lazy-view-error--stale": props.stale },
       ]}
       role={props.role ?? "alert"}
@@ -156,12 +156,16 @@ export function PanelErrorState(props: {
       </div>
       <div class="lazy-view-error__title">{props.title}</div>
       <div class="lazy-view-error__subtitle">{props.subtitle}</div>
-      {props.actions ? <div class="lazy-view-error__actions">{props.actions}</div> : undefined}
       {props.detail ? (
         <details class="lazy-view-error__details">
           <summary>{t("chat.details")}</summary>
           <code class="lazy-view-error__detail">{props.detail}</code>
         </details>
+      ) : undefined}
+      {props.actions ? (
+        <openclaw-modal-actions class="lazy-view-error__actions">
+          {props.actions}
+        </openclaw-modal-actions>
       ) : undefined}
     </div>
   );

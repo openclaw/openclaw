@@ -63,6 +63,8 @@ it.each([
         throw new Error("Expected the configured native-command ACP binding");
       }
       const effectsPath = state.path("acp-effects.log");
+      const effects = () => readFile(effectsPath, "utf8");
+      const record = (effect: string) => appendFile(effectsPath, effect + "\n");
       const acceptedOptions = new Map<string, string>();
       const readinessAwaited = createDeferredCore();
       const releaseReadiness = createDeferredCore();
@@ -70,7 +72,7 @@ it.each([
       const runtime: AcpRuntime = {
         ownerAwareSessions: 1,
         async ensureSession(input) {
-          await appendFile(effectsPath, "initialize\n");
+          await record("initialize");
           acceptedOptions.clear();
           if (input.model) {
             acceptedOptions.set("model", input.model);
@@ -95,7 +97,7 @@ it.each([
           return { controls: ["session/set_config_option"] };
         },
         async setConfigOption({ key, value }) {
-          await appendFile(effectsPath, `configure:${key}\n`);
+          await record(`configure:${key}`);
           acceptedOptions.set(key, value);
           if (pauseReadiness && preparation === "settle" && key === "model") {
             readinessAwaited.resolve();
@@ -105,9 +107,7 @@ it.each([
             configOptions: [...acceptedOptions].map(([id, currentValue]) => ({ id, currentValue })),
           };
         },
-        async close() {
-          await appendFile(effectsPath, "close\n");
-        },
+        close: () => record("close"),
         async cancel() {},
         runTurn() {
           throw new Error("This fixture must not start a provider turn");
@@ -118,22 +118,29 @@ it.each([
       const manager = getAcpSessionManager();
       try {
         if (preparation !== "initialize") {
-          expect(
-            await ensureConfiguredAcpBindingSession({
-              cfg,
-              spec: {
-                ...spec,
-                ...(preparation === "replace"
-                  ? { cwd: state.root }
-                  : { model: "fixture/previous" }),
-                ...(preparation === "settle" ? { thinking: "off" } : {}),
-              },
-            }),
-          ).toMatchObject({ ok: true });
+          const existing = {
+            ...spec,
+            ...(preparation === "replace" ? { cwd: state.root } : { model: "fixture/previous" }),
+            ...(preparation === "settle" ? { thinking: "off" } : {}),
+          };
+          expect(await ensureConfiguredAcpBindingSession({ cfg, spec: existing })).toMatchObject({
+            ok: true,
+          });
         }
         await writeFile(effectsPath, "");
         const target = { cfg, agentId: "main", sessionKey: binding.statefulTarget.sessionKey };
         const before = manager.resolveSession(target);
+        const expectUnchanged = async () => {
+          expect([await effects(), manager.resolveSession(target)]).toEqual(["", before]);
+        };
+        const expectDenied = (interaction: Awaited<ReturnType<typeof run>>) => {
+          expect(interaction.followUp).toHaveBeenCalledWith({
+            content: "You are not authorized to use this command.",
+            ephemeral: true,
+          });
+          expect(dispatch).not.toHaveBeenCalled();
+        };
+        const command = { commandName, argument: commandName === "think" ? "high" : undefined };
         if (
           commandName === "think" &&
           ["initialize", "configure", "replace"].includes(preparation)
@@ -142,82 +149,65 @@ it.each([
           expect(completed.respond).toHaveBeenCalledWith(
             expect.arrayContaining([expect.objectContaining({ value: "high" })]),
           );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          await expectUnchanged();
           setUserProfileRole(profile.id, "member");
           const revoked = await autocomplete();
           expect(revoked.respond).toHaveBeenCalledWith([]);
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          await expectUnchanged();
           setUserProfileRole(profile.id, "admin");
         }
-        const denied = await run({
-          senderId: "100000000000000009",
-          commandName,
-          argument: commandName === "think" ? "high" : undefined,
-        });
+        const denied = await run({ ...command, senderId: "100000000000000009" });
         if (commandName === "status") {
-          expect(denied.followUp).toHaveBeenCalledWith(
-            expect.objectContaining({
-              content: expect.stringContaining("Session:"),
-            }),
-          );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
-          const ownerStatus = await run({ commandName });
-          expect(ownerStatus.followUp).toHaveBeenCalledWith(
-            expect.objectContaining({
-              content: expect.stringContaining("Session:"),
-            }),
-          );
-          expect(await readFile(effectsPath, "utf8")).toBe("");
-          expect(manager.resolveSession(target)).toEqual(before);
+          let lastUpdatedAt: number | undefined;
+          const expectStatus = async (interaction: Awaited<ReturnType<typeof run>>) => {
+            expect(interaction.followUp).toHaveBeenCalledWith(
+              expect.objectContaining({ content: expect.stringContaining("Session:") }),
+            );
+            expect(await effects()).toBe("");
+            const after = manager.resolveSession(target);
+            const previous = before.kind === "ready" && before.entry;
+            const current = after.kind === "ready" && after.entry;
+            if (!previous || !current) {
+              expect(after).toEqual(before);
+              return;
+            }
+            // Delivered /status replies are transcript activity, not ACP ownership changes.
+            expect({
+              ...after,
+              entry: { ...current, updatedAt: previous.updatedAt },
+            }).toEqual(before);
+            expect(current.updatedAt).toBeGreaterThanOrEqual(lastUpdatedAt ?? previous.updatedAt);
+            lastUpdatedAt = current.updatedAt;
+          };
+          await expectStatus(denied);
+          await expectStatus(await run(command));
           expect(dispatch).not.toHaveBeenCalled();
           return;
         }
-        expect(denied.followUp).toHaveBeenCalledWith({
-          content: "You are not authorized to use this command.",
-          ephemeral: true,
-        });
-        expect(await readFile(effectsPath, "utf8")).toBe("");
-        expect(manager.resolveSession(target)).toEqual(before);
-        expect(dispatch).not.toHaveBeenCalled();
-
+        expectDenied(denied);
+        await expectUnchanged();
         pauseReadiness = true;
-        const allowedRun = run({
-          commandName,
-          argument: commandName === "think" ? "high" : undefined,
-        });
+        const allowedRun = run(command);
         if (preparation === "revoke" || preparation === "settle") {
           await readinessAwaited.promise;
           setUserProfileRole(profile.id, "member");
           releaseReadiness.resolve();
-          const rejected = await allowedRun;
-          expect(rejected.followUp).toHaveBeenCalledWith({
-            content: "You are not authorized to use this command.",
-            ephemeral: true,
-          });
-          expect(dispatch).not.toHaveBeenCalled();
+          expectDenied(await allowedRun);
           const after = manager.resolveSession(target);
           if (preparation === "revoke") {
-            expect(await readFile(effectsPath, "utf8")).toBe("");
-            expect(after).toEqual(before);
+            await expectUnchanged();
           } else {
-            expect(await readFile(effectsPath, "utf8")).toBe("configure:model\n");
-            expect(after.kind).toBe("ready");
-            if (after.kind === "ready") {
-              expect(after.meta.runtimeOptions).toMatchObject({
-                model: spec.model,
-                thinking: "off",
-              });
-            }
+            expect(await effects()).toBe("configure:model\n");
+            expect(after).toMatchObject({
+              kind: "ready",
+              meta: { runtimeOptions: { model: spec.model, thinking: "off" } },
+            });
           }
           return;
         }
         await allowedRun;
         expect(dispatch).toHaveBeenCalledOnce();
-        const effects = (await readFile(effectsPath, "utf8")).trim().split("\n");
-        expect(effects).toEqual(
+        expect((await effects()).trim().split("\n")).toEqual(
           preparation === "configure"
             ? ["configure:model"]
             : preparation === "replace"
@@ -225,13 +215,10 @@ it.each([
               : ["initialize"],
         );
         const after = manager.resolveSession(target);
-        expect(after.kind).toBe("ready");
-        if (after.kind === "ready") {
-          expect(after.meta.runtimeOptions).toMatchObject({
-            model: spec.model,
-            cwd: state.workspaceDir,
-          });
-        }
+        expect(after).toMatchObject({
+          kind: "ready",
+          meta: { runtimeOptions: { model: spec.model, cwd: state.workspaceDir } },
+        });
       } finally {
         releaseReadiness.resolve();
         await disposeAcpSessionManagerInstance(manager, "test complete");

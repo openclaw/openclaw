@@ -121,7 +121,8 @@ describe("native assignment completion custody", () => {
         completionScope: createCompletionScope("agent:main:original"),
         agentId: "main",
         claimDirectChild,
-        assertCurrent: () => {
+        assertCurrentAsync: async () => {
+          await Promise.resolve();
           if (!current) {
             throw new Error("Caller registration is no longer current");
           }
@@ -515,6 +516,7 @@ async function createSubmissionFixture() {
         throw new Error("Submission binding changed.");
       }
     },
+    assertCurrentAsync: async () => submissionStore.assertCurrent(),
     read: () => bindingStore.readNativeSubagentSubmissions(identity, owner),
     record: (receipt, guard) =>
       bindingStore.mutate(
@@ -828,6 +830,7 @@ describe("Codex native transient predecessor anchor", () => {
       let parentRegistered = true;
       const submissionStore = {
         assertCurrent: () => {},
+        assertCurrentAsync: async () => {},
         read: async () => [...receipts.values()],
         record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>(async (receipt, guard) => {
           guard();
@@ -903,6 +906,7 @@ describe("Codex native transient predecessor anchor", () => {
     let recordCompletion: Promise<boolean> | undefined;
     const submissionStore = {
       assertCurrent: () => {},
+      assertCurrentAsync: async () => {},
       read: async () => [...receipts.values()],
       record: vi.fn<CodexNativeSubagentSubmissionStore["record"]>((receipt, guard) => {
         recordCompletion = (async () => {

@@ -284,9 +284,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
             await runSessionBranchSummaryWorkerRequest(
               {
                 database: { agentId: target.agentId, path: storePath },
-                databaseIdentity: "absent-database",
                 sessionKey: target.sessionKey,
-                sessionId: target.sessionId,
               },
               new AbortController().signal,
             ),
@@ -460,7 +458,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
         active.push(store);
         await store.execute({ type: "append", input: { value: `database ${index}` } });
       }
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       for (const [index, store] of active.entries()) {
         expect(await store.execute({ type: "read", input: undefined })).toEqual([
           `database ${index}`,
@@ -470,7 +468,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
       await fs.link(paths[0]!, aliasPath);
       const alias = await open(aliasPath);
       await alias.execute({ type: "append", input: { value: "shared alias" } });
-      expect(runtime.launches).toBe(capable ? 4 : 5);
+      expect(runtime.launches).toBe(capable ? 2 : 5);
       await active[0]!.close();
       expect(await alias.execute({ type: "read", input: undefined })).toEqual([
         "database 0",
@@ -484,7 +482,7 @@ describe("Bun SQLite process selection and worker inheritance", () => {
           "database 0",
           "shared alias",
         ]);
-        expect(runtime.launches).toBe(4);
+        expect(runtime.launches).toBe(2);
         expect(
           await active[4]!.execute({ type: "append", input: { value: "sibling still open" } }),
         ).toMatchObject({ writes: 2 });

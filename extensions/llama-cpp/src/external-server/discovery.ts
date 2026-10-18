@@ -32,6 +32,7 @@ export async function discoverLlamaServer(params: {
   baseUrl?: string;
   apiKey?: string;
   headers?: Record<string, string>;
+  allowPrivateNetwork?: boolean;
   signal?: AbortSignal;
   useRuntimeDefaults?: boolean;
 }): Promise<LlamaServerDiscoveryResult> {
@@ -39,6 +40,7 @@ export async function discoverLlamaServer(params: {
   const result = await discoverOpenAICompatibleLocalModels({
     baseUrl: endpoint.inferenceBaseUrl,
     serverBaseUrl: endpoint.origin,
+    allowPrivateNetwork: params.allowPrivateNetwork,
     apiKey: params.apiKey,
     headers: params.headers,
     label: "llama-server",

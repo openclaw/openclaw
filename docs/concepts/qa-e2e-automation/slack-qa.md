@@ -88,7 +88,7 @@ Optional:
 - `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
   acknowledgement timeout. The default is `120000`.
 
-Canonical YAML scenarios exposed through the Slack live adapter:
+Shared YAML scenarios exposed through the Slack live adapter:
 
 - `thread-follow-up`
 - `thread-isolation`

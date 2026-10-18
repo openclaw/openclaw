@@ -19,12 +19,11 @@ import {
   type BackupAsset,
   resolveBackupPlanFromDisk,
 } from "../commands/backup-shared.js";
-import {
-  backupManifestSizeError,
-  type BackupManifest,
-} from "../commands/backup-verify-manifest.js";
+import { encodeBackupManifest, type BackupManifest } from "../commands/backup-verify-manifest.js";
 import { resolveGatewayLockDir } from "../config/paths.js";
+import { withCommandProcessScope } from "../process/exec-spawn.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { runOfflineDatabaseBackup } from "../snapshot/database-backup.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
@@ -71,6 +70,8 @@ import { isUpdateCapturePath } from "./update-capture-paths.js";
 const loadTarRuntime = createLazyRuntimeModule(() => import("tar"));
 
 export type BackupCreateOptions = {
+  /** Internal lifecycle cancellation for backup preparation, not admitted repairs. */
+  signal?: AbortSignal;
   output?: string;
   dryRun?: boolean;
   includeWorkspace?: boolean;
@@ -141,8 +142,7 @@ async function resolveOutputPath(params: {
   }
 
   try {
-    const stat = await fs.stat(resolved);
-    if (stat.isDirectory()) {
+    if ((await fs.stat(resolved)).isDirectory()) {
       return path.join(resolved, basename);
     }
   } catch {
@@ -225,16 +225,16 @@ async function prepareBackupOutputParent(outputPath: string): Promise<void> {
 }
 
 // Keep staged config and database snapshots outside the tree being archived.
-async function chooseBackupTempRoot(params: {
+export async function chooseBackupTempRoot(params: {
   assets: readonly BackupAsset[];
-  outputPath: string;
+  outputPath?: string;
 }): Promise<string> {
   const systemTmp = os.tmpdir();
   const canonicalSystemTmp = await canonicalizePathForContainment(systemTmp);
-  const systemTmpInsideAsset = params.assets.some((asset) =>
+  const overlapping = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalSystemTmp),
   );
-  if (!systemTmpInsideAsset) {
+  if (!overlapping) {
     return systemTmp;
   }
 
@@ -242,7 +242,12 @@ async function chooseBackupTempRoot(params: {
   // output-containment check guarantees `outputPath` is outside every asset,
   // so its parent is too. The caller must already have write access there to
   // write the archive itself, so this stays within the existing sandbox.
-  const fallback = path.dirname(params.outputPath);
+  // Without an output path (offsite uploads stage into scratch), fall back to
+  // the parent of the source that contains the system temp dir, e.g. when the
+  // Gateway runs jobs with TMPDIR=~/.openclaw/tmp.
+  const fallback = params.outputPath
+    ? path.dirname(params.outputPath)
+    : path.dirname(overlapping.sourcePath);
   const canonicalFallback = await canonicalizePathForContainment(fallback);
   const fallbackInsideAsset = params.assets.find((asset) =>
     isPathInside(asset.sourcePath, canonicalFallback),
@@ -273,6 +278,9 @@ function buildManifest(
     paths: {
       stateDir: plan.resources.stateDir,
       configPath: plan.configPath,
+      ...(plan.configCapture?.files[0]
+        ? { configSourcePath: plan.configCapture.files[0].canonicalPath }
+        : {}),
       oauthDir: plan.oauthDir,
       workspaceDirs: plan.workspaceDirs,
       ...(result.agentRoots ? { agentRoots: [...result.agentRoots] } : {}),
@@ -321,6 +329,7 @@ async function createConsistentStateSnapshotPlan(params: {
         ? {
             inventory: sealBackupResourceInventory(params.resources, []),
             snapshots: [],
+            postgresSnapshots: [],
             discoveredSourcePaths: new Set<string>(),
           }
         : await captureSqlite(params.tempDir),
@@ -373,11 +382,27 @@ async function createConsistentStateSnapshotPlan(params: {
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
+  return await withCommandProcessScope(() => createBackupArchiveInScope(opts), opts.signal);
+}
+
+async function createBackupArchiveInScope(
+  opts: BackupCreateOptions,
+  preparedPlan?: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
+): Promise<BackupCreateResult> {
   const nowMs = resolveDateTimestampMs(opts.nowMs);
   const archiveRoot = buildBackupArchiveRoot(nowMs);
   const onlyConfig = Boolean(opts.onlyConfig);
   const includeWorkspace = onlyConfig ? false : (opts.includeWorkspace ?? true);
-  const plan = await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs });
+  const plan =
+    preparedPlan ?? (await resolveBackupPlanFromDisk({ includeWorkspace, onlyConfig, nowMs }));
+  const selection = plan.databaseSelection;
+  if (!preparedPlan && !opts.dryRun && selection?.postgres && plan.databaseConfig) {
+    return runOfflineDatabaseBackup(
+      plan.stateDir,
+      () => createBackupArchiveInScope({ ...opts, nowMs }, plan),
+      { config: plan.databaseConfig, selection },
+    );
+  }
   const outputPath = await resolveOutputPath({
     output: opts.output,
     nowMs,
@@ -486,7 +511,14 @@ export async function createBackupArchive(
         skippedStateSourcePaths.add(skippedSourcePath);
       }
     }
+    const clientDirectories = new Set(
+      inventory.coreDatabases
+        .filter((database) => database.role === "client" && database.identity)
+        .map((database) => path.dirname(database.sourcePath)),
+    );
+    // Emit private client directories before snapshots create implicit tar parents.
     const requiredSourcePaths = new Set([
+      ...clientDirectories,
       ...sourcePathRemaps.keys(),
       ...result.assets.map((asset) => asset.sourcePath),
     ]);
@@ -496,10 +528,13 @@ export async function createBackupArchive(
     const gatewayLockDir = resolveGatewayLockDir(plan.stateDir);
     const skippedEntries = new Map<string, "volatile" | "vanished">();
     const opaqueSqliteSourcePaths = new Map<string, "archived" | "skipped">();
+    // Linked state roots can have distinct configured and canonical capture siblings.
+    // Otherwise the inventory owns privacy admission, except for config-only exports.
+    const checkConfiguredCaptureRoot = onlyConfig || plan.stateDir !== inventory.stateDir;
     const tarFilter = (entryPath: string, entryStat: import("node:fs").Stats): boolean => {
       const resolvedEntryPath = path.resolve(entryPath);
       const inventoryPath = sourcePathRemaps.get(resolvedEntryPath) ?? resolvedEntryPath;
-      if (isUpdateCapturePath(inventoryPath, plan.stateDir)) {
+      if (checkConfiguredCaptureRoot && isUpdateCapturePath(inventoryPath, plan.stateDir)) {
         return false;
       }
       const isDirectory = entryStat.isDirectory();
@@ -546,6 +581,7 @@ export async function createBackupArchive(
       tempArchivePath,
       log: opts.log,
       runTar: async (attemptTempArchivePath) => {
+        const visitedClientDirectories = new Set<string>();
         // Keep vanished paths across retries unless a later attempt archives them.
         for (const [sourcePath, reason] of skippedEntries) {
           if (reason === "volatile") {
@@ -556,12 +592,19 @@ export async function createBackupArchive(
         opaqueSqliteSourcePaths.clear();
         const prepared = await writeArchiveStreamToFile({
           archivePath: attemptTempArchivePath,
-          createArchiveStream: (reportProgress) =>
+          createArchiveStream: (reportProgress, signal) =>
             appendBackupManifest(
               walkBackupTar({
                 tar,
+                signal,
                 paths: [...requiredSourcePaths],
                 skip: (sourcePath) => {
+                  if (clientDirectories.has(sourcePath)) {
+                    if (visitedClientDirectories.has(sourcePath)) {
+                      return true;
+                    }
+                    visitedClientDirectories.add(sourcePath);
+                  }
                   if (!requiredSourcePaths.has(sourcePath) && inventory.isVolatile(sourcePath)) {
                     skippedEntries.set(sourcePath, "volatile");
                     return true;
@@ -630,23 +673,13 @@ export async function createBackupArchive(
                     ? { sourcePath: snapshot.sourcePath, role: "agent", agentId: snapshot.agentId }
                     : { sourcePath: snapshot.sourcePath, role: "global" },
                 );
-                const contents = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
-                const sizeError = backupManifestSizeError(contents.length);
-                if (sizeError) {
-                  throw sizeError;
-                }
-                const header = Buffer.alloc(512);
-                new tar.Header({
-                  path: archiveRoot + "/manifest.json",
-                  type: "File",
-                  mode: 0o644,
-                  size: contents.length,
-                }).encode(header);
-                return Buffer.concat([
-                  header,
-                  contents,
-                  Buffer.alloc(((512 - (contents.length % 512)) % 512) + 1024),
-                ]);
+                manifest.postgresSnapshots = stateSqliteBackup.postgresSnapshots.map(
+                  (snapshot) => ({
+                    archivePath: `${buildBackupArchivePath(archiveRoot, snapshot.sourcePath)}.postgres`,
+                    manifestSha256: snapshot.manifestSha256,
+                  }),
+                );
+                return encodeBackupManifest(manifest);
               },
             ),
           onPartialArchive: (partialArchive) => {
@@ -666,13 +699,9 @@ export async function createBackupArchive(
     }).catch((error: unknown) => {
       throw formatBackupOutputFailure(error, outputPath, "write", publication.stagingDir);
     });
-    const skippedVolatileCount = [...skippedEntries.values()].filter(
+    result.skippedVolatileCount = [...skippedEntries.values()].filter(
       (reason) => reason === "volatile",
     ).length;
-    result.skippedVolatileCount = skippedVolatileCount;
-    const vanishedWarnings = [...skippedEntries]
-      .filter(([, reason]) => reason === "vanished")
-      .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`);
     const archiveWarnings = [
       ...[...opaqueSqliteSourcePaths]
         .toSorted(([left], [right]) => left.localeCompare(right))
@@ -681,7 +710,9 @@ export async function createBackupArchive(
             ? `Skipped unresolvable opaque SQLite link: ${sourcePath}`
             : `SQLite file archived as opaque bytes without a live snapshot or integrity checks: ${sourcePath}`,
         ),
-      ...vanishedWarnings,
+      ...[...skippedEntries]
+        .filter(([, reason]) => reason === "vanished")
+        .map(([sourcePath]) => `Skipped vanished entry (ENOENT): ${sourcePath}`),
     ];
     if (archiveWarnings.length) {
       result.warnings = [...(result.warnings ?? []), ...archiveWarnings];
@@ -689,10 +720,10 @@ export async function createBackupArchive(
     if (externalSymbolicLinks.length) {
       result.externalSymbolicLinks = externalSymbolicLinks;
     }
-    if (skippedVolatileCount > 0) {
+    if (result.skippedVolatileCount > 0) {
       opts.log?.(
-        `Backup skipped ${skippedVolatileCount} volatile file${
-          skippedVolatileCount === 1 ? "" : "s"
+        `Backup skipped ${result.skippedVolatileCount} volatile file${
+          result.skippedVolatileCount === 1 ? "" : "s"
         } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
       );
     }

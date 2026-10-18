@@ -111,12 +111,12 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       if (discovery?.enabled === false) {
         return { entries: [] };
       }
-      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const options = resolveCodexAppServerRuntimeOptions({ pluginConfig: configured });
       const ownsLocalProcess =
         options.start.transport === "stdio" && !isCodexAppServerProxyLaunch(options.start.args);
       const authProfileStore =
         ownsLocalProcess && options.start.homeScope === "agent"
-          ? resolveCodexAppServerAuthProfileStore({
+          ? await resolveCodexAppServerAuthProfileStore({
               agentDir: params.agentDir,
               config: params.config,
             })
@@ -130,7 +130,9 @@ export function createCodexAppServerModelCatalog(runtime: string) {
         return { entries: [] };
       }
       const usesNativeHome = ownsLocalProcess && options.start.homeScope === "user";
-      const native = usesNativeHome ? await probeCodexNativeAuth({ pluginConfig }) : undefined;
+      const native = usesNativeHome
+        ? await probeCodexNativeAuth({ pluginConfig: configured })
+        : undefined;
       if ((usesNativeHome && !native) || disposed || observations.get(key) !== observation) {
         return { entries: [] };
       }
@@ -139,13 +141,23 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       const result = await withCodexAppServerJsonClient(
         {
           startOptions: start,
+          pluginConfig: configured,
           config: params.config,
           agentDir: params.agentDir,
           timeoutMs,
           ...(authProfileStore ? { authProfileStore, authProfileId } : {}),
+          ...(ownsLocalProcess && start.homeScope === "agent" && !authProfileId
+            ? { authRequirement: "environment-api-key" as const }
+            : {}),
         },
         async (request, client) => {
           try {
+            // Codex serializes this read after login's delayed account/updated.
+            // Drain startup before pinning the account revision for discovery.
+            await request<CodexGetAccountResponse>({
+              method: "account/read",
+              requestParams: { refreshToken: false },
+            });
             const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
             const listed = await listAllCodexAppServerModels({
               request,

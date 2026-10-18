@@ -161,6 +161,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   onTestFinished(() => {
     process.off(event, receive);
     drainSystemEvents(queueKey);
+    clearRuntimeConfigSnapshot();
   });
   const plugin = writePlugin({
     id: "preparation-probe",
@@ -190,6 +191,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
   const config = {
     plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
   };
+  setRuntimeConfigSnapshot(config, config);
   const previous = createEmptyPluginRegistry();
   setActivePluginRegistry(previous);
   const registry = loadOpenClawPlugins({

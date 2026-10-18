@@ -227,6 +227,7 @@ it("keeps an accepted one-hour question alive through default diagnostic recover
     expect(abort).not.toHaveBeenCalled();
     // Resolution is real progress, but a tool that stays hung is still recovered.
     await vi.advanceTimersByTimeAsync(900_000);
+    await Promise.all(recovery.mock.results.map((result) => result.value));
     expect(abort).toHaveBeenCalledTimes(1);
   });
 });

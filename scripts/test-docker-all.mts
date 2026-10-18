@@ -642,70 +642,24 @@ export async function writeRunSummary(
   console.log(`==> Docker run summary: ${file}`);
 }
 
-async function commitJoinedSummary(
-  logDir: string,
-  summary: () => RunSummary,
-  env: NodeJS.ProcessEnv,
-) {
+function commitJoinedSummary(logDir: string, summary: RunSummary, env: NodeJS.ProcessEnv) {
   const temporary = path.join(logDir, `.summary-${randomUUID()}.tmp`);
-  const payload = { ...runSummaryPayload(summary(), env), cleanup: { joined: true } };
-  let owned = false;
-  let failure: { error: unknown } | undefined;
+  const payload = { ...runSummaryPayload(summary, env), cleanup: { joined: true } };
+  const descriptor = fs.openSync(temporary, "wx");
   try {
-    const handle = await open(temporary, "wx");
-    owned = true;
-    const errors: unknown[] = [];
-    await handle.writeFile(`${JSON.stringify(payload, null, 2)}\n`).catch((error: unknown) => {
-      errors.push(error);
-    });
-    await handle.close().catch((error: unknown) => {
-      errors.push(error);
-    });
-    if (errors.length > 0) {
-      throw errors.length === 1
-        ? errors[0]
-        : new AggregateError(errors, "Docker summary staging failed", { cause: errors[0] });
-    }
-    await activeChildrenShutdownPromise;
-    if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-      // Include every handled signal before promotion without yielding between the
-      // final verdict and rename. Later signals affect exit, not the committed report.
-      const latest = runSummaryPayload(summary(), env);
-      fs.writeFileSync(
-        path.join(logDir, "failures.json"),
-        `${JSON.stringify(failureIndexPayload(latest, env), null, 2)}\n`,
-      );
-      if (latest.status !== payload.status) {
-        fs.writeFileSync(
-          temporary,
-          `${JSON.stringify({ ...latest, cleanup: { joined: true } }, null, 2)}\n`,
-        );
-      }
-      fs.renameSync(temporary, path.join(logDir, "summary.json"));
-      owned = false;
-    }
-  } catch (error) {
-    requiredPublicationFailed = true;
-    failure = { error };
-  }
-  if (owned) {
     try {
-      await fs.promises.rm(temporary, { force: true });
-    } catch (cleanupError) {
-      requiredPublicationFailed = true;
-      failure = {
-        error: failure
-          ? new AggregateError(
-              [failure.error, cleanupError],
-              "Docker summary staging cleanup failed",
-              { cause: failure.error },
-            )
-          : cleanupError,
-      };
+      fs.writeFileSync(descriptor, `${JSON.stringify(payload, null, 2)}\n`);
+    } finally {
+      fs.closeSync(descriptor);
     }
-  }
-  if (failure) {
-    throw failure.error;
+    fs.writeFileSync(
+      path.join(logDir, "failures.json"),
+      `${JSON.stringify(failureIndexPayload(payload, env), null, 2)}\n`,
+    );
+    fs.renameSync(temporary, path.join(logDir, "summary.json"));
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
   }
 }
 
@@ -2187,8 +2141,10 @@ async function main() {
         await mkdir(logDir, { recursive: true }).catch(recordPublicationFailure);
         await writeSummary(summary());
       }
+      await activeChildrenShutdownPromise;
       if (!requiredPublicationFailed && cleanupFailures.length === 0 && activeChildren.size === 0) {
-        await commitJoinedSummary(logDir, summary, baseEnv);
+        // Publish one final snapshot without yielding. Later signals affect exit, not this report.
+        commitJoinedSummary(logDir, summary(), baseEnv);
       }
     };
   }

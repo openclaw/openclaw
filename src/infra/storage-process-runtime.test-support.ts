@@ -1,5 +1,10 @@
 // Native storage probes share the invocation build before their child deadlines begin.
 export const storageProcessTestEntrypoints = {
+  auditRecovery: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "state-migrations.audit-recovery-protocol.test-support",
+    distWorkerPath: "infra/state-migrations.audit-recovery-protocol.test-support.js",
+  },
   acpMetadataWriter: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../acp/runtime/session-meta-process.test-support",
@@ -55,9 +60,9 @@ export const storageProcessTestEntrypoints = {
     sourceWorkerName: "lifecycle-tail-retention.test-support",
     distWorkerPath: "infra/lifecycle-tail-retention.test-support.js",
   },
-  sharedStateIdleFixture: {
+  sharedStateWalFixture: {
     currentModuleUrl: import.meta.url,
-    sourceWorkerName: "sqlite-worker-shared-state-idle-fixture.test-support",
-    distWorkerPath: "infra/sqlite-worker-shared-state-idle-fixture.test-support.js",
+    sourceWorkerName: "../state/openclaw-state-worker-wal.test-support",
+    distWorkerPath: "state/openclaw-state-worker-wal.test-support.js",
   },
 } as const;

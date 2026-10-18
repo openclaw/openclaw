@@ -5,7 +5,6 @@ import type {
   AuthProfileStore,
   AuthProfileStoreOwner,
   OAuthCredential,
-  UserModelAuthProfile,
   SharedAuthStoreOwnership,
 } from "./types.js";
 import type {
@@ -60,9 +59,7 @@ export type AuthStoreUpdateInput = {
   peerGeneration?: { profileId: string; generation: OAuthCredential };
 };
 
-export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"] & {
-  oauthRefreshClaimIds: ReadonlyMap<string, string | undefined>;
-};
+export type AuthStoreUpdatePublication = AuthProfileUsageReceipt["publication"];
 
 export type AuthStoreUpdateOperations = {
   "authProfiles.update": { input: AuthStoreUpdateInput; output: boolean };
@@ -77,36 +74,4 @@ export type AuthProfileBootstrapInput = {
 export type AuthProfileBootstrapResult = {
   ownership: SharedAuthStoreOwnership;
   relocated: boolean;
-};
-
-export type AuthProfileWorkerOperations = AuthStoreUpdateOperations & {
-  "authProfiles.bootstrap": {
-    input: AuthProfileBootstrapInput;
-    output: AuthProfileBootstrapResult;
-  };
-  "authProfiles.personalAccept": {
-    input: { profileId: string; credential: AuthProfileCredential };
-    output: boolean;
-  };
-  "authProfiles.personalReplace": {
-    input: { profileId: string; expected: UserModelAuthProfile; next: UserModelAuthProfile };
-    output: UserModelAuthProfile | undefined;
-  };
-  "authProfiles.usage": { input: AuthProfileUsageInput; output: AuthProfileUsageResult };
-  "authProfiles.personalUsage": {
-    input: { profileId: string; reduction: PersonalAuthProfileUsageReduction };
-    output: PersonalAuthProfileUsageResult | undefined;
-  };
-  "authProfiles.read": {
-    input: { artifactPreserving: boolean };
-    output: void;
-  };
-  "authProfiles.sharedOwnership": {
-    input: { artifactPreserving: boolean };
-    output: unknown;
-  };
-  "authProfiles.personal": {
-    input: { profileId: string; artifactPreserving: boolean };
-    output: UserModelAuthProfile | undefined;
-  };
 };

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
 import {
@@ -6,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
@@ -26,7 +26,7 @@ type SharedStateSchemaDatabase = {
 
 type DynamicSharedStateDatabase = Record<string, Record<string, unknown>>;
 
-function listTuiLastSessionStateRows(database: DatabaseSync) {
+function listTuiLastSessionStateRows(database: EngineConnection) {
   const db =
     getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "config_machine_state">>(database);
   return executeSqliteQuerySync(
@@ -43,7 +43,9 @@ function sqliteSchemaIdentifier(value: string) {
 }
 
 // Shared state has many owner-specific session-key columns; schema discovery keeps this migration complete.
-function listSharedStateSessionKeyColumns(database: DatabaseSync): SharedStateSessionKeyColumn[] {
+function listSharedStateSessionKeyColumns(
+  database: EngineConnection,
+): SharedStateSessionKeyColumn[] {
   const db = getNodeSqliteKysely<SharedStateSchemaDatabase>(database);
   const tables = executeSqliteQuerySync(
     database,
@@ -69,7 +71,7 @@ function listSharedStateSessionKeyColumns(database: DatabaseSync): SharedStateSe
   });
 }
 
-export function collectSharedStateSessionKeys(database: DatabaseSync): Set<string> {
+export function collectSharedStateSessionKeys(database: EngineConnection): Set<string> {
   const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
   const keys = new Set<string>();
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
@@ -103,7 +105,7 @@ export function collectSharedStateSessionKeys(database: DatabaseSync): Set<strin
 }
 
 export function rewriteSharedStateSessionKeys(
-  database: DatabaseSync,
+  database: EngineConnection,
   renames: ReadonlyMap<string, string>,
 ): void {
   const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
@@ -181,7 +183,7 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
   }
 }
 
-export function readRepairJournal(database: DatabaseSync): ReservedKeyRename[] {
+export function readRepairJournal(database: EngineConnection): ReservedKeyRename[] {
   const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -215,7 +217,7 @@ export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRe
 }
 
 export function writeRepairJournal(
-  database: DatabaseSync,
+  database: EngineConnection,
   renames: readonly ReservedKeyRename[],
 ): void {
   const now = Date.now();
@@ -244,7 +246,7 @@ export function writeRepairJournal(
   );
 }
 
-export function deleteRepairJournal(database: DatabaseSync): void {
+export function deleteRepairJournal(database: EngineConnection): void {
   const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
   executeSqliteQuerySync(
     database,

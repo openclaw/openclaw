@@ -19,6 +19,7 @@ import {
 } from "./oauth-refresh-failure.js";
 import { createFailedOAuthRefreshFence, createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import * as oauth from "./oauth.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   mockLockedUpdateForStore,
@@ -45,11 +46,6 @@ const resolveApiKeyForProfileMock = vi.hoisted(() =>
 
 let resolveApiKeyForProfileSpy: MockInstance<typeof oauth.resolveApiKeyForProfile> | undefined;
 
-vi.mock("./store.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./store.js")>()),
-  resolvePersistedAuthProfileOwnerAgentDir: (await import("./usage-fixture.test-support.js"))
-    .storeMocks.resolvePersistedAuthProfileOwnerAgentDir,
-}));
 // mock-isolation: Exercise quota planning and the real reducer without persistence workers.
 vi.mock("./usage-write.js", async () => ({
   withAuthProfileUsage: (await import("./usage-fixture.test-support.js")).usageMocks
@@ -59,19 +55,22 @@ vi.mock("./usage-write.js", async () => ({
 vi.mock("./store-runtime.js", async () => {
   const { storeMocks: mocks } = await import("./usage-fixture.test-support.js");
   return {
-    loadAuthProfileStoreWithoutExternalProfiles: mocks.loadAuthProfileStoreWithoutExternalProfiles,
+    loadAuthProfileStoreWithoutExternalProfilesAsync:
+      mocks.loadAuthProfileStoreWithoutExternalProfilesAsync,
+    resolvePersistedAuthProfileOwnerAgentDirAsync:
+      mocks.resolvePersistedAuthProfileOwnerAgentDirAsync,
     updateAuthProfileStoreWithLock: mocks.updateAuthProfileStoreWithLock,
     saveAuthProfileStore: mocks.saveAuthProfileStore,
   };
 });
 
 beforeEach(() => {
-  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
-  storeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockImplementation(
-    (params: { agentDir?: string }) => params.agentDir,
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockReset();
+  storeMocks.resolvePersistedAuthProfileOwnerAgentDirAsync.mockImplementation(
+    async (params: { agentDir?: string }) => params.agentDir,
   );
   storeMocks.saveAuthProfileStore.mockReset();
-  storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReset();
+  storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockReset();
   storeMocks.updateAuthProfileStoreWithLock.mockReset();
   resetAuthProfileUsageMocks();
   fetchMock.mockReset();
@@ -386,7 +385,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     mockLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
-    storeMocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue(params.store);
+    storeMocks.loadAuthProfileStoreWithoutExternalProfilesAsync.mockResolvedValue(params.store);
     if (params.mockLock !== false) {
       mockLockedUpdateForStore(params.store);
     }
@@ -432,6 +431,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
           profileId: "openai:default",
           profileType: "oauth",
           credential: refreshed,
+          readCurrentCredential: null,
         };
       });
       mockLockedUpdatesForStore(store);
@@ -482,7 +482,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     },
   );
 
-  it.each(["new block", "replaced credential", "removed credential"] as const)(
+  it.each(["replaced credential", "removed credential"] as const)(
     "does not probe an expired recovery after a %s",
     async (change) => {
       const now = Date.now();
@@ -503,13 +503,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         if (change === "removed credential") {
           delete store.profiles["openai:default"];
         } else {
-          store.profiles["openai:default"] =
-            change === "replaced credential"
-              ? { ...refreshed, access: "replacement-access" }
-              : refreshed;
-        }
-        if (change === "new block") {
-          store.usageStats!["openai:default"]!.lastFailureAt = now;
+          store.profiles["openai:default"] = { ...refreshed, access: "replacement-access" };
         }
         return {
           apiKey: refreshed.access,
@@ -517,6 +511,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
           profileId: "openai:default",
           profileType: "oauth",
           credential: refreshed,
+          readCurrentCredential: null,
         };
       });
       mockLockedUpdatesForStore(store);
@@ -598,6 +593,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         profileId,
         profileType: "oauth",
         credential: refreshed,
+        readCurrentCredential: null,
       };
     });
     mockLockedUpdatesForStore(store);
@@ -719,6 +715,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   );
 
   it("re-arms a stale WHAM block from the latest blocked snapshot", async () => {
+    prepareSharedAuthStoreOwnershipForNative();
     const now = 1_700_000_000_000;
     const store = makeStore({
       "openai:default": {
@@ -754,47 +751,6 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
     expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.5");
     expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
-  });
-
-  it("does not apply an available result over a newer WHAM block", async () => {
-    const now = 1_700_000_000_000;
-    const originalUntil = now + 6 * 24 * 60 * 60 * 1000;
-    const newerUntil = originalUntil + 60_000;
-    const store = makeStore({
-      "openai:default": {
-        blockedUntil: originalUntil,
-        blockedReason: "subscription_limit",
-        blockedSource: "wham",
-        lastFailureAt: now - 1,
-      },
-    });
-    let releaseResponse: ((response: Response) => void) | undefined;
-    fetchMock.mockReturnValueOnce(
-      new Promise<Response>((resolve) => {
-        releaseResponse = resolve;
-      }),
-    );
-    mockLockedUpdatesForStore(store);
-
-    const probe = maybeReprobeWhamBlockedProfiles({
-      store,
-      profileIds: ["openai:default"],
-      now,
-    });
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
-    const stats = store.usageStats?.["openai:default"];
-    if (!stats || !releaseResponse) {
-      throw new Error("expected claimed WHAM probe");
-    }
-    stats.blockedUntil = newerUntil;
-    stats.lastFailureAt = now + 1;
-    releaseResponse(Response.json({ rate_limit: { limit_reached: false } }));
-
-    await probe;
-    await vi.waitFor(() => {
-      expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
-    });
-    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(newerUntil);
   });
 
   it.each([

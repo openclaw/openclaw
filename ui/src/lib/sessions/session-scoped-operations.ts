@@ -1,4 +1,3 @@
-import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   SessionsBranchesListResult,
@@ -27,29 +26,30 @@ type SessionScopedOperationsHost = {
   reportError: (error: unknown) => void;
 };
 
-const retiredFailedSubscriptionRecoveries = new WeakSet<AggregateError>();
-
 function buildTranscriptMutationParams(sessionKey: string, agentId?: string | null) {
   const { key, ...owner } = buildSessionRequestParams(sessionKey, agentId);
   return { sessionKey: key, ...owner };
 }
 
+type SubscriptionRuntime = typeof import("./session-message-subscriptions.runtime.ts");
+let subscriptionRuntime: SubscriptionRuntime | undefined;
+let subscriptionRuntimeLoading: Promise<SubscriptionRuntime> | undefined;
+
+export function preloadSessionMessageSubscriptions(): Promise<SubscriptionRuntime> {
+  return (subscriptionRuntimeLoading ??= import("./session-message-subscriptions.runtime.ts").then(
+    (runtime) => (subscriptionRuntime = runtime),
+    (error: unknown) => {
+      subscriptionRuntimeLoading = undefined;
+      throw error;
+    },
+  ));
+}
+
 export function createSessionScopedOperations(host: SessionScopedOperationsHost) {
   const ownedSubscriptions = new Set<SessionMessageSubscription>();
-  type SubscriptionRuntime = typeof import("./session-message-subscriptions.runtime.ts");
-  let subscriptionRuntime: SubscriptionRuntime | undefined;
-  let subscriptionRuntimeLoading: Promise<SubscriptionRuntime> | undefined;
   let disposed = false;
-  const loadSubscriptionRuntime = () =>
-    (subscriptionRuntimeLoading ??= import("./session-message-subscriptions.runtime.ts").then(
-      (runtime) => (subscriptionRuntime = runtime),
-      (error: unknown) => {
-        subscriptionRuntimeLoading = undefined;
-        throw error;
-      },
-    ));
 
-  const recover = async (params: { key: string; agentId?: string }) => {
+  const recover: SessionCapability["recover"] = async (params) => {
     const scope = host.connection.capture();
     if (!scope) {
       return null;
@@ -59,7 +59,9 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      host.notifyCreated(result.key);
+      if (!areUiSessionKeysEquivalent(result.key, params.key)) {
+        host.notifyCreated(result.key);
+      }
       await host.reconcileMutation(params.agentId);
       return host.connection.isCurrent(scope) ? result : null;
     } catch (error) {
@@ -122,7 +124,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     });
 
   const unsubscribeMessages = async (subscription: SessionMessageSubscription): Promise<void> => {
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
+    const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     await runtime.releaseGatewaySessionMessageSubscription(subscription);
     ownedSubscriptions.delete(subscription);
   };
@@ -138,7 +140,7 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
     const normalizedKey = key.trim();
     const agentId = options.agentId?.trim() ? normalizeAgentId(options.agentId) : null;
     const { mode, includeApprovals } = options;
-    const runtime = subscriptionRuntime ?? (await loadSubscriptionRuntime());
+    const runtime = subscriptionRuntime ?? (await preloadSessionMessageSubscriptions());
     if (disposed || !host.connection.isCurrent(scope)) {
       throw new Error("Session message subscription completed on a replaced Gateway connection");
     }
@@ -150,22 +152,6 @@ export function createSessionScopedOperations(host: SessionScopedOperationsHost)
         agentId,
         ...(includeApprovals ? { includeApprovals: true } : {}),
         ...(mode ? { mode } : {}),
-      })
-      .catch((error: unknown) => {
-        if (
-          error instanceof AggregateError &&
-          error.errors[0] instanceof GatewayProtocolRequestTimeoutError &&
-          error.errors[0].requestSent &&
-          !disposed &&
-          host.connection.isCurrent(scope) &&
-          !retiredFailedSubscriptionRecoveries.has(error)
-        ) {
-          // Failed compensation cannot prove privileged observers were removed;
-          // closing their owning socket invokes authoritative Gateway cleanup.
-          retiredFailedSubscriptionRecoveries.add(error);
-          scope.client.forceReconnect("session subscription recovery failed");
-        }
-        throw error;
       });
     ownedSubscriptions.add(subscription);
     if (disposed || !host.connection.isCurrent(scope)) {

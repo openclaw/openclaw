@@ -8,9 +8,9 @@ import { sanitizeForLog, stripAnsi } from "../../packages/terminal-core/src/ansi
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { parseRedactPatternSource, replaceRedactPattern } from "./redact-pattern-runtime.js";
+import { replaceRedactPattern } from "./redact-pattern-runtime.js";
 import { AWS_SECRET_ACCESS_KEY_MATCHER, VENDOR_TOKEN_REDACT_PATTERNS } from "./redact-patterns.js";
-import { redactSensitiveText, redactText } from "./redact.js";
+import { redactSensitiveText, redactText, resolveRedactOptions } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
   /(?:authorization|cookie|credential|key|password|passwd|secret|token)/iu;
@@ -26,9 +26,10 @@ const SENSITIVE_COMMAND_ARG_RE =
 const BASIC_AUTH_RE = /\bBasic\s+[A-Za-z0-9+/]+={0,2}/giu;
 const COOKIE_HEADER_RE = /\b(Cookie|Set-Cookie)\s*:\s*[^\r\n]+/giu;
 const AWS_ACCESS_KEY_ID_RE = /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu;
-const vendorTokenPatterns = VENDOR_TOKEN_REDACT_PATTERNS.map(
-  (pattern) => new RegExp(...parseRedactPatternSource(pattern)),
-);
+// Reuse canonical matcher fast paths; AWS keeps its support-specific full mask below.
+const vendorTokenPatterns = resolveRedactOptions({
+  patterns: VENDOR_TOKEN_REDACT_PATTERNS,
+}).patterns.filter((pattern) => pattern !== AWS_SECRET_ACCESS_KEY_MATCHER);
 const JWT_RE = /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/gu;
 const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)([^/@\s:?#]+)(?::([^/@\s?#]+))?@/giu;
 const URL_PARAM_RE = /([?&])([^=&\s]+)=([^&#\s]+)/giu;
@@ -440,8 +441,17 @@ export function redactPublicSupportDiagnosticLine(
   context: SupportRedactionContext,
 ): string {
   const line = redactSupportDiagnosticLine(value, context);
+  const gatewayStatus =
+    /^Gateway readiness was not verified; service status: (running|stopped|unknown)(?=[;.])/u.exec(
+      line,
+    )?.[1];
+  if (gatewayStatus) {
+    // Startup phases and profile arguments can contain private text. Publish only
+    // the closed service status and canonical read-only recovery advice.
+    return `Gateway readiness was not verified; service status: ${gatewayStatus}. Check openclaw gateway status --deep.`;
+  }
   if (
-    /^Package recovery (?:anchor|control|journal|helper|rollback-journal) "[A-Za-z0-9_.-]{1,64}" unsafe: mode=[0-7]{4} nlink=\d{1,8} uid=\d{1,8}; expected owner-only mode(?: nlink=1)?\.$/u.test(
+    /^Package recovery (?:anchor|control|journal|helper|rollback-journal) "[A-Za-z0-9_.-]{1,64}" unsafe: mode=[0-7]{4} nlink=\d{1,8} uid=\d{1,8}; expected owner-only mode(?: nlink=1)?\.(?: Run openclaw doctor --fix\.)?$/u.test(
       line,
     )
   ) {
@@ -530,7 +540,7 @@ export function redactPublicSupportDiagnosticLine(
   );
   const causes = (
     lines.match(
-      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
+      /\b(?:GLIBC_\d{1,3}(?:\.\d{1,3}){1,2} not found|[Cc]onnection (?:refused|closed|timed out)|[Pp]ermission denied|[Nn]o space left on device|MCP error -?\d{1,5}|HTTP [1-5]\d{2}|Invalid package dist content inventory|SQLite (?:snapshot hash mismatch|file generation (?:changed while reading|did not stabilize)|source did not stabilize|WAL commit (?:header is unavailable or changing|publication could not be verified))|Package rollback (?:launcher backup changed|verification (?:timed out|failed))|managed update handoff (?:exited before (?:responding|signaling readiness)|did not (?:respond|signal readiness)))\b/gu,
     ) ?? []
   ).map((cause) => cause.replace(/^permission denied$/u, "Permission denied"));
   // Candidate admission's existing text protocol carries only these fixed validation lines.

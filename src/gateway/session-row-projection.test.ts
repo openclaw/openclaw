@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-runtime.publication-events.js";
@@ -15,7 +16,9 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   requestContext,
@@ -47,6 +50,9 @@ it("resolves agent-scoped legacy locators from resident topology for reads and d
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
+      for (const agentId of ["main", "work"]) {
+        projection.describe({ agentId, key: "global" });
+      }
       const main = projection.capture({ agentId: "main", key: "global" })!;
       const work = projection.capture({ agentId: "work", key: "global" })!;
       expect(main.storeTarget.storePath).not.toBe(work.storeTarget.storePath);
@@ -147,6 +153,7 @@ it("settles a committed write queued while the previous materialization is finis
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
+      projection.describe({ agentId: "main", key });
       const materialize = rowInputs.materializeSessionRow;
       let latestCommitted = false;
       vi.spyOn(rowInputs, "materializeSessionRow").mockImplementationOnce((inputs) => {
@@ -228,6 +235,70 @@ it("reprocesses activity-summary policy when config changes during materializati
         expect(projection.snapshot(target).row?.activitySummary?.state).toBe("stale");
       }
     } finally {
+      projection.dispose();
+    }
+  });
+});
+
+it("retains config changes published while topology discovery is pending", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const oldStore = state.statePath("old", "sessions.json");
+    const newStore = state.statePath("new", "sessions.json");
+    const oldKey = "agent:main:old-topology";
+    const newKey = "agent:work:new-topology";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: oldKey, storePath: oldStore },
+      { sessionId: "old-topology", updatedAt: 1 },
+    );
+    replaceSessionEntrySync(
+      { agentId: "work", sessionKey: newKey, storePath: newStore },
+      { sessionId: "new-topology", updatedAt: 1 },
+    );
+    let cfg = { agents: { entries: { main: {} } }, session: { store: oldStore } };
+    setRuntimeConfigSnapshot(cfg);
+    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    const captured = createDeferredCore();
+    const release = createDeferredCore();
+    let reading: Promise<void> | undefined;
+    try {
+      await projection.ensureMaterialized();
+      const read = stateReads.executeExistingOpenClawStateRead;
+      let held = false;
+      vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation(
+        async (...args) => {
+          const reply = await read(...args);
+          if (args[1].type === "agentDatabaseDeletion.snapshot" && !held) {
+            held = true;
+            captured.resolve();
+            await release.promise;
+          }
+          return reply;
+        },
+      );
+      sessionChanges.emit({ all: true, scope: "config" });
+      reading = projection.ensureMaterialized();
+      await withinTest(
+        awaitGateBeforeSettlement(captured.promise, reading, "Topology discovery was not held"),
+        signal,
+      );
+      const latestConfig = {
+        agents: { entries: { main: {}, work: {} } },
+        session: { store: newStore },
+      };
+      cfg = latestConfig;
+      setRuntimeConfigSnapshot(cfg);
+      release.resolve();
+      await withinTest(reading, signal);
+
+      expect(projection.state.cfg).toEqual(latestConfig);
+      expect(
+        projection.snapshot({ agentId: "work", key: newKey, storePath: newStore }).row,
+      ).toMatchObject({
+        sessionId: "new-topology",
+      });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(reading ? [reading] : []);
       projection.dispose();
     }
   });
@@ -417,56 +488,62 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", async () 
   });
 });
 
-it("inherits a raw sentinel parent from its physical store and refreshes its dependents", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const storePath = state.statePath("shared.sqlite");
-    let cfg = {
-      agents: {
-        ownership: "explicit" as const,
-        entries: { main: {}, work: {} },
-        defaults: { sessionStore: { agentId: "work" } },
-      },
-      session: { scope: "global" as const, store: storePath },
-    };
-    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-    const parent = {
-      sessionId: "work-parent",
-      updatedAt: 1,
-      providerOverride: "unit-test",
-      modelOverride: "before",
-    };
-    replaceSessionEntrySync({ agentId: "work", storePath, sessionKey: "global" }, parent);
-    const key = "agent:main:child";
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, sessionKey: key },
-      { sessionId: "child", updatedAt: Date.now(), parentSessionKey: "global" },
-    );
-    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
-    try {
-      expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("before");
+it.each(["global", "unknown"])(
+  "inherits a raw %s parent from its physical store and refreshes its dependents",
+  async (sentinel) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("shared.sqlite");
+      let cfg = {
+        agents: {
+          ownership: "explicit" as const,
+          entries: { main: {}, work: {} },
+          defaults: { sessionStore: { agentId: "work" } },
+        },
+        session: { scope: "global" as const, store: storePath },
+      };
+      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+      const parent = {
+        sessionId: "work-parent",
+        updatedAt: 1,
+        providerOverride: "unit-test",
+        modelOverride: "before",
+      };
+      replaceSessionEntrySync({ agentId: "work", storePath, sessionKey: sentinel }, parent);
+      const key = "agent:main:child";
       replaceSessionEntrySync(
-        { agentId: "work", storePath, sessionKey: "global" },
-        { ...parent, modelOverride: "after" },
+        { agentId: "main", storePath, sessionKey: key },
+        { sessionId: "child", updatedAt: Date.now(), parentSessionKey: sentinel },
       );
-      await projection.ensureMaterialized();
-      expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("after");
-      expect(projection.snapshot({ agentId: "work", key: "global" }).row?.childSessions).toEqual([
-        key,
-      ]);
-      const oldOwner = projection.describe({ agentId: "work", key: "global" })!;
-      cfg = { ...cfg, agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } } };
-      sessionChanges.emit({ all: true, scope: "config" });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot({ agentId: "work", key: "global" }).row).toBeNull();
-      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.sessionId).toBe(
-        "work-parent",
-      );
-      expect(projection.isCurrent(oldOwner)).toBe(false);
-    } finally {
-      projection.dispose();
-    }
-  });
-});
+      const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+      try {
+        expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("before");
+        replaceSessionEntrySync(
+          { agentId: "work", storePath, sessionKey: sentinel },
+          { ...parent, modelOverride: "after" },
+        );
+        await projection.ensureMaterialized();
+        expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("after");
+        expect(projection.snapshot({ agentId: "work", key: sentinel }).row?.childSessions).toEqual([
+          key,
+        ]);
+        const oldOwner = projection.describe({ agentId: "work", key: sentinel })!;
+        cfg = {
+          ...cfg,
+          agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },
+        };
+        sessionChanges.emit({ all: true, scope: "config" });
+        await projection.ensureMaterialized();
+        expect(projection.snapshot({ agentId: "work", key: sentinel }).row).toBeNull();
+        expect(projection.snapshot({ agentId: "main", key: sentinel }).row?.sessionId).toBe(
+          "work-parent",
+        );
+        expect(projection.isCurrent(oldOwner)).toBe(false);
+      } finally {
+        projection.dispose();
+      }
+    });
+  },
+);
 
 it("assigns a newly committed unknown row to its logical store owner", async () => {
   const key = "unknown";

@@ -38,6 +38,7 @@ import {
 import type { DeviceIdentity } from "../../infra/device-identity.js";
 import { prepareQuestionGatewayDispatch } from "../harness/host-private-capabilities.js";
 import { readPositiveIntegerParam, readToolStringParam } from "./common.js";
+import { hasInProcessGatewayToolCaller } from "./gateway-caller-availability.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { getGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
 import { getGatewaySessionSpawnParentExecutionIdentityToken } from "./gateway-session-spawn-execution-identity.js";
@@ -234,11 +235,11 @@ const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "question.request",
 ]);
 
-function resolveApprovalRuntimeTokenForGatewayTool(params: {
+async function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
   opts: GatewayCallOptions;
   target: GatewayOverrideTarget;
-}): string | undefined {
+}): Promise<string | undefined> {
   if (!APPROVAL_RUNTIME_METHODS.has(params.method)) {
     return undefined;
   }
@@ -576,12 +577,10 @@ export async function resolveMessageActionAgentRuntimeIdentity(
 
 /** Explicit destinations remain transport calls; retired hosted bindings must reject locally. */
 export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean {
-  const resolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   return (
-    Boolean(resolver) &&
     !trimToUndefined(opts.gatewayUrl) &&
     !trimToUndefined(opts.gatewayToken) &&
-    resolver?.()?.localEmbedded !== true
+    hasInProcessGatewayToolCaller()
   );
 }
 
@@ -644,7 +643,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   }
   const agentRuntimeIdentityToken =
     typeof runtimeIdentity === "string" ? runtimeIdentity : undefined;
-  const approvalRuntimeToken = resolveApprovalRuntimeTokenForGatewayTool({
+  const approvalRuntimeToken = await resolveApprovalRuntimeTokenForGatewayTool({
     method,
     opts,
     target: gateway.target,

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
+import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { TemplateContext } from "../templating.js";
 import {
   createAgentTurnExecutionDefaults,
@@ -16,6 +17,19 @@ import {
 const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: conversation failures", () => {
+  it("preserves typed node-loss guidance on internal control surfaces", async () => {
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    const failure = new WorkerNodeLostError();
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(failure);
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(createMinimalRunAgentTurnParams());
+    expect(result).toMatchObject({
+      kind: "final",
+      payload: { text: `${failure.message} This turn will not be continued automatically.` },
+    });
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([NON_DIRECT_FAILURE_SURFACE_CASES[0]])(
     "surfaces a safe failure for an accepted request in $label chats",
     async (testCase) => {

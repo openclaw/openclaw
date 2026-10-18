@@ -57,16 +57,9 @@ export async function appendSessionManagerActor(input: {
     },
   };
   assertCurrent();
-  const snapshot = actor.snapshot(authority);
   let captured: CommittedAppend | undefined;
   let outcome: SessionActorOutcome<AppendValue>;
   try {
-    const command = {
-      commandId: randomUUID(),
-      phaseId: "session-manager.append",
-      expected: snapshot?.version,
-      append,
-    };
     const observer = {
       committed: (value: CommittedAppend) => {
         captured = value;
@@ -75,17 +68,12 @@ export async function appendSessionManagerActor(input: {
         }
       },
     };
-    const execute = () =>
-      input.toolResult
-        ? actor.appendToolResult(command, authority, observer)
-        : actor.appendTranscriptEvent(command, authority, observer);
-    outcome = await execute();
-    // The typed stale reply proves no mutation ran; a captured commit always wins.
-    if (outcome.kind === "stale-version" && !captured) {
-      assertCurrent();
-      command.expected = outcome.postimage.version;
-      outcome = await execute();
-    }
+    // The worker selects the current actor version under its writer FIFO;
+    // the prepared append carries its own transcript and live-authority predicates.
+    const command = { commandId: randomUUID(), phaseId: "session-manager.append", append };
+    outcome = input.toolResult
+      ? await actor.appendToolResult(command, authority, observer)
+      : await actor.appendTranscriptEvent(command, authority, observer);
   } catch (cause) {
     if (!captured) {
       if (hasSqliteWorkerOutcomeUnknown(cause)) {

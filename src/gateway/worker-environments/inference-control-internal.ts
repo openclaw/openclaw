@@ -16,7 +16,7 @@ export type WorkerInferenceSessionDrain = {
 };
 
 export type AcceptedWorkerInferenceSessionDrain = WorkerInferenceSessionDrain & {
-  start(): void;
+  start(assertCurrent?: () => void): void;
 };
 
 type WorkerInferenceSessionDrainReservation = {
@@ -286,10 +286,10 @@ export function createWorkerInferenceSessionControls(params: {
         accepted = {
           drained,
           hasWork: () => hasSession(sessionId) || hasSessionOperation(sessionId),
-          start() {
+          start(assertCurrent) {
             if (!started) {
               started = true;
-              cancelling = cancelCaptured(captured, "cancelled");
+              cancelling = cancelCaptured(captured, "cancelled", { assertCurrent });
               startedSignal.resolve();
             }
           },

@@ -2,7 +2,6 @@ import { confirm, isCancel } from "@clack/prompts";
 import { selectStyled } from "../../../packages/terminal-core/src/prompt-select-styled.js";
 import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeUpdateChannel,
@@ -21,6 +20,7 @@ import {
   resolveUpdateRoot,
   type UpdateWizardOptions,
 } from "./shared.js";
+import { readUpdateConfigFileSnapshot } from "./update-command-config.js";
 
 export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promise<void> {
   if (!process.stdin.isTTY) {
@@ -43,7 +43,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       root,
       timeoutMs: timeoutMs ?? 3500,
     }),
-    readConfigFileSnapshot({ observe: false }),
+    readUpdateConfigFileSnapshot({ observe: false }),
   ]);
 
   if (updateStatus.installKind === "host") {
@@ -133,6 +133,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       restart,
       timeout: opts.timeout,
       acceptCapabilities: opts.acceptCapabilities,
+      fullIntegrityCheck: opts.fullIntegrityCheck,
     });
   } catch (err) {
     if (err instanceof ExitError) {

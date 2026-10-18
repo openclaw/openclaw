@@ -51,9 +51,9 @@ describe("tool display", () => {
       detail: "with false",
     },
     {
-      name: "redacted unknown-tool fallback",
+      name: "source-preserving unknown-tool fallback",
       params: { name: "unknown_tool", args: { path: "AKIDABCDEFGHIJKLMNOP1234567890" } },
-      detail: ["with AKIDAB…7890", "with AKIDAB...7890"],
+      detail: "with AKIDABCDEFGHIJKLMNOP1234567890",
     },
     {
       name: "raw command detail",
@@ -76,13 +76,7 @@ describe("tool display", () => {
   ] as const)("preserves $name", ({ params, detail }) => {
     const display = resolveToolDisplay(params);
     const formatted = formatToolDetail(display);
-    if (Array.isArray(detail)) {
-      // Core uses a Unicode ellipsis; the browser alias uses three dots.
-      expect(detail).toContain(formatted);
-      expect(formatted).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    } else {
-      expect(formatted).toBe(detail);
-    }
+    expect(formatted).toBe(detail);
   });
 });
 

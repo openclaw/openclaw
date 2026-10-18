@@ -10,14 +10,14 @@ import {
   resolveCodexMcpToolOverridesForAgent,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
+import { loadExecApprovalsReadOnlyAsync } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { buildNativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
 import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-workspace-context.js";
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-approvals.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
-import { readCodexPluginConfig, resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
+import { resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
 import { resolveCodexNativeExecutionPolicy } from "./native-execution-policy.js";
 import { codexNativeHookRemoteCredentialPath } from "./native-hook-relay-remote.js";
 import {
@@ -67,7 +67,7 @@ export async function prepareCanonicalCodexFork(params: {
   assertCurrent();
   if (!initialization.prepareNativeToolPolicy) {
     throw new Error(
-      "Canonical Codex forks require host native tool policy preparation. Update the Gateway before retrying.",
+      "Forking an OpenClaw Codex session requires host native tool policy preparation. Update the Gateway before retrying.",
     );
   }
   const workspaceDir = resolveAgentWorkspaceDir(config, created.agentId);
@@ -88,7 +88,7 @@ export async function prepareCanonicalCodexFork(params: {
       "This child requires an execution environment that cannot be prepared during a native fork. Fork an original imported message instead.",
     );
   }
-  const pluginConfig = readCodexPluginConfig(context.pluginConfig);
+  const pluginConfig = context.pluginConfig;
   const runtime = resolveCodexSupervisionAppServerRuntimeOptions({
     pluginConfig,
     config,
@@ -98,7 +98,7 @@ export async function prepareCanonicalCodexFork(params: {
     execPolicy: resolveOpenClawExecPolicyForCodexAppServer({
       config,
       agentId: created.agentId,
-      approvals: loadExecApprovals(),
+      approvals: await loadExecApprovalsReadOnlyAsync(),
     }),
   });
   // Creation cannot provision a role-required environment. For supported local

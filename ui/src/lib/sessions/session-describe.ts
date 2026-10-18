@@ -90,7 +90,7 @@ export function createSessionDescribeReads(host: {
     reads.delete(key);
     const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
     const pending: Read = {
-      params: { ...params },
+      params,
       scope,
       promise: request,
       issuedRow: host.currentRow(params),
@@ -141,7 +141,8 @@ export function createSessionDescribeReads(host: {
       }
       const targets = sessionChangedSnapshots(payload).flatMap((snapshot) => {
         const target = readSessionChangedEvent(snapshot);
-        return target ? [target] : [];
+        // References repeat content already invalidated by its preceding full snapshot.
+        return target && !target.isAncestorReference ? [target] : [];
       });
       if (!targets.length) {
         reads.clear();

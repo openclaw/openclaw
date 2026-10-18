@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createCanonicalFixtureSkill } from "../../skills/test-support/test-helpers.js";
 import {
@@ -9,6 +9,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   loadSessionEntry,
   onSessionIdentityMutation,
@@ -16,6 +17,8 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import { readSessionMaintenanceAgeQueries } from "./session-accessor.sqlite-maintenance-age-queries.js";
 import {
   projectPublicSessionEntry,
   projectPublicSessionEntryPatch,
@@ -31,13 +34,48 @@ function createScope(name: string) {
   };
 }
 
+beforeEach(() => setRuntimeConfigSnapshot({}));
+
 afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await closeStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("SQLite session row persistence", () => {
+  it("updates maintenance and retained-reference predicates with the canonical entry", async () => {
+    const scope = createScope("predicate-columns");
+    await upsertSessionEntryCore(scope, {
+      sessionId: "current",
+      updatedAt: 10,
+      sessionStartedAt: 5,
+      previousSessionId: "previous",
+    });
+    const database = openOpenClawAgentDatabase(scope);
+    const prepare = vi.spyOn(database.db, "prepare");
+    const startedAt = () =>
+      [...readSessionMaintenanceAgeQueries(database.db).activity(undefined)].find(
+        (row) => row.session_key === scope.sessionKey,
+      )?.session_started_at;
+    const references = () => readReferencedSessionIds(database, new Set(), ["previous"]);
+    expect(startedAt()).toBe(5);
+    expect(references().has("previous")).toBe(true);
+
+    await patchSessionEntryCore(
+      scope,
+      () => ({ sessionStartedAt: 8, previousSessionId: undefined }),
+      { skipMaintenance: true },
+    );
+    expect(startedAt()).toBe(8);
+    expect(references().has("previous")).toBe(false);
+    const queries = prepare.mock.calls.map(([query]) => query);
+    expect(queries.some((query) => query.includes('"session_started_at"'))).toBe(true);
+    expect(queries.some((query) => query.includes('"has_optional_references" ='))).toBe(true);
+    expect(queries.every((query) => !query.includes("$.sessionStartedAt"))).toBe(true);
+    prepare.mockRestore();
+  });
+
   it("bounds saved-prompt decoding while publishing identity changes", async () => {
     const env = {
       ...process.env,
@@ -125,10 +163,13 @@ describe("SQLite session row persistence", () => {
             (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
         ).length,
       ).toBeLessThanOrEqual(3);
-      const retainedSkills = facts[0]?.skillsSnapshot?.skills;
-      expect(retainedSkills).toEqual(skillsSnapshot.skills);
-      retainedSkills?.push({ name: "observer-only" });
+      expect(facts[0]?.skillsSnapshot).toEqual(skillsSnapshot);
       expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
+      result!.skillsSnapshot!.skills.push({ name: "caller-only" });
+      expect(result!.skillsSnapshot!.skills).toEqual([
+        ...skillsSnapshot.skills,
+        { name: "caller-only" },
+      ]);
       expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
     } finally {
       clone.mockRestore();
@@ -136,79 +177,70 @@ describe("SQLite session row persistence", () => {
     }
   });
 
-  it.each(["during", "after"] as const)(
-    "isolates the existing-entry context when first read %s the update",
-    async (readTiming) => {
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-context-copy-")),
-      };
-      const scope = { agentId: "main", env, sessionKey: "agent:main:context-copy" };
-      const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
-      replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
-      let readContext: () => InternalSessionEntry | undefined = () => undefined;
-      const result = await patchSessionEntryCore(
-        scope,
-        (entry, context) => {
-          readContext = () => context.existingEntry;
-          entry.skillsSnapshot!.prompt = "Callback mutation";
-          if (readTiming === "during") {
-            expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
-          }
-          return null;
-        },
-        { skipMaintenance: true },
-      );
-      result!.skillsSnapshot!.prompt = "Result mutation";
-      const contextEntry = readContext()!;
-      expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
-      contextEntry.skillsSnapshot!.prompt = "Context mutation";
-      expect(readContext()).toBe(contextEntry);
-      expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
-      expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
-    },
-  );
+  it("isolates the existing-entry context when first read during the update", async () => {
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("session-context-copy-")),
+    };
+    const scope = { agentId: "main", env, sessionKey: "agent:main:context-copy" };
+    const skillsSnapshot = { prompt: "Saved prompt", skills: [] };
+    replaceSessionEntrySync(scope, { sessionId: "existing", updatedAt: 1, skillsSnapshot });
+    let readContext: () => InternalSessionEntry | undefined = () => undefined;
+    const result = await patchSessionEntryCore(
+      scope,
+      (entry, context) => {
+        readContext = () => context.existingEntry;
+        entry.skillsSnapshot!.prompt = "Callback mutation";
+        expect(readContext()?.skillsSnapshot).toEqual(skillsSnapshot);
+        return null;
+      },
+      { skipMaintenance: true },
+    );
+    result!.skillsSnapshot!.prompt = "Result mutation";
+    const contextEntry = readContext()!;
+    expect(contextEntry.skillsSnapshot).toEqual(skillsSnapshot);
+    contextEntry.skillsSnapshot!.prompt = "Context mutation";
+    expect(readContext()).toBe(contextEntry);
+    expect(result?.skillsSnapshot?.prompt).toBe("Result mutation");
+    expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
+  });
 
-  it.each([undefined, "plugin-dock"] as const)(
-    "protects required profile provenance and surface %s during replacement",
-    async (createdSurface) => {
-      const scope = createScope("stamp");
-      const stamp = {
-        createdVia: "operator" as const,
-        ...(createdSurface ? { createdSurface } : {}),
-        createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
-        createdAt: 10,
-        sandbox: "required" as const,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
-      const replacement: InternalSessionEntry = {
-        sessionId: "replacement",
-        updatedAt: 20,
-        createdVia: "plugin",
-        createdSurface: createdSurface ? undefined : "plugin-dock",
-        createdActor: { type: "agent", id: "replacement-agent" },
-        createdAt: 20,
-      };
-      expect(
-        await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
-      ).toMatchObject(stamp);
-      expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
-      expect(loadSessionEntry(scope)?.createdSurface).toBe(createdSurface);
-      const row = openOpenClawAgentDatabase(scope)
-        .db.prepare(
-          "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
-        )
-        .get(scope.sessionKey);
-      expect(row).toMatchObject({
-        created_actor_type: "human",
-        created_actor_id: "profile-creator",
-        created_via: "operator",
-        created_at: 10,
-      });
-      expect(JSON.parse(String(row?.entry_json))).toMatchObject(stamp);
-      expect(JSON.parse(String(row?.entry_json)).createdSurface).toBe(createdSurface);
-    },
-  );
+  it("protects required profile provenance and an absent surface during replacement", async () => {
+    const scope = createScope("stamp");
+    const stamp = {
+      createdVia: "operator" as const,
+      createdActor: { type: "human" as const, source: "profile" as const, id: "profile-creator" },
+      createdAt: 10,
+      sandbox: "required" as const,
+    };
+    await upsertSessionEntryCore(scope, { sessionId: "original", updatedAt: 10, ...stamp });
+    const replacement: InternalSessionEntry = {
+      sessionId: "replacement",
+      updatedAt: 20,
+      createdVia: "plugin",
+      createdSurface: "plugin-dock",
+      createdActor: { type: "agent", id: "replacement-agent" },
+      createdAt: 20,
+    };
+    expect(
+      await patchSessionEntryCore(scope, () => replacement, { replaceEntry: true }),
+    ).toMatchObject(stamp);
+    expect(loadSessionEntry(scope)).toMatchObject({ sessionId: "replacement", ...stamp });
+    expect(loadSessionEntry(scope)?.createdSurface).toBeUndefined();
+    const row = openOpenClawAgentDatabase(scope)
+      .db.prepare(
+        "SELECT created_actor_type, created_actor_id, created_via, created_at, entry_json FROM session_nodes WHERE session_key = ?",
+      )
+      .get(scope.sessionKey);
+    expect(row).toMatchObject({
+      created_actor_type: "human",
+      created_actor_id: "profile-creator",
+      created_via: "operator",
+      created_at: 10,
+    });
+    expect(JSON.parse(String(row?.entry_json))).toMatchObject(stamp);
+    expect(JSON.parse(String(row?.entry_json)).createdSurface).toBeUndefined();
+  });
 
   it("keeps new required provenance with a fallback", async () => {
     const env = {

@@ -20,9 +20,7 @@ export async function prepareReplyWorkspace(params: {
   const options = {
     dir: params.dir,
     ensureBootstrapFiles: params.ensureBootstrapFiles,
-    skipOptionalBootstrapFiles: params.skipOptionalBootstrapFiles && [
-      ...params.skipOptionalBootstrapFiles,
-    ],
+    skipOptionalBootstrapFiles: params.skipOptionalBootstrapFiles,
   };
   const assertCurrent = () => {
     assertReplyPreprocessingActive(abortSignal);

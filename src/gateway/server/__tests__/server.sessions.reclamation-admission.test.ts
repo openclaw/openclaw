@@ -226,6 +226,14 @@ test("sessions.delete admits unrelated same-store patches during Worker validati
     },
     storePath,
   });
+  // Empty deletions reuse the admitted writer and do not enter reclamation validation.
+  await seedLinearSessionTranscript({
+    agentId: "main",
+    sessionKey: targetKey,
+    sessionId: "validation-delete",
+    storePath,
+    contents: ["archived transcript"],
+  });
   const { ws } = await openClient();
   const databasePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
   // Seed a host handle; the worker interceptor expires proof after executor preparation.
@@ -318,8 +326,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
       .all(database.path);
   const originalLeases = readLeases();
   expect(originalLeases).toHaveLength(1);
-  // A late commit guard can roll back deletion but cannot undo an earlier
-  // database-open repair. Keep the original cached handle warm throughout.
+  // Shared preparation still needs a current caller before repairing the store.
+  // Revoking deletion must preserve its session and transcript throughout.
   database.db.exec("DROP INDEX idx_agent_cache_expiry");
   invalidateOpenClawAgentDatabaseValidation(database.path);
   const readRepairIndex = () =>
@@ -348,7 +356,8 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     expect(readRepairIndex()).toBeUndefined();
     expect(openOpenClawAgentDatabase(databaseOptions)).toBe(database);
     expect(database.db.isOpen).toBe(true);
-    expect(readLeases()).toHaveLength(originalLeases.length + 1);
+    const preparingLeases = readLeases();
+    expect(preparingLeases).toHaveLength(originalLeases.length + 1);
     const callsBeforeRevocation = guardCalls;
     authorized = false;
     validation.release();
@@ -360,12 +369,14 @@ test("sessions.delete rejects revoked authority before repairing the same databa
     await expect(loadSeededTranscriptEvents(transcriptScope)).resolves.toEqual(originalTranscript);
     expect(Atomics.load(validation.gate, 2)).toBeGreaterThan(0);
     expect(Atomics.load(validation.gate, 3)).toBeGreaterThan(0);
+    expect(readRepairIndex()).toBeUndefined();
     // Refused native opening joins broker termination before returning its authority error.
     expect(reclamation.exitCodes).toEqual([1]);
     expect(readLeases()).toEqual(originalLeases);
-    expect(readRepairIndex()).toBeUndefined();
     await closeOpenClawAgentDatabasesAsync();
+    // The broker explicitly terminates its shared executor after native close.
     expect(reclamation.exitCodes).toEqual([1]);
+    expect(readLeases()).toEqual([]);
   } finally {
     await validation.close();
   }

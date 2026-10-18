@@ -17,6 +17,7 @@ import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
 } from "openclaw/plugin-sdk/plugin-test-api";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
@@ -50,6 +51,7 @@ it.each(["stop", "replacement"] as const)(
   "runs cleanup under service authority until %s",
   async (end) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       // Native timers retain async context; keep that contract in the fake clock.
       const schedule = globalThis.setTimeout;
@@ -179,7 +181,7 @@ it.each(["board", "session end"] as const)(
       await lifecycle.start();
       const db = openOpenClawStateDatabase().db;
       const prepare = db.prepare.bind(db);
-      const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql) => {
+      const hostRead = vi.spyOn(db, "prepare").mockImplementation((sql: string) => {
         if (/select\b[\s\S]*\bplugin_state_entries\b/i.test(sql)) {
           throw new Error("Dashboard discovery queried plugin rows on the host");
         }

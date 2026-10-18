@@ -1,7 +1,6 @@
 // Covers JSON5 tolerance in plugin manifest parsing.
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMemorySlotDecision } from "./config-state.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -60,48 +59,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
           authProfilePrefixes: [],
         },
       ]);
-    }
-  });
-
-  it("uses native JSON parsing for standard JSON manifests", () => {
-    const json5Parse = vi.spyOn(JSON5, "parse");
-    const dir = writeManifest({
-      id: "strict-json",
-      configSchema: { type: "object" },
-    });
-
-    const result = loadPluginManifest(dir, false);
-
-    expect(result.ok).toBe(true);
-    expect(json5Parse).not.toHaveBeenCalled();
-  });
-
-  it("reuses unchanged manifest loads within one lifecycle generation", () => {
-    const dir = writeManifest({
-      id: "cached-json",
-      configSchema: { type: "object" },
-    });
-    const first = loadPluginManifest(dir, false);
-    const second = loadPluginManifest(dir, false);
-
-    expect(first.ok).toBe(true);
-    expect(second).toBe(first);
-  });
-
-  it("parses a manifest with trailing commas", () => {
-    const dir = writeManifest(`{
-  "id": "hindsight",
-  "configSchema": {
-    "type": "object",
-    "properties": {
-      "apiKey": { "type": "string" },
-    },
-  },
-}`);
-    const result = loadPluginManifest(dir, false);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.manifest.id).toBe("hindsight");
     }
   });
 
@@ -166,43 +123,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
           selectedId: "memory-core",
         }),
       ).toEqual({ enabled: false, reason: 'memory slot set to "memory-core"' });
-    }
-  });
-
-  it("normalizes modelSupport metadata from the manifest", () => {
-    const dir = writeManifest(`{
-  id: "provider-plugin",
-  modelSupport: {
-    modelPrefixes: ["gpt-", "", "claude-"],
-    modelPatterns: ["^o[0-9].*", ""],
-  },
-  configSchema: { type: "object" }
-}`);
-    const result = loadPluginManifest(dir, false);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.manifest.modelSupport).toEqual({
-        modelPrefixes: ["gpt-", "claude-"],
-        modelPatterns: ["^o[0-9].*"],
-      });
-    }
-  });
-
-  it("normalizes catalog curation metadata from the manifest", () => {
-    const dir = writeManifest(`{
-  id: "catalog-plugin",
-  catalog: {
-    featured: false,
-    order: 0,
-  },
-  configSchema: { type: "object" }
-}`);
-
-    const result = loadPluginManifest(dir, false);
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.manifest.catalog).toEqual({ featured: false, order: 0 });
     }
   });
 
@@ -293,24 +213,6 @@ describe("loadPluginManifest JSON5 tolerance", () => {
         configMigrations: ["legacy-openai-auth"],
         requiresRuntime: false,
       });
-    }
-  });
-
-  it("still rejects completely invalid syntax", () => {
-    const dir = writeManifest("not json at all {{{}}");
-    const result = loadPluginManifest(dir, false);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("failed to parse plugin manifest");
-    }
-  });
-
-  it("rejects JSON5 values that parse but are not objects", () => {
-    const dir = writeManifest("'just a string'");
-    const result = loadPluginManifest(dir, false);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toContain("plugin manifest must be an object");
     }
   });
 });

@@ -4,6 +4,8 @@ import { en } from "./en.ts";
 // Analysis copy loads with Usage; shared labels and Settings search stay eager.
 const enUsage = {
   usage: {
+    unavailable:
+      "Token usage and cost are unknown because a response ended before final usage arrived. Select an unaffected session to view its usage.",
     presets: {
       today: "Today",
       last7d: "7d",
@@ -54,7 +56,7 @@ const enUsage = {
     query: {
       placeholder:
         "Filter sessions (e.g. key:agent:main:cron* model:gpt-4o has:errors minTokens:2000)",
-      apply: "Filter (client-side)",
+      apply: "Filter",
       matching: "{shown} of {total} sessions match",
       inRange: "{total} sessions in range",
       tip: "Tip: use filters or click bars to refine days.",
@@ -62,6 +64,8 @@ const enUsage = {
     export: {
       label: "Export",
       changed: "Session context changed while preparing the export. Refresh usage and try again.",
+      incomplete:
+        "Usage data is incomplete. Refresh usage and try again, or narrow the date range.",
       sessionsCsv: "Sessions CSV",
       dailyCsv: "Daily CSV",
       json: "JSON",

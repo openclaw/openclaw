@@ -226,7 +226,8 @@ export function createAgentCapability(gateway: AgentGateway) {
     state.agentsError = null;
     publish();
     const request: Promise<AgentsListResult | null> = client
-      .request<AgentsListResult>("agents.list", {})
+      // New Session reads the placement policy from this roster instead of a second request.
+      .request<AgentsListResult>("agents.list", { includeSessionPlacement: true })
       .then((result) => {
         const current = state.client === client && agentsRequest === request;
         if (current) {

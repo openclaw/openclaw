@@ -3,11 +3,18 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../../test/helpers/promise.js";
-import { getRuntimeConfig } from "../../../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../../../config/config.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry,
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../../../config/sessions/session-accessor.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { createGatewayInstanceRuntime } from "../../../gateway/server-instance-runtime.js";
 import { createChatAbortContext } from "../../../gateway/server-methods/chat.abort.test-helpers.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
+import { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { placementTurnOwner } from "../../../gateway/worker-environments/placement-record.js";
 import { createWorkerSessionPlacementStore } from "../../../gateway/worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "../../../gateway/worker-environments/placement-test-fixtures.js";
@@ -43,6 +50,66 @@ import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
 import { resolveSubagentSessionStatus } from "../registry/subagent-session-metrics.js";
+import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+export function createSpawnBoundaryConfig(
+  workspace: string,
+  maxChildrenPerAgent?: number,
+): OpenClawConfig {
+  return {
+    logging: { audit: { enabled: true, executionIdentity: true } },
+    tools: { swarm: { enabled: true, maxConcurrent: 1 } },
+    agents: {
+      ownership: "explicit",
+      defaults: {
+        workspace,
+        systemAgent: { agentId: "main" },
+        model: { primary: "custom/test-model" },
+        ...(maxChildrenPerAgent !== undefined ? { subagents: { maxChildrenPerAgent } } : {}),
+      },
+      entries: { main: { workspace } },
+    },
+    models: {
+      mode: "replace",
+      providers: {
+        custom: {
+          api: "openai-completions",
+          baseUrl: "https://example.invalid/v1",
+          models: [
+            {
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              id: "test-model",
+              input: ["text"],
+              maxTokens: 1_024,
+              name: "Test model",
+              reasoning: false,
+            },
+          ],
+        },
+      },
+    },
+  };
+}
+
+export async function recordSpawnBoundaryFinal(params: {
+  storePath: string;
+  sessionKey: string;
+  runId: string;
+  text: string;
+}) {
+  const entry = expectDefined(loadSessionEntry(params), "final reply session");
+  await appendTranscriptMessage(
+    { ...params, agentId: "main", sessionId: entry.sessionId },
+    {
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: params.text }],
+        stopReason: "stop",
+        __openclaw: { runId: params.runId },
+      },
+    },
+  );
+}
 
 export function createSpawnOperatorSource(
   profileId = "spawn-operator",
@@ -100,7 +167,7 @@ export async function createSpawnBoundaryParent(params: {
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }) {
   const { stateDir, parentSessionKey, parentRunId, operatorAuthority } = params;
-  const cfg = getRuntimeConfig();
+  const cfg = await captureRuntimeConfigAsyncReader()();
   const storePath = await writeSubagentSessionEntry({
     stateDir,
     agentId: "main",
@@ -240,6 +307,7 @@ export function createBoundSpawnInvocation(
     cleanup?: "keep" | "delete";
     expectsCompletionMessage?: boolean;
     completionTarget?: "parent";
+    thinking?: string;
   },
   requesterModel?: { provider: string; model: string },
   senderIsOwner?: boolean,
@@ -298,6 +366,79 @@ export function createBoundSpawnInvocation(
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
 type GatewayRuntime = ReturnType<typeof createGatewayInstanceRuntime>;
+
+export async function prepareIsolatedChildAdmissionProof(bound: BoundParent) {
+  const { parentSessionKey, storePath } = bound;
+  await appendTranscriptMessage(
+    { storePath, sessionKey: parentSessionKey, sessionId: "parent-session" },
+    { message: { role: "user", content: "History belonging only to the parent" } },
+  );
+  let createdChild: ReturnType<typeof loadSessionEntry>;
+  spawnTesting.setDepsForTest({
+    dispatchGatewayMethodInProcess: async <T>(
+      method: string,
+      params: Record<string, unknown>,
+      dispatchOptions?: Parameters<typeof dispatchGatewayMethodInProcess>[2],
+    ) => {
+      if (method === "agent") {
+        const scope = { storePath, sessionKey: String(params.sessionKey) };
+        createdChild = expectDefined(loadSessionEntry(scope), "committed child before admission");
+        expect(createdChild).toMatchObject({
+          createdVia: "spawn",
+          createdActor: { type: "agent", id: "main" },
+          createdAt: expect.any(Number),
+          spawnedBy: parentSessionKey,
+          parentSessionKey,
+          completionOwnerSessionKey: parentSessionKey,
+        });
+        expect(createdChild.sessionId).not.toBe("parent-session");
+        expect(await loadTranscriptEvents({ ...scope, sessionId: createdChild.sessionId })).toEqual(
+          [],
+        );
+        // A write after creation must survive adoption of the creation receipt.
+        await upsertSessionEntryCore(scope, {
+          label: "updated before admission",
+          permissionMode: "read-only",
+          thinkingLevel: "high",
+        });
+      }
+      return await dispatchGatewayMethodInProcess<T>(method, params, dispatchOptions);
+    },
+  });
+  return {
+    assertAdmitted(
+      childSessionKey: string,
+      embeddedRun:
+        | Parameters<typeof import("../../embedded-agent.js").runEmbeddedAgent>[0]
+        | undefined,
+    ) {
+      const initialChild = expectDefined(createdChild, "created child identity");
+      expect(embeddedRun).toMatchObject({
+        sessionId: initialChild.sessionId,
+        permissionMode: "read-only",
+        thinkLevel: "high",
+      });
+      const admittedChild = expectDefined(
+        loadSessionEntry({ storePath, sessionKey: childSessionKey }),
+        "admitted child",
+      );
+      expect(admittedChild).toMatchObject({
+        sessionId: initialChild.sessionId,
+        lifecycleRevision: initialChild.lifecycleRevision,
+        createdAt: initialChild.createdAt,
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "main" },
+        parentSessionKey,
+        completionOwnerSessionKey: parentSessionKey,
+        label: "updated before admission",
+        permissionMode: "read-only",
+        thinkingLevel: "high",
+      });
+      return admittedChild;
+    },
+    restore: () => spawnTesting.setDepsForTest(),
+  };
+}
 
 export type RequestCustodySpawnCaseOptions = {
   createBoundParent: () => Promise<BoundParent>;
@@ -398,7 +539,14 @@ export function registerYieldedRequesterBatchCase(options: {
           await params.onExecutionStarted?.();
           if (params.sessionKey !== bound.parentSessionKey) {
             childStarted.resolve();
-            return await childResult.promise;
+            const result = await childResult.promise;
+            await recordSpawnBoundaryFinal({
+              storePath: bound.storePath,
+              sessionKey: expectDefined(params.sessionKey, "child session"),
+              runId: params.runId,
+              text: "Nested child result.",
+            });
+            return result;
           }
           const current = subagentRuns.get(params.runId);
           parentCalls.push({
@@ -408,9 +556,18 @@ export function registerYieldedRequesterBatchCase(options: {
             prompt: params.prompt,
           });
           parentStarted.resolve();
+          await recordSpawnBoundaryFinal({
+            storePath: bound.storePath,
+            sessionKey: bound.parentSessionKey,
+            runId: params.runId,
+            text: "Nested parent is complete.",
+          });
           return {
             payloads: [{ text: "Nested parent is complete." }],
-            meta: { durationMs: 1, finalAssistantVisibleText: "Nested parent is complete." },
+            meta: {
+              durationMs: 1,
+              terminalReply: { disposition: "visible", text: "Nested parent is complete." },
+            },
           };
         } catch (error) {
           admissionFailures.push(error);
@@ -424,6 +581,11 @@ export function registerYieldedRequesterBatchCase(options: {
         await registry.registerSubagentRun({
           runId: bound.parentRunId,
           childSessionKey: bound.parentSessionKey,
+          childAgentId: "main",
+          sessionEntry: expectDefined(
+            loadSessionEntry({ storePath: bound.storePath, sessionKey: bound.parentSessionKey }),
+            "registered parent session",
+          ),
           requesterSessionKey: "agent:main:main",
           requesterAgentId: "main",
           requesterDisplayKey: "main",
@@ -469,7 +631,10 @@ export function registerYieldedRequesterBatchCase(options: {
         guest?.source.closeRequest();
         childResult.resolve({
           payloads: [{ text: "Nested child result." }],
-          meta: { durationMs: 1, finalAssistantVisibleText: "Nested child result." },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "Nested child result." },
+          },
         });
         const deliveryResult = await withinTest(delivered.promise, signal);
         expect(deliveryResult, JSON.stringify(deliveryResult)).toMatchObject({ delivered: true });
@@ -490,7 +655,10 @@ export function registerYieldedRequesterBatchCase(options: {
       } finally {
         childResult.resolve({
           payloads: [{ text: "Nested child result." }],
-          meta: { durationMs: 1 },
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "Nested child result." },
+          },
         });
         deliveryObserver.mockRestore();
         failures.push(...(await options.closeBoundGateway(bound, runtime, childRunId)));

@@ -35,7 +35,7 @@ import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "./subagent-completion-i
 import { resolveSubagentCompletionResultText } from "./subagent-completion-result.js";
 
 const CLAIM_LEASE_MS = 125_000;
-const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The canonical result follows.`;
+const CANONICAL_RESULT_PROMPT = `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} The result follows.`;
 
 /** Atomically admits a queue generation and publishes process mirrors only after commit. */
 export async function admitCorrelatedSubagentSessionDelivery(params: {
@@ -43,7 +43,7 @@ export async function admitCorrelatedSubagentSessionDelivery(params: {
   payload: Extract<QueuedSessionDeliveryPayload, { kind: "agentTurn" }>;
   queueContext: OpenClawStateWorkerContext;
 }): Promise<{ id: string; claimed: boolean; status: DeliveryQueueStoredStatus }> {
-  const payload = structuredClone(params.payload);
+  const payload = params.payload;
   const runId = params.runId;
   const context = params.queueContext;
   const expected = subagentRuns.get(runId);
@@ -182,11 +182,18 @@ export async function settleCorrelatedSubagentDelivery(
     return latest;
   };
   if (outcome !== "recovered") {
+    const { getUnrestorableSubagentCompletionSourceReason } =
+      await import("../registry/subagent-registry-gateway-owner.js");
+    const unavailableSource = current.requesterSettleWake
+      ? undefined
+      : getUnrestorableSubagentCompletionSourceReason(current);
     await blockSubagentCompletionDelivery({
       context: queueContext,
       subagent: current,
-      reason: queued.lastError ?? "completion delivery failed",
-      suspendedReason: "permanent_failure",
+      reason: unavailableSource ?? queued.lastError ?? "completion delivery failed",
+      suspendedReason: unavailableSource ? undefined : "permanent_failure",
+      disposition: unavailableSource ? "permanent_failure" : undefined,
+      operatorAuthorityUnavailable: unavailableSource ? true : undefined,
     });
     return;
   }

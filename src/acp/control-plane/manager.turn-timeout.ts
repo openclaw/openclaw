@@ -94,33 +94,18 @@ async function awaitCleanupWithGrace(params: {
   label: "cancel" | "close";
   promise: Promise<unknown>;
 }): Promise<boolean> {
-  const observedCleanupPromise = params.promise.then(
-    () => ({
-      kind: "done" as const,
-    }),
-    (error: unknown) => ({
-      kind: "error" as const,
-      error,
-    }),
-  );
+  let detached = false;
+  const observedCleanupPromise = params.promise.catch((error: unknown) => {
+    logVerbose(
+      `acp-manager: ${detached ? "detached " : ""}timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(error)}`,
+    );
+  });
   if (!(await settlesWithin(observedCleanupPromise, ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS))) {
-    void observedCleanupPromise.then((lateOutcome) => {
-      if (lateOutcome.kind === "error") {
-        logVerbose(
-          `acp-manager: detached timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(lateOutcome.error)}`,
-        );
-      }
-    });
+    detached = true;
     logVerbose(
       `acp-manager: timed-out turn ${params.label} cleanup exceeded ${ACP_TURN_TIMEOUT_CLEANUP_GRACE_MS}ms for ${params.sessionKey}`,
     );
     return false;
-  }
-  const outcome = await observedCleanupPromise;
-  if (outcome.kind === "error") {
-    logVerbose(
-      `acp-manager: timed-out turn ${params.label} cleanup failed for ${params.sessionKey}: ${String(outcome.error)}`,
-    );
   }
   return true;
 }

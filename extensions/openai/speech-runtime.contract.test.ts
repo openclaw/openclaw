@@ -221,7 +221,10 @@ describe("OpenAI speech public runtime contract", () => {
         name: "config wins over env",
         cfg: asLegacyTtsConfig({
           ...baseCfg,
-          tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
+          tts: {
+            ...baseCfg.tts,
+            providers: { openai: { baseUrl: "http://my-server:9000/v1" } },
+          },
         }),
         env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
         expected: "http://my-server:9000/v1",
@@ -232,7 +235,7 @@ describe("OpenAI speech public runtime contract", () => {
           ...baseCfg,
           tts: {
             ...baseCfg.tts,
-            openai: { baseUrl: "http://my-server:9000/v1///" },
+            providers: { openai: { baseUrl: "http://my-server:9000/v1///" } },
           },
         }),
         env: { OPENAI_TTS_BASE_URL: undefined },

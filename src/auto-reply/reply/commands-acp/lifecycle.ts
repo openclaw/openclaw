@@ -13,12 +13,12 @@ import {
 } from "../../../acp/policy.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import { closeAdmittedRunDelegatedAuthority } from "../../../agents/admitted-run-context.js";
+import { listAgentIds } from "../../../agents/agent-roster.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../../agents/spawned-context.js";
 import { resolveAcpSpawnRuntimePolicyError } from "../../../agents/subagents/spawn/acp-spawn-policy.js";
 import { resolveRuntimeCwdForAcpSpawn } from "../../../agents/subagents/spawn/acp-spawn-runtime.js";
 import { readChannelContextAdmissionEvidence } from "../../../channels/message-access/admission-evidence.js";
 import { updateSessionEntry } from "../../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getGatewayLocalUserIngress } from "../../../gateway/local-user-ingress.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
@@ -98,7 +98,7 @@ export async function handleAcpSpawnAction(
   }
 
   const spawn = parsed.value;
-  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+  const runtimePolicyError = await resolveAcpSpawnRuntimePolicyError({
     cfg: params.cfg,
     requesterAgentId: params.agentId,
     requesterSessionKey: params.sessionKey,
@@ -116,10 +116,15 @@ export async function handleAcpSpawnAction(
   }
 
   const acpManager = getAcpSessionManager();
-  const sessionKey = `agent:${spawn.agentId}:acp:${randomUUID()}`;
+  // Raw harness ids select a backend, not a new OpenClaw owner. Keep configured
+  // targets in their existing namespace; otherwise mirror sessions_spawn ownership.
+  const ownerAgentId = listAgentIds(params.cfg).includes(spawn.agentId)
+    ? spawn.agentId
+    : params.agentId;
+  const sessionKey = `agent:${ownerAgentId}:acp:${randomUUID()}`;
   const resolvedCwd = resolveSpawnedWorkspaceInheritance({
     config: params.cfg,
-    targetAgentId: spawn.agentId,
+    targetAgentId: ownerAgentId,
     requesterSessionKey: params.sessionKey,
     explicitWorkspaceDir: spawn.cwd,
   });
@@ -143,7 +148,7 @@ export async function handleAcpSpawnAction(
       assertActive: params.command.assertOwnerCurrent,
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       agent: spawn.agentId,
       mode: spawn.mode,
       cwd: runtimeCwd,
@@ -162,7 +167,7 @@ export async function handleAcpSpawnAction(
     cleanupFailedAcpSpawn({
       cfg: params.cfg,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       sessionEntry,
       deleteTranscript: false,
       closeRuntimeOnFailure,
@@ -173,8 +178,8 @@ export async function handleAcpSpawnAction(
     const result = await bindSpawnedAcpSession({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
-      label: spawn.label,
+      agentId: ownerAgentId,
+      label: spawn.label ?? spawn.agentId,
       mode:
         spawn.bind !== "off"
           ? "conversation"
@@ -194,7 +199,7 @@ export async function handleAcpSpawnAction(
     await persistSpawnedSessionLabel({
       commandParams: params,
       sessionKey,
-      agentId: spawn.agentId,
+      agentId: ownerAgentId,
       label: spawn.label,
     });
   } catch (err) {
@@ -235,27 +240,6 @@ export async function handleAcpSpawnAction(
   return commandReply(parts.join(" "));
 }
 
-async function resolveAcpSessionForCommandOrStop(params: {
-  acpManager: ReturnType<typeof getAcpSessionManager>;
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId: string;
-  assertCurrent?: () => void;
-}): Promise<CommandHandlerResult | null> {
-  const resolved = await params.acpManager.resolveSessionAsync({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    assertCurrent: params.assertCurrent,
-  });
-  params.assertCurrent?.();
-  const error = resolveAcpSessionResolutionError(resolved);
-  if (error) {
-    return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
-  }
-  return null;
-}
-
 async function withResolvedAcpSessionTarget(params: {
   commandParams: HandleCommandsParams;
   token?: string;
@@ -273,15 +257,15 @@ async function withResolvedAcpSessionTarget(params: {
   if (!target.ok) {
     return commandReply(`⚠️ ${target.error}`);
   }
-  const guardFailure = await resolveAcpSessionForCommandOrStop({
-    acpManager,
+  const resolved = await acpManager.resolveSessionAsync({
     cfg: params.commandParams.cfg,
     ...target,
     assertCurrent: params.commandParams.command.assertOwnerCurrent,
   });
   params.commandParams.command.assertOwnerCurrent?.();
-  if (guardFailure) {
-    return guardFailure;
+  const error = resolveAcpSessionResolutionError(resolved);
+  if (error) {
+    return acpCommandErrorReply(error, error.message, "ACP_SESSION_INIT_FAILED");
   }
   return await params.run({
     acpManager,

@@ -1,5 +1,4 @@
 import type { Message } from "grammy/types";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramMessageThreadSpec } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
@@ -70,7 +69,6 @@ export async function editMessageReplyMarkupTelegram(
           throw err;
         }
       }
-      logVerbose(`[telegram] Edited reply markup for message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
   );
@@ -102,7 +100,6 @@ export async function editMessageTelegram(
       const useRichMessages = resolveTelegramRichMessages(richMessagesParams);
       const tableMode = resolveTelegramTableMode(richMessagesParams);
       const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
-      const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
 
       // Reply markup semantics:
       // - buttons === undefined → don't send reply_markup (keep existing)
@@ -190,15 +187,21 @@ export async function editMessageTelegram(
             }),
           label,
         );
-      const performCaptionEdit = () =>
-        withTelegramPlainFallback({
+      const performCaptionEdit = () => {
+        const caption = renderTelegramHtmlText(text, {
+          textMode,
+          tableMode,
+          downgradeRichPromptTags: true,
+        });
+        return withTelegramPlainFallback({
           kind: "html",
           context: "editMessageCaption",
-          plainText,
+          plainText: telegramHtmlToPlainTextFallback(caption),
           warn: (message) => sendLogger.warn(message),
-          sendFormatted: () => editCaption(htmlText, true),
-          sendPlain: (_plan, label) => editCaption(plainText, false, label),
+          sendFormatted: () => editCaption(caption, true),
+          sendPlain: (plan, label) => editCaption(plan.plainText, false, label),
         });
+      };
 
       let editedMessage: TelegramOutboundPromptContextMessage | true | undefined;
       try {
@@ -235,7 +238,6 @@ export async function editMessageTelegram(
         });
       }
 
-      logVerbose(`[telegram] Edited message ${messageId} in chat ${chatId}`);
       return { ok: true, messageId: String(messageId), chatId };
     },
     (err) =>

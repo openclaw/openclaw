@@ -32,23 +32,6 @@ export function captureReplyToolAuthoritySession(
   };
 }
 
-/** Initial selection can supply classification only when one exact durable source won. */
-export function selectReplyToolAuthorityEntry(
-  target: GatewaySessionStoreTargetWithStore,
-  key: string,
-) {
-  const entry = target.store[target.canonicalKey];
-  return entry &&
-    !entry.incognito &&
-    target.canonicalKey === key &&
-    target.storeKeys.length === 1 &&
-    target.storeKeys[0] === key &&
-    target.capturedReadSources?.length === 1 &&
-    typeof target.capturedReadSource?.databaseIdentity === "string"
-    ? entry
-    : undefined;
-}
-
 /** Refresh classification on the admitted owner without changing the independent caller plan. */
 export async function withReplyToolAuthorityCohort<T>(params: {
   reader?: SessionEntryCohortReader;
@@ -57,7 +40,7 @@ export async function withReplyToolAuthorityCohort<T>(params: {
   env: NodeJS.ProcessEnv;
   assertCurrent(): void;
   prepare(): Promise<T>;
-  consume(entry: SessionEntry | undefined): T;
+  consume(entry: SessionEntry | undefined): Promise<T>;
 }): Promise<T> {
   const { reader, original, readPlan } = params;
   reader?.assertCurrent();
@@ -89,7 +72,7 @@ export async function withReplyToolAuthorityCohort<T>(params: {
     sessionKey: original.canonicalKey,
     env: params.env,
   });
-  return reader.withRead(
+  const preparedEntry = await reader.withRead(
     { sessionKeys: [key], snapshotFields: [] },
     assertCurrent,
     (read, assertPrepared) => {
@@ -102,9 +85,10 @@ export async function withReplyToolAuthorityCohort<T>(params: {
       ) {
         throw new Error("Tool authority classification source changed");
       }
-      const value = params.consume(entry);
-      assertPrepared();
-      return value;
+      return entry;
     },
   );
+  const value = await params.consume(preparedEntry);
+  assertCurrent();
+  return value;
 }

@@ -1,11 +1,10 @@
 import {
-  readAcpSessionEntry,
+  readAcpSessionEntryAsync,
   prepareAcpSessionEntryRead,
   type AcpSessionEntryPreparer,
   type PreparedAcpSessionEntryRead,
 } from "openclaw/plugin-sdk/acp-runtime";
 import { isAcpSessionKey } from "openclaw/plugin-sdk/routing";
-import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { persistBindingMutation } from "./thread-bindings-persistence.js";
 import { resolveBindingKey } from "./thread-bindings-session.js";
 import { getThreadBindingsState, listBindingsForAccount } from "./thread-bindings-state.js";
@@ -42,7 +41,7 @@ export async function reconcileTelegramAcpBindingsOnStartup(
         preparations.set(targetSessionKey, prepared);
         prepared.assertCurrent();
       }
-      const sessionEntry = prepared ? prepared.session : readAcpSessionEntry(input);
+      const sessionEntry = prepared ? prepared.session : await readAcpSessionEntryAsync(input);
       if (!sessionEntry || sessionEntry.storeReadFailed) {
         continue;
       }
@@ -82,11 +81,6 @@ export async function reconcileTelegramAcpBindingsOnStartup(
         if (getThreadBindingsState().bindingsByAccountConversation.get(key) === binding) {
           getThreadBindingsState().bindingsByAccountConversation.delete(key);
         }
-      }
-      if (bindingsToRemove.length > 0) {
-        logVerbose(
-          `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-        );
       }
     }
   } finally {

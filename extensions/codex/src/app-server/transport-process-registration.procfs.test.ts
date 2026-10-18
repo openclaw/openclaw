@@ -27,28 +27,6 @@ const procfs = vi.hoisted(() => {
     },
   };
 });
-vi.mock("node:fs/promises", async (importOriginal) => {
-  const original = await importOriginal<typeof import("node:fs/promises")>();
-  return {
-    ...original,
-    readFile: (...args: Parameters<typeof original.readFile>) => {
-      const file = args[0];
-      if (typeof file !== "string" || !file.startsWith("/proc/")) {
-        return original.readFile(...args);
-      }
-      return Promise.resolve().then(() => procfs.readFile(file));
-    },
-    readdir: (...args: Parameters<typeof original.readdir>) =>
-      args[0] === "/proc"
-        ? Promise.resolve(
-            [...procfs.files.keys()].flatMap(
-              (file) => /^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? [],
-            ),
-          )
-        : original.readdir(...args),
-  };
-});
-
 vi.mock("node:fs", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs")>();
   const { createProcfsSyncFixture } = await import("./transport-procfs.test-support.js");
@@ -58,7 +36,12 @@ vi.mock("node:fs", async (importOriginal) => {
 vi.mock("node:child_process", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:child_process")>();
   const { createProcfsCommandFixture } = await import("./transport-procfs.test-support.js");
-  return { ...original, execFile: createProcfsCommandFixture(original, procfs.readFile) };
+  return {
+    ...original,
+    execFile: createProcfsCommandFixture(original, procfs.readFile, () =>
+      [...procfs.files.keys()].flatMap((file) => /^\/proc\/(\d+)\/stat$/.exec(file)?.[1] ?? []),
+    ),
+  };
 });
 
 const bootId = "00000000-0000-0000-0000-000000000001";
@@ -152,8 +135,8 @@ describe("Codex registration procfs boundary", () => {
       });
       const register = await prepareCodexAppServerProcessRegistration();
       if (mode.startsWith("slow-") || mode === "exhausted-inspection") {
-        let now = Date.now();
-        vi.spyOn(Date, "now").mockImplementation(() => now);
+        let now = performance.now();
+        vi.spyOn(performance, "now").mockImplementation(() => now);
         const delayMs = mode === "exhausted-inspection" ? 6_000 : 3_000;
         procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
           now += delayMs;

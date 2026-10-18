@@ -193,12 +193,10 @@ it("rejects and terminalizes an intent superseded while descriptor admission wai
   });
 });
 
-it.each(["recorded child", "persisted store owner"] as const)(
-  "terminalizes a committed intent after a definite descriptor refusal using its %s usage",
-  async (owner) => {
+it.each(["main", "research"] as const)(
+  "terminalizes a committed intent using its recorded child usage with %s as the configured store owner",
+  async (configuredStoreOwner) => {
     await withQueuedRegistrationFixture(async (f) => {
-      const recordedChild = owner === "recorded child";
-      const configuredStoreOwner = recordedChild ? "main" : "research";
       const cfg = {
         session: { store: path.join(resolveStateDir(), "queued-registration-sessions.sqlite") },
         agents: {
@@ -209,7 +207,11 @@ it.each(["recorded child", "persisted store owner"] as const)(
       } satisfies OpenClawConfig;
       f.options.getRuntimeConfig = () => cfg;
       f.registration.childSessionKey = "global";
-      f.registration.childAgentId = recordedChild ? "research" : undefined;
+      f.registration.childAgentId = "research";
+      f.registration.sessionEntry = {
+        sessionId: "research-collector-session",
+        lifecycleRevision: "research-collector-lifecycle",
+      };
       f.registration.queuedLaunch!.request.sessionKey = "global";
       for (const [agentId, inputTokens, outputTokens] of [
         ["main", 11, 13],
@@ -501,6 +503,8 @@ it.each(["pending", "already dispatched", "next attempt"] as const)(
         await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
         expect(warn).not.toHaveBeenCalled();
         expect(f.current().execution).toMatchObject({ status: "running", startedAt: 20 });
+        expect(f.scope.canLaunch()).toBe(false);
+        expect(f.scope.canAcceptLaunch()).toBe(true);
         if (timing === "pending") {
           expect(completeInBackground).not.toHaveBeenCalled();
         } else {
@@ -551,25 +555,6 @@ it.each(["transaction", "commit"] as const)(
       } finally {
         admission.mockRestore();
       }
-    });
-  },
-);
-
-it.each(["running", "terminal"] as const)(
-  "retains acceptance authority after a %s lifecycle publication",
-  async (status) => {
-    await withQueuedRegistrationFixture(async (f) => {
-      await f.register();
-      await f.change((draft) => {
-        draft.execution = {
-          ...draft.execution,
-          status,
-          startedAt: 10,
-          ...(status === "terminal" ? { endedAt: 20 } : {}),
-        };
-      });
-      expect(f.scope.canLaunch()).toBe(false);
-      expect(f.scope.canAcceptLaunch()).toBe(true);
     });
   },
 );

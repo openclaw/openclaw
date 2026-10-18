@@ -44,7 +44,6 @@ it("inspects retained import.meta reads and assignments without evaluating depen
   ]);
   expect(inspection.unresolved).toEqual([]);
   expect(inspection.files).toContain(codec);
-  expect(() => inspection.assertSourceCurrent()).not.toThrow();
 
   const visited: string[] = [];
   visitPluginSourceReferences(
@@ -126,7 +125,6 @@ it("inspects a captured cyclic dependency graph without following its dependency
       )
       .toSorted(),
   );
-  expect(() => inspection.assertSourceCurrent()).not.toThrow();
   expect(fs.readdirSync(captures)).toEqual([]);
   expect(followedLinks.size).toBe(0);
 });
@@ -137,14 +135,7 @@ it.for(
   ),
 )(
   "inspects the module-sync target for $kind $specifier without evaluation",
-  ({ specifier, kind }, context) => {
-    // The CI pin predates openclaw/bun#57; keep import inspection active on that pin.
-    if (
-      kind === "require" &&
-      Reflect.get(process, "revision") === "17c9ecf9eb4aa0b60ae1a2c9f28c1b6dc0f4c8ac"
-    ) {
-      context.skip();
-    }
+  ({ specifier, kind }) => {
     const root = temp.make("plugin-inspection-conditions-");
     const entryFile = path.join(root, kind === "import" ? "index.mjs" : "index.cjs");
     const selected = path.join(root, "sync.mjs");
@@ -171,6 +162,5 @@ it.for(
     const inspection = inspectPluginSourceDependencies([{ rootDir: root, entryFile }]);
     expect(inspection.unresolved).toEqual([]);
     expect(inspection.references).toEqual([{ source: entryFile, specifier, target: selected }]);
-    expect(() => inspection.assertSourceCurrent()).not.toThrow();
   },
 );

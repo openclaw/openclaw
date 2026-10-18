@@ -15,6 +15,7 @@ import {
   openSessionMenuSubmenu,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+import { selectAllSidebarSessions } from "./sidebar-navigation.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat export attribution",
@@ -114,11 +115,8 @@ suite.define(() => {
             }
             markdown = await text(stream);
           } else {
-            // Keep this transcript ownerless: selecting All must not attribute it to the viewer.
-            await page
-              .locator(".sidebar-navigation-scope")
-              .getByRole("button", { name: "All", exact: true })
-              .click();
+            // Selecting All owners must not attribute this ownerless transcript to the viewer.
+            await selectAllSidebarSessions(page);
             const row = page.locator(`.sidebar-recent-session[data-session-key="${sessionKey}"]`);
             await row.hover();
             await row.click({ button: "right" });
@@ -130,7 +128,7 @@ suite.define(() => {
             });
             if (captureUiProofEnabled) {
               await waitForControlUiProofSurface(
-                page.locator('openclaw-session-menu > wa-dropdown [part="menu"]'),
+                page.locator("openclaw-session-menu .session-menu__panel"),
                 [page.getByRole("menuitem", { name: "Copy details", exact: true })],
               );
             }
@@ -138,9 +136,7 @@ suite.define(() => {
               suite,
               page,
               "copy-menu.png",
-              page
-                .getByRole("menuitem", { name: "Copy details", exact: true })
-                .locator('[part="submenu"]'),
+              page.getByRole("menu", { name: "Copy details", exact: true }),
               [copy],
             );
             await copy.click({ trial: true });

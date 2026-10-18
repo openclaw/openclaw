@@ -2,7 +2,7 @@ const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 5_000;
 
 type SessionEventRefreshCoordinatorOptions = {
   active: boolean;
-  refresh: (isCurrent: () => boolean) => Promise<void>;
+  refresh: (isCurrent: () => boolean, immediate: boolean) => Promise<void>;
 };
 
 /** Canonical bounded event refresh policy shared by session-list owners. */
@@ -17,6 +17,7 @@ export function createSessionEventRefreshCoordinator({
   let revision = 0;
   // Hidden pages and in-flight requests retain one trailing invalidation.
   let queued = false;
+  let immediate = false;
   let retryAt: number | null = null;
   let fallback: ReturnType<typeof setTimeout> | undefined;
 
@@ -33,7 +34,11 @@ export function createSessionEventRefreshCoordinator({
     const delay = debounce ? SESSION_EVENT_REFRESH_DEBOUNCE_MS * (1 - 0.2 * Math.random()) : 0;
     timer = setTimeout(
       start,
-      retryAt === null ? Math.max(delay, nextAllowed - now) : Math.max(0, retryAt - now),
+      retryAt !== null
+        ? Math.max(0, retryAt - now)
+        : immediate
+          ? 0
+          : Math.max(delay, nextAllowed - now),
     );
   };
 
@@ -43,12 +48,14 @@ export function createSessionEventRefreshCoordinator({
       return;
     }
     queued = false;
+    const requestImmediate = immediate;
+    immediate = false;
     retryAt = null;
     const request = {};
     pending = request;
     const started = Date.now();
     const requestRevision = revision;
-    void refresh(() => pending === request && requestRevision === revision)
+    void refresh(() => pending === request && requestRevision === revision, requestImmediate)
       .catch(() => {})
       .finally(() => {
         if (pending !== request) {
@@ -67,6 +74,7 @@ export function createSessionEventRefreshCoordinator({
     revision += 1;
     clearTimer();
     queued = false;
+    immediate = false;
     retryAt = null;
   };
   const reset = () => {
@@ -89,8 +97,13 @@ export function createSessionEventRefreshCoordinator({
       clearTimer();
       arm(false);
     },
-    schedule() {
+    schedule(expedite = false) {
       queued = true;
+      if (expedite && !immediate) {
+        // Creation skips collection/backoff, not active-request or visibility ownership.
+        immediate = true;
+        clearTimer();
+      }
       arm();
     },
     setActive(next: boolean, markDirty = false) {

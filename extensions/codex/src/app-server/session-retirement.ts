@@ -200,7 +200,7 @@ export async function retireCodexAppServerSessionGeneration(params: {
   }
   return await withCodexAppServerThreadMutation(expectedBinding.threadId, () =>
     params.bindingStore.withLease(params.identity, async () => {
-      const binding = params.bindingStore.read(params.identity);
+      const binding = await params.bindingStore.readAsync(params.identity);
       if (!binding || !isSameCodexAppServerThreadOwner(binding, expectedBinding)) {
         return "conflict";
       }

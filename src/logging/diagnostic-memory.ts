@@ -7,6 +7,7 @@ import {
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
 import { sampleTrackedWorkerMemory } from "../infra/worker-cpu.js";
+import { getWorkerMessageMetrics } from "../infra/worker-message-metrics.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const WARNING_RATIO = 0.8;
@@ -40,14 +41,19 @@ function isPositiveMemoryLimit(value: number | undefined): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
-function normalizeMemoryUsage(memory: NodeJS.MemoryUsage): DiagnosticMemoryUsage {
+function normalizeMemoryUsage(
+  memory: NodeJS.MemoryUsage,
+  collectDiagnostics: boolean,
+): DiagnosticMemoryUsage {
   return {
     rssBytes: memory.rss,
     heapTotalBytes: memory.heapTotal,
     heapUsedBytes: memory.heapUsed,
     externalBytes: memory.external,
     arrayBuffersBytes: memory.arrayBuffers,
-    ...sampleTrackedWorkerMemory(),
+    ...(collectDiagnostics
+      ? { ...sampleTrackedWorkerMemory(), workerMessages: getWorkerMessageMetrics() }
+      : {}),
   };
 }
 
@@ -213,19 +219,25 @@ function logMemoryPressure(pressure: MemoryPressure): void {
   log.warn(message);
 }
 
-export function emitDiagnosticMemorySample(options?: {
-  now?: number;
-  memoryUsage?: NodeJS.MemoryUsage;
-  heapSizeLimitBytes?: number;
-  processMemoryLimitBytes?: number;
-  physicalMemoryBytes?: number;
-  isBunRuntime?: boolean;
-  uptimeMs?: number;
-  thresholds?: DiagnosticMemoryThresholds;
-  emitSample?: boolean;
-}): DiagnosticMemoryUsage {
+export function emitDiagnosticMemorySample(
+  options?: {
+    now?: number;
+    memoryUsage?: NodeJS.MemoryUsage;
+    heapSizeLimitBytes?: number;
+    processMemoryLimitBytes?: number;
+    physicalMemoryBytes?: number;
+    isBunRuntime?: boolean;
+    uptimeMs?: number;
+    thresholds?: DiagnosticMemoryThresholds;
+    emitSample?: boolean;
+  },
+  collectDiagnostics = true,
+): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
-  const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
+  const memory = normalizeMemoryUsage(
+    options?.memoryUsage ?? process.memoryUsage(),
+    collectDiagnostics,
+  );
   const isBun = options?.isBunRuntime ?? DEFAULT_IS_BUN_RUNTIME;
   const heapLimitBytes = isBun
     ? undefined
@@ -236,7 +248,7 @@ export function emitDiagnosticMemorySample(options?: {
     options?.physicalMemoryBytes ?? DEFAULT_PHYSICAL_MEMORY_BYTES,
   ].filter(isPositiveMemoryLimit);
   const rssLimitBytes = memoryLimits.length ? Math.min(...memoryLimits) : undefined;
-  const shouldEmitSample = options?.emitSample !== false;
+  const shouldEmitSample = collectDiagnostics && options?.emitSample !== false;
 
   if (shouldEmitSample) {
     emitDiagnosticEvent({
@@ -254,6 +266,7 @@ export function emitDiagnosticMemorySample(options?: {
     channel("openclaw.memory.critical").publish(undefined);
   }
   if (
+    collectDiagnostics &&
     pressure &&
     shouldEmitPressure(
       pressure,

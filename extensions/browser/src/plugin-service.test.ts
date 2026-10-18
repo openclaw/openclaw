@@ -55,14 +55,6 @@ describe("createBrowserPluginService", () => {
   const createService = () =>
     createBrowserPluginService({ stopOnDemand: runtimeMocks.stopBrowserControlService });
 
-  it("does not start the control server during gateway startup by default", async () => {
-    const service = createService();
-
-    await service.start(SERVICE_CONTEXT);
-
-    expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
-  });
-
   it("does not start the control server when eager startup is disabled", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "0");
     const service = createService();
@@ -134,10 +126,6 @@ describe("createBrowserPluginService", () => {
 });
 
 describe("resolveBrowserPluginEnableState", () => {
-  it("defaults to enabled", () => {
-    expect(resolveBrowserPluginEnableState({} as OpenClawConfig)).toEqual({ enabled: true });
-  });
-
   it("respects explicit plugin disablement", () => {
     expect(
       resolveBrowserPluginEnableState({

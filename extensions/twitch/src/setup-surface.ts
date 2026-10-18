@@ -380,7 +380,7 @@ const twitchDmPolicy = createChannelDmPolicy({
     return setTwitchAccount(
       cfg,
       {
-        ...(account ?? undefined),
+        ...account,
         allowFrom,
       },
       resolvedAccountId,

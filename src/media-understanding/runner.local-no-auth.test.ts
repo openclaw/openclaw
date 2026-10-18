@@ -65,7 +65,7 @@ const AUTH_ENV = {
 
 beforeEach(() => {
   modelAuthTestControl.forceMissingProvider = false;
-  modelAuthTestControl.store = undefined;
+  modelAuthTestControl.store = { version: 1, profiles: {} };
 });
 
 type AudioResult = Awaited<ReturnType<typeof runCapability>>;

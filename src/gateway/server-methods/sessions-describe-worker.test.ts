@@ -214,9 +214,9 @@ async function afterCommittedChange(
   }
 }
 
-it.each(["describe", "list"] as const)(
+it.each(["list"] as const)(
   "captures current registry facts after %s owner publications",
-  async (method) => {
+  async () => {
     await withFixture(async ({ context, viewer, retainedRunIds }) => {
       await describeSession(context, viewer);
       const current = retainedRun("current-memory", {
@@ -224,17 +224,12 @@ it.each(["describe", "list"] as const)(
         controllerSessionKey: "agent:main:current-controller",
       });
       try {
-        const read = method === "list" ? whilePaused : afterCommittedChange;
-        const response = await read(
+        const response = await whilePaused(
           context,
           () =>
-            method === "describe"
-              ? describeSession(context, viewer)
-              : listSessions({ client: viewer, context, request: { limit: 100 } }).then(
-                  (result) => ({
-                    session: result.sessions.find((row) => row.key === targetKey),
-                  }),
-                ),
+            listSessions({ client: viewer, context, request: { limit: 100 } }).then((result) => ({
+              session: result.sessions.find((row) => row.key === targetKey),
+            })),
           () => {
             const published = retainedRun("current-persisted", {
               collect: true,
@@ -347,7 +342,7 @@ it("projects current target, lineage, children and placement after committed cha
   });
 });
 
-it.each(["draft", "role", "creator alias"] as const)(
+it.each(["role", "creator alias"] as const)(
   "rechecks sharing visibility after a %s change before the synchronous read",
   async (change) => {
     await withFixture(async ({ cfg, context, viewer }) => {

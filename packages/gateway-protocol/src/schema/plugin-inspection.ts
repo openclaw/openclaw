@@ -2,6 +2,7 @@ import { Type, type TSchema } from "typebox";
 import { closedObject } from "./closed-object.js";
 import type { PluginDeclaredSurfaceGroup } from "./plugin-declared-surface-groups.js";
 import { NonEmptyString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Effective operator hook-policy grant with optional explicit config value. */
 export const PluginHookGrantSchema = closedObject({
@@ -13,23 +14,21 @@ export const PluginHookGrantSchema = closedObject({
 
 /** Install provenance and pinned artifact integrity for one plugin. */
 export const PluginInspectSourceSchema = closedObject({
-  kind: Type.Union([
-    Type.Literal("bundled"),
-    Type.Literal("clawhub"),
-    Type.Literal("npm"),
-    Type.Literal("git"),
-    Type.Literal("path"),
-    Type.Literal("archive"),
-    Type.Literal("marketplace"),
-    Type.Literal("official-catalog"),
+  kind: stringLiteralUnion([
+    "bundled",
+    "clawhub",
+    "npm",
+    "git",
+    "path",
+    "archive",
+    "marketplace",
+    "official-catalog",
   ]),
   spec: Type.Optional(NonEmptyString),
   packageName: Type.Optional(NonEmptyString),
   /** Pinned artifact integrity recorded at install (npm SSRI, sha-256, or git commit). */
   integrity: Type.Optional(NonEmptyString),
-  integrityKind: Type.Optional(
-    Type.Union([Type.Literal("ssri"), Type.Literal("sha256"), Type.Literal("git-commit")]),
-  ),
+  integrityKind: Type.Optional(stringLiteralUnion(["ssri", "sha256", "git-commit"])),
 });
 
 /** Manifest-declared capability surface in enumerable terms. All arrays sorted. */
@@ -74,12 +73,7 @@ export const PluginOperatorGrantsSchema = closedObject({
 
 /** Persisted ClawHub per-release trust verdict from the install record. */
 export const PluginInstallTrustSchema = closedObject({
-  disposition: Type.Union([
-    Type.Literal("clean"),
-    Type.Literal("review-recommended"),
-    Type.Literal("review-required"),
-    Type.Literal("blocked"),
-  ]),
+  disposition: stringLiteralUnion(["clean", "review-recommended", "review-required", "blocked"]),
   reasons: Type.Optional(Type.Array(Type.String())),
   checkedAt: Type.Optional(NonEmptyString),
   acknowledgedAt: Type.Optional(NonEmptyString),
@@ -116,7 +110,8 @@ export const PluginDecisionProviderStatusSchema = closedObject({
   providerId: NonEmptyString,
   pluginId: NonEmptyString,
   configured: Type.Boolean(),
-  credentialReady: Type.Boolean(),
+  /** V1 prepared readiness; V2 omits this because credentials are selected per call. */
+  credentialReady: Type.Optional(Type.Boolean()),
   callable: Type.Boolean(),
   runtimeGeneration: NonEmptyString,
   recentSuccessAt: Type.Optional(Type.Integer({ minimum: 0 })),

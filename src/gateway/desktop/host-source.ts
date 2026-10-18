@@ -503,16 +503,11 @@ export function createHostDesktopService(params: {
       }
     },
     async status() {
-      for (;;) {
-        const runtime = await resolveRuntime();
-        if (!runtime) {
-          return (await inspectHostDesktop({ config: params.getConfig(), platform })).status;
-        }
-        const inspection = await runtime.source.inspect();
-        if (isCurrent(runtime)) {
-          return inspection.status;
-        }
+      const runtime = await resolveRuntime();
+      if (!runtime) {
+        return (await inspectHostDesktop({ config: params.getConfig(), platform })).status;
       }
+      return (await runtime.source.inspect()).status;
     },
     reconcileRuntimePolicy,
   };

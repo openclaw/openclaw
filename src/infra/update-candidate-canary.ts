@@ -5,39 +5,27 @@ import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import JSON5 from "json5";
+import { readUpdateTargetCliOptions } from "../cli/update-cli/update-command-cli-options.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
-import {
-  parseOpenClawSchemaVersions,
-  type OpenClawSchemaVersions,
-} from "../state/openclaw-schema-versions.js";
+import * as schemaVersions from "../state/openclaw-schema-versions.js";
 import { hasErrnoCode } from "./errors.js";
 import { readPackageVersion } from "./package-json.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveSqliteInspectionBudget } from "./sqlite-readonly-worker.js";
-import {
-  buildUpdateCanaryCommands,
-  type UpdateCanaryCommand,
-} from "./update-candidate-canary-commands.js";
+import * as canaryCmd from "./update-candidate-canary-commands.js";
 import { launchCanary, stopCanary, waitBounded } from "./update-candidate-canary-process.js";
 import { UPDATE_CANARY_PROGRESS_ARGS } from "./update-candidate-canary-progress.js";
-import {
-  observeUpdateCandidateStartup,
-  waitForUpdateCandidateReadiness,
-} from "./update-candidate-canary-readiness.js";
+import * as readiness from "./update-candidate-canary-readiness.js";
 import type { UpdateCandidateBundledSource } from "./update-candidate-plugins.js";
 import {
   prepareUpdateCandidateRehearsal,
   type UpdateCandidateRehearsal,
 } from "./update-candidate-rehearsal.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
-import {
-  applyUpdateDoctorLintReport,
-  parseUpdateDoctorLintReport,
-  UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX,
-} from "./update-doctor-lint.js";
+import * as lint from "./update-doctor-lint.js";
 import {
   consumeUpdatePostInstallDoctorResult,
   createUpdatePostInstallDoctorResultPath,
@@ -58,13 +46,17 @@ import { resolveUpdateDoctorExecutionPolicy } from "./update-runner-doctor.js";
 import { UpdateSnapshotCapacityError } from "./update-snapshot-capacity.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-type CanaryPhase = UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
+type CanaryPhase = canaryCmd.UpdateCanaryCommand["phase"] | "snapshot" | "startup" | "readiness";
 
 type CanaryOutcome =
   | { status: "ok" }
   | {
       status: "error";
-      reason: "doctor-failed" | "candidate-checks-timeout" | "runtime-verification-failed";
+      reason:
+        | "doctor-failed"
+        | "candidate-checks-timeout"
+        | "candidate-snapshot-failed"
+        | "runtime-verification-failed";
     };
 
 type CanaryResult = {
@@ -72,7 +64,7 @@ type CanaryResult = {
   durationMs: number;
   logTail: string[];
   steps: UpdateStepResult[];
-  candidateSchemaVersions?: OpenClawSchemaVersions;
+  candidateSchemaVersions?: schemaVersions.OpenClawSchemaVersions;
   gatewayRestartCompletion?: boolean;
   doctorConfigWrites?: boolean;
   doctorConfigChanges?: UpdateDoctorConfigChange[];
@@ -93,6 +85,7 @@ export async function validateUpdateCandidateCanary(params: {
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   nodeRunner?: string;
+  fullIntegrityCheck?: boolean;
   assertCurrent?: () => void;
   /** Startup-only callers must prove the preserved input boots without Doctor repair. */
   migrationPolicy?: "rehearse" | "startup-only";
@@ -164,7 +157,7 @@ export async function validateUpdateCandidateCanary(params: {
       });
     }
   };
-  let candidateSchemaVersions: OpenClawSchemaVersions | undefined;
+  let candidateSchemaVersions: schemaVersions.OpenClawSchemaVersions | undefined;
   let gatewayRestartCompletion = false;
   let doctorConfigWrites = false;
   let doctorConfigChanges: UpdateDoctorConfigChange[] = [];
@@ -277,6 +270,7 @@ export async function validateUpdateCandidateCanary(params: {
       assertCurrent: params.assertCurrent,
       onProgress: params.onProgress,
       migrationPolicy: params.migrationPolicy,
+      fullIntegrityCheck: params.fullIntegrityCheck,
     });
     // Copying private state has its own size/progress budget; preserve the
     // runtime validation budget after large snapshots finish.
@@ -294,9 +288,22 @@ export async function validateUpdateCandidateCanary(params: {
       gateway: { host: "127.0.0.1", port },
       mcpAppSandbox: "disabled",
     };
-    const commands = buildUpdateCanaryCommands({
+    const commands = canaryCmd.buildUpdateCanaryCommands({
       continuationEntry,
       migrationPolicy: params.migrationPolicy,
+      fullIntegrityCheck:
+        params.migrationPolicy !== "startup-only" &&
+        params.fullIntegrityCheck &&
+        (
+          await readUpdateTargetCliOptions(
+            {
+              nodeRunner: params.nodeRunner ?? process.execPath,
+              entryPath: entry,
+              command: "doctor",
+            },
+            { cwd: params.root, baseEnv: env, timeoutMs: params.timeoutMs },
+          )
+        ).has("--full-integrity-check"),
     });
     // Each fresh process may inspect the private state again, including the Gateway.
     const processBudget = resolveSqliteInspectionBudget(
@@ -348,7 +355,7 @@ export async function validateUpdateCandidateCanary(params: {
         onLine: (line) => {
           sectionTiming?.observeLine(line);
           const plain = stripVTControlCharacters(line).trim();
-          if (phase === "lint" && plain.startsWith(UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX)) {
+          if (phase === "lint" && plain.startsWith(lint.UPDATE_DOCTOR_DISPOSAL_WARNING_PREFIX)) {
             disposalWarnings.push(redactSupportString(plain, { env, stateDir: params.stateDir }));
           }
           if (phase === "doctor" && /^(?:└\s*)?Doctor complete\.$/u.test(plain)) {
@@ -358,7 +365,7 @@ export async function validateUpdateCandidateCanary(params: {
         onStdout: (stdout) => {
           if (phase === "lint") {
             try {
-              parseUpdateDoctorLintReport(stdout);
+              lint.parseUpdateDoctorLintReport(stdout);
               checksCompletedAt ??= Date.now();
             } catch {
               checksCompletedAt = undefined;
@@ -387,7 +394,7 @@ export async function validateUpdateCandidateCanary(params: {
           // Freeze this child's result before termination can emit late completion output.
           const lintReport =
             phase === "lint" && checksCompletedAt !== undefined && !running.outputExceeded()
-              ? parseUpdateDoctorLintReport(running.stdout(), env)
+              ? lint.parseUpdateDoctorLintReport(running.stdout(), env)
               : undefined;
           const completed = checksCompletedAt !== undefined && (phase === "doctor" || lintReport);
           timeoutMessage = `candidate-migration-rehearsal: ${phase} exceeded budget after ${Math.ceil(elapsed / 1000)} s (${stepLogTail.at(-1) ?? "no progress output"})`;
@@ -450,7 +457,7 @@ export async function validateUpdateCandidateCanary(params: {
           : undefined;
       params.signal?.throwIfAborted();
       const lintReport = activeLintStep
-        ? applyUpdateDoctorLintReport(activeLintStep, running.stdout(), code, env)
+        ? lint.applyUpdateDoctorLintReport(activeLintStep, running.stdout(), code, env)
         : undefined;
       doctorAdvisory ??= activeLintStep?.advisory;
       if (code === 0 && phase === "plugins") {
@@ -511,7 +518,7 @@ export async function validateUpdateCandidateCanary(params: {
         const contract: unknown = running.outputExceeded()
           ? undefined
           : JSON.parse(running.stdout());
-        candidateSchemaVersions = parseOpenClawSchemaVersions(contract);
+        candidateSchemaVersions = schemaVersions.parseOpenClawSchemaVersions(contract);
         gatewayRestartCompletion = isRecord(contract) && contract.gatewayRestartCompletion === true;
         doctorConfigWrites = isRecord(contract) && contract.doctorConfigWrites === "pid-start-v1";
         if (!candidateSchemaVersions) {
@@ -583,17 +590,17 @@ export async function validateUpdateCandidateCanary(params: {
     startBudget();
     remaining();
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
-    const startupProgress = observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
+    const startup = readiness.observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();
     const running = launch(entry, [...args, "--port", String(port)], {
-      onLine: startupProgress.onLine,
+      onLine: startup.onLine,
     });
     const abortExited = () => processExit.abort();
     running.child.once("exit", abortExited);
     running.child.once("error", abortExited);
     let startupFailure: unknown;
     try {
-      const probeFailure = await waitForUpdateCandidateReadiness({
+      const probeFailure = await readiness.waitForUpdateCandidateReadiness({
         port,
         workDeadline,
         started,
@@ -602,7 +609,7 @@ export async function validateUpdateCandidateCanary(params: {
         assertCurrent: params.assertCurrent,
         hasExited: () => running.processExited() || running.hasExited(),
         getExitReason: running.stderrDiagnostic,
-        startupProgress: startupProgress.milestones,
+        startupProgress: startup.milestones,
         onWarning: async (message) => {
           startupWarnings.push(message);
           capture(message);
@@ -702,7 +709,9 @@ export async function validateUpdateCandidateCanary(params: {
           ? "candidate-checks-timeout"
           : phase === "doctor" || phase === "lint"
             ? "doctor-failed"
-            : "runtime-verification-failed",
+            : phase === "snapshot"
+              ? "candidate-snapshot-failed"
+              : "runtime-verification-failed",
       },
       phase,
     );

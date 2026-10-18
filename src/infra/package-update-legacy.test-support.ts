@@ -2,13 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
-// Frozen byte format from v2026.9.8 package-update-integrity.ts, independent of today's reader.
-export function legacyPackageFingerprint(root: string) {
+// Frozen v2026.9.8 byte format, also verified against the pinned npm v2026.9.9 helper.
+// Independent of today's reader; the optional device models pre-remount digest bytes.
+export function legacyPackageFingerprint(root: string, historicalDevice?: string) {
   const digest = createHash("sha256");
   const hardlinks = new Map<string, string>();
   const visit = (file: string, relative: string) => {
     const stat = fs.lstatSync(file, { bigint: true });
-    const identity = `${stat.dev}:${stat.ino}`;
+    const identity = `${historicalDevice ?? stat.dev}:${stat.ino}`;
     const metadata = [
       identity,
       stat.mode,

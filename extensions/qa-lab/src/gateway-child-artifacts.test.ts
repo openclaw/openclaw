@@ -183,7 +183,7 @@ console.log(JSON.stringify({ scratch, cache }));
         stateDir,
         profiles: { fake: { type: "api_key", provider: "openai", key: "qa-synthetic" } },
       });
-      readQaAuthProfiles(agentDir);
+      await readQaAuthProfiles(agentDir);
       const agent = openOpenClawAgentDatabase({
         agentId: "qa",
         env,

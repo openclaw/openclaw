@@ -1,21 +1,22 @@
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import type { WorkerSessionPlacementProjection } from "./placement-read-projection.types.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
-import type { PlacementStoreRuntime } from "./placement-runtime.js";
-import { matchesWorkerPlacementTarget } from "./placement-target.js";
+import { preparePlacementAuthorityRead } from "./placement-turn-authority.js";
 import {
   PERSONAL_SCOPE,
-  readWorkspaceReservationAuthority,
   SessionWorkspaceReservationBusyError,
 } from "./placement-workspace-reservation.kernel.js";
 
 const SCOPE = "session-workspace-action";
 function assertReconciled(
-  facts: ReturnType<typeof readWorkspaceReservationAuthority>,
+  facts: WorkerSessionPlacementProjection,
   identity: WorkerSessionPlacementIdentity,
   workspace: "local" | "repository",
 ): void {
-  const { placement, pending, reconciling } = facts;
+  const placement = facts.placements.get(identity.sessionId);
+  const pending = facts.pendingResults.has(identity.sessionId);
+  const reconciling = facts.workspaceRecoveryPendingSessionIds.has(identity.sessionId);
   if (
     placement &&
     (placement.agentId !== identity.agentId || placement.sessionKey !== identity.sessionKey)
@@ -45,7 +46,10 @@ function assertReconciled(
   }
 }
 
-export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRuntime) {
+export function createPlacementWorkspaceReservationOps(
+  runtime: { path: string },
+  read: (sessionId: string) => Promise<WorkerSessionPlacementProjection>,
+) {
   const signal = getGatewayRestartDrainSignal();
   const withReservation = async <T>(
     scope: string,
@@ -77,19 +81,23 @@ export function createPlacementWorkspaceReservationOps(runtime: PlacementStoreRu
       identity.sessionId,
       async (assertPublisherExclusion) =>
         await withReservation(PERSONAL_SCOPE, identity.sessionId, async (assertOwned) => {
-          const initial = readWorkspaceReservationAuthority(runtime.read(), identity.sessionId);
-          assertReconciled(initial, identity, workspace);
-          const assertCurrent = () => {
-            assertPublisherExclusion();
-            assertOwned();
-            const current = readWorkspaceReservationAuthority(runtime.read(), identity.sessionId);
-            assertReconciled(current, identity, workspace);
-            if (!matchesWorkerPlacementTarget(current.placement, initial.placement)) {
-              throw new Error("The session workspace placement changed during publication.");
-            }
-          };
-          // This lease is exclusion only: it never creates a model run, turn claim, or identity.
-          return await run(assertCurrent);
+          const prepared = await preparePlacementAuthorityRead(
+            runtime.path,
+            identity.sessionId,
+            () => read(identity.sessionId),
+          );
+          try {
+            assertReconciled(prepared.value, identity, workspace);
+            const assertCurrent = () => {
+              assertPublisherExclusion();
+              assertOwned();
+              prepared.assertCurrent();
+            };
+            // Exclusion blocks new claims; committed placement changes revoke the prepared facts.
+            return await run(assertCurrent);
+          } finally {
+            prepared.release();
+          }
         }),
     );
   };

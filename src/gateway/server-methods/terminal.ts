@@ -21,7 +21,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { allowsProcessHomeSessionScan } from "../../config/paths.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
 import { NODE_TERMINAL_UPLOAD_COMMAND } from "../../infra/node-commands.js";
 import { mergeProcessEnv } from "../../infra/process-env.js";
 import type { TerminalUploadFile } from "../../infra/terminal-file-upload.js";
@@ -29,7 +29,8 @@ import type { SessionCatalogTerminalPlan } from "../../plugins/session-catalog.j
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
+import type { GatewaySessionEntryRead } from "../session-utils.js";
 import { buildTerminalEnv, type TerminalLaunchResolution } from "../terminal/launch.js";
 import { createNodeRelayBackend } from "../terminal/node-relay.js";
 import {
@@ -154,46 +155,26 @@ export async function openTerminalSession(
   opts: GatewayRequestHandlerOptions,
   request: TerminalSessionOpenRequest,
 ): Promise<void> {
-  const binding = request.sessionKey
-    ? captureIncognitoSessionSource({ agentId: request.agentId, sessionKey: request.sessionKey })
+  const authority = readGatewayRequestMutationAuthority(opts);
+  const metadata = request.sessionKey
+    ? captureSessionEntryMetadataRead(
+        { agentId: request.agentId, sessionKey: request.sessionKey },
+        authority.assertCurrent,
+      )
     : undefined;
-  if (binding && request.sessionKey) {
-    const authority = readGatewayRequestMutationAuthority(opts);
+  if (metadata && request.sessionKey) {
     const sessionKey = request.sessionKey;
-    if ("kind" in binding) {
-      return openTerminalSessionWithSource(opts, request, {
-        entry: undefined,
-        assertCurrent() {
-          authority.assertCurrent();
-          binding.assertCurrent();
-        },
-      });
-    }
-    const claim = binding.actor.sessions.captureCurrent(sessionKey);
-    return binding.actor.sessions.withSharedState(async () => {
-      const read = await binding.actor.sessions.read(
-        authority,
-        { sessionKey },
-        binding.admissionSignal,
-      );
-      const assertCurrent = () => {
-        authority.assertCurrent();
-        binding.admissionSignal?.throwIfAborted();
-        binding.actor.assertReadable();
-        claim.assertCurrent();
-        const error = resolveSessionWorkStartError(
-          sessionKey,
-          binding.actor.sessions.readSharing(sessionKey)?.entry,
-          {
-            expectedSessionId: read.entry?.sessionId,
-          },
-        );
+    const entry = metadata.readCurrent();
+    return openTerminalSessionWithSource(opts, request, {
+      entry,
+      assertCurrent() {
+        const error = resolveSessionWorkStartError(sessionKey, metadata.readCurrent(), {
+          expectedSessionId: entry?.sessionId,
+        });
         if (error) {
           throw new Error(error);
         }
-      };
-      read.snapshot.assertCurrent();
-      return openTerminalSessionWithSource(opts, request, { entry: read.entry, assertCurrent });
+      },
     });
   }
   return openTerminalSessionWithSource(opts, request);
@@ -203,7 +184,7 @@ async function openTerminalSessionWithSource(
   opts: GatewayRequestHandlerOptions,
   request: TerminalSessionOpenRequest,
   source?: {
-    entry: ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"];
+    entry: GatewaySessionEntryRead["entry"];
     assertCurrent(): void;
   },
 ): Promise<void> {
@@ -338,6 +319,48 @@ async function openTerminalSessionWithSource(
     }
   }
 
+  let agentOwner: AgentTerminalOwner | undefined;
+  if (request.sessionKey) {
+    const runtimeConfig = context.getRuntimeConfig();
+    const requestedOwner = resolveRequestedSessionAgentId(
+      runtimeConfig,
+      request.sessionKey,
+      launch.plan.agentId,
+    );
+    if (!requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    const agentSessionKey = resolveStoredSessionKeyForAgentStore({
+      cfg: runtimeConfig,
+      agentId: requestedOwner.agentId,
+      sessionKey: request.sessionKey,
+    });
+    source?.assertCurrent();
+    const { entry } =
+      source ??
+      (await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: runtimeConfig,
+        key: agentSessionKey,
+        agentId: requestedOwner.agentId,
+      }));
+    const agentSessionId = entry?.sessionId?.trim();
+    if (!agentSessionId) {
+      unavailable("session is no longer available; refresh and retry");
+      return;
+    }
+    const readinessError = resolveSessionWorkStartError(agentSessionKey, entry);
+    if (readinessError) {
+      invalidPlan(readinessError);
+      return;
+    }
+    agentOwner = {
+      kind: "agent",
+      agentSessionKey,
+      agentSessionId,
+      agentId: requestedOwner.agentId,
+    };
+  }
   if (context.isConnectionActive?.(connId) === false) {
     unavailable("terminal connection closed");
     return;
@@ -356,51 +379,12 @@ async function openTerminalSessionWithSource(
     unavailable("terminal is disabled");
     return;
   }
-  const refreshedLaunch = context.resolveTerminalLaunchPolicy(request.agentId);
+  const refreshedLaunch = context.resolveTerminalLaunchPolicy(
+    agentOwner?.agentId ?? request.agentId,
+  );
   if (!refreshedLaunch.ok) {
     respondLaunchBlocked(respond, refreshedLaunch.block, request.failureHint);
     return;
-  }
-  let agentOwner: AgentTerminalOwner | undefined;
-  if (request.sessionKey) {
-    const runtimeConfig = context.getRuntimeConfig();
-    const requestedOwner = resolveRequestedSessionAgentId(
-      runtimeConfig,
-      request.sessionKey,
-      refreshedLaunch.plan.agentId,
-    );
-    if (!requestedOwner.ok) {
-      respond(false, undefined, requestedOwner.error);
-      return;
-    }
-    const agentSessionKey = resolveStoredSessionKeyForAgentStore({
-      cfg: runtimeConfig,
-      agentId: requestedOwner.agentId,
-      sessionKey: request.sessionKey,
-    });
-    source?.assertCurrent();
-    const { entry } =
-      source ??
-      loadGatewaySessionEntryReadOnly(agentSessionKey, {
-        agentId: requestedOwner.agentId,
-        clone: false,
-      });
-    const agentSessionId = entry?.sessionId?.trim();
-    if (!agentSessionId) {
-      unavailable("session is no longer available; refresh and retry");
-      return;
-    }
-    const readinessError = resolveSessionWorkStartError(agentSessionKey, entry);
-    if (readinessError) {
-      invalidPlan(readinessError);
-      return;
-    }
-    agentOwner = {
-      kind: "agent",
-      agentSessionKey,
-      agentSessionId,
-      agentId: requestedOwner.agentId,
-    };
   }
   if (nodeRelay) {
     const relay = nodeRelay;
@@ -435,7 +419,7 @@ async function openTerminalSessionWithSource(
             context.resolveTerminalLaunchPolicy(refreshedLaunch.plan.agentId).ok &&
             authorizeTerminalNodeCommand(context, relay.plan.nodeId, relay.plan.command).ok &&
             !deadline.controller.signal.aborted &&
-            Date.now() < deadline.expiresAtMs
+            performance.now() < deadline.expiresAtMs
           );
         },
         command: relay.plan.command,

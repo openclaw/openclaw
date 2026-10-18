@@ -1,8 +1,10 @@
 import "./doctor-health.test-support.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs";
+import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDoctorNoCowToolFixture } from "../commands/doctor-sqlite-nocow.test-support.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.js";
@@ -57,6 +59,7 @@ it.skipIf(process.platform !== "linux")(
           gateway: { mode: "local" as const },
         };
         await state.writeConfig(cfg);
+        setRuntimeConfigSnapshot(cfg);
         mocks.config.mockReturnValue(cfg);
         mocks.packageRoot.mockReturnValue(undefined);
         const seeded = [
@@ -115,7 +118,16 @@ it.skipIf(process.platform !== "linux")(
           { repair: true, nonInteractive: true, workspaceSuggestions: false },
         );
         expect(readerClosed).toBe(true);
-        expect(tools.exchanges).toBe(2);
+        // Exchanges are per file; each store still reports completion once.
+        const rewrites = log.mock.calls
+          .flat()
+          .filter(
+            (message) =>
+              typeof message === "string" && message.startsWith("Rewrote SQLite files with NOCOW:"),
+          );
+        expect(rewrites).toEqual(
+          paths.map((pathname) => expect.stringContaining(path.dirname(pathname))),
+        );
         expect(log.mock.calls.flat().join("\n")).not.toContain("SQLite NOCOW repair refused");
         for (const [index, pathname] of paths.entries()) {
           expect(fs.statSync(pathname).ino).not.toBe(originalInodes[index]);

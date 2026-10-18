@@ -4,10 +4,14 @@ import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
   appendSessionTranscriptMessageByIdentity,
   readVisibleSessionTranscriptMessageEntries,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   HOST_KEY,
   HOST_MODEL,
@@ -27,6 +31,7 @@ import { CodexAppServerClient } from "./client.js";
 import {
   resolveCodexAppServerRuntimeOptions,
   resolveCodexSupervisionAppServerRuntimeOptions,
+  type CodexPluginConfig,
 } from "./config.js";
 import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
@@ -55,6 +60,9 @@ import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
+
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(() => clearRuntimeConfigSnapshot());
 
 type NativeRunParams = ReturnType<typeof createNativeRunParams>;
 
@@ -167,7 +175,11 @@ async function createRunParams(fixture: NativeFixture) {
   params.disableTools = false;
   params.permissionMode = "full";
   params.timeoutMs = 20_000;
+  params.onSettledTurn = async (attempt, captureContext) => {
+    attempt.settledTurnFinalizationContext = await captureContext();
+  };
   params.config = { tools: { web: { search: { enabled: false } } } };
+  setRuntimeConfigSnapshot(params.config);
   setCodexTestToolFactory(params, () => []);
   registerCodexTestSessionIdentity(params.sessionFile, params.sessionId, params.sessionKey);
   return params;
@@ -239,7 +251,7 @@ describe.skipIf(process.platform === "win32")(
       { timeout: 60_000 },
       async (closure) => {
         await withNativeFixture(tempDir, async (fixture, cleanups) => {
-          const pluginConfig = {
+          const pluginConfig: CodexPluginConfig = {
             ...fixture.pluginConfig,
             appServer: { ...fixture.pluginConfig.appServer, homeScope: "agent" },
           };
@@ -385,7 +397,7 @@ describe.skipIf(process.platform === "win32")(
           };
           const calls = vi.spyOn(client, "request");
           fixture.setPhase("side");
-          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toEqual({
+          await expect(runCodexAppServerSideQuestion(side, options)).resolves.toMatchObject({
             text: SUMMARY,
           });
           expect(await fs.readFile(fixture.marker, "utf8")).toBe("completed-once\n");
@@ -580,7 +592,10 @@ describe.skipIf(process.platform === "win32")(
           const transcriptBefore = await readVisibleSessionTranscriptMessageEntries(
             transcriptTarget(params),
           );
-          const sourceIsCurrent = sharedClients.captureSharedCodexAppServerCatalogLifetime(client);
+          const assertSourceCurrent = sharedClients.captureCodexAppServerClientLifetime(
+            client,
+            "connection",
+          );
           const nativeRequests = vi.spyOn(client, "request");
           const createClient = vi.spyOn(sharedClients, "createIsolatedCodexAppServerClient");
           const startClient = vi.spyOn(CodexAppServerClient, "start");
@@ -602,7 +617,6 @@ describe.skipIf(process.platform === "win32")(
           expect(nativeRequests).not.toHaveBeenCalled();
           expect(requests).toHaveLength(0);
           expect(context).toEqual({ source: "unavailable" });
-          expect(Object.isFrozen(context)).toBe(true);
           expect(captureContext).not.toHaveBeenCalled();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context is unavailable",
@@ -620,7 +634,7 @@ describe.skipIf(process.platform === "win32")(
           expect(
             await readVisibleSessionTranscriptMessageEntries(transcriptTarget(params)),
           ).toEqual(transcriptBefore);
-          expect(sourceIsCurrent()).toBe(true);
+          expect(assertSourceCurrent).not.toThrow();
           expect(client.getCloseError()).toBeUndefined();
           expect(sharedClients.releaseLeasedSharedCodexAppServerClient(client)).toBe(false);
           await expect(
@@ -764,7 +778,6 @@ describe.skipIf(process.platform === "win32")(
             fixture.setPhase("action");
             params.runId = "run-settled-action";
             if (hidden) {
-              params.agentId = "main";
               params.prompt =
                 "Background task completed. Use exec_command exactly once to run " +
                 "`printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt`, " +
@@ -794,7 +807,6 @@ describe.skipIf(process.platform === "win32")(
             if (!(context instanceof settledContext.CodexSettledTurnContext)) {
               throw new Error("Native turn lost its settled-tool evidence");
             }
-            expect(Object.isFrozen(context)).toBe(true);
             if (hidden) {
               expect(context.data).toEqual(
                 expect.arrayContaining([

@@ -1,14 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
-  deferCanonicalSessionValidation,
-  type PendingCanonicalValidation,
-} from "../config/sessions/session-canonical-validation-deferral.js";
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import * as sqliteTarget from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
@@ -25,29 +24,23 @@ import {
   withAgentDatabaseStartupAdmission,
 } from "../state/agent-database-startup.js";
 import * as deletionJournal from "../state/agent-deletion-journal.read.js";
-import { registerOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { createRequestGatewayMethodRegistry, handleGatewayRequest } from "./server-methods.js";
 import { authorizeGatewayRequestPreDispatch } from "./server-methods/request-authorization.js";
 import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
-import { withPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
+import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowAncestorReads } from "./session-row-projection-ancestors.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
-const certifyReadiness = vi.hoisted(() => vi.fn(async () => {}));
-vi.mock("../config/sessions/session-canonical-validation-readiness.js", () => ({
-  certifySessionCanonicalValidationPending: certifyReadiness,
-}));
-
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   vi.useRealTimers();
   vi.restoreAllMocks();
-  certifyReadiness.mockReset();
   vi.unstubAllEnvs();
 });
 
@@ -55,20 +48,10 @@ const cfg = { agents: { entries: { main: {} } } };
 const query = { agentId: "main", key: "agent:main:dashboard:incognito-prepared" };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function pendingDatabase(pathname: string): PendingCanonicalValidation {
-  return {
-    agentId: "main",
-    path: pathname,
-    initializeCanonicalValidation: true,
-    assertStateCurrent: () => {},
-    source: { key: "file:synthetic", canonicalPath: pathname, incarnation: "test" },
-  };
-}
-
 function describeFixture() {
   const projection = createSessionRowProjectionFixture({ cfg, store: {} });
-  projection.withPreparedExactRows = (queries, consume) =>
-    withPreparedSessionRows(projection, () => true, queries, consume);
+  projection.withPreparedExactRows = async (queries, consume) =>
+    readPreparedSessionRows(projection, () => true, queries, consume);
   const context = bindSessionRowProjection(requestContext(cfg), () => projection);
   const client = sharingPolicyClient({ scopes: ["operator.admin"] });
   const request = {
@@ -78,7 +61,20 @@ function describeFixture() {
     context,
     methodRegistry: createRequestGatewayMethodRegistry(),
   };
-  return { projection, context, client, request };
+  const dispatch = (
+    req: Parameters<typeof handleGatewayRequest>[0]["req"],
+    respond: Parameters<typeof handleGatewayRequest>[0]["respond"],
+    extraHandlers = sessionByKeyReadHandlers,
+  ) =>
+    handleGatewayRequest({
+      req,
+      context,
+      client,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers,
+    });
+  return { projection, context, client, request, dispatch };
 }
 
 async function withPendingStartupInspection(
@@ -147,19 +143,14 @@ it.each([
 ] as const)(
   "holds %s reads until their startup inspection publishes (%j)",
   async (method, params) => {
-    await withPendingStartupInspection(async ({ context, client, complete }) => {
+    await withPendingStartupInspection(async ({ dispatch, complete }) => {
       const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
         assertAgentDatabaseAdmitted("main");
         respond(true, { read: "committed" });
       });
       const respond = vi.fn();
-      const request = handleGatewayRequest({
-        req: { type: "req", id: "startup-read", method, params },
-        context,
-        client,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: { [method]: handler },
+      const request = dispatch({ type: "req", id: "startup-read", method, params }, respond, {
+        [method]: handler,
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(handler).not.toHaveBeenCalled();
@@ -174,17 +165,14 @@ it.each([
 );
 
 it("dispatches broad lists while an agent remains in startup preparation", async () => {
-  await withPendingStartupInspection(async ({ context, client }) => {
+  await withPendingStartupInspection(async ({ dispatch }) => {
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
     const respond = vi.fn();
-    const request = handleGatewayRequest({
-      req: { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
-      context,
-      client,
+    const request = dispatch(
+      { type: "req", id: "broad-startup-list", method: "sessions.list", params: {} },
       respond,
-      isWebchatConnect: () => false,
-      extraHandlers: { "sessions.list": handler },
-    });
+      { "sessions.list": handler },
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(handler).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledExactlyOnceWith(true, { sessions: [] });
@@ -295,7 +283,7 @@ it.each(["ready", "revoked", "changed config", "timeout", "cancelled"] as const)
   },
 );
 
-it("rechecks scopes after startup admission without delaying healthy agents or writes", async () => {
+it("rechecks scopes after startup admission", async () => {
   await withPendingStartupInspection(async ({ request, client, complete }) => {
     const read = authorizeGatewayRequestPreDispatch(request);
     await vi.advanceTimersByTimeAsync(0);
@@ -305,9 +293,6 @@ it("rechecks scopes after startup admission without delaying healthy agents or w
         method: "sessions.list",
         requestParams: { agentId: "healthy" },
       }),
-    ).resolves.toMatchObject({ error: null });
-    await expect(
-      authorizeGatewayRequestPreDispatch({ ...request, method: "sessions.patch" }),
     ).resolves.toMatchObject({ error: null });
     client.connect.scopes = [];
     complete();
@@ -389,19 +374,16 @@ it("preserves the admin dispatch shortcut without preparing private rows", async
 });
 
 it.each(["dispatch scopes", "private access"] as const)(
-  "rechecks %s after canonical description readiness",
+  "rechecks %s after row preparation",
   async (boundary) => {
-    const { projection, context, client, request } = describeFixture();
-    const database = pendingDatabase("/synthetic/parent.sqlite");
-    vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-      kind: "pending",
-      database,
-    });
+    const { projection, context, client, dispatch } = describeFixture();
+    const prepare = projection.withPreparedExactRows.bind(projection);
     const describe = vi.spyOn(projection, "describe");
     if (boundary === "dispatch scopes") {
       client.connect.scopes = ["operator.read"];
     }
-    certifyReadiness.mockImplementationOnce(async () => {
+    vi.spyOn(projection, "withPreparedExactRows").mockImplementationOnce(async (...args) => {
+      await Promise.resolve();
       client.connect.scopes = boundary === "dispatch scopes" ? [] : ["operator.read"];
       if (boundary === "private access") {
         client.authenticatedUserProfile = {
@@ -411,11 +393,24 @@ it.each(["dispatch scopes", "private access"] as const)(
           updatedAt: 1,
         };
       }
+      return prepare(...args);
     });
     if (boundary === "dispatch scopes") {
-      await expect(authorizeGatewayRequestPreDispatch(request)).resolves.toMatchObject({
-        error: { code: "FORBIDDEN", details: { code: "MISSING_SCOPE" } },
-      });
+      const respond = vi.fn();
+      await dispatch(
+        {
+          type: "req",
+          id: "revoked-description",
+          method: "sessions.describe",
+          params: { key: query.key },
+        },
+        respond,
+      );
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN" }),
+      );
     } else {
       const respond = vi.fn();
       await sessionByKeyReadHandlers["sessions.describe"]!({
@@ -432,40 +427,35 @@ it.each(["dispatch scopes", "private access"] as const)(
       });
       expect(describe).not.toHaveBeenCalled();
     }
-    expect(certifyReadiness).toHaveBeenCalledExactlyOnceWith(database);
   },
 );
 
 it.each(["operator.admin", "operator.read"])(
-  "ends describe readiness retries after its %s connection closes",
+  "ends describe preparation after its %s connection closes",
   async (scope) => {
-    const { projection, context, client } = describeFixture();
+    const { projection, client, dispatch } = describeFixture();
     const connection = new AbortController();
     client.connect.scopes = [scope];
     client.connectionSignal = connection.signal;
-    const prepare = vi.spyOn(projection, "withPreparedExactRows").mockResolvedValueOnce({
-      kind: "pending",
-      database: pendingDatabase("/synthetic/cancelled.sqlite"),
-    });
-    certifyReadiness.mockImplementationOnce(async () => {
-      connection.abort(new Error("Requesting connection closed"));
-    });
+    const prepareRows = projection.withPreparedExactRows.bind(projection);
+    const prepare = vi
+      .spyOn(projection, "withPreparedExactRows")
+      .mockImplementationOnce(async (...args) => {
+        await Promise.resolve();
+        connection.abort(new Error("Requesting connection closed"));
+        return prepareRows(...args);
+      });
     const respond = vi.fn();
     try {
-      await handleGatewayRequest({
-        req: {
+      await dispatch(
+        {
           type: "req",
           id: "cancelled-description",
           method: "sessions.describe",
           params: { key: "agent:main:cancelled-read" },
         },
-        context,
-        client,
         respond,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionByKeyReadHandlers,
-      });
-      expect(certifyReadiness).toHaveBeenCalledOnce();
+      );
       expect(prepare).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
     } finally {
@@ -474,30 +464,15 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it.each(["disposed", "pending", "refreshed"] as const)(
-  "consumes private rows only from an active, ready frame: %s",
+it.each(["disposed", "refreshed"] as const)(
+  "consumes rows only from an active, ready frame: %s",
   async (preparation) => {
     const owner = createSessionRowProjectionFixture({ cfg, store: {} });
     const queries = vi.fn(() => [query]);
-    let database: DatabaseSync | undefined;
-    let originalStateDir: string | undefined;
-    let placement: ReturnType<typeof createSessionRowPlacementProjection> | undefined;
     const initial = owner.state;
     let current = initial;
     const state = vi.fn(() => current);
-    if (preparation === "pending") {
-      originalStateDir = tempDirs.make("session-row-pending-");
-      vi.stubEnv("OPENCLAW_STATE_DIR", originalStateDir);
-      const db = new DatabaseSync(path.join(originalStateDir, "parent.sqlite"));
-      database = db;
-      registerOpenClawAgentDatabaseIdentity(db);
-      placement = createSessionRowPlacementProjection(undefined, () => undefined);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(originalStateDir, "changed-root"));
-      vi.spyOn(owner, "describe").mockImplementation(() => {
-        deferCanonicalSessionValidation({ agentId: "main", db }, false);
-        return undefined;
-      });
-    } else if (preparation === "refreshed") {
+    if (preparation === "refreshed") {
       Object.defineProperty(owner, "state", { get: state });
       vi.spyOn(owner, "describe").mockImplementation(() => {
         current = {
@@ -522,38 +497,19 @@ it.each(["disposed", "pending", "refreshed"] as const)(
       expect(state).not.toHaveBeenCalled();
     });
     try {
-      const reading = placement
-        ? placement.withPreparedRows(
-            owner,
-            () => true,
-            () => undefined,
-            queries,
-            () => undefined,
-            consume,
-          )
-        : withPreparedSessionRows(owner, () => preparation !== "disposed", queries, consume);
+      const read = () =>
+        readPreparedSessionRows(owner, () => preparation !== "disposed", queries, consume);
       if (preparation === "disposed") {
-        await expect(reading).rejects.toThrow("no longer active");
+        expect(read).toThrow("no longer active");
         expect(queries).not.toHaveBeenCalled();
-      } else if (preparation === "pending") {
-        await expect(reading).resolves.toMatchObject({
-          kind: "pending",
-          database: {
-            agentId: "main",
-            path: expectDefined(database, "pending database").location(),
-            initializeCanonicalValidation: false,
-            env: { OPENCLAW_STATE_DIR: originalStateDir },
-          },
-        });
       } else {
-        await reading;
+        read();
       }
       if (preparation !== "refreshed") {
         expect(consume).not.toHaveBeenCalled();
       }
     } finally {
-      placement?.dispose();
-      database?.close();
+      owner.dispose();
     }
   },
 );
@@ -561,6 +517,7 @@ it.each(["disposed", "pending", "refreshed"] as const)(
 it.each(["child", "parent"] as const)(
   "rechecks %s membership after placement preparation and consumes the exact frame once",
   async (changed) => {
+    setRuntimeConfigSnapshot(cfg);
     const child = { agentId: "main", key: "agent:main:prepared-child" };
     const parent = { agentId: "main", key: "agent:main:prepared-parent" };
     const projection = createSessionRowProjectionFixture({
@@ -607,7 +564,6 @@ it.each(["child", "parent"] as const)(
       prepareExactRows: () => undefined,
       prepareSelection: () => undefined,
       retainExactPreparation: () => () => {},
-      assertExactRowsPrepared: () => {},
       retainArchiveRows: () => ({ update: () => {}, release: () => {} }),
       describe: projection.describe,
       inOwnerContext: AsyncLocalStorage.snapshot(),
@@ -641,7 +597,7 @@ it.each(["child", "parent"] as const)(
       ).toBe("membership");
       expect(consume).not.toHaveBeenCalled();
       membershipReady.resolve();
-      await expect(prepared).resolves.toEqual({ kind: "complete", value: [parent.key] });
+      await expect(prepared).resolves.toEqual([parent.key]);
       expect(prepareMembership).toHaveBeenCalledOnce();
       expect(consume).toHaveBeenCalledOnce();
     } finally {

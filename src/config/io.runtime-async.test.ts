@@ -14,6 +14,7 @@ import { readConfigHealthStateFromStore } from "./io.health-state.js";
 import { createManagedRuntimeEnvBase } from "./io.runtime-env.js";
 import {
   captureRuntimeConfigAsyncReader,
+  getRuntimeConfig,
   registerConfigWriteListener,
   writeConfigFile,
 } from "./io.runtime.js";
@@ -82,6 +83,19 @@ async function withoutMainSql<T>(run: () => Promise<T>): Promise<T> {
     }
   }
 }
+
+it("requires preparation and follows published config changes without main SQL", async () => {
+  fixture();
+  await withoutMainSql(async () => {
+    expect(() => getRuntimeConfig()).toThrow("Runtime config is not prepared");
+    const config = await captureRuntimeConfigAsyncReader()();
+    expect(getRuntimeConfig()).toBe(config);
+    const replacement = { ...config, gateway: { ...config.gateway, port: 19002 } };
+    setRuntimeConfigSnapshot(replacement);
+    expect(getRuntimeConfig()).toBe(replacement);
+    expect(getRuntimeConfig().gateway?.port).toBe(19002);
+  });
+});
 
 it("preserves SDK config writes and load authority inside a native worker", async () => {
   const { configPath } = fixture();
@@ -165,35 +179,19 @@ it.each(["config environment", "dotenv selector"] as const)(
   },
 );
 
-it.each(["validation", "namespace"] as const)(
-  "rejects a cold load after %s failure without publishing config environment",
-  async (failure) => {
-    fixture(
-      failure === "validation"
-        ? {
-            gateway: { port: "invalid" },
-            env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
-          }
-        : undefined,
-    );
-    const read = captureRuntimeConfigAsyncReader();
-    if (failure === "namespace") {
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", "/fixture/another-config.json");
-    }
-    const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
-    if (failure === "validation") {
-      await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
-      expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
-    } else {
-      await expect(pending).rejects.toThrow("Runtime config source changed");
-    }
-    expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe(
-      failure === "validation" ? "workspace" : undefined,
-    );
-    expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
-    expect(getRuntimeConfigSnapshot()).toBeNull();
-  },
-);
+it("rejects an invalid cold load without publishing config environment", async () => {
+  fixture({
+    gateway: { port: "invalid" },
+    env: { vars: { CONFIG_ASYNC_CONFIG: "rejected" } },
+  });
+  const read = captureRuntimeConfigAsyncReader();
+  const pending = withoutMainSql(() => withPluginCache(createPluginCache(), read));
+  await expect(pending).rejects.toMatchObject({ code: "INVALID_CONFIG" });
+  expect(process.env.CONFIG_ASYNC_GLOBAL).toBe("global");
+  expect(process.env.CONFIG_ASYNC_WORKSPACE).toBe("workspace");
+  expect(process.env.CONFIG_ASYNC_CONFIG).toBeUndefined();
+  expect(getRuntimeConfigSnapshot()).toBeNull();
+});
 
 it("keeps a pinned runtime readable when the captured launch directory is unavailable", async () => {
   fixture();

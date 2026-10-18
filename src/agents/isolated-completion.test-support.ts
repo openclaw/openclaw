@@ -25,7 +25,7 @@ const isolatedCompletionMocks = vi.hoisted(() => ({
     vi.fn<(params: AgentHarnessSelectionDecisionParams) => AgentHarnessSelectionDecision>(),
   ensureAuthProfileStore: vi.fn(),
   cliBackendAcceptsAuthProfileForwarding: vi.fn<() => boolean>(() => false),
-  resolveCliExecutionAuthProfileId: vi.fn<() => string | undefined>(() => undefined),
+  resolveCliExecutionAuthProfileId: vi.fn<() => Promise<string | undefined>>(async () => undefined),
   hasAvailableAuthForProvider: vi.fn(async () => false),
   isCliRuntimeAliasForProvider: vi.fn<(params: { runtime?: string; provider?: string }) => boolean>(
     () => false,
@@ -63,8 +63,11 @@ vi.mock("./cli-execution-auth.js", () => ({
     isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding,
   resolveCliExecutionAuthProfileId: isolatedCompletionMocks.resolveCliExecutionAuthProfileId,
 }));
+// mock-isolation: Fixture dispatch decisions must not discover host subscription credentials.
 vi.mock("./embedded-agent-runner/cli-backend-dispatch-eligibility.js", () => ({
   resolveEmbeddedCliBackendDispatchEligibility:
+    isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
+  resolveEmbeddedCliBackendDispatchEligibilityAsync:
     isolatedCompletionMocks.resolveEmbeddedCliBackendDispatchEligibility,
 }));
 vi.mock("./embedded-agent-runner/model.js", () => ({
@@ -81,12 +84,16 @@ vi.mock("./model-runtime-aliases.js", () => ({
   isCliRuntimeAliasForProvider: isolatedCompletionMocks.isCliRuntimeAliasForProvider,
   resolveCliRuntimeExecutionProvider: isolatedCompletionMocks.resolveCliRuntimeExecutionProvider,
 }));
+// mock-isolation: Completion auth availability comes only from the fixture, never host accounts.
 vi.mock("./model-auth.js", () => ({
   ensureAuthProfileStore: isolatedCompletionMocks.ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync: isolatedCompletionMocks.ensureAuthProfileStore,
   hasAvailableAuthForProvider: isolatedCompletionMocks.hasAvailableAuthForProvider,
 }));
+// mock-isolation: Runtime admission uses fixture leases, never host registry or credential state.
 vi.mock("./prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
+  acquireReadOnlyPreparedModelRuntime: isolatedCompletionMocks.acquireAgentRunPreparedModelRuntime,
 }));
 vi.mock("./simple-completion-runtime.js", async () => ({
   // Selection stays real so utility completions can be prepared end to end;
@@ -199,7 +206,7 @@ export function resetIsolatedCompletionTestState(): void {
   });
   isolatedCompletionMocks.isCliRuntimeAliasForProvider.mockReturnValue(false);
   isolatedCompletionMocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(false);
-  isolatedCompletionMocks.resolveCliExecutionAuthProfileId.mockReturnValue(undefined);
+  isolatedCompletionMocks.resolveCliExecutionAuthProfileId.mockResolvedValue(undefined);
   isolatedCompletionMocks.resolveCliBackendConfig.mockReturnValue({
     config: { command: "test-cli" },
   });

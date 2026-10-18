@@ -200,7 +200,6 @@ export async function runWithAgentCommandRecoveryOwner<
       if (restoreAdmittedRecovery) {
         pendingRecovery = await repairMainSessionRecoveryMutation({
           mutation: restoreAdmittedRecovery,
-          onDeferredSuccess: scheduleMainSessionRecoveryPendingTarget,
           onError: (restoreError) =>
             log.warn(
               `failed to restore admitted recovery after command preparation: ${formatErrorMessage(restoreError)}`,
@@ -267,6 +266,7 @@ export async function runWithAgentCommandRecoveryOwner<
       assertCurrent();
       if (!commandAdmission && params.opts.sessionEffects !== "internal") {
         commandAdmission = await beginSessionWorkAdmission({
+          agentId: prepared.sessionAgentId,
           scope: prepared.storePath ?? `agent:${prepared.sessionAgentId}`,
           isSettling: params.opts.isTerminalOutcomeObserved,
           identities: [prepared.sessionKey, prepared.previousSessionId ?? prepared.sessionId],

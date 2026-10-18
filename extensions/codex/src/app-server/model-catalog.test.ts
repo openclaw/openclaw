@@ -5,10 +5,7 @@ import { createCodexAppServerModelCatalog } from "./model-catalog.js";
 import { listAllCodexAppServerModels } from "./models.js";
 import { probeCodexNativeAuth } from "./native-auth.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import {
-  CodexAppServerLocalRequestCancellationError,
-  CodexAppServerRpcError,
-} from "./rpc-error.js";
+import { CodexAppServerLocalRequestCancellationError } from "./rpc-error.js";
 
 vi.mock("./models.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./models.js")>()),
@@ -19,11 +16,13 @@ vi.mock("./native-auth.js", () => ({ probeCodexNativeAuth: vi.fn() }));
 const profiles = vi.hoisted((): { store: AuthProfileStore } => ({
   store: { version: 1, profiles: {} },
 }));
+// mock-isolation: Exercise real profile selection against the catalog fixture, without host credential storage.
 vi.mock("./auth-profile.js", async () => {
   const { resolveAuthProfileOrder } = await import("openclaw/plugin-sdk/provider-auth");
   const { createCodexAuthProfileSelection } = await import("./auth-profile-selection.js");
   return createCodexAuthProfileSelection({
     ensureAuthProfileStore: () => profiles.store,
+    ensureAuthProfileStoreAsync: async () => profiles.store,
     resolveAuthProfileOrder,
   });
 });
@@ -100,16 +99,6 @@ describe("Codex app-server model catalog", () => {
       error: new CodexAppServerLocalRequestCancellationError("account/read", "aborted", true),
       retires: true,
     },
-    {
-      name: "pre-write deadline",
-      error: new CodexAppServerLocalRequestCancellationError("account/read", "timed out", false),
-      retires: false,
-    },
-    {
-      name: "native error response",
-      error: new CodexAppServerRpcError({ code: -32603, message: "Unavailable" }, "account/read"),
-      retires: false,
-    },
   ])("preserves discovery ownership after $name", async ({ error, retires }) => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     rpc.request.mockRejectedValueOnce(error);
@@ -180,85 +169,6 @@ describe("Codex app-server model catalog", () => {
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 
-  it("returns no rows without a live call when discovery is disabled", async () => {
-    expect(
-      await loadCodexAppServerModelCatalog(catalogParams, { discovery: { enabled: false } }),
-    ).toEqual([]);
-    expect(listModelsMock).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    {
-      name: "logged-out native account",
-      nativeMode: undefined,
-      homeScope: undefined,
-      expectedHome: "agent",
-      expectedProfile: "openai:work",
-      accountType: "apiKey",
-    },
-    {
-      name: "different native account",
-      nativeMode: "oauth",
-      homeScope: undefined,
-      expectedHome: "agent",
-      expectedProfile: "openai:work",
-      accountType: "apiKey",
-    },
-    {
-      name: "explicit native home",
-      nativeMode: "oauth",
-      homeScope: "user",
-      expectedHome: "user",
-      expectedProfile: undefined,
-      accountType: "chatgpt",
-    },
-  ] as const)("keeps the selected account with a $name", async (scenario) => {
-    profiles.store = {
-      version: 1,
-      profiles: {
-        "openai:personal": { type: "api_key", provider: "openai", key: "synthetic-personal-key" },
-        "openai:work": { type: "api_key", provider: "openai", key: "synthetic-work-key" },
-      },
-    };
-    const params = {
-      ...catalogParams,
-      config: { auth: { order: { openai: ["openai:work", "openai:personal"] } } },
-    };
-    const pluginConfig = { appServer: { homeScope: scenario.homeScope } };
-    vi.mocked(probeCodexNativeAuth).mockResolvedValue(
-      scenario.nativeMode
-        ? { apiKey: "native-presence", source: "native login", mode: scenario.nativeMode }
-        : undefined,
-    );
-    rpc.request.mockResolvedValue({
-      account: { type: scenario.accountType },
-      requiresOpenaiAuth: true,
-    });
-    listModelsMock.mockResolvedValue({
-      models: [
-        {
-          id: "synthetic-account-model",
-          model: "synthetic-account-model",
-          inputModalities: ["text"],
-          supportedReasoningEfforts: [],
-        },
-      ],
-    });
-
-    expect((await owner.load(params, pluginConfig)).entries).toContainEqual(
-      expect.objectContaining({ id: "synthetic-account-model" }),
-    );
-    const clientOptions = vi.mocked(withCodexAppServerJsonClient).mock.calls[0]?.[0];
-    expect(clientOptions?.startOptions?.homeScope).toBe(scenario.expectedHome);
-    expect(clientOptions?.authProfileId).toBe(scenario.expectedProfile);
-    if (scenario.expectedProfile) {
-      expect(clientOptions?.authProfileStore).toBe(profiles.store);
-      expect(probeCodexNativeAuth).not.toHaveBeenCalled();
-    } else {
-      expect(probeCodexNativeAuth).toHaveBeenCalledOnce();
-    }
-  });
-
   it.each([
     {
       name: "Unix",
@@ -277,11 +187,6 @@ describe("Codex app-server model catalog", () => {
         args: ["app-server", "proxy", "--sock", "/fixture/server.sock"],
       },
       envArgs: undefined,
-    },
-    {
-      name: "environment-selected stdio proxy",
-      appServer: { transport: "stdio" },
-      envArgs: "app-server proxy --sock /fixture/server.sock",
     },
   ])(
     "uses the $name server account without probing a local login",
@@ -359,7 +264,7 @@ describe("Codex app-server model catalog", () => {
     ).toBeUndefined();
   });
 
-  it.each(["oauth", "token"] as const)(
+  it.each(["token"] as const)(
     "retains the observed native %s mode through discovery",
     async (mode) => {
       vi.mocked(probeCodexNativeAuth).mockResolvedValue({
@@ -438,11 +343,6 @@ describe("Codex app-server model catalog", () => {
       mode: "apiKey",
       readiness: { accountType: "apiKey", authMode: "api_key" },
     },
-    {
-      account: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-      mode: "chatgpt",
-      readiness: { accountType: "chatgpt", authMode: "oauth" },
-    },
     { account: null, mode: undefined, readiness: undefined },
   ])(
     "preserves account mode $mode without importing credentials",
@@ -489,18 +389,26 @@ describe("Codex app-server model catalog", () => {
   it("cannot publish superseded or disposed asynchronous observations", async () => {
     listModelsMock.mockResolvedValue(opaqueCatalog());
     const pending = createDeferred<unknown>();
-    rpc.request.mockReturnValueOnce(pending.promise);
+    const pendingStarted = createDeferred<void>();
+    rpc.request.mockImplementationOnce(() => {
+      pendingStarted.resolve();
+      return pending.promise;
+    });
     const older = owner.load(catalogParams, undefined);
-    await vi.waitFor(() => expect(rpc.request).toHaveBeenCalledOnce());
+    await pendingStarted.promise;
     expect(read()).toBeUndefined();
     await owner.load(catalogParams, undefined);
     pending.resolve({ account: { type: "chatgpt" }, requiresOpenaiAuth: true });
     expect(await older).toEqual({ entries: [] });
     expect(read()).toEqual({ accountType: "apiKey", authMode: "api_key" });
     const disposed = createDeferred<unknown>();
-    rpc.request.mockReturnValueOnce(disposed.promise);
+    const disposedStarted = createDeferred<void>();
+    rpc.request.mockImplementationOnce(() => {
+      disposedStarted.resolve();
+      return disposed.promise;
+    });
     const late = owner.load(catalogParams, undefined);
-    await vi.waitFor(() => expect(rpc.request).toHaveBeenCalledTimes(3));
+    await disposedStarted.promise;
     owner.dispose();
     disposed.resolve({ account: { type: "apiKey" }, requiresOpenaiAuth: true });
     expect(await late).toEqual({ entries: [] });

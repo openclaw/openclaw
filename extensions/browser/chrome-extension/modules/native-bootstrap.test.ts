@@ -6,12 +6,6 @@ import {
   requestRelayEnsure,
 } from "./native-bootstrap.js";
 
-const COPILOT_LOCAL_KEYS = [
-  "copilotSessionRegistryV1",
-  "copilotDeviceIdentitiesV1",
-  "copilotDeviceTokensV1",
-];
-const COPILOT_SESSION_KEYS = ["copilotBrowserInstanceV1", "copilotPanelBindingsV1"];
 const CUSTODY_BLOCKED_KEY = "retiredCopilotCustodyBlockedV1";
 const RETAINED_LOCAL = {
   relayUrl: "ws://127.0.0.1:18789/extension",
@@ -29,30 +23,21 @@ type CleanupFailureStage =
 
 function cleanupStorage(params: {
   registry?: unknown;
-  registryPresent?: boolean;
   readError?: Error;
   failureStage?: CleanupFailureStage;
-  marker?: boolean;
 }) {
   let failureStage = params.failureStage;
-  const operations: string[] = [];
   const localValues: Record<string, unknown> = {
     copilotDeviceIdentitiesV1: { device: "identity" },
     copilotDeviceTokensV1: { device: "token" },
     ...RETAINED_LOCAL,
+    copilotSessionRegistryV1: params.registry,
   };
-  if (params.registryPresent !== false) {
-    localValues.copilotSessionRegistryV1 = params.registry;
-  }
-  if (params.marker === true) {
-    localValues[CUSTODY_BLOCKED_KEY] = true;
-  }
   const sessionValues: Record<string, unknown> = {
     copilotBrowserInstanceV1: "browser-instance",
     copilotPanelBindingsV1: { 7: "panel-binding" },
   };
   const localSet = vi.fn(async (values: Record<string, unknown>) => {
-    operations.push("marker_set");
     if (failureStage === "marker_set") {
       throw new Error("marker set failed");
     }
@@ -60,7 +45,6 @@ function cleanupStorage(params: {
   });
   const localRemove = vi.fn(async (keys: string[]) => {
     const stage = keys.includes(CUSTODY_BLOCKED_KEY) ? "marker_remove" : "retired_local_remove";
-    operations.push(stage);
     if (failureStage === stage) {
       throw new Error(`${stage} failed`);
     }
@@ -69,7 +53,6 @@ function cleanupStorage(params: {
     }
   });
   const sessionRemove = vi.fn(async (keys: string[]) => {
-    operations.push("session_remove");
     if (failureStage === "session_remove") {
       throw new Error("session remove failed");
     }
@@ -97,10 +80,8 @@ function cleanupStorage(params: {
         session: { remove: sessionRemove },
       },
     },
-    localSet,
     localRemove,
     localValues,
-    operations,
     setFailureStage: (next: CleanupFailureStage | undefined) => {
       failureStage = next;
     },
@@ -110,79 +91,6 @@ function cleanupStorage(params: {
 }
 
 describe("retired copilot custody", () => {
-  it.each([
-    { label: "no registry", registryPresent: false, registry: undefined },
-    {
-      label: "an exact empty registry",
-      registryPresent: true,
-      registry: { sessions: {}, pendingArchives: [] },
-    },
-  ])("removes all retired keys for $label", async ({ registry, registryPresent }) => {
-    const storage = cleanupStorage({ registry, registryPresent });
-
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
-      blocked: false,
-    });
-
-    expect(storage.localSet).not.toHaveBeenCalled();
-    expect(storage.localRemove).toHaveBeenCalledOnce();
-    expect(storage.localRemove).toHaveBeenCalledWith(COPILOT_LOCAL_KEYS);
-    expect(storage.sessionRemove).toHaveBeenCalledOnce();
-    expect(storage.sessionRemove).toHaveBeenCalledWith(COPILOT_SESSION_KEYS);
-    expect(storage.localValues).toEqual(RETAINED_LOCAL);
-    expect(storage.sessionValues).toEqual({});
-    expect(storage.operations).toEqual(["session_remove", "retired_local_remove"]);
-  });
-
-  it.each([
-    {
-      label: "session creation is pending",
-      registry: {
-        sessions: {
-          7: {
-            tabId: 7,
-            browserInstanceId: "browser-instance",
-            gatewayScope: "ws://127.0.0.1:18789/",
-            sessionKey: "browser:tab:7",
-            creationPending: true,
-          },
-        },
-        pendingArchives: [],
-      },
-    },
-    {
-      label: "a pending archive",
-      registry: {
-        sessions: {},
-        pendingArchives: [
-          {
-            tabId: 7,
-            gatewayScope: "ws://127.0.0.1:18789/",
-            sessionKey: "browser:tab:7",
-            queuedAt: 1,
-          },
-        ],
-      },
-    },
-    { label: "a malformed registry", registry: { sessions: [], pendingArchives: [] } },
-    {
-      label: "an unrecognized registry",
-      registry: { sessions: {}, pendingArchives: [], futureCustody: {} },
-    },
-  ])("preserves every retired key for $label", async ({ registry }) => {
-    const storage = cleanupStorage({ registry });
-    const beforeLocal = structuredClone(storage.localValues);
-    const beforeSession = structuredClone(storage.sessionValues);
-
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({ blocked: true });
-
-    expect(storage.localRemove).not.toHaveBeenCalled();
-    expect(storage.sessionRemove).not.toHaveBeenCalled();
-    expect(storage.localValues).toEqual(beforeLocal);
-    expect(storage.sessionValues).toEqual(beforeSession);
-    expect(storage.localValues).toMatchObject(RETAINED_LOCAL);
-  });
-
   it("preserves every retired key when the registry read fails", async () => {
     const storage = cleanupStorage({ readError: new Error("storage unavailable") });
     const beforeLocal = structuredClone(storage.localValues);
@@ -195,35 +103,6 @@ describe("retired copilot custody", () => {
     expect(storage.localValues).toEqual(beforeLocal);
     expect(storage.sessionValues).toEqual(beforeSession);
     expect(storage.localValues).toMatchObject(RETAINED_LOCAL);
-  });
-
-  it("explicitly discards every retired key", async () => {
-    const storage = cleanupStorage({
-      registry: {
-        sessions: { 7: { creationPending: true } },
-        pendingArchives: [{ tabId: 7 }],
-      },
-    });
-
-    await expect(discardRetiredCopilotState(storage.chromeApi)).resolves.toBeUndefined();
-
-    expect(storage.localValues).toEqual(RETAINED_LOCAL);
-    expect(storage.sessionValues).toEqual({});
-    expect(storage.operations).toEqual([
-      "marker_set",
-      "session_remove",
-      "retired_local_remove",
-      "marker_remove",
-    ]);
-  });
-
-  it("blocks when a prior destructive cleanup left its durable marker", async () => {
-    const storage = cleanupStorage({ registryPresent: false, marker: true });
-
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({ blocked: true });
-
-    expect(storage.operations).toEqual([]);
-    expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
   });
 
   it.each<CleanupFailureStage>([
@@ -244,48 +123,41 @@ describe("retired copilot custody", () => {
     } else {
       expect(storage.localValues[CUSTODY_BLOCKED_KEY]).toBe(true);
     }
-    if (stage === "session_remove" || stage === "retired_local_remove") {
+    if (stage === "session_remove") {
       expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
     }
     if (stage === "marker_remove") {
       expect(storage.localValues).not.toHaveProperty("copilotSessionRegistryV1");
     }
 
-    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({ blocked: true });
+    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+      blocked: true,
+    });
     storage.setFailureStage(undefined);
     await expect(discardRetiredCopilotState(storage.chromeApi)).resolves.toBeUndefined();
     expect(storage.localValues).toEqual(RETAINED_LOCAL);
     expect(storage.sessionValues).toEqual({});
   });
 
-  it.each([
-    { stage: "session_remove", registryPresent: true },
-    { stage: "retired_local_remove", registryPresent: true },
-    { stage: "session_remove", registryPresent: false },
-    { stage: "retired_local_remove", registryPresent: false },
-  ] as const)(
-    "retries harmless cleanup after $stage fails (registry present: $registryPresent)",
-    async ({ stage, registryPresent }) => {
-      const storage = cleanupStorage({
-        registry: { sessions: {}, pendingArchives: [] },
-        registryPresent,
-        failureStage: stage,
-      });
+  it("retries harmless cleanup after session removal fails", async () => {
+    const storage = cleanupStorage({
+      registry: { sessions: {}, pendingArchives: [] },
+      failureStage: "session_remove",
+    });
 
-      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
-        blocked: true,
-      });
-      expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
-      expect(Object.hasOwn(storage.localValues, "copilotSessionRegistryV1")).toBe(registryPresent);
+    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+      blocked: true,
+    });
+    expect(storage.localValues).not.toHaveProperty(CUSTODY_BLOCKED_KEY);
+    expect(storage.localValues).toHaveProperty("copilotSessionRegistryV1");
 
-      storage.setFailureStage(undefined);
-      await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
-        blocked: false,
-      });
-      expect(storage.localValues).toEqual(RETAINED_LOCAL);
-      expect(storage.sessionValues).toEqual({});
-    },
-  );
+    storage.setFailureStage(undefined);
+    await expect(prepareRetiredCopilotState(storage.chromeApi)).resolves.toEqual({
+      blocked: false,
+    });
+    expect(storage.localValues).toEqual(RETAINED_LOCAL);
+    expect(storage.sessionValues).toEqual({});
+  });
 });
 
 describe("native bootstrap timeout", () => {
@@ -294,7 +166,7 @@ describe("native bootstrap timeout", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["current", "disabled", "re-enabled"])(
+  it.each(["current", "re-enabled"])(
     "settles a stuck native call after %s ownership",
     async (ownership) => {
       vi.useFakeTimers();

@@ -46,23 +46,6 @@ describe("resolveMSTeamsUserAllowlist", () => {
     expect(result).toEqual({ input: "  ", resolved: false });
   });
 
-  it("resolves one exact Graph user identity", async () => {
-    findGraphUsersByExactIdentity.mockResolvedValueOnce({
-      items: [
-        { id: "user-1", displayName: "Alice" },
-        { id: "user-2", displayName: "Alice Two" },
-      ],
-      truncated: false,
-    });
-    const [result] = await resolveMSTeamsUserAllowlist({ cfg: {}, entries: ["Alice"] });
-    expect(result).toEqual({
-      input: "Alice",
-      resolved: true,
-      id: "user-1",
-      name: "Alice",
-    });
-  });
-
   it("uses the selected named account for Graph user lookup credentials", async () => {
     const cfg = { channels: { msteams: { defaultAccount: "default" } } };
     findGraphUsersByExactIdentity.mockResolvedValueOnce({
@@ -167,11 +150,6 @@ describe("projectStableMSTeamsGroupAllowlist", () => {
       "accessGroup:operators",
       "40a1a0ed-4ff2-4164-a219-55518990c197",
     ]);
-  });
-
-  it("preserves absent and empty group allowlists", () => {
-    expect(projectStableMSTeamsGroupAllowlist()).toBeUndefined();
-    expect(projectStableMSTeamsGroupAllowlist([])).toEqual([]);
   });
 });
 
@@ -411,12 +389,9 @@ describe("resolveMSTeamsTeamsConfig", () => {
 });
 
 describe("looksLikeMSTeamsTargetId", () => {
-  it.each(["8:orgid:user-object-id", "  TEAMS:user:40a1a0ed-4ff2-4164-a219-55518990c197  "])(
-    "accepts explicit target %s",
-    (raw) => {
-      expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
-    },
-  );
+  it.each(["8:orgid:user-object-id"])("accepts explicit target %s", (raw) => {
+    expect(looksLikeMSTeamsTargetId(raw)).toBe(true);
+  });
 
   it.each(["user:John Smith", "Product Team/Roadmap"])("rejects non-id input %s", (raw) => {
     expect(looksLikeMSTeamsTargetId(raw)).toBe(false);

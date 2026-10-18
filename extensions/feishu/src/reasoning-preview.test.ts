@@ -3,8 +3,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 
-const { getSessionEntryMock } = vi.hoisted(() => ({
-  getSessionEntryMock: vi.fn(),
+const { getSessionEntryAsyncMock } = vi.hoisted(() => ({
+  getSessionEntryAsyncMock: vi.fn(),
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -13,7 +13,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    getSessionEntry: getSessionEntryMock,
+    getSessionEntryAsync: getSessionEntryAsyncMock,
   };
 });
 
@@ -40,8 +40,8 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
     vi.clearAllMocks();
   });
 
-  it("enables previews only for stream reasoning sessions", () => {
-    getSessionEntryMock.mockImplementation(({ sessionKey }) => {
+  it("enables previews only for stream reasoning sessions", async () => {
+    getSessionEntryAsyncMock.mockImplementation(async ({ sessionKey }) => {
       const entries = {
         "agent:main:feishu:dm:ou_sender_1": { reasoningLevel: "stream" },
         "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "on" },
@@ -49,26 +49,26 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       return entries[sessionKey as keyof typeof entries];
     });
 
-    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(true);
-    expect(resolvePreview("agent:main:feishu:dm:ou_sender_2")).toBe(false);
-    expect(getSessionEntryMock).toHaveBeenCalledWith({
+    expect(await resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(true);
+    expect(await resolvePreview("agent:main:feishu:dm:ou_sender_2")).toBe(false);
+    expect(getSessionEntryAsyncMock).toHaveBeenCalledWith({
       storePath: "/tmp/feishu-sessions.json",
       sessionKey: "agent:main:feishu:dm:ou_sender_1",
       readConsistency: "latest",
     });
   });
 
-  it("returns false for missing sessions or load failures", () => {
-    getSessionEntryMock.mockImplementationOnce(() => {
+  it("returns false for missing sessions or load failures", async () => {
+    getSessionEntryAsyncMock.mockImplementationOnce(async () => {
       throw new Error("disk unavailable");
     });
 
-    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(false);
-    expect(resolvePreview()).toBe(false);
+    expect(await resolvePreview("agent:main:feishu:dm:ou_sender_1")).toBe(false);
+    expect(await resolvePreview()).toBe(false);
   });
 
-  it("falls back to configured stream defaults", () => {
-    getSessionEntryMock.mockImplementation(({ sessionKey }) => {
+  it("falls back to configured stream defaults", async () => {
+    getSessionEntryAsyncMock.mockImplementation(async ({ sessionKey }) => {
       const entries = {
         "agent:main:feishu:dm:ou_sender_1": {},
         "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "off" },
@@ -83,8 +83,8 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
       },
     };
 
-    expect(resolvePreview("agent:main:feishu:dm:ou_sender_1", { cfg })).toBe(true);
-    expect(resolvePreview(undefined, { cfg, agentId: "ops" })).toBe(false);
-    expect(resolvePreview("agent:main:feishu:dm:ou_sender_2", { cfg })).toBe(false);
+    expect(await resolvePreview("agent:main:feishu:dm:ou_sender_1", { cfg })).toBe(true);
+    expect(await resolvePreview(undefined, { cfg, agentId: "ops" })).toBe(false);
+    expect(await resolvePreview("agent:main:feishu:dm:ou_sender_2", { cfg })).toBe(false);
   });
 });

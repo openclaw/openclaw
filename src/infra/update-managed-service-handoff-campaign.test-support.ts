@@ -13,17 +13,21 @@ export function registerManagedCampaignFailureTests(
   ) => Promise<ManagedServiceManagerBoundaryResult>,
   itUnix: ReturnType<typeof import("vitest").it.runIf>,
 ): void {
-  itUnix.each([undefined, "consumed-before-exit"] as const)(
-    "records the child's early refusal without its notification (%s)",
-    async (updaterNotification) => {
+  itUnix.each([
+    { updaterNotification: undefined, structuredFacts: false },
+    { updaterNotification: "consumed-before-exit", structuredFacts: true },
+  ] as const)(
+    "records the child's early refusal without its notification ($updaterNotification)",
+    async ({ updaterNotification, structuredFacts }) => {
       const reason = "update-recovery-pending";
-      const repair =
-        "Retained package activation is prepared. Run openclaw update repair before retrying.";
+      const diagnostic =
+        "Package publication recovery permissions are unsafe: /fixture/.openclaw.package-activation-test (mode 0750, nlink 2).";
+      const failureMessage = "Package publication is incomplete.";
       const facts = [
         {
           check: "package-activation",
           code: reason,
-          message: "Package publication is incomplete.",
+          message: failureMessage,
         },
       ];
       const { commands, parentSignal, run, state, sentinel, sensitiveFilesRemoved } =
@@ -46,8 +50,8 @@ export function registerManagedCampaignFailureTests(
                 cwd: "",
                 durationMs: 0,
                 exitCode: 1,
-                failureFacts: facts,
-                diagnostics: [repair],
+                ...(structuredFacts ? { failureFacts: facts } : {}),
+                diagnostics: [diagnostic],
                 stdoutTail: updaterNotification ? undefined : "diagnostic context ".repeat(4_000),
               },
             ],
@@ -67,19 +71,19 @@ export function registerManagedCampaignFailureTests(
           expect.objectContaining({
             step: "package-activation",
             status: "failed",
-            failureFacts: facts,
+            ...(structuredFacts ? { failureFacts: facts } : {}),
           }),
-          expect.objectContaining({ step: "diagnostic:package-activation", detail: repair }),
+          expect.objectContaining({ step: "diagnostic:package-activation", detail: diagnostic }),
           expect.objectContaining({
             step: "managed-service-handoff",
             status: "failed",
-            detail: "managed-service-handoff-failed",
+            detail: `${reason}: ${structuredFacts ? failureMessage : diagnostic}`,
           }),
         ]),
       );
       const report = renderUpdateRunReport(recorded).markdown;
       expect(report).toContain(reason);
-      expect(report).toContain("Package publication is incomplete.");
+      expect(report).toContain(structuredFacts ? failureMessage : diagnostic);
     },
   );
 

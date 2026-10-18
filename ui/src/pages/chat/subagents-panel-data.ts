@@ -2,8 +2,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { SidebarSessionNarrationController } from "../../components/app-sidebar-session-narration.ts";
-import type { SidebarToolActivity } from "../../components/app-sidebar-session-types.ts";
+import { createSidebarNarration } from "../../components/app-sidebar-session-narration.ts";
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -30,20 +29,21 @@ import { requestSharedHistory } from "./chat-history-request.ts";
 import { historySessionId, isHistoryCursor } from "./chat-history-snapshot.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import { isSubagentsPanelSession } from "./chat-spawned-subagent.ts";
+import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import {
   readSubagentActivitySnapshot,
   readSubagentToolEvent,
   subagentToolCallCount,
   type SubagentActivitySnapshot,
 } from "./subagents-panel-activity.ts";
-import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
+import { buildToolStreamIdentity, toolStreamIdentityRunId } from "./tool-stream-identity.ts";
 
 const HISTORY_CONCURRENCY = 2;
 const MAX_RETAINED_CALLS = 1024;
 
 export type SubagentsPanelRow = {
   session: GatewaySessionRow;
-  callCount?: number;
+  callCount?: { count: number; exact: boolean };
   activity?: string;
   toolDisplayName?: string;
   canStop: boolean;
@@ -83,7 +83,6 @@ function createMetrics(identity: string): Metrics {
   };
 }
 
-/** Presentation-scoped child discovery. Shared owners retain wire subscriptions and roster facts. */
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
   loading = false;
@@ -99,14 +98,13 @@ export class SubagentsPanelData {
   private sessions: GatewaySessionRow[] = [];
   private metrics = new Map<string, Metrics>();
   private historyReads = 0;
-  private tools: ReadonlyMap<string, SidebarToolActivity> = new Map();
   private stopping = new Set<string>();
   private readonly messageSubscriptions = new Map<string, Set<SessionMessageSubscription>>();
   private readonly narrationSource: Pick<
     SessionCapability,
     "subscribeMessages" | "unsubscribeMessages"
   >;
-  private readonly narration: SidebarSessionNarrationController;
+  private readonly narration = createSidebarNarration();
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
@@ -137,15 +135,9 @@ export class SubagentsPanelData {
         }
       },
     };
-    this.narration = new SidebarSessionNarrationController(
-      () => undefined,
-      () => undefined,
-      (tools) => {
-        this.tools = tools;
-        this.publish();
-      },
-    );
+    // Until disposal, keep rows synchronous and retire connection scopes before observer events.
     this.unsubscribe = [
+      this.narration.subscribe(() => this.publish()),
       context.gateway.subscribe(() => {
         this.reconcile();
         this.publish();
@@ -461,7 +453,8 @@ export class SubagentsPanelData {
     if (!metrics) {
       return;
     }
-    const fallback = !metrics.liveToolObserved && metrics.tool && !this.tools.has(row.key);
+    const fallback =
+      !metrics.liveToolObserved && metrics.tool && !this.narration.read().tools.has(row.key);
     const activity = readSidebarToolActivity(stream, payload.data, metrics.tool);
     if (activity !== undefined) {
       metrics.liveToolObserved = true;
@@ -477,7 +470,7 @@ export class SubagentsPanelData {
       callIdentity ? metrics.calls.get(callIdentity) : undefined,
     );
     if (!item) {
-      if (fallback && activity !== undefined && !this.tools.has(row.key)) {
+      if (fallback && activity !== undefined && !this.narration.read().tools.has(row.key)) {
         this.publish();
       }
       return;
@@ -507,11 +500,30 @@ export class SubagentsPanelData {
     if (this.disposed) {
       return;
     }
+    const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
       const tool = isSessionRunActive(session)
-        ? (this.tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
+        ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
+      const headline =
+        isSessionRunActive(session) && metrics
+          ? selectActivityHeadline(
+              [...metrics.calls]
+                .filter(([identity, item]) => {
+                  const runId = toolStreamIdentityRunId(identity);
+                  return (
+                    runId !== undefined &&
+                    session.activeRunIds?.includes(runId) &&
+                    !item.hideFromChannelProgress &&
+                    !item.suppressChannelProgress
+                  );
+                })
+                .map(([, item]) => item),
+              [],
+              new Map(),
+            )
+          : undefined;
       const stopAccess = readChatSessionActionAccess(this.context.gateway.snapshot, true, {
         session,
         sessionAbortable: true,
@@ -519,7 +531,14 @@ export class SubagentsPanelData {
       return {
         session,
         callCount: metrics ? subagentToolCallCount(metrics) : undefined,
-        activity: tool?.text,
+        activity:
+          tool?.text ||
+          headline?.title ||
+          (isSessionRunActive(session) &&
+          session.observerDigest?.runId &&
+          session.activeRunIds?.includes(session.observerDigest.runId)
+            ? session.observerDigest.headline.trim() || undefined
+            : undefined),
         toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
         canStop:
           isSessionRunActive(session) && session.activeRunIds?.length === 1 && stopAccess.allowed,
@@ -593,7 +612,6 @@ export class SubagentsPanelData {
     this.scope = null;
     this.sessions = [];
     this.metrics.clear();
-    this.tools = new Map();
     this.stopping.clear();
     this.messageSubscriptions.clear();
     this.loading = false;
@@ -605,7 +623,7 @@ export class SubagentsPanelData {
   dispose(): void {
     this.disposed = true;
     this.retire();
-    this.narration.dispose();
+    this.narration.disconnect();
     for (const unsubscribe of this.unsubscribe) {
       unsubscribe();
     }

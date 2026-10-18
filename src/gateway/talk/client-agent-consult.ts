@@ -10,20 +10,20 @@ import {
 import type { createPluginRuntime } from "../../plugins/runtime/index.js";
 import {
   GatewayDrainingError,
-  runOutsideGatewayRootWorkAdmission,
-  tryBeginGatewayRootWorkAdmission,
+  tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  buildRealtimeVoiceAgentToolAuthorityOverlay,
   consultRealtimeVoiceAgent,
-  prepareRealtimeVoiceAgentExecutionContext,
 } from "../../talk/agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { assertClientVoiceSessionOpen } from "../../talk/client-voice-session-read.js";
 import type { ClientVoiceSessionSource } from "../../talk/client-voice-session-source.js";
 import { registerClientVoiceConsultRun } from "../../talk/client-voice-session.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import type { GatewayRequestContext } from "../server-methods/shared-types.js";
 import type {
@@ -52,23 +52,27 @@ export function prepareTalkClientControlAuthority(params: {
   if (params.source === "reply" && !params.authority.replyCaller) {
     throw new Error("Talk chat caller authority is unavailable");
   }
-  const prepared = prepareRealtimeVoiceAgentExecutionContext({
-    cfg: params.config,
-    agentRuntime: params.agentRuntime,
+  // The control callback reads current policy immediately before the execution effect.
+  const sessionEntry = params.agentRuntime.session.getSessionEntry({
     agentId: params.sessionTarget.agentId,
     sessionKey: params.sessionTarget.canonicalKey,
     storePath: params.sessionTarget.storePath,
-    messageProvider: "webchat",
-    senderIsOwner: params.authority.senderIsOwner,
-    toolsAllow: params.authority.toolsAllow,
+    readConsistency: "latest",
   });
   const overlay =
     prepareTalkClientToolContext({
       config: params.config,
       agentId: params.sessionTarget.agentId,
       authority: params.authority,
-      sessionEntry: prepared.sessionEntry,
-    })?.toolAuthorityOverlay ?? prepared.toolAuthorityOverlay;
+      sessionEntry,
+    })?.toolAuthorityOverlay ??
+    buildRealtimeVoiceAgentToolAuthorityOverlay({
+      sessionEntry,
+      deliveryContext: deliveryContextFromSession(sessionEntry),
+      messageProvider: "webchat",
+      senderIsOwner: params.authority.senderIsOwner,
+      toolsAllow: params.authority.toolsAllow,
+    });
   // Direct attempts do not implement reply tracing; permission/reviewer facts are shared.
   return params.source === "reply" ? overlay : { ...overlay, traceAuthorized: false };
 }
@@ -191,7 +195,9 @@ export function createTalkClientAgentConsultRunner(params: {
     const talkConfig = normalizeTalkSection(config.talk);
     // A voice turn outlives offer setup and must drain under its own root,
     // while new turns still respect suspension and restart admission.
-    const admission = runOutsideGatewayRootWorkAdmission(tryBeginGatewayRootWorkAdmission);
+    const admission = tryBeginGatewayIndependentRootWorkAdmission("talk-agent-consult", {
+      detachedWork: true,
+    });
     if (!admission) {
       throw new GatewayDrainingError();
     }

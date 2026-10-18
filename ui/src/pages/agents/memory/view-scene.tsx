@@ -1,8 +1,8 @@
 import { createMemo, For } from "solid-js";
+import { LobsterSvg } from "../../../components/lobster-pet-artwork.tsx";
 import { lobsterPetSeed } from "../../../components/lobster-pet-contract.ts";
-import { createLobsterPetLook, renderLobsterSvg } from "../../../components/lobster-pet-look.ts";
+import { createLobsterPetLook } from "../../../components/lobster-pet-look.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { LitContent } from "../../../lit/solid-bridge.ts";
 import type { DreamingProps } from "./view-types.ts";
 
 const DREAM_PHASES = ["light", "deep", "rem"] as const;
@@ -33,7 +33,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
   const look = createMemo(() => createLobsterPetLook(lobsterPetSeed(props.selectedAgentId)));
   const style = () => `--lob-shell:${look().palette.shell};--lob-claw:${look().palette.claw}`;
   return (
-    <section class={`dreams ${!props.active ? "dreams--idle" : ""}`}>
+    <section class={["dreams", { "dreams--idle": !props.active }]}>
       <For each={STARS}>
         {(s) => (
           <div
@@ -70,7 +70,7 @@ export function renderScene(props: DreamingProps, dreamText: () => string) {
 
       <div class="dreams__glow" />
       <div class="dreams__lobster" style={style()}>
-        <LitContent render={() => renderLobsterSvg(look(), { sleeping: true })} />
+        <LobsterSvg look={look()} sleeping />
       </div>
       <span class="dreams__z">z</span>
       <span class="dreams__z">z</span>

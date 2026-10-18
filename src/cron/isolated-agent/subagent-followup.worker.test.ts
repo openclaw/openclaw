@@ -16,10 +16,7 @@ import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  hasUnsettledCronDescendants,
-  readDescendantExecutionState,
-} from "./run-subagent-registry.runtime.js";
+import { hasUnsettledCronDescendants } from "./run-subagent-registry.runtime.js";
 import { readDescendantSubagentFallbackReply } from "./subagent-followup.js";
 
 const sessionKey = "agent:main:cron:worker-read:run:current";
@@ -47,7 +44,11 @@ function completedChild(text = "Completed child answer") {
     childSessionKey: "agent:main:subagent:cron-worker-child",
     createdAt: 10,
     execution: { status: "terminal", endedAt: 20, outcome: { status: "ok" } },
-    completion: { required: false, terminalReply: { disposition: "visible", text } },
+    completion: {
+      required: false,
+      resultText: text,
+      terminalReply: { disposition: "visible", text },
+    },
     delivery: { status: "not_required" },
   });
 }
@@ -200,26 +201,6 @@ it.each(["close", "caller cancellation"] as const)(
   },
 );
 
-it.each([
-  { createdAt: 10, startedAt: 30, fresh: true },
-  { createdAt: 30, startedAt: undefined, fresh: true },
-  { createdAt: 30, startedAt: 10, fresh: false },
-])("projects settled descendant freshness in the same read frame: %j", async (row) => {
-  await withPersistedCronRuns(async () => {
-    const child = {
-      ...completedChild(),
-      createdAt: row.createdAt,
-      execution: { status: "terminal" as const, startedAt: row.startedAt, endedAt: 40 },
-    };
-    saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
-    clearSubagentRunsReadCacheForTest();
-    expect(await readDescendantExecutionState(sessionKey, 25)).toEqual({
-      hasFreshDescendants: row.fresh,
-      hasActiveDescendants: false,
-    });
-  });
-});
-
 it.each(["running", "yielded", "queued delivery"] as const)(
   "keeps %s descendants unsettled independently of execution activity",
   async (phase) => {
@@ -241,10 +222,6 @@ it.each(["running", "yielded", "queued delivery"] as const)(
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
       clearSubagentRunsReadCacheForTest();
       expect(await hasUnsettledCronDescendants(sessionKey)).toBe(true);
-      expect(await readDescendantExecutionState(sessionKey, 25)).toEqual({
-        hasFreshDescendants: false,
-        hasActiveDescendants: phase === "running",
-      });
     });
   },
 );

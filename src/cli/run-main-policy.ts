@@ -1,12 +1,16 @@
-// Main CLI startup policy helpers for fast paths, proxy startup, aliases, and missing commands.
+import { existsSync } from "node:fs";
+import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { PROXY_ENV_KEYS as CLI_PROXY_ENV_KEYS } from "../infra/net/proxy-env.js";
+import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type {
   resolveManifestCommandAliasOwner,
   resolveManifestCliCommandSurfaceOwner,
@@ -25,21 +29,23 @@ import {
 } from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
+export const TUI_REQUIRES_TTY =
+  "OpenClaw TUI needs an interactive TTY. Use `openclaw agent --local ...` for automation.";
 const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
 ]);
-const CLI_PROXY_ENV_KEYS = [
-  "HTTP_PROXY",
-  "HTTPS_PROXY",
-  "ALL_PROXY",
-  "http_proxy",
-  "https_proxy",
-  "all_proxy",
-] as const;
+export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
+  const cwd = tryProcessCwd();
+  if (cwd && existsSync(path.join(cwd, ".env"))) {
+    return true;
+  }
+  return loadGlobalEnv && existsSync(path.join(resolveStateDir(), ".env"));
+}
 
 export function isGatewayRunFastPathArgv(argv: string[]): boolean {
   const invocation = resolveCliArgvInvocation(argv);
@@ -155,6 +161,32 @@ export function shouldStartProxyForCli(argv: string[]): boolean {
     return false;
   }
   return resolveCliNetworkProxyPolicy(policyArgv) === "default";
+}
+
+/** Bare `openclaw` has no command path, so its launch target decides the TTY rule and proxy routing. */
+export function resolveBareRootLaunchPolicy(target: BareRootLaunchTarget): {
+  ttyMessage: string;
+  startProxy: boolean;
+} {
+  if (target.kind === "remote-gateway-inference") {
+    return {
+      ttyMessage:
+        "Remote Gateway inference setup needs an interactive TTY. Re-run `openclaw` in a terminal connected to this Gateway.",
+      startProxy: false,
+    };
+  }
+  if (target.kind === "onboarding") {
+    // Onboarding probes providers from this process, like `openclaw onboard`.
+    return {
+      ttyMessage: target.classic
+        ? "OpenClaw config is invalid. Run `openclaw doctor --fix` before onboarding."
+        : "Onboarding needs an interactive TTY. Use `openclaw onboard --non-interactive --accept-risk ...` for automation.",
+      startProxy: true,
+    };
+  }
+  // The local TUI runs the agent here, like `tui --local`; a Gateway-bound TUI keeps
+  // its direct control-plane connection.
+  return { ttyMessage: TUI_REQUIRES_TTY, startProxy: target.local };
 }
 
 export function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {

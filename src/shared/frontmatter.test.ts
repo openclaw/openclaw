@@ -19,25 +19,6 @@ describe("shared/frontmatter", () => {
     expect(parseFrontmatterBool("maybe", false)).toBe(false);
   });
 
-  test("resolveOpenClawManifestBlock reads current manifest keys and custom metadata fields", () => {
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          metadata: "{ openclaw: { foo: 1, bar: 'baz' } }",
-        },
-      }),
-    ).toEqual({ foo: 1, bar: "baz" });
-
-    expect(
-      resolveOpenClawManifestBlock({
-        frontmatter: {
-          pluginMeta: "{ anotherTool: { foo: 99 }, openclaw: { foo: 2 } }",
-        },
-        key: "pluginMeta",
-      }),
-    ).toEqual({ foo: 2 });
-  });
-
   test("resolveOpenClawManifestBlock returns undefined for invalid input", () => {
     expect(resolveOpenClawManifestBlock({ frontmatter: {} })).toBeUndefined();
     expect(

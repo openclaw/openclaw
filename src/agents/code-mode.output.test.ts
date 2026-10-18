@@ -171,7 +171,7 @@ describe("Code Mode output provenance", () => {
 
   it("reports only unsettled calls without replaying clipped output", async () => {
     const { ctx, tools: codeModeTools } = createCodeModeHarness({
-      codeMode: { timeoutMs: 500, maxOutputBytes: 1024 },
+      codeMode: { maxOutputBytes: 1024 },
     });
     applyCodeModeCatalog({
       tools: [
@@ -188,13 +188,15 @@ describe("Code Mode output provenance", () => {
 
     const first = resultDetails(
       await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-call-timeout",
+        "code-call-pending",
         {
           code: `
-          text(${JSON.stringify("before timeout".repeat(200))});
+          text(${JSON.stringify("before yield".repeat(200))});
           const fast = fake_fast({});
           const slow = fake_slow({});
           await fast;
+          await yield_control();
+          await yield_control();
           await slow;
           return "done";
         `,
@@ -203,29 +205,28 @@ describe("Code Mode output provenance", () => {
     );
     expect(first.status).toBe("waiting");
     expectOriginalCodeModeMarker((first.output as unknown[])[0], [
-      { type: "text", text: "before timeout".repeat(200) },
+      { type: "text", text: "before yield".repeat(200) },
     ]);
-    // The fast call may settle as the snapshot is parked, but the slow call must remain pending.
-    expect(first.pendingToolCalls).toContainEqual(
+    expect(first.pendingToolCalls).toEqual([
       expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
-    );
+      expect.objectContaining({ method: "yield" }),
+    ]);
     expect(first.runId).toEqual(expect.any(String));
     const runId = String(first.runId);
 
-    const activeRun = testing.activeRuns.get(runId);
-    expect(activeRun).toBeDefined();
-    activeRun!.config.timeoutMs = 100;
-
     const second = resultDetails(
       await expectDefined(codeModeTools[1], "codeModeTools[1] test invariant").execute(
-        "code-wait-timeout",
+        "code-wait-pending",
         { runId },
       ),
     );
 
     expect(second.status).toBe("waiting");
     expect(second.output).toEqual([]);
-    expect(second.pendingToolCalls).toEqual([expect.objectContaining({ method: "callValue" })]);
+    expect(second.pendingToolCalls).toEqual([
+      expect.objectContaining({ id: "bridge:callValue:2", method: "callValue" }),
+      expect.objectContaining({ method: "yield" }),
+    ]);
   });
 });
 

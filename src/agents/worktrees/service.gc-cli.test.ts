@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { registerWorktreesCli } from "../../cli/worktrees-cli.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
@@ -27,9 +27,9 @@ import {
   updateRegistryWorktree,
 } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
+import { resolveRepository } from "./repository-paths.js";
 import { admitWorktreeRunLeaseInDatabase } from "./run-lease-store.kernel.js";
-import { resolveRepository } from "./service-preparation.js";
-import { IDLE_GC_MS, SNAPSHOT_RETENTION_MS, ManagedWorktreeService } from "./service.js";
+import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixtures,
   useManagedWorktreeTestRepository,
@@ -47,6 +47,10 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 const initializeRepository = useManagedWorktreeTestRepository();
+
+beforeEach(() => {
+  setRuntimeConfigSnapshot({});
+});
 
 async function bindFixtureRepository(env: NodeJS.ProcessEnv, repo: string, ids: string[]) {
   const identity = await resolveRepository(repo);
@@ -70,7 +74,7 @@ it
     await requireGit(repo, ["commit", "-m", "add tracked directory"]);
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const now = 1_700_000_000_000;
+    const now = Date.now();
     const [record] = await materializeManagedWorktreeFixtures({
       env,
       repoRoot: repo,
@@ -79,7 +83,7 @@ it
       ownerKind: "workboard",
       names: ["unreadable"],
     });
-    const service = new ManagedWorktreeService({ env, now: () => now });
+    const service = new ManagedWorktreeService({ env });
     const gc = service.gc.bind(service);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setRuntimeConfigSnapshot({}, {});
@@ -158,7 +162,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
   const repo = await initializeRepository(root);
   const stateDir = path.join(root, "state");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const now = 1_700_000_000_000;
+  const now = Date.now();
   const [moved, orphan, ...idle] = await materializeManagedWorktreeFixtures({
     env,
     repoRoot: repo,
@@ -211,7 +215,7 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     },
     { env },
   );
-  const service = new ManagedWorktreeService({ env, now: () => now });
+  const service = new ManagedWorktreeService({ env });
   const gc = service.gc.bind(service);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   setRuntimeConfigSnapshot({}, {});
@@ -262,7 +266,8 @@ it("finishes CLI cleanup with moved HEADs, missing gitdirs, and 600 mixed regist
     throw new Error("CLI cleanup did not return its result");
   }
   expect(formatWorktreeGcResult(collected)).toContain(orphan!.path);
-  expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBe(now);
+  expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeGreaterThanOrEqual(now);
+  expect(getRegistryWorktree(env, orphan!.id)?.removedAt).toBeLessThanOrEqual(Date.now());
   expect((await service.list()).some((record) => record.id === orphan!.id)).toBe(false);
   await expect(service.restore({ id: orphan!.id })).rejects.toThrow("is not restorable");
   expect(await requireGit(repo, ["rev-parse", "--verify", orphan!.branch])).toBeTruthy();
@@ -282,7 +287,7 @@ it("preserves a recent orphan when its owner becomes live during cleanup", async
   const repo = await initializeRepository(root);
   const stateDir = path.join(root, "state");
   const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const now = 1_700_000_000_000;
+  const now = Date.now();
   const [record] = await materializeManagedWorktreeFixtures({
     env,
     repoRoot: repo,
@@ -295,7 +300,7 @@ it("preserves a recent orphan when its owner becomes live during cleanup", async
   await bindFixtureRepository(env, repo, [record!.id]);
   const gitdir = await requireGit(record!.path, ["rev-parse", "--absolute-git-dir"]);
   await fs.rm(gitdir, { recursive: true });
-  const service = new ManagedWorktreeService({ env, now: () => now });
+  const service = new ManagedWorktreeService({ env });
   const result = await service.gc({
     readOwnerState: vi.fn().mockReturnValueOnce("retired").mockReturnValue("idle"),
   });
@@ -313,7 +318,7 @@ it.each([
     const repo = await initializeRepository(root);
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const now = 1_700_000_000_000;
+    const now = Date.now();
     const [record] = await materializeManagedWorktreeFixtures({
       env,
       repoRoot: repo,
@@ -338,7 +343,7 @@ it.each([
         },
       );
     }
-    const result = await new ManagedWorktreeService({ env, now: () => now }).gc();
+    const result = await new ManagedWorktreeService({ env }).gc();
     expect(result).toMatchObject({ orphansRetired: 0, outcome });
     expect(getRegistryWorktree(env, record!.id)?.removedAt).toBeUndefined();
     expect(await fs.readFile(path.join(record!.path, "README.md"), "utf8")).toBe("base\n");
@@ -352,7 +357,7 @@ it.each(["gitdir", "checkout"])(
     const repo = await initializeRepository(root);
     const stateDir = path.join(root, "state");
     const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    let now = 1_700_000_000_000;
+    const now = Date.now();
     const [record] = await materializeManagedWorktreeFixtures({
       env,
       repoRoot: repo,
@@ -390,7 +395,7 @@ it.each(["gitdir", "checkout"])(
         : record!.path,
       { recursive: true },
     );
-    const service = new ManagedWorktreeService({ env, now: () => now });
+    const service = new ManagedWorktreeService({ env });
     for (let pass = 0; pass < 2; pass++) {
       const result = await service.gc();
       expect(result).toMatchObject({
@@ -405,7 +410,6 @@ it.each(["gitdir", "checkout"])(
         projection,
       );
       expect(await fs.readFile(uniqueFile, "utf8")).toBe("unique projection bytes\n");
-      now += SNAPSHOT_RETENTION_MS + 1;
     }
   },
 );

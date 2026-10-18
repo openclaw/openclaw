@@ -4,7 +4,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
+import { canAccessSync } from "./path-existence.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -30,12 +32,7 @@ let cachedProcessRoots: WindowsProcessRoots | null = null;
 
 function locateWindowsRegExe(): string | null {
   const filePath = path.win32.join(DEFAULT_WINDOWS_SYSTEM_ROOT, "System32", "reg.exe");
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-    return filePath;
-  } catch {
-    return null;
-  }
+  return canAccessSync(filePath, fs.constants.R_OK) ? filePath : null;
 }
 
 function trimTrailingSeparators(value: string): string {
@@ -111,6 +108,7 @@ export function queryWindowsRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
       const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
         env: resolveDiagnosticProcessEnv(),

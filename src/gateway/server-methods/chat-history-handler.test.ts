@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixture.test-support.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
   patchSessionEntryCore,
@@ -19,12 +21,18 @@ import {
   listUserProfileAuthLinks,
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
+import { chatMessageGetHandlers } from "./chat-message-get-handler.js";
+import {
+  registerMetadataCallerCases,
+  registerMetadataRevocationCases,
+} from "./chat-metadata-ownership.test-support.js";
 import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
 import { identifiedClient } from "./sessions-read-cache.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
@@ -58,6 +66,7 @@ function createPersonalMetadataFixture() {
       },
     },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(config);
   const clients = new Set([client]);
   const metadata = { models: [], swarmEnabled: false };
   const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(async () => metadata);
@@ -93,49 +102,160 @@ function createPersonalMetadataFixture() {
   return { owner, authProfileId, client, clients, config, metadata, readChatMetadata, request };
 }
 
+describe("plugin steering history audience", () => {
+  it("serves notices only to Control UI through worker history, startup, delta, and exact hydration", async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:plugin-steering",
+        sessionId: "plugin-steering",
+      };
+      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      await appendTranscriptMessage(scope, {
+        eventId: "question",
+        now: 1,
+        message: { role: "user", content: "Question" },
+      });
+      const context = await createHistoryReadContext();
+      const client = identifiedClient("steering-reader");
+      client.connect.scopes = ["operator.admin"];
+      const request = async (method: string, params: Record<string, unknown> = {}) => {
+        const handler = expectDefined(
+          { ...chatHistoryHandlers, ...chatMessageGetHandlers }[method],
+          "chat handler",
+        );
+        const respond = vi.fn<RespondFn>();
+        await handler({
+          params: { sessionKey: scope.sessionKey, ...params },
+          client,
+          context,
+          respond,
+          req: { type: "req", id: "steering-read", method },
+          isWebchatConnect: () => true,
+        });
+        expect(respond.mock.calls[0]?.[0]).toBe(true);
+        return expectDefined(asOptionalRecord(respond.mock.calls[0]?.[1]), "chat response");
+      };
+      const cursor = (await request("chat.history")).deltaCursor;
+      expect(typeof cursor).toBe("string");
+      await appendTranscriptMessage(scope, {
+        eventId: "plugin-note",
+        now: 2,
+        message: {
+          role: "user",
+          display: false,
+          content: "Private model prefix\n\nKeep the change small.",
+          provenance: { kind: "internal_system", sourceTool: "plugin:reviewer" },
+          __openclaw: {
+            pluginSteering: {
+              pluginId: "reviewer",
+              pluginName: "Reviewer",
+              displayText: "Keep the change small.",
+            },
+          },
+        },
+      });
+      await appendTranscriptMessage(scope, {
+        eventId: "hidden-exec",
+        now: 3,
+        message: {
+          role: "user",
+          display: false,
+          content: "Private exec output",
+          provenance: { kind: "internal_system", sourceTool: "exec" },
+        },
+      });
+      for (const id of [
+        GATEWAY_CLIENT_IDS.CONTROL_UI,
+        GATEWAY_CLIENT_IDS.TUI,
+        GATEWAY_CLIENT_IDS.MACOS_APP,
+      ]) {
+        client.connect.client = { ...client.connect.client, id, mode: "webchat" };
+        const visible = id === GATEWAY_CLIENT_IDS.CONTROL_UI;
+        for (const method of ["chat.history", "chat.startup"]) {
+          const response = await request(method);
+          expect(response.messages).toHaveLength(visible ? 2 : 1);
+          if (visible) {
+            expect(response.messages).toEqual(
+              expect.arrayContaining([
+                expect.objectContaining({
+                  display: true,
+                  content: [{ type: "text", text: "Keep the change small." }],
+                  __openclaw: expect.objectContaining({
+                    pluginSteering: expect.objectContaining({
+                      pluginId: "reviewer",
+                      pluginName: "Reviewer",
+                    }),
+                  }),
+                }),
+              ]),
+            );
+          }
+        }
+        const delta = await request("chat.history", { cursor });
+        expect(delta.kind).toBe("delta");
+        expect(delta.messages).toHaveLength(visible ? 1 : 0);
+        const exact = await request("chat.message.get", { messageId: "plugin-note" });
+        expect(exact.ok).toBe(visible);
+        if (visible) {
+          expect(exact.message).toMatchObject({
+            display: true,
+            content: [{ type: "text", text: "Keep the change small." }],
+          });
+        }
+      }
+    });
+  });
+});
+
 describe("chat history model selection defaults", () => {
   it.each(["chat.history", "chat.startup"] as const)(
     "%s keeps selection session-only for an agent with an explicit default",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg = {
-          agents: {
-            defaults: { model: "openai/gpt-5.6-sol" },
-            ownership: "explicit",
-            entries: {
-              main: {},
-              work: { model: "anthropic/claude-sonnet-4-6" },
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async (state) => {
+          const cfg = {
+            agents: {
+              defaults: { model: "openai/gpt-5.6-sol" },
+              ownership: "explicit",
+              entries: {
+                main: {},
+                work: { model: "anthropic/claude-sonnet-4-6" },
+              },
             },
-          },
-        } satisfies OpenClawConfig;
-        await state.writeConfig(cfg);
-        const scope = {
-          agentId: "work",
-          sessionKey: "agent:work:main",
-          sessionId: "work-main",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        let result: unknown;
+          } satisfies OpenClawConfig;
+          await state.writeConfig(cfg);
+          setRuntimeConfigSnapshot(cfg);
+          const scope = {
+            agentId: "work",
+            sessionKey: "agent:work:main",
+            sessionId: "work-main",
+          };
+          await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+          let result: unknown;
 
-        await expectDefined(
-          chatHistoryHandlers[method],
-          "history handler",
-        )({
-          params: { agentId: scope.agentId, sessionKey: scope.sessionKey },
-          context: await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
-          req: { type: "req", id: "model-target", method },
-          client: { connect: { scopes: ["operator.admin"] } } as never,
-          isWebchatConnect: () => false,
-          respond: (ok, payload, error) => {
-            expect(error).toBeUndefined();
-            expect(ok).toBe(true);
-            result = payload;
-          },
-        });
+          await expectDefined(
+            chatHistoryHandlers[method],
+            "history handler",
+          )({
+            params: { agentId: scope.agentId, sessionKey: scope.sessionKey },
+            context: await createHistoryReadContext({ getRuntimeConfig: () => cfg }),
+            req: { type: "req", id: "model-target", method },
+            client: { connect: { scopes: ["operator.admin"] } } as never,
+            isWebchatConnect: () => false,
+            respond: (ok, payload, error) => {
+              expect(error).toBeUndefined();
+              expect(ok).toBe(true);
+              result = payload;
+            },
+          });
 
-        const response = expectDefined(asOptionalRecord(result), "history response");
-        expect(response.defaults).toMatchObject({ modelSelectionTarget: "session" });
-      });
+          const response = expectDefined(asOptionalRecord(result), "history response");
+          expect(response.defaults).toMatchObject({ modelSelectionTarget: "session" });
+        },
+      );
     },
   );
 });
@@ -144,164 +264,176 @@ describe("chat history sharing projection", () => {
   it.each(["chat.history", "chat.startup"] as const)(
     "%s projects unbound canonical ACP metadata without host ACP reads",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const sessionKey = "agent:main:acp:unbound-history";
-        seedCanonicalAcpSessionMeta({
-          sessionKey,
-          meta: {
-            backend: "acpx",
-            agent: "main",
-            runtimeSessionName: "unbound-history",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 1,
-          },
-        });
-        const context = await createHistoryReadContext();
-        const client = identifiedClient("unbound-history-operator");
-        client.connect.scopes = ["operator.admin"];
-        const respond = vi.fn<RespondFn>();
-        const hostSql = observeHostDataSql();
-        try {
-          await expectDefined(
-            chatHistoryHandlers[method],
-            "history handler",
-          )({
-            params: { sessionKey },
-            context,
-            client,
-            respond,
-            req: { type: "req", id: "unbound-history", method },
-            isWebchatConnect: () => false,
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const sessionKey = "agent:main:acp:unbound-history";
+          seedCanonicalAcpSessionMeta({
+            sessionKey,
+            meta: {
+              backend: "acpx",
+              agent: "main",
+              runtimeSessionName: "unbound-history",
+              mode: "persistent",
+              state: "idle",
+              lastActivityAt: 1,
+            },
           });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({
-              sessionInfo: expect.objectContaining({
-                runtimeSelectionLocked: true,
-                agentRuntime: {
-                  id: "acpx",
-                  source: "session-key",
-                  cloudPlacementSupported: false,
-                  devicePlacementSupported: false,
-                },
+          const context = await createHistoryReadContext();
+          const client = identifiedClient("unbound-history-operator");
+          client.connect.scopes = ["operator.admin"];
+          const respond = vi.fn<RespondFn>();
+          const hostSql = observeHostDataSql();
+          try {
+            await expectDefined(
+              chatHistoryHandlers[method],
+              "history handler",
+            )({
+              params: { sessionKey },
+              context,
+              client,
+              respond,
+              req: { type: "req", id: "unbound-history", method },
+              isWebchatConnect: () => false,
+            });
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                sessionInfo: expect.objectContaining({
+                  runtimeSelectionLocked: true,
+                  agentRuntime: {
+                    id: "acpx",
+                    source: "session-key",
+                    cloudPlacementSupported: false,
+                    devicePlacementSupported: false,
+                  },
+                }),
               }),
-            }),
-          );
-          expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
-        } finally {
-          hostSql.restore();
-        }
-      });
+            );
+            expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
+          } finally {
+            hostSql.restore();
+          }
+        },
+      );
     },
   );
 
   it.each(["chat.history", "chat.startup"] as const)(
     "%s carries current caller sharing controls on sessionInfo",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "sharing-history",
-          updatedAt: Date.now(),
-          visibility: "read-only",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        for (const role of ["owner", "admin", "viewer"] as const) {
-          const client = identifiedClient(role);
-          if (role === "admin") {
-            client.connect.scopes = ["operator.admin"];
-          }
-          const respond = vi.fn<RespondFn>();
-          await expectDefined(
-            chatHistoryHandlers[method],
-            "history handler",
-          )({
-            params: scope,
-            client,
-            context: await createHistoryReadContext(),
-            respond,
-            req: { type: "req", id: "sharing-history", method },
-            isWebchatConnect: () => false,
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const scope = { agentId: "main", sessionKey: "agent:main:sharing-history" };
+          await upsertSessionEntryCore(scope, {
+            sessionId: "sharing-history",
+            updatedAt: Date.now(),
+            visibility: "read-only",
+            createdActor: { type: "human", source: "profile", id: "owner" },
           });
-          expect(respond).toHaveBeenCalledWith(
-            true,
-            expect.objectContaining({
-              sessionInfo: expect.objectContaining({
-                sessionId: "sharing-history",
-                sharingRole: role,
-                visibility: "read-only",
+          for (const role of ["owner", "admin", "viewer"] as const) {
+            const client = identifiedClient(role);
+            if (role === "admin") {
+              client.connect.scopes = ["operator.admin"];
+            }
+            const respond = vi.fn<RespondFn>();
+            await expectDefined(
+              chatHistoryHandlers[method],
+              "history handler",
+            )({
+              params: scope,
+              client,
+              context: await createHistoryReadContext(),
+              respond,
+              req: { type: "req", id: "sharing-history", method },
+              isWebchatConnect: () => false,
+            });
+            expect(respond).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                sessionInfo: expect.objectContaining({
+                  sessionId: "sharing-history",
+                  sharingRole: role,
+                  visibility: "read-only",
+                }),
               }),
-            }),
-          );
-        }
-      });
+            );
+          }
+        },
+      );
     },
   );
 
   it.each(["chat.history", "chat.startup"] as const)(
     "%s refreshes sharing after startup work and rejects a replaced session",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "sharing-history-race",
-          updatedAt: Date.now(),
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        const client = identifiedClient("viewer");
-        client.connect.scopes = ["operator.admin"];
-        const readChatStartupProjection = vi.fn(async () => {
-          client.connect.scopes = ["operator.read", "operator.write"];
-          await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-          return undefined;
-        });
-        const context = await createHistoryReadContext({ readChatStartupProjection });
-        const call = async () => {
-          const respond = vi.fn<RespondFn>();
-          await expectDefined(
-            chatHistoryHandlers[method],
-            "history handler",
-          )({
-            params: scope,
-            client,
-            context,
-            respond,
-            req: { type: "req", id: "sharing-history-race", method },
-            isWebchatConnect: () => false,
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const scope = { agentId: "main", sessionKey: "agent:main:sharing-history-race" };
+          await upsertSessionEntryCore(scope, {
+            sessionId: "sharing-history-race",
+            updatedAt: Date.now(),
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: "owner" },
           });
-          return respond;
-        };
-        expect(await call()).toHaveBeenCalledWith(
-          true,
-          expect.objectContaining({
-            sessionInfo: expect.objectContaining({
-              sharingRole: "viewer",
-              visibility: "read-only",
+          const client = identifiedClient("viewer");
+          client.connect.scopes = ["operator.admin"];
+          const readChatStartupProjection = vi.fn(async () => {
+            client.connect.scopes = ["operator.read", "operator.write"];
+            await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+            return undefined;
+          });
+          const context = await createHistoryReadContext({ readChatStartupProjection });
+          const call = async () => {
+            const respond = vi.fn<RespondFn>();
+            await expectDefined(
+              chatHistoryHandlers[method],
+              "history handler",
+            )({
+              params: scope,
+              client,
+              context,
+              respond,
+              req: { type: "req", id: "sharing-history-race", method },
+              isWebchatConnect: () => false,
+            });
+            return respond;
+          };
+          expect(await call()).toHaveBeenCalledWith(
+            true,
+            expect.objectContaining({
+              sessionInfo: expect.objectContaining({
+                sharingRole: "viewer",
+                visibility: "read-only",
+              }),
             }),
-          }),
-        );
-        readChatStartupProjection.mockImplementationOnce(async () => {
-          await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-          return undefined;
-        });
-        expect(await call()).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "INVALID_REQUEST" }),
-        );
-        await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
-        readChatStartupProjection.mockImplementationOnce(async () => {
-          await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
-          return undefined;
-        });
-        expect(await call()).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-        );
-      });
+          );
+          readChatStartupProjection.mockImplementationOnce(async () => {
+            await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
+            return undefined;
+          });
+          expect(await call()).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "INVALID_REQUEST" }),
+          );
+          await patchSessionEntryCore(scope, () => ({ visibility: "read-only" }));
+          readChatStartupProjection.mockImplementationOnce(async () => {
+            await patchSessionEntryCore(scope, () => ({ sessionId: "replacement-history" }));
+            return undefined;
+          });
+          expect(await call()).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+          );
+        },
+      );
     },
   );
 });
@@ -319,103 +451,110 @@ describe("chat history delta publication", () => {
   ] as const)(
     "$method rejects a delta after $change during transcript restoration",
     async ({ method, change, code }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:delta-publication",
-          sessionId: "delta-publication",
-        };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          lifecycleRevision: "before-reset",
-          sessionStartedAt: 1,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        });
-        await appendTranscriptMessage(scope, {
-          message: { role: "user", content: "before cursor", timestamp: 1 },
-        });
-        const client = identifiedClient("viewer");
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (cursor?: string) => {
-          const respond = vi.fn<RespondFn>();
-          await handler({
-            params: { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) },
-            client,
-            context,
-            respond,
-            req: { type: "req", id: "delta-publication", method },
-            isWebchatConnect: () => false,
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const scope = {
+            agentId: "main",
+            sessionKey: "agent:main:delta-publication",
+            sessionId: "delta-publication",
+          };
+          await upsertSessionEntryCore(scope, {
+            sessionId: scope.sessionId,
+            lifecycleRevision: "before-reset",
+            sessionStartedAt: 1,
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: "owner" },
           });
-          return respond;
-        };
-        const initial = await call();
-        const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
-        expect(initialResponse[0]).toBe(true);
-        expect(initialResponse[1]).toMatchObject({
-          sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
-        });
-        const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
-        if (typeof cursor !== "string") {
-          throw new Error("expected initial delta cursor");
-        }
-        await appendTranscriptMessage(scope, {
-          message: { role: "assistant", content: "private delta content", timestamp: 2 },
-        });
-        const entered = createDeferred();
-        const release = createDeferred();
-        const read = coldStorageRead.readRestoredSessionTranscript;
-        const readSpy = vi.spyOn(coldStorageRead, "readRestoredSessionTranscript");
-        readSpy.mockImplementationOnce(async function delayedRead<T>(
-          readScope: SessionTranscriptReadScope,
-          readSnapshot: () => T,
-        ): Promise<T> {
-          const result = await read(readScope, readSnapshot);
-          entered.resolve();
-          await release.promise;
-          return result;
-        });
-        const pending = call(cursor);
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readSpy).toHaveBeenCalledOnce();
-          await patchSessionEntryCore(scope, () =>
-            change === "replacement"
-              ? { sessionId: "replacement" }
-              : change === "reset"
-                ? { lifecycleRevision: "after-reset", sessionStartedAt: 3 }
-                : { visibility: change === "revocation" ? "draft" : "read-only" },
-          );
-        } finally {
-          release.resolve();
-          try {
-            await pending;
-          } finally {
-            readSpy.mockRestore();
+          await appendTranscriptMessage(scope, {
+            message: { role: "user", content: "before cursor", timestamp: 1 },
+          });
+          const client = identifiedClient("viewer");
+          const context = await createHistoryReadContext();
+          const handler = expectDefined(chatHistoryHandlers[method], "history handler");
+          const call = async (cursor?: string) => {
+            const respond = vi.fn<RespondFn>();
+            await handler({
+              params: { sessionKey: scope.sessionKey, ...(cursor ? { cursor } : {}) },
+              client,
+              context,
+              respond,
+              req: { type: "req", id: "delta-publication", method },
+              isWebchatConnect: () => false,
+            });
+            return respond;
+          };
+          const initial = await call();
+          const initialResponse = expectDefined(initial.mock.calls[0], "initial response");
+          expect(initialResponse[0]).toBe(true);
+          expect(initialResponse[1]).toMatchObject({
+            sessionInfo: { sessionId: scope.sessionId, lifecycleRevision: "before-reset" },
+          });
+          const cursor = asOptionalRecord(initialResponse[1])?.deltaCursor;
+          if (typeof cursor !== "string") {
+            throw new Error("expected initial delta cursor");
           }
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({ code, ...(code === "UNAVAILABLE" ? { retryable: true } : {}) }),
-        );
-        expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
-        if (change === "reset") {
-          // A reset can retain the physical transcript ID while invalidating cached full messages.
-          expect(await call()).toHaveBeenCalledExactlyOnceWith(
-            true,
+          await appendTranscriptMessage(scope, {
+            message: { role: "assistant", content: "private delta content", timestamp: 2 },
+          });
+          const entered = createDeferred();
+          const release = createDeferred();
+          const read = coldStorageRead.readRestoredSessionTranscript;
+          const readSpy = vi.spyOn(coldStorageRead, "readRestoredSessionTranscript");
+          readSpy.mockImplementationOnce(async function delayedRead<T>(
+            readScope: SessionTranscriptReadScope,
+            readSnapshot: () => T,
+          ): Promise<T> {
+            const result = await read(readScope, readSnapshot);
+            entered.resolve();
+            await release.promise;
+            return result;
+          });
+          const pending = call(cursor);
+          try {
+            await Promise.race([entered.promise, pending]);
+            expect(readSpy).toHaveBeenCalledOnce();
+            await patchSessionEntryCore(scope, () =>
+              change === "replacement"
+                ? { sessionId: "replacement" }
+                : change === "reset"
+                  ? { lifecycleRevision: "after-reset", sessionStartedAt: 3 }
+                  : { visibility: change === "revocation" ? "draft" : "read-only" },
+            );
+          } finally {
+            release.resolve();
+            try {
+              await pending;
+            } finally {
+              readSpy.mockRestore();
+            }
+          }
+          const respond = await pending;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
+            false,
+            undefined,
             expect.objectContaining({
-              sessionInfo: expect.objectContaining({
-                sessionId: scope.sessionId,
-                lifecycleRevision: "after-reset",
-              }),
+              code,
+              ...(code === "UNAVAILABLE" ? { retryable: true } : {}),
             }),
           );
-        }
-      });
+          expect(JSON.stringify(respond.mock.calls)).not.toContain("private delta content");
+          if (change === "reset") {
+            // A reset can retain the physical transcript ID while invalidating cached full messages.
+            expect(await call()).toHaveBeenCalledExactlyOnceWith(
+              true,
+              expect.objectContaining({
+                sessionInfo: expect.objectContaining({
+                  sessionId: scope.sessionId,
+                  lifecycleRevision: "after-reset",
+                }),
+              }),
+            );
+          }
+        },
+      );
     },
   );
 });
@@ -450,98 +589,103 @@ describe("chat history exact-entry snapshots", () => {
   it.each(["chat.history", "chat.startup"] as const)(
     "%s projects fresh owned session state without another preparation copy",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const now = Date.now();
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:history-owned",
-          sessionId: "history-owned",
-        };
-        const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
-        const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
-        const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
-        await upsertSessionEntryCore(scope, {
-          sessionId: scope.sessionId,
-          updatedAt: now,
-          thinkingLevel: "high",
-          toolOverrides,
-          skillsSnapshot,
-        });
-        await upsertSessionEntryCore(childScope, {
-          sessionId: "history-child",
-          updatedAt: now,
-          parentSessionKey: scope.sessionKey,
-          spawnedBy: scope.sessionKey,
-          skillsSnapshot,
-        });
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async () => {
-          const respond = vi.fn();
-          const cloneSpy = vi.spyOn(globalThis, "structuredClone");
-          const parseSpy = vi.spyOn(JSON, "parse");
-          try {
-            const pending = handler({
-              params: { sessionKey: scope.sessionKey },
-              context,
-              req: { type: "req", id: "owned-history", method },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
-            });
-            // Count synchronous history preparation before optional startup icon work resumes.
-            const preparationCopies = cloneSpy.mock.calls.filter(
-              ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
-            ).length;
-            expect(
-              parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt)),
-            ).toBe(false);
-            await pending;
-            expect(
-              parseSpy.mock.calls.filter(([value]) => value.includes('"sessionId":"history-child"'))
-                .length,
-            ).toBeLessThanOrEqual(1);
-            const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
-            expect(error).toBeUndefined();
-            expect(ok).toBe(true);
-            expect(preparationCopies).toBe(0);
-            return expectDefined(asOptionalRecord(payload), "history payload");
-          } finally {
-            cloneSpy.mockRestore();
-            parseSpy.mockRestore();
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const now = Date.now();
+          const scope = {
+            agentId: "main",
+            sessionKey: "agent:main:history-owned",
+            sessionId: "history-owned",
+          };
+          const childScope = { agentId: "main", sessionKey: "agent:main:subagent:history-child" };
+          const toolOverrides = { mcpToolsDeny: { synthetic: ["blocked"] } };
+          const skillsSnapshot = { prompt: "history unused saved prompt", skills: [] };
+          await upsertSessionEntryCore(scope, {
+            sessionId: scope.sessionId,
+            updatedAt: now,
+            thinkingLevel: "high",
+            toolOverrides,
+            skillsSnapshot,
+          });
+          await upsertSessionEntryCore(childScope, {
+            sessionId: "history-child",
+            updatedAt: now,
+            parentSessionKey: scope.sessionKey,
+            spawnedBy: scope.sessionKey,
+            skillsSnapshot,
+          });
+          const context = await createHistoryReadContext();
+          const handler = expectDefined(chatHistoryHandlers[method], "history handler");
+          const call = async () => {
+            const respond = vi.fn();
+            const cloneSpy = vi.spyOn(globalThis, "structuredClone");
+            const parseSpy = vi.spyOn(JSON, "parse");
+            try {
+              const pending = handler({
+                params: { sessionKey: scope.sessionKey },
+                context,
+                req: { type: "req", id: "owned-history", method },
+                client: null,
+                isWebchatConnect: () => false,
+                respond,
+              });
+              // Count synchronous history preparation before optional startup icon work resumes.
+              const preparationCopies = cloneSpy.mock.calls.filter(
+                ([value]) => asOptionalRecord(value)?.sessionId === scope.sessionId,
+              ).length;
+              expect(
+                parseSpy.mock.calls.some(([value]) => value.includes(skillsSnapshot.prompt)),
+              ).toBe(false);
+              await pending;
+              expect(
+                parseSpy.mock.calls.filter(([value]) =>
+                  value.includes('"sessionId":"history-child"'),
+                ).length,
+              ).toBeLessThanOrEqual(1);
+              const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
+              expect(error).toBeUndefined();
+              expect(ok).toBe(true);
+              expect(preparationCopies).toBe(0);
+              return expectDefined(asOptionalRecord(payload), "history payload");
+            } finally {
+              cloneSpy.mockRestore();
+              parseSpy.mockRestore();
+            }
+          };
+
+          const first = await call();
+          expect(first).toMatchObject({ thinkingLevel: "high", toolOverrides });
+          expect(first.sessionInfo).toMatchObject({ childSessions: [childScope.sessionKey] });
+          const responseTools = expectDefined(
+            asOptionalRecord(first.toolOverrides),
+            "tool overrides",
+          );
+          const deniedByServer = expectDefined(
+            asOptionalRecord(responseTools.mcpToolsDeny),
+            "denied tools by server",
+          );
+          const deniedTools = deniedByServer.synthetic;
+          if (!Array.isArray(deniedTools)) {
+            throw new Error("expected nested denied tool array");
           }
-        };
+          deniedTools.push("response-only");
+          expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
+          expect((await call()).toolOverrides).toEqual(toolOverrides);
 
-        const first = await call();
-        expect(first).toMatchObject({ thinkingLevel: "high", toolOverrides });
-        expect(first.sessionInfo).toMatchObject({ childSessions: [childScope.sessionKey] });
-        const responseTools = expectDefined(
-          asOptionalRecord(first.toolOverrides),
-          "tool overrides",
-        );
-        const deniedByServer = expectDefined(
-          asOptionalRecord(responseTools.mcpToolsDeny),
-          "denied tools by server",
-        );
-        const deniedTools = deniedByServer.synthetic;
-        if (!Array.isArray(deniedTools)) {
-          throw new Error("expected nested denied tool array");
-        }
-        deniedTools.push("response-only");
-        expect(toolOverrides.mcpToolsDeny.synthetic).toEqual(["blocked"]);
-        expect((await call()).toolOverrides).toEqual(toolOverrides);
-
-        await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
-        await updateSessionEntry(childScope, () => ({
-          parentSessionKey: "agent:main:other-parent",
-          spawnedBy: "agent:main:other-parent",
-          updatedAt: now + 1,
-        }));
-        const fresh = await call();
-        expect(fresh).toMatchObject({ thinkingLevel: "low", toolOverrides });
-        expect(asOptionalRecord(fresh.sessionInfo)?.childSessions).toBeUndefined();
-        expect(first.thinkingLevel).toBe("high");
-      });
+          await updateSessionEntry(scope, () => ({ thinkingLevel: "low", updatedAt: now + 1 }));
+          await updateSessionEntry(childScope, () => ({
+            parentSessionKey: "agent:main:other-parent",
+            spawnedBy: "agent:main:other-parent",
+            updatedAt: now + 1,
+          }));
+          const fresh = await call();
+          expect(fresh).toMatchObject({ thinkingLevel: "low", toolOverrides });
+          expect(asOptionalRecord(fresh.sessionInfo)?.childSessions).toBeUndefined();
+          expect(first.thinkingLevel).toBe("high");
+        },
+      );
     },
   );
 });
@@ -550,167 +694,172 @@ describe("chat history recovery byte budget", () => {
   it.each(["chat.history", "chat.startup"] as const)(
     "%s reuses measured history bytes while preserving the recovery boundary",
     async (method) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const scope = {
-          agentId: "main",
-          sessionKey: "agent:main:history-bytes",
-          sessionId: "history-bytes",
-        };
-        await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-        const marker = "history-byte-fixture";
-        for (let index = 0; index < 12; index++) {
-          await appendTranscriptMessage(scope, {
-            message: {
-              role: index % 2 === 0 ? "user" : "assistant",
-              content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
-              timestamp: index + 1,
-            },
-          });
-        }
-        const context = await createHistoryReadContext();
-        const handler = expectDefined(chatHistoryHandlers[method], "history handler");
-        const call = async (params: Record<string, unknown> = {}) => {
-          const respond = vi.fn<RespondFn>();
-          const stringify = JSON.stringify;
-          let historyArrayBytes = 0;
-          const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
-            const result = stringify(...args);
-            if (
-              Array.isArray(args[0]) &&
-              args[0].some((value) => {
-                const record = asOptionalRecord(value);
-                return (
-                  record?.role === "user" || asOptionalRecord(record?.message)?.role === "user"
-                );
-              }) &&
-              typeof result === "string" &&
-              result.includes(marker)
-            ) {
-              historyArrayBytes += Buffer.byteLength(result);
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          await captureRuntimeConfigAsyncReader()();
+          const scope = {
+            agentId: "main",
+            sessionKey: "agent:main:history-bytes",
+            sessionId: "history-bytes",
+          };
+          await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+          const marker = "history-byte-fixture";
+          for (let index = 0; index < 12; index++) {
+            await appendTranscriptMessage(scope, {
+              message: {
+                role: index % 2 === 0 ? "user" : "assistant",
+                content: `${marker}-${index}: ${'漢字\n"\\'.repeat(100)}`,
+                timestamp: index + 1,
+              },
+            });
+          }
+          const context = await createHistoryReadContext();
+          const handler = expectDefined(chatHistoryHandlers[method], "history handler");
+          const call = async (params: Record<string, unknown> = {}) => {
+            const respond = vi.fn<RespondFn>();
+            const stringify = JSON.stringify;
+            let historyArrayBytes = 0;
+            const serialization = vi.spyOn(JSON, "stringify").mockImplementation((...args) => {
+              const result = stringify(...args);
+              if (
+                Array.isArray(args[0]) &&
+                args[0].some((value) => {
+                  const record = asOptionalRecord(value);
+                  return (
+                    record?.role === "user" || asOptionalRecord(record?.message)?.role === "user"
+                  );
+                }) &&
+                typeof result === "string" &&
+                result.includes(marker)
+              ) {
+                historyArrayBytes += Buffer.byteLength(result);
+              }
+              return result;
+            });
+            try {
+              await handler({
+                params: { sessionKey: scope.sessionKey, ...params },
+                context,
+                req: { type: "req", id: "history-bytes", method },
+                client: null,
+                isWebchatConnect: () => false,
+                respond,
+              });
+            } finally {
+              serialization.mockRestore();
             }
-            return result;
+            expect(respond).toHaveBeenCalledTimes(1);
+            const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
+            expect(error).toBeUndefined();
+            expect(ok).toBe(true);
+            expect(historyArrayBytes).toBe(0);
+            return expectDefined(asOptionalRecord(payload), "history payload");
+          };
+          const inactive = await call();
+          expect(inactive.messages).toHaveLength(12);
+          expect(inactive.inFlightRun).toBeUndefined();
+          const historyJson = JSON.stringify(inactive.messages);
+          const registration = registerChatAbortController({
+            chatAbortControllers: context.chatAbortControllers,
+            runId: "run-history-bytes",
+            ...scope,
+            now: 1_000,
+            timeoutMs: 60_000,
           });
+          const run = context.chatRunState.getOrCreate("run-history-bytes");
+          run.buffer = "partial reply ".repeat(1_000);
+          run.planSnapshot = { steps: [{ step: "Read history", status: "in_progress" }] };
+          const expected = {
+            runId: "run-history-bytes",
+            text: run.buffer,
+            startedAt: 1_000,
+            plan: run.planSnapshot,
+          };
+          const exactBytes =
+            Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
+          const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
           try {
-            await handler({
-              params: { sessionKey: scope.sessionKey, ...params },
-              context,
-              req: { type: "req", id: "history-bytes", method },
-              client: null,
-              isWebchatConnect: () => false,
-              respond,
+            const bounded = await call({ maxBytes: exactBytes - 1 });
+            expect(bounded.messages).toEqual(inactive.messages);
+            expect(bounded.inFlightRun).toEqual({ ...expected, text: "" });
+            const exact = await call({ maxBytes: exactBytes });
+            expect(exact.messages).toEqual(inactive.messages);
+            expect(exact.inFlightRun).toEqual(expected);
+            expect(
+              Buffer.byteLength(JSON.stringify(exact.messages)) +
+                Buffer.byteLength(JSON.stringify(exact.inFlightRun)),
+            ).toBe(exactBytes);
+            const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
+            expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
+            await appendTranscriptMessage(scope, {
+              eventId: "delta-user",
+              message: {
+                role: "user",
+                content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
+                timestamp: 13,
+              },
             });
+            await appendTranscriptMessage(scope, {
+              eventId: "delta-tool",
+              message: {
+                role: "assistant",
+                content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
+                timestamp: 14,
+              },
+            });
+            const appended = await call({ cursor: exact.deltaCursor });
+            expect(appended).toMatchObject({
+              kind: "delta",
+              messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
+              activity: [{ messageId: "delta-tool" }],
+              inFlightRun: expected,
+            });
+            const deltaBytes =
+              Buffer.byteLength(JSON.stringify(appended.messages)) +
+              Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
+              1 +
+              Buffer.byteLength(JSON.stringify(expected));
+            for (const extraBytes of [0, -1]) {
+              const page = await call({
+                cursor: exact.deltaCursor,
+                maxBytes: deltaBytes + extraBytes,
+              });
+              expect(page.messages).toEqual(appended.messages);
+              expect(page.activity).toEqual(appended.activity);
+              expect(page.inFlightRun).toEqual(
+                extraBytes === 0 ? expected : { ...expected, text: "" },
+              );
+              expect(page).not.toHaveProperty("messagesBytes");
+              expect(page).not.toHaveProperty("activityBytes");
+            }
+            expect(delta).not.toHaveProperty("messagesBytes");
+            expect(delta).not.toHaveProperty("activityBytes");
+            expect(JSON.stringify(inactive.messages)).toBe(historyJson);
           } finally {
-            serialization.mockRestore();
+            clock.mockRestore();
+            registration.cleanup();
+            context.chatRunState.clearRun("run-history-bytes");
           }
-          expect(respond).toHaveBeenCalledTimes(1);
-          const [ok, payload, error] = expectDefined(respond.mock.calls[0], "history response");
-          expect(error).toBeUndefined();
-          expect(ok).toBe(true);
-          expect(historyArrayBytes).toBe(0);
-          return expectDefined(asOptionalRecord(payload), "history payload");
-        };
-        const inactive = await call();
-        expect(inactive.messages).toHaveLength(12);
-        expect(inactive.inFlightRun).toBeUndefined();
-        const historyJson = JSON.stringify(inactive.messages);
-        const registration = registerChatAbortController({
-          chatAbortControllers: context.chatAbortControllers,
-          runId: "run-history-bytes",
-          ...scope,
-          now: 1_000,
-          timeoutMs: 60_000,
-        });
-        const run = context.chatRunState.getOrCreate("run-history-bytes");
-        run.buffer = "partial reply ".repeat(1_000);
-        run.planSnapshot = { steps: [{ step: "Read history", status: "in_progress" }] };
-        const expected = {
-          runId: "run-history-bytes",
-          text: run.buffer,
-          startedAt: 1_000,
-          plan: run.planSnapshot,
-        };
-        const exactBytes =
-          Buffer.byteLength(historyJson) + Buffer.byteLength(JSON.stringify(expected));
-        const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-        try {
-          const bounded = await call({ maxBytes: exactBytes - 1 });
-          expect(bounded.messages).toEqual(inactive.messages);
-          expect(bounded.inFlightRun).toEqual({ ...expected, text: "" });
-          const exact = await call({ maxBytes: exactBytes });
-          expect(exact.messages).toEqual(inactive.messages);
-          expect(exact.inFlightRun).toEqual(expected);
-          expect(
-            Buffer.byteLength(JSON.stringify(exact.messages)) +
-              Buffer.byteLength(JSON.stringify(exact.inFlightRun)),
-          ).toBe(exactBytes);
-          const delta = await call({ cursor: exact.deltaCursor, maxBytes: exactBytes });
-          expect(delta).toMatchObject({ kind: "delta", messages: [], inFlightRun: expected });
-          await appendTranscriptMessage(scope, {
-            eventId: "delta-user",
-            message: {
-              role: "user",
-              content: `${marker}: ${'漢字\n"\\🤖'.repeat(100)}`,
-              timestamp: 13,
-            },
-          });
-          await appendTranscriptMessage(scope, {
-            eventId: "delta-tool",
-            message: {
-              role: "assistant",
-              content: [{ type: "toolCall", id: "read-delta", name: "read", arguments: {} }],
-              timestamp: 14,
-            },
-          });
-          const appended = await call({ cursor: exact.deltaCursor });
-          expect(appended).toMatchObject({
-            kind: "delta",
-            messages: [{ messageId: "delta-user" }, { messageId: "delta-tool" }],
-            activity: [{ messageId: "delta-tool" }],
-            inFlightRun: expected,
-          });
-          const deltaBytes =
-            Buffer.byteLength(JSON.stringify(appended.messages)) +
-            Buffer.byteLength(JSON.stringify({ activity: appended.activity })) -
-            1 +
-            Buffer.byteLength(JSON.stringify(expected));
-          for (const extraBytes of [0, -1]) {
-            const page = await call({
-              cursor: exact.deltaCursor,
-              maxBytes: deltaBytes + extraBytes,
-            });
-            expect(page.messages).toEqual(appended.messages);
-            expect(page.activity).toEqual(appended.activity);
-            expect(page.inFlightRun).toEqual(
-              extraBytes === 0 ? expected : { ...expected, text: "" },
-            );
-            expect(page).not.toHaveProperty("messagesBytes");
-            expect(page).not.toHaveProperty("activityBytes");
+          const completed = await call();
+          expect(completed.messages).toHaveLength(14);
+          if (!Array.isArray(completed.messages)) {
+            throw new Error("Expected completed history messages");
           }
-          expect(delta).not.toHaveProperty("messagesBytes");
-          expect(delta).not.toHaveProperty("activityBytes");
-          expect(JSON.stringify(inactive.messages)).toBe(historyJson);
-        } finally {
-          clock.mockRestore();
-          registration.cleanup();
-          context.chatRunState.clearRun("run-history-bytes");
-        }
-        const completed = await call();
-        expect(completed.messages).toHaveLength(14);
-        if (!Array.isArray(completed.messages)) {
-          throw new Error("Expected completed history messages");
-        }
-        expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
-        expect(completed.inFlightRun).toBeUndefined();
-      });
+          expect(completed.messages.slice(0, 12)).toEqual(inactive.messages);
+          expect(completed.inFlightRun).toBeUndefined();
+        },
+      );
     },
   );
 });
 
 describe("chat metadata ownership", () => {
   it("previews a retained personal account with read scope without changing its cleared default", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+    await withOpenClawTestState({ layout: "state-only", prepareProfileCatalog: true }, async () => {
       const { owner, authProfileId, metadata, readChatMetadata, request } =
         createPersonalMetadataFixture();
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
       const before = readUserModelAuthProfile(authProfileId);
 
@@ -733,92 +882,13 @@ describe("chat metadata ownership", () => {
     });
   });
 
-  it.each([
-    "foreign admin",
-    "unidentified admin",
-    "anonymous",
-    "synthetic owner",
-    "forged locator",
-  ] as const)(
-    "rejects a personal draft preview from %s before projecting credentials",
-    async (caller) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { owner, client, authProfileId, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        client.connect.scopes = ["operator.admin"];
-        let requestedProfile = authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("metadata-other@example.test");
-          client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "unidentified admin") {
-          delete client.authenticatedUserProfile;
-        } else if (caller === "synthetic owner") {
-          client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
-        }
+  registerMetadataCallerCases(createPersonalMetadataFixture);
 
-        const respond = await request(
-          { agentId: "main", authProfileId: requestedProfile },
-          caller === "anonymous" ? { client: null } : {},
-        );
-
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        expect(readChatMetadata).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rejects a personal draft preview after %s during the metadata read",
-    async (loss) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        const entered = createDeferred();
-        const release = createDeferred();
-        const abort = new AbortController();
-        readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return metadata;
-        });
-        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readChatMetadata).toHaveBeenCalledOnce();
-          if (loss === "disconnect") {
-            clients.delete(client);
-          } else if (loss === "role loss") {
-            config.gateway.roles.definitions.reader.scopes = [];
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-      });
-    },
-  );
+  registerMetadataRevocationCases(createPersonalMetadataFixture);
 
   it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:locked";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },

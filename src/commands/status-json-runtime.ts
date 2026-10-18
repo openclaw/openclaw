@@ -1,7 +1,7 @@
-// Resolves runtime-only inputs for status JSON after the fast scan completes.
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
 import { buildStatusJsonPayload } from "./status-json-payload.ts";
 import {
   resolveStatusRuntimeSnapshot,
@@ -42,11 +42,13 @@ export async function resolveStatusJsonOutput(params: {
       ...(scan.collection && opts.usage
         ? {
             resolveUsage: async (input: Parameters<typeof resolveStatusUsageSummary>[0]) => {
-              const { readConfigFileSnapshot } = await import("../config/config.js");
+              const { readConfigFileSnapshot, setAppliedRuntimeConfigSnapshot } =
+                await import("../config/config.js");
               const snapshot = await readConfigFileSnapshot({
                 observe: false,
                 pluginValidation: "core-only",
               });
+              await setAppliedRuntimeConfigSnapshot(snapshot.runtimeConfig, snapshot.sourceConfig);
               return resolveStatusUsageSummary({ ...input, config: snapshot.runtimeConfig });
             },
           }
@@ -59,6 +61,7 @@ export async function resolveStatusJsonOutput(params: {
       ...scan,
       gatewayService,
       nodeService,
+      databaseEngines: await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores),
     },
     osSummary: scan.osSummary,
     memory: scan.memory,

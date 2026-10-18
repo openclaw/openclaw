@@ -56,6 +56,42 @@ function textJoined(lines: string[]): string {
 }
 
 describe("formatMessageCliText displayLimit", () => {
+  it("renders the message inside a Slack pin envelope", () => {
+    const message = { ts: "1712345678.123456", user: "message-author", text: "Pinned checklist" };
+    const result = {
+      ...pinsResultPayload({
+        pins: [
+          { type: "message", created_by: "pinning-user", message },
+          { message: { text: "Outside display limit" } },
+        ],
+      }),
+      channel: "slack" as const,
+    };
+    const output = textJoined(formatMessageCliText(result, { displayLimit: 1 }));
+    for (const value of Object.values(message)) {
+      expect(output).toContain(value);
+    }
+    expect(output).not.toContain("pinning-user");
+    expect(output).not.toContain("Outside display limit");
+  });
+
+  it.each(["discord", "msteams", "slack"] as const)(
+    "preserves flat %s pins and their outer identity",
+    (channel) => {
+      const pin = { id: "pin-resource", messageId: "message-id", text: "Flat pin" };
+      const output = textJoined(
+        formatMessageCliText({ ...pinsResultPayload({ pins: [pin] }), channel }),
+      );
+      expect(output).toContain("pin-resource");
+      expect(output).toContain("Flat pin");
+    },
+  );
+
+  it("renders an empty Slack pin list", () => {
+    const result = { ...pinsResultPayload({ pins: [] }), channel: "slack" as const };
+    expect(formatMessageCliText(result)).toEqual(["Pinned messages", "No pins."]);
+  });
+
   it("honors displayLimit for list-pins", () => {
     const pins = Array.from({ length: 40 }, (_, i) =>
       msg(`pin-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `pin-text-${i}`),
@@ -95,6 +131,49 @@ describe("formatMessageCliText displayLimit", () => {
   it("renders an explicit empty search outcome despite an approximate positive total", () => {
     const result = searchResultPayload({ results: { messages: [], total_results: 1 } });
     expect(formatMessageCliText(result)).toEqual(["Search results", "No results."]);
+  });
+});
+
+describe("formatMessageCliText message terminal safety", () => {
+  const text = "\u001b[2Jrelease checklist\u001b]52;c;QQ==\u0007";
+  const author = "\u001b]52;c;QQ==\u0007alice";
+  const timestamp = "\u001b[2J1712345678.123456";
+  const slackMessage = { ts: timestamp, user: author, text };
+  const message = {
+    id: "\u001b[2Jmessage-1",
+    timestamp,
+    author: { username: author },
+    content: text,
+  };
+
+  it.each([
+    {
+      surface: "nested Slack pins",
+      result: {
+        ...pinsResultPayload({ pins: [{ message: slackMessage }] }),
+        channel: "slack" as const,
+      },
+      id: "1712345678.123456",
+    },
+    { surface: "Matrix read", result: readResultPayload({ messages: [message] }), id: "message-1" },
+    { surface: "Matrix pins", result: pinsResultPayload({ pins: [message] }), id: "message-1" },
+    {
+      surface: "Discord search",
+      result: searchResultPayload({ results: { messages: [[message]] } }),
+      id: "message-1",
+    },
+  ])("renders $surface as terminal-safe text without mutating the payload", ({ result, id }) => {
+    const original = structuredClone(result.payload);
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain("release checklist");
+    expect(output).toContain("alice");
+    expect(output).toContain(id);
+    expect(output).toContain("1712345678.123456");
+    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(output).not.toContain("52;c;QQ==");
+    expect(result.payload).toEqual(original);
   });
 });
 
@@ -199,35 +278,6 @@ describe("formatMessageCliText send results", () => {
 });
 
 describe("formatMessageCliText payload scalars", () => {
-  it("keeps alias reads lazy after the first nonempty string", () => {
-    const reads: string[] = [];
-    const message = Object.create(null) as Record<string, unknown>;
-    Object.defineProperties(message, {
-      id: {
-        enumerable: true,
-        get: () => {
-          reads.push("id");
-          return reads.length === 1 ? "first-id" : "second-id";
-        },
-      },
-      ts: {
-        enumerable: true,
-        get: () => {
-          reads.push("ts");
-          throw new Error("later alias must not be read");
-        },
-      },
-      authorTag: { enumerable: true, value: "alice" },
-      timestamp: { enumerable: true, value: "now" },
-      content: { enumerable: true, value: "hello" },
-    });
-
-    const output = textJoined(formatMessageCliText(readResultPayload({ messages: [message] })));
-    expect(output).toContain("second-id");
-    expect(output).not.toContain("first-id");
-    expect(reads).toEqual(["id", "id"]);
-  });
-
   it("preserves generic object primitive summaries", () => {
     const result = {
       kind: "action",

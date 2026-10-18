@@ -1,7 +1,6 @@
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { advanceMessageActionPrompt } from "../gateway/message-action-turn-capability.js";
-import { prepareModelVisibleToolTextBlock } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -36,13 +35,8 @@ import type {
   CompactionAppendPersistence,
   CompactionAppendPersistenceAsync,
 } from "./sessions/session-compaction-persistence.js";
-import { setSessionToolResultPreparer } from "./sessions/session-tool-result-redaction.js";
-import {
-  copyCodeModeSourceAppend,
-  type CodeModeSourceAppend,
-} from "./transcript-code-mode-source.js";
-import { resolveTranscriptLoggingConfig } from "./transcript-redact-text.js";
-import { redactTranscriptMessage } from "./transcript-redact.js";
+import { setSessionToolResultPreparer } from "./sessions/session-tool-result-preparation.js";
+import { sanitizeTranscriptMessage } from "./transcript-sanitize.js";
 
 type GuardedSessionManager = SessionManager &
   Partial<
@@ -68,6 +62,7 @@ type GuardedSessionManager = SessionManager &
         recorder: UserTurnTranscriptRecorder | undefined;
         replayKey: string | undefined;
       },
+      hidden: boolean,
     ) => void;
   };
 
@@ -80,7 +75,7 @@ function publishPersistedUserEnvelope(
     return;
   }
   // Publish once, before model transforms. Replay must use the same envelope;
-  // runtime content and non-enumerable media/steering facts remain prepared.
+  // runtime content and symbol-carried media/steering facts remain prepared.
   const content = runtime.content;
   const imageFactIndexes = readPersistedImageBlockFactIndexes(runtime);
   for (const key of Object.keys(runtime)) {
@@ -109,6 +104,7 @@ export function guardSessionManager(
     config?: OpenClawConfig;
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
+    privateCompletion?: true;
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
@@ -118,7 +114,7 @@ export function guardSessionManager(
     suppressNextUserMessagePersistence?: boolean;
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     assistantErrorTranscript?: AssistantErrorTranscript;
-    /** Finalization keeps core redaction but must not run plugin write hooks. */
+    /** Finalization keeps transcript normalization but must not run plugin write hooks. */
     skipBeforeMessageWriteHooks?: boolean;
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
@@ -145,6 +141,7 @@ export function guardSessionManager(
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
   let inputProvenance = opts?.inputProvenance;
+  let hidden = opts?.privateCompletion === true || opts?.trigger === "memory";
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
   let preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
   let preparedUserReplayKey =
@@ -165,6 +162,7 @@ export function guardSessionManager(
         recorder: preparedUserTurnTranscriptRecorder,
         replayKey: preparedUserReplayKey,
       },
+      hidden,
     );
     return guardedSessionManager;
   }
@@ -175,10 +173,7 @@ export function guardSessionManager(
     AgentMessage,
     Extract<AgentMessage, { role: "user" }>
   >();
-  const beforeMessageWrite = (
-    event: { message: AgentMessage },
-    sourceAppend?: CodeModeSourceAppend,
-  ) => {
+  const beforeMessageWrite = (event: { message: AgentMessage }) => {
     // Persisting a routing signal would force recovery to rewrite the whole archive to remove it.
     if (isMidTurnPrecheckAssistantError(event.message)) {
       return { block: true };
@@ -187,7 +182,7 @@ export function guardSessionManager(
     let message = event.message;
     let changed = false;
     // Accepted source bytes already passed the plugin hook before ACK. Only
-    // core redaction and visibility still run when the native turn consumes them.
+    // transcript normalization and visibility still run when the native turn consumes them.
     const skipUserWriteHook =
       skipBeforeMessageWriteHooks ||
       (message.role === "user" &&
@@ -231,19 +226,17 @@ export function guardSessionManager(
       });
       changed = true;
     }
-    copyCodeModeSourceAppend(event.message, message, sourceAppend);
-    const redacted = redactTranscriptMessage(message, opts?.config, sourceAppend);
-    if (redacted !== message) {
-      message = redacted;
+    const sanitized = sanitizeTranscriptMessage(message);
+    if (sanitized !== message) {
+      message = sanitized;
       changed = true;
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
-      hidden: opts?.trigger === "memory",
+      hidden,
       inputProvenance,
       message,
     });
     if (projectedMessage !== message) {
-      copyCodeModeSourceAppend(message, projectedMessage, sourceAppend);
       message = projectedMessage;
       changed = true;
     }
@@ -381,8 +374,6 @@ export function guardSessionManager(
     onUserMessageBlocked: opts?.onUserMessageBlocked,
   });
   setSessionToolResultPreparer(guardedSessionManager, {
-    prepareText: (block) =>
-      prepareModelVisibleToolTextBlock(block, resolveTranscriptLoggingConfig(opts?.config)),
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
   });
   guardedSessionManager.hasPendingToolResults = guard.hasPendingToolResults;
@@ -398,6 +389,7 @@ export function guardSessionManager(
     provenance,
     suppressUserPersistence,
     preparedUserTurn,
+    hideMessages,
   ) => {
     transcriptRunId = runId;
     guard.setTranscriptRunId(runId, errors);
@@ -405,6 +397,8 @@ export function guardSessionManager(
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
     inputProvenance = provenance;
+    // Managers outlive individual runs; neither private nor public visibility may carry over.
+    hidden = hideMessages;
     pendingPreparedUserTurnMessage = preparedUserTurn.message;
     preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
     preparedUserReplayKey = preparedUserTurn.replayKey;

@@ -1,6 +1,5 @@
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { CHANNEL_IDS } from "../channels/ids.js";
 import {
   clearMemoryPluginState,
@@ -142,6 +141,25 @@ describe("buildAgentSystemPrompt", () => {
       ["## Documentation", "Docs: /tmp/openclaw/docs", "Source: /tmp/openclaw"],
     ],
     [
+      "acknowledges unavailable docs retrieval in a sandbox without web tools",
+      { toolNames: ["read"], sandboxInfo: { enabled: true } },
+      [
+        "Docs: https://docs.openclaw.ai",
+        "docs could not be checked; mark recalled behavior as unverified",
+      ],
+      ["docs mirror first when web exists", "inspect GitHub source"],
+    ],
+    [
+      "keeps mirror guidance when a sandbox can discover a web tool",
+      {
+        toolNames: ["read"],
+        capabilityToolNames: ["web_fetch"],
+        sandboxInfo: { enabled: true },
+      },
+      ["Docs: https://docs.openclaw.ai", "docs mirror first when web exists"],
+      ["mark recalled behavior as unverified"],
+    ],
+    [
       "uses limited bootstrap wording for constrained user-facing runs",
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
@@ -233,18 +251,30 @@ describe("buildAgentSystemPrompt", () => {
 
   it.each<PromptCase>([
     [
-      "uses Slack typed presentation hints instead of generic inline button config guidance",
+      "keeps generic callback guidance without a plugin override",
       {
         toolNames: ["message"],
         runtimeInfo: {
-          channel: "slack",
+          channel: "custom",
+          capabilities: ["inlineButtons"],
         },
-        messageToolHints: [
-          "- Use `presentation` buttons/selects for discrete choices or parameter picks instead of asking the user to type one.",
-        ],
       },
-      ["`presentation` buttons/selects"],
-      ["Inline buttons not enabled for slack", 'presentation={"blocks":[{"type":"buttons"'],
+      ['"action":{"type":"callback"'],
+      [],
+    ],
+    [
+      "leaves custom button guidance to the plugin regardless of channel",
+      {
+        toolNames: ["message"],
+        runtimeInfo: {
+          channel: "custom",
+          capabilities: ["inlineButtons"],
+          customInlineButtonHint: true,
+        },
+        messageToolHints: ["- Custom button guidance."],
+      },
+      ["- Custom button guidance."],
+      ['"action":{"type":"callback"', "Inline buttons OFF"],
     ],
   ])("%s", expectPromptCase);
   it("advertises YouTube embeds only in full webchat prompts below the cache boundary", () => {
@@ -480,10 +510,9 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("filters invalid paths and renders typed project context in canonical order", () => {
+  it("filters blank paths and renders typed project context in canonical order", () => {
     const prompt = renderPrompt({
       contextFiles: [
-        { path: undefined as unknown as string, content: "Missing path" },
         { path: "   ", content: "Blank path" },
         { path: "MEMORY.md", content: "Durable facts" },
         { path: "dir\\SOUL.md", content: "Windows persona" },
@@ -496,7 +525,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("SOUL.md: persona/tone.");
     expect(prompt).toContain("MEMORY.md: durable");
     expect(prompt).toContain("Durable facts");
-    expect(prompt).not.toContain("Missing path");
     expect(prompt).not.toContain("Blank path");
     expect(prompt.indexOf("## AGENTS.md")).toBeLessThan(prompt.indexOf("## ./SOUL.md"));
     expect(prompt.indexOf("## ./SOUL.md")).toBeLessThan(prompt.indexOf("## MEMORY.md"));
@@ -586,7 +614,7 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("Group/channel:");
       expect(prompt).toContain("current source is default target");
       expect(prompt).not.toContain("## Silent Replies");
-      expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
+      expect(prompt).not.toContain("Only that whole reply is silent.");
       expect(prompt).not.toContain("`send`: `target` + `message`.");
     },
   );
@@ -677,17 +705,36 @@ describe("buildAgentSystemPrompt", () => {
     }
   });
 
-  it("keeps automatic tool discovery in the stable prompt-cache prefix", () => {
+  it("keeps automatic tool discovery after the stable prompt-cache prefix", () => {
     const toolSchemaDirectoryPrompt =
       "Available deferred-schema tools:\n- fake_calendar: Schedule an event";
     const prompt = renderPrompt({
-      toolNames: ["tool_search", "tool_describe", "tool_call"],
+      toolNames: ["tool_search", "tool_describe", "dispatch_action"],
       toolSchemaDirectoryPrompt,
     });
     const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
     expect(prompt).toContain("### Deferred Tool Schemas");
-    expect(boundary).toBeGreaterThan(prompt.indexOf("### Deferred Tool Schemas"));
-    expect(prompt.slice(0, boundary)).toContain(toolSchemaDirectoryPrompt);
+    expect(prompt.indexOf("### Deferred Tool Schemas")).toBeGreaterThan(boundary);
+    expect(prompt.slice(boundary)).toContain(toolSchemaDirectoryPrompt);
+  });
+
+  it("keeps changing Code Mode catalogs after the stable prompt-cache prefix", () => {
+    const prompts = ["calendar.create", "calendar.create\ncalendar.list"].map(
+      (toolSchemaDirectoryPrompt) =>
+        renderPrompt({
+          toolNames: ["exec", "wait"],
+          codeModeActive: true,
+          toolSchemaDirectoryPrompt,
+        }),
+    );
+    const [first, next] = prompts.map((prompt) => {
+      const boundary = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+      return { prefix: prompt.slice(0, boundary), suffix: prompt.slice(boundary) };
+    });
+    expect(next!.prefix).toBe(first!.prefix);
+    expect(first!.prefix).not.toContain("calendar.create");
+    expect(first!.suffix).toContain("calendar.create");
+    expect(next!.suffix).toContain("calendar.list");
   });
 });
 
@@ -766,13 +813,76 @@ describe("system prompt memory and runtime cache boundary", () => {
     expect(prepare).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps refreshed memory recall instructions after the cached project context", async () => {
+    let recall = "Recall from the first index.";
+    registerMemoryPromptPreparation("memory-wiki", async () => ["## Memory Recall", recall]);
+    const params = {
+      toolNames: ["wiki_search"],
+      agentId: "main",
+      agentSessionKey: "agent:main:main",
+    };
+    const first = buildPromptParts({
+      preparedMemoryPrompt: await prepareAgentMemoryPrompt({ enabled: true, ...params }),
+      toolNames: params.toolNames,
+      runtimeInfo: { agentId: params.agentId, sessionKey: params.agentSessionKey },
+    });
+    recall = "Recall from the refreshed index.";
+    const next = buildPromptParts({
+      preparedMemoryPrompt: await prepareAgentMemoryPrompt({ enabled: true, ...params }),
+      toolNames: params.toolNames,
+      runtimeInfo: { agentId: params.agentId, sessionKey: params.agentSessionKey },
+    });
+    expect(next.prefix).toBe(first.prefix);
+    expect(first.prefix).not.toContain("## Memory Recall");
+    expect(first.suffix).toContain("## Memory Recall\nRecall from the first index.");
+    expect(next.suffix).toContain("## Memory Recall\nRecall from the refreshed index.");
+    expect(next.suffix).not.toContain("Recall from the first index.");
+  });
+
+  it.each([
+    {
+      name: "Skills",
+      params: { toolNames: ["read"], skillsPrompt: SKILLS },
+      update: { skillsPrompt: SKILLS.replaceAll("demo", "updated") },
+      first: "/skills/demo/SKILL.md",
+      next: "/skills/updated/SKILL.md",
+    },
+    {
+      name: "Model Aliases",
+      params: { modelAliasLines: ["- fast: provider/model-a"] },
+      update: { modelAliasLines: ["- fast: provider/model-b"] },
+      first: "- fast: provider/model-a",
+      next: "- fast: provider/model-b",
+    },
+    {
+      name: "Runtime Context",
+      params: { toolNames: ["read"] },
+      update: { toolNames: ["read", "process", "sessions_spawn"] },
+      first: "- read: Read files",
+      next: "Before input: process log;",
+    },
+  ])(
+    "keeps changing $name after the cached project context",
+    ({ params, update, first: previousText, next: nextText }) => {
+      const first = buildPromptParts(params);
+      const next = buildPromptParts({ ...params, ...update });
+      expect(next.prefix).toBe(first.prefix);
+      expect(first.prefix).not.toContain(previousText);
+      expect(next.prefix).not.toContain(nextText);
+      expect(first.suffix).toContain(previousText);
+      expect(next.suffix).toContain(nextText);
+    },
+  );
+
   it.each([{ toolNames: ["image_generate"], guidance: "Do not call `image_generate` again" }])(
-    "keeps $toolNames guidance stable even without active work",
+    "keeps $toolNames guidance below the stable prefix even without active work",
     ({ toolNames, guidance }) => {
       const available = buildPromptParts({ toolNames });
-      expect(available.prefix).toContain(guidance);
-      expect(buildPromptParts({ toolNames: [] }).prefix).not.toContain(guidance);
-      expect(available.suffix).not.toContain(guidance);
+      const unavailable = buildPromptParts({ toolNames: [] });
+      expect(available.prefix).toBe(unavailable.prefix);
+      expect(available.prefix).not.toContain(guidance);
+      expect(available.suffix).toContain(guidance);
+      expect(unavailable.suffix).not.toContain(guidance);
     },
   );
 
@@ -794,12 +904,18 @@ describe("system prompt memory and runtime cache boundary", () => {
         runtimeInfo: { channel: "discord", capabilities: ["threadbound-acp-spawn"] },
       },
       { runtimeInfo: { channel: "telegram", capabilities: [] } },
+      [["## Execution Bias"], ["Discord ACP default:"]],
+      [
+        [
+          "never route ACP through local subagent controls or a local PTY",
+          "Discord ACP default:",
+          'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`',
+        ],
+      ],
       [
         ["never route ACP through local subagent controls or a local PTY"],
-        ["Discord ACP default:"],
+        ["Discord ACP default:", "ACP thread:"],
       ],
-      [["Discord ACP default:", 'ACP thread: only `sessions_spawn(runtime:"acp", thread:true)`']],
-      [[], ["Discord ACP default:", "ACP thread:"]],
     ],
     [
       "ultra toggles",
@@ -809,15 +925,17 @@ describe("system prompt memory and runtime cache boundary", () => {
         proactiveSubagentOrchestration: false,
       },
       { proactiveSubagentOrchestration: true },
+      [["## Execution Bias"], ["## Proactive Sub-Agent Orchestration"]],
+      [["## Care", "## Delegation", "Execute work directly by default."], ["Ultra active"]],
       [
         [
           "## Care",
-          "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
+          "## Proactive Sub-Agent Orchestration",
+          "Ultra active",
+          "Execute work directly by default.",
         ],
-        ["## Proactive Sub-Agent Orchestration"],
+        ["## Delegation"],
       ],
-      [["## Delegation"], ["Ultra active"]],
-      [["## Proactive Sub-Agent Orchestration", "Ultra active"], ["## Delegation"]],
     ],
     [
       "elevated-level changes",
@@ -834,15 +952,21 @@ describe("system prompt memory and runtime cache boundary", () => {
           elevated: { allowed: true, fullAccessAvailable: true, defaultLevel: "full" },
         },
       },
+      [["## Execution Bias"], ["Current elevated level:"]],
       [
         [
           "Subagents stay sandboxed without elevated/host access;",
           "User can toggle with /elevated on|off|ask|full.",
+          "Current elevated level: ask",
         ],
-        ["Current elevated level:"],
       ],
-      [["Current elevated level: ask"]],
-      [["Current elevated level: full"]],
+      [
+        [
+          "Subagents stay sandboxed without elevated/host access;",
+          "User can toggle with /elevated on|off|ask|full.",
+          "Current elevated level: full",
+        ],
+      ],
     ],
   ])(
     "keeps %s after stable authority guidance",

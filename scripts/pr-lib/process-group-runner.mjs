@@ -532,6 +532,25 @@ function childResultAllowsLockRelease() {
   return completedCleanly || failedDuringValidation;
 }
 
+// A side-effecting failure that ended on its own leaves the same evidence as a
+// clean exit once the full drain observes the group dead and every inherited
+// notification-pipe holder gone: only an escaped, fd-closing daemonizer stays
+// invisible, the residual a clean exit already accepts (#124583). Signals,
+// lingering group work, open pipes, and controller loss keep the lock sticky.
+function failedOperationDrainAllowsLockRelease() {
+  return (
+    drainResult === "drained" &&
+    operationCompleteReceived &&
+    childResult.code !== null &&
+    childResult.code > 0 &&
+    childResult.code < 128 &&
+    !receivedSignal &&
+    !childResult.signal &&
+    !notificationFailure &&
+    !hadLingeringGroup
+  );
+}
+
 const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
@@ -734,7 +753,9 @@ for (const [signal, handler] of signalHandlers) {
 
 const retainedLocks = [];
 const releaseFailures = new Set();
-if (drained && childResultAllowsLockRelease()) {
+const releaseAfterDrainedFailure =
+  drained && !childResultAllowsLockRelease() && failedOperationDrainAllowsLockRelease();
+if (drained && (childResultAllowsLockRelease() || releaseAfterDrainedFailure)) {
   for (const lock of locks.values()) {
     try {
       releaseLock(lock);
@@ -750,6 +771,15 @@ if (drained && childResultAllowsLockRelease()) {
 }
 for (const { lock, releaseError } of retainedLocks) {
   reportRetainedLock(lock, releaseError, releaseFailures);
+}
+if (releaseAfterDrainedFailure) {
+  for (const { lockRef } of locks.values()) {
+    if (!retainedLocks.some(({ lock }) => lock.lockRef === lockRef)) {
+      console.error(
+        `Released the operation lock for PR #${lockRef.split("/").at(-1)} after exit code ${childResult.code}; its process group and every notification-pipe holder exited.`,
+      );
+    }
+  }
 }
 
 if (

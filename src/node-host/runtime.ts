@@ -1,7 +1,7 @@
 /** Transport-independent CLI node-host runtime shared by Gateway and app workers. */
 import type { CloudflareAccessCredentials } from "../../packages/gateway-client/src/cloudflare-access.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { NODE_CLAUDE_SKILLS_MESSAGE_BYTES } from "../infra/node-claude-skill-protocol.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -52,12 +52,43 @@ import {
   type NodeHostInventory,
 } from "./runtime-manifest.js";
 import { resolveExecutableTrustPathFromEnv, SkillBinsCache } from "./runtime-skill-bins.js";
-import { createNodeHostUpdatePause } from "./runtime-update-pause.js";
 import { scanNodeHostedSkills } from "./skills.js";
 export type { NodeHostInventory } from "./runtime-manifest.js";
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 const WORKER_INITIALIZATION_RETRY_MS = 5_000;
+
+function createNodeHostUpdatePause(params: {
+  hasLocalActiveWork: () => boolean;
+  hasWorkerActiveWork: () => Promise<boolean> | undefined;
+}) {
+  let updatePause = false;
+  return {
+    get isPaused() {
+      return updatePause;
+    },
+    async tryPauseForUpdate(this: void) {
+      if (updatePause || params.hasLocalActiveWork()) {
+        return false;
+      }
+      // The update loop awaits this check before resuming; close invoke admission first.
+      updatePause = true;
+      let admitted = false;
+      try {
+        const workerBusy = await params.hasWorkerActiveWork();
+        admitted = !workerBusy && !params.hasLocalActiveWork();
+        return admitted;
+      } finally {
+        if (!admitted) {
+          updatePause = false;
+        }
+      }
+    },
+    resumeAfterUpdate(this: void) {
+      updatePause = false;
+    },
+  };
+}
 
 type ActiveNodeInvoke = {
   controller: AbortController;
@@ -97,15 +128,14 @@ export async function prepareNodeHostRuntime(params?: {
   installedAppsSharingEnabled?: boolean;
   desktopSharingEnabled?: boolean;
   commands?: readonly string[];
-  platform?: NodeJS.Platform;
 }) {
   const commandAllowlist = params?.commands === undefined ? undefined : new Set(params.commands);
   if (!commandAllowlist) {
     void ensureTerminalUploadCleanup();
   }
-  const config = params?.config ?? getRuntimeConfig();
+  const config = params?.config ?? (await captureRuntimeConfigAsyncReader()());
   const env = params?.env ?? process.env;
-  const platform = params?.platform ?? process.platform;
+  const platform = process.platform;
   await ensureNodeHostPluginRegistry({ config, env, commandAllowlist });
   const pathEnv = ensureNodePathEnv();
   env.PATH = pathEnv;
@@ -133,7 +163,11 @@ export async function prepareNodeHostRuntime(params?: {
   let workerRunsEnabled =
     !commandAllowlist &&
     (params?.forceWorkerRuns === true || config.nodeHost?.workerRuns?.enabled === true);
-  const workspaceOptions = { env, ephemeral: params?.ephemeral };
+  const workspaceOptions = {
+    env,
+    ephemeral: params?.ephemeral,
+    folders: config.nodeHost?.workerRuns?.folders,
+  };
   let preparedWorkerWorkspace: NodeWorkerWorkspaceRuntime | undefined;
   let preparedContainerSupervisor: ReturnType<typeof createNodeWorkerSupervisor> | undefined;
   let preparedContainerCapacity: NodeWorkerCapacitySnapshot | undefined;
@@ -232,6 +266,9 @@ export async function prepareNodeHostRuntime(params?: {
   return {
     manifest,
     workerHostingEnabled: workerRunsEnabled,
+    ...(workerRunsEnabled && workspaceOptions.folders?.length !== 0
+      ? { deviceFoldersEnabled: true as const }
+      : {}),
     preparedWorkspacesEnabled: workerRunsEnabled && params?.ephemeral === true,
     nativeInferenceEnabled: workerRunsEnabled && nativeInferenceSnapshot !== undefined,
     ...(commandAllowlist ? { restrictedSurface: true as const } : {}),
@@ -480,6 +517,7 @@ export async function prepareNodeHostRuntime(params?: {
                   client,
                   frame,
                   idleTimeoutMs: NODE_DUPLEX_INVOKE_IDLE_TIMEOUT_MS,
+                  signal: controller.signal,
                   onError: () => controller.abort(),
                 })
               : undefined;
@@ -552,7 +590,6 @@ export async function prepareNodeHostRuntime(params?: {
                 desktopHostConfig,
                 ...(progress ? { emitProgress: (text) => progress.write(text) } : {}),
                 installedAppsSharingEnabled,
-                installedAppsPlatform: platform,
                 pluginCommandContext,
                 ...(params?.ephemeral === true && !commandAllowlist
                   ? { workerComputer: { capabilities: () => resolvePluginNodeHost().computerUse } }

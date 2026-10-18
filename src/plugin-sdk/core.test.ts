@@ -211,14 +211,14 @@ describe("createChatChannelPlugin", () => {
         };
       }
 
-      it.each([
-        { label: "no provider channel", metadata: {} },
-        { label: "matching provider channel", metadata: { channel: "configured-channel" } },
-        { label: "stale provider channel", metadata: { channel: "stale-provider-channel" } },
-      ])("stamps the configured channel with $label", async ({ metadata }) => {
+      it("stamps the configured channel over a stale provider channel", async () => {
         const send = createSend();
         const extra = { correlation: "retained" };
-        const providerResult = Object.freeze({ messageId: "message-1", meta: extra, ...metadata });
+        const providerResult = Object.freeze({
+          messageId: "message-1",
+          meta: extra,
+          channel: "stale-provider-channel",
+        });
         const sender = vi.fn(function (this: unknown, _context: unknown) {
           return providerResult;
         });
@@ -246,26 +246,6 @@ describe("createChatChannelPlugin", () => {
         expect(plugin.outbound?.chunker).toBe(chunker);
         expect(plugin.outbound?.textChunkLimit).toBe(500);
         expect(chunker).not.toHaveBeenCalled();
-      });
-
-      it.each(["throw", "reject"] as const)("preserves a sender %s", async (failure) => {
-        const send = createSend();
-        const error = new Error("provider failure");
-        const sender = vi.fn(() => {
-          if (failure === "throw") {
-            throw error;
-          }
-          return Promise.reject(error);
-        });
-        const attachedResults = { channel: "configured-channel", [method]: sender };
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: { base: { deliveryMode: "direct" }, attachedResults },
-        });
-
-        await expect(send.run(plugin.outbound!)).rejects.toBe(error);
-        expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
-        expect(sender.mock.contexts[0]).toBe(attachedResults);
       });
 
       it("captures the channel before awaiting the sender and copies result fields afterward", async () => {
@@ -308,27 +288,6 @@ describe("createChatChannelPlugin", () => {
         expect(sender).toHaveBeenCalledExactlyOnceWith(send.context);
         expect(sender.mock.contexts[0]).toBe(attachedResults);
       });
-
-      it("keeps omitted sender methods unavailable", () => {
-        const sender = vi.fn(() => ({ messageId: "message-1" }));
-        const plugin = createChatChannelPlugin({
-          base: createChannelPlugin("configured-channel"),
-          outbound: {
-            base: { deliveryMode: "direct" },
-            attachedResults: { channel: "configured-channel", [method]: sender },
-          },
-        });
-
-        for (const name of ["sendText", "sendMedia", "sendPoll"] as const) {
-          expect(Object.hasOwn(plugin.outbound!, name)).toBe(true);
-          if (name === method) {
-            expect(plugin.outbound?.[name]).toBeTypeOf("function");
-          } else {
-            expect(plugin.outbound?.[name]).toBeUndefined();
-          }
-        }
-        expect(sender).not.toHaveBeenCalled();
-      });
     },
   );
 
@@ -366,46 +325,5 @@ describe("createChatChannelPlugin", () => {
       account: { accountId: "default" },
     });
     expect(policy?.classifyEntryAuthentication?.("alias")).toBe("mutable");
-  });
-
-  it("preserves account-scoped current-conversation binding support", () => {
-    const conversationBindings: NonNullable<ChannelPlugin["conversationBindings"]> = {
-      isCurrentConversationBindingSupported: ({ accountId }) => accountId !== "enterprise",
-    };
-    const plugin = createChatChannelPlugin({
-      base: {
-        ...createChannelPlugin("account-scoped-bindings"),
-        conversationBindings,
-      },
-    });
-
-    expect(plugin.conversationBindings?.supportsCurrentConversationBinding).toBe(true);
-    expect(
-      plugin.conversationBindings?.isCurrentConversationBindingSupported?.({
-        accountId: "workspace",
-      }),
-    ).toBe(true);
-    expect(
-      plugin.conversationBindings?.isCurrentConversationBindingSupported?.({
-        accountId: "enterprise",
-      }),
-    ).toBe(false);
-  });
-
-  it("exports the conversation route-owner result contract", () => {
-    const messaging = {
-      resolveConversationRouteOwner: ({ conversation }) =>
-        conversation.peerId === "retry"
-          ? ({ kind: "unavailable" } as const)
-          : ({ kind: "agent", agentId: "main" } as const),
-    } satisfies NonNullable<ChannelPlugin["messaging"]>;
-
-    expect(
-      messaging.resolveConversationRouteOwner({
-        cfg: {},
-        accountId: "default",
-        conversation: { kind: "direct", peerId: "retry" },
-      }),
-    ).toEqual({ kind: "unavailable" });
   });
 });

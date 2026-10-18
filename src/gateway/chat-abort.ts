@@ -20,6 +20,7 @@ import {
 } from "../infra/agent-events.js";
 import { registerAgentRunDeadlineRenewer } from "../infra/agent-run-deadline.js";
 import {
+  getAgentRunContext,
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
@@ -53,6 +54,7 @@ export { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.
 
 export type RestartRecoveryCandidate = {
   runId: string;
+  sourceRunId?: string;
   lifecycleGeneration: string;
   sessionKey: string;
   sessionId: string;
@@ -186,24 +188,20 @@ export function registerChatAbortController(params: {
       }
       const persistence = entry.projectSessionTerminalPersistence;
       if (persistence) {
-        void persistence
-          .then(() => {
-            if (
-              params.chatAbortControllers.get(params.runId)?.controller === controller &&
-              entry.projectSessionTerminalPersistence === persistence
-            ) {
+        const removeAfterPersistence = (persisted: boolean) => {
+          if (
+            params.chatAbortControllers.get(params.runId)?.controller === controller &&
+            entry.projectSessionTerminalPersistence === persistence
+          ) {
+            if (persisted) {
               entry.projectSessionTerminalPersistence = undefined;
-              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
-          })
-          .catch(() => {
-            if (
-              params.chatAbortControllers.get(params.runId)?.controller === controller &&
-              entry.projectSessionTerminalPersistence === persistence
-            ) {
-              removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
-            }
-          });
+            removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
+          }
+        };
+        void persistence
+          .then(() => removeAfterPersistence(true))
+          .catch(() => removeAfterPersistence(false));
         return;
       }
       removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
@@ -414,6 +412,7 @@ function broadcastChatAborted(
     stopReason?: string;
     message?: Record<string, unknown>;
     errorMessage?: string;
+    localModelMayStillBeFinishing?: boolean;
     liveTextGroup?: AbortSignal;
   },
 ) {
@@ -433,6 +432,7 @@ function broadcastChatAborted(
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
+    ...(params.localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
     ...(errorMessage ? { errorMessage } : {}),
     message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
   };
@@ -490,6 +490,7 @@ export function abortChatRunById(
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const run = ops.chatRunState.runs.get(runId);
+  const localModelMayStillBeFinishing = Boolean(getAgentRunContext(runId)?.localModelWait);
   const liveTextGroup = run?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   const canvasBlocks =
@@ -550,6 +551,7 @@ export function abortChatRunById(
       stopReason,
       message,
       errorMessage: active.toolErrorSummary,
+      localModelMayStillBeFinishing,
       liveTextGroup,
     });
   }

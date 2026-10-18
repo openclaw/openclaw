@@ -30,7 +30,7 @@ export function createSystemdPeerQueue() {
             expire();
             return;
           }
-          // Once started, the native call owns its absolute deadline. We must
+          // Once started, the native call owns its remaining I/O budget. We must
           // join its actual completion, even when another queued caller expires.
           try {
             resolve(await execute());

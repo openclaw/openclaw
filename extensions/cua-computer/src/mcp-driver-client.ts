@@ -159,12 +159,12 @@ function normalizeMcpToolResult(tool: string, raw: unknown): CuaToolResult {
   return {
     text: text.join("\n"),
     images,
-    ...(structured ? { structuredJson: JSON.stringify(structured) } : {}),
+    ...(structured ? { structuredContent: structured } : {}),
     isError,
     ...(errorCode ? { errorCode } : {}),
     ...(!isError ? { action: mcpActionResult(tool, structured) } : {}),
     degraded: structured?.degraded === true,
-    rawJson: JSON.stringify(raw),
+    rawJson: "{}",
   };
 }
 
@@ -201,18 +201,10 @@ function createClient(binaryPath: string, socketPath: string, env: NodeJS.Proces
 }
 
 function sessionState(value: CuaToolResult): import("@trycua/cua-driver").SessionStateOutput {
-  if (value.isError || !value.structuredJson) {
+  if (value.isError || !value.structuredContent) {
     throw driverProtocolError(value.text || "CUA MCP session operation failed");
   }
-  let structured: Record<string, unknown> | undefined;
-  try {
-    structured = record(JSON.parse(value.structuredJson));
-  } catch (error) {
-    throw driverProtocolError("CUA MCP session operation returned invalid JSON", error);
-  }
-  if (!structured) {
-    throw driverProtocolError("CUA MCP session operation returned invalid state");
-  }
+  const structured = value.structuredContent;
   return {
     session: typeof structured.session === "string" ? structured.session : "",
     captureScope: mappedEnum(

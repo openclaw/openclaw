@@ -25,6 +25,10 @@ enum ScreenshotFixtureMode {
     static var reactionsEnabled: Bool {
         !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
     }
+
+    static var progressCardEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
+    }
 }
 
 struct LocalChatFixture {
@@ -237,18 +241,29 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard ScreenshotFixtureMode.progressCardEnabled,
+              ["progressCard.get", "progressCard.refresh"].contains(method)
+        else { return nil }
+        return true
+    }
+
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
-        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
             revision: 1,
             updatedat: 0,
-            markdown: """
+            markdown: ScreenshotFixtureMode.progressCardEnabled ? nil : """
             <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
 
             Now: reading the sample diff.
             """,
-            steps: [])
+            steps: ScreenshotFixtureMode.progressCardEnabled ? [
+                ProgressCardStep(step: "Collect the sample data", status: .completed),
+                ProgressCardStep(step: "Draft the summary", status: .inProgress),
+                ProgressCardStep(step: "Share the result", status: .pending),
+            ] : [])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -345,6 +360,17 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     {
         let response = try await store.sessions()
         var sessions = response.sessions
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-subagent-wait-fixture")
+        {
+            sessions[0].hasActiveSubagentRun = true
+            sessions.append(OpenClawChatSessionEntry(
+                key: "agent:main:subagent:fixture-helper",
+                displayName: "Project helper",
+                parentSessionKey: self.fixture.sessionKey,
+                status: "running",
+                hasActiveRun: true))
+        }
         if archived {
             sessions = []
         }
@@ -491,19 +517,47 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
-        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
+        let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
+        var startupSnapshot: OpenClawChatInFlightRun?
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
+           let runID = self.activeRunID
+        {
+            let wire = try JSONSerialization.data(withJSONObject: [[
+                "runId": runID,
+                "seq": 1,
+                "stream": "run_status",
+                "data": ["phase": "starting_model"],
+            ]])
+            let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
+        }
+        let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
+                                                        ProcessInfo.processInfo.arguments
+                                                            .contains("--openclaw-subagent-wait-fixture"),
+                                                            normalizedSessionKey == "agent:main:subagent:fixture-helper"
+        {
+            [Self.message(
+                role: "assistant",
+                text: "OPENCLAW_HELPER_SESSION",
+                timestamp: 1,
+                transcriptMessageID: "fixture-helper-answer")]
+        } else {
+            self.messages
+        }
         return try OpenClawChatHistoryPayload(
             sessionKey: normalizedSessionKey,
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
-            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(self.messages)),
+            messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
             thinkingLevel: self.thinkingLevel,
+            // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] },
                 key: owner.map { "agent:\($0):\(normalizedSessionKey)" },
                 agentId: owner),
-            inFlightRun: self.duplicateReplaySessionKey.flatMap { _ in
+            inFlightRun: startupSnapshot ?? self.duplicateReplaySessionKey.flatMap { _ in
                 self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
             } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
                 ? self.activeRunID.map {
@@ -554,6 +608,18 @@ private actor LocalFixtureChatStore {
         {
             self.heldInitialRun = true
             self.activeRunID = runId
+            if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture") {
+                let wire = try? JSONSerialization.data(withJSONObject: [
+                    "runId": runId,
+                    "sessionKey": sessionKey,
+                    "state": "status",
+                    "phase": "starting_model",
+                    "seq": 1,
+                ])
+                if let wire, let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+                    self.publish(.chat(event))
+                }
+            }
             return OpenClawChatSendResponse(runId: runId, status: "started")
         }
         let assistantMessage = Self.message(
@@ -582,7 +648,7 @@ private actor LocalFixtureChatStore {
             timestamp: timestamp + 1,
             transcriptMessageID: "\(runId):assistant")
         self.messages.append(saved)
-        self.eventContinuation?.yield(.sessionMessage(OpenClawSessionMessageEventPayload(
+        self.publish(.sessionMessage(OpenClawSessionMessageEventPayload(
             sessionKey: sessionKey, message: saved, messageId: saved.transcriptMessageID, messageSeq: nil)))
         self.emitDuplicateAgentEvent(
             runId: runId,
@@ -599,6 +665,18 @@ private actor LocalFixtureChatStore {
                 "phase": "start", "name": "read", "toolCallId": "dup-filter-receipt",
                 "args": ["path": "dup-filter-inputs-received"],
             ])
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 3,
+            stream: "usage",
+            timestamp: timestamp + 4,
+            data: ["outputTokens": 485])
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 4,
+            stream: "run_status",
+            timestamp: timestamp + 5,
+            data: ["phase": "retrying", "attempt": 2, "maxAttempts": 3])
     }
 
     private func emitDuplicateAgentEvent(
@@ -617,22 +695,37 @@ private actor LocalFixtureChatStore {
         guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
             preconditionFailure("Invalid duplicate reply fixture event")
         }
-        self.eventContinuation?.yield(event)
+        self.publish(event)
     }
 
     private var heldInitialRun = false
     private var activeRunID: String?
-    private var eventContinuation: AsyncStream<OpenClawChatTransportEvent>.Continuation?
+    private var eventContinuations: [UUID: AsyncStream<OpenClawChatTransportEvent>.Continuation] = [:]
 
     func setEventContinuation(_ continuation: AsyncStream<OpenClawChatTransportEvent>.Continuation) {
-        self.eventContinuation = continuation
+        // Chat and its session sidebar independently subscribe to the fixture transport.
+        let id = UUID()
+        self.eventContinuations[id] = continuation
+        continuation.onTermination = { [weak self] _ in
+            Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private func removeEventContinuation(_ id: UUID) {
+        self.eventContinuations[id] = nil
+    }
+
+    private func publish(_ event: OpenClawChatTransportEvent) {
+        for continuation in self.eventContinuations.values {
+            continuation.yield(event)
+        }
     }
 
     func runObservation(runId: String) -> OpenClawChatRunObservation {
         if self.activeRunID == runId,
            let sessionKey = self.duplicateReplaySessionKey,
            !self.duplicateReplayStarted,
-           self.eventContinuation != nil
+           !self.eventContinuations.isEmpty
         {
             self.duplicateReplayStarted = true
             self.replayDuplicateReply(
@@ -646,7 +739,7 @@ private actor LocalFixtureChatStore {
         self.activeRunID = nil
         self.duplicateReplaySessionKey = nil
         self.duplicateReplayStarted = false
-        self.eventContinuation?.yield(.chat(OpenClawChatEventPayload(
+        self.publish(.chat(OpenClawChatEventPayload(
             runId: runId,
             sessionKey: sessionKey,
             state: "aborted",
@@ -810,7 +903,7 @@ private actor LocalFixtureChatStore {
     private func publishReactions(for message: OpenClawChatMessage, sessionKey: String, agentID: String? = nil) {
         guard ScreenshotFixtureMode.reactionsEnabled, let messageID = message.transcriptMessageID else { return }
         let key = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
-        self.eventContinuation?.yield(.sessionReaction(OpenClawChatReactionEvent(
+        self.publish(.sessionReaction(OpenClawChatReactionEvent(
             sessionKey: key,
             agentID: agentID ?? self.fixture.defaultAgentID,
             sessionID: "\(self.fixture.sessionIDPrefix)-\(key)",

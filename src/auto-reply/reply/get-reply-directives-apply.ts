@@ -1,9 +1,7 @@
 import type { ModelContextTokenProjection } from "../../agents/context-resolution.js";
 import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { modelKey } from "../../agents/model-selection.js";
-import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import { resolveStickyModelSelectionScope } from "../../agents/sticky-model-selection.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { AgentConfig } from "../../config/types.agents.js";
@@ -407,9 +405,6 @@ export async function applyInlineDirectiveOverrides(params: {
             configuredDefaultUpdate: applied.configuredDefaultUpdate,
             ...(stickyModelSelectionTarget ? { stickyModelSelectionTarget } : {}),
           }),
-          applied.thinkingRemap
-            ? `Thinking level set to ${applied.thinkingRemap.to} (${applied.thinkingRemap.from} not supported for ${applied.thinkingRemap.provider}/${applied.thinkingRemap.model}).`
-            : undefined,
           applied.runtimeChange?.kind === "clear"
             ? "Runtime reset to configured policy."
             : applied.runtimeChange?.kind === "set"
@@ -484,17 +479,7 @@ export async function applyInlineDirectiveOverrides(params: {
   contextTokenProjection = resolveModelContextTokenProjection({
     cfg,
     allowAsyncLoad: false,
-    provider: resolveContextConfigProviderForRuntime({
-      provider,
-      runtimeId: resolveAgentHarnessPolicy({
-        provider,
-        modelId: model,
-        config: cfg,
-        agentId,
-        sessionKey,
-      }).runtime,
-      config: cfg,
-    }),
+    provider,
     model,
     modelContextWindow: selectedCatalogEntry?.contextWindow,
     modelContextTokens: selectedCatalogEntry?.contextTokens,

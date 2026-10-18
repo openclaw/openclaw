@@ -33,12 +33,10 @@ export async function withRuntimeWorkerGeneration<T>(
 ): Promise<T> {
   const current: GenerationScope = {};
   const resources = new Map<object, Parameters<RuntimeWorkerGeneration["retain"]>[1]>();
-  let closing = false;
   return await scope.run(current, async () => {
     let outcome: { value: T } | { error: unknown };
     let settlement: Promise<void> | undefined;
     const settleGeneration = () => {
-      closing = true;
       return (settlement ??= (async () => {
         const settled = await Promise.allSettled(
           [...resources.values()].map((settle) => Promise.resolve().then(settle)),
@@ -84,20 +82,9 @@ export async function withRuntimeWorkerGeneration<T>(
     try {
       outcome = {
         value: await operation((resolve) => {
-          if (closing || current.generation) {
-            throw new Error("The updater already retained its worker generation");
-          }
           current.generation = Object.freeze({
-            resolve(url: URL) {
-              if (closing) {
-                throw new Error("The updater's retained worker generation is closing");
-              }
-              return resolve(url);
-            },
+            resolve,
             retain(owner: object, settle: Parameters<RuntimeWorkerGeneration["retain"]>[1]) {
-              if (closing) {
-                throw new Error("The updater's retained worker generation is closing");
-              }
               resources.set(owner, settle);
             },
           });

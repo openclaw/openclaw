@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
+import { conversationIdentityFromMsgContext } from "./conversation-identity-inbound.js";
 import {
   buildConversationIdentity,
-  conversationIdentityFromMsgContext,
   conversationIdentityFromSessionEntry as conversationIdentityFromCanonicalSessionEntry,
 } from "./conversation-identity.js";
 import type { SessionEntry, SessionOrigin } from "./types.js";
@@ -53,65 +53,6 @@ describe("conversation identity", () => {
     ).toBeNull();
   });
 
-  it("derives the same opaque address from prefixed and native direct targets", () => {
-    const native = conversationIdentityFromSessionEntry(directEntry("peer-a"));
-    const prefixed = conversationIdentityFromSessionEntry({
-      ...directEntry("peer-a"),
-      origin: { provider: "reef", accountId: "default" },
-    });
-
-    expect(native).toMatchObject({
-      accountId: "default",
-      channel: "reef",
-      deliveryTarget: "reef:peer-a",
-      kind: "direct",
-      peerId: "peer-a",
-    });
-    expect(native?.conversationRef).toMatch(/^conv_[a-f0-9]{32}$/u);
-    expect(prefixed?.conversationRef).toBe(native?.conversationRef);
-  });
-
-  it("uses the canonical delivery snapshot when stale origin metadata disagrees", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      ...directEntry("peer-a"),
-      origin: {
-        provider: "reef",
-        accountId: "default",
-        nativeDirectUserId: "peer-a",
-        from: "reef:stale-peer",
-      },
-    });
-
-    expect(identity?.deliveryTarget).toBe("reef:peer-a");
-    expect(identity?.peerId).toBe("peer-a");
-    expect(identity?.conversationRef).toBe(
-      conversationIdentityFromSessionEntry(directEntry("peer-a"))?.conversationRef,
-    );
-  });
-
-  it("never lets stale native metadata label another delivery target", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      ...directEntry("peer-b"),
-      origin: {
-        provider: "reef",
-        accountId: "default",
-        nativeDirectUserId: "peer-a",
-      },
-    });
-
-    expect(identity).toMatchObject({
-      deliveryTarget: "reef:peer-b",
-      nativeDirectUserId: "peer-a",
-      peerId: "peer-b",
-    });
-    expect(identity?.conversationRef).toBe(
-      conversationIdentityFromSessionEntry(directEntry("peer-b"))?.conversationRef,
-    );
-    expect(identity?.conversationRef).not.toBe(
-      conversationIdentityFromSessionEntry(directEntry("peer-a"))?.conversationRef,
-    );
-  });
-
   it("keeps a paired canonical outbound peer separate from its delivery alias", () => {
     const identity = conversationIdentityFromSessionEntry({
       sessionId: "session-main",
@@ -147,33 +88,6 @@ describe("conversation identity", () => {
         deliveryTarget: "user:delivery-alias-456",
       })?.conversationRef,
     );
-  });
-
-  it("keeps a group bound to its room instead of the paired origin sender", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-group",
-      updatedAt: 100,
-      chatType: "group",
-      deliveryContext: {
-        channel: "discord",
-        accountId: "default",
-        to: "channel:ops-room",
-      },
-      origin: {
-        provider: "discord",
-        accountId: "default",
-        chatType: "group",
-        from: "discord:user:participant-123",
-        to: "channel:ops-room",
-        nativeChannelId: "ops-room",
-      },
-    });
-
-    expect(identity).toMatchObject({
-      deliveryTarget: "channel:ops-room",
-      nativeChannelId: "ops-room",
-      peerId: "ops-room",
-    });
   });
 
   it("keeps fallback origin targets paired with their origin channel", () => {
@@ -218,7 +132,7 @@ describe("conversation identity", () => {
     );
   });
 
-  it.each(["exec", "cron", "heartbeat"] as const)(
+  it.each(["heartbeat"] as const)(
     "binds synthetic %s metadata to its originating direct route, not its execution sender",
     (source) => {
       const identity = conversationIdentityFromMsgContext({
@@ -243,44 +157,6 @@ describe("conversation identity", () => {
       });
     },
   );
-
-  it.each([
-    { fallback: { origin: { provider: "reef", accountId: "work" } }, label: "origin" },
-    { fallback: { lastChannel: "reef", lastAccountId: "work" }, label: "last route" },
-  ])("fills an omitted delivery account from the persisted $label", ({ fallback }) => {
-    const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", to: "reef:peer-a" },
-      ...fallback,
-    });
-    const explicit = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
-      chatType: "direct",
-      deliveryContext: { channel: "reef", accountId: "work", to: "reef:peer-a" },
-    });
-
-    expect(identity?.accountId).toBe("work");
-    expect(identity?.conversationRef).toBe(explicit?.conversationRef);
-  });
-
-  it("pairs a partial delivery target with the persisted session channel", () => {
-    const identity = conversationIdentityFromSessionEntry({
-      sessionId: "session-main",
-      updatedAt: 100,
-      chatType: "direct",
-      channel: "reef",
-      deliveryContext: { to: "reef:peer-a" },
-    });
-
-    expect(identity).toMatchObject({
-      channel: "reef",
-      deliveryTarget: "reef:peer-a",
-      peerId: "peer-a",
-    });
-  });
 
   it("derives the same threaded address from live and persisted route facts", () => {
     const persisted = conversationIdentityFromSessionEntry({

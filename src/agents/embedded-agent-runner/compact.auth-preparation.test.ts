@@ -3,6 +3,7 @@ import { afterAll, expect, it, onTestFinished, vi } from "vitest";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
+import { prepareSharedAuthStoreOwnershipForNative } from "../auth-profiles/path-resolve.native.js";
 import {
   clearRuntimeAuthProfileStoreSnapshotCore,
   setRuntimeAuthProfileStoreSnapshot,
@@ -25,11 +26,13 @@ const [
   { ensureAuthProfileStoreWithoutExternalProfiles },
   { AsyncWorkScope },
   { prepareProviderRuntimeAuth },
+  { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot },
 ] = await Promise.all([
   import("../../config/sessions/session-accessor.js"),
   import("../model-auth.js"),
   import("../../shared/async-work-scope.js"),
   import("../../plugins/provider-runtime.js"),
+  import("../../config/runtime-snapshot.js"),
 ]);
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-compaction-auth-");
 
@@ -149,6 +152,7 @@ it.each([false, true])(
       revoked = revoke;
       return { info: { ownsCompaction: true }, compact: contextEngineCompactMock };
     });
+    setRuntimeConfigSnapshot({});
     try {
       const operation = runOwnedCompaction(() =>
         compactEmbeddedAgentSession({
@@ -170,6 +174,7 @@ it.each([false, true])(
       expect(dispose).toHaveBeenCalledOnce();
     } finally {
       uninstall();
+      clearRuntimeConfigSnapshot();
     }
   },
 );
@@ -243,6 +248,7 @@ it("compacts through the configured fallback when the primary profile is cooling
       },
     },
   };
+  prepareSharedAuthStoreOwnershipForNative();
   setRuntimeAuthProfileStoreSnapshot(authStore, agentDir);
   onTestFinished(() => {
     clearRuntimeAuthProfileStoreSnapshotCore(agentDir);

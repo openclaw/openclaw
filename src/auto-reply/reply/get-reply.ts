@@ -8,13 +8,14 @@ import {
   resolveAgentWorkspaceDir,
   resolveAgentSkillsFilter,
 } from "../../agents/agent-scope.js";
-import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { projectConversationToolNames } from "../../agents/conversation-tool-policy-pipeline.js";
+import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSandboxRuntimeStatusAsync } from "../../agents/sandbox.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveEffectiveToolFsRootExpansionAllowed } from "../../agents/tool-fs-policy.js";
@@ -31,17 +32,16 @@ import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
-import { hasStagedMediaFacts, normalizeMediaFacts } from "../../media/media-facts.js";
+import { hasStagedMediaFacts } from "../../media/media-facts.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   isModelSelectionLocked,
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
-import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
+import { resolveStoredModelOverrideAsync } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import {
@@ -56,7 +56,6 @@ import {
 } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
@@ -103,7 +102,7 @@ import { assertReplyPreprocessingActive } from "./reply-preprocessing-abort.js";
 import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
-import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { withReplySessionDiffBaseline, type ReplyDiffBaseline } from "./session-diff-baseline.js";
 import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
@@ -121,6 +120,17 @@ export async function getReplyFromConfig(
   ctx: MsgContext,
   options?: GetReplyOptions,
   configOverride?: OpenClawConfig,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withReplySessionDiffBaseline((baseline) =>
+    resolveReplyFromConfig(ctx, options, configOverride, baseline),
+  );
+}
+
+async function resolveReplyFromConfig(
+  ctx: MsgContext,
+  options: GetReplyOptions | undefined,
+  configOverride: OpenClawConfig | undefined,
+  baseline: ReplyDiffBaseline,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const opts = prepareInternalGetReplyOptions(options, ctx);
   const isFastTestEnv = isFastTestRuntimeEnv();
@@ -283,14 +293,12 @@ export async function getReplyFromConfig(
     });
   const typing = resolverTiming.measureSync("reply.create_typing_controller", () => {
     const configuredTypingSeconds = agentCfg?.typingIntervalSeconds;
-    const typingIntervalSeconds =
-      typeof configuredTypingSeconds === "number" ? configuredTypingSeconds : 6;
+    const typingIntervalSeconds = configuredTypingSeconds ?? 6;
     const controller = createTypingController({
       onReplyStart: opts?.onReplyStart,
       onCleanup: opts?.onTypingCleanup,
       typingIntervalSeconds,
       keepalive: opts?.typingKeepalive ?? true,
-      silentToken: SILENT_REPLY_TOKEN,
       log: defaultRuntime.log,
     });
     opts?.onTypingController?.(controller);
@@ -450,32 +458,31 @@ export async function getReplyFromConfig(
   const utilityModelSelectionLocked = isModelSelectionLocked(preprocessingState?.sessionEntry);
 
   if (mediaUnderstandingRequested) {
-    const shouldApplyLockedAudio =
-      utilityModelSelectionLocked &&
-      hasInboundAudio(finalized) &&
-      hasExplicitAudioUnderstandingConfig(cfg);
     // Native harnesses receive images directly, but generic file attachments
     // still need host extraction. Only explicitly configured STT runs when locked.
     const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         ...workspaceContext,
-        activeModel: { provider, model },
+        activeModel: {
+          provider,
+          model,
+          api: findModelInCatalog(preparedModelCatalog?.entries ?? [], provider, model)?.api,
+        },
         // Cache and classify now; the final provider and owner policy are
         // resolved later, immediately before the embedded turn starts.
         selfServeLocalPaths: false,
         ...(utilityModelSelectionLocked
           ? {
-              processingMode: shouldApplyLockedAudio
-                ? ("audio-and-files" as const)
-                : ("files-only" as const),
+              processingMode:
+                hasInboundAudio(finalized) && hasExplicitAudioUnderstandingConfig(cfg)
+                  ? ("audio-and-files" as const)
+                  : ("files-only" as const),
             }
           : {}),
       }),
     );
-    if (mediaResult?.extractedFileImages.length) {
-      extractedFileImages = mediaResult.extractedFileImages;
-    }
+    extractedFileImages = mediaResult?.extractedFileImages;
     enableLocalPathSelfServe = mediaResult?.enableLocalPathSelfServe;
   }
   if (linkUnderstandingRequested && !utilityModelSelectionLocked) {
@@ -520,24 +527,9 @@ export async function getReplyFromConfig(
     }
     throw error;
   }
-  if (!useFastTestBootstrap) {
-    try {
-      await traceGetReplyPhase("reply.capture_session_diff_baseline", () =>
-        prepareReplySessionDiffBaseline({
-          agentId,
-          workspaceDir,
-          sessionState,
-        }),
-      );
-    } catch (error) {
-      if (isSessionWorkStartInvalidatedError(error)) {
-        throw error;
-      }
-      logVerbose(
-        `session diff baseline capture failed; continuing without attribution filtering: ${formatErrorMessage(error)}`,
-      );
-    }
-  }
+  const awaitSessionDiffBaseline = useFastTestBootstrap
+    ? undefined
+    : baseline.start({ agentId, workspaceDir, sessionState }, traceGetReplyPhase);
   const {
     sessionCtx,
     sessionEntry,
@@ -576,9 +568,11 @@ export async function getReplyFromConfig(
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
-  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
-    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
-    : optsWithCommandQueueOverride;
+  const optsWithSessionSkillOverrides = {
+    ...optsWithCommandQueueOverride,
+    ...(turnToolOverrides?.skills ? { skillOverrides: turnToolOverrides.skills } : {}),
+    ...(awaitSessionDiffBaseline ? { awaitSessionDiffBaseline } : {}),
+  };
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -647,9 +641,7 @@ export async function getReplyFromConfig(
         channel:
           groupResolution?.channel ??
           sessionDeliveryChannel(sessionEntry) ??
-          (typeof finalized.OriginatingChannel === "string"
-            ? finalized.OriginatingChannel
-            : undefined) ??
+          finalized.OriginatingChannel ??
           finalized.Provider,
         groupId: groupResolution?.id ?? sessionEntry.groupId,
         groupChatType: sessionEntry.chatType ?? sessionCtx.ChatType ?? finalized.ChatType,
@@ -683,7 +675,7 @@ export async function getReplyFromConfig(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
   );
-  const storedModelOverride = resolveStoredModelOverride({
+  const storedModelOverride = await resolveStoredModelOverrideAsync({
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -784,25 +776,15 @@ export async function getReplyFromConfig(
   }
   const {
     command,
-    allowTextCommands,
-    skillCommands,
-    elevatedEnabled,
-    elevatedAllowed,
-    elevatedFailures,
     defaultActivation,
-    resolvedVerboseLevel,
-    resolvedElevatedLevel,
-    blockReplyChunking,
-    resolvedBlockStreamingBreak,
     provider: resolvedProvider,
     model: resolvedModel,
     requestedRouteResolution,
     modelState,
     resolveModelLevels,
     inlineStatusRequested,
-    directiveAck,
   } = directiveResult.result;
-  let { directives, cleanedBody } = directiveResult.result;
+  let { directives } = directiveResult.result;
   provider = resolvedProvider;
   model = resolvedModel;
 
@@ -816,6 +798,10 @@ export async function getReplyFromConfig(
     }
     const { emitResetCommandHooks } = await import("./commands-reset-hooks.js");
     const action = resetMatch[1]?.toLowerCase() === "reset" ? "reset" : "new";
+    await resolvedOpts?.awaitSessionDiffBaseline?.();
+    assertReplyPreprocessingActive(resolvedOpts?.abortSignal);
+    resolvedOpts?.operatorAuthority?.assertCurrent();
+    command.assertOwnerCurrent?.();
     await emitResetCommandHooks({
       action,
       agentId,
@@ -850,6 +836,7 @@ export async function getReplyFromConfig(
 
   const inlineActionResult = await traceGetReplyPhase("reply.handle_inline_actions", () =>
     handleInlineActions({
+      ...directiveResult.result,
       ctx,
       sessionCtx,
       ...replyContext,
@@ -862,29 +849,13 @@ export async function getReplyFromConfig(
       isGroup,
       opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       typing,
-      allowTextCommands,
-      inlineStatusRequested,
-      inlineCommand: directiveResult.result.inlineCommand,
-      command,
-      skillCommands,
-      directives,
-      cleanedBody,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
       defaultActivation: () => defaultActivation,
       thinkingCatalog: statusThinkingCatalog,
-      resolveModelLevels,
-      resolvedVerboseLevel,
-      resolvedElevatedLevel,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
       resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
       provider,
       model,
-      contextTokens: directiveResult.result.contextTokens,
-      contextTokenProjection: directiveResult.result.contextTokenProjection,
-      directiveAck,
+      // Inline commands do not inherit the full turn's exec overrides.
+      execOverrides: undefined,
       abortedLastRun,
       skillFilter: mergedSkillFilter,
     }),
@@ -895,7 +866,6 @@ export async function getReplyFromConfig(
     return finishCommandTurn({ opts, ctx: finalized, cfg, reply: inlineActionResult.reply });
   }
   directives = inlineActionResult.directives;
-  cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
   const queueModeOverride = inlineActionResult.queueModeOverride;
   const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
@@ -957,11 +927,11 @@ export async function getReplyFromConfig(
         agentEntry?.reasoningDefault != null || agentCfg?.reasoningDefault != null,
     });
   }
-  const { resolvedThinkLevel, resolvedReasoningLevel } = await resolveRunModelLevels();
+  const modelLevels = await resolveRunModelLevels();
 
   let stagedAttachmentPaths: ReadonlyMap<number, string> = hasStagedMediaFacts(finalized.media)
     ? new Map(
-        normalizeMediaFacts(finalized.media).flatMap((fact, index) =>
+        (finalized.media ?? []).flatMap((fact, index) =>
           fact.path ? [[index, fact.path] as const] : [],
         ),
       )
@@ -974,7 +944,6 @@ export async function getReplyFromConfig(
     !hasStagedMediaFacts(ctx.media) &&
     hasInboundMedia(ctx)
   ) {
-    const { stageSandboxMedia } = await stageSandboxMediaRuntimeLoader.load();
     const stagingSessionEntry =
       sessionEntryHandle?.getCurrent() ?? sessionStore?.[sessionKey] ?? sessionEntry;
     const stagingWorkspaceDir =
@@ -1004,8 +973,8 @@ export async function getReplyFromConfig(
           })
         ).snapshot
       : undefined;
-    const stageResult = await traceGetReplyPhase("reply.stage_media", () =>
-      stageSandboxMedia({
+    const stageResult = await traceGetReplyPhase("reply.stage_media", async () =>
+      (await stageSandboxMediaRuntimeLoader.load()).stageSandboxMedia({
         ctx,
         sessionCtx,
         cfg,
@@ -1014,6 +983,7 @@ export async function getReplyFromConfig(
         workspaceDir: stagingWorkspaceDir,
         skillsSnapshot: stagingSkillsSnapshot,
         abortSignal: optsWithSkillFilter?.abortSignal,
+        awaitSessionDiffBaseline: resolvedOpts?.awaitSessionDiffBaseline,
       }),
     );
     stagedAttachmentPaths = stageResult.staged;
@@ -1026,17 +996,20 @@ export async function getReplyFromConfig(
       ctx: sessionCtx,
       sessionKey,
     });
-    const sandboxed = resolveSandboxRuntimeStatus({
-      cfg,
-      agentId,
-      sessionKey,
-      classificationSessionKey: policySessionKey,
-    }).sandboxed;
+    const sandboxed = (
+      await resolveSandboxRuntimeStatusAsync({
+        cfg,
+        agentId,
+        sessionKey,
+        classificationSessionKey: policySessionKey,
+        ...(policySessionKey === sessionKey ? { preparedSessionEntry: sessionEntry } : {}),
+      })
+    ).sandboxed;
     if (
       (sandboxed && stagedAttachmentPaths.size > 0) ||
       (!sandboxed && resolveEffectiveToolFsRootExpansionAllowed({ cfg, agentId }))
     ) {
-      const capabilityProfile = resolveConversationCapabilityProfile({
+      const capabilityProfile = await prepareConversationCapabilityProfile({
         config: cfg,
         sessionKey: policySessionKey,
         runSessionKey: policySessionKey === sessionKey ? undefined : sessionKey,
@@ -1089,8 +1062,7 @@ export async function getReplyFromConfig(
       sessionCfg,
       commandAuthorized,
       directives,
-      resolvedThinkLevel,
-      resolvedReasoningLevel,
+      ...modelLevels,
       modelState: runModelState,
       provider: runProvider,
       model: runModel,

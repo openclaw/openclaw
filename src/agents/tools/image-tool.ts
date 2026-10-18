@@ -1,4 +1,5 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { findCapabilityProviderById } from "../../../packages/media-generation-core/src/capability-model-ref.js";
@@ -51,7 +52,8 @@ import {
 import {
   buildToolModelConfigFromCandidates,
   hasToolModelConfig,
-  prepareToolAuthProfileStoreSource,
+  loadLegacyToolAuthProfileStore,
+  prepareToolAuthProfileStore,
   resolveDefaultModelRef,
   resolveOpenAiImageMediaCandidate,
 } from "./model-config.helpers.js";
@@ -267,17 +269,18 @@ export function createImageTool(options?: {
       : null;
   const shouldResolveAutoImageModel =
     !modelHasVision && !explicitImageModelConfig && !options?.deferAutoModelResolution;
-  const resolveInitialModelConfig = (authProfileStoreSource: boolean | undefined) =>
+  const resolveInitialModelConfig = (authStore: AuthProfileStore | undefined) =>
     resolveImageModelConfigForTool({
       cfg: options?.config,
       agentDir,
       workspaceDir: options?.workspaceDir,
-      authStore: options?.authProfileStore,
-      authProfileStoreSource,
+      authStore,
       preparedModelRuntime: options?.preparedModelRuntime,
     });
   const resolvedImageModelConfig = shouldResolveAutoImageModel
-    ? resolveInitialModelConfig(options?.authProfileStoreSource)
+    ? resolveInitialModelConfig(
+        options?.authProfileStore ?? loadLegacyToolAuthProfileStore(agentDir),
+      )
     : explicitImageModelConfig;
   if (!modelHasVision && !resolvedImageModelConfig && !options?.deferAutoModelResolution) {
     return null;
@@ -309,10 +312,7 @@ export function createImageTool(options?: {
     }),
     execute: async (_toolCallId, args, suppliedSignal) =>
       runWithAsyncWorkResources(async (onAcquired) => {
-        const record: Record<string, unknown> = args && typeof args === "object" ? { ...args } : {};
-        if (Array.isArray(record.paths)) {
-          record.paths = [...record.paths];
-        }
+        const record = asRecord(args);
         const capturedOperator = await captureAmbientGatewayOperatorAuthority({
           missingBindingError: () =>
             new Error("Image analysis requires its current Gateway binding."),
@@ -378,9 +378,9 @@ export function createImageTool(options?: {
               modelOverride,
             });
           if (!imageModelConfig) {
-            const authProfileStoreSource = await prepareToolAuthProfileStoreSource(options);
+            const authStore = await prepareToolAuthProfileStore(options);
             assertCurrent();
-            imageModelConfig = resolveInitialModelConfig(authProfileStoreSource);
+            imageModelConfig = resolveInitialModelConfig(authStore);
           }
           if (!imageModelConfig) {
             throw new Error(

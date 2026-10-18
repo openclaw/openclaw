@@ -4,6 +4,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it, vi } from "vitest";
+import type * as ConfigIO from "../config/io.js";
+import {
+  captureRuntimeConfigAsyncReader as captureFixtureRuntimeConfigAsyncReader,
+  clearRuntimeConfigSnapshot as clearFixtureRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot as setFixtureRuntimeConfigSnapshot,
+} from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginServiceScheduler } from "../plugin-sdk/plugin-test-api.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -13,11 +19,13 @@ import {
   createPluginModuleLoader,
   runPluginRegisterSyncInRegistry,
 } from "./loader-module-runtime.js";
+import { tryNativeRequireModule } from "./native-module-require.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginInstance } from "./plugin-instance.js";
 import { createPluginRegistry } from "./registry.js";
 import type { PluginRuntime } from "./runtime/types.js";
+import { preparePluginLoaderAliases } from "./sdk-alias.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
@@ -34,6 +42,18 @@ const { MEMORY_DREAMING_SYSTEM_EVENT_TEXT } = loadHost(
   path.join(repository, "src/plugin-sdk/memory-core-host-status.ts"),
 ) as typeof import("../plugin-sdk/memory-core-host-status.js");
 
+// The SDK reads config through the native host, outside the transformed fixture graph.
+const configRuntime = tryNativeRequireModule(path.join(repository, "src/config/io.ts"), {
+  aliasMap: preparePluginLoaderAliases({
+    modulePath: memorySource,
+    devSourceRoot: repository,
+    pluginSdkResolution: "src",
+  }).resolveAlias,
+});
+assert(configRuntime.ok, "Expected the native config runtime fixture");
+const { captureRuntimeConfigAsyncReader, clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+  configRuntime.moduleExport as typeof ConfigIO;
+
 it("keeps successor sweeps and diary publication owned after another registration retires", async () => {
   const state = await createOpenClawTestState({ label: "memory-dreaming-reload" });
   const instances: PluginInstance[] = [];
@@ -44,10 +64,16 @@ it("keeps successor sweeps and diary publication owned after another registratio
     agents: { entries: { main: { workspace: state.workspaceDir } } },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config, config);
+  // The host-owned runtime facade uses Vitest's config graph; SDK modules use the native graph.
+  setFixtureRuntimeConfigSnapshot(config, config);
+  await captureRuntimeConfigAsyncReader()();
+  await captureFixtureRuntimeConfigAsyncReader()();
   vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
   const load = () => {
     const subagent = {
       complete: vi.fn(() => completion.promise),
+      forkSession: vi.fn(async () => ({ text: "" })),
       run: vi.fn(async () => ({ runId: "unused" })),
       waitForRun: vi.fn(async () => ({ status: "ok" as const })),
       getSessionMessages: vi.fn(async () => ({ messages: [] })),
@@ -165,6 +191,9 @@ it("keeps successor sweeps and diary publication owned after another registratio
     await Promise.all(stops.map((stop) => stop()));
     await Promise.all(instances.map((instance) => instance.dispose()));
     vi.useRealTimers();
-    await state.cleanup();
+    await state.cleanup().finally(() => {
+      clearRuntimeConfigSnapshot();
+      clearFixtureRuntimeConfigSnapshot();
+    });
   }
 });

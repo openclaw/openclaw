@@ -25,103 +25,96 @@ type SessionPageArchiveHost = {
 };
 
 /** Page lifetime adapts to the same archive owner used by sidebar and chat. */
-export class SessionsPageArchive {
-  constructor(private readonly host: SessionPageArchiveHost) {}
-
-  private async loadOperations(scope: SessionsPageRequestScope) {
+export function createSessionsArchive(host: SessionPageArchiveHost) {
+  async function loadOperations(scope: SessionsPageRequestScope) {
     try {
       return await import("../../components/session-organizer-archive.runtime.ts");
     } catch (error) {
-      if (this.host.isCurrent(scope)) {
-        this.host.publishError(scope, error);
+      if (host.isCurrent(scope)) {
+        host.publishError(scope, error);
       }
       return null;
     }
   }
-  async archiveTree(row: GatewaySessionRow) {
-    const scope = this.host.captureScope();
+  async function archive(row: GatewaySessionRow, hasDescendants = false) {
+    const scope = host.captureScope();
     if (!scope) {
       return;
     }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !this.host.isCurrent(scope)) {
+    const operations = await loadOperations(scope);
+    if (!operations || !host.isCurrent(scope)) {
       return;
     }
-    await operations.archiveSessionTreeWithUndo(
-      {
-        sessionData: {
-          isSessionMutationScopeCurrent: () => this.host.isCurrent(scope),
-          publishSessionMutationError: (_candidate, error) => {
-            this.host.publishError(scope, error);
+    const session = {
+      ...row,
+      label: row.label ?? row.displayName ?? row.key,
+      pinned: row.pinned === true,
+      active: false,
+      hasArchiveDescendants: hasDescendants,
+    };
+    const mutationScope = {
+      ...scope,
+      selectedAgentId: resolveUiSessionRowAgentId(
+        row,
+        scope.context.agentSelection.state.selectedId ??
+          resolveUiDefaultAgentId({
+            agentsList: scope.context.agents.state.agentsList,
+            hello: scope.gateway.snapshot.hello,
+          }),
+      ),
+    };
+    let choice: Awaited<ReturnType<typeof operations.confirmSessionArchive>>;
+    try {
+      choice = await operations.confirmSessionArchive(session, mutationScope, () =>
+        host.isCurrent(scope),
+      );
+    } catch (error) {
+      if (host.isCurrent(scope)) {
+        host.publishError(scope, error);
+      }
+      return;
+    }
+    if (!choice) {
+      return;
+    }
+    if (choice.kind === "tree") {
+      await operations.archiveConfirmedSessionsWithUndo(
+        {
+          sessionData: {
+            isSessionMutationScopeCurrent: () => host.isCurrent(scope),
+            publishSessionMutationError: (_candidate, error) => {
+              host.publishError(scope, error);
+            },
+            refreshSidebarSessions: async () => {
+              await host.refresh(scope);
+            },
           },
-          refreshSidebarSessions: async () => {
-            await this.host.refresh(scope);
+          pruneSidebarSessionEntry: (key) => {
+            scope.context.navigation.update({
+              sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
+                (entry) => entry !== "session:" + key,
+              ),
+            });
           },
+          selectSession: (key) => {
+            selectApplicationSession({
+              selection: scope.context.agentSelection,
+              gateway: scope.gateway,
+              sessionKey: key,
+              agentId: host.agentId(key, scope.context),
+            });
+          },
+          sidebarSessionStatusFilter: () => "all",
         },
-        pruneSidebarSessionEntry: (key) => {
-          scope.context.navigation.update({
-            sidebarEntries: scope.context.navigation.snapshot.sidebarEntries.filter(
-              (entry) => entry !== "session:" + key,
-            ),
-          });
-        },
-        selectSession: (key) => {
-          selectApplicationSession({
-            selection: scope.context.agentSelection,
-            gateway: scope.gateway,
-            sessionKey: key,
-            agentId: this.host.agentId(key, scope.context),
-          });
-        },
-        sidebarSessionStatusFilter: () => "all",
-      },
-      {
-        key: row.key,
-        agentId: row.agentId,
-        sessionId: row.sessionId,
-        label: row.label ?? row.displayName ?? row.key,
-        pinned: row.pinned === true,
-        archived: row.archived,
-        category: row.category,
-        sharingRole: row.sharingRole,
-        active: false,
-      },
-      {
-        ...scope,
-        selectedAgentId: resolveUiSessionRowAgentId(
-          row,
-          scope.context.agentSelection.state.selectedId ??
-            resolveUiDefaultAgentId({
-              agentsList: scope.context.agents.state.agentsList,
-              hello: scope.gateway.snapshot.hello,
-            }),
-        ),
-      },
-    );
-  }
-
-  async archive(row: GatewaySessionRow) {
-    const scope = this.host.captureScope();
-    if (!scope) {
-      return;
-    }
-    const operations = await this.loadOperations(scope);
-    if (!operations || !this.host.isCurrent(scope)) {
-      return;
-    }
-    if (
-      !(await operations.confirmRunningSessionArchive(
-        { ...row, label: row.label ?? row.displayName ?? row.key },
-        scope.signal,
-      )) ||
-      !this.host.isCurrent(scope)
-    ) {
+        choice.rows,
+        mutationScope,
+      );
       return;
     }
     const onConfirmed = prepareArchiveOutcome(
       scope.sessions,
       row,
-      this.host.agentId(row.key, scope.context),
+      host.agentId(row.key, scope.context),
     );
     if (!onConfirmed) {
       return;
@@ -131,7 +124,7 @@ export class SessionsPageArchive {
       return;
     }
     try {
-      await this.host.patch(row.key, { archived: true }, scope, row.sessionId, {
+      await host.patch(row.key, { archived: true }, scope, row.sessionId, {
         onConfirmed,
         sessionScope: true,
       });
@@ -139,4 +132,5 @@ export class SessionsPageArchive {
       finishArchive();
     }
   }
+  return { archive };
 }

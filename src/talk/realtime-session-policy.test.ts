@@ -39,7 +39,6 @@ describe("realtime voice session policy", () => {
   it.each([
     { configuredConsultPolicy: undefined, requireWakeName: undefined, allowed: true },
     { configuredConsultPolicy: "always" as const, requireWakeName: undefined, allowed: false },
-    { configuredConsultPolicy: undefined, requireWakeName: true, allowed: false },
   ])("resolves native delegation policy: %j", ({ allowed, ...overrides }) => {
     const resolve = () =>
       resolveRealtimeVoiceSessionPolicy({

@@ -97,7 +97,7 @@ async function processGoogleChatEvent(
   const sender = message.sender ?? event.user;
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
-  const senderEmail = sender?.email ?? undefined;
+  const senderEmail = sender?.email;
   const isBotSender = sender?.type?.toUpperCase() === "BOT";
   const appUserId = account.config.botUser?.trim() || "users/app";
 
@@ -272,7 +272,7 @@ async function processGoogleChatEvent(
       WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       GroupSubject: undefined,
-      GroupSpace: isGroup ? (space.displayName ?? undefined) : undefined,
+      GroupSpace: isGroup ? space.displayName : undefined,
     },
   });
 

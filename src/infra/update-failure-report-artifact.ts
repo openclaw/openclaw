@@ -135,17 +135,15 @@ export async function writeTriageUpdateFailure(
     options.outputPath ??
     path.join(stateDir, "logs", "support", updateDiagnosticArtifactName("failure"));
   const inventory = sanitizeTriageUpdateFailure(failure, { env, stateDir }, "inventory");
+  let detail: string | undefined;
   if ("result" in inventory && inventory.result.steps.some((step) => step.doctorLintFindings)) {
-    const detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
+    detail = await writeUpdateFailureLintArtifact(inventory, path.dirname(outputPath)).then(
       (inventoryPath) => `Complete Doctor lint inventory: ${inventoryPath}`,
       (error: unknown) =>
         `Complete Doctor lint inventory unavailable: ${formatErrorMessage(error)}`,
     );
-    // The released reader strips new fields and successful steps. Its error text retains
-    // this diagnostic link even after a later plugin failure or another CLI handoff.
-    inventory.error = `${inventory.error ?? inventory.result.reason ?? "Update failed"}. ${detail}`;
   }
-  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact");
+  const sanitized = sanitizeTriageUpdateFailure(inventory, { env, stateDir }, "artifact", detail);
   const body = `${JSON.stringify(sanitized)}\n`;
   // The managed helper's private handoff keeps the latest complete outcome after cleanup.
   await writeTextAtomic(outputPath, body, { mode: 0o600, dirMode: 0o700 });
@@ -285,16 +283,16 @@ export async function discardSavedUpdateFailureReport(
 export async function discardSavedUpdateFailureReportBestEffort(
   prepared: PreparedUpdateFailureReport,
 ): Promise<void> {
-  await discardSavedUpdateFailureReport(prepared).catch(() => {});
+  await discardSavedUpdateFailureReport(prepared).catch(() => {
+    // Optional artifact cleanup must not replace the report submission result.
+  });
 }
 
-/** Captures the immutable retired-artifact set for one fenced sweep generation. */
+/** Captures attempt artifacts once; cleanup protects the current receipt after enumeration. */
 export async function listRetiredUpdateFailureReportArtifacts(
   prepared: PreparedUpdateFailureReport,
-  keep?: PreparedUpdateFailureReport,
 ): Promise<string[]> {
   const base = path.parse(prepared.savedReportPath);
-  const keepPaths = new Set(keep ? [keep.savedReportPath, stagedReportPath(keep)] : []);
   const entries = await fs.readdir(base.dir).catch((error: unknown) => {
     if (hasErrorCode(error, "ENOENT")) {
       return [];
@@ -303,8 +301,7 @@ export async function listRetiredUpdateFailureReportArtifacts(
   });
   return entries
     .filter((entry) => isAttemptArtifactName(base, entry))
-    .map((entry) => path.join(base.dir, entry))
-    .filter((artifactPath) => !keepPaths.has(artifactPath));
+    .map((entry) => path.join(base.dir, entry));
 }
 
 /** Deletes only a previously captured set; this function never performs a fresh scan. */
@@ -312,7 +309,9 @@ export async function removeRetiredUpdateFailureReportArtifacts(
   artifactPaths: readonly string[],
 ): Promise<void> {
   for (const artifactPath of artifactPaths) {
-    await fs.rm(artifactPath, { force: true }).catch(() => {});
+    await fs.rm(artifactPath, { force: true }).catch(() => {
+      // A later sweep can remove these non-authoritative retired artifacts.
+    });
   }
 }
 

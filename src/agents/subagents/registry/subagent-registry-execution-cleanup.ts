@@ -7,6 +7,8 @@ import {
   clearGatewayContextResolver,
   getGatewayContextResolver,
 } from "../../../plugins/runtime/gateway-request-scope.js";
+import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
+import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -24,6 +26,51 @@ type ExecutionCleanupObservation = {
 // Immutable row publications preserve their existing physical execution owner.
 const executionCleanups = new WeakMap<object, ExecutionCleanupObservation>();
 
+export function captureSubagentEmbeddedExecution(entry: SubagentRunRecord) {
+  if (resolveSubagentChildAuthority(entry).status === "mismatch") {
+    return undefined;
+  }
+  const owner = resolveActiveEmbeddedRunOwnerByRunId(entry.runId);
+  return owner?.sessionKey === entry.childSessionKey &&
+    (!entry.childSessionIdentity?.sessionId ||
+      owner.sessionId === entry.childSessionIdentity.sessionId)
+    ? owner
+    : undefined;
+}
+
+export async function captureSubagentReplyExecution(entry: SubagentRunRecord) {
+  const authority = resolveSubagentChildAuthority(entry);
+  if (authority.status === "mismatch") {
+    return undefined;
+  }
+  const [{ resolveReplyOperationsForSession }, { getAttachedBackend }] = await Promise.all([
+    import("../../../auto-reply/reply/reply-run-registry.registry.js"),
+    import("../../../auto-reply/reply/reply-run-registry.state.js"),
+  ]);
+  const current = () =>
+    resolveReplyOperationsForSession({
+      agentId: authority.childAgentId,
+      sessionKeys: [entry.childSessionKey],
+      sessionId: entry.childSessionIdentity?.sessionId,
+    }).find(
+      (operation) =>
+        operation.key === entry.childSessionKey &&
+        getAttachedBackend(operation)?.runId === entry.runId,
+    );
+  const operation = current();
+  if (!operation) {
+    return undefined;
+  }
+  const backend = getAttachedBackend(operation);
+  const isCurrent = () => current() === operation && getAttachedBackend(operation) === backend;
+  return {
+    sessionId: operation.sessionId,
+    settlement: operation.ownerSettlement,
+    isCurrent,
+    abort: () => isCurrent() && operation.abortByUser(),
+  };
+}
+
 export function captureSubagentExecution(params: {
   entry: SubagentRunRecord;
   session: SubagentKillSession;
@@ -37,7 +84,11 @@ export function captureSubagentExecution(params: {
       entries: context.chatAbortControllers,
       runId: entry.runId,
       sessionKey: entry.childSessionKey,
-      sessionId: params.session.entry?.sessionId,
+      sessionId:
+        resolveSubagentChildAuthority(entry).status === "legacy-unverified"
+          ? (entry.childSessionIdentity?.sessionId ??
+            context.chatAbortControllers.get(entry.runId)?.sessionId)
+          : params.session.entry?.sessionId,
       lifecycleGeneration: entry.execution.lifecycleGeneration,
     });
   return context && execution
@@ -54,7 +105,7 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
     const context = resolver?.();
     const execution = context?.chatAbortControllers.get(entry.runId);
     const settlement = execution?.executionSettlement;
-    const { runId, childSessionKey, generation, createdAt } = entry;
+    const { runId, childSessionKey } = entry;
     const lifecycleGeneration = entry.execution.lifecycleGeneration;
     if (
       !resolver ||
@@ -79,8 +130,6 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
       return (
         current.runId === runId &&
         current.childSessionKey === childSessionKey &&
-        current.generation === generation &&
-        current.createdAt === createdAt &&
         current.execution.lifecycleGeneration === lifecycleGeneration &&
         current.childSessionIdentity?.sessionId === recordSessionId &&
         current.childSessionIdentity?.lifecycleRevision === sessionLifecycleRevision
@@ -126,8 +175,7 @@ export function getSubagentExecutionCleanup(
   const observation = executionCleanups.get(getSubagentRunRuntimeKey(entry));
   return observation?.sessionId === session?.sessionId &&
     observation?.matchesRecord() &&
-    (observation.sessionLifecycleRevision === undefined ||
-      observation.sessionLifecycleRevision === session?.lifecycleRevision)
+    observation.sessionLifecycleRevision === session?.lifecycleRevision
     ? observation
     : undefined;
 }

@@ -364,15 +364,26 @@ describe("state poll store", () => {
             options: ["A", "B"],
             maxSelections: 1,
             createdAt: new Date().toISOString(),
-            votes: {},
+            // A real bucket write invalidates the initial replacement-read snapshot.
+            // The later prune read must decode the trigger-corrupted rows.
+            votes: { voter: ["1"] },
           }),
-        ).rejects.toThrow();
+        ).rejects.toThrow(
+          failure === "null value"
+            ? TypeError
+            : failure === "invalid JSON"
+              ? "Plugin state entry contains corrupt JSON."
+              : "Failed to delete plugin state entry.",
+        );
+        const newPollKey = crypto.createHash("sha256").update("new").digest("hex");
         const remaining = database
           .prepare(
             "SELECT namespace, entry_key FROM plugin_state_entries WHERE plugin_id = 'msteams' ORDER BY namespace, entry_key",
           )
           .all();
         expect(remaining).toEqual([
+          // SHA-256("new\0voter") selects bucket 8 of 32.
+          { namespace: "poll-vote-buckets", entry_key: `${newPollKey}:0008` },
           { namespace: "poll-vote-buckets", entry_key: "failing" },
           ...(failure === "invalid JSON"
             ? [{ namespace: "poll-vote-buckets", entry_key: "first" }]
@@ -380,7 +391,7 @@ describe("state poll store", () => {
           { namespace: "poll-vote-buckets", entry_key: "later" },
           {
             namespace: "polls",
-            entry_key: crypto.createHash("sha256").update("new").digest("hex"),
+            entry_key: newPollKey,
           },
           { namespace: "polls", entry_key: "expired-b" },
         ]);

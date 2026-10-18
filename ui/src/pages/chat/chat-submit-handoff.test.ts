@@ -5,11 +5,14 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { extractText } from "../../lib/chat/message-extract.ts";
 import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { removeQueuedMessage } from "./chat-queue.ts";
 import {
@@ -18,12 +21,15 @@ import {
   resumeStoredChatOutboxes,
 } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
+import { buildChatItems } from "./chat-thread-build.ts";
+import { createProps } from "./chat-thread.test-support.ts";
 import {
   listStoredChatOutboxes,
   updateStoredChatComposerQueueItems,
 } from "./composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { beginQueuedMessageEdit, updateQueuedMessageEdit } from "./queued-message-edit.ts";
+import { applySessionMessagePayload } from "./session-message-apply.ts";
 
 type TestChatHost = ReturnType<typeof makeChatHost>;
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -55,6 +61,100 @@ function idleChatHistory(sessionKey = "agent:main") {
 }
 
 describe("chat submission handoff", () => {
+  it("keeps a setup-held original ahead of a steer through dispatch, custody, and persistence", async () => {
+    const originalRunId = "setup-run";
+    const original = {
+      id: "original-input",
+      runId: originalRunId,
+      acceptedAt: 10_000,
+      state: "queued" as const,
+      message: { role: "user", content: "Original request", timestamp: 10_000 },
+    };
+    const pendingInputs = { items: [original], total: 1 };
+    const dispatched = createDeferred();
+    const ack = createDeferred<unknown>();
+    const host = makeChatHost({
+      currentSessionId: "setup-session",
+      chatRunId: originalRunId,
+      requestHandlers: {
+        "chat.history": {
+          sessionId: "setup-session",
+          messages: [],
+          pendingInputs,
+          sessionInfo: row("agent:main", { hasActiveRun: true, status: "running" }),
+        },
+        "chat.send": () => {
+          dispatched.resolve();
+          return ack.promise;
+        },
+      },
+    });
+    const rows = () =>
+      buildChatItems(
+        createProps({
+          messages: host.chatMessages,
+          queue: host.chatQueue,
+          pendingInputs: getChatPendingInputs(host)?.page.items,
+          runId: host.chatRunId,
+          runWorking: true,
+        }),
+      ).flatMap((item) =>
+        item.kind === "group" ? item.messages.map(({ message }) => extractText(message)) : [],
+      );
+    await loadChatHistory(host);
+    expect(rows()).toEqual(["Original request"]);
+    const sending = handleSendChat(host, "Later steer", { followUpMode: "steer" });
+    await dispatched.promise;
+    const steer = expectDefined(host.chatQueue.at(-1), "steer submission");
+    ack.resolve({ runId: steer.sendRunId, status: "accepted" });
+    try {
+      expect(rows()).toEqual(["Original request", "Later steer"]);
+    } finally {
+      await sending;
+    }
+    applyChatPendingInputs(host, {
+      items: [
+        ...pendingInputs.items,
+        {
+          id: "steer-input",
+          runId: steer.sendRunId,
+          acceptedAt: 9_000,
+          state: "queued",
+          message: { role: "user", content: "Later steer", timestamp: 9_000 },
+        },
+      ],
+      total: 2,
+    });
+    expect(rows()).toEqual(["Original request", "Later steer"]);
+    for (const [index, input] of [
+      original,
+      {
+        ...original,
+        id: "steer-input",
+        runId: steer.sendRunId,
+        message: { role: "user", content: "Later steer", timestamp: 9_000 },
+      },
+    ].entries()) {
+      applySessionMessagePayload(
+        host,
+        {
+          message: {
+            ...input.message,
+            __openclaw: {
+              id: input.id,
+              seq: index + 1,
+              idempotencyKey: input.runId + ":user",
+              ...(index === 1 ? { steerTargetRunId: originalRunId } : {}),
+            },
+          },
+        },
+        true,
+        { kind: "history-delta" },
+      );
+      expect(rows()).toEqual(["Original request", "Later steer"]);
+    }
+  });
+
   it("queues identical messages from distinct user actions while coalescing re-entry", async () => {
     const sent = createDeferred<unknown>();
     const host = makeChatHost({

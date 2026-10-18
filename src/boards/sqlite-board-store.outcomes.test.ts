@@ -15,6 +15,7 @@ import {
   SqliteWorkerError,
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-contract.js";
+import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -99,11 +100,15 @@ function fixture() {
 async function receiveExecutedFailure(retire: boolean) {
   const rejected = createDeferredCore<unknown>();
   const events: string[] = [];
+  const custody = new SqliteWorkerSlotCustody();
+  const requestCustody = custody.createRequest();
+  requestCustody.activate();
+  requestCustody.accept();
   const job: Job = {
+    custody: requestCustody,
     observation: { started() {}, completed() {} },
     request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
     bytes: 0,
-    nativeDispatched: true,
     settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
     resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
     reject: (error) => {
@@ -114,6 +119,7 @@ async function receiveExecutedFailure(retire: boolean) {
   };
   const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
     Parameters<typeof failSqliteWorkerSlot>[0] = {
+    custody,
     actors: new Set<Actor>(),
     current: job,
     queue: [],

@@ -107,7 +107,10 @@ export function scanKnownModelRefs(value: unknown, key?: string, path = ""): boo
   );
 }
 
-type ModelRefNormalizer = (value: string) => string | null;
+type ModelRefNormalizer = (
+  value: string,
+  providerModelPair?: Record<string, unknown>,
+) => string | null;
 
 function rewriteModelRefString(
   value: string,
@@ -405,7 +408,7 @@ export function rewriteModelRefs(
   const providerModelPair = provider !== undefined && model !== undefined;
   if (provider?.trim() && model !== undefined) {
     const ref = `${provider}/${model}`;
-    const rewritten = normalize(ref);
+    const rewritten = normalize(ref, record);
     if (rewritten && rewritten !== ref) {
       const slash = rewritten.indexOf("/");
       working = {

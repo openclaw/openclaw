@@ -176,6 +176,12 @@ child-process env. WebSocket app-server connections do not receive Gateway
 env API-key fallback; use an explicit auth profile or the remote
 app-server's own account.
 
+Model discovery uses the same local stdio environment-key fallback when no
+OpenAI profile is selected in the isolated agent home. Refreshing discovery
+after changing the environment key acquires a client for the new key. Native
+user homes and remote app-servers keep their own authentication. Discovery does
+not import API keys from the operator’s native Codex auth file.
+
 If a subscription profile hits a Codex usage limit, OpenClaw records the
 reset time when Codex reports one and tries the next ordered auth profile
 for the same Codex run. When the reset time passes, the subscription

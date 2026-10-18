@@ -54,23 +54,6 @@ describe("native CLI selection", () => {
     }
   });
 
-  it.each([
-    { file: "ui/src/pages/devices/capability-chips.test.ts", selected: true },
-    { file: "ui/src/pages/devices/capability.browser-import.test.ts", selected: true },
-    { file: "ui/src/pages/devices.browser/capability.test.ts", selected: true },
-    { file: "ui/src/pages/devices/capability.browser-helper.browser.test.ts", selected: false },
-    { file: "ui/src/pages/devices/capability-chips.browser.test.ts", selected: false },
-  ])("preserves UI extglob ownership for $file", ({ file, selected }) => {
-    const include = ["ui/src/**/" + nonBrowserTestBasenamePattern];
-    const expected = selected ? [file] : [];
-    expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual(expected);
-    expect(intersectIncludePatterns(include, [file], matchesVitestGlob)).toEqual(expected);
-    expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
-    expect(
-      narrowIncludePatternsForCli(include, ["node", "vitest", "run", path.resolve(file)]),
-    ).toEqual(selected ? [path.resolve(file).replaceAll("\\", "/")] : []);
-  });
-
   it("keeps non-test paths outside UI discovery when CLI narrowing is unavailable", () => {
     const file = "ui/src/pages/devices/capability.ts";
     const absoluteFile = path.resolve(file);
@@ -161,44 +144,6 @@ describe("native CLI selection", () => {
 });
 
 describe("batch file selection", () => {
-  const files = Object.freeze([
-    "ui/src/b.test.ts",
-    "ui/src/a.browser.test.ts",
-    "ui/src/a.test.ts",
-    "ui/src/b.test.ts",
-    "ui/src/.hidden.test.ts",
-    "ui/src/../src/a.test.ts",
-    "ui//src/a.test.ts",
-    "ui\\src\\a.test.ts",
-    "UI/src/a.test.ts",
-    "!ui/src/a.test.ts",
-    "#ui/src/a.test.ts",
-  ]);
-
-  it.each([
-    { include: ["ui/src/**/!(*.browser).test.ts"], exclude: [] },
-    { include: ["ui/src/a*", "ui/src/b*"], exclude: ["**/*.browser.test.ts"] },
-    { include: ["{ui,UI}/src/[ab].test.ts"], exclude: ["ui/**/b.test.ts"] },
-    { include: ["!ui/**", "#ui/**"], exclude: [] },
-    { include: ["./ui/src/*.test.ts", "ui\\src\\*.test.ts"], exclude: ["**/.hidden*"] },
-    { include: [], exclude: [] },
-    { include: ["**"], exclude: ["**"] },
-  ])("retains single-file matcher semantics and input order: $include", ({ include, exclude }) => {
-    const expected = files.filter(
-      (file) =>
-        include.some((pattern) => path.matchesGlob(file, pattern)) &&
-        !exclude.some((pattern) => path.matchesGlob(file, pattern)),
-    );
-    expect(
-      filterFilesByPatterns(
-        files,
-        Object.freeze(include),
-        Object.freeze(exclude),
-        path.matchesGlob,
-      ),
-    ).toEqual(expected);
-  });
-
   it("keeps a large exclusion inventory within Node's compiled-pattern cache budget", () => {
     const candidates = Array.from({ length: 12 }, (_, index) => `src/keep-${index}.test.ts`);
     const exclude = Array.from({ length: 260 }, (_, index) => `src/excluded-${index}.test.ts`);

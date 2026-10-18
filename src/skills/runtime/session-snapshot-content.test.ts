@@ -1,58 +1,106 @@
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
-import {
-  bumpSkillsSnapshotVersion,
-  getSkillsSnapshotVersion,
-  registerSkillsChangeListener,
-  resetSkillsRefreshStateForTest,
-  suspendSkillsSnapshotSources,
-} from "./refresh-state.js";
+import { getSkillsSnapshotVersion, registerSkillsChangeListener } from "./refresh-state.js";
+import { closeSkillsWatchers, refreshSkillsDiscovery } from "./refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "./session-snapshot.js";
 
-vi.mock("../loading/plugin-skills.js", () => ({ resolvePluginSkillRoots: () => [] }));
-vi.mock("../loading/bundled-dir.js", () => ({ resolveBundledSkillsDir: () => undefined }));
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-beforeEach(() => resetSkillsRefreshStateForTest());
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    await closeSkillsWatchers(true);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
+beforeEach(() => {
+  const home = tempDirs.make("skills-content-home-");
+  for (const [key, value] of Object.entries({
+    HOME: home,
+    USERPROFILE: home,
+    OPENCLAW_HOME: home,
+    OPENCLAW_STATE_DIR: path.join(home, "state"),
+    OPENCLAW_BUNDLED_SKILLS_DIR: path.join(home, "bundled-skills"),
+    OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(home, "plugins"),
+  })) {
+    vi.stubEnv(key, value);
+  }
+  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 });
+const config = { plugins: { enabled: false } };
+
+async function completePassiveScan() {
+  const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
+  try {
+    await vi.advanceTimersByTimeAsync(60_000);
+    await Promise.all(tasks.mock.results.map((result) => result.value));
+  } finally {
+    tasks.mockRestore();
+  }
+}
 
 describe("content-addressed skill refresh", () => {
+  it("honors a per-call passive refresh opt-out without disabling another observer", async () => {
+    const workspaceDir = tempDirs.make("skills-content-no-watch-");
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    await writeSkill({ dir: skillDir, name: "demo", description: "Original" });
+    const params = { workspaceDir, config, watch: false };
+    const original = await resolveReusableWorkspaceSkillSnapshot(params);
+    await writeSkill({ dir: skillDir, name: "demo", description: "Passive change" });
+    await completePassiveScan();
+    const unobserved = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: original.snapshot,
+    });
+    expect(unobserved.snapshot).toBe(original.snapshot);
+
+    // A separate consumer owns observation; an opt-out read must not turn it off.
+    await resolveReusableWorkspaceSkillSnapshot({ ...params, watch: true });
+    await resolveReusableWorkspaceSkillSnapshot(params);
+    const published = new Promise<void>((resolve) => {
+      const unregister = registerSkillsChangeListener((event) => {
+        if (event.workspaceDir === workspaceDir && event.reason === "watch") {
+          unregister();
+          resolve();
+        }
+      });
+    });
+    await completePassiveScan();
+    await published;
+    const observed = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: original.snapshot,
+    });
+    expect(observed.shouldRefresh).toBe(true);
+    expect(observed.snapshot.prompt).toContain("Passive change");
+  });
+
   it("reuses session snapshots after unchanged rebuilds and refreshes instruction-only edits", async () => {
     const workspaceDir = tempDirs.make("skills-content-");
     vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
     const skillDir = path.join(workspaceDir, "skills", "demo");
     await writeSkill({ dir: skillDir, name: "demo", description: "Demo", body: "Original body" });
-    const params = { workspaceDir, config: {}, watch: false };
+    const params = { workspaceDir, config };
     const first = await resolveReusableWorkspaceSkillSnapshot(params);
     const version = getSkillsSnapshotVersion(workspaceDir);
     const changed = vi.fn();
     const unregister = registerSkillsChangeListener(changed);
     try {
-      for (const event of [
-        { workspaceDir, reason: "watch" as const },
-        { workspaceDir, reason: "watch-targets" as const },
-        { reason: "manual" as const },
-      ]) {
-        bumpSkillsSnapshotVersion(event);
-        const next = await resolveReusableWorkspaceSkillSnapshot({
-          ...params,
-          existingSnapshot: first.snapshot,
-        });
-        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-        expect(next.snapshot).toBe(first.snapshot);
-        expect(next.shouldRefresh).toBe(false);
-      }
+      await completePassiveScan();
+      const next = await resolveReusableWorkspaceSkillSnapshot({
+        ...params,
+        existingSnapshot: first.snapshot,
+      });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+      expect(next.snapshot).toBe(first.snapshot);
+      expect(next.shouldRefresh).toBe(false);
       expect(changed).not.toHaveBeenCalled();
       await fs.appendFile(path.join(skillDir, "SKILL.md"), "\nNew instructions\n");
-      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      await completePassiveScan();
       const edited = await resolveReusableWorkspaceSkillSnapshot({
         ...params,
         existingSnapshot: first.snapshot,
@@ -78,11 +126,11 @@ describe("content-addressed skill refresh", () => {
     const originFile = path.join(originDir, "source-origin.json");
     await fs.mkdir(originDir);
     await fs.writeFile(originFile, JSON.stringify({ slug: "demo-original" }));
-    const params = { workspaceDir, config: {}, watch: false };
+    const params = { workspaceDir, config };
     const first = await resolveReusableWorkspaceSkillSnapshot(params);
     expect(first.snapshot.skills[0]?.skillKey).toBe("demo-original");
     await fs.writeFile(originFile, JSON.stringify({ slug: "demo-renamed" }));
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "manual" });
+    await refreshSkillsDiscovery({ workspaceDir });
     const next = await resolveReusableWorkspaceSkillSnapshot({
       ...params,
       existingSnapshot: first.snapshot,
@@ -94,47 +142,49 @@ describe("content-addressed skill refresh", () => {
     );
   });
 
-  it("reconciles only affected execution roots and preserves unrelated discovery cache entries", async () => {
+  it("keeps execution workspace content isolated while refreshing active sessions", async () => {
     const workspaceDir = tempDirs.make("skills-content-scopes-");
     vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
     const firstScope = { executionWorkspaceDir: path.join(workspaceDir, "first") };
     const secondScope = { executionWorkspaceDir: path.join(workspaceDir, "second") };
-    const firstOptions = {
+    const firstParams = {
+      workspaceDir,
+      config,
       executionWorkspaceDir: path.relative(process.cwd(), firstScope.executionWorkspaceDir),
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-      bundledSkillsDir: "",
     };
-    const secondOptions = { ...firstOptions, ...secondScope };
-    const scopes = [firstScope, secondScope];
-    for (const scope of scopes) {
+    const secondParams = { ...firstParams, ...secondScope };
+    for (const [scope, description] of [
+      [firstScope, "First scope"],
+      [secondScope, "Second scope"],
+    ] as const) {
       await writeSkill({
         dir: path.join(scope.executionWorkspaceDir, "skills", "demo"),
         name: "demo",
-        description: "Demo",
+        description,
       });
     }
-    loadWorkspaceSkills(workspaceDir, firstOptions);
-    const second = loadWorkspaceSkills(workspaceDir, secondOptions);
+    const first = await resolveReusableWorkspaceSkillSnapshot(firstParams);
+    const second = await resolveReusableWorkspaceSkillSnapshot(secondParams);
     await writeSkill({
       dir: path.join(firstScope.executionWorkspaceDir, "skills", "demo"),
       name: "demo",
       description: "Changed first scope",
     });
-    const directoryReads = vi.spyOn(fsSync, "opendirSync");
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch", sourceScopes: [firstScope] });
-    const reconciledReadCount = directoryReads.mock.calls.length;
-    expect(reconciledReadCount).toBeGreaterThan(0);
-    expect(
-      directoryReads.mock.calls.some(([dir]) =>
-        String(dir).startsWith(secondScope.executionWorkspaceDir),
-      ),
-    ).toBe(false);
-    expect(loadWorkspaceSkills(workspaceDir, firstOptions)[0]?.skill.description).toBe(
-      "Changed first scope",
+    await refreshSkillsDiscovery({ workspaceDir });
+    const refreshed = await resolveReusableWorkspaceSkillSnapshot({
+      ...firstParams,
+      existingSnapshot: first.snapshot,
+    });
+    const unrelated = await resolveReusableWorkspaceSkillSnapshot({
+      ...secondParams,
+      existingSnapshot: second.snapshot,
+    });
+    expect(refreshed.snapshot.prompt).toContain("Changed first scope");
+    expect(unrelated.snapshot.prompt).toContain("Second scope");
+    expect(unrelated.snapshot.prompt).not.toContain("Changed first scope");
+    expect(unrelated.snapshot.resolvedSkills?.[0]?.filePath).toBe(
+      path.join(secondScope.executionWorkspaceDir, "skills", "demo", "SKILL.md"),
     );
-    const reused = loadWorkspaceSkills(workspaceDir, secondOptions);
-    expect(reused[0]).toBe(second[0]);
-    expect(directoryReads).toHaveBeenCalledTimes(reconciledReadCount);
   });
 
   it("uses incoming roots before deciding whether a warm session can be reused", async () => {
@@ -144,23 +194,28 @@ describe("content-addressed skill refresh", () => {
     const secondRoot = path.join(workspaceDir, "second");
     await writeSkill({ dir: path.join(firstRoot, "demo"), name: "demo", description: "Before" });
     await writeSkill({ dir: path.join(secondRoot, "demo"), name: "demo", description: "After" });
-    const firstConfig = { skills: { load: { extraDirs: [firstRoot] } } };
-    const nextConfig = { skills: { load: { extraDirs: [secondRoot] } } };
+    const firstConfig = {
+      ...config,
+      agents: { defaults: { workspace: workspaceDir } },
+      skills: { load: { extraDirs: [firstRoot] } },
+    };
+    const nextConfig = {
+      ...config,
+      agents: { defaults: { workspace: workspaceDir } },
+      skills: { load: { extraDirs: [secondRoot] } },
+    };
     const first = await resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
       config: firstConfig,
-      watch: false,
     });
-    bumpSkillsSnapshotVersion({
+    await refreshSkillsDiscovery({
       workspaceDir,
-      reason: "watch-targets",
-      sourceScopes: [{}],
-      refreshInputs: { sourceScope: {}, config: nextConfig },
+      reason: "config-change",
+      config: nextConfig,
     });
     const next = await resolveReusableWorkspaceSkillSnapshot({
       workspaceDir,
       config: nextConfig,
-      watch: false,
       existingSnapshot: first.snapshot,
     });
     expect(next.shouldRefresh).toBe(true);
@@ -168,37 +223,24 @@ describe("content-addressed skill refresh", () => {
     expect(next.snapshot.prompt).not.toContain("Before");
   });
 
-  it("keeps retired worktrees out of global reconciliation and verifies them on reacquisition", async () => {
-    const workspaceDir = tempDirs.make("skills-content-retired-");
+  it("refreshes an existing session after its workspace is replaced", async () => {
+    const workspaceDir = tempDirs.make("skills-content-replaced-");
     vi.stubEnv("OPENCLAW_STATE_DIR", workspaceDir);
-    const executionWorkspaceDir = path.join(workspaceDir, "retired");
-    const skillDir = path.join(executionWorkspaceDir, "skills", "retired");
-    await writeSkill({ dir: skillDir, name: "retired", description: "Retired" });
-    const options = {
-      executionWorkspaceDir,
-      bundledSkillsDir: "",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
-    };
-    loadWorkspaceSkills(workspaceDir, options);
-    const version = getSkillsSnapshotVersion(workspaceDir);
-    suspendSkillsSnapshotSources(workspaceDir, { executionWorkspaceDir });
-    await fs.rm(executionWorkspaceDir, { recursive: true });
-    bumpSkillsSnapshotVersion({ reason: "workshop" });
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-    bumpSkillsSnapshotVersion({
-      workspaceDir,
-      reason: "watch-targets",
-      refreshInputs: { sourceScope: {} },
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    await writeSkill({ dir: skillDir, name: "demo", description: "Original workspace" });
+    const params = { workspaceDir, config };
+    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    await fs.rename(workspaceDir, path.join(tempDirs.make("skills-content-old-"), "workspace"));
+    await writeSkill({ dir: skillDir, name: "demo", description: "Replacement workspace" });
+    await completePassiveScan();
+    const next = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: first.snapshot,
     });
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
-    bumpSkillsSnapshotVersion({
-      workspaceDir,
-      reason: "watch-targets",
-      sourceScopes: [{ executionWorkspaceDir }],
-      refreshInputs: { sourceScope: { executionWorkspaceDir } },
-    });
-    expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
-    expect(loadWorkspaceSkills(workspaceDir, options)).toEqual([]);
+    expect(next.shouldRefresh).toBe(true);
+    expect(next.snapshot.prompt).toContain("Replacement workspace");
+    expect(next.snapshot.prompt).not.toContain("Original workspace");
+    expect(next.snapshot.resolvedSkills?.[0]?.filePath).toBe(path.join(skillDir, "SKILL.md"));
   });
 
   it("ignores losing skill edits but refreshes when the precedence winner disappears", async () => {
@@ -209,19 +251,32 @@ describe("content-addressed skill refresh", () => {
     const loser = path.join(executionWorkspaceDir, "skills", "demo");
     await writeSkill({ dir: winner, name: "demo", description: "Winner" });
     await writeSkill({ dir: loser, name: "demo", description: "Loser" });
-    const options = {
+    const params = {
+      workspaceDir,
+      config,
       executionWorkspaceDir,
-      bundledSkillsDir: "",
-      managedSkillsDir: path.join(workspaceDir, ".managed"),
     };
-    loadWorkspaceSkills(workspaceDir, options);
+    const first = await resolveReusableWorkspaceSkillSnapshot(params);
+    expect(first.snapshot.prompt).toContain("Winner");
     const version = getSkillsSnapshotVersion(workspaceDir);
     await fs.appendFile(path.join(loser, "SKILL.md"), "\nChanged loser\n");
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await completePassiveScan();
+    const unchanged = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: first.snapshot,
+    });
     expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+    expect(unchanged.snapshot).toBe(first.snapshot);
+    expect(unchanged.shouldRefresh).toBe(false);
     await fs.unlink(path.join(winner, "SKILL.md"));
-    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+    await completePassiveScan();
+    const fallback = await resolveReusableWorkspaceSkillSnapshot({
+      ...params,
+      existingSnapshot: first.snapshot,
+    });
     expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
-    expect(loadWorkspaceSkills(workspaceDir, options)[0]?.skill.description).toBe("Loser");
+    expect(fallback.shouldRefresh).toBe(true);
+    expect(fallback.snapshot.prompt).toContain("Loser");
+    expect(fallback.snapshot.resolvedSkills?.[0]?.filePath).toBe(path.join(loser, "SKILL.md"));
   });
 });

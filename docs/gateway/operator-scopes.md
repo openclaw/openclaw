@@ -93,8 +93,11 @@ access and the caller to have current permission to start a turn there, includin
 ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
 `canvas.document.preview` also accepts session read access: it returns the
 caller's HTML and isolated sandbox location without reading session data.
-Stored Canvas documents still require broader read access through
-`canvas.document.view`.
+For saved inline widgets, `canvas.document.view` also accepts session read access
+with `sessionKey`: the Gateway verifies a successful saved `show_widget` result
+for that document in a conversation the caller can currently read. Inaccessible
+conversations and unbound documents remain denied. Broad `operator.read` callers
+retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,
@@ -106,9 +109,14 @@ Reconnecting rechecks current permission before replaying a Stop for its origina
 Own-work methods, including message sending, ordinary session creation,
 recovery, and forks, accept `operator.sessions.write` where their parameters
 do not require administrator access. Session ownership, current authority,
-agent access, and runtime and sandbox requirements still apply. The
-`artifacts.list`, `artifacts.get`, and `artifacts.download` APIs require
-the broader `operator.read` scope.
+agent access, and runtime and sandbox requirements still apply.
+
+Session readers can also use `artifacts.list`, `artifacts.get`, and
+`artifacts.download` for artifacts in a conversation they can currently read.
+Both session-key and run-ID queries retain the selected session's visibility,
+identity, and lifecycle checks. An artifact ID alone does not grant access to
+another conversation's files; reads and downloads recheck access before returning
+content.
 
 Hidden native sub-agents started through `sessions_spawn` use the initiating
 person's session-write authority for the exact owned child and its private
@@ -344,7 +352,7 @@ policy, even after role changes. Recovery and branching requested by another
 person use that person's own role rather than the source session's policy.
 
 Required creation provenance is immutable. Role changes, sharing, participation,
-`sessions.patch`, whole-entry replacement, legacy imports, and canonical-key
+`sessions.patch`, whole-entry replacement, legacy imports, and normalized-key
 repair cannot remove or replace an existing required stamp. Blocked persisted
 overwrites emit a `session-sqlite` warning. Inspect them with
 [`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
@@ -366,6 +374,23 @@ Git author. Effective `"shared"` scope refuses this injection and logs a warning
 naming the agent. `openclaw security audit` warns for each opted-in agent. See
 [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
 credential boundary and backend requirements.
+
+A required sandbox contains the session's exec and file tools. It does not
+contain these paths, so configure them before admitting people you do not trust
+with the Gateway host:
+
+- Code Mode under the default `node` executor runs cells in the Gateway process.
+  Use the [QuickJS executor](/tools/code-mode/executors#choose-an-executor).
+- [CLI backends](/gateway/cli-backends) such as Claude CLI own their native
+  tools and sandboxing on the Gateway host. Exclude them with the role's
+  `modelPolicy`.
+- `worker-turn` cloud workers receive the agent's shared GitHub identity
+  regardless of `allowInSandbox`. Keep restricted people off worker profiles.
+- `sessions.others: "view"` exposes complete shared transcripts, including tool
+  output, from every agent. Keep sensitive work in draft sessions.
+- Gateway-brokered GitHub publication uses the shared account. See
+  [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)
+  for what pull request workflows can run.
 
 The role's `scopes` list caps scopes granted through connection auth, identity
 grants, pairing, scope upgrades, and authenticated trusted-proxy HTTP requests.
@@ -392,6 +417,16 @@ cookie. Plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
 Include `operator.admin` explicitly only when that role should retain
 administrative connection authority.
+
+[Principal-bound remote ingress](/plugins/sdk-gateway-ingress) uses a separate
+plugin-approved ceiling intersected with the bound person's current role.
+**Read + write** uses `operator.read` and `operator.write`; **Full** uses
+`operator.admin`, whose implications are still limited by the role. Thus Full
+for a read-only role yields read access, while an empty role or grant remains
+empty. The same exact effective scopes apply to the remote UI and grant-bound
+Gateway RPC: neither identity grants nor an admin plugin caller adds authority.
+Role or profile changes fence existing delegated work. Ingress never issues a
+reusable device token, and device scope upgrades cannot widen its grant ceiling.
 
 An administrator-attested [channel identity link](/concepts/user-model#channel-identity-links)
 also lets a sender inherit channel-owner authority from their effective role's
@@ -454,7 +489,7 @@ Identity grants apply only to `operator`-role connections. `node`-role connectio
 
 Each Gateway RPC has a least-privilege method scope that decides whether a
 request reaches its handler. Params-aware methods derive that scope before
-dispatch so authorization failures have one canonical structured response:
+dispatch so authorization failures have one standard structured response:
 
 - `agent` needs `operator.write` for ordinary turns and `operator.admin` for
   `/new` or `/reset` session lifecycle commands.
@@ -470,7 +505,14 @@ dispatch so authorization failures have one canonical structured response:
   require an exact match, or `operator.admin`.
 - `sessions.create` accepts `operator.sessions.write` for ordinary own-session
   creation, including a `projectId`, or the broader `operator.write` scope.
-  Incognito sessions and any `execNode` request require `operator.admin`.
+  Existing device folders (`deviceFolder: { deviceId, path }`) require the broader
+  `operator.write` scope, a connected session host advertising folder support, and
+  node-local consent through `nodeHost.workerRuns.folders`. They do not grant
+  arbitrary node execution, but the selected folder becomes the session's
+  workspace root. If you rely on `tools.fs.workspaceOnly` or exec restrictions to
+  contain `operator.write` sessions, also set `nodeHost.workerRuns.folders` on the
+  device. Incognito sessions and any `execNode` request require
+  `operator.admin`.
   For non-admin callers, the handler limits `cwd` to configured agent
   workspaces. `projectId` cannot be combined with `cwd` or `execNode`.
 - `environments.list` needs `operator.read` for plain inventory and

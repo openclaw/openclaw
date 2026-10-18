@@ -1,7 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionToolsVisibility } from "../../plugin-sdk/session-visibility.js";
 import {
@@ -35,6 +38,7 @@ const sessions = [
   { key: requesterKey, agentId: "main", sessionId: "requester-session" },
   { key: subagentRequesterKey, agentId: "main", sessionId: "subagent-requester-session" },
   { key: workerKey, agentId: "worker", sessionId: workerSessionId, label: "delegation-worker" },
+  { key: "global", agentId: "worker", sessionId: "raw-worker-session", label: "raw-worker" },
   { key: "agent:stranger:main", agentId: "stranger", sessionId: "stranger-session" },
   {
     key: nativeChildKey,
@@ -121,6 +125,18 @@ describe("sessions_send directed policy at the tool boundary", () => {
       await replaceSessionEntry(
         { agentId, sessionKey: key },
         { sessionId, updatedAt: 1, ...entry },
+      );
+      await appendTranscriptMessage(
+        { agentId, sessionKey: key, sessionId },
+        {
+          message: {
+            role: "assistant",
+            __openclaw: { runId },
+            phase: "final_answer",
+            stopReason: "stop",
+            content: [{ type: "text", text: replyText }],
+          },
+        },
       );
     }
   });
@@ -224,7 +240,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
-    expect(gatewayMethods()).not.toContain("chat.history");
   });
 
   afterAll(async () => {
@@ -313,6 +328,22 @@ describe("sessions_send directed policy at the tool boundary", () => {
     expect(watch).toHaveBeenCalledOnce();
   });
 
+  it("reports a raw-target watch refusal without misreporting an accepted send", async () => {
+    const result = await send(configFor({ send: ["worker"], visibility: "all" }), {
+      label: "raw-worker",
+      agentId: "worker",
+      watch: true,
+    });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      reply: replyText,
+      watched: false,
+      watchError: expect.stringContaining("agent-qualified"),
+    });
+    expect(gatewayMethods()).toContain("agent");
+    expect(gatewayMethods()).toContain("agent.wait");
+  });
+
   it.each([requesterKey, subagentRequesterKey])(
     "keeps sandbox spawned-only for requester %s",
     async (agentSessionKey) => {
@@ -392,5 +423,6 @@ describe("sessions_send directed policy at the tool boundary", () => {
     ).rejects.toThrow("visibility");
     expectNoDispatch();
     expect(gatewayMethods()).not.toContain("sessions.search");
+    expect(gatewayMethods()).not.toContain("chat.history");
   });
 });

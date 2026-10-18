@@ -7,9 +7,10 @@ export function extractSqliteTableSchema(
   options: { endMarker?: string; includeEndMarker?: boolean; errorMessage?: string } = {},
 ): string {
   const start = schema.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
-  const endMarker = options.endMarker ?? "\n) STRICT;";
-  const end = schema.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
+  const endMarker =
+    options.endMarker ?? schema.slice(start).match(/\n\) STRICT(?:, WITHOUT ROWID)?;/u)?.[0];
+  const end = endMarker ? schema.indexOf(endMarker, start) : -1;
+  if (start < 0 || !endMarker || end < start) {
     throw new Error(options.errorMessage ?? `Canonical schema markers are missing for ${table}`);
   }
   return schema.slice(start, end + (options.includeEndMarker === false ? 0 : endMarker.length));
@@ -62,6 +63,11 @@ export function normalizeSqlIdentifier(identifier: string): string {
     return identifier.slice(1, -1).toLowerCase();
   }
   return identifier.toLowerCase();
+}
+
+/** SQLite folds only ASCII letters when comparing identifiers. */
+export function foldSqliteIdentifierCase(identifier: string): string {
+  return identifier.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 export function normalizeSchemaSql(sql: string | null): string | null {

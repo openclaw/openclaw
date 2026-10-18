@@ -19,8 +19,11 @@ import {
   readUserProfileGitHubCommand,
   resolveUserProfileGitHubAttribution,
 } from "./user-profile-github-identity.js";
-import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
-import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
+import {
+  getUserProfileListItem,
+  readUserProfileSnapshotSync,
+} from "./user-profile-list-item.test-support.js";
+import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   readUserProfileDirectory,
   resolveCanonicalCachedGitHubIdentity,
@@ -28,15 +31,15 @@ import {
 import { linkEmail, setAvatar, syncGitHubIdentity } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
-import {
-  ensureProfileForEmail,
-  ensureProfileForTailscaleIdentity,
-  getUserProfileDisplay,
-} from "./user-profiles.js";
+import { ensureProfileForEmail, ensureProfileForTailscaleIdentity } from "./user-profiles.js";
 import { userProfileOperations } from "./user-profiles.worker.js";
 
+const catalogReleases: Array<() => void> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(async () => {
+    for (const release of catalogReleases.splice(0)) {
+      release();
+    }
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
@@ -171,6 +174,48 @@ describe("multi-account people", () => {
     ).toBeUndefined();
   });
 
+  it("reads public credit for merged aliases in one snapshot statement", () => {
+    const options = stateOptions();
+    const person = syncEmailGitHubProfile(
+      { accountId: 71, canonicalLogin: "person", email: "person@example.test" },
+      options,
+    );
+    const alias = ensureProfileForEmail("alias@example.test", options);
+    const unverified = ensureProfileForEmail("unverified@example.test", options);
+    linkEmail("alias@example.test", person.id, options);
+    setUserPreferences(person.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: true }, options);
+    const { db } = openOpenClawStateDatabase(options);
+    const reads = [
+      vi.spyOn(StatementSync.prototype, "all"),
+      vi.spyOn(StatementSync.prototype, "iterate"),
+      vi.spyOn(StatementSync.prototype, "get"),
+    ];
+    const transactions = vi.spyOn(db, "exec");
+    try {
+      expect(
+        readUserProfileGitHubCommand(db, {
+          type: "userProfiles.githubAttribution.resolve",
+          profileIds: [person.id, alias.id, alias.id, unverified.id, "missing"],
+        }),
+      ).toEqual({
+        type: "userProfiles.githubAttribution.resolve",
+        identities: new Map([
+          [person.id, { accountId: 71, login: "person" }],
+          [alias.id, { accountId: 71, login: "person" }],
+          [unverified.id, null],
+        ]),
+        canonicalProfileIds: expect.arrayContaining([person.id, unverified.id]),
+      });
+      expect(reads.reduce((count, read) => count + read.mock.calls.length, 0)).toBe(1);
+      expect(transactions).not.toHaveBeenCalled();
+    } finally {
+      for (const read of reads) {
+        read.mockRestore();
+      }
+      transactions.mockRestore();
+    }
+  });
+
   it("adds the nullable primary column to existing profiles without advancing the schema", async () => {
     const options = stateOptions();
     let db = openOpenClawStateDatabase(options).db;
@@ -275,6 +320,7 @@ describe("multi-account people", () => {
     linkEmail(secondary.email, person.id, options);
     expect(beforeMerge.isCurrent()).toBe(false);
     closeOpenClawStateDatabaseForTest();
+    catalogReleases.push((await prepareUserProfileCatalog(options)).release);
     for (const account of [secondary, primary, secondary]) {
       expect(syncEmailGitHubProfile(account, options)).toMatchObject({
         id: person.id,
@@ -375,7 +421,12 @@ describe("multi-account people", () => {
       await setCanonicalUserPreferences(work.id, { [GIT_COAUTHOR_PREFERENCE_KEY]: false }, options),
     ).toEqual({ ok: true, value: { profileId: person.id } });
     expect(preparedCredit.isCurrent()).toBe(false);
-    expect((await resolveUserProfileGitHubAttribution([work.id], options)).get(work.id)).toBeNull();
+    expect(await resolveUserProfileGitHubAttribution([person.id, work.id], options)).toEqual(
+      new Map([
+        [person.id, null],
+        [work.id, null],
+      ]),
+    );
     expect(
       openOpenClawStateDatabase(options).db.prepare("PRAGMA user_version").get()?.user_version,
     ).toBe(version);

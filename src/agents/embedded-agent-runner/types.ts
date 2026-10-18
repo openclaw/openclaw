@@ -19,7 +19,7 @@ import type { McpConnectAction } from "../mcp-connect-action.js";
 import type { McpAppChannelView } from "../mcp-ui-resource.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
-import type { ReplyDeliveryState } from "../reply-completion.js";
+import type { ReplyDeliveryState, ReplyExpectation } from "../reply-completion.js";
 import type { AgentRuntimeCredentialSource } from "../runtime-plan/types.js";
 import type { NormalizedUsage } from "../usage.js";
 
@@ -38,8 +38,6 @@ export type BlockReplyFlushContext =
       reason: "pre_compaction";
       attemptAccepted: boolean;
     };
-
-type EmbeddedAgentUsage = Omit<NormalizedUsage, "contextUsage">;
 
 export type EmbeddedAgentMeta = {
   sessionId: string;
@@ -77,9 +75,10 @@ export type EmbeddedAgentMeta = {
    * and completion tokens that are useful for billing but noisy as live context.
    */
   promptTokens?: number;
-  usage?: EmbeddedAgentUsage;
-  /** Terminal cumulative usage reserved for turn-level diagnostics. */
-  diagnosticUsage?: EmbeddedAgentUsage;
+  /** Billing totals may span candidates; unavailable context prevents treating them as a snapshot. */
+  usage?: NormalizedUsage;
+  /** Terminal cumulative usage for turn-level diagnostics and persisted CLI transcript accounting. */
+  diagnosticUsage?: NormalizedUsage;
   /**
    * Usage from the last individual API call (not accumulated across tool-use
    * loops or compaction retries). Used for context-window utilization display
@@ -166,6 +165,13 @@ export type EmbeddedAgentRunMeta = {
   finalPromptText?: string;
   finalAssistantVisibleText?: string;
   finalAssistantRawText?: string;
+  /**
+   * Raw text of only the model's own latest message; "" when that message had
+   * no final text (empty, or it ended in a tool call). finalAssistantRawText can
+   * be cumulative (CLI) or runner-substituted earlier text, so diagnostics prefer
+   * this field. Unset when the runtime exposes no message (assistantTexts only).
+   */
+  finalAssistantMessageRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
   timeoutPhase?: AgentRunTimeoutPhase;
@@ -176,10 +182,12 @@ export type EmbeddedAgentRunMeta = {
     | "idle_timeout_circuit_breaker"
     | "provider_review_continuation";
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
-  terminalReplyKind?: "silent-empty";
   /** An exact, successfully settled tool batch intentionally completed the turn without a reply. */
   intentionalTerminalCompletion?: "tool-batch";
   terminalReply?: AgentRunTerminalReplySnapshot;
+  terminalReplyExpectation?: ReplyExpectation;
+  /** Retain a failed internal result without a user-facing retry notice. */
+  suppressErrorNotice?: boolean;
   yielded?: boolean;
   /** Explicit user-facing waiting status supplied to sessions_yield. */
   yieldAcknowledgment?: string;
@@ -230,6 +238,7 @@ export type EmbeddedAgentRunMeta = {
   requestShaping?: {
     authMode?: string;
     thinking?: string;
+    thinkingClamp?: string;
     reasoning?: string;
     verbose?: string;
     trace?: string;
@@ -263,6 +272,7 @@ export type EmbeddedAgentRunResult = {
     mediaUrls?: string[];
     replyToId?: string;
     isError?: boolean;
+    isStatusNotice?: boolean;
     isReasoning?: boolean;
     /** Marks pre-tool commentary (💬) — a display lane, suppressed unless the channel opts in. */
     isCommentary?: boolean;

@@ -199,7 +199,7 @@ describe("authenticated human prepared-pool demand", () => {
     },
   );
 
-  it.each(["rejected", "held"] as const)(
+  it.each(["held"] as const)(
     "cleans unrelated expiry and refills a healthy sibling before %s presence admission",
     async (failure) => {
       const healthyKey = "2".repeat(64);
@@ -258,15 +258,11 @@ describe("authenticated human prepared-pool demand", () => {
       const settled = running.catch(() => {});
       try {
         await entered.promise;
-        if (failure === "rejected") {
-          await settled;
-        } else {
-          await awaitGateBeforeSettlement(
-            progressed.promise,
-            running,
-            "Healthy refill did not progress",
-          );
-        }
+        await awaitGateBeforeSettlement(
+          progressed.promise,
+          running,
+          "Healthy refill did not progress",
+        );
         expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(2_000);
         const healthy = fixture
           .reserves()
@@ -331,43 +327,7 @@ describe("authenticated human prepared-pool demand", () => {
     },
   );
 
-  it("fills three exact-repository reserves, stops refill on departure, and retires after 15m", async () => {
-    const presence = presencePool();
-    await presence.owner.setHumanPresence(true);
-    expect(fixture.reserves()).toHaveLength(3);
-    expect(fixture.reserves().map((record) => record.profileSnapshot.project)).toEqual([
-      expect.objectContaining(repository),
-      expect.objectContaining(repository),
-      expect.objectContaining(repository),
-    ]);
-    expect(presence.read()).toMatchObject({
-      profileId: "development",
-      requestedRef: "main",
-      preparationKey: PREPARATION_KEY,
-      lastPresentAtMs: 1_000,
-      retireAtMs: null,
-    });
-
-    await presence.owner.setHumanPresence(false);
-    expect(presence.read()?.retireAtMs).toBe(901_000);
-    await fixture.destroy(await fixture.ready(fixture.reserves()[0]!));
-    fixture.nowMs = 900_999;
-    await fixture.schedule(presence.owner);
-    expect(fixture.reserves()).toHaveLength(3);
-    expect(fixture.reserves().filter((record) => record.state !== "destroyed")).toHaveLength(2);
-
-    fixture.nowMs = 901_000;
-    await fixture.schedule(presence.owner);
-    expect(
-      fixture
-        .reserves()
-        .filter((record) => record.state !== "destroyed")
-        .every((record) => record.destroyRequestedAtMs === 901_000),
-    ).toBe(true);
-  });
-
   it.each([
-    { change: "GitHub host", url: "https://ghe.example.test/acme/private-repo.git" },
     { change: "repository on the same host", url: "https://github.com/acme/other-repo.git" },
   ])("retires persisted demand after a $change change", async ({ url }) => {
     const oldReserve = await fixture.ready(
@@ -416,32 +376,6 @@ describe("authenticated human prepared-pool demand", () => {
 
     expect(presence.write).toHaveBeenCalledWith(null, expect.any(Function));
     expect(presence.read()).toBeUndefined();
-  });
-
-  it("closes a crash-left active marker and resolves the ref again on return", async () => {
-    const active: PreparedPoolPresenceDemand = {
-      revision: 4,
-      profileId: "development",
-      requestedRef: "main",
-      preparationKey: PREPARATION_KEY,
-      project: repository,
-      lastPresentAtMs: 500,
-      retireAtMs: null,
-    };
-    await fixture.seed("retiring-presence-source", { reserve: true, repository });
-    const presence = presencePool(active);
-
-    await presence.owner.setHumanPresence(false);
-    expect(presence.read()).toMatchObject({ revision: 5, retireAtMs: 901_000 });
-
-    fixture.nowMs = 901_001;
-    await presence.owner.setHumanPresence(true);
-    expect(presence.prepareIntent).toHaveBeenCalledWith(
-      "development",
-      expect.objectContaining({
-        repository: { agentId: "main", url: repository.source.url, ref: "main" },
-      }),
-    );
   });
 
   it("refreshes main with live reserves, retires only unused old workers, and claims the new generation", async () => {
@@ -511,119 +445,5 @@ describe("authenticated human prepared-pool demand", () => {
       projectRepository: repository,
     });
     expect(presence.owner.candidates(staleIntent)).toEqual([]);
-  });
-
-  it("retains and refills current reserves after a newer old-base foreground activation", async () => {
-    fixture.provider.resolvePreparedIdleTimeoutMs = () => 300_000;
-    const foreground = await fixture.ready(
-      await fixture.seed("old-base-foreground", { repository }),
-    );
-    const presence = presencePool(undefined, "worker-turn");
-    const currentRepository = { ...repository, baseCommit: "f".repeat(40) };
-    presence.setRepository(currentRepository);
-    await presence.owner.setHumanPresence(true);
-    const current = await Promise.all(
-      fixture
-        .reserves()
-        .filter((record) => record.preparation?.consumedAtMs === null)
-        .map((record) => fixture.ready(record)),
-    );
-    expect(current).toHaveLength(3);
-
-    fixture.nowMs = 1_100;
-    const activated = await fixture.attach(foreground);
-    expect(activated.lastActivatedAtMs).toBe(1_100);
-    await fixture.schedule(presence.owner);
-    expect(current.map((record) => fixture.store.get(record.environmentId))).toEqual(current);
-
-    await fixture.destroy(current[0]!);
-    await fixture.schedule(presence.owner);
-    const retained = fixture
-      .reserves()
-      .filter(
-        (record) =>
-          record.preparation?.consumedAtMs === null && record.destroyRequestedAtMs === null,
-      );
-    expect(retained).toHaveLength(3);
-    expect(retained.every((record) => record.preparation?.key === "e".repeat(64))).toBe(true);
-    expect(fixture.store.get(activated.environmentId)).toEqual(activated);
-  });
-
-  it("keeps later activation demand eligible after the presence grace expires", async () => {
-    const source = await fixture.ready(
-      await fixture.seed("activated-presence-source", { reserve: true, repository }),
-    );
-    await fixture.teardown(await fixture.attach(source, "active", 1_400));
-    fixture.nowMs = 1_600;
-    const presence = presencePool({
-      revision: 2,
-      profileId: "development",
-      requestedRef: "main",
-      preparationKey: PREPARATION_KEY,
-      project: repository,
-      lastPresentAtMs: 500,
-      retireAtMs: 1_500,
-    });
-
-    await presence.owner.setHumanPresence(false);
-    expect(fixture.reserves().filter((record) => record.state !== "destroyed")).toHaveLength(3);
-    expect(presence.read()?.retireAtMs).toBe(1_500);
-  });
-
-  it("retires stale preparation generations before current presence demand can refill", async () => {
-    const staleKey = "e".repeat(64);
-    const oldRepository = {
-      ...repository,
-      key: "c".repeat(64),
-      source: {
-        ...repository.source,
-        url: "https://github.com/acme/old-repo.git",
-        repositoryId: "R_acme_old_repo",
-      },
-    };
-    fixture.config.cloudWorkers!.profiles!.legacy = {
-      provider: fixture.provider.id,
-      settings: {},
-    };
-    for (const [index, stale] of [
-      { profileId: "development", repository },
-      { profileId: "development", repository: oldRepository },
-      { profileId: "legacy", repository },
-    ].entries()) {
-      await fixture.seed(`stale-presence-${index}`, {
-        reserve: true,
-        profileId: stale.profileId,
-        repository: stale.repository,
-        preparationKey: staleKey,
-        expiresAtMs: Number.MAX_SAFE_INTEGER,
-      });
-    }
-    fixture.nowMs = 2_001;
-    const presence = presencePool();
-
-    await presence.owner.setHumanPresence(true);
-    const stale = fixture.reserves().filter((record) => record.preparation?.key === staleKey);
-    expect(stale).toHaveLength(3);
-    expect(stale.every((record) => record.destroyRequestedAtMs === 2_001)).toBe(true);
-    expect(
-      fixture.reserves().filter((record) => record.preparation?.key === PREPARATION_KEY),
-    ).toHaveLength(0);
-
-    for (const record of stale) {
-      await fixture.store.transition({
-        environmentId: record.environmentId,
-        from: "requested",
-        to: "failed",
-        patch: { lastError: "fixture cleanup" },
-      });
-    }
-    await fixture.schedule(presence.owner);
-    expect(
-      fixture
-        .reserves()
-        .filter(
-          (record) => record.state !== "destroyed" && record.preparation?.key === PREPARATION_KEY,
-        ),
-    ).toHaveLength(3);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { getUserProfileListItem } from "../state/user-profile-list-item.test-support.js";
 import { linkEmail } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -10,6 +10,11 @@ import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "./server-methods.js";
+import {
+  createRequestGate,
+  expectRejected,
+  expectRejectedOnce,
+} from "./server-methods.request-gate.test-support.js";
 import { createLazyCoreHandlers } from "./server-methods/lazy-core-handlers.js";
 import { readGatewayRequestMutationAuthority } from "./server-methods/session-mutation-guards.js";
 import { sessionMutationHandlers } from "./server-methods/sessions-mutations.js";
@@ -17,13 +22,18 @@ import type { GatewayRequestHandler } from "./server-methods/types.js";
 import * as sessionGroupCatalog from "./session-group-catalog.js";
 import { talkModeHandlers } from "./talk/handlers/mode.js";
 
-function createPendingProfileClient() {
+function profileIdentity(profile: { id: string; updatedAt: number }) {
+  const { id: profileId, updatedAt } = profile;
+  return { profileId, displayName: null, hasAvatar: false, updatedAt };
+}
+
+function createPendingProfileClient(scopes = ["operator.admin"]) {
   return {
     connId: "conn-pending-profile",
     authenticatedUserId: "mutable-login@github",
     connect: {
       role: "operator" as const,
-      scopes: ["operator.admin"],
+      scopes,
       client: { id: "test", version: "1", platform: "test", mode: "test" },
       minProtocol: 1,
       maxProtocol: 1,
@@ -31,39 +41,54 @@ function createPendingProfileClient() {
   } as NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
 }
 
-async function dispatchPendingProfileMethod(params: {
-  client: NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>;
-  handler?: GatewayRequestHandler;
-  method: string;
-  requestParams?: unknown;
-  methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
-  expectedProfileId?: string;
-}) {
-  const respond = vi.fn();
+async function dispatchProfile(
+  client: NonNullable<Parameters<typeof handleGatewayRequest>[0]["client"]>,
+  method: string,
+  params: {
+    handler?: GatewayRequestHandler;
+    requestParams?: unknown;
+    methodRegistry?: ReturnType<typeof createGatewayMethodRegistry>;
+    expectedProfileId?: string;
+    context?: Parameters<typeof handleGatewayRequest>[0]["context"];
+    respond?: Parameters<typeof handleGatewayRequest>[0]["respond"];
+    webchat?: boolean;
+  } = {},
+) {
+  const respond = params.respond ?? vi.fn();
   await handleGatewayRequest({
     req: {
       type: "req",
-      id: `req-${params.method}`,
-      method: params.method,
+      id: `req-${method}`,
+      method,
       params: params.requestParams ?? {},
       ...(params.expectedProfileId !== undefined
         ? { expectedProfileId: params.expectedProfileId }
         : {}),
     },
     respond,
-    client: params.client,
-    isWebchatConnect: () => false,
-    context: {
-      logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({}),
-    } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
+    client,
+    isWebchatConnect: () => params.webchat ?? false,
+    context:
+      params.context ??
+      ({
+        logGateway: { warn: vi.fn() },
+        getRuntimeConfig: () => ({}),
+      } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"]),
     ...(params.methodRegistry
       ? { methodRegistry: params.methodRegistry }
       : params.handler
-        ? { extraHandlers: { [params.method]: params.handler } }
+        ? { extraHandlers: { [method]: params.handler } }
         : {}),
   });
   return respond;
+}
+
+function selectedProfile(email: string) {
+  const source = ensureProfileForEmail(email);
+  const target = ensureProfileForEmail(`merged-${email}`);
+  const client = createPendingProfileClient();
+  client.authenticatedUserProfile = profileIdentity(source);
+  return { source, target, client };
 }
 
 describe("Gateway pending-profile authorization", () => {
@@ -81,21 +106,14 @@ describe("Gateway pending-profile authorization", () => {
     async (method, initial, current) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const profile = ensureProfileForEmail("catalog-reader@example.test");
-        const client = createPendingProfileClient();
-        client.connect.scopes = [initial];
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        const client = createPendingProfileClient([initial]);
+        using gate = createRequestGate();
         const admittedScopes: Array<string | undefined> = [];
         const handler = vi.fn<GatewayRequestHandler>((options) => {
           admittedScopes.push(readGatewayRequestMutationAuthority(options).sessionScope);
           options.respond(true, { ok: true });
         });
-        const identity = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
+        const identity = profileIdentity(profile);
         const groupRead = method === "sessions.groups.list";
         const ensureCatalog = sessionGroupCatalog.ensureSessionGroupCatalog;
         using catalogPreparation = groupRead
@@ -103,31 +121,26 @@ describe("Gateway pending-profile authorization", () => {
               .spyOn(sessionGroupCatalog, "ensureSessionGroupCatalog")
               .mockImplementation(async (env) => {
                 await ensureCatalog(env);
-                entered.resolve();
-                await release.promise;
+                await gate.pause();
               })
           : undefined;
         if (groupRead) {
           client.authenticatedUserProfile = identity;
         }
         client.authenticatedGitHubIdentitySync = vi.fn(async () => {
-          entered.resolve();
-          await release.promise;
+          await gate.pause();
           client.authenticatedUserProfile = identity;
           return { profileId: profile.id, updatedAt: profile.updatedAt };
         });
-        const pending = dispatchPendingProfileMethod({ client, method, handler });
-        try {
-          await Promise.race([entered.promise, pending]);
+        const pending = dispatchProfile(client, method, { handler });
+        await gate.during(pending, () => {
           expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(groupRead ? 0 : 1);
           if (groupRead) {
             expect(catalogPreparation).toHaveBeenCalledOnce();
           }
           expect(handler).not.toHaveBeenCalled();
           client.connect.scopes = [current];
-        } finally {
-          release.resolve();
-        }
+        });
         const response = await pending;
         if (initial === current) {
           expect(response).toHaveBeenCalledExactlyOnceWith(true, { ok: true });
@@ -136,33 +149,24 @@ describe("Gateway pending-profile authorization", () => {
           ]);
         } else {
           expect(handler).not.toHaveBeenCalled();
-          expect(response).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              code: "FORBIDDEN",
-              message: "Gateway requester authority changed",
-            }),
-          );
+          expectRejectedOnce(response, {
+            code: "FORBIDDEN",
+            message: "Gateway requester authority changed",
+          });
         }
       });
     },
   );
 
   it("requires a verified person only when the request uses narrow session admission", async () => {
-    const client = createPendingProfileClient();
+    const client = createPendingProfileClient([SESSION_READ_SCOPE]);
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { sessions: [] }));
-    client.connect.scopes = ["operator.sessions.read"];
-    const denied = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
-    expect(denied).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN" }),
-    );
+    const denied = await dispatchProfile(client, "sessions.list", { handler });
+    expectRejected(denied, "FORBIDDEN");
     expect(handler).not.toHaveBeenCalled();
 
     client.connect.scopes = ["operator.read"];
-    const broad = await dispatchPendingProfileMethod({ client, method: "sessions.list", handler });
+    const broad = await dispatchProfile(client, "sessions.list", { handler });
     expect(broad).toHaveBeenCalledWith(true, { sessions: [] });
     expect(handler).toHaveBeenCalledOnce();
   });
@@ -171,66 +175,43 @@ describe("Gateway pending-profile authorization", () => {
     "rechecks bound webchat talk.mode after node discovery (profile merged: %s)",
     async (merge) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        setRuntimeConfigSnapshot({});
         const email = "talk-source@example.test";
-        const source = ensureProfileForEmail(email);
-        const target = ensureProfileForEmail("talk-target@example.test");
-        const client = createPendingProfileClient();
+        const { source, target, client } = selectedProfile(email);
         client.connect.client = {
           id: "openclaw-control-ui",
           version: "test",
           platform: "web",
           mode: "webchat",
         };
-        client.authenticatedUserProfile = {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        };
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        using gate = createRequestGate();
         const broadcast = vi.fn();
         const hasConnectedTalkNode = vi.fn(async () => {
-          entered.resolve();
-          await release.promise;
+          await gate.pause();
           return true;
         });
         const context = createDirectChatContext({ broadcast, hasConnectedTalkNode });
         const respond = vi.fn();
-        const request = handleGatewayRequest({
-          req: {
-            type: "req",
-            id: "bound-talk-mode",
-            method: "talk.mode",
-            expectedProfileId: source.id,
-            params: { enabled: true, phase: "listening" },
-          },
-          client,
+        const request = dispatchProfile(client, "talk.mode", {
+          expectedProfileId: source.id,
+          requestParams: { enabled: true, phase: "listening" },
           context,
           respond,
-          isWebchatConnect: () => true,
-          extraHandlers: talkModeHandlers,
+          webchat: true,
+          handler: talkModeHandlers["talk.mode"],
         });
-        try {
-          await Promise.race([entered.promise, request]);
+        await gate.during(request, () => {
           expect(hasConnectedTalkNode).toHaveBeenCalledOnce();
           expect(respond).not.toHaveBeenCalled();
           expect(broadcast).not.toHaveBeenCalled();
           if (merge) {
             linkEmail(email, target.id);
           }
-        } finally {
-          release.resolve();
-          await request;
-        }
+        });
         if (merge) {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
-            false,
-            undefined,
-            expect.objectContaining({
-              details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
-            }),
-          );
+          expectRejectedOnce(respond, {
+            details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+          });
           expect(broadcast).not.toHaveBeenCalled();
         } else {
           const payload = { enabled: true, phase: "listening", ts: expect.any(Number) };
@@ -246,8 +227,8 @@ describe("Gateway pending-profile authorization", () => {
 
   it("keeps the actual settings writer unchanged when a selected account merges during preparation", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = ensureProfileForEmail("patch-source@example.test");
-      const target = ensureProfileForEmail("patch-target@example.test");
+      setRuntimeConfigSnapshot({});
+      const { source, target, client } = selectedProfile("patch-source@example.test");
       const scope = { agentId: "main", sessionKey: "agent:main:bound-patch" };
       await upsertSessionEntryCore(scope, {
         sessionId: "bound-patch-session",
@@ -255,106 +236,37 @@ describe("Gateway pending-profile authorization", () => {
         label: "original",
       });
       const before = loadSessionEntry(scope);
-      const client = createPendingProfileClient();
-      client.authenticatedUserProfile = {
-        profileId: source.id,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: source.updatedAt,
-      };
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
+      using gate = createRequestGate();
       const respond = vi.fn();
       const context = createDirectChatContext();
-      const request = handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "bound-patch",
-          method: "sessions.patch",
-          expectedProfileId: source.id,
-          params: { key: scope.sessionKey, agentId: "main", label: "must not commit" },
-        },
-        client,
-        respond,
-        isWebchatConnect: () => false,
+      const request = dispatchProfile(client, "sessions.patch", {
+        expectedProfileId: source.id,
+        requestParams: { key: scope.sessionKey, agentId: "main", label: "must not commit" },
         context,
-        extraHandlers: {
-          "sessions.patch": async (options) => {
-            entered.resolve();
-            await release.promise;
-            await sessionMutationHandlers["sessions.patch"]!(options);
-          },
+        respond,
+        handler: async (options) => {
+          await gate.pause();
+          await sessionMutationHandlers["sessions.patch"]!(options);
         },
       });
-      try {
-        await Promise.race([entered.promise, request]);
+      await gate.during(request, () => {
         expect(respond).not.toHaveBeenCalled();
         linkEmail("patch-source@example.test", target.id);
-      } finally {
-        release.resolve();
-        await request;
-      }
+      });
       expect(loadSessionEntry(scope)).toEqual(before);
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
-        }),
-      );
+      expectRejected(respond, {
+        details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
+      });
       const accepted = vi.fn();
-      await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "current-patch",
-          method: "sessions.patch",
-          expectedProfileId: target.id,
-          params: { key: scope.sessionKey, agentId: "main", label: "current account" },
-        },
-        client,
+      await dispatchProfile(client, "sessions.patch", {
+        expectedProfileId: target.id,
+        requestParams: { key: scope.sessionKey, agentId: "main", label: "current account" },
         context,
         respond: accepted,
-        isWebchatConnect: () => false,
-        extraHandlers: sessionMutationHandlers,
+        handler: sessionMutationHandlers["sessions.patch"],
       });
       expect(accepted.mock.calls[0]?.[0]).toBe(true);
       expect(loadSessionEntry(scope)?.label).toBe("current account");
-    });
-  });
-
-  it("resolves pending identity for an explicitly bound independent method", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const profile = ensureProfileForEmail("pending-binding@example.test");
-      const client = createPendingProfileClient();
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      client.authenticatedGitHubIdentitySync = vi.fn(async () => {
-        entered.resolve();
-        await release.promise;
-        client.authenticatedUserProfile = {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: profile.updatedAt,
-        };
-        return { profileId: profile.id, updatedAt: profile.updatedAt };
-      });
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-      const request = dispatchPendingProfileMethod({
-        client,
-        handler,
-        method: "status",
-        expectedProfileId: profile.id,
-      });
-      try {
-        await Promise.race([entered.promise, request]);
-        expect(handler).not.toHaveBeenCalled();
-        expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
-      } finally {
-        release.resolve();
-        await request;
-      }
-      expect(await request).toHaveBeenCalledWith(true, { ok: true });
     });
   });
 
@@ -363,37 +275,23 @@ describe("Gateway pending-profile authorization", () => {
     async (phase) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const email = "selected-profile@example.test";
-        const source = ensureProfileForEmail(email);
-        const target = ensureProfileForEmail("merged-profile@example.test");
-        const client = createPendingProfileClient();
-        client.authenticatedUserProfile = {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        };
-        const entered = createDeferredCore();
-        const release = createDeferredCore();
+        const { source, target, client } = selectedProfile(email);
+        using gate = createRequestGate();
         const handler = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
           if (phase === "invocation") {
-            entered.resolve();
-            await release.promise;
+            await gate.pause();
           }
           respond(
             true,
             { accountData: "must not publish" },
-            {
-              code: "UNAVAILABLE",
-              message: "must not publish original error",
-            },
+            { code: "UNAVAILABLE", message: "must not publish original error" },
           );
         });
         const lazy = createLazyCoreHandlers({
           methods: ["status"],
           loadHandlers: async () => {
             if (phase === "preparation") {
-              entered.resolve();
-              await release.promise;
+              await gate.pause();
             }
             return { status: handler };
           },
@@ -401,38 +299,27 @@ describe("Gateway pending-profile authorization", () => {
         if (phase === "entry") {
           linkEmail(email, target.id);
         }
-        const request = dispatchPendingProfileMethod({
-          client,
+        const request = dispatchProfile(client, "status", {
           handler: lazy.status,
-          method: "status",
           expectedProfileId: source.id,
         });
-        try {
-          if (phase !== "entry") {
-            await Promise.race([entered.promise, request]);
+        if (phase !== "entry") {
+          await gate.during(request, () => {
             linkEmail(email, target.id);
-          }
-        } finally {
-          release.resolve();
+          });
         }
         const respond = await request;
-        expect(respond).toHaveBeenCalledExactlyOnceWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "INVALID_REQUEST",
-            details: {
-              reason: "EXPECTED_PROFILE_MISMATCH",
-              execution: phase === "invocation" ? "may_have_executed" : "not_started",
-            },
-          }),
-        );
+        expectRejectedOnce(respond, {
+          code: "INVALID_REQUEST",
+          details: {
+            reason: "EXPECTED_PROFILE_MISMATCH",
+            execution: phase === "invocation" ? "may_have_executed" : "not_started",
+          },
+        });
         expect(handler).toHaveBeenCalledTimes(phase === "invocation" ? 1 : 0);
         expect(client).not.toHaveProperty("invalidated", true);
-        const current = await dispatchPendingProfileMethod({
-          client,
+        const current = await dispatchProfile(client, "status", {
           handler: ({ respond: respondCurrent }) => respondCurrent(true, { ok: true }),
-          method: "status",
           expectedProfileId: target.id,
         });
         expect(current).toHaveBeenCalledWith(true, { ok: true });
@@ -440,32 +327,50 @@ describe("Gateway pending-profile authorization", () => {
     },
   );
 
-  it("waits for immutable profile attachment before chat.send dispatch", async () => {
-    const deferred = createDeferredCore<{ profileId: string; updatedAt: number }>();
-    const client = createPendingProfileClient();
-    client.authenticatedGitHubIdentitySync = vi.fn(async () => await deferred.promise);
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-
-    const request = dispatchPendingProfileMethod({
-      client,
-      handler,
-      method: "chat.send",
-      requestParams: { sessionKey: "agent:main:main" },
-    });
-    await Promise.resolve();
-    expect(handler).not.toHaveBeenCalled();
-
-    client.authenticatedUserProfile = {
-      profileId: "profile-canonical",
-      displayName: "Canonical",
-      hasAvatar: false,
-      updatedAt: 1,
-    };
-    deferred.resolve({ profileId: "profile-canonical", updatedAt: 1 });
-
-    await expect(request).resolves.toHaveBeenCalledWith(true, { ok: true });
-    expect(handler).toHaveBeenCalledOnce();
-  });
+  it.each(["status", "chat.send"] as const)(
+    "waits for immutable profile attachment before %s",
+    async (method) => {
+      const run = async () => {
+        const bound = method === "status";
+        const profile = bound
+          ? ensureProfileForEmail("pending-binding@example.test")
+          : { id: "profile-canonical", updatedAt: 1 };
+        const client = createPendingProfileClient();
+        using gate = createRequestGate();
+        client.authenticatedGitHubIdentitySync = vi.fn(async () => {
+          await gate.pause();
+          if (bound) {
+            client.authenticatedUserProfile = profileIdentity(profile);
+          }
+          return { profileId: profile.id, updatedAt: profile.updatedAt };
+        });
+        const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
+        const request = dispatchProfile(client, method, {
+          handler,
+          ...(bound
+            ? { expectedProfileId: profile.id }
+            : { requestParams: { sessionKey: "agent:main:main" } }),
+        });
+        await gate.during(request, () => {
+          expect(handler).not.toHaveBeenCalled();
+          expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
+          if (!bound) {
+            client.authenticatedUserProfile = {
+              ...profileIdentity(profile),
+              displayName: "Canonical",
+            };
+          }
+        });
+        expect(await request).toHaveBeenCalledWith(true, { ok: true });
+        expect(handler).toHaveBeenCalledOnce();
+      };
+      if (method === "status") {
+        await withOpenClawTestState({ scenario: "minimal" }, run);
+      } else {
+        await run();
+      }
+    },
+  );
 
   it("returns retryable unavailability without dispatch and retries on the next request", async () => {
     const client = createPendingProfileClient();
@@ -473,30 +378,21 @@ describe("Gateway pending-profile authorization", () => {
       .fn()
       .mockRejectedValueOnce(new Error("private provider detail"))
       .mockImplementationOnce(async () => {
-        client.authenticatedUserProfile = {
-          profileId: "profile-retried",
-          displayName: "Retried",
-          hasAvatar: false,
-          updatedAt: 2,
-        };
+        client.authenticatedUserProfile = profileIdentity({ id: "profile-retried", updatedAt: 2 });
         return { profileId: "profile-retried", updatedAt: 2 };
       });
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-    const failed = await dispatchPendingProfileMethod({ client, handler, method: "agent" });
+    const failed = await dispatchProfile(client, "agent", { handler });
     expect(handler).not.toHaveBeenCalled();
-    expect(failed).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        message: expect.not.stringContaining("private provider detail"),
-        retryable: true,
-        details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
-      }),
-    );
+    expectRejected(failed, {
+      code: "UNAVAILABLE",
+      message: expect.not.stringContaining("private provider detail"),
+      retryable: true,
+      details: { code: "AUTHENTICATED_PROFILE_UNAVAILABLE" },
+    });
 
-    const retried = await dispatchPendingProfileMethod({ client, handler, method: "agent" });
+    const retried = await dispatchProfile(client, "agent", { handler });
     expect(handler).toHaveBeenCalledOnce();
     expect(retried).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledTimes(2);
@@ -504,48 +400,20 @@ describe("Gateway pending-profile authorization", () => {
 
   it("classifies profile-owned core families and plugin or auxiliary methods fail-closed", async () => {
     const methods = [
-      "agent",
-      "approval.resolve",
-      "artifacts.list",
-      "board.event",
-      "chat.history",
-      "chat.metadata",
-      "controlUi.sessionPreview",
-      "exec.approval.resolve",
-      "mcp.app.view",
-      "mentions.list",
-      "mentions.dismiss",
-      "message.action",
-      "models.list",
-      "openclaw.chat",
-      "plugin.approval.resolve",
-      "projects.list",
-      "secrets.store.set",
-      "send",
-      "sessions.list",
-      "skills.library.list",
-      "skills.library.read",
-      "skills.library.save",
-      "skills.library.mutate",
-      "skills.library.activate",
-      "skills.library.import",
-      "skills.library.upload",
-      "taskSuggestions.list",
-      "users.github.status",
-      "users.github.authorize.start",
-      "users.github.authorize.poll",
-      "users.github.authorize.cancel",
-      "users.github.disconnect",
-      "users.mentionable",
-    ];
+      "agent approval.resolve artifacts.list board.event chat.history chat.metadata",
+      "controlUi.sessionPreview exec.approval.resolve mcp.app.view mentions.list mentions.dismiss",
+      "message.action models.list openclaw.chat plugin.approval.resolve projects.list secrets.store.set send sessions.list",
+      "skills.library.list skills.library.read skills.library.save skills.library.mutate",
+      "skills.library.activate skills.library.import skills.library.upload taskSuggestions.list",
+      "users.github.status users.github.authorize.start users.github.authorize.poll",
+      "users.github.authorize.cancel users.github.disconnect users.mentionable",
+    ].flatMap((group) => group.split(" "));
     for (const method of methods) {
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
       const handler = vi.fn<GatewayRequestHandler>();
-      const respond = await dispatchPendingProfileMethod({
-        client,
+      const respond = await dispatchProfile(client, method, {
         handler,
-        method,
         requestParams:
           method === "skills.library.activate" ? { sessionKey: "agent:main:main" } : undefined,
       });
@@ -556,48 +424,37 @@ describe("Gateway pending-profile authorization", () => {
         expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
       );
     }
+  });
 
+  it("keeps plugin and auxiliary profile access fail-closed unless explicitly independent", async () => {
     for (const owner of [
       { kind: "plugin" as const, pluginId: "identity-reader" },
       { kind: "aux" as const, area: "identity-reader" },
+      { kind: "plugin" as const, pluginId: "logbook" },
     ]) {
+      const independent = owner.kind === "plugin" && owner.pluginId === "logbook";
       const client = createPendingProfileClient();
       client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
-      const handler = vi.fn<GatewayRequestHandler>();
-      const method = `${owner.kind}.identity.read`;
+      const handler = independent
+        ? vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }))
+        : vi.fn<GatewayRequestHandler>();
+      const method = independent ? "logbook.status" : `${owner.kind}.identity.read`;
       const methodRegistry = createGatewayMethodRegistry([
-        { name: method, handler, owner, scope: "operator.admin" },
+        {
+          name: method,
+          handler,
+          owner,
+          scope: independent ? "operator.read" : "operator.admin",
+          ...(independent ? { profileAccess: "independent" as const } : {}),
+        },
       ]);
-      await dispatchPendingProfileMethod({ client, handler, method, methodRegistry });
-      expect(handler, owner.kind).not.toHaveBeenCalled();
+      const respond = await dispatchProfile(client, method, { handler, methodRegistry });
+      expect(handler).toHaveBeenCalledTimes(independent ? 1 : 0);
+      if (independent) {
+        expect(respond).toHaveBeenCalledWith(true, { ok: true });
+        expect(client.authenticatedGitHubIdentitySync).not.toHaveBeenCalled();
+      }
     }
-  });
-
-  it("dispatches explicitly independent plugin status while profile sync is unavailable", async () => {
-    const client = createPendingProfileClient();
-    client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
-    const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
-    const method = "logbook.status";
-    const methodRegistry = createGatewayMethodRegistry([
-      {
-        name: method,
-        handler,
-        owner: { kind: "plugin", pluginId: "logbook" },
-        profileAccess: "independent",
-        scope: "operator.read",
-      },
-    ]);
-
-    const respond = await dispatchPendingProfileMethod({
-      client,
-      handler,
-      method,
-      methodRegistry,
-    });
-
-    expect(handler).toHaveBeenCalledOnce();
-    expect(respond).toHaveBeenCalledWith(true, { ok: true });
-    expect(client.authenticatedGitHubIdentitySync).not.toHaveBeenCalled();
   });
 
   it("gates parameter-dependent incognito access without blocking ordinary independent requests", async () => {
@@ -605,81 +462,51 @@ describe("Gateway pending-profile authorization", () => {
     client.authenticatedGitHubIdentitySync = vi.fn().mockRejectedValue(new Error("offline"));
     const handler = vi.fn<GatewayRequestHandler>(({ respond }) => respond(true, { ok: true }));
 
-    const blocked = await dispatchPendingProfileMethod({
-      client,
+    const blocked = await dispatchProfile(client, "question.request", {
       handler,
-      method: "question.request",
       requestParams: { sessionKey: "agent:main:dashboard:incognito-profile-gate" },
     });
     expect(handler).not.toHaveBeenCalled();
-    expect(blocked).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-    );
+    expectRejected(blocked, { code: "UNAVAILABLE", retryable: true });
 
-    const allowed = await dispatchPendingProfileMethod({
-      client,
+    const allowed = await dispatchProfile(client, "question.request", {
       handler,
-      method: "question.request",
       requestParams: { sessionKey: "agent:main:main" },
     });
     expect(handler).toHaveBeenCalledOnce();
     expect(allowed).toHaveBeenCalledWith(true, { ok: true });
     expect(client.authenticatedGitHubIdentitySync).toHaveBeenCalledOnce();
   });
-});
-
-describe("Gateway self-profile scope", () => {
   it("allows read-only users.self without anonymous access or profile writes", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const email = "reader@example.com";
       const profile = ensureProfileForEmail(email);
       const before = getUserProfileListItem(profile.id);
-      const reader = createPendingProfileClient();
+      const reader = createPendingProfileClient([READ_SCOPE]);
       reader.authenticatedUserId = email;
-      reader.connect.scopes = ["operator.read"];
       const sql = observeHostDataSql();
-      const self = await dispatchPendingProfileMethod({
-        client: reader,
-        method: "users.self",
-      }).finally(sql.restore);
-      expect(
-        sql.queries.filter((statement) =>
-          /\buser_profile(?:s|_emails|_identities)\b/u.test(statement),
-        ),
-      ).toEqual([]);
+      const self = await dispatchProfile(reader, "users.self").finally(sql.restore);
+      const profileQueries = sql.queries.filter((s) =>
+        /\buser_profile(?:s|_emails|_identities)\b/u.test(s),
+      );
+      expect(profileQueries).toEqual([]);
 
-      const anonymous = createPendingProfileClient();
+      const anonymous = createPendingProfileClient([READ_SCOPE]);
       delete anonymous.authenticatedUserId;
-      anonymous.connect.scopes = ["operator.read"];
-      const deniedRead = await dispatchPendingProfileMethod({
-        client: anonymous,
-        method: "users.self",
-      });
-      const deniedWrite = await dispatchPendingProfileMethod({
-        client: reader,
-        method: "users.setDisplayName",
+      const deniedRead = await dispatchProfile(anonymous, "users.self");
+      const deniedWrite = await dispatchProfile(reader, "users.setDisplayName", {
         requestParams: { profileId: profile.id, displayName: "Not permitted" },
       });
 
-      expect(deniedRead).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "FORBIDDEN" }),
-      );
-      expect(deniedWrite).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "FORBIDDEN",
-          details: {
-            code: "MISSING_SCOPE",
-            missingScope: "operator.write",
-            requiredScopes: ["operator.write"],
-          },
-        }),
-      );
+      expectRejected(deniedRead, "FORBIDDEN");
+      expectRejected(deniedWrite, {
+        code: "FORBIDDEN",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.write",
+          requiredScopes: ["operator.write"],
+        },
+      });
       expect(getUserProfileListItem(profile.id)).toEqual(before);
       expect(self).toHaveBeenCalledWith(true, {
         profile: expect.objectContaining({ id: profile.id, emails: [email] }),

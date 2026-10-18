@@ -13,14 +13,13 @@ import {
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { logInfo } from "../logger.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import {
-  readConfigMachineState,
-  readConfigMachineStateWithMetadata,
-} from "../state/config-machine-state.js";
+import { readConfigMachineState } from "../state/config-machine-state.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { readConfigMachineStateWithMetadata } from "../test-utils/config-machine-state.js";
 import { nodeHostConfigRuntimeEntrypoint } from "./config-runtime.test-support.js";
 import {
   configureNodeHost,
@@ -250,6 +249,10 @@ describe("node-host SQLite config", () => {
 
   it("keeps the first committed implicit node id across processes", async ({ signal }) => {
     const { env, stateDir } = makeTestEnv();
+    // Finish exclusive schema initialization before racing the first node-config writes.
+    openOpenClawStateDatabase({ env });
+    expect(readConfigMachineState(NODE_HOST_CONFIG_KEY, { env })).toBeUndefined();
+    await closeOpenClawStateDatabaseAsync();
     const [first, second] = await fixture.run(() =>
       runConcurrentImplicitConfigures(stateDir, signal),
     );

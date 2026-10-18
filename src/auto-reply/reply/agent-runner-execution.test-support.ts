@@ -13,6 +13,10 @@ import {
   initialModelFallbackAttemptOptions,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -242,11 +246,17 @@ vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
   recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
 }));
 
-vi.mock("../../runtime.js", () => ({
-  defaultRuntime: {
-    error: vi.fn(),
-  },
-}));
+vi.mock("../../runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../runtime.js")>();
+  return {
+    ...actual,
+    defaultRuntime: {
+      ...actual.defaultRuntime,
+      error: vi.fn(),
+      log: vi.fn(),
+    },
+  };
+});
 
 vi.mock("../../utils/message-channel.js", async () => ({
   ...(await vi.importActual<typeof import("../../utils/message-channel.js")>(
@@ -321,7 +331,8 @@ vi.mock("./agent-runner-utils.js", async () => ({
   }),
 }));
 
-vi.mock("./reply-delivery.js", () => ({
+vi.mock("./reply-delivery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-delivery.js")>()),
   createBlockReplyDeliveryHandler: (params: unknown) =>
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
@@ -334,8 +345,16 @@ vi.mock("./reply-media-paths.js", async (importOriginal) => ({
   createReplyMediaPathNormalizer: () => (payload: unknown) => payload,
 }));
 
-export async function getExecuteAgentTurnForTest() {
+export async function getRawExecuteAgentTurnForTest() {
   const execute = (await import("./agent-runner-execution.js")).executeAgentTurn;
+  return async (...args: Parameters<typeof execute>) => {
+    setRuntimeConfigSnapshot(args[0].followupRun.run.config);
+    return execute(...args);
+  };
+}
+
+export async function getExecuteAgentTurnForTest() {
+  const execute = await getRawExecuteAgentTurnForTest();
   return async (...args: Parameters<typeof execute>) => {
     const execution = await execute(...args);
     const outcome = execution.outcome;
@@ -348,7 +367,6 @@ export async function getExecuteAgentTurnForTest() {
         fallbackModel: outcome.resolved.model,
         ...(outcome.fallback.exhausted ? { fallbackExhausted: true as const } : {}),
         fallbackAttempts: outcome.fallback.attempts,
-        didLogHeartbeatStrip: outcome.didLogHeartbeatStrip,
         autoCompactionCount: outcome.autoCompactionCount,
         hasDirectlySentBlockReply: outcome.hasDirectlySentBlockReply,
         directBlockDeliveries: outcome.directBlockDeliveries,
@@ -363,7 +381,7 @@ export async function getExecuteAgentTurnForTest() {
         postCompactionModelFailure: outcome.postCompactionModelFailure,
       };
     }
-    const payload: ReplyPayload = { text: "NO_REPLY" };
+    const payload: ReplyPayload = {};
     return { kind: "final" as const, payload };
   };
 }
@@ -721,6 +739,7 @@ export async function setupAgentRunnerExecutionTestState() {
     // Fake-timer tests must not leak into --isolate=false peers.
     vi.useRealTimers();
     cliBackendsTesting.resetDepsForTest();
+    clearRuntimeConfigSnapshot();
     vi.clearAllMocks();
   });
 

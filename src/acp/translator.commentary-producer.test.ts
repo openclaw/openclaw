@@ -32,7 +32,7 @@ it.each([
     expected: "Checking files.\nReading config.\nChecking files.Done.",
   },
 ])(
-  "delivers generic commentary once through Gateway and ACP ($name)",
+  "delivers explicit commentary once through Gateway and ACP ($name)",
   async ({ batchedPreview, separator, expected }) => {
     const sent = createDeferred<string>();
     const request = vi.fn().mockImplementation(async (method, params) => {
@@ -53,7 +53,7 @@ it.each([
       }
     });
     const source = createSubscribedSessionHarness({ runId });
-    const message = makeAgentAssistantMessage({ api: "anthropic-messages", content: [] });
+    const message = makeAgentAssistantMessage({ api: "openai-completions", content: [] });
     const deliver = async () => {
       await source.subscription.waitForPendingEvents();
       await unsubscribe.drain();

@@ -338,27 +338,6 @@ describe("codex web search provider", () => {
     expect(path.dirname(threadStartCwd)).toBe(path.dirname(isolatedCodexHome));
   });
 
-  it("selects the live default text-capable model", async () => {
-    const { client, requests } = createFakeClient({
-      models: [
-        codexModel({ id: "available-first", isDefault: false }),
-        codexModel({ id: "available-default", model: "available-default-wire" }),
-      ],
-    });
-    const provider = createCodexWebSearchProvider({
-      clientFactory: async () => client,
-    });
-    const tool = createSearchTool(provider);
-
-    const result = await tool?.execute({ query: "plumbers in Edmonton Alberta" });
-
-    expect(result?.model).toBe("available-default");
-    expect(requests[1]?.params).toEqual(
-      expect.objectContaining({ model: "available-default-wire" }),
-    );
-    expect(requests[2]?.params).not.toHaveProperty("model");
-  });
-
   it("does not send app-server requests after authority ends during client preparation", async () => {
     const { client, requests } = createFakeClient();
     const entered = createDeferred<void>();

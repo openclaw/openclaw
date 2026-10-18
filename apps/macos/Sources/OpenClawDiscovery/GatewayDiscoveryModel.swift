@@ -2,7 +2,6 @@ import Foundation
 import Network
 import Observation
 import OpenClawKit
-import OSLog
 
 @MainActor
 @Observable
@@ -89,7 +88,6 @@ public final class GatewayDiscoveryModel {
     private var wideAreaFallback: (domain: String, beacons: [WideAreaGatewayBeacon])?
     private var tailscaleServeFallbackTask: Task<Void, Never>?
     private var tailscaleServeFallbackBeacons: [TailscaleServeGatewayBeacon] = []
-    private let logger = Logger(subsystem: "ai.openclaw", category: "gateway-discovery")
 
     public init(
         localDisplayName: String? = nil,
@@ -305,7 +303,7 @@ public final class GatewayDiscoveryModel {
 
     private func scheduleWideAreaFallback() {
         guard let domain = OpenClawBonjour.wideAreaGatewayServiceDomain else { return }
-        if Self.isRunningTests { return }
+        if OpenClawProcessInfo.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = self.scheduleFallback(
             discover: { await WideAreaGatewayDiscovery.discover(timeoutSeconds: 2.0) },
@@ -315,7 +313,7 @@ public final class GatewayDiscoveryModel {
     }
 
     private func scheduleTailscaleServeFallback() {
-        if Self.isRunningTests { return }
+        if OpenClawProcessInfo.isRunningTests { return }
         guard self.tailscaleServeFallbackTask == nil else { return }
         self.tailscaleServeFallbackTask = self.scheduleFallback(
             discover: { await TailscaleServeGatewayDiscovery.discover(timeoutSeconds: 2.4) },
@@ -399,16 +397,6 @@ public final class GatewayDiscoveryModel {
         }
     }
 
-    private nonisolated static var isRunningTests: Bool {
-        // Keep discovery background work from running forever during SwiftPM test runs.
-        if Bundle.allBundles.contains(where: { $0.bundleURL.pathExtension == "xctest" }) { return true }
-
-        let env = ProcessInfo.processInfo.environment
-        return env["XCTestConfigurationFilePath"] != nil
-            || env["XCTestBundlePath"] != nil
-            || env["XCTestSessionIdentifier"] != nil
-    }
-
     private func updateGatewaysForAllDomains() {
         for (domain, results) in self.resultsByDomain {
             self.updateGateways(for: domain, results: results)
@@ -477,19 +465,12 @@ public final class GatewayDiscoveryModel {
             name: serviceName,
             type: type,
             domain: domain,
-            resolve: { [logger] service in
+            resolve: { service in
                 let txt = service.txtRecordData().map {
                     NetService.dictionary(fromTXTRecord: $0).compactMapValues { String(data: $0, encoding: .utf8) }
                 } ?? [:]
                 let host = BonjourServiceResolverSupport.normalizeHost(service.hostName)
                 let port = service.port > 0 ? service.port : nil
-                if !txt.isEmpty {
-                    let payload = txt.sorted(by: { $0.key < $1.key })
-                        .map { "\($0.key)=\($0.value)" }
-                        .joined(separator: " ")
-                    logger.debug(
-                        "discovery: resolved TXT for \(service.name, privacy: .public): \(payload, privacy: .public)")
-                }
                 return ResolvedGatewayService(txt: txt, host: host, port: port)
             },
             completion: { [weak self] resolved in

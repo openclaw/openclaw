@@ -65,14 +65,14 @@ describe("test environment SQLite lifetime", () => {
       PRAGMA user_version = 9;
       CREATE TABLE agent_databases (
         agent_id TEXT NOT NULL, path TEXT NOT NULL, schema_version INTEGER NOT NULL,
-        last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id, path)
+        last_seen_at INTEGER NOT NULL, size_bytes INTEGER, PRIMARY KEY (agent_id)
       );
       CREATE TABLE auth_profile_stores (agent_id TEXT PRIMARY KEY);
     `);
     legacy.close();
     const legacyBytes = fs.readFileSync(legacyPath);
     expect(() => listOpenClawRegisteredAgentDatabases({ path: legacyPath })).toThrow(
-      "has a legacy agent database registry schema",
+      "has an unsupported agent database registry schema",
     );
 
     const testEnv = installOwnedEnv();

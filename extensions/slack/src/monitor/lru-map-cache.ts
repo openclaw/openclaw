@@ -1,5 +1,4 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 
 /** LRU-touch read: move hit to newest so pruneMapToMaxSize keeps active keys. */
 export function readLruMapEntry<T>(cache: Map<string, T>, cacheKey: string): T | undefined {
@@ -24,15 +23,11 @@ export function writeLruMapEntry<T>(
 
 export function pruneExpiredMapEntries<T extends { expiresAt: number }>(
   cache: Map<string, T>,
-  rawNow: number,
+  now: number,
 ): void {
-  const now = asDateTimestampMs(rawNow);
-  if (now === undefined) {
-    cache.clear();
-    return;
-  }
+  // Cache clocks are process-owned Date.now() values, not external timestamps.
   for (const [key, entry] of cache) {
-    if (asDateTimestampMs(entry.expiresAt) === undefined || entry.expiresAt <= now) {
+    if (entry.expiresAt <= now) {
       cache.delete(key);
     }
   }

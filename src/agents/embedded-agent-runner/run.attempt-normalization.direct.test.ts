@@ -90,6 +90,44 @@ function makeNormalizationInput(
 }
 
 describe("normalizeEmbeddedRunAttempt", () => {
+  it.each(["settled", "aborted"])(
+    "preserves committed accounting after an attempt is %s without replacing its request budget",
+    (retirement) => {
+      const state = createEmbeddedRunContextRecoveryState();
+      const controller = new AbortController();
+      const onBudget = vi.fn();
+      const first = state.beginAttempt(controller.signal, onBudget);
+      const budget = {
+        contextWindow: 32_768,
+        reserveTokens: 8_192,
+        fixedTokens: 100,
+        pendingTokens: 10,
+      };
+      first.onCompactionRequestBudget(budget);
+      first.onContextAccountingEvent({ kind: "compaction", tokensAfter: 400 });
+      if (retirement === "settled") {
+        first.close();
+      } else {
+        controller.abort();
+      }
+      first.onCompactionRequestBudget({ ...budget, fixedTokens: 999 });
+      // Committed accounting still settles after foreground budget publication closes.
+      first.onContextAccountingEvent({ kind: "compaction", tokensAfter: 200 });
+      expect(state.compactionRequestBudget).toBe(budget);
+      expect(onBudget.mock.calls).toEqual([[undefined], [budget]]);
+      expect(first.recordedCompactionCount).toBe(2);
+      expect(state.autoCompactionCount).toBe(2);
+      expect(state.currentContextSnapshot).toEqual({ tokens: 200 });
+
+      const next = state.beginAttempt(undefined, onBudget);
+      next.onContextAccountingEvent({ kind: "model", contextTokens: 250, successful: true });
+      expect(next.recordedCompactionCount).toBe(0);
+      expect(state.compactionRequestBudget).toBeUndefined();
+      expect(state.autoCompactionCount).toBe(2);
+      expect(state.currentContextSnapshot).toEqual({ tokens: 250 });
+    },
+  );
+
   it("keeps the physical-attempt source when idle timeouts trip the breaker despite billed partial output", async () => {
     const attempt = {
       ...makeAttempt(),

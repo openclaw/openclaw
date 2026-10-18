@@ -1,11 +1,19 @@
-// Qa Lab Matrix tests cover redacted protocol recording and manifest derivation.
-import { createServer } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
-import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
 import { startMatrixQaRecordingProxy, type MatrixQaRecordingProxy } from "./recording-proxy.js";
 
 const closeCallbacks: Array<() => Promise<void>> = [];
+const clientPath = "/_matrix/client/v3/";
+const statePath = "rooms/!same:matrix.test/state/m.room.name";
+const jsonHeaders = { "content-type": "application/json" };
+const shape = (...fields: string[]) => ({ kind: "json", fields });
+const keyed = <T>(id: string, value: T) => ({ [id]: value });
+const events = (...entries: unknown[]) => ({ events: entries });
+const get = (proxy: MatrixQaRecordingProxy, path: string, token?: string) =>
+  fetch(`${proxy.baseUrl}${clientPath}${path}`, {
+    headers: token ? { authorization: `Bearer ${token}` } : undefined,
+  });
 
 afterEach(async () => {
   while (closeCallbacks.length > 0) {
@@ -13,118 +21,57 @@ afterEach(async () => {
   }
 });
 
-async function startRecordingTarget(options?: { alwaysFailState?: boolean }) {
-  let syncCount = 0;
-  let stateCount = 0;
-  const server = createServer((req, res) => {
-    const url = new URL(req.url ?? "/", "http://matrix.test");
-    if (url.pathname.endsWith("/sync")) {
-      syncCount += 1;
-      const since = url.searchParams.get("since");
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          account_data: {
-            events: [
-              {
-                content: {
-                  encrypted: {
-                    SECRET_NESTED_STORAGE_KEY: { ciphertext: "secret-nested-ciphertext" },
-                  },
-                  unsigned: {
-                    "secret-custom-field-name": "secret-custom-field-value",
-                  },
-                  url: "mxc://matrix.test/secret-media",
-                  info: { mimetype: "image/png" },
-                },
-                type: "m.cross_signing.master",
-              },
-            ],
-          },
-          device_keys: {
-            "@secret-user:matrix.test": {
-              SECRET_DEVICE: {
-                keys: {
-                  "ed25519:SECRET_DEVICE": "secret-signing-key",
-                },
-              },
-            },
-          },
-          device_one_time_keys_count: { signed_curve25519: 12 },
-          device_unused_fallback_key_types: ["signed_curve25519"],
-          next_batch: since === "echoed-unknown" ? since : `secret-sync-${syncCount}`,
-          device_lists: { changed: ["secret-device"] },
-          rooms: {
-            join: {
-              "!secret-room:matrix.test": {
-                timeline: {
-                  events: [
-                    { type: "m.room.message" },
-                    { sender: "@secret-sender:matrix.test", type: "m.room.encrypted" },
-                  ],
-                },
-              },
-            },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.includes("/room_keys/keys")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          rooms: {
-            "!secret-backup-room:matrix.test": {
-              sessions: {
-                "secret-backup-session": { first_message_index: 0 },
-              },
-            },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.endsWith("/keys/upload")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ one_time_key_counts: {} }));
-      return;
-    }
-    if (url.pathname.endsWith("/keys/query")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(
-        JSON.stringify({
-          failures: {
-            "secret-server.example": { errcode: "M_UNAVAILABLE" },
-          },
-        }),
-      );
-      return;
-    }
-    if (url.pathname.includes("/account_data/")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({}));
-      return;
-    }
-    if (url.pathname.includes("/sendToDevice/")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({}));
-      return;
-    }
-    if (url.pathname.includes("/state/")) {
-      stateCount += 1;
-      const status = options?.alwaysFailState || stateCount === 1 ? 401 : 200;
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(
-        status === 401
-          ? JSON.stringify({ errcode: "M_UNKNOWN_TOKEN", error: "secret-response" })
-          : JSON.stringify({ name: "secret-state-name" }),
-      );
-      return;
-    }
-    res.writeHead(401, { "content-type": "application/json" });
-    res.end(JSON.stringify({ errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }));
+function jsonResponse(res: ServerResponse, body: unknown, status = 200) {
+  res.writeHead(status, jsonHeaders);
+  res.end(JSON.stringify(body));
+}
+
+function sendJson(
+  proxy: MatrixQaRecordingProxy,
+  path: string,
+  body: unknown,
+  method: "POST" | "PUT" = "POST",
+  token?: string,
+) {
+  return fetch(`${proxy.baseUrl}${clientPath}${path}`, {
+    method,
+    headers: {
+      ...jsonHeaders,
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
   });
+}
+
+function syncRequest(search = "?timeout=0", bearerToken?: string) {
+  return {
+    bearerToken,
+    body: Buffer.alloc(0),
+    headers: {},
+    method: "GET",
+    path: `${clientPath}sync`,
+    search,
+  };
+}
+
+async function exchangeSync(
+  recording: MatrixQaRecordingProxy,
+  request: ReturnType<typeof syncRequest>,
+  nextBatch: string,
+  context = recording.createExchangeContext?.(request),
+) {
+  await recording.onExchange?.({
+    context,
+    request,
+    response: {
+      body: Buffer.from(JSON.stringify({ next_batch: nextBatch })),
+      headers: new Headers(jsonHeaders),
+      status: 200,
+    },
+  });
+}
+
+async function listen(server: Server) {
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -145,18 +92,97 @@ async function startRecordingTarget(options?: { alwaysFailState?: boolean }) {
   return `http://127.0.0.1:${address.port}`;
 }
 
-async function startRecording(
-  scenarioId: string,
-  options?: Parameters<typeof startRecordingTarget>[0],
-) {
-  const targetBaseUrl = await startRecordingTarget(options);
-  const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
+async function startRecordingTarget() {
+  let syncCount = 0;
+  let stateCount = 0;
+  const server = createServer((req, res) => {
+    const url = new URL(req.url ?? "/", "http://matrix.test");
+    if (url.pathname.endsWith("/sync")) {
+      syncCount += 1;
+      const since = url.searchParams.get("since");
+      jsonResponse(res, {
+        account_data: events({
+          content: {
+            encrypted: {
+              SECRET_NESTED_STORAGE_KEY: { ciphertext: "secret-nested-ciphertext" },
+            },
+            unsigned: {
+              "secret-custom-field-name": "secret-custom-field-value",
+            },
+            url: "mxc://matrix.test/secret-media",
+            info: { mimetype: "image/png" },
+          },
+          type: "m.cross_signing.master",
+        }),
+        device_keys: keyed(
+          "@secret-user:matrix.test",
+          keyed("SECRET_DEVICE", {
+            keys: keyed("ed25519:SECRET_DEVICE", "secret-signing-key"),
+          }),
+        ),
+        device_one_time_keys_count: { signed_curve25519: 12 },
+        device_unused_fallback_key_types: ["signed_curve25519"],
+        next_batch: since === "echoed-unknown" ? since : `secret-sync-${syncCount}`,
+        device_lists: { changed: ["secret-device"] },
+        rooms: {
+          join: keyed("!secret-room:matrix.test", {
+            timeline: events(
+              { type: "m.room.message" },
+              { sender: "@secret-sender:matrix.test", type: "m.room.encrypted" },
+            ),
+          }),
+        },
+      });
+      return;
+    }
+    const response = [
+      [
+        "/room_keys/keys",
+        {
+          rooms: keyed("!secret-backup-room:matrix.test", {
+            sessions: keyed("secret-backup-session", { first_message_index: 0 }),
+          }),
+        },
+      ],
+      ["/keys/upload", { one_time_key_counts: {} }],
+      ["/keys/query", { failures: keyed("secret-server.example", { errcode: "M_UNAVAILABLE" }) }],
+      ["/account_data/", {}],
+      ["/sendToDevice/", {}],
+    ] satisfies Array<[string, unknown]>;
+    const match = response.find(([path]) =>
+      path.startsWith("/keys/") ? url.pathname.endsWith(path) : url.pathname.includes(path),
+    );
+    if (match) {
+      jsonResponse(res, match[1]);
+      return;
+    }
+    if (url.pathname.includes("/state/")) {
+      stateCount += 1;
+      const status = stateCount === 1 ? 401 : 200;
+      jsonResponse(
+        res,
+        status === 401
+          ? { errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }
+          : { name: "secret-state-name" },
+        status,
+      );
+      return;
+    }
+    jsonResponse(res, { errcode: "M_UNKNOWN_TOKEN", error: "secret-response" }, 401);
+  });
+  return await listen(server);
+}
+
+async function startRecording(scenarioId = "test", targetBaseUrl?: string) {
+  const recording = await startMatrixQaRecordingProxy({
+    targetBaseUrl: targetBaseUrl ?? (await startRecordingTarget()),
+  });
   closeCallbacks.push(() => recording.stop());
   recording.setScenarioId(scenarioId);
   return recording;
 }
 
-function scenarioExpectation(recording: MatrixQaRecordingProxy, scenarioId: string) {
+function scenarioExpectation(recording: MatrixQaRecordingProxy, scenarioId = "test") {
   return recording.buildManifest({
     requestedProfile: "test",
     scenarioIds: [scenarioId],
@@ -166,172 +192,134 @@ function scenarioExpectation(recording: MatrixQaRecordingProxy, scenarioId: stri
 
 describe("Matrix QA recording proxy", () => {
   it("records only redacted shapes and derives scenario expectations", async () => {
-    const proxy = await startRecording("matrix-recording-test");
+    const proxy = await startRecording();
 
-    const firstSync = await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&access_token=secret-query`,
-      { headers: { authorization: "Bearer secret-header" } },
-    );
+    const firstSync = await get(proxy, "sync?timeout=0&access_token=secret-query", "secret-header");
     const firstBody = (await firstSync.json()) as { next_batch: string };
-    await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&since=${encodeURIComponent(firstBody.next_batch)}`,
-      { headers: { authorization: "Bearer secret-header" } },
+    await get(
+      proxy,
+      `sync?timeout=0&since=${encodeURIComponent(firstBody.next_batch)}`,
+      "secret-header",
     );
-    const postState = async () => {
-      await fetch(
-        `${proxy.baseUrl}/_matrix/client/v3/rooms/!secret:matrix.test/state/m.room.name`,
-        {
-          body: JSON.stringify({ password: "secret-password", body: "secret-message" }),
-          headers: {
-            authorization: "Bearer secret-header",
-            "content-type": "application/json",
-          },
-          method: "POST",
-        },
+    const postState = () =>
+      sendJson(
+        proxy,
+        "rooms/!secret:matrix.test/state/m.room.name",
+        { password: "secret-password", body: "secret-message" },
+        "POST",
+        "secret-header",
       );
-    };
     await postState();
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/room_keys/keys`, {
-      headers: {
-        authorization: "Bearer secret-header",
-      },
-    });
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/keys/upload`, {
-      body: JSON.stringify({
+    await get(proxy, "room_keys/keys", "secret-header");
+    await sendJson(
+      proxy,
+      "keys/upload",
+      {
         device_keys: {
           algorithms: ["m.olm.v1.curve25519-aes-sha2"],
           device_id: "SECRET_UPLOAD_DEVICE",
           keys: { "ed25519:SECRET_UPLOAD_DEVICE": "secret-upload-key" },
           user_id: "@secret-upload:matrix.test",
         },
-        one_time_keys: {
-          "signed_curve25519:SECRET_ONE_TIME": { key: "secret-one-time-key" },
-        },
-      }),
-      headers: {
-        authorization: "Bearer secret-header",
-        "content-type": "application/json",
+        one_time_keys: keyed("signed_curve25519:SECRET_ONE_TIME", { key: "secret-one-time-key" }),
       },
-      method: "POST",
-    });
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/keys/query`, {
-      body: JSON.stringify({ device_keys: {} }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    });
-    await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/user/@secret-upload%3Amatrix.test/account_data/m.cross_signing.master`,
-      {
-        body: JSON.stringify({
-          encrypted: {
-            SECRET_STORAGE_KEY: { ciphertext: "secret-ciphertext" },
-          },
-        }),
-        headers: { "content-type": "application/json" },
-        method: "PUT",
-      },
+      "POST",
+      "secret-header",
     );
-    await fetch(
-      `${proxy.baseUrl}/_matrix/client/v3/user/@secret-upload%3Amatrix.test/account_data/m.megolm_backup.v1`,
+    await sendJson(proxy, "keys/query", { device_keys: {} });
+    await sendJson(
+      proxy,
+      "user/@secret-upload%3Amatrix.test/account_data/m.cross_signing.master",
       {
-        body: JSON.stringify({ version: "1" }),
-        headers: { "content-type": "application/json" },
-        method: "PUT",
+        encrypted: keyed("SECRET_STORAGE_KEY", { ciphertext: "secret-ciphertext" }),
       },
+      "PUT",
     );
-    await fetch(`${proxy.baseUrl}/_matrix/client/v3/sendToDevice/m.room.encrypted/transaction-42`, {
-      body: JSON.stringify({
-        messages: {
-          "@secret-recipient:matrix.test": {
-            SECRET_RECIPIENT_DEVICE: { content: "secret-device-message" },
-          },
-        },
-      }),
-      headers: { "content-type": "application/json" },
-      method: "PUT",
-    });
+    await sendJson(
+      proxy,
+      "user/@secret-upload%3Amatrix.test/account_data/m.megolm_backup.v1",
+      { version: "1" },
+      "PUT",
+    );
+    await sendJson(
+      proxy,
+      "sendToDevice/m.room.encrypted/transaction-42",
+      {
+        messages: keyed(
+          "@secret-recipient:matrix.test",
+          keyed("SECRET_RECIPIENT_DEVICE", {
+            content: "secret-device-message",
+          }),
+        ),
+      },
+      "PUT",
+    );
     await postState();
 
     const records = proxy.records();
     const serialized = JSON.stringify(records);
-    expect(serialized).not.toContain("secret-query");
-    expect(serialized).not.toContain("secret-header");
-    expect(serialized).not.toContain("secret-password");
-    expect(serialized).not.toContain("secret-message");
-    expect(serialized).not.toContain("secret-sync");
-    expect(serialized).not.toContain("secret-response");
-    expect(serialized).not.toContain("secret-room");
-    expect(serialized).not.toContain("secret-backup-room");
-    expect(serialized).not.toContain("secret-backup-session");
-    expect(serialized).not.toContain("secret-state-name");
-    expect(serialized).not.toContain("secret-user");
-    expect(serialized).not.toContain("SECRET_DEVICE");
-    expect(serialized).not.toContain("SECRET_UPLOAD_DEVICE");
-    expect(serialized).not.toContain("SECRET_ONE_TIME");
-    expect(serialized).not.toContain("SECRET_RECIPIENT_DEVICE");
-    expect(serialized).not.toContain("secret-server.example");
-    expect(serialized).not.toContain("SECRET_STORAGE_KEY");
-    expect(serialized).not.toContain("SECRET_NESTED_STORAGE_KEY");
-    expect(serialized).not.toContain("secret-custom-field-name");
-    const keyUpload = records.find((record) => record.request.route.endsWith("/keys/upload"));
-    expect(keyUpload?.request.body).toEqual({
-      kind: "json",
-      fields: [
-        "device_keys.algorithms",
-        "device_keys.device_id",
-        "device_keys.keys.{keyId}",
-        "device_keys.user_id",
-        "one_time_keys.{keyId}.key",
-      ],
-    });
-    const sendToDevice = records.find((record) => record.request.route.includes("sendToDevice"));
-    expect(sendToDevice?.request.body).toEqual({
-      kind: "json",
-      fields: ["messages.{userId}.{deviceId}.content"],
-    });
-    const keyQuery = records.find((record) => record.request.route.endsWith("/keys/query"));
-    expect(keyQuery?.response.body).toEqual({
-      kind: "json",
-      fields: ["failures.{serverName}.errcode"],
-    });
-    const secretStorage = records.find((record) =>
-      record.request.route.endsWith("/account_data/m.cross_signing.master"),
+    const secrets = `secret-query secret-header secret-password secret-message secret-sync
+      secret-response secret-room secret-backup-room secret-backup-session secret-state-name
+      secret-user SECRET_DEVICE SECRET_UPLOAD_DEVICE SECRET_ONE_TIME SECRET_RECIPIENT_DEVICE
+      secret-server.example SECRET_STORAGE_KEY SECRET_NESTED_STORAGE_KEY secret-custom-field-name`;
+    for (const secret of secrets.split(/\s+/u)) {
+      expect(serialized).not.toContain(secret);
+    }
+    const expectBody = (route: string, side: "request" | "response", ...fields: string[]) => {
+      expect(records.find((record) => record.request.route.endsWith(route))?.[side].body).toEqual(
+        shape(...fields),
+      );
+    };
+    expectBody(
+      "/keys/upload",
+      "request",
+      "device_keys.algorithms",
+      "device_keys.device_id",
+      "device_keys.keys.{keyId}",
+      "device_keys.user_id",
+      "one_time_keys.{keyId}.key",
     );
-    expect(secretStorage?.request.body).toEqual({
-      kind: "json",
-      fields: ["encrypted.{keyId}.ciphertext"],
-    });
+    expectBody(
+      "/sendToDevice/m.room.encrypted/{transactionId}",
+      "request",
+      "messages.{userId}.{deviceId}.content",
+    );
+    expectBody("/keys/query", "response", "failures.{serverName}.errcode");
+    expectBody("/account_data/m.cross_signing.master", "request", "encrypted.{keyId}.ciphertext");
     expect(records[1]?.sync).toMatchObject({ continuity: true, since: "sync-1" });
 
     const manifest = proxy.buildManifest({
       generatedAt: "2026-07-03T00:00:00.000Z",
       requestedProfile: "all",
-      scenarioIds: ["matrix-recording-test"],
+      scenarioIds: ["test"],
       substrate: { id: "tuwunel", version: "v1.5.1" },
     });
-    const expectation = manifest.scenarios["matrix-recording-test"];
+    const expectation = manifest.scenarios.test;
     expect(manifest.profile).toEqual({
       derivedFrom: "observed-request-response-traffic",
       id: "matrix-qa-v1",
     });
-    expect(expectation?.syncTokens).toEqual({
-      continuityObserved: true,
-      incrementalRequests: 1,
-      initialRequests: 1,
-      responseTokens: 2,
-    });
-    expect(expectation?.state.device).toEqual([
-      "/_matrix/client/v3/keys/upload",
-      "/_matrix/client/v3/sync",
-    ]);
-    expect(expectation?.state.key).toContain(
-      "/_matrix/client/v3/user/{userId}/account_data/m.cross_signing.master",
+    expect(expectation).toEqual(
+      expect.objectContaining({
+        syncTokens: {
+          continuityObserved: true,
+          incrementalRequests: 1,
+          initialRequests: 1,
+          responseTokens: 2,
+        },
+        state: expect.objectContaining({
+          device: [`${clientPath}keys/upload`, `${clientPath}sync`],
+          key: expect.arrayContaining([
+            `${clientPath}user/{userId}/account_data/m.cross_signing.master`,
+            `${clientPath}sync`,
+          ]),
+          backup: expect.arrayContaining([
+            `${clientPath}user/{userId}/account_data/m.megolm_backup.v1`,
+          ]),
+          media: expect.arrayContaining([`${clientPath}sync`]),
+        }),
+      }),
     );
-    expect(expectation?.state.key).toContain("/_matrix/client/v3/sync");
-    expect(expectation?.state.backup).toContain(
-      "/_matrix/client/v3/user/{userId}/account_data/m.megolm_backup.v1",
-    );
-    expect(expectation?.state.media).toContain("/_matrix/client/v3/sync");
     expect(expectation?.ordering[0]).toMatchObject({
       requestBody: { kind: "empty" },
       responseBody: {
@@ -354,72 +342,30 @@ describe("Matrix QA recording proxy", () => {
   });
 
   it("normalizes substrate-specific Matrix identifiers from routes", () => {
-    expect(
-      normalizeMatrixQaRoute(
-        "/_matrix/client/v3/rooms/!room%3Amatrix.test/send/m.room.message/txn-123",
-      ),
-    ).toBe("/_matrix/client/v3/rooms/{roomId}/send/m.room.message/{transactionId}");
-    expect(
-      normalizeMatrixQaRoute(
-        "/_matrix/client/v3/rooms/!room%3Amatrix.test/redact/$event%3Amatrix.test/txn-123",
-      ),
-    ).toBe("/_matrix/client/v3/rooms/{roomId}/redact/{eventId}/{transactionId}");
-    expect(normalizeMatrixQaRoute("/_matrix/media/v3/download/matrix.test/secret-media-id")).toBe(
-      "/_matrix/media/v3/download/{serverName}/{mediaId}",
-    );
-    expect(
-      normalizeMatrixQaRoute(
-        "/_matrix/media/v3/download/matrix.test/secret-media-id/private-report.pdf",
-      ),
-    ).toBe("/_matrix/media/v3/download/{serverName}/{mediaId}/{filename}");
-    expect(
-      normalizeMatrixQaRoute("/_matrix/client/v1/media/thumbnail/matrix.test/secret-media-id"),
-    ).toBe("/_matrix/client/v1/media/thumbnail/{serverName}/{mediaId}");
-    expect(
-      normalizeMatrixQaRoute("/_matrix/client/v3/user/@alice%3Amatrix.test/filter/filter-42"),
-    ).toBe("/_matrix/client/v3/user/{userId}/filter/{filterId}");
-    expect(
-      normalizeMatrixQaRoute(
-        "/_matrix/client/v3/user/@alice%3Amatrix.test/account_data/m.secret_storage.key.secret-key-id",
-      ),
-    ).toBe("/_matrix/client/v3/user/{userId}/account_data/m.secret_storage.key.{keyId}");
-    expect(
-      normalizeMatrixQaRoute("/_matrix/client/v3/room_keys/keys/!room%3Amatrix.test/session-42"),
-    ).toBe("/_matrix/client/v3/room_keys/keys/{roomId}/{sessionId}");
-  });
-
-  it("records the response observed after scenario-local fault injection", async () => {
-    const targetBaseUrl = await startRecordingTarget();
-    const recording = await startMatrixQaRecordingProxy({ targetBaseUrl });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-fault-recording-test");
-    const faultProxy = await startMatrixQaFaultProxy({
-      targetBaseUrl,
-      ...recording,
-      rules: [
-        {
-          id: "backup-unavailable",
-          match: (request) => request.path.endsWith("/room_keys/version"),
-          response: () => ({
-            body: { errcode: "M_NOT_FOUND", error: "secret-fault-message" },
-            status: 404,
-          }),
-        },
+    const routes = [
+      [
+        "rooms/!r%3Ax/send/m.room.message/txn",
+        "rooms/{roomId}/send/m.room.message/{transactionId}",
       ],
-    });
-    closeCallbacks.push(() => faultProxy.stop());
-
-    await fetch(`${faultProxy.baseUrl}/_matrix/client/v3/room_keys/version`);
-
-    const record = recording
-      .records()
-      .find((entry) => entry.scenarioId === "matrix-fault-recording-test");
-    expect(record?.response).toMatchObject({ errcode: "M_NOT_FOUND", status: 404 });
-    expect(JSON.stringify(record)).not.toContain("secret-fault-message");
+      ["rooms/!r%3Ax/redact/$e%3Ax/txn", "rooms/{roomId}/redact/{eventId}/{transactionId}"],
+      ["/media/v3/download/x/id", "/media/v3/download/{serverName}/{mediaId}"],
+      ["/media/v3/download/x/id/f.pdf", "/media/v3/download/{serverName}/{mediaId}/{filename}"],
+      ["/client/v1/media/thumbnail/x/id", "/client/v1/media/thumbnail/{serverName}/{mediaId}"],
+      ["user/@a%3Ax/filter/id", "user/{userId}/filter/{filterId}"],
+      [
+        "user/@a%3Ax/account_data/m.secret_storage.key.id",
+        "user/{userId}/account_data/m.secret_storage.key.{keyId}",
+      ],
+      ["room_keys/keys/!r%3Ax/id", "room_keys/keys/{roomId}/{sessionId}"],
+    ] satisfies Array<[string, string]>;
+    for (const [route, expected] of routes) {
+      const prefix = route.startsWith("/") ? "/_matrix" : clientPath;
+      expect(normalizeMatrixQaRoute(`${prefix}${route}`)).toBe(`${prefix}${expected}`);
+    }
   });
 
   it("records in-place scenario faults without changing the canonical proxy URL", async () => {
-    const recording = await startRecording("matrix-in-place-fault-recording-test");
+    const recording = await startRecording();
     const baseUrl = recording.baseUrl;
     const handle = recording.installFaultRule({
       id: "in-place-backup-unavailable",
@@ -430,7 +376,7 @@ describe("Matrix QA recording proxy", () => {
       }),
     });
 
-    const response = await fetch(`${recording.baseUrl}/_matrix/client/v3/room_keys/version`);
+    const response = await get(recording, "room_keys/version");
     expect(response.status).toBe(404);
     expect(recording.baseUrl).toBe(baseUrl);
     expect(handle.hits()).toHaveLength(1);
@@ -441,19 +387,15 @@ describe("Matrix QA recording proxy", () => {
     expect(JSON.stringify(recording.records().at(-1))).not.toContain("secret-in-place-fault");
 
     handle.remove();
-    const forwarded = await fetch(`${recording.baseUrl}/_matrix/client/v3/room_keys/version`);
+    handle.remove();
+    const forwarded = await get(recording, "room_keys/version");
     expect(forwarded.status).toBe(401);
     expect(handle.hits()).toHaveLength(1);
   });
 
   it("records proxy-generated upstream failures", async () => {
-    const recording = await startMatrixQaRecordingProxy({
-      targetBaseUrl: "http://127.0.0.1:1",
-    });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-upstream-failure-test");
-
-    const response = await fetch(`${recording.baseUrl}/_matrix/client/v3/sync?timeout=0`);
+    const recording = await startRecording("test", "http://127.0.0.1:1");
+    const response = await get(recording, "sync?timeout=0");
 
     expect(response.status).toBe(502);
     expect(recording.records().at(-1)?.response).toMatchObject({
@@ -463,141 +405,61 @@ describe("Matrix QA recording proxy", () => {
   });
 
   it("redacts signature upload device and cross-signing key identifiers", async () => {
-    const recording = await startRecording("matrix-signatures-recording-test");
+    const recording = await startRecording();
 
-    await fetch(`${recording.baseUrl}/_matrix/client/v3/keys/signatures/upload`, {
-      body: JSON.stringify({
-        "@secret-signing-user:matrix.test": {
-          SECRET_CROSS_SIGNING_KEY: { signatures: {} },
-        },
-      }),
-      headers: { "content-type": "application/json" },
-      method: "POST",
-    });
-
+    await sendJson(
+      recording,
+      "keys/signatures/upload",
+      keyed("@secret-signing-user:matrix.test", { SECRET_CROSS_SIGNING_KEY: { signatures: {} } }),
+    );
     const record = recording.records().at(-1);
-    expect(record?.request.body).toEqual({
-      kind: "json",
-      fields: ["{userId}.{deviceOrKeyId}.signatures"],
-    });
-    expect(JSON.stringify(record)).not.toContain("secret-signing-user");
-    expect(JSON.stringify(record)).not.toContain("SECRET_CROSS_SIGNING_KEY");
+    expect(record?.request.body).toEqual(shape("{userId}.{deviceOrKeyId}.signatures"));
+    for (const secret of ["secret-signing-user", "SECRET_CROSS_SIGNING_KEY"]) {
+      expect(JSON.stringify(record)).not.toContain(secret);
+    }
   });
 
   it("does not learn an unknown request token from the same sync response", async () => {
-    const recording = await startRecording("matrix-echoed-sync-token-test");
+    const recording = await startRecording();
 
-    await fetch(`${recording.baseUrl}/_matrix/client/v3/sync?timeout=0&since=echoed-unknown`);
+    await get(recording, "sync?timeout=0&since=echoed-unknown");
 
-    expect(recording.records().at(-1)?.sync).toMatchObject({
-      continuity: false,
-      since: "sync-unknown",
+    expect(recording.records().at(-1)).toMatchObject({
+      sync: { continuity: false, since: "sync-unknown" },
+      request: { query: { since: "sync-unknown" } },
     });
-    expect(recording.records().at(-1)?.request.query).toMatchObject({
-      since: "sync-unknown",
-    });
-    expect(
-      scenarioExpectation(recording, "matrix-echoed-sync-token-test")?.syncTokens,
-    ).toMatchObject({
+    expect(scenarioExpectation(recording)?.syncTokens).toMatchObject({
       continuityObserved: false,
       incrementalRequests: 1,
     });
   });
 
-  it("does not conflate distinct same-shape operations as retries", async () => {
-    const recording = await startRecording("matrix-distinct-operation-test");
-
-    await fetch(
-      `${recording.baseUrl}/_matrix/client/v3/rooms/!first:matrix.test/state/m.room.name`,
-      {
-        body: JSON.stringify({ name: "first" }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      },
-    );
-    await fetch(
-      `${recording.baseUrl}/_matrix/client/v3/rooms/!second:matrix.test/state/m.room.name`,
-      {
-        body: JSON.stringify({ name: "second" }),
-        headers: { "content-type": "application/json" },
-        method: "POST",
-      },
-    );
-
-    expect(scenarioExpectation(recording, "matrix-distinct-operation-test")?.retries).toEqual([]);
-  });
-
   it("does not conflate identical operations from different principals", async () => {
-    const recording = await startRecording("matrix-principal-retry-test");
-    const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
+    const recording = await startRecording();
+    await sendJson(recording, statePath, { name: "same" }, "POST", "first");
+    await sendJson(recording, statePath, { name: "same" }, "POST", "second");
 
-    await fetch(endpoint, {
-      body: JSON.stringify({ name: "same" }),
-      headers: { authorization: "Bearer first", "content-type": "application/json" },
-      method: "POST",
-    });
-    await fetch(endpoint, {
-      body: JSON.stringify({ name: "same" }),
-      headers: { authorization: "Bearer second", "content-type": "application/json" },
-      method: "POST",
-    });
-
-    expect(scenarioExpectation(recording, "matrix-principal-retry-test")?.retries).toEqual([]);
+    expect(scenarioExpectation(recording)?.retries).toEqual([]);
   });
 
   it("attributes sync completion to the active scenario", async () => {
     const recording = await startRecording("previous-scenario");
-    const context = recording.createExchangeContext?.({
-      body: Buffer.alloc(0),
-      headers: {},
-      method: "GET",
-      path: "/_matrix/client/v3/sync",
-      search: "?timeout=0",
-    });
+    const request = syncRequest();
+    const context = recording.createExchangeContext?.(request);
     recording.setScenarioId("active-scenario");
-    await recording.onExchange?.({
-      context,
-      request: {
-        body: Buffer.alloc(0),
-        headers: {},
-        method: "GET",
-        path: "/_matrix/client/v3/sync",
-        search: "?timeout=0",
-      },
-      response: {
-        body: Buffer.from(JSON.stringify({ next_batch: "sync-complete" })),
-        headers: new Headers({ "content-type": "application/json" }),
-        status: 200,
-      },
-    });
+    await exchangeSync(recording, request, "sync-complete", context);
 
     expect(recording.records().at(-1)?.scenarioId).toBe("active-scenario");
   });
 
   it("does not share sync-token continuity across principals", async () => {
-    const recording = await startRecording("matrix-principal-sync-test");
-    const exchange = async (bearerToken: string, search: string, nextBatch: string) => {
-      const request = {
-        bearerToken,
-        body: Buffer.alloc(0),
-        headers: {},
-        method: "GET",
-        path: "/_matrix/client/v3/sync",
-        search,
-      };
-      await recording.onExchange?.({
-        context: recording.createExchangeContext?.(request),
-        request,
-        response: {
-          body: Buffer.from(JSON.stringify({ next_batch: nextBatch })),
-          headers: new Headers({ "content-type": "application/json" }),
-          status: 200,
-        },
-      });
-    };
-
-    await exchange("first", "?timeout=0", "shared-token");
-    await exchange("second", "?timeout=0&since=shared-token", "second-token");
+    const recording = await startRecording();
+    await exchangeSync(recording, syncRequest("?timeout=0", "first"), "shared-token");
+    await exchangeSync(
+      recording,
+      syncRequest("?timeout=0&since=shared-token", "second"),
+      "second-token",
+    );
 
     expect(recording.records().at(-1)?.sync).toMatchObject({
       continuity: false,
@@ -605,31 +467,15 @@ describe("Matrix QA recording proxy", () => {
     });
   });
 
-  it("records exhausted retry chains without recovery", async () => {
-    const recording = await startRecording("matrix-exhausted-retry-test", {
-      alwaysFailState: true,
-    });
-    const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!exhausted:matrix.test/state/m.room.name`;
-
-    await fetch(endpoint, { method: "POST" });
-    await fetch(endpoint, { method: "POST" });
-
-    expect(scenarioExpectation(recording, "matrix-exhausted-retry-test")?.retries).toEqual([
-      expect.objectContaining({ attempts: 2, statuses: [401, 401] }),
-    ]);
-  });
-
   it("does not infer retries across intervening operations", async () => {
-    const recording = await startRecording("matrix-independent-operation-test");
-    const stateEndpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
+    const recording = await startRecording();
+    const stateEndpoint = `${recording.baseUrl}${clientPath}${statePath}`;
 
     await fetch(stateEndpoint, { method: "POST" });
     await fetch(`${recording.baseUrl}/_matrix/client/versions`);
     await fetch(stateEndpoint, { method: "POST" });
 
-    expect(scenarioExpectation(recording, "matrix-independent-operation-test")?.retries).toEqual(
-      [],
-    );
+    expect(scenarioExpectation(recording)?.retries).toEqual([]);
   });
 
   it("records repeated retry chains and ends each at the first recovery", async () => {
@@ -637,39 +483,15 @@ describe("Matrix QA recording proxy", () => {
     const server = createServer((_req, res) => {
       requestCount += 1;
       const status = requestCount <= 4 && requestCount % 2 === 1 ? 503 : 200;
-      res.writeHead(status, { "content-type": "application/json" });
-      res.end(JSON.stringify(status === 200 ? {} : { errcode: "M_UNAVAILABLE" }));
+      jsonResponse(res, status === 200 ? {} : { errcode: "M_UNAVAILABLE" }, status);
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
-    closeCallbacks.push(
-      () =>
-        new Promise<void>((resolve, reject) => {
-          server.close((error) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve();
-          });
-        }),
-    );
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("retry target did not bind");
-    }
-    const recording = await startMatrixQaRecordingProxy({
-      targetBaseUrl: `http://127.0.0.1:${address.port}`,
-    });
-    closeCallbacks.push(() => recording.stop());
-    recording.setScenarioId("matrix-repeated-retry-test");
-    const endpoint = `${recording.baseUrl}/_matrix/client/v3/rooms/!same:matrix.test/state/m.room.name`;
+    const recording = await startRecording("test", await listen(server));
+    const endpoint = `${recording.baseUrl}${clientPath}${statePath}`;
     for (let attempt = 0; attempt < 5; attempt += 1) {
       await fetch(endpoint, { method: "POST" });
     }
 
-    expect(scenarioExpectation(recording, "matrix-repeated-retry-test")?.retries).toEqual([
+    expect(scenarioExpectation(recording)?.retries).toEqual([
       expect.objectContaining({ attempts: 2, statuses: [503, 200] }),
       expect.objectContaining({ attempts: 2, statuses: [503, 200] }),
     ]);

@@ -20,6 +20,7 @@ import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
 } from "../lib/bounded-response.mjs";
+import { createBuildSmokeEnv } from "../lib/build-smoke-env.mts";
 import { reportLimitViolations, type LimitViolation } from "../lib/check-limits.mts";
 import { toErrorObject as coerceKitchenSinkError } from "../lib/error-format.mts";
 import { readGatewayResources } from "../lib/gateway-bench-profile.ts";
@@ -29,6 +30,7 @@ import {
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
 import { resolveGatewayCliPayload } from "./lib/gateway-frame-payload.mjs";
+import { parseJsonOutputValues } from "./lib/json-output.mjs";
 import {
   calibrateKitchenSinkResources,
   KITCHEN_RESOURCE_CONTROLS,
@@ -41,7 +43,7 @@ import {
   type KitchenSinkResourcePhase,
 } from "./lib/kitchen-sink-resources.mts";
 import { fixtureCapabilityConsentArgs } from "./lib/package-compat.mjs";
-import { readTextFileTail } from "./lib/text-file-utils.mjs";
+import { createTextFileScanner, readTextFileTail } from "./lib/text-file-utils.mjs";
 
 type JsonRecord = Record<string, unknown>;
 type ProcessEnv = Record<string, string | undefined>;
@@ -404,12 +406,7 @@ export function makeEnv(baseEnv: ProcessEnv = process.env) {
   return {
     root,
     env: {
-      ...baseEnv,
-      HOME: home,
-      USERPROFILE: home,
-      OPENCLAW_HOME: home,
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      ...createBuildSmokeEnv(home, baseEnv),
       OPENCLAW_NO_ONBOARD: "1",
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_KITCHEN_SINK_PERSONALITY: baseEnv.OPENCLAW_KITCHEN_SINK_PERSONALITY || "conformance",
@@ -822,23 +819,9 @@ export function parseJsonOutput(stdout: string): JsonRecord {
   if (!trimmed) {
     throw new Error("command produced no JSON output");
   }
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (isRecord(parsed)) {
-      return parsed;
-    }
-  } catch {
-    // Fall through to extracting a complete object from mixed command output.
-  }
-  for (const candidate of extractBalancedJsonObjects(trimmed).toReversed()) {
-    try {
-      const parsed: unknown = JSON.parse(candidate);
-      if (isRecord(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // Continue looking for the final complete JSON object.
-    }
+  const parsed = parseJsonOutputValues(trimmed).findLast(isRecord);
+  if (parsed) {
+    return parsed;
   }
   throw new Error(`JSON output was not parseable:\n${tailText(trimmed)}`);
 }
@@ -949,65 +932,6 @@ function previewJsonString(value: string) {
   return `${value.slice(0, JSON_PREVIEW_STRING_HEAD_CHARS)}... [truncated ${omitted} chars] ...${value.slice(
     -JSON_PREVIEW_STRING_TAIL_CHARS,
   )}`;
-}
-
-function extractBalancedJsonObjects(text: string) {
-  const candidates: string[] = [];
-  for (let index = 0; index < text.length; index += 1) {
-    if (text[index] !== "{") {
-      continue;
-    }
-    if (!isJsonObjectRecordStart(text, index)) {
-      continue;
-    }
-    const end = findBalancedJsonObjectEnd(text, index);
-    if (end > index) {
-      candidates.push(text.slice(index, end + 1));
-      index = end;
-    }
-  }
-  return candidates;
-}
-
-function isJsonObjectRecordStart(text: string, index: number) {
-  if (index === 0) {
-    return true;
-  }
-  let cursor = index - 1;
-  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
-    cursor -= 1;
-  }
-  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
-}
-
-function findBalancedJsonObjectEnd(text: string, startIndex: number) {
-  let depth = 0;
-  let inString = false;
-  let escaping = false;
-  for (let index = startIndex; index < text.length; index += 1) {
-    const char = text[index];
-    if (inString) {
-      if (escaping) {
-        escaping = false;
-      } else if (char === "\\") {
-        escaping = true;
-      } else if (char === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (char === '"') {
-      inString = true;
-    } else if (char === "{") {
-      depth += 1;
-    } else if (char === "}") {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-  return -1;
 }
 
 function hasOwnPayloadField(raw: unknown, field: string): raw is JsonRecord {
@@ -1168,6 +1092,9 @@ async function retryRpcCall(method: string, params: unknown, options: RpcCallOpt
 function isRetryableGatewayCallError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
   return (
+    // Typed request errors carry the Gateway's own retry verdict, such as a
+    // cold `talk.catalog` read answering UNAVAILABLE while its snapshot warms.
+    asRecord(error).retryable === true ||
     isRetryableTransientNetworkError(error) ||
     text.includes("gateway starting") ||
     text.includes("gateway closed") ||
@@ -1547,54 +1474,8 @@ function signalChildProcessTree(
 }
 
 export function createGatewayReadyLogScanner(logPath: string, marker = "[gateway] ready") {
-  let offset = 0;
-  let tail = "";
-  let found = false;
-
-  return () => {
-    if (found) {
-      return true;
-    }
-
-    let stat;
-    try {
-      stat = fs.statSync(logPath);
-    } catch {
-      offset = 0;
-      tail = "";
-      return false;
-    }
-
-    if (stat.size < offset) {
-      offset = 0;
-      tail = "";
-    }
-    if (stat.size === offset) {
-      return false;
-    }
-
-    const fd = fs.openSync(logPath, "r");
-    try {
-      const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size - offset));
-      while (offset < stat.size) {
-        const bytesToRead = Math.min(buffer.length, stat.size - offset);
-        const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
-        if (bytesRead <= 0) {
-          break;
-        }
-        offset += bytesRead;
-        const text = `${tail}${buffer.subarray(0, bytesRead).toString("utf8")}`;
-        if (text.includes(marker)) {
-          found = true;
-          return true;
-        }
-        tail = text.slice(-Math.max(0, marker.length - 1));
-      }
-      return false;
-    } finally {
-      fs.closeSync(fd);
-    }
-  };
+  const scan = createTextFileScanner(logPath, [marker], LOG_SCAN_CHUNK_BYTES);
+  return () => scan() >= 0;
 }
 
 export async function waitForGatewayReady(

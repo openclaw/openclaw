@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts,
@@ -63,7 +63,7 @@ export const workspaceStatePublication = createStateDomainPublication<WorkspaceS
   },
 });
 
-export function captureWorkspaceStateReceipt<T>(db: DatabaseSync, run: () => T): T {
+export function captureWorkspaceStateReceipt<T>(db: EngineConnection, run: () => T): T {
   const { result, receipt } = workspaceStatePublication.capture(db, run);
   deferSqliteWorkerCommitReceipt(
     db,
@@ -77,17 +77,17 @@ export function captureWorkspaceStateReceipt<T>(db: DatabaseSync, run: () => T):
   return result;
 }
 
-export function workspaceStateReceiptResult(facts: unknown): unknown {
+export function readWorkspaceStateReceipt(facts: unknown) {
   if (!isRecord(facts) || facts.kind !== "workspace-state") {
     throw new Error("Workspace state has no committed receipt");
   }
-  return facts.result;
+  return facts;
 }
 
 export function withWorkspaceStatePublication(
   context: OpenClawStateWorkerContext,
   createAdmission: SqliteWorkerAdmissionFactory,
-  onCommitted?: (facts: unknown) => void,
+  onCommitted?: (facts: ReturnType<typeof readWorkspaceStateReceipt>) => void,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const accepted = createAdmission(operation);
@@ -98,11 +98,9 @@ export function withWorkspaceStatePublication(
       assertCurrent: context.assertPublicationCurrent ?? context.admission.assertCurrent,
     });
     observeSqliteWorkerCommittedFacts(accepted.admission, ({ facts }) => {
-      workspaceStateReceiptResult(facts);
-      if (isRecord(facts)) {
-        publication.committed(facts.receipt);
-      }
-      onCommitted?.(facts);
+      const receipt = readWorkspaceStateReceipt(facts);
+      publication.committed(receipt.receipt);
+      onCommitted?.(receipt);
     });
     void operation.settled.then((settlement) =>
       publication.finish(settlement.kind === "completed"),

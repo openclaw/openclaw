@@ -85,11 +85,21 @@ export function createEventHandlers(context: EventHandlerContext) {
     finalizeHistoryOwnedRun: ({ runId, result, previouslyDisplayed }) => {
       // Persisted history owns the final row; retain the previous display fact
       // after a failed rebuild so delayed finals never duplicate or disappear.
+      const ownsRun =
+        state.activeChatRunId === runId ||
+        getPendingSubmitAcceptedRunId(state) === runId ||
+        runCoordinator.sessionRuns.has(runId);
+      const outcome = ownsRun && result.loaded ? result.runOutcome.state : undefined;
+      clearPendingSubmit(state, runId);
       finalizeRun({
         runId,
-        wasActiveRun: state.activeChatRunId === runId,
-        status: "idle",
+        wasActiveRun:
+          state.activeChatRunId === runId || (!state.activeChatRunId && !hasPendingSubmit(state)),
+        status: outcome === "failed" ? "error" : "idle",
+        runOutcome:
+          outcome === "completed" ? "completed" : outcome === "interrupted" ? "aborted" : undefined,
         displayedFinal: result.loaded || previouslyDisplayed,
+        reconcileIdle: false,
       });
     },
     replayHistoryRunEvent: (event) => handleChatEvent(event),
@@ -253,6 +263,9 @@ export function createEventHandlers(context: EventHandlerContext) {
     }
     if (evt.state === "final") {
       const wasActiveRun = state.activeChatRunId === evt.runId;
+      const terminalStopReason = state.sessionProjection.runs[evt.runId]?.stopReason;
+      const status = terminalStopReason === "error" ? "error" : "idle";
+      const runOutcome = status === "error" ? undefined : "completed";
       if (!evt.message && isLocalBtwRun) {
         forgetLocalBtwRunId?.(evt.runId);
         runCoordinator.noteFinalizedRun(evt.runId);
@@ -266,7 +279,12 @@ export function createEventHandlers(context: EventHandlerContext) {
           wasPendingChatRun: isPendingChatRun,
         });
         chatLog.dropAssistant(evt.runId);
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status,
+          runOutcome,
+        });
         tui.requestRender(true);
         return;
       }
@@ -276,12 +294,16 @@ export function createEventHandlers(context: EventHandlerContext) {
         if (text) {
           chatLog.addSystem(text);
         }
-        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle", displayedFinal: true });
+        finalizeRun({
+          runId: evt.runId,
+          wasActiveRun,
+          status,
+          runOutcome,
+          displayedFinal: true,
+        });
         tui.requestRender(true);
         return;
       }
-      const terminalStopReason = state.sessionProjection.runs[evt.runId]?.stopReason;
-
       const hasStreamedText = streamAssembler.hasDisplayText(evt.runId);
       const finalText = streamAssembler.finalize(
         evt.runId,
@@ -308,7 +330,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       finalizeRun({
         runId: evt.runId,
         wasActiveRun,
-        status: terminalStopReason === "error" ? "error" : "idle",
+        status,
+        runOutcome,
         displayedFinal: !suppressEmptyExternalPlaceholder,
       });
     }
@@ -328,7 +351,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       const diagnostic = formatTuiAbortDiagnostic(evt.errorMessage);
       chatLog.addSystem(diagnostic ? `run aborted: ${diagnostic}` : "run aborted");
-      terminateRun({ runId: evt.runId, wasActiveRun, status: "aborted" });
+      terminateRun({
+        runId: evt.runId,
+        wasActiveRun,
+        status: "aborted",
+        localModelMayStillBeFinishing: evt.localModelMayStillBeFinishing,
+      });
       maybeRefreshHistoryForRun(evt.runId, {
         hasDisplayableFinal: hasDisplayableAbortedText,
       });
@@ -365,11 +393,17 @@ export function createEventHandlers(context: EventHandlerContext) {
     const persistedRunId = evt.clientRunId || evt.runId;
     if (persistedRunId && (evt.phase === "end" || evt.phase === "error")) {
       runCoordinator.notePersistedRun(persistedRunId);
-      if (pendingNewSessionRunIds.delete(persistedRunId)) {
+      if (
+        pendingNewSessionRunIds.delete(persistedRunId) ||
+        sessionRuns.has(persistedRunId) ||
+        state.activeChatRunId === persistedRunId ||
+        getPendingSubmitAcceptedRunId(state) === persistedRunId
+      ) {
         if (evt.phase === "end") {
           const displayedRunIds = finalizedRunsWithDisplay.has(persistedRunId)
             ? [persistedRunId]
             : [];
+          runCoordinator.pendingHistoryRefresh = false;
           void runCoordinator.queueHistoryReload(
             [persistedRunId],
             [persistedRunId],
@@ -548,6 +582,23 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (!isKnownRun) {
       return;
     }
+    if (evt.stream === "run_status" && isActiveRun) {
+      if (evt.data?.phase === "waiting_for_model") {
+        pauseStreamingWatchdog();
+        setActivityStatus(
+          evt.data.reason === "slot"
+            ? "Waiting for a free model slot"
+            : "Waiting for the local model to respond",
+        );
+      } else if (evt.data?.phase === "starting_model") {
+        armStreamingWatchdog(evt.runId);
+        setActivityStatus("running");
+      } else {
+        return;
+      }
+      tui.requestRender();
+      return;
+    }
     if (evt.stream === "item") {
       if (
         renderTuiActivityItem({ chatLog, event: evt, verboseLevel: state.sessionInfo.verboseLevel })
@@ -609,7 +660,8 @@ export function createEventHandlers(context: EventHandlerContext) {
       if (!isActiveRun && !isPendingRun && phase !== "finishing" && !isPostFinalTerminalPhase) {
         return;
       }
-      const canUpdateActivityStatus = !hasConcurrentActiveRun(evt.runId);
+      const canUpdateActivityStatus =
+        !hasConcurrentActiveRun(evt.runId) && (!hasPendingSubmit(state) || isPendingRun);
       if (phase && phase !== "end" && phase !== "error" && phase !== "finishing") {
         armStreamingWatchdog(evt.runId);
       }
@@ -630,7 +682,14 @@ export function createEventHandlers(context: EventHandlerContext) {
       }
       if (phase === "end") {
         if (!localMode || !isLocalRunId?.(evt.runId) || finalizedRuns.has(evt.runId)) {
-          setActivityStatus("idle"); // Local chat.final proves post-turn maintenance finished.
+          // Local chat.final proves post-turn maintenance finished. A lifecycle
+          // end must not turn an already aborted or failed run into success.
+          const runStatus = state.sessionProjection?.runs[evt.runId]?.status;
+          if (runStatus === "error" || runStatus === "timeout") {
+            setActivityStatus("error");
+          } else {
+            setActivityStatus("idle", runStatus === "aborted" ? "aborted" : "completed");
+          }
         }
       }
       if (phase === "error") {

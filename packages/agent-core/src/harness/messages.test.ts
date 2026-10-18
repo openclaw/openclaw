@@ -62,12 +62,14 @@ describe("convertToLlm message ownership", () => {
       role: "user",
       content: blocks,
       timestamp: Date.parse(timestamp),
+      synthetic: true,
     });
     expect(text).not.toBe(textMessage);
     expect(text).toEqual({
       role: "user",
       content: [{ type: "text", text: "text content" }],
       timestamp: Date.parse(timestamp),
+      synthetic: true,
     });
     expect(text?.content).not.toBe(repeatedText?.content);
   });
@@ -112,6 +114,7 @@ describe("convertToLlm message ownership", () => {
         role: "user",
         content: [{ type: "text", text: "extension-owned content" }],
         timestamp: Date.parse(timestamp),
+        synthetic: true,
       },
       {
         role: "user",
@@ -224,20 +227,6 @@ describe("harness message timestamps", () => {
     ];
 
     const [message] = convertToLlm(persistedMessages);
-
-    expect(message?.timestamp).toBe(Date.parse(timestamp));
-  });
-
-  it("preserves Date.parse semantics for numeric-looking persisted timestamps", () => {
-    const timestamp = "2026";
-    const [message] = convertToLlm([
-      {
-        role: "compactionSummary",
-        summary: "older context",
-        tokensBefore: 123,
-        timestamp,
-      },
-    ]);
 
     expect(message?.timestamp).toBe(Date.parse(timestamp));
   });

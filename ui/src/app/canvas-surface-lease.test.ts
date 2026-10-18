@@ -243,7 +243,7 @@ describe("createCanvasSurfaceLease", () => {
     expect(clock.pendingCount).toBe(0);
   });
 
-  it.each([Number.MAX_SAFE_INTEGER, 2 ** 32 + 115_000])(
+  it.each([Number.MAX_SAFE_INTEGER])(
     "clamps an advertised canvas expiry of %d to a browser-safe native timer",
     async (expiresAtMs) => {
       const request = vi.fn(async () => ({

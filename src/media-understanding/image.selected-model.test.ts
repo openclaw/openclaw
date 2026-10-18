@@ -118,6 +118,7 @@ describe("image model selection ownership", () => {
               agentDir: state.agentDir(),
               provider,
               model: "entry",
+              authStore: { version: 1, profiles: {} },
               preparedModelRuntime: snapshot,
             },
             (resources) => {

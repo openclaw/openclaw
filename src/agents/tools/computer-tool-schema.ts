@@ -5,6 +5,7 @@ import {
   COMPUTER_USE_V1_ACTION_NAMES,
   type ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
+import { createCachedToolSchema } from "../schema/cached-schema.js";
 import {
   optionalFiniteNumberSchema,
   optionalNonNegativeIntegerSchema,
@@ -53,9 +54,24 @@ function coordinatePair(description: string, integer = true) {
   );
 }
 
+const cachedComputerToolSchema = createCachedToolSchema({
+  key: (inputs: {
+    actions: readonly ComputerUseV2ActionName[];
+    targetScope: "paired" | "session";
+  }) => JSON.stringify([inputs.targetScope, inputs.actions]),
+  build: ({ actions, targetScope }) => buildComputerToolSchema(actions, targetScope),
+});
+
 export function createComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
   targetScope: "paired" | "session" = "paired",
+) {
+  return cachedComputerToolSchema({ actions, targetScope });
+}
+
+function buildComputerToolSchema(
+  actions: readonly ComputerUseV2ActionName[],
+  targetScope: "paired" | "session",
 ) {
   const supportsHold = actions.includes("hold_key");
   const accessibilityTarget = actions.includes("get_window_state")

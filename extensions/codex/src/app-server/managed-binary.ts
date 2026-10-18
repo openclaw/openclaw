@@ -4,13 +4,14 @@
  * app-server handshake, otherwise the package shipped beside the Codex plugin.
  */
 import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
-import { access, open, realpath } from "node:fs/promises";
+import { open, realpath } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-registration";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { resolveNodeHostExecutable } from "openclaw/plugin-sdk/node-host";
+import { canAccess } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runUtf8CommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { parse as parseSemver } from "semver";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
@@ -378,7 +379,6 @@ export async function runCodexVersionCommand(
 ): Promise<string> {
   const result = await runUtf8CommandWithTimeout([nativeCommand, "--version"], {
     baseEnv: env,
-    input: "",
     timeoutMs,
     maxOutputBytes: CODEX_VERSION_MAX_OUTPUT_BYTES,
     outputCapture: "head",
@@ -605,10 +605,5 @@ export function resolveManagedCodexPackageEntrypoint(pluginRoot: string): string
 }
 
 async function commandPathExists(filePath: string, platform: NodeJS.Platform): Promise<boolean> {
-  try {
-    await access(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
+  return canAccess(filePath, platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
 }

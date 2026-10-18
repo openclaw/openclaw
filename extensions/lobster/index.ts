@@ -13,7 +13,7 @@ export default definePluginEntry({
         }
         return createLobsterTool(api);
       },
-      { optional: true },
+      { optional: true, workspaceAccess: "execute" },
     );
   },
 });

@@ -186,7 +186,15 @@ export function installControlUiRpcDiagnostics(page: Page): void {
             "agents.files.list",
             "agents.files.get",
             "agents.files.set",
+            "audit.run.inspect",
             "canvas.document.view",
+            "chat.history",
+            "chat.startup",
+            "sessions.list",
+            "sessions.subscribe",
+            "sessions.unsubscribe",
+            "sessions.messages.subscribe",
+            "sessions.messages.unsubscribe",
           ].includes(frame.method)
         ) {
           if (pending.size >= 32) {
@@ -221,7 +229,7 @@ type ControlUiE2eFailureDiagnosticsOptions = {
   label: string;
   pageErrors?: string[];
   pageEvents?: ControlUiE2eDiagnosticEvent[];
-  modelResponses?: { list?: unknown; authStatus?: unknown };
+  modelResponses?: { list?: unknown; snapshot?: unknown; authStatus?: unknown };
 };
 
 function summarizeRecordedModelResponses(
@@ -229,9 +237,8 @@ function summarizeRecordedModelResponses(
 ) {
   const list = asOptionalRecord(responses.list);
   const auth = asOptionalRecord(responses.authStatus);
-  const catalog = asOptionalRecord(list?.payload);
+  const snapshot = asOptionalRecord(responses.snapshot);
   const health = asOptionalRecord(auth?.payload);
-  const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
   const profiles = Array.isArray(health?.providers)
     ? health.providers.flatMap((provider) => {
         const record = asOptionalRecord(provider);
@@ -252,25 +259,36 @@ function summarizeRecordedModelResponses(
       ]),
     );
   };
+  const catalogCounts = (payload: unknown) => {
+    const catalog = asOptionalRecord(payload);
+    const models = Array.isArray(catalog?.models) ? catalog.models : undefined;
+    return {
+      models: models?.length ?? null,
+      available:
+        models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
+      unavailable:
+        models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
+      unknownAvailability:
+        models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
+        null,
+      pendingProviders: Array.isArray(catalog?.pendingProviders)
+        ? catalog.pendingProviders.length
+        : null,
+      providerOutcomes: statusCounts(catalog?.providerOutcomes, [
+        "ready",
+        "auth-rejected",
+        "unavailable",
+      ]),
+    };
+  };
   return {
     listSeen: responses.list !== undefined,
     listOk: typeof list?.ok === "boolean" ? list.ok : null,
-    models: models?.length ?? null,
-    available:
-      models?.filter((model) => asOptionalRecord(model)?.available === true).length ?? null,
-    unavailable:
-      models?.filter((model) => asOptionalRecord(model)?.available === false).length ?? null,
-    unknownAvailability:
-      models?.filter((model) => typeof asOptionalRecord(model)?.available !== "boolean").length ??
-      null,
-    pendingProviders: Array.isArray(catalog?.pendingProviders)
-      ? catalog.pendingProviders.length
-      : null,
-    providerOutcomes: statusCounts(catalog?.providerOutcomes, [
-      "ready",
-      "auth-rejected",
-      "unavailable",
-    ]),
+    ...catalogCounts(list?.payload),
+    snapshot: {
+      seen: responses.snapshot !== undefined,
+      ...catalogCounts(asOptionalRecord(snapshot?.payload)?.catalog),
+    },
     authSeen: responses.authStatus !== undefined,
     authOk: typeof auth?.ok === "boolean" ? auth.ok : null,
     profiles: statusCounts(profiles, ["ok", "expiring", "expired", "missing", "static"]),
@@ -340,8 +358,10 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
       };
       const app = document.querySelector("openclaw-app");
       const shell = document.querySelector("openclaw-app-shell");
+      const runInspector = document.querySelector("#activity-run-panel");
       const diagnostics: ReturnType<ControlUiReadiness["hook"]["diagnostics"]> | undefined =
         window.openclawControlUi?.diagnostics();
+      const readiness = window.openclawControlUi?.snapshot();
       const agentsState = diagnostics?.roster;
       const gatewaySnapshot = diagnostics?.gateway;
       const customElementCounts: Record<string, number> = {};
@@ -373,37 +393,40 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         /^\/settings\/agents\/([^/]+)\/(overview|files|tools|skills|channels|cron)$/u,
       );
       const groupMode = document.querySelector<HTMLElement>(
-        "wa-dropdown.session-group-defaults__mode-dropdown",
+        ".session-group-defaults__mode-dropdown",
       );
-      const groupMenu = groupMode?.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-      const groupPopup = groupMode?.shadowRoot?.querySelector<HTMLElement>("wa-popup");
-      const groupPopupSurface =
-        groupPopup?.shadowRoot?.querySelector<HTMLElement>('[part="popup"]');
+      const groupMenu = groupMode?.querySelector<HTMLElement>(".session-group-defaults__mode-menu");
       const groupFolderPicker = document.querySelector<HTMLElement>(
-        "wa-popover.session-group-defaults__folder-popover",
+        ".session-group-defaults__folder-popover",
       );
       return {
         failureSummary: {
+          readiness: readiness
+            ? {
+                generation: readiness.generation,
+                booted: readiness.booted,
+                gatewayPhase: readiness.gatewayPhase,
+                routeReady: readiness.routeReady,
+                rosterReady: readiness.rosterReady,
+                ready: readiness.ready,
+                settlementFailed: diagnostics?.settlementError != null,
+              }
+            : null,
           sessionGroupDefaults: groupMode
             ? {
-                open: Reflect.get(groupMode, "open") === true,
+                open: groupMenu?.matches(":popover-open") ?? false,
                 expanded: safeValue(
-                  groupMode.querySelector('[slot="trigger"]')?.getAttribute("aria-expanded"),
+                  groupMode
+                    .querySelector(".session-group-defaults__mode-trigger")
+                    ?.getAttribute("aria-expanded"),
                   ["true", "false"],
                 ),
                 menuInert: groupMenu?.inert ?? null,
                 menuVisible: groupMenu?.checkVisibility({ visibilityProperty: true }) ?? null,
-                popupActive: groupPopup ? Reflect.get(groupPopup, "active") === true : null,
-                nativePopupOpen: groupPopupSurface?.matches(":popover-open") ?? null,
-                folderPickerOpen: groupFolderPicker
-                  ? Reflect.get(groupFolderPicker, "open") === true
-                  : null,
-                folderDialogOpen:
-                  groupFolderPicker?.shadowRoot?.querySelector<HTMLDialogElement>("dialog")?.open ??
-                  null,
+                folderPickerOpen: groupFolderPicker?.matches(":popover-open") ?? null,
                 items: ["local", "worktree"].map((value) => {
                   const item = groupMode.querySelector<HTMLElement>(
-                    `wa-dropdown-item[value="${value}"]`,
+                    `[data-environment-mode="${value}"]`,
                   );
                   return {
                     value,
@@ -415,7 +438,7 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                     ]),
                     visible: item?.checkVisibility({ visibilityProperty: true }) ?? null,
                     rectCount: item?.getClientRects().length ?? 0,
-                    iconCount: item?.querySelectorAll('[slot="icon"]').length ?? 0,
+                    iconCount: item?.querySelectorAll(".oc-menu-item__icon").length ?? 0,
                   };
                 }),
               }
@@ -458,6 +481,11 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
             editorPresent: Boolean(fileEditor),
             editorLength: fileEditor?.value.length ?? null,
             editorDisabled: fileEditor?.disabled ?? null,
+          },
+          runInspector: {
+            panelPresent: runInspector !== null,
+            executionIdentityPresent: runInspector?.hasAttribute("data-execution-id") ?? null,
+            runIdentityPresent: runInspector?.hasAttribute("data-run-id") ?? null,
           },
           gatewayPhase: safeValue(gatewaySnapshot?.phase, [
             "stopped",

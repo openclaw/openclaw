@@ -1,7 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
-  getRuntimeConfig,
+  captureRuntimeConfigAsyncReader,
   type OpenClawConfig,
   CONFIG_PATH,
   readConfigFileSnapshot,
@@ -96,7 +96,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   // Gmail watch requires the Pub/Sub topic to live in the OAuth client project.
   if (!projectId) {
     throw new Error(
-      "GCP project id required (use --project or ensure gog credentials are available)",
+      "GCP project id required (use --project or check that gog credentials are available)",
     );
   }
 
@@ -263,7 +263,7 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
 export async function runGmailService(opts: GmailRunOptions) {
   await ensureDependency("gog", ["gogcli"]);
-  const config = getRuntimeConfig();
+  const config = await captureRuntimeConfigAsyncReader()();
 
   const overrides: GmailHookOverrides = {
     account: opts.account,

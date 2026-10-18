@@ -16,16 +16,19 @@ export async function openHomeFullPage(page: Page, agentId = "main"): Promise<vo
   await expect
     .poll(async () => new URL(page.url()).pathname === pathname || (await pageAction.isVisible()))
     .toBe(true);
+  // Chip navigation may reach Home before the dock receives its route properties.
+  if (new URL(page.url()).pathname === pathname) {
+    await waitForControlUiRoute(page, { pathname, routeId: "chat" });
+    return;
+  }
   if (await pageAction.isVisible()) {
     await pageAction.click();
   }
   await waitForControlUiRoute(page, { pathname, routeId: "chat" });
 }
 
-/** Cross-owner scenarios choose the All view explicitly instead of broadening the default. */
+/** Cross-owner scenarios choose All owners explicitly instead of broadening the default. */
 export async function selectAllSidebarSessions(page: Page): Promise<void> {
-  await page
-    .locator(".sidebar-navigation-scope")
-    .getByRole("button", { name: "All", exact: true })
-    .click();
+  await page.locator("#sidebar-session-owner-title").click();
+  await page.locator('.sidebar-session-owner-filter [role="option"][data-value="all"]').click();
 }

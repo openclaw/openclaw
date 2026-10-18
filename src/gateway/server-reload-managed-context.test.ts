@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotsRevision,
@@ -7,7 +7,10 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { ConfigWriteNotification } from "../config/config.js";
-import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import {
   attachRuntimeConfigWriteApplication,
   createRuntimeConfigWriteApplication,
@@ -35,6 +38,7 @@ import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
+import { installWatcherMock } from "./config-reload.watcher.test-support.js";
 import type { GatewayCronState } from "./server-cron.js";
 import type { GatewayPluginReloadResult } from "./server-reload-contracts.js";
 import {
@@ -70,6 +74,8 @@ let skipChannels: string | undefined;
 let skipProviders: string | undefined;
 
 beforeEach(() => {
+  const watcher = installWatcherMock();
+  onTestFinished(() => watcher.restore());
   pluginRegistrySnapshot = captureActivePluginRegistrySnapshot();
   skipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
   skipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -130,6 +136,7 @@ function startManagedGatewayConfigReloader(
   startManagedGatewayConfigReloaderImpl: typeof StartManagedGatewayConfigReloader,
   params: ManagedReloaderTestParams,
 ) {
+  setRuntimeConfigSnapshot(params.initialConfig);
   let state: ReturnType<ManagedReloaderParams["getState"]> = {
     hooksConfig: {} as never,
     hookClientIpConfig: {} as never,

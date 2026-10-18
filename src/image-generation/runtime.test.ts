@@ -62,6 +62,26 @@ describe("image-generation runtime", () => {
     seenRequest = undefined;
   });
 
+  it.each(["grok-imagine-image-unknown", "xai/"])(
+    "rejects unresolved explicit model %s instead of generating with the configured default",
+    async (modelOverride) => {
+      providers = [
+        createProvider("xai", {
+          defaultModel: "grok-imagine-image",
+          models: ["grok-imagine-image"],
+        }),
+      ];
+
+      await expect(
+        runGenerateImage({
+          cfg: imageConfig("xai/grok-imagine-image"),
+          modelOverride,
+        }),
+      ).rejects.toThrow(`Unknown model override: ${modelOverride}`);
+      expect(seenRequest).toBeUndefined();
+    },
+  );
+
   it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
     providers = [createProvider("image-plugin")];
 

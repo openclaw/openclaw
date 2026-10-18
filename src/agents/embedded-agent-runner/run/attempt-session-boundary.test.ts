@@ -95,6 +95,9 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         expect(first[1]).toMatchObject({
           role: "user",
           content: labelRuntimeContextText(carrier.content),
+          runtimeContext: { retained: appendOnlyRuntimeContext },
+          runtimeContextCarrier: true,
+          runtimeContextCarrierRetained: appendOnlyRuntimeContext,
         });
         messages.push(
           makeAssistantMessageFixture({
@@ -151,37 +154,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           content: labelRuntimeContextText(nextCarrier.content),
         });
       }),
-  );
-
-  it.each([false, true])(
-    "records runtime-context cache retention at the LLM boundary (%s)",
-    async (appendOnlyRuntimeContext) => {
-      const { activeSession } = createActiveSession();
-      activeSession.agent.convertToLlm = convertHarnessMessages;
-      await prepareEmbeddedAttemptSessionBoundary({
-        activeSession,
-        appendOnlyRuntimeContext,
-        attempt: { sessionId: "session-boundary", prompt: "question" },
-        getUserTranscriptContexts: () => undefined,
-        isRawModelRun: false,
-        preparedUserTurnMessage: undefined,
-        sessionManager: createSessionManager(),
-        setActiveSessionSystemPrompt: vi.fn(),
-      });
-
-      const user = { role: "user" as const, content: "question", timestamp: 1 };
-      const carrier = buildRuntimeContextCustomMessage("context")!;
-      const converted = await activeSession.agent.convertToLlm(
-        appendOnlyRuntimeContext ? [user, carrier] : [carrier, user],
-      );
-      const message = converted.at(-1);
-      expect(message).toMatchObject({
-        role: "user",
-        runtimeContext: { retained: appendOnlyRuntimeContext },
-        runtimeContextCarrier: true,
-        runtimeContextCarrierRetained: appendOnlyRuntimeContext,
-      });
-    },
   );
 
   it("resets restored state and preserves exact prompt bytes for raw model probes", async () => {
@@ -291,34 +263,6 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
     expect((converted[0] as { content?: unknown }).content).toBe(
       `${buildTimestampPrefix(new Date(preparedTimestamp), { timezone: "UTC" })}Current ask`,
     );
-  });
-
-  it("projects the exact persisted sender row for the active user turn", async () => {
-    const runtimeMessage = {
-      role: "user",
-      content: [{ type: "text", text: "The launch is Friday" }],
-      timestamp: 1,
-    } as AgentMessage;
-    const transcriptMessage = {
-      role: "user",
-      content: "The launch is Friday",
-      timestamp: 1,
-      __openclaw: { senderId: "alice-id", senderName: "Alice" },
-    } as AgentMessage;
-    const { activeSession } = createActiveSession();
-    await prepareEmbeddedAttemptSessionBoundary({
-      activeSession,
-      attempt: { sessionId: "session-boundary", prompt: "The launch is Friday" },
-      getUserTranscriptContexts: () => [{ runtimeMessage, transcriptMessage }],
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
-    });
-
-    const converted = await activeSession.agent.convertToLlm([runtimeMessage]);
-
-    expect((converted[0] as { content?: unknown }).content).toContain('"name":"Alice"');
   });
 
   it("retains sender projection for earlier in-memory turns after a queued turn", async () => {

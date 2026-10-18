@@ -12,7 +12,11 @@ import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
-import type { UpdateRunPhasePatch, UpdateRunWriteCommand } from "./update-run-mutation.types.js";
+import type {
+  UpdateRunPhasePatch,
+  UpdateRunWriteCommand,
+  UpdateRunWriteInput,
+} from "./update-run-mutation.types.js";
 import type {
   CreateUpdateRunInput,
   FinishUpdateRunInput,
@@ -37,13 +41,7 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
 /** Capture the receipt before yielding and join its writer through native settlement. */
 async function recordUpdateRunMutationAsync(
   runId: string,
-  mutation:
-    | { kind: "step"; step: UpdateRunStep & { reason?: string } }
-    | { kind: "phase"; phase: UpdateRunPhase; patch: UpdateRunPhasePatch }
-    | { kind: "create"; run: CreateUpdateRunInput }
-    | { kind: "finish"; result: FinishUpdateRunInput }
-    | { kind: "verification"; verification: UpdateRunRecord["verification"]; onlyIfRunning?: true }
-    | { kind: "diagnostics"; diagnostics: UpdateRunDiagnostics; preserveRecovery?: true },
+  createCommand: (input: UpdateRunWriteInput) => UpdateRunWriteCommand,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
   options.assertAccepting?.();
@@ -62,54 +60,17 @@ async function recordUpdateRunMutationAsync(
     captured.assertCurrent?.();
   };
   assertCurrent();
-  const input = {
-    runId,
-    redactionFacts: captureUpdateRunRedactionFacts(captured.env),
-    requireNoRecovery: captured.requireNoRecovery,
-    busyTimeoutMs: captured.busyTimeoutMs,
-    redactPaths: captured.redactPaths,
-  };
-  let command: UpdateRunWriteCommand;
-  switch (mutation.kind) {
-    case "step":
-      command = { type: "updateRuns.recordStep", input: { ...input, step: mutation.step } };
-      break;
-    case "phase":
-      command = {
-        type: "updateRuns.recordPhase",
-        input: { ...input, phase: mutation.phase, patch: mutation.patch },
-      };
-      break;
-    case "create":
-      command = { type: "updateRuns.create", input: { ...input, run: mutation.run } };
-      break;
-    case "finish":
-      command = { type: "updateRuns.finish", input: { ...input, result: mutation.result } };
-      break;
-    case "verification":
-      command = {
-        type: "updateRuns.recordVerification",
-        input: {
-          ...input,
-          verification: mutation.verification,
-          onlyIfRunning: mutation.onlyIfRunning,
-        },
-      };
-      break;
-    case "diagnostics":
-      command = {
-        type: "updateRuns.recordDiagnostics",
-        input: {
-          ...input,
-          diagnostics: mutation.diagnostics,
-          preserveRecovery: mutation.preserveRecovery,
-        },
-      };
-      break;
-  }
-  command = structuredClone(command);
+  const command = structuredClone(
+    createCommand({
+      runId,
+      redactionFacts: captureUpdateRunRedactionFacts(captured.env),
+      requireNoRecovery: captured.requireNoRecovery,
+      busyTimeoutMs: captured.busyTimeoutMs,
+      redactPaths: captured.redactPaths,
+    }),
+  );
   const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    existingOnly: mutation.kind !== "create",
+    existingOnly: command.type !== "updateRuns.create",
     assertCurrent,
     createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
       context.admission.databasePath,
@@ -144,7 +105,11 @@ export function recordUpdateRunStepAsync(
   step: UpdateRunStep & { reason?: string },
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord | undefined> {
-  return recordUpdateRunMutationAsync(runId, { kind: "step", step }, options);
+  return recordUpdateRunMutationAsync(
+    runId,
+    (input) => ({ type: "updateRuns.recordStep", input: { ...input, step } }),
+    options,
+  );
 }
 
 export async function recordUpdateRunPhaseAsync(
@@ -155,7 +120,7 @@ export async function recordUpdateRunPhaseAsync(
 ): Promise<UpdateRunRecord> {
   const record = await recordUpdateRunMutationAsync(
     runId,
-    { kind: "phase", phase, patch },
+    (input) => ({ type: "updateRuns.recordPhase", input: { ...input, phase, patch } }),
     options,
   );
   if (!record) {
@@ -169,7 +134,11 @@ export async function createUpdateRunAsync(
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
   const run = { ...input, runId: input.runId ?? randomUUID() };
-  const record = await recordUpdateRunMutationAsync(run.runId, { kind: "create", run }, options);
+  const record = await recordUpdateRunMutationAsync(
+    run.runId,
+    (mutation) => ({ type: "updateRuns.create", input: { ...mutation, run } }),
+    options,
+  );
   if (!record) {
     throw new Error("Update run was not created");
   }
@@ -181,7 +150,11 @@ export async function finishUpdateRunAsync(
   result: FinishUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(runId, { kind: "finish", result }, options);
+  const record = await recordUpdateRunMutationAsync(
+    runId,
+    (input) => ({ type: "updateRuns.finish", input: { ...input, result } }),
+    options,
+  );
   if (!record) {
     throw new Error("Update run outcome was not recorded");
   }
@@ -193,9 +166,13 @@ export async function recordUpdateRunVerificationAsync(
   verification: UpdateRunRecord["verification"],
   options: UpdateRunWriteOptions & { onlyIfRunning?: true } = {},
 ): Promise<UpdateRunRecord> {
+  const { onlyIfRunning } = options;
   const record = await recordUpdateRunMutationAsync(
     runId,
-    { kind: "verification", verification, onlyIfRunning: options.onlyIfRunning },
+    (input) => ({
+      type: "updateRuns.recordVerification",
+      input: { ...input, verification, onlyIfRunning },
+    }),
     options,
   );
   if (!record) {
@@ -221,9 +198,13 @@ export async function recordUpdateRunDiagnosticsAsync(
     return undefined;
   }
   try {
+    const { preserveRecovery } = options;
     return await recordUpdateRunMutationAsync(
       runId,
-      { kind: "diagnostics", diagnostics, preserveRecovery: options.preserveRecovery },
+      (input) => ({
+        type: "updateRuns.recordDiagnostics",
+        input: { ...input, diagnostics, preserveRecovery },
+      }),
       options,
     );
   } catch (error) {

@@ -139,18 +139,13 @@ export type SqliteArchiveOneShotWorkerData = Extract<
 
 export type SqliteArchiveSessionRequest = SqliteArchiveOperation & {
   type: "archive-operation";
-  operationId: number;
 };
 
-export type SqliteArchiveSessionResponse = {
-  operationId: number;
-  settled: true;
-} & (
+export type SqliteArchiveSessionResponse =
   | TranscriptArchiveWorkerMessage
   | TranscriptArchivePublishWorkerMessage
   | { type: "page-read"; results: Array<TranscriptArchivePageResult | undefined> }
-  | { type: "final-read"; results: TranscriptArchiveReadResult[] }
-);
+  | { type: "final-read"; results: TranscriptArchiveReadResult[] };
 export type SessionTranscriptMaintenanceSizingInput = {
   agentId: string;
   path: string;

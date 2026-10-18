@@ -1,4 +1,3 @@
-// Gateway legacy environment warning.
 // Emits a one-shot notice for ignored pre-OpenClaw environment prefixes.
 import { isVitestRuntimeEnv } from "../infra/env.js";
 

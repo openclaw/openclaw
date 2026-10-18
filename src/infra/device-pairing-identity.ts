@@ -89,7 +89,7 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve one exact active role-token generation without exposing its credential. */
-export function resolvePairedDeviceTokenIdentity(
+function resolvePairedDeviceTokenIdentity(
   device: PairedDevice | null,
   role: string,
 ): PairedDeviceTokenIdentity | null {

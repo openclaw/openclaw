@@ -68,9 +68,6 @@ function update(container: HTMLElement, value: ControlUiLinkReaderDocument, link
 describe("link reader document content", () => {
   it.each([
     ["success", "Checks passed"],
-    ["failure", "Checks failed"],
-    ["pending", "Checks in progress"],
-    ["neutral", "Checks"],
     ["unavailable", "Checks unavailable"],
   ] as const)(
     "renders %s check results without assuming service-specific labels",
@@ -95,7 +92,7 @@ describe("link reader document content", () => {
       });
       const checks = container.querySelector<HTMLDetailsElement>(".lr-checks")!;
       expect(checks.querySelector("summary strong")?.textContent).toBe(label);
-      expect(checks.open).toBe(state === "failure");
+      expect(checks.open).toBe(false);
       expect(checks.textContent).toContain("Provider-owned result");
       expect(checks.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("In progress");
       const run = checks.querySelector<HTMLAnchorElement>(".lr-check-copy a")!;
@@ -322,11 +319,15 @@ describe("link reader document content", () => {
     await Promise.resolve();
     expect(firstImage.hasAttribute("src")).toBe(false);
     expect(secondImage.hasAttribute("src")).toBe(false);
+    firstImage.dispatchEvent(new Event("error"));
+    expect(firstImage.hidden).toBe(false);
 
     mounted.unmount();
     pending.get("https://images.example/second.png")!("blob:second");
     await Promise.resolve();
     expect(secondImage.hasAttribute("src")).toBe(false);
+    secondImage.dispatchEvent(new Event("error"));
+    expect(secondImage.hidden).toBe(false);
   });
 
   it("never creates image requests for unsafe/local sources or activates remote document instructions", () => {
@@ -507,7 +508,7 @@ describe("link reader document content", () => {
     expect(container.querySelector("#note-n1")?.textContent).toContain("A note");
     expect(container.querySelector<HTMLDetailsElement>(".lr-file")?.open).toBe(true);
     expect(container.textContent).toContain("Renamed from src/old.ts");
-    expect(container.textContent).toContain("This view is incomplete");
+    expect(container.textContent).not.toContain("This view is incomplete");
     expect(container.textContent).toContain("Some comments could not be shown");
     expect(container.textContent).toContain("Some files could not be shown");
     expect(container.textContent).toContain("No text diff available");

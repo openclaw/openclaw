@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   isAgentRunDirectAbortReason,
-  isAgentRunRestartAbortReason,
+  resolveAgentRunErrorLifecycleFields,
 } from "../../agents/run-termination.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { readErrorName } from "../../infra/errors.js";
@@ -49,9 +49,12 @@ function isGatewayAbortSignalReason(reason: unknown): boolean {
 export function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal): boolean {
   if (!signal.aborted) {
     // The run can cancel its own controller without aborting the Gateway observer.
-    return isAgentRunDirectAbortReason(error);
+    return (
+      isAgentRunDirectAbortReason(error) ||
+      resolveAgentRunErrorLifecycleFields(error, undefined).stopReason === "restart"
+    );
   }
-  if (isAgentRunRestartAbortReason(signal.reason)) {
+  if (resolveAgentRunErrorLifecycleFields(undefined, signal).stopReason === "restart") {
     return true;
   }
   if (readErrorName(signal.reason) === "TimeoutError") {
@@ -65,11 +68,10 @@ export function isGatewayAgentAbortRejection(error: unknown, signal: AbortSignal
 
 export function resolveGatewayAgentAbortStopReason(
   signal: AbortSignal,
+  error?: unknown,
 ): "restart" | "rpc" | "timeout" {
-  if (isAgentRunRestartAbortReason(signal.reason)) {
-    return "restart";
-  }
-  return readErrorName(signal.reason) === "TimeoutError" ? "timeout" : "rpc";
+  const stopReason = resolveAgentRunErrorLifecycleFields(error, signal).stopReason;
+  return stopReason === "restart" || stopReason === "timeout" ? stopReason : "rpc";
 }
 
 // `agent` clients already consume cancellation as timeout; keep that wire

@@ -113,10 +113,11 @@ function projectOpenAIToolDescriptors(
       continue;
     }
     const prepared = schemas
-      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`)
+      ? prepareRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name)
       : undefined;
     const schemaProjection =
-      prepared?.projection ?? projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`);
+      prepared?.projection ??
+      projectRuntimeToolInputSchema(parameters ?? {}, `${name}.parameters`, name);
     if (!isRecord(schemaProjection.schema) || schemaProjection.violations.length > 0) {
       diagnostics.push({
         toolIndex,

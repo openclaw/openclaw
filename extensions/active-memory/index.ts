@@ -18,7 +18,6 @@ import { resolveRecallEscalationDecision } from "./escalation.js";
 import { buildPromptPrefix, buildRecallOutcomePrefix } from "./prompt.js";
 import { buildQuery, buildSearchQuery, extractRecentTurns, getModelRef } from "./query.js";
 import { forgetActiveRecallRun, toSingleLineErrorMessage } from "./recall-state.js";
-import { maybeResolveActiveRecall } from "./recall.js";
 import {
   ACTIVE_MEMORY_GLOBAL_MUTATION_ADMIN_REQUIRED_TEXT,
   formatActiveMemoryCommandHelp,
@@ -90,9 +89,7 @@ export default definePluginEntry({
     warnDeprecatedModelFallbackPolicy(api.pluginConfig);
     const refreshLiveConfigFromRuntime = () => {
       const livePluginConfig = resolveLivePluginConfigObject(
-        api.runtime.config?.current
-          ? () => api.runtime.config.current() as OpenClawConfig
-          : undefined,
+        () => api.runtime.config.current() as OpenClawConfig,
         "active-memory",
         api.pluginConfig as Record<string, unknown>,
       );
@@ -235,18 +232,19 @@ export default definePluginEntry({
                 modelId: ctx.modelId,
               })
             : { provider: ctx.modelProviderId, model: ctx.modelId }) ?? {};
-        const cliDispatchEligibility = api.runtime.agent.resolveCliBackendDispatchEligibility({
-          provider: timeoutModelRef.provider,
-          model: timeoutModelRef.model,
-          config: liveConfig,
-          ...(timeoutAgentId
-            ? {
-                agentId: timeoutAgentId,
-                agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
-                workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
-              }
-            : {}),
-        });
+        const cliDispatchEligibility =
+          await api.runtime.agent.resolveCliBackendDispatchEligibilityAsync({
+            provider: timeoutModelRef.provider,
+            model: timeoutModelRef.model,
+            config: liveConfig,
+            ...(timeoutAgentId
+              ? {
+                  agentId: timeoutAgentId,
+                  agentDir: resolveAgentDir(liveConfig, timeoutAgentId),
+                  workspaceDir: resolveAgentWorkspaceDir(liveConfig, timeoutAgentId),
+                }
+              : {}),
+          });
         const invocationConfig = applyCliRuntimeRecallTimeoutDefault(
           config,
           cliDispatchEligibility !== undefined,
@@ -306,14 +304,6 @@ export default definePluginEntry({
               ctx.assertMemoryAudienceCurrent?.();
               return { prependContext };
             };
-            const skipRecall = async (reason: string) => {
-              logRecallSkipped(reason);
-              await persistPluginStatusLines({
-                api,
-                agentId: effectiveAgentId,
-                sessionKey: resolvedSessionKey,
-              });
-            };
             if (authorityAllowedRecallTools.length === 0) {
               await persistPluginStatusLines({
                 api,
@@ -337,6 +327,14 @@ export default definePluginEntry({
               logRecallSkipped("harness-session");
               return undefined;
             }
+            // Status describes this turn. Clear it after the side-effect-free harness
+            // guard, before preflight can fail or time out without a replacement.
+            await persistPluginStatusLines({
+              api,
+              agentId: effectiveAgentId,
+              sessionKey: resolvedSessionKey,
+            });
+            toolAuthority.assertActive();
             const sessionDisabled = await isSessionActiveMemoryDisabled({
               api,
               sessionKey: resolvedSessionKey,
@@ -344,7 +342,7 @@ export default definePluginEntry({
             deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             if (sessionDisabled) {
-              await skipRecall("session-disabled");
+              logRecallSkipped("session-disabled");
               return undefined;
             }
             const sessionContext = {
@@ -352,7 +350,7 @@ export default definePluginEntry({
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
             };
             if (!isEligibleInteractiveSession(sessionContext)) {
-              await skipRecall("session-ineligible");
+              logRecallSkipped("session-ineligible");
               return undefined;
             }
             const destinationContext = {
@@ -508,11 +506,11 @@ export default definePluginEntry({
             const productRecallAllowed = Boolean(productRecallToolName);
             if (productRecallEligible && !productRecallAllowed) {
               api.logger.warn?.(
-                `active-memory: ${deterministicRecallToolName ?? "the provider's deterministic recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
+                `active-memory: ${deterministicRecallToolName ?? "the provider's direct recall tool"} is unavailable; skipping Remember across conversations private transcript recall`,
               );
             }
             if (!activeMemoryAllowed && !productRecallAllowed) {
-              await skipRecall("destination-not-allowed");
+              logRecallSkipped("destination-not-allowed");
               return publishPrependContext([laneOneContext]);
             }
             const escalationDecision = resolveRecallEscalationDecision({
@@ -549,6 +547,8 @@ export default definePluginEntry({
             // Start recall with its full configured budget. The preceding
             // session/config checks must not consume abort-settlement time.
             armHookDeadline(liveRecallTimeoutMs, "recall");
+            const { maybeResolveActiveRecall } = await import("./recall.js");
+            deadlineController.signal.throwIfAborted();
             toolAuthority.assertActive();
             const result = await maybeResolveActiveRecall({
               api,

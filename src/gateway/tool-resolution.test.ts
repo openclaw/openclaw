@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
@@ -11,6 +11,7 @@ import {
   wrapToolWithGatewayCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import * as gatewayTools from "../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunApprovalAuthority,
@@ -41,6 +42,27 @@ async function resolveTools(
 }
 
 describe("resolveGatewayScopedTools", () => {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+
+  it.each([
+    { messageProvider: "webchat", deny: false, available: true },
+    { messageProvider: "whatsapp", deny: false, available: false },
+    { messageProvider: "webchat", deny: true, available: false },
+  ])(
+    "gates ask_user in the $messageProvider catalog (deny: $deny)",
+    async ({ messageProvider, deny, available }) => {
+      const result = await resolveTools({
+        cfg: {
+          plugins: { enabled: false },
+          tools: { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
+        },
+        messageProvider,
+        senderIsOwner: true,
+      });
+      expect(result.tools.some((tool) => tool.name === "ask_user")).toBe(available);
+    },
+  );
+
   it("retains a computer execution across MCP catalog rebuilds and releases it with its run", async () => {
     const cfg = { plugins: { enabled: false }, tools: { allow: ["computer"] } };
     const admissions = ["computer-first", "computer-next"].map((runId) =>

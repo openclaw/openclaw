@@ -5,6 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   acquireGatewayLock,
@@ -113,6 +117,7 @@ describe("memory.search gateway method", () => {
       label: "gateway-memory-search",
       layout: "state-only",
     });
+    setRuntimeConfigSnapshot({});
     getActiveMemorySearchManagerCore.mockReset();
     resolveActiveMemoryBackendConfig.mockReset().mockReturnValue({ backend: "builtin" });
     isActiveMemoryProviderNative.mockReset().mockReturnValue(false);
@@ -121,10 +126,12 @@ describe("memory.search gateway method", () => {
 
   afterEach(async () => {
     await testState.cleanup();
+    clearRuntimeConfigSnapshot();
   });
 
   async function withOwner(cfg: OpenClawConfig, run: (ownerId: string) => Promise<void>) {
     await testState.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const owner = await acquireGatewayLock({ allowInTests: true, timeoutMs: 0 });
     assert(owner, "Expected a Gateway owner");
     const ownerId = readLockPayloadSync(
@@ -736,11 +743,16 @@ describe("memory.search gateway method", () => {
           )
           .run();
       };
-      const expectRecall = (respond: Awaited<ReturnType<typeof invokeMemorySearch>>) => {
+      const expectRecall = (
+        respond: Awaited<ReturnType<typeof invokeMemorySearch>>,
+        repaired = true,
+      ) => {
         expect(respond).toHaveBeenCalledWith(
           true,
           expect.objectContaining({
-            warning: expect.stringContaining("does not call an embedding provider"),
+            ...(repaired
+              ? { warning: expect.stringContaining("does not call an embedding provider") }
+              : {}),
             results: [
               expect.objectContaining({
                 path: "memory/orchard.md",
@@ -750,6 +762,10 @@ describe("memory.search gateway method", () => {
           }),
           undefined,
         );
+        if (!repaired) {
+          expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("stale");
+          expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("warning");
+        }
       };
       getActiveMemorySearchManagerCore.mockImplementation((params) =>
         memoryRuntime.getMemorySearchManager(params),
@@ -762,18 +778,31 @@ describe("memory.search gateway method", () => {
       expect(singleRepairWrites).toBeGreaterThan(0);
 
       markOldProvenance();
+      const observer = await memoryRuntime.getMemorySearchManager({
+        cfg,
+        agentId: "main",
+        purpose: "cli",
+      });
+      assert(observer.manager, observer.error ?? "Expected a memory index observer");
       const beforeConcurrent = readRevision();
       const acquired: RegisteredMemorySearchManager[] = [];
-      const bothAcquired = createDeferredCore();
+      const bothSearching = createDeferredCore();
+      let searching = 0;
       getActiveMemorySearchManagerCore.mockImplementation(async (params) => {
         const result = await memoryRuntime.getMemorySearchManager(params);
         if (result.manager) {
           acquired.push(result.manager);
+          const search = result.manager.search.bind(result.manager);
+          vi.spyOn(result.manager, "search").mockImplementationOnce(async (...args) => {
+            if (++searching === 2) {
+              bothSearching.resolve();
+            }
+            await bothSearching.promise;
+            return search(...args);
+          });
+        } else {
+          bothSearching.resolve();
         }
-        if (!result.manager || acquired.length === 2) {
-          bothAcquired.resolve();
-        }
-        await bothAcquired.promise;
         return result;
       });
       const responses = await Promise.all([
@@ -782,7 +811,10 @@ describe("memory.search gateway method", () => {
       ]);
       expect(acquired).toHaveLength(2);
       expect(acquired[0]).not.toBe(acquired[1]);
-      responses.forEach(expectRecall);
+      responses.forEach((response) => expectRecall(response));
+      expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
+      getActiveMemorySearchManagerCore.mockResolvedValueOnce(observer);
+      expectRecall(await invokeMemorySearch({ query: "Juniper", agentId: "main" }, cfg), false);
       expect(readRevision() - beforeConcurrent).toBe(singleRepairWrites);
     } finally {
       await memoryRuntime.closeAllMemorySearchManagers?.();

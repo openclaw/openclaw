@@ -2,6 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import {
   MessagePort,
   MessageChannel,
+  getEnvironmentData,
   parentPort,
   SHARE_ENV,
   setEnvironmentData,
@@ -12,7 +13,11 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { attachBrokerNativeResource } from "../process/spawn-broker/resource-client.js";
 import { BrokerNativeResourceCloseError } from "../process/spawn-broker/resource-protocol.js";
-import "./worker-ancestry.js";
+import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
+import {
+  readSqliteDatabaseAdmissions,
+  SqliteDatabaseAdmissionRegistry,
+} from "./sqlite-database-admission-record.js";
 import { serveWorkerMemorySamples } from "./worker-memory.js";
 import { encodeNativeWorkerFailure } from "./worker-native-error.js";
 import type { NativeWorkerReply, NativeWorkerRequest } from "./worker-native-lifecycle.types.js";
@@ -22,6 +27,13 @@ if (!isRecord(workerData) || !(workerData.port instanceof MessagePort)) {
   throw new Error("Native worker lifetime owner requires its private port");
 }
 const port = workerData.port;
+const databaseAdmissions = new SqliteDatabaseAdmissionRegistry();
+const inheritedDatabaseAdmissions = readSqliteDatabaseAdmissions(
+  getEnvironmentData(SQLITE_DATABASE_ADMISSIONS_KEY),
+);
+if (inheritedDatabaseAdmissions) {
+  databaseAdmissions.install(inheritedDatabaseAdmissions);
+}
 if (parentPort) {
   serveWorkerMemorySamples(parentPort);
 }
@@ -144,6 +156,19 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
   let workerTransfers = request.transferList;
   let worker: Worker;
   try {
+    // Install ordered deltas before child validation so the next creation starts from this receipt.
+    for (const [key, value] of request.environmentData) {
+      if (key === SQLITE_DATABASE_ADMISSIONS_KEY) {
+        const admissions = readSqliteDatabaseAdmissions(value);
+        if (admissions) {
+          if (!databaseAdmissions.install(admissions)) {
+            databaseAdmissions.publish();
+          }
+          continue;
+        }
+      }
+      setEnvironmentData(key, value);
+    }
     if (descriptor) {
       if (
         (options.workerData !== undefined && !isRecord(options.workerData)) ||
@@ -156,9 +181,6 @@ function create(request: Extract<NativeWorkerRequest, { type: "create" }>): void
       workerTransfers = [...request.transferList, resourcePorts.port2];
     }
     // The carrier may predate admission; each child inherits the spawning caller's current facts.
-    for (const [key, value] of request.environmentData) {
-      setEnvironmentData(key, value);
-    }
     worker = new Worker(
       request.filename.kind === "url" ? new URL(request.filename.value) : request.filename.value,
       {
@@ -239,7 +261,8 @@ port.on("message", (message: NativeWorkerRequest) => {
     return;
   }
   if (message.type === "release") {
-    if (lifetime.joined) {
+    // The parent can also join an exited target with the broker's independent close receipt.
+    if (lifetime.joined || lifetime.nativeJoined) {
       lifetime.resource?.owner.dispose();
       workers.delete(message.id);
     }

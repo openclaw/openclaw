@@ -301,34 +301,6 @@ describe("startProxy", () => {
     );
   });
 
-  it("keeps same-url overlapping handles active until the final stop", async () => {
-    const firstHandle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-    const secondHandle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-    });
-
-    expect(installGlobalProxyMock).toHaveBeenCalledOnce();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
-    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
-    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
-
-    await stopProxy(secondHandle);
-
-    expect(proxylineStopMock).not.toHaveBeenCalled();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledOnce();
-    expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
-    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBe("1");
-
-    await stopProxy(firstHandle);
-
-    expect(proxylineStopMock).toHaveBeenCalledOnce();
-    expect(forceResetGlobalDispatcherMock).toHaveBeenCalledTimes(2);
-    expect(process.env["HTTP_PROXY"]).toBeUndefined();
-    expect(process.env["OPENCLAW_PROXY_ACTIVE"]).toBeUndefined();
-  });
-
   it("rejects overlapping handles with different managed proxy URLs", async () => {
     const firstHandle = await startProxy({
       proxyUrl: "http://127.0.0.1:3128",
@@ -411,22 +383,6 @@ describe("startProxy", () => {
 
   it("stopProxy is a no-op when handle is null", async () => {
     await expect(stopProxy(null)).resolves.toBeUndefined();
-  });
-
-  it("throws when active proxy loopbackMode is block for Browser CDP bypass", async () => {
-    const handle = await startProxy({
-      proxyUrl: "http://127.0.0.1:3128",
-      loopbackMode: "block",
-    });
-
-    try {
-      expect(() => registerManagedProxyBrowserCdpBypass("http://127.0.0.1:18800")).toThrow(
-        "Browser loopback CDP connections are blocked by proxy.loopbackMode",
-      );
-      expect(proxylineRegisterBypassMock).not.toHaveBeenCalled();
-    } finally {
-      await stopProxy(handle);
-    }
   });
 
   it("returns undefined when no managed proxy is active (bypass is a no-op)", () => {

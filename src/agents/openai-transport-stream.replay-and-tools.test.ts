@@ -1,6 +1,7 @@
 import OpenAI from "openai";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
+import { serializeModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
 import { buildOpenAICompletionsParams } from "./openai-transport-stream.js";
 import {
   buildOpenAIResponsesParams,
@@ -99,7 +100,7 @@ function emptyResponsesContext() {
 
 describe("openai transport stream", () => {
   it("omits Responses replay item ids when OpenAI Responses requests disable store", () => {
-    const params = buildOpenAIResponsesParams(
+    const request = buildOpenAIResponsesParams(
       makeResponsesModel({
         id: "gpt-5.5",
         name: "GPT-5.5",
@@ -126,6 +127,9 @@ describe("openai transport stream", () => {
         ],
       }),
       { sessionId: "session-123" },
+    );
+    const params = JSON.parse(
+      new TextDecoder().decode(serializeModelRequestBody(request).body),
     ) as {
       store?: boolean;
       input?: Array<{

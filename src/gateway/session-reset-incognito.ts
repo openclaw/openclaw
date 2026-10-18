@@ -1,10 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
 import { deleteSessionEntryLifecycle, type SessionEntry } from "../config/sessions.js";
-import {
-  captureIncognitoSessionOperation,
-  withIncognitoSessionBinding,
-} from "../config/sessions/session-incognito-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { getInProcessGatewayRequestContext } from "../plugins/runtime/gateway-request-scope.js";
 import { SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS } from "../sessions/session-lifecycle-admission.js";
@@ -24,16 +21,16 @@ type IncognitoResetParams = {
 export async function deleteIncognitoSessionForReset(
   params: IncognitoResetParams,
 ): Promise<Result<{ deletedSessionId?: string }, ErrorShape>> {
-  const binding = captureIncognitoSessionOperation({
-    ...params,
-    sessionKey: params.target.canonicalKey,
-  });
-  const run = () => deleteIncognitoSessionForResetInScope(params);
-  return binding
-    ? binding.actor.sessions.withSharedState(() =>
-        withIncognitoSessionBinding({ ...binding, admissionSignal: undefined }, run),
-      )
-    : run();
+  const assertCurrent = params.commitGuard;
+  const deleted = await withSessionActorStorage(
+    { ...params, sessionKey: params.target.canonicalKey },
+    {
+      lifetime: { assertCurrent, assertReadable: assertCurrent },
+      authority: { assertCurrent, authorize() {} },
+    },
+    () => deleteIncognitoSessionForResetInScope(params),
+  );
+  return deleted ?? unavailableSessionRequest(`Session ${params.key} changed before reset. Retry.`);
 }
 
 async function deleteIncognitoSessionForResetInScope(
@@ -67,9 +64,7 @@ async function deleteIncognitoSessionForResetInScope(
       archiveTranscript: false,
       deleteDeliveryArtifacts: true,
       deleteTranscriptWithoutArchive: true,
-      expectedEntry: params.entry,
       expectedSessionId: params.entry.sessionId,
-      expectedUpdatedAt: params.entry.updatedAt,
       storePath: params.storePath,
       target: params.target,
     });

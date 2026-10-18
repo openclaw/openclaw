@@ -4,50 +4,53 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createNativeSessionCommitFinalizer } from "../../agents/harness/native-session/deletion-participant.js";
-import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
-import { loadSubagentRunsForSessionsInDatabase } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { capturePluginStateNativeBindingFacts } from "../../plugin-state/plugin-state-native-binding-facts.js";
+import { createPluginStateKeyedStoreV2 } from "../../plugin-state/plugin-state-store.js";
+import { capturePluginStateNativeBindingStore } from "../../plugin-state/plugin-state-store.native-binding.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
-import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { withNativeBindingFixture } from "./session-native-binding.test-support.js";
 
 const delivery = vi.hoisted(() => ({ afterExecution: undefined as (() => void) | undefined }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
+  const withDelivery = (
+    owner: ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution>,
+  ): typeof owner => {
+    return {
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
+      },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                try {
+                  return await worker.execute(command, commandOptions);
+                } finally {
+                  if (command.type === "session.nativeBindings.delete") {
+                    delivery.afterExecution?.();
+                  }
+                }
+              },
+            }),
+          options,
+        ),
+    };
+  };
   return {
     ...actual,
     captureOpenClawAgentDatabaseExecution: (
       ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owner = actual.captureOpenClawAgentDatabaseExecution(...args);
-      return {
-        ...owner,
-        get fileIdentity() {
-          return owner.fileIdentity;
-        },
-        runExisting: (source, operation, options) =>
-          owner.runExisting(
-            source,
-            (worker) =>
-              operation({
-                execute: async (command, commandOptions) => {
-                  try {
-                    return await worker.execute(command, commandOptions);
-                  } finally {
-                    if (command.type === "session.nativeBindings.delete") {
-                      delivery.afterExecution?.();
-                    }
-                  }
-                },
-              }),
-            options,
-          ),
-      };
-    },
+    ) => withDelivery(actual.captureOpenClawAgentDatabaseExecution(...args)),
+    captureOpenClawAgentDatabasePreparationExecution: (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabasePreparationExecution>
+    ) => withDelivery(actual.captureOpenClawAgentDatabasePreparationExecution(...args)),
   };
 });
 
@@ -146,10 +149,9 @@ it("uses each installed plugin owner's packaged codec during real binding deleti
   });
 });
 
-it("keeps archive bytes and identity publication equivalent to the released native adapter", async () => {
+it("keeps archive bytes and identity publication equivalent with a legacy cleanup companion", async () => {
   const outcomes: unknown[] = [];
-  const hostBindingSql = { native: 0, worker: 0 };
-  for (const mode of ["native", "worker"] as const) {
+  for (const mode of ["legacy", "worker"] as const) {
     await withNativeBindingFixture(
       "codex",
       async (fixture) => {
@@ -165,12 +167,7 @@ it("keeps archive bytes and identity publication equivalent to the released nati
         const sql = observeHostDataSql();
         try {
           const result = await fixture.remove({ archiveTranscript: true });
-          hostBindingSql[mode] = bindingWrites(sql.queries).length;
-          if (mode === "native") {
-            expect(hostBindingSql[mode]).toBeGreaterThan(0);
-          } else {
-            expect(hostBindingSql[mode]).toBe(0);
-          }
+          expect(bindingWrites(sql.queries)).toEqual([]);
           expect(result.deleted).toBe(true);
           expect(result.archivedTranscripts).toHaveLength(1);
           const bytes = readSessionArchiveContentSync(result.archivedTranscripts[0]!.archivedPath);
@@ -194,9 +191,6 @@ it("keeps archive bytes and identity publication equivalent to the released nati
       mode,
     );
   }
-  console.info(
-    `Native binding caller SQL: ${hostBindingSql.native} before -> ${hostBindingSql.worker} after`,
-  );
   expect(outcomes[1]).toEqual(outcomes[0]);
 });
 
@@ -261,96 +255,6 @@ it("restores the exact removed Codex row after A fails", async () => {
         typeof originalLease.expiresAt === "number" &&
         restoredLease.expiresAt >= originalLease.expiresAt,
     ).toBe(true);
-  });
-});
-
-it("rechecks a changed durable descendant basis after the final A grant and compensates S", async () => {
-  await withNativeBindingFixture("codex", async (fixture) => {
-    const before = fixture.readEntry();
-    const history = loadTranscriptEventsSync(fixture.scope);
-    const source = readDatabasePathIdentitySync(fixture.shared.path);
-    const descendantRunBasis: SubagentRunsDurableBasis = {
-      databasePath: fixture.shared.path,
-      databaseIdentity: source.key,
-      databaseBirthtime: source.birthtime,
-      sessionKeys: [fixture.scope.sessionKey],
-      liveTopology: [],
-      digest: loadSubagentRunsForSessionsInDatabase(fixture.shared, [fixture.scope.sessionKey], [])
-        .digest,
-    };
-    let removed: Record<string, unknown> | undefined;
-    let restored: Record<string, unknown> | undefined;
-    let grantReached = false;
-    observeNativeGrants((request, facts) => {
-      if (facts.kind === "native-binding-ready") {
-        removed = fixture.readBinding();
-      }
-      if (request.stage !== "commit" || facts.kind !== "session-native-binding") {
-        return;
-      }
-      grantReached = true;
-      expect(fixture.readBinding()).toBeUndefined();
-      const child = {
-        runId: "late-native-descendant",
-        requesterSessionKey: fixture.scope.sessionKey,
-        childSessionKey: "agent:main:subagent:late-native-descendant",
-        requesterDisplayKey: "synthetic-parent",
-        task: "Synthetic descendant admitted before deletion commit",
-        cleanup: "keep",
-        createdAt: 1,
-        completion: { required: false },
-        delivery: { status: "not_required" },
-        execution: { status: "running", startedAt: 1 },
-      } satisfies SubagentRunRecord;
-      fixture.shared.db
-        .prepare(
-          "INSERT INTO subagent_runs (run_id, child_session_key, requester_session_key, created_at, payload_json) VALUES (?, ?, ?, ?, ?)",
-        )
-        .run(
-          child.runId,
-          child.childSessionKey,
-          child.requesterSessionKey,
-          child.createdAt,
-          JSON.stringify(child),
-        );
-      expect(
-        loadSubagentRunsForSessionsInDatabase(
-          fixture.shared,
-          [fixture.scope.sessionKey],
-          [],
-        ).runs.has(child.runId),
-      ).toBe(true);
-    });
-    delivery.afterExecution = () => {
-      restored = fixture.readBinding();
-    };
-    const published = vi.fn();
-    const unsubscribe = onSessionIdentityMutation((change) => {
-      if (
-        change.kind === "delete" &&
-        change.previous.sessionKeys.includes(fixture.scope.sessionKey)
-      ) {
-        published();
-      }
-    });
-    try {
-      await expect(fixture.remove({ descendantRunBasis })).rejects.toThrow(
-        "Session subagent facts changed before commit",
-      );
-      expect(grantReached).toBe(true);
-      expect(fixture.readEntry()).toEqual(before);
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(history);
-      expect(restored).toEqual({
-        ...removed,
-        lease: {
-          token: isRecord(removed?.lease) ? removed.lease.token : undefined,
-          expiresAt: expect.any(Number),
-        },
-      });
-      expect(published).not.toHaveBeenCalled();
-    } finally {
-      unsubscribe();
-    }
   });
 });
 
@@ -440,6 +344,22 @@ it.each([false, true])(
         authFingerprint: "3c26b68488ce497a69d2c9fce9ee19c461fa67a3d959b0dc3bafe5718c56119d",
       };
       fixture.bindingStore.register(fixture.bindingKey, legacy);
+      const store = createPluginStateKeyedStoreV2(
+        "agentsapi",
+        {
+          namespace: "agentsapi-sessions",
+          maxEntries: 100_000,
+          overflowPolicy: "reject-new",
+          env: fixture.scope.env,
+        },
+        { assertCurrent() {} },
+      );
+      const authority = await capturePluginStateNativeBindingFacts(
+        capturePluginStateNativeBindingStore(store)!,
+        fixture.bindingKey,
+        true,
+      );
+      expect(authority.read()).toEqual(legacy);
       const before = fixture.readEntry();
       const failure = new Error("synthetic legacy deletion COMMIT refusal");
       let commitSeen = false;
@@ -447,6 +367,7 @@ it.each([false, true])(
         if (request.stage === "commit" && facts.kind === "session-native-binding") {
           commitSeen = true;
           expect(fixture.readBinding()).toBeUndefined();
+          expect(() => authority.read()).toThrow("authority is unavailable");
           if (rollback) {
             throw failure;
           }
@@ -461,9 +382,11 @@ it.each([false, true])(
         }
         expect(commitSeen).toBe(true);
         expect(bindingWrites(sql.queries)).toEqual([]);
+        expect(authority.read()).toEqual(rollback ? legacy : undefined);
         expect(fixture.readBinding()).toEqual(rollback ? legacy : undefined);
         expect(fixture.readEntry()).toEqual(rollback ? before : undefined);
       } finally {
+        authority.release();
         sql.restore();
       }
     });

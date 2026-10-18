@@ -24,7 +24,10 @@ import {
   stopGatewayDiagnosticHeartbeat,
 } from "../../logging/diagnostic.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
@@ -122,7 +125,8 @@ describe("cloud worker run ownership", () => {
           input,
           vi.fn(),
         )
-        .catch((error: unknown) => error);
+        .catch((error: unknown) => error)
+        .finally(() => operation.complete());
       await launched.promise;
       const active = placements.get(SESSION_ID);
       if (!active) {
@@ -160,11 +164,16 @@ describe("cloud worker run ownership", () => {
         sessionKey: SESSION_KEY,
         state: "processing",
       });
+      const heartbeatClock = createGatewaySchedulerClock(Date.now());
+      let recovery: ReturnType<typeof recoverStuckDiagnosticSession> | undefined;
       startGatewayDiagnosticHeartbeat(
-        createTestGatewayScheduler("fake-timers"),
+        createTestGatewayScheduler(heartbeatClock.clock),
         { diagnostics: { enabled: true } },
         {
-          recoverStuckSession: recoverStuckDiagnosticSession,
+          recoverStuckSession: (request) => {
+            recovery = recoverStuckDiagnosticSession(request);
+            return recovery;
+          },
           sampleLiveness: () => null,
         },
       );
@@ -236,7 +245,14 @@ describe("cloud worker run ownership", () => {
           expect(isReplyRunEvidenceStale(operation)).toBe(false);
           vi.setSystemTime(turnStartedAtMs + input.timeoutMs + 1);
           expect(isReplyRunEvidenceStale(operation)).toBe(true);
-          await vi.advanceTimersByTimeAsync(60_000);
+          heartbeatClock.setTime(Date.now());
+          await heartbeatClock.wake();
+          // A delayed heartbeat defers recovery until the next healthy tick.
+          vi.setSystemTime(Date.now() + 30_000);
+          heartbeatClock.setTime(Date.now());
+          await heartbeatClock.wake();
+          expect(recovery).toBeDefined();
+          await recovery;
           expect(operation.result).toMatchObject({ kind: "failed", code: "run_stalled" });
         }
         expect(workerSignal?.aborted).toBe(true);
@@ -305,6 +321,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           }),
       );
@@ -348,6 +365,7 @@ describe("cloud worker run ownership", () => {
             placements,
             claim: firstClaim,
             turn: turn(runId),
+            isReplyDelivered: () => false,
             sessionKey: SESSION_KEY,
           });
           expect(captureWorkerTurnLiveEventOwner(identity)).not.toBe(eventOwner);
@@ -365,6 +383,7 @@ describe("cloud worker run ownership", () => {
               placements,
               claim: nextClaim,
               turn: turn(runId),
+              isReplyDelivered: () => false,
               sessionKey: SESSION_KEY,
             });
             expect(captureWorkerTurnLiveEventOwner(identity)).toBeUndefined();
@@ -412,6 +431,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim,
         turn: turn(runId),
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
       });
       const previous = resolveActiveEmbeddedRunOwner(SESSION_ID);
@@ -436,6 +456,7 @@ describe("cloud worker run ownership", () => {
         placements,
         claim: requested,
         turn: { ...turn(runId), abortSignal: controller.signal },
+        isReplyDelivered: () => false,
         sessionKey: SESSION_KEY,
         assertCurrent: () => {
           if (!callerCurrent) {

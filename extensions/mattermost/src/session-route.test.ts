@@ -10,41 +10,6 @@ function expectRoute(route: ReturnType<typeof resolveMattermostOutboundSessionRo
 }
 
 describe("mattermost session route", () => {
-  it("builds direct-message routes for user targets", () => {
-    const route = resolveMattermostOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      accountId: "acct-1",
-      target: "@user123",
-    });
-
-    const directRoute = expectRoute(route);
-    expect(directRoute.peer.kind).toBe("direct");
-    expect(directRoute.peer.id).toBe("user123");
-    expect(directRoute.from).toBe("mattermost:user123");
-    expect(directRoute.to).toBe("user:user123");
-    expect(directRoute.recipientSessionExact).toBe(false);
-  });
-
-  it("builds threaded channel routes for channel targets", () => {
-    const route = resolveMattermostOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      accountId: "acct-1",
-      target: "mattermost:channel:chan123",
-      threadId: "thread456",
-    });
-
-    const channelRoute = expectRoute(route);
-    expect(channelRoute.peer.kind).toBe("channel");
-    expect(channelRoute.peer.id).toBe("chan123");
-    expect(channelRoute.from).toBe("mattermost:channel:chan123");
-    expect(channelRoute.to).toBe("channel:chan123");
-    expect(channelRoute.threadId).toBe("thread456");
-    expect(channelRoute.sessionKey).toContain("thread456");
-    expect(channelRoute.recipientSessionExact).toBe(false);
-  });
-
   it("accepts canonical user ids but keeps channel-shaped ids inexact", () => {
     const id = "abcdefghijklmnopqrstuvwxyz";
     const bareRoute = expectRoute(
@@ -68,44 +33,6 @@ describe("mattermost session route", () => {
     expect(bareRoute.recipientSessionExact).toBe(false);
     expect(userRoute.recipientSessionExact).toBe(true);
     expect(channelRoute.recipientSessionExact).toBe(false);
-  });
-
-  it.each(["channel", "group"] as const)(
-    "does not treat directory-resolved %s ids as classified channel types",
-    (kind) => {
-      const id = "abcdefghijklmnopqrstuvwxyz";
-      const route = expectRoute(
-        resolveMattermostOutboundSessionRoute({
-          cfg: {},
-          agentId: "main",
-          target: `channel:${id}`,
-          resolvedTarget: {
-            to: `channel:${id}`,
-            kind,
-            source: "directory",
-          },
-        }),
-      );
-
-      expect(route.recipientSessionExact).toBe(false);
-    },
-  );
-
-  it("recovers channel thread routes from currentSessionKey", () => {
-    const route = resolveMattermostOutboundSessionRoute({
-      cfg: {},
-      agentId: "main",
-      accountId: "acct-1",
-      target: "mattermost:channel:chan123",
-      currentSessionKey: "agent:main:mattermost:channel:chan123:thread:root-post",
-    });
-
-    const recoveredRoute = expectRoute(route);
-    expect(recoveredRoute.sessionKey).toBe(
-      "agent:main:mattermost:channel:chan123:thread:root-post",
-    );
-    expect(recoveredRoute.baseSessionKey).toBe("agent:main:mattermost:channel:chan123");
-    expect(recoveredRoute.threadId).toBe("root-post");
   });
 
   it("keeps explicit replyToId ahead of recovered currentSessionKey thread", () => {

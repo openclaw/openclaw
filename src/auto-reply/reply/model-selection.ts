@@ -28,11 +28,7 @@ import {
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "../../agents/model-visibility-policy.js";
-import {
-  OPENAI_CODEX_PROVIDER_ID,
-  OPENAI_PROVIDER_ID,
-  listOpenAIAuthProfileProvidersForAgentRuntime,
-} from "../../agents/openai-routing.js";
+import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
 import { resolveOperatorModelDefault } from "../../agents/operator-model-policy.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -251,7 +247,7 @@ export async function createModelSelectionState(params: {
     const staleLegacyOpenAICodexAutoOverride =
       override?.source === "session" &&
       entry?.modelOverrideSource === "auto" &&
-      normalizeProviderId(override.provider ?? "") === OPENAI_CODEX_PROVIDER_ID &&
+      normalizeProviderId(override.provider ?? "") === OPENAI_PROVIDER_ID &&
       normalizeProviderId(primaryProvider) === OPENAI_PROVIDER_ID &&
       primaryHarnessPolicy.runtime === "codex" &&
       normalizeModelRef(OPENAI_PROVIDER_ID, override.model, runtimeModelNormalization).model ===
@@ -466,41 +462,28 @@ export async function createModelSelectionState(params: {
     sessionKey &&
     sessionEntry.authProfileOverride
   ) {
-    const { ensureAuthProfileStore, prepareAuthProfileProvider } =
+    const { ensureAuthProfileStoreAsync, prepareAuthProfileProvider } =
       await import("../../agents/auth-profiles.runtime.js");
-    const store = ensureAuthProfileStore(
+    const selection = { ...sessionEntry };
+    const authProfileId = sessionEntry.authProfileOverride;
+    const store = await ensureAuthProfileStoreAsync(
       params.agentId ? resolveAgentDir(cfg, params.agentId) : undefined,
       {
         allowKeychainPrompt: false,
-        profileId: sessionEntry.authProfileOverride,
+        profileId: authProfileId,
       },
     );
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
-    const profile = store.profiles[sessionEntry.authProfileOverride];
+    const profile = store.profiles[authProfileId];
     const authConfig = resolveModelProviderAuthConfig({ config: cfg, provider, modelId: model });
-    const harnessPolicy = resolveAgentHarnessPolicy({
-      provider,
-      modelId: model,
-      config: cfg,
-      agentId: params.agentId,
-      sessionKey,
-    });
-    const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider,
-      harnessRuntime: harnessPolicy.runtime,
-      config: cfg,
-    }).map(normalizeProviderId);
     // Provider aliases must preserve the same credential across native and embedded runtimes.
     const overrideStillEligible =
       profile != null &&
-      acceptedAuthProviders.some((accepted) =>
-        isStoredCredentialCompatibleWithAuthProvider({
-          cfg: authConfig,
-          provider: accepted,
-          credential: profile,
-        }),
-      );
-    const selection = { ...sessionEntry };
+      isStoredCredentialCompatibleWithAuthProvider({
+        cfg: authConfig,
+        provider: normalizeProviderId(provider),
+        credential: profile,
+      });
     const assertSelectionCurrent = () => {
       operatorAuthority?.assertCurrent();
       if (

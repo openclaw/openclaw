@@ -8,7 +8,10 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import {
+  ageManagedWorktreeTemplates,
+  useManagedWorktreeTestRepository,
+} from "./service.test-support.js";
 import { listTemplatesAsync } from "./template-registry-async.js";
 
 const execFileAsync = promisify(execFile);
@@ -101,8 +104,8 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     await execFileAsync("/bin/chmod", ["+a", "everyone allow read", parent]);
     const third = await service.create({ repoRoot: repo, name: "third", baseRef: "HEAD" });
     expect(await readAcl(path.join(third.path, "README.md"))).toEqual([]);
-    expect(getApfsCloneId(path.join(third.path, "README.md"))).toBe(
-      getApfsCloneId(path.join(template.path, "README.md")),
+    expect(await getApfsCloneId(path.join(third.path, "README.md"))).toBe(
+      await getApfsCloneId(path.join(template.path, "README.md")),
     );
   });
 
@@ -163,7 +166,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const root = tempDirs.make("openclaw-service-apfs-acl-unavailable-");
     const repo = await initializeRepository(root);
     const { apfsFilesystem } = await import("./filesystem-apfs.native.js");
-    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockReturnValue(undefined);
+    vi.spyOn(apfsFilesystem, "readDirectoryAcl").mockResolvedValue(undefined);
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
     const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     const created = await service.create({ repoRoot: repo, name: "unavailable", baseRef: "HEAD" });
@@ -192,8 +195,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     );
     await fs.writeFile(path.join(repo, ".env.local"), "first");
     const env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") };
-    let now = Date.now();
-    const service = new ManagedWorktreeService({ env, now: () => now, getConfig: () => ({}) });
+    const service = new ManagedWorktreeService({ env, getConfig: () => ({}) });
     const first = await service.create({ repoRoot: repo, name: "first", baseRef: "HEAD" });
     const template = (await listTemplatesAsync(env))[0];
     assert(template);
@@ -202,8 +204,8 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     const second = await service.create({ repoRoot: repo, name: "second", baseRef: "HEAD" });
     expect((await listTemplatesAsync(env)).map((entry) => entry.id)).toEqual([template.id]);
     for (const record of [first, second]) {
-      expect(getApfsCloneId(path.join(record.path, "payload"))).toBe(
-        getApfsCloneId(path.join(template.path, "payload")),
+      expect(await getApfsCloneId(path.join(record.path, "payload"))).toBe(
+        await getApfsCloneId(path.join(template.path, "payload")),
       );
       expect(await git(record.path, "status", "--porcelain")).toBe("");
       expect(await git(record.path, "symbolic-ref", "--short", "HEAD")).toBe(record.branch);
@@ -234,7 +236,7 @@ describe.skipIf(process.platform !== "darwin")("managed worktrees on native APFS
     expect((await listTemplatesAsync(env))[0]?.sourceCommit).toBe(
       await git(repo, "rev-parse", "HEAD"),
     );
-    now += IDLE_GC_MS + 1;
+    await ageManagedWorktreeTemplates(env, Date.now() - IDLE_GC_MS - 1);
     expect((await service.gc()).removed).toEqual([]);
     expect(await listTemplatesAsync(env)).toEqual([]);
     expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe("saved edit\n");

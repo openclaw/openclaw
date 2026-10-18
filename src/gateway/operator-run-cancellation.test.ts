@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
@@ -30,6 +31,7 @@ async function withCancellationFixture(
       agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
     };
     await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
     const fixture = await createCancellationFixture(cfg);
     try {
       await run(fixture);
@@ -43,6 +45,7 @@ async function withCancellationFixture(
 
 async function createCancellationFixture(cfg: OpenClawConfig) {
   const profile = ensureProfileForEmail("guest-cancellation@example.test");
+  const source = new AbortController();
   const scope = {
     agentId: "main",
     sessionId: "guest-and-staff-session",
@@ -75,6 +78,7 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
   const releases: Array<() => void> = [];
   const register = (
     runId: string,
+    buffer?: string,
     projection: Pick<
       Parameters<typeof registerChatAbortController>[0],
       "controlUiVisible" | "projectSessionActive"
@@ -92,9 +96,20 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
       throw new Error("fixture run was not registered");
     }
     registrations.push(registration);
-    return registration;
+    if (buffer !== undefined) {
+      chatRunState.getOrCreate(runId).buffer = buffer;
+    }
+    return {
+      ...registration,
+      retain: () => retain(runId, registration.entry),
+      expectCurrent: () => {
+        expect(registration.controller.signal.aborted).toBe(false);
+        expect(context.chatAbortControllers.get(runId)).toBe(registration.entry);
+      },
+    };
   };
-  const retain = async (signal: AbortSignal, runId: string, entry: ChatAbortControllerEntry) => {
+  const retain = async (runId: string, entry: ChatAbortControllerEntry) => {
+    const { signal } = source;
     const retained = await retainGatewayOperatorRun({
       context,
       runId,
@@ -117,27 +132,27 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
     releases.push(retained.release);
     return retained;
   };
+  const settle = () =>
+    AsyncWorkScope.runWhenAllIdle(
+      () => [execution],
+      () => {},
+    );
   return {
+    source,
     scope,
     context,
     execution,
-    settle: () =>
-      AsyncWorkScope.runWhenAllIdle(
-        () => [execution],
-        () => {},
-      ),
+    settle,
+    abort: () => {
+      source.abort();
+      return settle();
+    },
+    transcript: () => loadTranscriptEventsSync(scope),
     warn,
     register,
-    retain,
-    release: () => {
-      for (const release of releases) {
-        release();
-      }
-    },
+    release: () => releases.forEach((release) => release()),
     cleanup: () => {
-      for (const registration of registrations) {
-        registration.cleanup();
-      }
+      registrations.forEach((registration) => registration.cleanup());
       for (const [runId, entry] of context.chatQueuedTurns) {
         completeQueuedChatTurn(context.chatQueuedTurns, runId, entry.controller);
       }
@@ -150,18 +165,16 @@ async function createCancellationFixture(cfg: OpenClawConfig) {
 describe("operator access cancellation", () => {
   it.each([false, true])(
     "stops only its run and settles persistence (hidden progress refresh: %s)",
-    async (hiddenRefresh) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
+    (hiddenRefresh) =>
+      withCancellationFixture(async (f) => {
         const guest = f.register(
           "guest-run",
+          "The guest's saved progress.",
           hiddenRefresh ? { controlUiVisible: false, projectSessionActive: false } : {},
         );
-        const staff = f.register("staff-run");
-        const savedTranscript = loadTranscriptEventsSync(f.scope);
-        f.context.chatRunState.getOrCreate("guest-run").buffer = "The guest's saved progress.";
-        f.context.chatRunState.getOrCreate("staff-run").buffer = "Staff work continues.";
-        (await f.retain(source.signal, "guest-run", guest.entry)).armCancellation();
+        const staff = f.register("staff-run", "Staff work continues.");
+        const savedTranscript = f.transcript();
+        (await guest.retain()).armCancellation();
         const terminalWrite = createDeferredCore();
         const cancellationObserved = createDeferredCore();
         let sourceClosedAtAbort = false;
@@ -169,7 +182,7 @@ describe("operator access cancellation", () => {
           if (event.runId !== "guest-run" || event.stream !== "lifecycle") {
             return;
           }
-          sourceClosedAtAbort = source.signal.aborted;
+          sourceClosedAtAbort = f.source.signal.aborted;
           guest.entry.projectSessionTerminalObservedAt = Date.now();
           guest.entry.projectSessionTerminalPersistence = terminalWrite.promise.then(() => {
             guest.entry.projectSessionTerminalPending = false;
@@ -178,7 +191,7 @@ describe("operator access cancellation", () => {
         });
         let drain: Promise<void> | undefined;
         try {
-          source.abort();
+          f.source.abort();
           await Promise.race([
             cancellationObserved.promise,
             f.settle().then(() => {
@@ -201,11 +214,11 @@ describe("operator access cancellation", () => {
             "Staff work continues.",
           );
           if (hiddenRefresh) {
-            expect(loadTranscriptEventsSync(f.scope)).toEqual(savedTranscript);
+            expect(f.transcript()).toEqual(savedTranscript);
             expect(f.context.broadcast).not.toHaveBeenCalled();
             expect(f.context.nodeSendToSession).not.toHaveBeenCalled();
           } else {
-            expect(loadTranscriptEventsSync(f.scope)).toEqual(
+            expect(f.transcript()).toEqual(
               expect.arrayContaining([
                 ...savedTranscript,
                 expect.objectContaining({
@@ -223,22 +236,19 @@ describe("operator access cancellation", () => {
           unsubscribe();
           await drain;
         }
-      });
-    },
+      }),
   );
 
   it.each(["persisting", "persisted"] as const)(
     "preserves an accepted terminal result while %s",
-    async (phase) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
-        const guest = f.register("terminal-run");
-        const savedTranscript = loadTranscriptEventsSync(f.scope);
+    (phase) =>
+      withCancellationFixture(async (f) => {
+        const guest = f.register("terminal-run", "The already accepted result.");
+        const savedTranscript = f.transcript();
         const acceptedMessage = {
           role: "assistant",
           content: [{ type: "text", text: "The already accepted result." }],
         };
-        f.context.chatRunState.getOrCreate("terminal-run").buffer = "The already accepted result.";
         const terminalWrite = createDeferredCore();
         guest.entry.projectSessionActive = false;
         guest.entry.projectSessionTerminalPending = true;
@@ -255,23 +265,21 @@ describe("operator access cancellation", () => {
           guest.entry.projectSessionTerminalPersisted = true;
         });
         guest.entry.projectSessionTerminalPersistence = persistence;
-        (await f.retain(source.signal, "terminal-run", guest.entry)).armCancellation();
+        (await guest.retain()).armCancellation();
         try {
           if (phase === "persisted") {
             terminalWrite.resolve();
             await persistence;
           }
-          source.abort();
-          await f.settle();
-          expect(guest.controller.signal.aborted).toBe(false);
-          expect(f.context.chatAbortControllers.get("terminal-run")).toBe(guest.entry);
+          await f.abort();
+          guest.expectCurrent();
           expect(f.context.chatRunState.resolveBuffer("terminal-run").text).toBe(
             "The already accepted result.",
           );
           expect(f.context.broadcast).not.toHaveBeenCalled();
           terminalWrite.resolve();
           await persistence;
-          expect(loadTranscriptEventsSync(f.scope)).toEqual([
+          expect(f.transcript()).toEqual([
             ...savedTranscript,
             expect.objectContaining({
               id: "accepted-result",
@@ -283,8 +291,7 @@ describe("operator access cancellation", () => {
           terminalWrite.resolve();
           await persistence;
         }
-      });
-    },
+      }),
   );
 
   it.each([
@@ -292,12 +299,11 @@ describe("operator access cancellation", () => {
     { collect: true, activeAdmission: true },
   ])(
     "retains queued custody across collect=$collect and active admission=$activeAdmission",
-    async ({ collect, activeAdmission }) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
+    ({ collect, activeAdmission }) =>
+      withCancellationFixture(async (f) => {
         const guest = f.register("queued-guest");
         const staff = f.register("queued-staff");
-        const retained = await f.retain(source.signal, "queued-guest", guest.entry);
+        const retained = await guest.retain();
         const work = createChatSendWorkAdmission({
           admission: { release: () => {} },
           releaseCallerAuthority: retained.release,
@@ -332,8 +338,7 @@ describe("operator access cancellation", () => {
           );
         }
         try {
-          source.abort();
-          await f.settle();
+          await f.abort();
           expect(guest.controller.signal.aborted).toBe(!collect);
           expect(onGuestAborted.mock.calls).toEqual(collect ? [] : [["authority-revoked"]]);
           expect(f.context.chatQueuedTurns.has("queued-guest")).toBe(collect);
@@ -346,22 +351,18 @@ describe("operator access cancellation", () => {
         } finally {
           releaseQueue();
         }
-      });
-    },
+      }),
   );
 
   it.each(["before", "after"] as const)(
     "preserves replacement runs and accepted persistence when cleanup occurs %s revocation",
-    async (cleanup) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
-        const original = f.register("reused-run");
-        f.context.chatRunState.getOrCreate("reused-run").buffer =
-          "Keep the canceled run's progress.";
-        const retained = await f.retain(source.signal, "reused-run", original.entry);
+    (cleanup) =>
+      withCancellationFixture(async (f) => {
+        const original = f.register("reused-run", "Keep the canceled run's progress.");
+        const retained = await original.retain();
         retained.armCancellation();
         if (cleanup === "after") {
-          source.abort();
+          f.source.abort();
         }
         original.cleanup();
         if (cleanup === "after") {
@@ -369,16 +370,15 @@ describe("operator access cancellation", () => {
         }
         const replacement = f.register("reused-run");
         if (cleanup === "before") {
-          source.abort();
+          f.source.abort();
         }
         await f.settle();
-        expect(replacement.controller.signal.aborted).toBe(false);
-        expect(f.context.chatAbortControllers.get("reused-run")).toBe(replacement.entry);
+        replacement.expectCurrent();
         if (cleanup === "before") {
           expect(f.context.broadcast).not.toHaveBeenCalled();
         } else {
           expect(original.controller.signal.aborted).toBe(true);
-          expect(loadTranscriptEventsSync(f.scope)).toContainEqual(
+          expect(f.transcript()).toContainEqual(
             expect.objectContaining({
               message: expect.objectContaining({
                 content: [{ type: "text", text: "Keep the canceled run's progress." }],
@@ -386,78 +386,83 @@ describe("operator access cancellation", () => {
             }),
           );
         }
-      });
-    },
+      }),
   );
 
   it.each(["released", "already-aborted"] as const)(
     "leaves its run untouched after source release or rejected admission (%s)",
-    async (state) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
+    (state) =>
+      withCancellationFixture(async (f) => {
         const guest = f.register("bound-run");
         if (state === "already-aborted") {
-          source.abort(new Error("operator source already ended"));
-          await expect(f.retain(source.signal, "bound-run", guest.entry)).rejects.toThrow(
-            "operator source already ended",
-          );
+          f.source.abort(new Error("operator source already ended"));
+          await expect(guest.retain()).rejects.toThrow("operator source already ended");
         } else {
-          const retained = await f.retain(source.signal, "bound-run", guest.entry);
+          const retained = await guest.retain();
           retained.armCancellation();
           retained.release();
-          source.abort();
+          f.source.abort();
         }
         await f.settle();
         expect(guest.controller.signal.aborted).toBe(false);
-      });
-    },
+      }),
   );
 
   it.each([false, true])(
     "leaves input custody untouched until execution owns cancellation (retired: %s)",
-    async (retired) => {
-      await withCancellationFixture(async (f) => {
-        const source = new AbortController();
+    (retired) =>
+      withCancellationFixture(async (f) => {
         const guest = f.register("admitted-input");
         const staff = f.register("independent-backing-run");
-        const retained = await f.retain(source.signal, "admitted-input", guest.entry);
-        const transcript = loadTranscriptEventsSync(f.scope);
+        const retained = await guest.retain();
+        const transcript = f.transcript();
         if (retired) {
           retained.armCancellation();
           retained.retireCancellation();
         }
 
-        source.abort();
-        await f.settle();
-        expect(guest.controller.signal.aborted).toBe(false);
-        expect(f.context.chatAbortControllers.get("admitted-input")).toBe(guest.entry);
+        await f.abort();
+        guest.expectCurrent();
         expect(f.context.broadcast).not.toHaveBeenCalled();
-        expect(loadTranscriptEventsSync(f.scope)).toEqual(transcript);
+        expect(f.transcript()).toEqual(transcript);
         expect(() => retained.authority?.assertCurrent()).toThrow();
 
         retained.armCancellation();
         await f.settle();
         expect(guest.controller.signal.aborted).toBe(!retired);
-        expect(staff.controller.signal.aborted).toBe(false);
-        expect(f.context.chatAbortControllers.get("independent-backing-run")).toBe(staff.entry);
-      });
-    },
+        staff.expectCurrent();
+      }),
   );
 
-  it("still stops its exact run if partial transcript capture fails", async () => {
-    await withCancellationFixture(async (f) => {
-      const source = new AbortController();
-      const guest = f.register("failed-partial-capture");
-      guest.entry.sessionId = "retired-session";
-      f.context.chatRunState.getOrCreate("failed-partial-capture").buffer =
-        "Preserve this progress.";
-      (await f.retain(source.signal, "failed-partial-capture", guest.entry)).armCancellation();
-      source.abort();
-      await f.settle();
-      expect(guest.controller.signal.aborted).toBe(true);
-      expect(f.warn).toHaveBeenCalledWith(
-        expect.stringContaining("Aborted partial transcript session changed before persistence"),
-      );
-    });
-  });
+  it.each(["reset", "retired"] as const)(
+    "stops the exact run when partial capture meets a %s session",
+    (change) =>
+      withCancellationFixture(async (f) => {
+        const guest = f.register("stale-session", "Progress from the previous session lifecycle.");
+        if (change === "retired") {
+          guest.entry.sessionId = "retired-session";
+        }
+        (await guest.retain()).armCancellation();
+        if (change === "reset") {
+          await replaceSessionEntry(f.scope, {
+            sessionId: f.scope.sessionId,
+            updatedAt: 2,
+            lifecycleRevision: "reset-lifecycle",
+          });
+        }
+        const transcript = change === "reset" ? f.transcript() : undefined;
+        await f.abort();
+        expect(guest.controller.signal.aborted).toBe(true);
+        if (change === "reset") {
+          expect(f.transcript()).toEqual(transcript);
+          expect(f.warn).toHaveBeenCalled();
+        } else {
+          expect(f.warn).toHaveBeenCalledWith(
+            expect.stringContaining(
+              "Aborted partial transcript session changed before persistence",
+            ),
+          );
+        }
+      }),
+  );
 });

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -32,6 +33,7 @@ async function withSession(
   await withOpenClawTestState(
     { scenario: "minimal", label: "doctor-session-title" },
     async (state) => {
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {} } } });
       const params = {
         agentId: "main",
         storePath: state.statePath("agents", "main", "sessions", "sessions.json"),

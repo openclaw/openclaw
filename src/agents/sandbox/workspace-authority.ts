@@ -19,7 +19,7 @@ import {
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
-import { resolveSandboxRuntimeStatus } from "./runtime-status.js";
+import type { resolveSandboxRuntimeStatus } from "./runtime-status.js";
 import type { SandboxToolPolicy } from "./types.js";
 
 type RestrictiveWorkspaceToolPolicy = SandboxToolPolicy & { allow: string[] };
@@ -147,15 +147,9 @@ export function resolveSandboxWorkspaceAuthority(params: {
   requiredToolNames?: readonly string[];
   modelProvider?: string;
   modelId?: string;
-  preparedRuntimeStatus?: ReturnType<typeof resolveSandboxRuntimeStatus>;
+  preparedRuntimeStatus: ReturnType<typeof resolveSandboxRuntimeStatus>;
 }): SandboxWorkspaceAuthority {
-  const runtime =
-    params.preparedRuntimeStatus ??
-    resolveSandboxRuntimeStatus({
-      cfg: params.config,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-    });
+  const runtime = params.preparedRuntimeStatus;
   const sandbox = resolveSandboxConfigForAgent(params.config, runtime.agentId);
   if (!runtime.sandboxed) {
     return { sandboxed: false, workspaceAccess: sandbox.workspaceAccess };

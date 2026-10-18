@@ -110,7 +110,7 @@ Hydration adds eligible model ids and fills only undefined metadata. Explicit ma
 
 This field is publication-time authoring metadata, not a Gateway discovery hook. It does not add runtime network calls or hot reload; the existing [hosted catalog update lifecycle](/concepts/models#hosted-catalog-updates) is unchanged.
 
-`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning canonical provider rows only.
+`aliases` participates in provider ownership lookup for model-catalog planning. Alias targets must be top-level providers owned by the same plugin. When a provider-filtered list uses an alias, OpenClaw can read the owning manifest and apply alias API/base URL overrides without loading provider runtime. Aliases do not expand unfiltered catalog listings; broad lists emit the owning primary provider rows only.
 
 `suppressions` replaces the old provider runtime `suppressBuiltInModel` hook. Suppression entries are honored only when the provider is owned by the plugin or declared as a `modelCatalog.aliases` key that targets an owned provider. Runtime suppression hooks are no longer called during model resolution.
 
@@ -158,7 +158,7 @@ Model fields:
 | `api`                  | `ModelApi`                                                     | Optional per-model API override.                                                     |
 | `baseUrl`              | `string`                                                       | Optional per-model base URL override.                                                |
 | `headers`              | `Record<string, string>`                                       | Optional per-model static headers.                                                   |
-| `input`                | `Array<"text" \| "image" \| "document">`                       | Modalities the model accepts. Other values are silently dropped.                     |
+| `input`                | `Array<"text" \| "image" \| "video" \| "document">`            | Modalities the model accepts. Other values are silently dropped.                     |
 | `reasoning`            | `boolean`                                                      | Whether the model exposes reasoning behavior.                                        |
 | `contextWindow`        | `number`                                                       | Native provider context window.                                                      |
 | `contextWindows`       | `Array<{ id: string; label: string; contextWindow: number }>`  | Up to 16 selectable windows, normalized in ascending token-count order.              |
@@ -202,6 +202,53 @@ Generated cache reads for plugins with `activation.onStartup: false` require cur
 
 Capabilities belong to the declared API and base URL, not only the provider/model id. When model listing enriches a cached row, it uses manifest capabilities only for a matching route; a custom endpoint must supply its own limits and capabilities.
 
+### Task-specific inference metadata
+
+A model row can declare `inference` facts for its exact served route. Manifest
+normalization and prepared catalog projection retain them. They do not register
+a transport, grant execution permission, or replace existing provider runtime
+contracts. Omitting the field preserves legacy catalog behavior. An explicit
+declaration requires `chat`; text encoding, JSON support and generic tool-choice
+flags do not establish conversational support.
+
+`inference.decision` describes a typed task separately from chat thinking:
+
+- `protocol`: a bounded provider-owned adapter identifier, not a URL or auth identity.
+- `input`: supported text/image modalities for this task.
+- `questions`: optional declared `boolean`, `choice`, `score`, `sort`, or `tags` kinds.
+  Omission means unknown support; an explicit empty declaration is invalid.
+  Each records probability semantics (`boolean`, `categorical`, `independent`,
+  `provider-defined`, or `none`) and whether it can abstain. Optional option bounds
+  include a separate image-input bound. `requiresCriteria` records whether Boolean
+  questions need an explicit rubric. Independent and provider-defined estimates
+  must not be normalized to sum to one; abstention must not become an argmax.
+- `confidence`: optional `provider-specific` or `none`. A provider-specific
+  confidence metric is distinct from a calibrated correctness probability.
+- `reasoning`: supported `auto`/`off`/`on` modes, optional default/applicable
+  question kinds, and whether execution metadata is returned. This does not
+  imply reasoning text or set the primary model effort.
+- `grounding`: web-search support and optional applicable question kinds.
+  Support is not permission for extra network access or billing.
+- `limits`: optional question, request-token, state-plus-question-token, encoded
+  input and image bounds. Unknown values stay absent. Image metadata records
+  decoded-byte limits, MIME types and remote-URL support separately.
+- `billing`: `tokens`, `decision-units`, or `requests`, with source provenance
+  (`provider-docs`, `provider-catalog`, or `configured`). Only token billing
+  accepts `usdPerMillion.input`/`output`. An absent rate is unknown; an explicit
+  zero remains zero. Subscription decision units are not converted into an
+  invented marginal dollar price.
+
+A genuinely dual-capability model may declare both tasks on the same identity.
+Typed-only routes declare `chat: false`; neither capability implies the other.
+Task metadata never supplies fallback models or ambient conversation content.
+
+Malformed explicit declarations exclude the row rather than falling back to
+a legacy chat interpretation. Unknown fields are discarded. A route change
+replaces the entire declaration rather than blending endpoints with different
+reasoning, probabilities, limits or prices. Losing declared route facts retains
+`chat: false` until the new route supplies an explicit declaration. An overlay
+that preserves the original transport also preserves its inference facts.
+
 ## modelIdNormalization reference
 
 Use `modelIdNormalization` for cheap provider-owned model-id cleanup that must happen before provider runtime loads. This keeps aliases such as short model names, provider-local legacy ids, and proxy prefix rules in the owning plugin manifest instead of in core model-selection tables.
@@ -237,6 +284,22 @@ Provider fields:
 
 Use `modelPricing` when the hosted catalog publisher needs provider-specific pricing-key behavior. The publisher reads this metadata without importing provider runtime code.
 
+A plugin can declare a policy for each id in its `providers` or `cliBackends`. Policies for other ids are ignored. A CLI backend that sends a vendor's models to that vendor can use `priceAs` to price them with the vendor's catalog rows. Its usage is then estimated at the vendor's API rates, even when the CLI is billed through a subscription plan. No separate prices are published for the CLI backend. For example, the Anthropic plugin prices its `claude-cli` backend as `anthropic`:
+
+```json
+{
+  "providers": ["anthropic"],
+  "cliBackends": ["claude-cli"],
+  "modelPricing": {
+    "providers": {
+      "claude-cli": { "priceAs": "anthropic" }
+    }
+  }
+}
+```
+
+Another example:
+
 ```json
 {
   "providers": ["ollama", "openrouter"],
@@ -265,6 +328,7 @@ Provider fields:
 | `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
 | `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
 | `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
+| `priceAs`    | `string`          | Provider whose catalog rows price this provider's models when it has no price of its own.       |
 | `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
 | `modelsDev`  | `false \| object` | models.dev price list for the provider that bills the request. Enabled by default.              |
 | `openRouter` | `false \| object` | OpenRouter's own prices. They price only `openrouter/*` keys, never a vendor's models.          |

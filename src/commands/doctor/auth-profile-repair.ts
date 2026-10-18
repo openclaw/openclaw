@@ -1,3 +1,4 @@
+import { copyConfigResolutionFactsThroughRewrite } from "../../config/resolution-facts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
@@ -45,8 +46,12 @@ export async function repairAuthProfileMigration(params: {
       ? await maybeRepairLegacyAuthProfileStores({ cfg: config, env, profileIdMap: authorized })
       : { profileIdMap: authorized, changes: [], warnings: [] };
   const repaired = maybeRepairOpenAICodexAuthConfig(config, { profileIdMap: aliases.profileIdMap });
+  const configChanged = imported.configChanged || repaired.changes.length > 0;
+  if (configChanged) {
+    copyConfigResolutionFactsThroughRewrite(params.cfg, repaired.config);
+  }
   return {
-    config: repaired.config,
+    config: configChanged ? repaired.config : params.cfg,
     changes: [
       ...repaired.changes,
       ...(imported.configChanged ? ["Auth profile SQLite migration updated auth.profiles."] : []),

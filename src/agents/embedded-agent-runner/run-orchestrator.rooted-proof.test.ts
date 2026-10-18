@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
@@ -94,6 +95,7 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
     tools: { allow: toolsAllow },
   };
   await state.writeConfig(config);
+  setRuntimeConfigSnapshot(config);
   // A Gateway projects its boot inventory for every run workspace.
   const metadata = loadPluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir });
   expect(metadata.plugins.some((plugin) => plugin.id === "llm-task")).toBe(true);

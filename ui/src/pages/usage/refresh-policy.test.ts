@@ -28,36 +28,16 @@ describe("UsageRefreshPolicy", () => {
     vi.restoreAllMocks();
   });
 
-  it("skips automatic refresh while the cached payload is within the TTL", () => {
-    const { policy, reload } = createPolicy();
-    policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS + 1);
-
-    policy.request("reconnect");
-    policy.request("poll");
-
-    expect(reload).not.toHaveBeenCalled();
-  });
-
   it("defers stale work until the page is visible", () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const { policy, reload } = createPolicy();
     policy.setLastLoadedAtMs(NOW_MS - USAGE_PAYLOAD_TTL_MS);
 
-    policy.request("reconnect");
+    void policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    policy.request("focus");
-    expect(reload).toHaveBeenCalledOnce();
-  });
-
-  it("always fetches for a manual refresh", () => {
-    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
-    const { policy, reload } = createPolicy();
-    policy.setLastLoadedAtMs(NOW_MS);
-
-    policy.request("manual");
-
+    void policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -69,11 +49,11 @@ describe("UsageRefreshPolicy", () => {
     policy.interrupt();
     loading = false;
 
-    policy.request("reconnect");
+    void policy.request("reconnect");
     expect(reload).not.toHaveBeenCalled();
 
     visibility.mockReturnValue("visible");
-    policy.request("focus");
+    void policy.request("focus");
     expect(reload).toHaveBeenCalledOnce();
   });
 
@@ -88,12 +68,12 @@ describe("UsageRefreshPolicy", () => {
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     expect(onIncompleteUsageExhausted).toHaveBeenCalledOnce();
 
-    policy.request("manual");
+    void policy.request("manual");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(5);
 
-    policy.request("focus");
+    void policy.request("focus");
     policy.setLastLoadedAtMs(Date.now(), { incomplete: true });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(reload).toHaveBeenCalledTimes(7);

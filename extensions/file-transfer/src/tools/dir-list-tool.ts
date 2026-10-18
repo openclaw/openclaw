@@ -44,7 +44,7 @@ function directoryListingText(
       return { manifest: listing, text: `${listing}\n${note}` };
     },
     fallback:
-      "Directory listing omitted: the canonical path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
+      "Directory listing omitted: the resolved path or continuation metadata cannot be represented safely within the 8192-byte text limit. No usable paths or continuation token are shown; use available node-local directory capabilities.",
   });
 }
 

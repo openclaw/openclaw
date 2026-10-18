@@ -18,7 +18,7 @@ public final class OpenClawChatViewModel {
     }
 
     let sourcePreviewState = ChatSourcePreviewState()
-    let reactionState = ChatMessageReactionState()
+    var reactionState = ChatMessageReactionState()
 
     public var input: String = "" {
         didSet {
@@ -125,6 +125,11 @@ public final class OpenClawChatViewModel {
     var narration = ChatNarration()
     public internal(set) var progressCard: ProgressCard?
     var progressCardStoreAvailable: Bool?
+    var progressCardRefreshAvailable = false
+    var progressCardRefreshPending = false
+    @ObservationIgnored
+    var progressCardRefreshTask: Task<Void, Never>?
+    var progressCardRefreshIntent: (key: String, baseline: Int, accepted: Bool)?
     @ObservationIgnored
     var progressCardGeneration: UInt64 = 0
     @ObservationIgnored
@@ -137,7 +142,7 @@ public final class OpenClawChatViewModel {
     public private(set) var sessionKey: String {
         didSet {
             syncContextUsageFraction()
-            syncActiveSessionRunIDsFromCurrentSession()
+            syncActiveSessionMetadata()
         }
     }
 
@@ -150,9 +155,16 @@ public final class OpenClawChatViewModel {
     }
 
     public private(set) var streamingAssistantText: String?
+    /// What the Gateway says the selected run is doing before its first output.
+    var runStartup: ChatRunStartup?
+    var runStartupStatus: String? {
+        self.runStartup?.runID == self.liveUsageRunID ? self.runStartup?.status : nil
+    }
 
     public private(set) var toolActivities: [OpenClawChatPendingToolCall] = []
     private(set) var timelineRevision: UInt64 = 0
+    // Capped or filtered rosters can omit the active row. Reset this projection with session-owned state.
+    var retainedActiveSession: OpenClawChatSessionEntry?
     var legacySessions: [OpenClawChatSessionEntry] = []
 
     public internal(set) var sidebarData: OpenClawChatSessionSidebarData?
@@ -364,7 +376,6 @@ public final class OpenClawChatViewModel {
     private var settingsPatchWaitersByTarget: [ModelPatchTarget: [CheckedContinuation<Void, Never>]] = [:]
     @ObservationIgnored
     private var settingsPatchTailsByTarget: [ModelPatchTarget: SettingsPatchTail] = [:]
-    var nextThinkingSelectionRequestID: UInt64 = 0
     var latestThinkingSelectionRequestIDsByTarget: [ModelPatchTarget: UInt64] = [:]
     var confirmedThinkingPreference: PreferenceState
     var emittedThinkingPreference: PreferenceState
@@ -379,7 +390,6 @@ public final class OpenClawChatViewModel {
     var lastSuccessfulFastOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var lastSuccessfulVerboseOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedSettingsPatchResultsByTarget: [ModelPatchTarget: OpenClawChatModelPatchResult] = [:]
-    var acceptedThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedPreferredThinkingLevelsByTarget: [ModelPatchTarget: String] = [:]
     var acceptedExplicitThinkingPreferencesByTarget: [ModelPatchTarget: Bool] = [:]
     var acceptedThinkingOverrideClearedByTarget: [ModelPatchTarget: Bool] = [:]
@@ -617,6 +627,7 @@ public final class OpenClawChatViewModel {
         self.retireQuestionAuthority()
         self.resetSessionReactions()
         self.isTransportDetached = true
+        self.invalidateProgressCardTarget()
         self.sidebarData?.invalidate(clear: true)
         let transport = self.transport
         Task { await transport.releaseActiveSessionSubscription() }
@@ -778,6 +789,7 @@ extension OpenClawChatViewModel {
     }
 
     func clearStreamingActivity() {
+        self.runStartup = nil
         self.turnToolCallsById = [:]
         self.updateStreamingAssistantText(nil)
     }
@@ -971,9 +983,6 @@ extension OpenClawChatViewModel {
             return
         }
         let context = self.beginHistoryRequest()
-        self.logDiagnostic(
-            "chat.ui foreground refresh sessionKey=\(context.session.key) "
-                + "pending=\(self.pendingRunCount)")
         let refresh = await refreshHistoryAfterRun(historyRequest: context)
         guard self.isCurrentSession(context.session) else { return }
         if refresh.applied,
@@ -1253,6 +1262,7 @@ extension OpenClawChatViewModel {
         self.narration = ChatNarration()
         self.isShowingCachedTranscript = false
         self.hasAppliedLiveHistory = false
+        self.retainedActiveSession = nil
         self.pendingLocalUserEchoMessageIDsByRunID.removeAll()
         self.runMessageScopesByRunID.removeAll()
         self.provisionalFinalMessagesByID.removeAll()
@@ -1462,7 +1472,6 @@ extension OpenClawChatViewModel {
             // Rollback baselines belong to one contiguous settings lane. Once
             // drained, the next authoritative session snapshot owns state.
             self.acceptedSettingsPatchResultsByTarget.removeValue(forKey: target)
-            self.acceptedThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedPreferredThinkingLevelsByTarget.removeValue(forKey: target)
             self.acceptedExplicitThinkingPreferencesByTarget.removeValue(forKey: target)
             self.acceptedThinkingOverrideClearedByTarget.removeValue(forKey: target)
@@ -1617,7 +1626,6 @@ extension OpenClawChatViewModel {
         self.lastSuccessfulModelSelectionIDsByTarget[target] = selectionID
         self.lastSuccessfulSettingsPatchResultsByTarget[target] = patchResult
         if let thinkingLevel = Self.normalizedThinkingLevel(patchResult?.thinkingLevel) {
-            self.acceptedThinkingLevelsByTarget[target] = thinkingLevel
             if self.acceptedExplicitThinkingPreferencesByTarget[target] == false {
                 self.acceptedPreferredThinkingLevelsByTarget[target] = thinkingLevel
                 self.confirmedThinkingPreference = PreferenceState(level: thinkingLevel, isExplicit: false)
@@ -1629,7 +1637,7 @@ extension OpenClawChatViewModel {
                 key: patchResult.key ?? previous?.key,
                 modelProvider: patchResult.modelProvider ?? previous?.modelProvider,
                 model: patchResult.model ?? previous?.model,
-                thinkingLevel: patchResult.thinkingLevel ?? previous?.thinkingLevel,
+                thinkingLevel: Self.normalizedThinkingLevel(patchResult.thinkingLevel) ?? previous?.thinkingLevel,
                 thinkingLevels: patchResult.thinkingLevels ?? previous?.thinkingLevels,
                 fastMode: patchResult.fastMode ?? previous?.fastMode,
                 effectiveFastMode: patchResult.effectiveFastMode ?? previous?.effectiveFastMode,

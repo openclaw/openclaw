@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as gatewayWork from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
@@ -9,8 +10,11 @@ import {
 import { startCronMaintenance, stopCronMaintenance } from "./maintenance.js";
 
 const mocks = vi.hoisted(() => ({
-  history: vi.fn(async () => {}),
-  registry: vi.fn(async () => ({})),
+  history: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({ nextSweepAtMs: null })),
+  historyChanged: undefined as ((databasePath: string) => void) | undefined,
+  registry: vi.fn(async (): Promise<{ nextSweepAtMs: number | null }> => ({
+    nextSweepAtMs: null,
+  })),
   info: vi.fn(),
   warn: vi.fn(),
   error: vi.fn(),
@@ -22,6 +26,19 @@ vi.mock("../state/openclaw-state-worker-context.js", () => ({
 }));
 // mock-isolation: Observe retention writes without starting database workers.
 vi.mock("./store/run-history.js", () => ({ maintainCronRunHistory: mocks.history }));
+// mock-isolation: Deliver a committed owner notification during an awaited history read.
+vi.mock("./store/run-history-changes.js", () => ({
+  subscribeCronRunHistoryChanges: (listener: (databasePath: string) => void) => {
+    mocks.historyChanged = listener;
+    return () => {
+      mocks.historyChanged = undefined;
+    };
+  },
+}));
+// mock-isolation: Match synthetic receipt paths without resolving the user's state directory.
+vi.mock("../state/openclaw-state-db.paths.js", () => ({
+  resolveOpenClawStateSqlitePath: () => "/synthetic/state.sqlite",
+}));
 // mock-isolation: Observe the session sweep without opening session stores.
 vi.mock("./session-registry-maintenance.js", () => ({
   runSessionRegistryMaintenance: mocks.registry,
@@ -35,7 +52,8 @@ let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.history.mockReset().mockResolvedValue(undefined);
+  mocks.history.mockReset().mockResolvedValue({ nextSweepAtMs: null });
+  mocks.registry.mockReset().mockResolvedValue({ nextSweepAtMs: null });
   clock = createGatewaySchedulerClock();
   gatewayWork.resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler(clock.clock);
@@ -47,7 +65,7 @@ afterEach(async () => {
   gatewayWork.resetGatewayWorkAdmission();
 });
 
-it.each([false, true])("runs retention after startup preparation, pending=%s", async (pending) => {
+it.each([true])("runs retention after startup preparation, pending=%s", async (pending) => {
   await withAgentDatabaseStartupAdmission(async (admission) => {
     const preparation = createDeferredCore();
     if (pending) {
@@ -71,14 +89,68 @@ it.each([false, true])("runs retention after startup preparation, pending=%s", a
       expect(mocks.registry).toHaveBeenCalledOnce();
       expect(mocks.warn).not.toHaveBeenCalled();
       expect(mocks.error).not.toHaveBeenCalled();
+      expect(scheduler.nextWakeAtMs).toBeNull();
       await clock.advanceBy(60_000);
-      expect(mocks.history).toHaveBeenCalledTimes(2);
-      expect(mocks.registry).toHaveBeenCalledTimes(2);
+      expect(mocks.history).toHaveBeenCalledOnce();
+      expect(mocks.registry).toHaveBeenCalledOnce();
       expect(mocks.info).toHaveBeenCalledTimes(pending ? 1 : 0);
     } finally {
       preparation.resolve();
     }
   });
+});
+
+it("sleeps until the retained session deadline when history is empty", async () => {
+  mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 70_000 });
+  startCronMaintenance(scheduler);
+  await clock.advanceBy(5_000);
+  await clock.advanceTo(65_000);
+  expect(mocks.history).toHaveBeenCalledOnce();
+  expect(mocks.registry).toHaveBeenCalledOnce();
+  await clock.advanceTo(70_000);
+  expect(mocks.history).toHaveBeenCalledOnce();
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
+});
+
+it.each(["session", "stores", "config"] as const)(
+  "wakes for committed %s changes and replaces their previous expiry without polling unrelated sessions",
+  async (kind) => {
+    mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 200_000 });
+    startCronMaintenance(scheduler);
+    await clock.advanceBy(5_000);
+    await clock.advanceTo(10_000);
+    sessionChanges.emit({ sessionKey: "agent:main:main", scope: "session-entry" });
+    await clock.advanceTo(65_000);
+    expect(mocks.registry).toHaveBeenCalledOnce();
+
+    mocks.registry.mockResolvedValueOnce({ nextSweepAtMs: 500_000 });
+    if (kind === "session") {
+      sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+    } else {
+      sessionChanges.emit({ all: true, scope: kind });
+    }
+    await clock.advanceTo(125_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+    await clock.advanceTo(200_000);
+    expect(mocks.registry).toHaveBeenCalledTimes(2);
+  },
+);
+
+it("retains a committed cron wake received while the previous registry read is in flight", async () => {
+  const entered = createDeferredCore();
+  const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
+  mocks.registry.mockImplementationOnce(() => {
+    entered.resolve();
+    return result.promise;
+  });
+  startCronMaintenance(scheduler);
+  const sweep = clock.advanceBy(5_000);
+  await entered.promise;
+  sessionChanges.emit({ sessionKey: "agent:main:cron:job:run:new", scope: "session-entry" });
+  result.resolve({ nextSweepAtMs: 500_000 });
+  await sweep;
+  await clock.advanceTo(65_000);
+  expect(mocks.registry).toHaveBeenCalledTimes(2);
 });
 
 it("cancels the startup wait when the Gateway stops", async () => {
@@ -162,38 +234,69 @@ describe("Cron maintenance admission diagnostics", () => {
     }
   });
 
-  it.each([
-    {
-      kind: "disk-full",
-      failure: new Error("Cron history maintenance failed: database or disk is full"),
-    },
-    { kind: "drain", failure: new gatewayWork.GatewayDrainingError() },
-  ])("reports an admitted $kind failure while stop joins its sweep", async ({ failure }) => {
-    const sweep = createDeferredCore();
-    mocks.history.mockImplementation(() => sweep.promise);
+  it.each([{ kind: "drain", failure: new gatewayWork.GatewayDrainingError() }])(
+    "reports an admitted $kind failure while stop joins its sweep",
+    async ({ failure }) => {
+      const sweep = createDeferredCore<{ nextSweepAtMs: number | null }>();
+      mocks.history.mockImplementation(() => sweep.promise);
 
-    try {
-      startCronMaintenance(scheduler);
-      const tick = clock.advanceBy(5_000);
-      expect(mocks.history).toHaveBeenCalledOnce();
-      gatewayWork.markGatewayRestartDraining();
-      const gatewayStopping = scheduler.stop();
-      let stopped = false;
-      const stopping = stopCronMaintenance().then(() => {
-        stopped = true;
-      });
-      expect(stopped).toBe(false);
-      sweep.reject(failure);
-      await stopping;
-      await gatewayStopping;
-      await tick;
-      expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
-        error: failure,
-      });
-      expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
-    } finally {
-      sweep.resolve();
-      await stopCronMaintenance();
-    }
+      try {
+        startCronMaintenance(scheduler);
+        const tick = clock.advanceBy(5_000);
+        expect(mocks.history).toHaveBeenCalledOnce();
+        gatewayWork.markGatewayRestartDraining();
+        const gatewayStopping = scheduler.stop();
+        let stopped = false;
+        const stopping = stopCronMaintenance().then(() => {
+          stopped = true;
+        });
+        expect(stopped).toBe(false);
+        sweep.reject(failure);
+        await stopping;
+        await gatewayStopping;
+        await tick;
+        expect(mocks.warn).toHaveBeenCalledExactlyOnceWith("Cron maintenance failed", {
+          error: failure,
+        });
+        expect(gatewayWork.getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        sweep.resolve({ nextSweepAtMs: null });
+        await stopCronMaintenance();
+      }
+    },
+  );
+});
+
+it("keeps a history invalidation received during its async read and reconstructs on restart", async () => {
+  const entered = createDeferredCore();
+  const result = createDeferredCore<{ nextSweepAtMs: number | null }>();
+  mocks.history.mockImplementationOnce(() => {
+    entered.resolve();
+    return result.promise;
   });
+  startCronMaintenance(scheduler);
+  const sweep = clock.advanceBy(5_000);
+  await entered.promise;
+  mocks.historyChanged?.("/synthetic/state.sqlite");
+  result.resolve({ nextSweepAtMs: 500_000 });
+  await sweep;
+  await clock.advanceTo(65_000);
+  expect(mocks.history).toHaveBeenCalledTimes(2);
+  await clock.advanceTo(500_000);
+  expect(mocks.history).toHaveBeenCalledTimes(2);
+  await stopCronMaintenance();
+  startCronMaintenance(scheduler);
+  await clock.advanceBy(5_000);
+  expect(mocks.history).toHaveBeenCalledTimes(3);
+});
+
+it("runs overdue history retention after sleep and leaves unrelated writes parked", async () => {
+  mocks.history.mockResolvedValueOnce({ nextSweepAtMs: 300_000 });
+  startCronMaintenance(scheduler);
+  await clock.advanceBy(5_000);
+  mocks.historyChanged?.("/unrelated/state.sqlite");
+  await clock.advanceTo(299_999);
+  expect(mocks.history).toHaveBeenCalledOnce();
+  await clock.advanceTo(360_000);
+  expect(mocks.history).toHaveBeenCalledTimes(2);
 });

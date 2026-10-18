@@ -92,7 +92,6 @@ export function bindSqliteWorkerBackend(
     originalExec(sql);
     if (sql === "BEGIN IMMEDIATE") {
       writeFileSync(input.marker, "native transaction entered");
-      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 200);
     }
   };
   db.close = () => {
@@ -120,11 +119,10 @@ export function bindSqliteWorkerBackend(
       db.exec = originalExec;
       db.close = originalClose;
       if (db.isOpen) {
-        const closed = backend.close();
+        backend.close();
         if (input.failBindingClose) {
           throw new Error("injected binding cleanup failure");
         }
-        return closed;
       }
     },
   };

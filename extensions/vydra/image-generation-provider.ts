@@ -1,5 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { DEFAULT_VYDRA_IMAGE_MODEL } from "./defaults.js";
 import { runVydraGeneration } from "./shared.js";
 
@@ -9,7 +9,7 @@ export function buildVydraImageGenerationProvider(): ImageGenerationProvider {
     label: "Vydra",
     defaultModel: DEFAULT_VYDRA_IMAGE_MODEL,
     models: [DEFAULT_VYDRA_IMAGE_MODEL],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "vydra", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "vydra", ...ctx }),
     capabilities: {
       generate: {
         maxCount: 1,

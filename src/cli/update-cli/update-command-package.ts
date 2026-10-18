@@ -1,5 +1,9 @@
 import path from "node:path";
-import { UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV } from "../../commands/doctor/shared/update-phase.js";
+import { resolveOpenClawCliInvocation } from "../../../cli-invocation.mjs";
+import {
+  UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV,
+  UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
+} from "../../commands/doctor/shared/update-phase.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
@@ -53,6 +57,7 @@ import {
   runUpdateStep,
   UpdatePreMutationError,
 } from "./shared.js";
+import { readUpdateTargetCliOptions } from "./update-command-cli-options.js";
 import {
   createUpdateConfigSnapshot,
   captureUpdateConfigSnapshot,
@@ -78,6 +83,7 @@ type PackageDoctorContext = {
 
 type PackageDoctorOptions = {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   timeoutMs?: number;
   /** Null leaves forward work unbounded; omission retains the caller's timeout. */
@@ -119,19 +125,44 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
     targetVersion: candidateHostVersion,
     allowGatewayServiceRepair: false,
   });
-  const doctorArgv = [
-    params.nodeRunner ?? resolveNodeRunner(),
-    ...(context
-      ? [
-          path.join(
-            params.root,
-            "dist",
-            runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
-          ),
-          "--doctor",
-        ]
-      : [entryPath, "doctor", "--non-interactive", ...(doctorPolicy.fix ? ["--fix"] : [])]),
-  ];
+  let doctorArgv: string[];
+  if (context) {
+    doctorArgv = [
+      params.nodeRunner ?? resolveNodeRunner(),
+      path.join(
+        params.root,
+        "dist",
+        runtimeProcessEntrypoints.updateMigratedFinalize.distWorkerPath,
+      ),
+      "--doctor",
+    ];
+  } else {
+    const fullIntegrityCheck =
+      params.fullIntegrityCheck &&
+      (
+        await readUpdateTargetCliOptions(
+          {
+            nodeRunner: params.nodeRunner ?? resolveNodeRunner(),
+            entryPath,
+            command: "doctor",
+          },
+          { cwd: params.root, baseEnv: doctorEnv, timeoutMs: params.timeoutMs },
+        )
+      ).has("--full-integrity-check");
+    // Older candidates already check fully and reject the new option.
+    const invocation = resolveOpenClawCliInvocation({
+      execPath: params.nodeRunner ?? resolveNodeRunner(),
+      entryPath,
+      execArgv: [],
+      args: [
+        "doctor",
+        "--non-interactive",
+        ...(doctorPolicy.fix ? ["--fix"] : []),
+        ...(fullIntegrityCheck ? ["--full-integrity-check"] : []),
+      ],
+    });
+    doctorArgv = [invocation.command, ...invocation.args];
+  }
   const doctorProgressInfo = {
     name: `${CLI_NAME} doctor`,
     command: doctorArgv.join(" "),
@@ -145,7 +176,10 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
       : undefined;
   } catch (error) {
     assertCurrent();
-    return await deferPackageStateVerification({ ...params, assertCurrent }, error);
+    return await deferPackageStateVerification(
+      { ...params, assertCurrent, migrationRecorded: Boolean(context?.databaseBackup?.migration) },
+      error,
+    );
   }
   await params.progress?.onStepStart?.(doctorProgressInfo);
   assertCurrent();
@@ -179,7 +213,8 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         ...sectionTiming.env,
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
         // finishUpdate runs the deferred inspections once the restarted Gateway is ready.
-        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]: params.restart === false ? "0" : "1",
+        [UPDATE_PARENT_RUNS_POST_ACTIVATION_INSPECTIONS_ENV]:
+          params.restart === false ? "0" : UPDATE_POST_ACTIVATION_INSPECTIONS_REPORT_MODE,
       },
       timeoutMs: resolveInstallWorkTimeoutMs(params.workTimeoutMs, params.timeoutMs),
       runCommand: sectionTiming.wrap(runCommand ?? runCommandWithTimeout),
@@ -201,7 +236,9 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
               input: {
                 configInputHash: context.inputHash,
                 repair: doctorPolicy.fix,
+                fullIntegrityCheck: params.fullIntegrityCheck,
                 databaseGenerations: context.databaseBackup?.sourceGenerations,
+                databasePluginOwners: context.databaseBackup?.pluginOwners,
                 originalRecoveryCapture: context.originalRecoveryCapture,
               },
             },
@@ -448,7 +485,6 @@ export async function runPackageInstallUpdate(
   params: PackageInstallUpdateParams,
   resolveDoctorOptions: () => PackageDoctorOptions = () => params,
 ): Promise<UpdateRunResult> {
-  const installEnv = params.installEnv ?? (await createGlobalInstallEnv());
   let installTarget = params.installTarget;
   if (!installTarget) {
     const manager = await resolveGlobalManager({
@@ -464,6 +500,7 @@ export async function runPackageInstallUpdate(
       honorPackageRoot: params.honorPackageRoot === true,
     });
   }
+  const installEnv = params.installEnv ?? (await createGlobalInstallEnv(undefined, installTarget));
   const pkgRoot = installTarget.packageRoot;
   const packageName = (await readPackageName(pkgRoot || params.root)) ?? DEFAULT_PACKAGE_NAME;
   const installSpec =

@@ -160,6 +160,7 @@ vi.mock("../../agents/sandbox.js", async (importOriginal) => {
   return {
     ...actual,
     ensureSandboxWorkspaceForSession: async () => null,
+    prepareSandboxWorkspaceForSession: async () => null,
   };
 });
 
@@ -216,13 +217,13 @@ function createMediaFollowupRun(overrides: Parameters<typeof createMockFollowupR
   return followupRun;
 }
 
-function makeRunReplyAgentParams(
+async function makeRunReplyAgentParams(
   overrides: Partial<Parameters<typeof runReplyAgent>[0]> & {
     provider?: string;
     prompt?: string;
     workspaceDir?: string;
   } = {},
-): Parameters<typeof runReplyAgent>[0] {
+): Promise<Parameters<typeof runReplyAgent>[0]> {
   const provider = overrides.provider ?? "whatsapp";
   const prompt = overrides.prompt ?? "generate chart";
   const runWorkspaceDir = overrides.workspaceDir ?? testWorkspaceDir;
@@ -253,7 +254,7 @@ function makeRunReplyAgentParams(
     }
   }
   if (overrides.isActive === true && !overrides.replyOperation) {
-    replyOperation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(followupRun));
+    await replyOperation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(followupRun));
   }
   if (overrides.isActive === true) {
     replyOperation.attachBackend({

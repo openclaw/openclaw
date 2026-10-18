@@ -12,8 +12,7 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
-import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../auth-profiles/source-check.js";
+import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
 import {
@@ -26,15 +25,16 @@ import {
   resolveBootstrapContextForRun,
   resolveContextInjectionMode,
 } from "../bootstrap-files.js";
-import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
+import { prepareConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveOpenClawReferencePaths } from "../docs-path.js";
 import { prepareAgentMemoryPrompt } from "../memory-prompt-prepare.js";
 import {
   applyAuthHeaderOverride,
   applyLocalNoAuthHeaderOverride,
-  resolveModelAuthMode,
+  resolveModelAuthModeAsync,
 } from "../model-auth.js";
 import { supportsModelTools } from "../model-tool-support.js";
+import { getPreparedModelRuntimeAuthStore } from "../prepared-model-runtime-auth.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { resolveRuntimeChannelPromptContext } from "../runtime-capabilities.js";
 import {
@@ -87,6 +87,7 @@ export async function buildPreparedCompactionRuntime(
     thinkLevel,
     runtimeModel,
     apiKeyInfo,
+    runtimeApiKey,
     resolvedRuntimeAuthPlan,
     hasRuntimeAuthExchange,
     resolvedWorkspace,
@@ -180,8 +181,7 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Apply contextTokens cap to model so session runtime's auto-compaction
-    // threshold uses the effective limit, not the native context window.
+    // Keep session sizing separate from the summarizer's native request window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -191,12 +191,7 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(
-        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
-          ? { ...runtimeModel, contextWindow: contextTokenBudget }
-          : runtimeModel,
-        apiKeyInfo,
-      ),
+      applyLocalNoAuthHeaderOverride(runtimeModel, { apiKey: runtimeApiKey }),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.
@@ -276,7 +271,7 @@ export async function buildPreparedCompactionRuntime(
       spawnWorkspaceDir,
       skillsSnapshot: skillsSnapshotForRun,
     };
-    const runtimeCapabilityProfile = resolveConversationCapabilityProfile({
+    const runtimeCapabilityProfile = await prepareConversationCapabilityProfile({
       ...conversationContext,
       agentId: sandboxAgentId,
       conversationToolPolicy: params.conversationToolPolicy,
@@ -287,15 +282,17 @@ export async function buildPreparedCompactionRuntime(
       pluginMetadataSnapshot: params.preparedModelRuntime.metadataSnapshot,
     });
     const toolsEnabled = supportsModelTools(effectiveModel);
-    const authProfileStoreSource =
-      toolsEnabled && (await hasAnyAuthProfileStoreSourceAsync(agentDir));
+    const authProfileStore = toolsEnabled
+      ? (getPreparedModelRuntimeAuthStore(params.preparedModelRuntime) ??
+        (await ensureAuthProfileStoreWithoutExternalProfilesAsync(agentDir)))
+      : undefined;
     params.abortSignal?.throwIfAborted();
-    const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const skillInstructionDeliveryCache = new Map<string, Promise<boolean>>();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
             ...conversationContext,
-            authProfileStoreSource,
+            authProfileStore,
             agentId: sessionAgentId,
             exec: {
               ...execOverrides,
@@ -318,9 +315,14 @@ export async function buildPreparedCompactionRuntime(
             skillInstructionDeliveryCache,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
-            modelAuthMode: resolveModelAuthMode(effectiveModel.provider, params.config, undefined, {
-              workspaceDir: effectiveWorkspace,
-            }),
+            modelAuthMode: await resolveModelAuthModeAsync(
+              effectiveModel.provider,
+              params.config,
+              authProfileStore,
+              {
+                workspaceDir: effectiveWorkspace,
+              },
+            ),
           },
           skillReadResources,
         )
@@ -398,12 +400,18 @@ export async function buildPreparedCompactionRuntime(
     const promptAllowedToolNames = collectAllowedToolNames({ tools: promptTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
-    const { runtimeChannel, runtimeCapabilities, reactionGuidance, messageToolHints } =
-      resolveRuntimeChannelPromptContext({
-        cfg: params.config,
-        channel: params.messageChannel ?? params.messageProvider,
-        accountId: params.agentAccountId,
-      });
+    const {
+      runtimeChannel,
+      runtimeCapabilities,
+      reactionGuidance,
+      messageToolHints,
+      customInlineButtonHint,
+    } = resolveRuntimeChannelPromptContext({
+      cfg: params.config,
+      channel: params.messageChannel ?? params.messageProvider,
+      accountId: params.agentAccountId,
+      requester: params,
+    });
 
     const runtimeInfo = {
       agentId: sessionAgentId,
@@ -418,6 +426,7 @@ export async function buildPreparedCompactionRuntime(
       channel: runtimeChannel,
       chatType: params.chatType,
       capabilities: runtimeCapabilities,
+      customInlineButtonHint,
       activeProcessSessions: listActiveProcessSessionReferences({
         scopeKey: resolveProcessToolScopeKey({
           sessionKey: params.sessionKey,
@@ -464,6 +473,7 @@ export async function buildPreparedCompactionRuntime(
       surface: promptSurface,
     });
     const openClawReferences = await resolveOpenClawReferencePaths({
+      sandbox,
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
       cwd: effectiveCwd,

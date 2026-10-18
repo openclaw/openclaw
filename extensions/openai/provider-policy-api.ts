@@ -1,9 +1,6 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  normalizeOpenAIServiceTier,
-  supportsOpenAIResponsesFastMode,
-} from "openclaw/plugin-sdk/provider-model-metadata";
+import { supportsOpenAIResponsesFastMode } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -16,6 +13,7 @@ import type {
   ProviderResolveModelRoutesContext,
 } from "openclaw/plugin-sdk/provider-model-types";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { OPENAI_PRE_GPT5_MODEL_ID_PATTERN } from "./account-models.js";
 import {
   classifyOpenAIBaseUrl,
   isOpenAICodexBaseUrl,
@@ -48,7 +46,6 @@ export function resolveFastModeSupport(ctx: ProviderFastModePolicyContext): bool
   }
   return (
     (resolveOpenAIModelServiceTiers(ctx)?.includes("priority") ?? true) &&
-    normalizeOpenAIServiceTier(ctx.params?.serviceTier ?? ctx.params?.service_tier) === undefined &&
     supportsOpenAIResponsesFastMode(ctx)
   );
 }
@@ -73,11 +70,18 @@ export function normalizeModelCatalogId(params: ProviderNormalizeModelCatalogIdC
     : null;
 }
 
+// A dated id is a concrete release of its undated route, as the Responses transport reconciles it.
+const OPENAI_RELEASE_DATE_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
+
 export function isResponseModelEquivalent(params: ProviderResponseModelEquivalenceContext) {
+  if (params.provider.trim().toLowerCase() !== OPENAI_PROVIDER_ID) {
+    return false;
+  }
+  const responseRoute = params.responseModelId.replace(OPENAI_RELEASE_DATE_SUFFIX, "");
   return (
-    params.provider.trim().toLowerCase() === OPENAI_PROVIDER_ID &&
-    params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
-    params.responseModelId === OPENAI_GPT_56_SOL_MODEL_ID
+    responseRoute === params.requestedModelId ||
+    (params.requestedModelId === OPENAI_GPT_56_MODEL_ID &&
+      responseRoute === OPENAI_GPT_56_SOL_MODEL_ID)
   );
 }
 
@@ -204,21 +208,34 @@ function codexCanReproduceRoute(candidate: ProviderModelRouteCandidate): boolean
   );
 }
 
-function withRuntimePolicy(candidate: ProviderModelRouteCandidate): ProviderModelRouteCandidate {
+function withRuntimePolicy(
+  candidate: ProviderModelRouteCandidate,
+  modelId?: string,
+): ProviderModelRouteCandidate {
+  const compatibleIds = codexCanReproduceRoute(candidate)
+    ? candidate.authRequirement === "api-key"
+      ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
+      : CODEX_RUNTIME_COMPATIBLE_IDS
+    : OPENCLAW_RUNTIME_COMPATIBLE_IDS;
+  // Codex's native Code Mode emits custom tools, which pre-GPT-5 models reject.
+  // model/list does not expose its tool_mode or freeform-tool capability.
+  const requiresFunctionTools = OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(
+    (modelId ?? "").toLowerCase().replace(/^openai\//, ""),
+  );
   return {
     ...candidate,
     runtimePolicy: {
-      compatibleIds: codexCanReproduceRoute(candidate)
-        ? candidate.authRequirement === "api-key"
-          ? [...CODEX_RUNTIME_COMPATIBLE_IDS, "agentsapi"]
-          : CODEX_RUNTIME_COMPATIBLE_IDS
-        : OPENCLAW_RUNTIME_COMPATIBLE_IDS,
+      compatibleIds: requiresFunctionTools
+        ? compatibleIds.filter((id) => id !== CODEX_AGENT_RUNTIME_ID)
+        : compatibleIds,
     },
   };
 }
 
 function defaultRuntimeIdForRoute(candidate: ProviderModelRouteCandidate): string {
-  return codexCanReproduceRoute(candidate) ? CODEX_AGENT_RUNTIME_ID : OPENAI_AGENT_RUNTIME_ID;
+  return candidate.runtimePolicy?.compatibleIds.includes(CODEX_AGENT_RUNTIME_ID)
+    ? CODEX_AGENT_RUNTIME_ID
+    : OPENAI_AGENT_RUNTIME_ID;
 }
 
 function route(
@@ -378,18 +395,24 @@ function resolveSingleObservedModelRoute(
     configuredRoute && effectiveApi === OPENAI_COMPLETIONS_API
       ? OPENAI_COMPLETIONS_API
       : OPENAI_RESPONSES_API;
-  const platformRoute = withRuntimePolicy({
-    api: platformApi,
-    baseUrl: OPENAI_API_BASE_URL,
-    authRequirement: "api-key",
-    requestTransportOverrides,
-  });
-  const chatGPTRoute = withRuntimePolicy({
-    api: OPENAI_CHATGPT_RESPONSES_API,
-    baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
-    authRequirement: "subscription",
-    requestTransportOverrides,
-  });
+  const platformRoute = withRuntimePolicy(
+    {
+      api: platformApi,
+      baseUrl: OPENAI_API_BASE_URL,
+      authRequirement: "api-key",
+      requestTransportOverrides,
+    },
+    modelId,
+  );
+  const chatGPTRoute = withRuntimePolicy(
+    {
+      api: OPENAI_CHATGPT_RESPONSES_API,
+      baseUrl: OPENAI_CODEX_RESPONSES_BASE_URL,
+      authRequirement: "subscription",
+      requestTransportOverrides,
+    },
+    modelId,
+  );
   const platformOnly = isOpenAIPlatformOnlyRouteModelId(modelId);
   const subscriptionOnly = isOpenAISubscriptionOnlyRouteModelId(modelId);
   const dualRoute = isOpenAIDualRouteModelId(modelId);
@@ -437,8 +460,7 @@ function resolveSingleObservedModelRoute(
   if (!configuredRoute && !hasObservedRoute) {
     return {
       kind: "indeterminate",
-      defaultRuntimeId:
-        requestTransportOverrides === "present" ? OPENAI_AGENT_RUNTIME_ID : CODEX_AGENT_RUNTIME_ID,
+      defaultRuntimeId: defaultRuntimeIdForRoute(platformRoute),
     };
   }
   return route(platformRoute);

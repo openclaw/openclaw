@@ -1,10 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import type { MultiSelect } from "../../components/multi-select.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildAgentContext } from "../../lib/agents/display.ts";
 // Control UI tests cover the agents overview context display.
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createAgentViewTestProps as createProps } from "./agents-view.test-helpers.ts";
 import { Agents } from "./view.tsx";
+
+afterEach(() => document.body.replaceChildren());
 
 const inheritedAgentModel = "openai/gpt-5.4";
 const resolvedAgentWorkspace = "/tmp/agents/beta";
@@ -100,32 +102,28 @@ it.each(["overview", "channels", "cron"] as const)(
 );
 
 it.each([
-  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false, text: "Save" },
-  {
-    label: "an active identity save",
-    canUpdateIdentity: true,
-    identitySaving: true,
-    text: "Saving…",
-  },
-])("shows the actual save state for $label", ({ canUpdateIdentity, identitySaving, text }) => {
-  const container = document.createElement("div");
-  const props = createProps();
-  mountSolid(
-    Agents,
-    {
-      ...props,
-      access: { ...props.access, canUpdateIdentity },
-      overview: { ...props.overview, identitySaving },
-    },
-    container,
-  );
+  { label: "a read-only editor", canUpdateIdentity: false, identitySaving: false },
+  { label: "an active identity save", canUpdateIdentity: true, identitySaving: true },
+])(
+  "keeps identity field permissions correct for $label",
+  ({ canUpdateIdentity, identitySaving }) => {
+    const container = document.createElement("div");
+    const props = createProps();
+    mountSolid(
+      Agents,
+      {
+        ...props,
+        access: { ...props.access, canUpdateIdentity },
+        overview: { ...props.overview, identitySaving },
+      },
+      container,
+    );
 
-  const save = container.querySelector<HTMLButtonElement>(
-    ".agent-identity-editor__actions button.primary",
-  );
-  expect(save?.textContent?.trim()).toBe(text);
-  expect(save?.disabled).toBe(true);
-});
+    expect(
+      container.querySelector<HTMLInputElement>(".agent-identity-editor__fields input")?.disabled,
+    ).toBe(!canUpdateIdentity);
+  },
+);
 
 it("shows inherited skills in the Agent Context overview", () => {
   const container = document.createElement("div");
@@ -165,7 +163,7 @@ describe("fallback field", () => {
   ] satisfies ReturnType<typeof createProps>["overview"]["modelCatalog"];
 
   function renderFallbacks(overrides: Partial<ReturnType<typeof createProps>> = {}) {
-    const container = document.createElement("div");
+    const container = document.body.appendChild(document.createElement("div"));
     const onModelFallbacksChange = vi.fn();
     mountSolid(
       Agents,
@@ -193,37 +191,59 @@ describe("fallback field", () => {
       }),
       container,
     );
-    const field = container.querySelector<MultiSelect>("openclaw-multi-select.agent-fallbacks");
+    const field = container.querySelector<HTMLElement>("openclaw-multi-select.agent-fallbacks");
     if (!field) {
       throw new Error("fallback field missing");
     }
     return { field, onModelFallbacksChange };
   }
 
-  it("hands the field the effective chain, the catalog, and the primary to exclude", () => {
-    const { field } = renderFallbacks();
-
-    expect(field.value).toEqual([existingFallback]);
-    expect(field.isExcluded(primary)).toBe(true);
-    expect(field.options.map((option) => option.value)).toEqual(
-      expect.arrayContaining([primary, existingFallback, "google/gemini-3-pro"]),
+  const choices = (field: HTMLElement) =>
+    Array.from(
+      field.querySelectorAll<HTMLElement>(".multi-select__option"),
+      (row) => row.dataset.value,
     );
-    expect(field.allowCustom).toBe(true);
-    expect(field.disabled).toBe(false);
+  const typeSearch = (field: HTMLElement, text: string) => {
+    const input = field.querySelector<HTMLInputElement>("input")!;
+    input.value = text;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+  };
+  const open = async (field: HTMLElement) => {
+    field.querySelector<HTMLElement>(".multi-select")!.click();
+    await waitForSolid(() => expect(choices(field).length).toBeGreaterThan(0));
+  };
+
+  it("shows the effective chain and excludes the primary and selected models from choices", async () => {
+    const { field } = renderFallbacks();
+    expect(
+      Array.from(
+        field.querySelectorAll<HTMLElement>(".multi-select__chip"),
+        (chip) => chip.dataset.value,
+      ),
+    ).toEqual([existingFallback]);
+    expect(field.querySelector<HTMLInputElement>("input")?.disabled).toBe(false);
+    await open(field);
+    expect(choices(field)).toEqual(["google/gemini-3-pro"]);
+    typeSearch(field, "fixture/custom-fallback");
+    expect(field.querySelector("[data-custom]")?.getAttribute("data-value")).toBe(
+      "fixture/custom-fallback",
+    );
   });
 
-  it("stages the field's next chain for the selected agent", () => {
+  it("stages the field's next chain for the selected agent", async () => {
     const { field, onModelFallbacksChange } = renderFallbacks();
-
-    field.onChange([existingFallback, "google/gemini-3-pro"]);
-
+    await open(field);
+    field
+      .querySelector<HTMLElement>('.multi-select__option[data-value="google/gemini-3-pro"]')!
+      .click();
     expect(onModelFallbacksChange).toHaveBeenCalledWith("beta", [
       existingFallback,
       "google/gemini-3-pro",
     ]);
   });
 
-  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", () => {
+  it("excludes a profile-qualified primary alias while retaining case-distinct model choices", async () => {
     const primaryAlias = "fast@work";
     const target = "custom/model-a";
     const caseDistinct = "custom/Model-A";
@@ -259,17 +279,19 @@ describe("fallback field", () => {
       },
     });
 
-    expect(field.isExcluded("FAST")).toBe(true);
-    expect(field.isExcluded(`${target}@other`)).toBe(false);
-    expect(field.options.filter((option) => !field.isExcluded(option.value))).toEqual([
-      expect.objectContaining({ value: caseDistinct, label: "Uppercase model" }),
-    ]);
+    await open(field);
+    expect(choices(field)).toEqual([caseDistinct]);
+    expect(field.querySelector(".multi-select__option")?.textContent).toContain("Uppercase model");
+    typeSearch(field, "FAST");
+    expect(choices(field)).toEqual([]);
+    typeSearch(field, `${target}@other`);
+    expect(choices(field)).toEqual([`${target}@other`]);
   });
 
   it("disables the field without config write access", () => {
     const access = { ...createProps().access, canUpdateConfig: false };
     const { field } = renderFallbacks({ access });
 
-    expect(field.disabled).toBe(true);
+    expect(field.querySelector<HTMLInputElement>("input")?.disabled).toBe(true);
   });
 });

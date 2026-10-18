@@ -33,16 +33,9 @@ describe("voice-call tailscale helpers", () => {
     runCommandMock.mockResolvedValue(commandResult());
   });
 
-  it("reads dns and node id through the canonical bounded wrapper", async () => {
-    const stdout = JSON.stringify({
-      Self: { DNSName: "bot.example.ts.net.", ID: "node-123" },
-    });
-    runCommandMock.mockResolvedValue(commandResult({ stdout }));
-
-    await expect(getTailscaleSelfInfo()).resolves.toEqual({
-      dnsName: "bot.example.ts.net",
-      nodeId: "node-123",
-    });
+  it("returns null for command, timeout, output-limit, and JSON failures", async () => {
+    runCommandMock.mockResolvedValueOnce(commandResult({ code: 1, stdout: "bad" }));
+    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
     expect(runCommandMock).toHaveBeenCalledWith(
       ["tailscale", "status", "--json", "--peers=false"],
       expect.objectContaining({
@@ -52,11 +45,6 @@ describe("voice-call tailscale helpers", () => {
         timeoutMs: 2500,
       }),
     );
-  });
-
-  it("returns null for command, timeout, output-limit, and JSON failures", async () => {
-    runCommandMock.mockResolvedValueOnce(commandResult({ code: 1, stdout: "bad" }));
-    await expect(getTailscaleSelfInfo()).resolves.toBeNull();
 
     runCommandMock.mockResolvedValueOnce(commandResult({ stdout: "{not-json" }));
     await expect(getTailscaleSelfInfo()).resolves.toBeNull();
@@ -177,58 +165,41 @@ describe("voice-call tailscale helpers", () => {
     expect(runCommandMock.mock.calls[2]?.[0]).toEqual(["tailscale", "serve", "off", "/voice"]);
   });
 
-  it.each([
-    {
-      name: "realtime",
-      config: { realtime: { enabled: true, streamPath: "/voice/stream/realtime" } },
-      streamPath: "/voice/stream/realtime",
-      publicStreamPath: "/edge/voice/stream/realtime",
-    },
-    {
-      name: "streaming",
-      config: { streaming: { enabled: true, streamPath: "/voice/stream" } },
-      streamPath: "/voice/stream",
-      publicStreamPath: "/voice/stream",
-    },
-  ])(
-    "mounts and cleans up the enabled $name stream path",
-    async ({ config, streamPath, publicStreamPath }) => {
-      runCommandMock.mockImplementation(async (command: string[]) =>
-        command[1] === "status"
-          ? commandResult({
-              stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
-            })
-          : commandResult(),
-      );
-      const voiceCallConfig = {
-        tailscale: { mode: "funnel", port: 443, path: "/edge/voice/webhook" },
-        serve: { port: 8787, path: "/voice/webhook" },
-        realtime: { enabled: false },
-        streaming: { enabled: false },
-        ...config,
-      } as never;
+  it("mounts and cleans up the enabled streaming stream path", async () => {
+    runCommandMock.mockImplementation(async (command: string[]) =>
+      command[1] === "status"
+        ? commandResult({
+            stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
+          })
+        : commandResult(),
+    );
+    const voiceCallConfig = {
+      tailscale: { mode: "funnel", port: 443, path: "/edge/voice/webhook" },
+      serve: { port: 8787, path: "/voice/webhook" },
+      realtime: { enabled: false },
+      streaming: { enabled: true, streamPath: "/voice/stream" },
+    } as never;
 
-      await setupTailscaleExposure(voiceCallConfig);
-      await cleanupTailscaleExposure(voiceCallConfig);
+    await setupTailscaleExposure(voiceCallConfig);
+    await cleanupTailscaleExposure(voiceCallConfig);
 
-      expect(runCommandMock).toHaveBeenCalledWith(
-        [
-          "tailscale",
-          "funnel",
-          "--bg",
-          "--yes",
-          "--set-path",
-          publicStreamPath,
-          `http://127.0.0.1:8787${streamPath}`,
-        ],
-        expect.any(Object),
-      );
-      expect(runCommandMock).toHaveBeenCalledWith(
-        ["tailscale", "funnel", "off", publicStreamPath],
-        expect.any(Object),
-      );
-    },
-  );
+    expect(runCommandMock).toHaveBeenCalledWith(
+      [
+        "tailscale",
+        "funnel",
+        "--bg",
+        "--yes",
+        "--set-path",
+        "/voice/stream",
+        "http://127.0.0.1:8787/voice/stream",
+      ],
+      expect.any(Object),
+    );
+    expect(runCommandMock).toHaveBeenCalledWith(
+      ["tailscale", "funnel", "off", "/voice/stream"],
+      expect.any(Object),
+    );
+  });
 
   it("uses HTTPS 8443 for legacy webhook and realtime routes and cleanup", async () => {
     runCommandMock.mockImplementation(async (command: string[]) =>

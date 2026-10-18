@@ -45,6 +45,7 @@ import {
   stripExtractedFileImageMetadata,
   type ExtractedFileImage,
 } from "../../media-understanding/extracted-file-images.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
@@ -118,6 +119,8 @@ export async function tryDispatchAcpReplyCore(
     shouldSendFullToolDetails: () => Promise<boolean>;
     bypassForCommand: boolean;
     onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
+    onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
+    turnAdoption?: PluginHookReplyDispatchContext["turnAdoption"];
     userTurnTranscriptRecorder?: GetReplyOptions["userTurnTranscriptRecorder"];
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
     recordProcessed: InboundMessageAuditTerminalRecorder["note"];
@@ -175,22 +178,26 @@ export async function tryDispatchAcpReplyCore(
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
+  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
+  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const dispatchChannels = params.cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const defaultDispatchAccount =
+    normalizedDispatchChannel == null
+      ? undefined
+      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
+  const effectiveDispatchAccountId =
+    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const hasBoundConversationForSession = async (): Promise<boolean> => {
-    const channel =
-      normalizeOptionalLowercaseString(
-        params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-      ) ?? "";
+    const channel = normalizedDispatchChannel;
     if (!channel) {
       return false;
     }
-    const accountId = normalizeOptionalLowercaseString(params.ctx.AccountId) ?? "";
-    const channels = params.cfg.channels as Record<
-      string,
-      { defaultAccount?: unknown } | undefined
-    >;
-    const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
     const normalizedAccountId =
-      accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
+      normalizeOptionalLowercaseString(effectiveDispatchAccountId) ?? "default";
     const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
     const bindings = await listSessionBindingsBySessionAsync(canonicalSessionKey);
     return bindings.some(
@@ -214,19 +221,6 @@ export async function tryDispatchAcpReplyCore(
         normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
         resolveAgentIdFromSessionKey(canonicalSessionKey))
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
-  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
-    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-  );
-  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const dispatchChannels = params.cfg.channels as
-    | Record<string, { defaultAccount?: unknown } | undefined>
-    | undefined;
-  const defaultDispatchAccount =
-    normalizedDispatchChannel == null
-      ? undefined
-      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
-  const effectiveDispatchAccountId =
-    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
   await input.withCurrent(() => {});
   const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({
@@ -322,7 +316,6 @@ export async function tryDispatchAcpReplyCore(
     accountId: effectiveDispatchAccountId,
   });
 
-  const acpDispatchStartedAt = Date.now();
   const finishAttempt = (
     finalQueued: boolean,
     error?: AcpRuntimeError,
@@ -332,10 +325,6 @@ export async function tryDispatchAcpReplyCore(
     const suppressionReason = hasQueuedDelivery
       ? undefined
       : delivery.getDeliverySuppressionReason();
-    const acpStats = acpManager.getObservabilitySnapshot();
-    logVerbose(
-      `acp-dispatch: session=${sessionKey} outcome=${error ? `error code=${error.code}` : "ok"} latencyMs=${Date.now() - acpDispatchStartedAt} queueDepth=${acpStats.turns.queueDepth} activeRuntimes=${acpStats.runtimeCache.activeSessions}`,
-    );
     params.recordProcessed("completed", {
       reason: error
         ? `acp_error:${normalizeLowercaseStringOrEmpty(error.code)}`
@@ -369,6 +358,7 @@ export async function tryDispatchAcpReplyCore(
     sessionId: transcriptSessionId,
     runId: auditRunId,
     onAgentRunStart: params.onAgentRunStart,
+    onPreparedAgentRunStart: params.onPreparedAgentRunStart,
     getResult: () => ({ assistantTranscript, terminalOutcome }),
   });
   await input.withCurrent(() => {});
@@ -592,13 +582,6 @@ export async function tryDispatchAcpReplyCore(
       return { queuedFinal: false, counts };
     }
 
-    emitAuditStart();
-    try {
-      await delivery.startReplyLifecycle();
-    } catch (error) {
-      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
-    }
-
     admittedRunContext = await prepareChannelRunAdmission({
       cfg: params.cfg,
       runId: requestId,
@@ -626,6 +609,13 @@ export async function tryDispatchAcpReplyCore(
     // ACP can act before its terminal transcript arrives. Consume accepted input
     // before submission while leaving final assistant/outcome persistence below.
     await persistInput?.();
+    // Start publications clear prior lifecycle facts; settle input before they can race its guard.
+    emitAuditStart();
+    try {
+      await delivery.startReplyLifecycle();
+    } catch (error) {
+      logVerbose(`dispatch-acp: start reply lifecycle failed: ${formatErrorMessage(error)}`);
+    }
     await assertPreparedConversationBindingRouteCurrent(params.ctx);
     const turnInput: Parameters<typeof acpManager.runTurn>[0] = {
       admittedRunContext,
@@ -644,6 +634,16 @@ export async function tryDispatchAcpReplyCore(
       mode: "prompt",
       requestId,
       ...(params.abortSignal ? { signal: params.abortSignal } : {}),
+      onBeforePrompt: async () => {
+        await input.withCurrent(() => {});
+        await params.turnAdoption?.adopt();
+        await assertPreparedConversationBindingRouteCurrent(params.ctx);
+        await input.withCurrent(() => {
+          if (getAdmittedRunDelegatedAuthority(turnAdmission) === undefined) {
+            throw new Error("ACP turn admission ended before input dispatch.");
+          }
+        });
+      },
       onElicitation,
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
@@ -710,6 +710,7 @@ export async function tryDispatchAcpReplyCore(
     emitAuditTerminal();
     return result;
   } catch (err) {
+    params.turnAdoption?.assertCurrent();
     const acpError = toAcpRuntimeError({
       error: err,
       fallbackCode: "ACP_TURN_FAILED",

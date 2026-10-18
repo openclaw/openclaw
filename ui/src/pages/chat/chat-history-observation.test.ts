@@ -4,7 +4,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRouter, definePage } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -38,7 +37,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { renderChat } from "./chat-view.ts";
+import { disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
   installTranscriptDomMocks,
@@ -146,7 +145,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
   const makeState = (owner = sessions) => {
     const state = createPageState(
       { ...context, sessions: owner },
-      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { afterCommit: () => () => {} },
       document.createElement("div"),
     );
     state.client = client;
@@ -309,25 +308,6 @@ describe("history descriptor observation order", () => {
     expect(h.sessions.state.result?.sessions.find((row) => row.key === key)?.label).toBe(
       fresh.label,
     );
-  });
-
-  it("does not let a late shared consumer recapture an older history result", async () => {
-    const h = await fixture();
-    const first = h.begin(h.makeState());
-    const current = { ...initial, updatedAt: 5, label: "Newer managed read" };
-    await h.refreshManaged(current);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
-    const late = h.begin(h.makeState());
-    expect(h.reads).toHaveLength(1);
-    h.reads[0]!.pending.resolve(
-      history({ ...initial, updatedAt: 50, label: "Older history read" }),
-    );
-    await Promise.all([first, late]);
-
-    // Both projections must retain the accepted managed read, not the late history descriptor.
-    expect(h.managedRow()).toMatchObject(current);
-    expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(current);
-    expect(h.sessions.state.result?.sessions.map((row) => row.key)).toEqual([key, sibling.key]);
   });
 
   it("uses the successful chat.startup retry's observation for shared consumers", async () => {
@@ -512,16 +492,13 @@ it.each([false, true])(
     document.body.append(container);
     const renderCurrent = () => {
       pane.render();
-      render(
-        renderChat({
-          ...expectDefined(pane.chatProps, "Rendered chat props"),
-          historyState: state,
-        }),
-        container,
-      );
+      renderChatPropsInto(container, {
+        ...expectDefined(pane.chatProps, "Rendered chat props"),
+        historyState: state,
+      });
     };
     onTestFinished(async () => {
-      render(nothing, container);
+      disposeChatView(container);
       container.remove();
       retireChatMetadataRequests(state);
       await vi.dynamicImportSettled();

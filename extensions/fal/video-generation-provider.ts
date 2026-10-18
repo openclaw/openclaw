@@ -3,7 +3,7 @@ import {
   resolveGeneratedMediaMaxBytes,
 } from "openclaw/plugin-sdk/media-generation-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
-import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
+import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -17,10 +17,11 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  GeneratedVideoAsset,
-  VideoGenerationProvider,
-  VideoGenerationRequest,
+import {
+  normalizeVideoGenerationDuration,
+  type GeneratedVideoAsset,
+  type VideoGenerationProvider,
+  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -88,23 +89,21 @@ function readFalVideoPayload(payload: unknown) {
     throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
   }
   return {
-    video: isRecord(video)
+    video: video
       ? {
           url: normalizeFalVideoUrl(video.url),
           content_type: normalizeOptionalString(video.content_type),
         }
       : undefined,
-    videos: Array.isArray(videos)
-      ? videos.map((entry) => {
-          if (!isRecord(entry)) {
-            throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-          }
-          return {
-            url: normalizeFalVideoUrl(entry.url),
-            content_type: normalizeOptionalString(entry.content_type),
-          };
-        })
-      : undefined,
+    videos: videos?.map((entry) => {
+      if (!isRecord(entry)) {
+        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+      }
+      return {
+        url: normalizeFalVideoUrl(entry.url),
+        content_type: normalizeOptionalString(entry.content_type),
+      };
+    }),
     prompt: normalizeOptionalString(payload.prompt),
     seed: typeof payload.seed === "number" ? payload.seed : undefined,
   };
@@ -126,7 +125,7 @@ function readFalQueueResponse(payload: unknown) {
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
-    error: isRecord(error) ? { message: normalizeOptionalString(error.message) } : undefined,
+    error: error ? { message: normalizeOptionalString(error.message) } : undefined,
   };
 }
 
@@ -198,10 +197,10 @@ function resolveFalDuration(
   durationSeconds: number | undefined,
   model: string,
 ): number | string | undefined {
-  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
+  const duration = normalizeVideoGenerationDuration({ durationSeconds });
+  if (duration === undefined) {
     return undefined;
   }
-  const duration = Math.max(1, Math.round(durationSeconds));
   if (isFalSeedance2Model(model)) {
     return SEEDANCE_2_DURATION_SECONDS.includes(
       duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
@@ -247,7 +246,7 @@ function applyFalSeedanceControls(
   if (duration) {
     body.duration = duration;
   }
-  if (isFalSeedance2Model(model) && typeof req.audio === "boolean") {
+  if (isFalSeedance2Model(model) && req.audio !== undefined) {
     body.generate_audio = req.audio;
   }
 }
@@ -461,7 +460,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
       "fal-ai/wan/v2.2-a14b/text-to-video",
       "fal-ai/wan/v2.2-a14b/image-to-video",
     ],
-    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "fal", ...ctx }),
+    isConfiguredAsync: (ctx) => isProviderApiKeyConfiguredAsync({ provider: "fal", ...ctx }),
     capabilities: {
       generate: buildFalVideoModeCapabilities(SEEDANCE_2_VIDEO_MODELS),
       imageToVideo: {
@@ -539,7 +538,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         metadata: {
           ...(submitted.request_id ? { requestId: submitted.request_id } : {}),
           ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
-          ...(typeof videoPayload.seed === "number" ? { seed: videoPayload.seed } : {}),
+          ...(videoPayload.seed !== undefined ? { seed: videoPayload.seed } : {}),
         },
       };
     },

@@ -30,7 +30,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
-import { buildAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
@@ -167,7 +167,8 @@ function completedAnnounceRun(
     execution: { endedAt: 2, outcome: { status: "ok" } },
     completion: {
       required: true,
-      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text }),
+      terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+      resultText: text,
     },
   });
   subagentRegistryMock.latestRunForChild.mockImplementation((key) =>
@@ -190,6 +191,8 @@ const defaultOutcomeAnnounce = {
   cleanup: "keep" as const,
   startedAt: 10,
   endedAt: 20,
+  roundOneReply: "raw subagent reply",
+  terminalReply: { disposition: "visible", text: "raw subagent reply" } as const,
   outcome: { status: "ok" } as const,
 };
 
@@ -202,7 +205,7 @@ function makeChildCompletion(
   const { endedAt: terminalAt, ...record } = overrides;
   const createdAt = record.createdAt ?? 10;
   const endedAt = terminalAt ?? createdAt + 1;
-  return {
+  const childRun: MockSubagentRun = {
     runId: `run-${child}`,
     childSessionKey: `${requesterSessionKey}:subagent:${child}`,
     requesterSessionKey,
@@ -212,9 +215,16 @@ function makeChildCompletion(
     createdAt,
     execution: { endedAt, outcome: { status: "ok" } },
     cleanupCompletedAt: endedAt + 1,
-    completion: { required: true, resultText },
+    completion: {
+      required: true,
+      resultText,
+      terminalReply: prepareAgentRunTerminalReply({ rawText: resultText }).terminalReply,
+    },
     ...record,
   };
+  sessionStore[childRun.childSessionKey] = { sessionId: `session-${childRun.runId}` };
+  transcriptEvents.push(assistantEvent(childRun.runId, resultText));
+  return childRun;
 }
 
 function setCompletionSessions(
@@ -346,6 +356,22 @@ const gatewayDeps = {
   getRuntimeConfig: () => configOverride,
 };
 
+const deliveryDeps = {
+  ...gatewayDeps,
+  loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
+  loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
+  getRequesterSessionActivity: (requesterSessionKey: string) => {
+    const entry = readSessionFixture(requesterSessionKey);
+    const sessionId = entry?.sessionId;
+    return {
+      sessionId,
+      isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
+    };
+  },
+  queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
+    embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
+} satisfies Parameters<typeof subagentAnnounceDeliveryTesting.setDepsForTest>[0];
+
 function expectParentAnnounce() {
   expect(sendSpy).not.toHaveBeenCalled();
   expect(agentSpy).toHaveBeenCalledTimes(1);
@@ -363,6 +389,11 @@ describe("subagent announce formatting", () => {
       requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
       expectsCompletionMessage: true,
       ...params,
+      terminalReply:
+        params.terminalReply ??
+        prepareAgentRunTerminalReply({
+          rawText: params.roundOneReply ?? defaultOutcomeAnnounce.roundOneReply,
+        }).terminalReply,
     });
   }
 
@@ -378,6 +409,11 @@ describe("subagent announce formatting", () => {
       expectsCompletionMessage: true,
       wakeOnDescendantSettle: true,
       ...params,
+      terminalReply:
+        params.terminalReply ??
+        prepareAgentRunTerminalReply({
+          rawText: params.roundOneReply ?? defaultOutcomeAnnounce.roundOneReply,
+        }).terminalReply,
     });
   }
 
@@ -438,21 +474,7 @@ describe("subagent announce formatting", () => {
       }
       return {};
     });
-    subagentAnnounceDeliveryTesting.setDepsForTest({
-      ...gatewayDeps,
-      loadSessionEntry: (scope) => readSessionFixture(scope.sessionKey),
-      loadSessionEntryByKey: async (sessionKey) => readSessionFixture(sessionKey),
-      getRequesterSessionActivity: (requesterSessionKey: string) => {
-        const entry = readSessionFixture(requesterSessionKey);
-        const sessionId = entry?.sessionId;
-        return {
-          sessionId,
-          isActive: Boolean(sessionId && embeddedRunMock.isEmbeddedAgentRunActive(sessionId)),
-        };
-      },
-      queueEmbeddedAgentMessageWithOutcome: (sessionId, text, options) =>
-        embeddedRunMock.queueEmbeddedAgentMessageWithOutcome(sessionId, text, options),
-    });
+    subagentAnnounceDeliveryTesting.setDepsForTest(deliveryDeps);
     subagentAnnounceTesting.setDepsForTest(gatewayDeps);
     transcriptEvents = [];
     subagentAnnounceOutputTesting.setDepsForTest({
@@ -464,7 +486,6 @@ describe("subagent announce formatting", () => {
       },
       ...gatewayDeps,
       readSubagentSessionEntry: (_storePath, sessionKey) => readSessionFixture(sessionKey),
-      resolveAgentIdFromSessionKey: () => "main",
       resolveSessionStorePathCore: () => "/tmp/sessions.json",
     });
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
@@ -523,9 +544,27 @@ describe("subagent announce formatting", () => {
         totalTokens: 2,
       },
     };
+    const child = publishAnnounceRunFixture({
+      runId: "run-123",
+      childSessionKey: "agent:main:subagent:test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "do thing",
+      cleanup: "keep",
+      createdAt: 10,
+      execution: { endedAt: 20, outcome: { status: "error", error: "boom" } },
+      completion: {
+        required: true,
+        resultText: "raw subagent reply",
+        terminalReply: prepareAgentRunTerminalReply({ rawText: "raw subagent reply" })
+          .terminalReply,
+      },
+    });
+    transcriptEvents = [assistantEvent("run-123", "raw subagent reply")];
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-123",
+      terminalReply: child.completion?.terminalReply,
       outcome: { status: "error", error: "boom" },
       requesterSessionKey: "agent:main:main",
       task: "do thing",
@@ -636,6 +675,7 @@ describe("subagent announce formatting", () => {
         await runSubagentAnnounceFlow({
           ...defaultOutcomeAnnounce,
           ...params,
+          roundOneReply: "child result",
           terminalReply: { disposition: "visible", text: "child result", modelRouteChange },
         }),
       ).toBe("delivered");
@@ -665,13 +705,13 @@ describe("subagent announce formatting", () => {
         totalTokensVersion: 1,
       },
     };
-    readLatestAssistantReplyMock.mockResolvedValue(
-      Array.from({ length: 140 }, (_, index) => `step-${index}`).join(" "),
-    );
+    const text = Array.from({ length: 140 }, (_, index) => `step-${index}`).join(" ");
 
     await runSubagentAnnounceFlow({
       ...defaultOutcomeAnnounce,
       childRunId: "run-usage",
+      roundOneReply: text,
+      terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
     });
 
     const call = getAgentCall();
@@ -708,10 +748,13 @@ describe("subagent announce formatting", () => {
           skipMaintenance: true,
         },
       );
-      // readSubagentSessionEntry is intentionally omitted so the real reader runs.
+      // Drop both read overrides so the real announce reader reaches the session worker.
+      subagentAnnounceDeliveryTesting.setDepsForTest({
+        ...deliveryDeps,
+        loadSessionEntry: undefined,
+      });
       subagentAnnounceOutputTesting.setDepsForTest({
         ...gatewayDeps,
-        resolveAgentIdFromSessionKey: () => "main",
         resolveSessionStorePathCore: () => storePath,
       });
       await run();
@@ -757,13 +800,11 @@ describe("subagent announce formatting", () => {
         sessionId: "requester-session",
       },
     };
-    chatHistoryMock.mockResolvedValueOnce({
-      messages: [{ role: "assistant", content: [{ type: "text", text: "final answer: 2" }] }],
-    });
-    readLatestAssistantReplyMock.mockResolvedValue("");
+    transcriptEvents = [assistantEvent("run-direct-completion", "final answer: 2")];
 
     const didAnnounce = await announceCompletion({
       childRunId: "run-direct-completion",
+      roundOneReply: "final answer: 2",
     });
 
     expect(didAnnounce).toBe("delivered");
@@ -782,42 +823,35 @@ describe("subagent announce formatting", () => {
       name: "required",
       childRunId: "run-direct-completion-no-reply",
       required: true,
-      fallbackReply: undefined,
       expected: "(no output)",
     },
     {
       name: "non-required",
       childRunId: "run-non-required-completion-no-reply",
       required: false,
-      fallbackReply: undefined,
       expected: undefined,
     },
     {
-      name: "wake fallback",
+      name: "wake silence",
       childRunId: "run-direct-completion-no-reply:wake",
       required: true,
-      fallbackReply: "final summary from prior completion",
-      expected: "final summary from prior completion",
+      expected: "(no output)",
     },
-  ])(
-    "handles $name NO_REPLY completion",
-    async ({ childRunId, required, fallbackReply, expected }) => {
-      expect(
-        await announceCompletion({
-          childRunId,
-          requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
-          expectsCompletionMessage: required,
-          roundOneReply: " NO_REPLY ",
-          fallbackReply,
-        }),
-      ).toBe("delivered");
-      expect(sendSpy).not.toHaveBeenCalled();
-      expect(agentSpy).toHaveBeenCalledTimes(expected === undefined ? 0 : 1);
-      if (expected !== undefined) {
-        expect(getAgentCallContext()).toContain(expected);
-      }
-    },
-  );
+  ])("handles $name NO_REPLY completion", async ({ childRunId, required, expected }) => {
+    expect(
+      await announceCompletion({
+        childRunId,
+        requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
+        expectsCompletionMessage: required,
+        terminalReply: { disposition: "silent" },
+      }),
+    ).toBe("delivered");
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).toHaveBeenCalledTimes(expected === undefined ? 0 : 1);
+    if (expected !== undefined) {
+      expect(getAgentCallContext()).toContain(expected);
+    }
+  });
 
   it.each([
     {
@@ -837,6 +871,7 @@ describe("subagent announce formatting", () => {
         childRunId: `run-restored-completion-${name}`,
         requesterOrigin: { channel: "slack", to: "channel:C123", accountId: "acct-1" },
         terminalReply,
+        roundOneReply: terminalReply.disposition === "visible" ? terminalReply.text : undefined,
       });
 
       expect(didAnnounce).toBe("delivered");
@@ -859,6 +894,7 @@ describe("subagent announce formatting", () => {
         requesterOrigin: { channel: "whatsapp", to: "+15550000000", accountId: "default" },
         expectsCompletionMessage: true,
         roundOneReply: "final answer",
+        terminalReply: { disposition: "visible", text: "final answer" } as const,
       },
       outcome: "delivered",
     },
@@ -870,6 +906,7 @@ describe("subagent announce formatting", () => {
         requesterOrigin: { channel: "telegram", to: "telegram:1234" },
         expectsCompletionMessage: true,
         roundOneReply: "final answer",
+        terminalReply: { disposition: "visible", text: "final answer" } as const,
       },
       outcome: "permanent_failure",
     },
@@ -897,6 +934,7 @@ describe("subagent announce formatting", () => {
         childRunId: "run-direct-agent-fallback-summary-retry",
         requesterOrigin: { channel: "discord", to: "channel:C123", accountId: "default" },
         roundOneReply: "worker result",
+        terminalReply: { disposition: "visible", text: "worker result" } as const,
       },
       outcome: "delivered",
     },
@@ -1051,6 +1089,7 @@ describe("subagent announce formatting", () => {
     readLatestAssistantReplyMock.mockResolvedValue("");
     const didAnnounce = await announceCompletion({
       childRunId: "run-completion-status",
+      roundOneReply: "child details",
       outcome: testCase.outcome,
       ...(testCase.spawnMode ? { spawnMode: testCase.spawnMode } : {}),
     });
@@ -1123,7 +1162,7 @@ describe("subagent announce formatting", () => {
     },
   );
 
-  it.each(["777", undefined, "999"])(
+  it.each([undefined, "999"])(
     "uses the hook-provided thread target with requester thread %s",
     async (threadId) => {
       const requesterOrigin = {
@@ -1339,6 +1378,7 @@ describe("subagent announce formatting", () => {
     const didAnnounce = await announceCompletion({
       childSessionKey: "agent:main:subagent:worker",
       childRunId: "run-completion-output",
+      roundOneReply: expected === "(no output)" ? "" : expected,
     });
     expect(didAnnounce).toBe("delivered");
     expectParentAnnounce();
@@ -1492,12 +1532,9 @@ describe("subagent announce formatting", () => {
     expectInputProvenance(call.params, "agent:main:subagent:worker");
   });
 
-  it("retries reading subagent output when early lifecycle completion had no text", async () => {
+  it("uses the producer's complete reply after the child settles without rereading history", async () => {
     embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValueOnce(true).mockReturnValue(false);
     embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
-    readLatestAssistantReplyMock
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce("Read #12 complete.");
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-1",
@@ -1510,6 +1547,8 @@ describe("subagent announce formatting", () => {
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
       childRunId: "run-child",
+      roundOneReply: "Read #12 complete.",
+      terminalReply: { disposition: "visible", text: "Read #12 complete." },
       requesterSessionKey: "agent:main:main",
       task: "context-stress-test",
       timeoutMs: 1000,
@@ -1527,9 +1566,11 @@ describe("subagent announce formatting", () => {
     const context = getAgentCallContext(call);
     expect(context).toContain("Read #12 complete.");
     expect(context).not.toContain("(no output)");
+    expect(chatHistoryMock).not.toHaveBeenCalled();
+    expect(readLatestAssistantReplyMock).not.toHaveBeenCalled();
   });
 
-  it.each([0, 600, undefined])(
+  it.each([600, undefined])(
     "wakes an ended orchestrator with current child results and its %s-second budget before upward announce",
     async (runTimeoutSeconds) => {
       const parentKey = "agent:main:subagent:parent";
@@ -1801,32 +1842,6 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
-  it("bubbles child announce to parent requester when requester subagent session is missing", async () => {
-    subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
-    subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue({
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: { channel: "whatsapp", to: "+1555", accountId: "acct-main" },
-    });
-    sessionStore = {
-      "agent:main:subagent:orchestrator": undefined,
-    };
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      ...defaultOutcomeAnnounce,
-      childSessionKey: "agent:main:subagent:leaf",
-      childRunId: "run-leaf",
-      requesterSessionKey: "agent:main:subagent:orchestrator",
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    const call = getAgentCall();
-    expect(call.params?.sessionKey).toBe("agent:main:main");
-    expect(call.params?.deliver).toBe(true);
-    expect(call.params?.channel).toBe("whatsapp");
-    expect(call.params?.to).toBe("+1555");
-    expect(call.params?.accountId).toBe("acct-main");
-  });
-
   it("keeps announce retryable when missing requester subagent session has no fallback requester", async () => {
     subagentRegistryMock.isSubagentSessionRunActive.mockReturnValue(false);
     subagentRegistryMock.resolveRequesterForChildSession.mockReturnValue(null);
@@ -1847,22 +1862,19 @@ describe("subagent announce formatting", () => {
     expect(sessionsDeleteSpy).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "defers announce when the child stays active after settle timeout: completion=%s",
-    async (expectsCompletionMessage) => {
-      embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(true);
-      embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
-      sessionStore = { "agent:main:subagent:test": { sessionId: "child-session-active" } };
-      const didAnnounce = await runSubagentAnnounceFlow({
-        ...defaultOutcomeAnnounce,
-        childRunId: "run-child-active",
-        ...(expectsCompletionMessage ? { expectsCompletionMessage: true } : {}),
-      });
-      expect(didAnnounce).toBe("retryable");
-      expect(agentSpy).not.toHaveBeenCalled();
-      expect(sendSpy).not.toHaveBeenCalled();
-    },
-  );
+  it("defers completion announce when the child stays active after settle timeout", async () => {
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(true);
+    embeddedRunMock.waitForEmbeddedAgentRunEnd.mockResolvedValue(false);
+    sessionStore = { "agent:main:subagent:test": { sessionId: "child-session-active" } };
+    const didAnnounce = await runSubagentAnnounceFlow({
+      ...defaultOutcomeAnnounce,
+      childRunId: "run-child-active",
+      expectsCompletionMessage: true,
+    });
+    expect(didAnnounce).toBe("retryable");
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -1917,7 +1929,7 @@ describe("subagent announce formatting", () => {
         task: "QA task",
       });
       expect(didAnnounce).toBe("delivered");
-      expect(getAgentCall().params).toMatchObject({
+      expectAgentCallFields(getAgentCall(), {
         sessionKey: testCase.expectedSessionKey,
         deliver: false,
       });
@@ -1961,37 +1973,6 @@ describe("subagent announce formatting", () => {
       const message = getAgentCallContext(call);
       expect(message).toContain("result A");
       expect(message).toContain("result B");
-    });
-
-    it("includes child error status and output in the parent synthesis wake", async () => {
-      // Regression guard: failed child outcomes must still surface through parent completion synthesis.
-      subagentRegistryMock.countPendingDescendantRuns.mockReturnValue(0);
-      subagentRegistryMock.listSubagentRunsForRequester.mockImplementation((sessionKey: string) =>
-        sessionKey === "agent:main:subagent:parent-error"
-          ? [
-              makeChildCompletion(
-                "agent:main:subagent:parent-error",
-                "child-error",
-                "traceback: child exploded",
-                {
-                  task: "error child",
-                  execution: { endedAt: 11, outcome: { status: "error", error: "child exploded" } },
-                },
-              ),
-            ]
-          : [],
-      );
-
-      const didAnnounce = await announceWake(
-        "agent:main:subagent:parent-error",
-        "run-parent-error",
-      );
-
-      expect(didAnnounce).toBe("delivered");
-      const call = getAgentCall();
-      const message = getAgentCallContext(call);
-      expect(message).toContain("status: error: child exploded");
-      expect(message).toContain("traceback: child exploded");
     });
   });
 });

@@ -1,31 +1,26 @@
 import fs from "node:fs";
 import net, { type AddressInfo } from "node:net";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-manager-api.js";
 import {
-  disposeAllSessionMcpRuntimes,
-  getSessionMcpRuntimeManagerForTesting,
-  setSessionMcpRuntimeScheduler,
-} from "../agents/agent-bundle-mcp-manager-api.js";
-import { testing as mcpRuntimeTesting } from "../agents/agent-bundle-mcp-runtime.js";
+  bindSessionMcpRuntimeTestScheduler,
+  getSessionMcpRuntimeTestManager,
+} from "../agents/agent-bundle-mcp-manager.test-support.js";
+import * as mcpClientLifecycle from "../agents/mcp-client-lifecycle.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createCronScriptRuntimeFixture as createCronScriptRuntime } from "./trigger-script.test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-let scheduler: GatewayScheduler;
 
 beforeEach(async () => {
-  scheduler = createTestGatewayScheduler();
-  await setSessionMcpRuntimeScheduler(scheduler);
+  await bindSessionMcpRuntimeTestScheduler();
 });
 
 afterEach(async () => {
   await disposeAllSessionMcpRuntimes();
-  await scheduler.stop();
 });
 
 // Minimal stdio MCP server: records each start, and each call reports the serving pid.
@@ -138,7 +133,7 @@ describe("cron script MCP namespace", () => {
       const state = "state" in result ? (result.state as { listed: { pid: number } }) : undefined;
       expect(isProcessAlive(state?.listed.pid ?? 0)).toBe(false);
       expect(fixture.starts()).toBe(1);
-      expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+      expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
     },
   );
 
@@ -158,7 +153,7 @@ describe("cron script MCP namespace", () => {
       }),
     ).resolves.toEqual({ kind: "evaluated", fire: false, state: "undefined" });
     expect(fixture.starts()).toBe(0);
-    expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
   });
 
   it("runs past a failed named server and names it when the script fails", async () => {
@@ -184,14 +179,17 @@ describe("cron script MCP namespace", () => {
     expect(result.kind === "error" ? result.error : "").toContain(
       'MCP server "broken" is unavailable',
     );
-    expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
   });
 
   it.each(["evaluated", "aborted"] as const)(
     "returns an %s evaluation while a stubborn MCP server keeps retiring",
     async (outcome) => {
       // Forced shutdown takes 3 s; a finished evaluation waits at most the 1 s cleanup grace.
-      mcpRuntimeTesting.setBundleMcpDisposeTimeoutMsForTest(3_000);
+      const dispose = mcpClientLifecycle.disposeMcpClient;
+      const disposing = vi
+        .spyOn(mcpClientLifecycle, "disposeMcpClient")
+        .mockImplementation((session) => dispose(session, 3_000));
       const connected = createDeferred<net.Socket>();
       const listener = net.createServer((socket) => connected.resolve(socket));
       await new Promise<void>((resolve) => {
@@ -230,7 +228,7 @@ describe("cron script MCP namespace", () => {
         expect(retired).toBe(false);
         await closed;
       } finally {
-        mcpRuntimeTesting.setBundleMcpDisposeTimeoutMsForTest();
+        disposing.mockRestore();
         await new Promise<void>((resolve) => {
           listener.close(() => resolve());
         });

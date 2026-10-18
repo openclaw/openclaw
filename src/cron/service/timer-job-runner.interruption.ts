@@ -1,7 +1,7 @@
 // Pure interruption-outcome mapping for cron runs; kept separate so the
 // cancellation/timeout branches and their invariants are directly testable.
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob, CronWebhookDeliveryOutcome } from "../types.js";
+import type { CronJob, CronRunErrorClassification, CronWebhookDeliveryOutcome } from "../types.js";
 import type { IsolatedAgentSetupTimeoutSignal } from "./timer-execution-timeout.js";
 import type { executeJobCore } from "./timer-execution.js";
 
@@ -68,21 +68,35 @@ export function withPrimaryWebhookInterruption(params: {
   job: CronJob;
   result: CronCoreRunOutcome;
   error: string;
+  errorClassification?: CronRunErrorClassification;
   outcome?: CronWebhookDeliveryOutcome;
 }): CronCoreRunOutcome {
   // Mirror deliverPrimaryWebhook's unfired-trigger gate: a trigger that
   // evaluated false never requested delivery, so an interruption must not
   // downgrade its intentional non-outcome to a delivery failure.
-  return resolveCronDeliveryPlan(params.job).mode === "webhook" &&
-    params.result.triggerEval?.fired !== false
-    ? withPrimaryWebhookTrace({ ...params, outcome: params.outcome ?? { status: "not-delivered" } })
-    : params.result;
+  if (
+    resolveCronDeliveryPlan(params.job).mode !== "webhook" ||
+    params.result.triggerEval?.fired === false
+  ) {
+    return params.result;
+  }
+  const result = withPrimaryWebhookTrace({
+    ...params,
+    outcome: params.outcome ?? { status: "not-delivered" },
+  });
+  // Delivery interruption must not replace a completed core failure's classification.
+  return result.status !== "error" &&
+    params.outcome?.status !== "delivered" &&
+    params.errorClassification
+    ? { ...result, errorClassification: params.errorClassification }
+    : result;
 }
 
 export function resolveInterruptedRunProgress(params: {
   progress: CronRunProgress;
   job: CronJob;
   error: string;
+  errorClassification?: CronRunErrorClassification;
 }): CronCoreRunOutcome | undefined {
   if (params.progress.settledDeliveryResult) {
     return params.progress.settledDeliveryResult;
@@ -93,6 +107,7 @@ export function resolveInterruptedRunProgress(params: {
       result: params.progress.completedCoreResult,
       outcome: params.progress.webhookDelivery,
       error: params.error,
+      errorClassification: params.errorClassification,
     });
   }
   return undefined;

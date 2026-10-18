@@ -13,8 +13,12 @@ import {
 import type { AgentDatabaseRegistryMutation } from "../../state/openclaw-agent-db-registry-listing.js";
 import { matchesAgentDatabaseReadCandidatePath } from "../../state/openclaw-agent-db-resources.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
+import {
+  cloneEnvWithPlatformSemantics,
+  getPublishedConfigRuntimeEnvState,
+} from "../config-env-vars.js";
 import { resolveSessionStoreCompatibilityAgentId } from "../legacy.default-agent-owner.js";
+import { getRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { captureRuntimeConfig } from "../runtime-source-projection.js";
 import { resolveStateDir } from "../state-dir.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
@@ -42,6 +46,7 @@ import {
   dedupeSessionStoreTargetsBySqliteTarget,
   type SessionStoreTarget,
 } from "./targets-collision.js";
+import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
 import {
   shouldSkipDiscoveryError,
   toDiscoveredSessionStoreTarget,
@@ -50,7 +55,7 @@ import {
   resolveExistingAgentSessionStoreTargetsReadOnlyResult,
   type SessionStoreTargetsReadCache,
   type SessionStoreTargetsReadResult,
-} from "./targets-read-availability.js";
+} from "./targets-read-availability.worker.js";
 import {
   isPerAgentSessionStoreConfig,
   listConfiguredSessionStoreAgentIds,
@@ -185,7 +190,7 @@ export function captureSessionStoreWriteCandidates(storePath: string) {
 }
 
 export type SessionStoreTargetInventoryRequest = {
-  selection?: "configured" | "recovery";
+  selection?: "configured" | "recovery" | "known-owners";
   config: OpenClawConfig;
   agentIds: string[];
   env: NodeJS.ProcessEnv;
@@ -255,7 +260,14 @@ export function createSessionStoreRegistryMutationFilter(params: {
           params.preparedSources.some(
             (prepared) =>
               prepared.agentId === source.agentId &&
-              prepared.identity === source.identity &&
+              (prepared.identity === source.identity ||
+                // A creator's COMMIT promotes its captured absent locator to this file.
+                params.captured.some(
+                  ({ candidate, identity, birthtime }) =>
+                    birthtime === undefined &&
+                    identity === source.identity &&
+                    (candidate.path === prepared.path || candidate.physicalPath === prepared.path),
+                )) &&
               isCurrentRegistrySourceGeneration(prepared, source),
           ))
       ) {
@@ -299,17 +311,61 @@ function isCurrentRegistrySourceGeneration(
   }
 }
 
+type InventoryEnvironment = {
+  env: NodeJS.ProcessEnv;
+  stateDir: string;
+  serialized: NodeJS.ProcessEnv;
+};
+let publishedInventoryEnvironment:
+  | {
+      config: OpenClawConfig;
+      publication: ReturnType<typeof getPublishedConfigRuntimeEnvState>;
+      captured: InventoryEnvironment;
+    }
+  | undefined;
+
+/** Capture runtime routing without discovering physical store candidates. */
+export function captureSessionStoreEnvironment(
+  cfg: OpenClawConfig,
+  inputEnv?: NodeJS.ProcessEnv,
+): InventoryEnvironment & { config: OpenClawConfig } {
+  const config = captureRuntimeConfig(cfg);
+  const publication =
+    inputEnv === undefined && cfg === getRuntimeConfigSnapshot()
+      ? getPublishedConfigRuntimeEnvState()
+      : undefined;
+  let environment =
+    publication &&
+    publishedInventoryEnvironment?.config === config &&
+    publishedInventoryEnvironment.publication === publication
+      ? publishedInventoryEnvironment.captured
+      : undefined;
+  if (!environment) {
+    const env = cloneEnvWithPlatformSemantics(inputEnv ?? process.env);
+    const stateDir = resolveStateDir(env);
+    env.OPENCLAW_STATE_DIR = stateDir;
+    // Windows path resolution needs the proxy; worker requests need a plain snapshot.
+    environment = {
+      env,
+      stateDir,
+      serialized: Object.freeze({ ...env, OPENCLAW_STATE_DIR: stateDir }),
+    };
+    if (publication) {
+      // Config publication and env rollback both replace their existing owner-held identities.
+      publishedInventoryEnvironment = { config, publication, captured: environment };
+    }
+  }
+  return { config, ...environment };
+}
+
 /** Capture locators and bounded families without reading SQLite or assigning an owner. */
 export function prepareSessionStoreTargetInventory(
   cfg: OpenClawConfig,
   inputAgentIds: readonly string[],
-  inputEnv: NodeJS.ProcessEnv = process.env,
+  inputEnv?: NodeJS.ProcessEnv,
   selection?: SessionStoreTargetInventoryRequest["selection"],
 ): Omit<SessionStoreTargetInventoryRequest, "registeredDatabases"> {
-  const env = cloneEnvWithPlatformSemantics(inputEnv);
-  const stateDir = resolveStateDir(env);
-  env.OPENCLAW_STATE_DIR = stateDir;
-  const config = captureRuntimeConfig(cfg);
+  const { config, env, stateDir, serialized } = captureSessionStoreEnvironment(cfg, inputEnv);
   const agentIds = [...new Set(inputAgentIds.map(normalizeAgentId))];
   const configured = listConfiguredSessionStoreAgentIds(config);
   const paths = new Map(
@@ -375,7 +431,7 @@ export function prepareSessionStoreTargetInventory(
     selection,
     config,
     agentIds,
-    env: { ...env, OPENCLAW_STATE_DIR: env.OPENCLAW_STATE_DIR },
+    env: serialized,
     paths,
     candidates: [...candidates.values()],
     ...(perAgent && retired.size > 0
@@ -429,6 +485,15 @@ export function readSessionStoreTargetInventory(
   const cache: SessionStoreTargetsReadCache = new Map();
   let readFailed = false;
   try {
+    if (request.selection === "known-owners") {
+      return {
+        kind: "session-target-inventory",
+        agents: listKnownSessionStoreAgentIds(config, {
+          env,
+          registeredDatabases: request.registeredDatabases,
+        }).map((agentId) => ({ agentId, result: { available: true, targets: [] }, reads: [] })),
+      };
+    }
     if (request.selection === "configured" || request.selection === "recovery") {
       const agents: Extract<
         SessionStoreTargetInventoryResult,
@@ -468,12 +533,10 @@ export function readSessionStoreTargetInventory(
         },
       };
       if (request.selection === "recovery") {
-        const selected = new Set(request.agentIds);
+        // Maintenance must retain retired and held stores in its discovered roster.
         resolveAllAgentSessionStoreTargetsSync(config, {
           ...options,
-          ...(isPerAgentSessionStoreConfig(config.session?.store)
-            ? { agentIds: selected }
-            : { fixedStoreAgentIds: selected }),
+          fixedStoreAgentIds: new Set(request.agentIds),
         });
       } else {
         dedupeSessionStoreTargetsBySqliteTarget(

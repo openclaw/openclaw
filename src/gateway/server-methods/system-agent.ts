@@ -8,7 +8,9 @@ import {
   validateSystemAgentSetupActivateParams,
   validateSystemAgentSetupActivateStartParams,
   validateSystemAgentSetupAuthStartParams,
+  validateSystemAgentSetupRuntimeStartParams,
   validateSystemAgentSetupDetectParams,
+  validateSystemAgentSetupAutoParams,
   validateSystemAgentSetupVerifyParams,
   type SystemAgentChatParams,
   type SystemAgentChatQuestion,
@@ -40,7 +42,10 @@ import {
   authenticatedProfileUnavailableError,
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
-import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import {
+  readGatewayRequestMutationAuthority,
+  retainGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import {
   createAdmittedWizardSession,
   runExclusiveSystemAgentSetupActivation,
@@ -70,6 +75,7 @@ import {
 } from "./system-agent-setup-wizard.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
+import { startWizardLogin } from "./wizard-login.js";
 
 export type { SystemAgentChatSession };
 
@@ -150,7 +156,26 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     validateSystemAgentSetupDetectParams,
     async ({ params, respond }) => {
       const { detectSetupInference } = await import("../../system-agent/setup-inference.js");
-      respond(true, await detectSetupInference({}, params.agentId), undefined);
+      respond(true, await detectSetupInference(params.agentId), undefined);
+    },
+  ),
+  "openclaw.setup.auto": defineValidatedGatewayHandler(
+    "openclaw.setup.auto",
+    validateSystemAgentSetupAutoParams,
+    async (options) => {
+      const { context, respond } = options;
+      const authority = retainGatewayRequestMutationAuthority(options);
+      try {
+        const { runGatewayAutomaticSetup } = await import("./system-agent-setup-auto.js");
+        respond(true, await runGatewayAutomaticSetup(context, authority.assertCurrent), undefined);
+      } catch (error) {
+        if (!(error instanceof SetupAdmissionBusyError)) {
+          throw error;
+        }
+        respondSetupAdmissionBusy(respond);
+      } finally {
+        authority.release();
+      }
     },
   ),
   "openclaw.setup.verify": defineValidatedGatewayHandler(
@@ -165,6 +190,60 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
         });
         respond(true, result, undefined);
       });
+    },
+  ),
+  "openclaw.setup.runtime.start": defineValidatedGatewayHandler(
+    "openclaw.setup.runtime.start",
+    validateSystemAgentSetupRuntimeStartParams,
+    async (options) => {
+      const { params, context, respond, client } = options;
+      if (rejectExistingSetupWizardSession({ sessionId: params.sessionId, context, respond })) {
+        return;
+      }
+      if (!client) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "Client required"));
+        return;
+      }
+      const authority = retainGatewayRequestMutationAuthority(options);
+      let created = false;
+      try {
+        await startWizardLogin({
+          client,
+          context,
+          sessionId: params.sessionId,
+          respond,
+          assertCurrent: authority.assertCurrent,
+          createSession: () => {
+            created = true;
+            return new WizardSession(
+              async (prompter, signal, runnerSession) => {
+                try {
+                  // Keep installed plugin runtime loading off Gateway startup.
+                  const { setupNativeRuntime } =
+                    await import("../../system-agent/setup-native-runtime.js");
+                  await setupNativeRuntime({
+                    ...params,
+                    prompter,
+                    signal,
+                    assertCurrent: authority.assertCurrent,
+                    onCommitStarted: () => runnerSession.lockCancellation(),
+                  });
+                } finally {
+                  authority.release();
+                }
+              },
+              { timeoutMs: PROVIDER_AUTH_SESSION_TIMEOUT_MS },
+            );
+          },
+        });
+      } catch (error) {
+        authority.release();
+        throw error;
+      } finally {
+        if (!created) {
+          authority.release();
+        }
+      }
     },
   ),
   "openclaw.setup.auth.start": defineValidatedGatewayHandler(
@@ -315,16 +394,14 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
     const { params: rawParams, respond, client, context } = options;
     const reject = (error: ReturnType<typeof errorShape>) => respond(false, undefined, error);
     const authority = readGatewayRequestMutationAuthority(options);
-    const sanitizedParams = sanitizeSystemAgentChatParams(rawParams);
+    const inputParams = sanitizeSystemAgentChatParams(rawParams);
     const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
-    if (
-      !assertValidParams(sanitizedParams, validateSystemAgentChatParams, "openclaw.chat", respond)
-    ) {
+    if (!assertValidParams(inputParams, validateSystemAgentChatParams, "openclaw.chat", respond)) {
       return;
     }
     const params: SystemAgentChatParams = trustedAgentRuntime
       ? {
-          ...sanitizedParams,
+          ...inputParams,
           delegation: {
             agentId: trustedAgentRuntime.agentId,
             sessionKey: trustedAgentRuntime.sessionKey,
@@ -342,7 +419,7 @@ export const systemAgentHandlers: GatewayRequestHandlers = {
               : {}),
           },
         }
-      : sanitizedParams;
+      : inputParams;
     const inputError = getSystemAgentChatInputError(params);
     if (inputError) {
       reject(errorShape(ErrorCodes.INVALID_REQUEST, inputError));

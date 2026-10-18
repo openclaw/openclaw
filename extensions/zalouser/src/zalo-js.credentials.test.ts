@@ -377,9 +377,7 @@ describe("zalouser credential persistence", () => {
         await expect(
           access(resolveLegacyZalouserCredentialsPath(profile, { OPENCLAW_STATE_DIR: stateDir })),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        await expect(
-          access(path.join(stateDir, "state", "openclaw.sqlite")),
-        ).resolves.toBeUndefined();
+        await access(path.join(stateDir, "state", "openclaw.sqlite"));
         await expect(logoutZaloProfile(profile)).resolves.toMatchObject({
           cleared: true,
           loggedOut: true,
@@ -712,13 +710,11 @@ describe("zalouser credential persistence", () => {
       name: "link",
       send: () => sendZaloLink("thread-1", "https://example.com", { profile: "missing-session" }),
     },
-  ])("returns a missing-session error for $name", async ({ send }) => {
+  ])("rejects with a missing-session error for $name", async ({ send }) => {
     const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
     try {
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-        const result = await send();
-        expect(result.ok).toBe(false);
-        expect(result.error).toContain("No saved Zalo session");
+        await expect(send()).rejects.toThrow("No saved Zalo session");
       });
     } finally {
       await removeCredentialStateDir(stateDir);

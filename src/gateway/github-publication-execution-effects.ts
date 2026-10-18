@@ -10,7 +10,7 @@ type GitHubPublicationMutableFacts = {
   effect_state?: string | null;
 };
 
-type GitHubPublicationEffectTransition =
+export type GitHubPublicationEffectTransition =
   | { operation: "updateHead"; headCommit: string }
   | { operation: "complete"; result: SessionGitHubPublicationResult }
   | {
@@ -21,7 +21,7 @@ type GitHubPublicationEffectTransition =
   | { operation: "interrupt" };
 
 /** Effect observations retain custody but never restore permission for another action. */
-function githubPublicationEffectFacts(
+export function githubPublicationEffectFacts(
   transition: GitHubPublicationEffectTransition,
   interruptedStatus: "requested" | "needs_confirmation",
 ): { values: GitHubPublicationMutableFacts; requireAction: boolean } {
@@ -71,30 +71,4 @@ function githubPublicationEffectFacts(
       };
   }
   throw new Error("Unknown GitHub publication effect transition.");
-}
-
-/** Released synchronous adapters and worker transitions share the same effect reducer. */
-export function createGitHubPublicationExecutionEffects<Row>(params: {
-  write: (facts: GitHubPublicationMutableFacts, requireAction: boolean) => Row;
-  interruptedStatus: "requested" | "needs_confirmation";
-}) {
-  const apply = (transition: GitHubPublicationEffectTransition) => {
-    const { values, requireAction } = githubPublicationEffectFacts(
-      transition,
-      params.interruptedStatus,
-    );
-    return params.write(values, requireAction);
-  };
-  return {
-    updateHead: (headCommit: string): Row => apply({ operation: "updateHead", headCommit }),
-    complete: (result: SessionGitHubPublicationResult): Row =>
-      apply({ operation: "complete", result }),
-    recordEffect(
-      effect: "push" | "pull_request",
-      observed?: { headCommit?: string; url?: string },
-    ): void {
-      apply({ operation: "recordEffect", effect, observed });
-    },
-    interrupt: (): Row => apply({ operation: "interrupt" }),
-  };
 }

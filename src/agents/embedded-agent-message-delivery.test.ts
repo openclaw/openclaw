@@ -3,10 +3,40 @@ import { createMessageReceiptFromOutboundResults } from "../channels/message/rec
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import {
   projectEmbeddedMessageDeliveryFact,
+  projectPluginMessageDeliveryFact,
   readEmbeddedMessageDeliveryFact,
 } from "./embedded-agent-message-delivery.js";
 
 describe("projectEmbeddedMessageDeliveryFact", () => {
+  it.each([
+    [{ dryRun: true, sentBeforeError: true }, "dryRun", false],
+    [{ sentBeforeError: true, messageId: "suppressed" }, "settled", true],
+    [{ messageId: "suppressed", error: "no delivery" }, "suppressed", false],
+    [{ changed: false, messageId: "sent-1" }, "failed", false],
+    [{ error: "no delivery", messageId: "sent-1" }, "failed", false],
+  ])("preserves nested plugin signal precedence: %j", (signals, status, partialDelivery) => {
+    expect(
+      projectPluginMessageDeliveryFact({
+        content: [{ text: JSON.stringify({ result: signals }) }],
+      }),
+    ).toEqual({ status, partialDelivery, createdThreadIds: [] });
+  });
+
+  it("projects identities from parsed plugin envelopes in traversal order", () => {
+    expect(
+      projectPluginMessageDeliveryFact({
+        content: [{ text: '{"result":{"messageId":" first ","channelId":"channel-1"}}' }],
+        payload: { pollId: "second", roomId: "room-2" },
+      }),
+    ).toEqual({
+      status: "settled",
+      primaryPlatformMessageId: "first",
+      deliveredTargets: ["channel-1", "room-2"],
+      partialDelivery: false,
+      createdThreadIds: [],
+    });
+  });
+
   it.each([
     { status: "settled", partialDelivery: false, sourceReplyDelivered: true, expected: true },
     { status: "settled", partialDelivery: true, sourceReplyDelivered: true },

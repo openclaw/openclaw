@@ -17,17 +17,17 @@ import { ensureSessionTranscriptArchiveSchema } from "../../state/openclaw-agent
 import * as writeAdmission from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { resolveRegisteredSqliteTranscriptArchiveName } from "./session-accessor.sqlite-archive-artifact.js";
-import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
+import {
+  readSqliteSessionArchivePruning,
+  withSqliteSessionPageReclamation,
+} from "./session-accessor.sqlite-page-reclamation.js";
 import * as pageReclamation from "./session-accessor.sqlite-page-reclamation.js";
 import { resolveSessionReclamationDatabaseOptions } from "./session-accessor.sqlite-reclamation.js";
 import {
   getSessionKysely,
   runExclusiveSqliteSessionWrite,
 } from "./session-accessor.sqlite-scope.js";
-import {
-  hasCanonicalSessionTranscriptArchives,
-  pruneAllSessionTranscriptArchivesToHighWater,
-} from "./session-history-archive-pruning.js";
+import { pruneAllSessionTranscriptArchivesToHighWater } from "./session-history-archive-pruning.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -110,7 +110,7 @@ it.each([
           });
           expect(result.removedFiles).toBe(1);
         } else {
-          expect(await hasCanonicalSessionTranscriptArchives(linkOptions)).toBe(true);
+          expect((await readSqliteSessionArchivePruning(linkOptions))?.archives).toHaveLength(1);
         }
         expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(true);
         if (retirement === "path") {

@@ -31,6 +31,7 @@ import {
 import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycle.js";
 import { stripLegacyMediaContextFields } from "../../media/media-facts.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
 import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js";
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
@@ -45,6 +46,7 @@ import type {
   InboundMessageAuditTerminalRecorder,
 } from "./dispatch-from-config.audit.js";
 import {
+  resolveBoundAcpDispatchRuntimeOwner,
   resolveBoundAcpDispatchSessionKey,
   resolveSessionStoreLookup,
 } from "./dispatch-from-config.context.js";
@@ -76,6 +78,7 @@ export async function gatherDispatchRequest(
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
   onRuntimeLease?: (lease: PreparedModelRuntimeLease) => void,
+  onDispose?: (dispose: () => void) => void,
 ) {
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
@@ -104,11 +107,42 @@ export async function gatherDispatchRequest(
         : {}),
     },
   };
+  let turnAdoption: PluginHookReplyDispatchContext["turnAdoption"];
+  const adoptInput = normalizedParams.replyOptions?.turnAdoptionLifecycle?.onAdopted;
+  if (adoptInput) {
+    let active = true;
+    let pending: Promise<void> | undefined;
+    let failure: { error: unknown } | undefined;
+    const assertCurrent = () => {
+      if (!active) {
+        throw new Error("Reply input adoption is no longer active.");
+      }
+      if (failure) {
+        throw failure.error;
+      }
+    };
+    turnAdoption = {
+      assertCurrent,
+      adopt: () => {
+        assertCurrent();
+        return (pending ??= Promise.resolve()
+          .then(adoptInput)
+          .catch((error: unknown) => {
+            failure = { error };
+            throw error;
+          }));
+      },
+    };
+    onDispose?.(() => {
+      active = false;
+    });
+  }
   const replyOperationRunState: ReplyOperationRunState =
     resolveReplyOperationRunState(normalizedParams.replyOptions) ?? {};
   let replayUnsafeActivity = false;
   const state = {
     params: normalizedParams,
+    turnAdoption,
     messageAuditTerminal,
     allowInboundHandlers:
       replyOperationRunState.heartbeat === undefined &&
@@ -174,6 +208,7 @@ export async function gatherDispatchRequest(
     initialSessionStoreEntry.sessionKey === sessionKey
       ? initialSessionStoreEntry.entry?.sessionId
       : undefined;
+  const inboundText = ctx.Body ?? ctx.RawBody ?? "";
   const messageLifecycle = createDiagnosticMessageLifecycle({
     enabled: diagnosticsEnabled,
     channel,
@@ -188,11 +223,12 @@ export async function gatherDispatchRequest(
     processingReason: "message_start",
     startedAtMs: startTime,
     trackSessionState: canTrackSession,
+    userPrompt: inboundText,
   });
   const traceAttributes = {
     surface: channel,
     hasSessionKey: Boolean(sessionKey),
-    hasRunId: typeof params.replyOptions?.runId === "string",
+    hasRunId: params.replyOptions?.runId !== undefined,
   };
   const replyHotPathTiming = createReplyHotPathTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: cfg }),
@@ -207,7 +243,20 @@ export async function gatherDispatchRequest(
     );
   let agentDispatchStartedAt = 0;
 
-  const recordProcessed = (outcome: DispatchProcessedOutcome, opts?: DispatchProcessedOptions) => {
+  // The model's own response is captured once, as soon as it is known, so error and
+  // aborted terminals keep it even when later delivery or finalization throws.
+  let capturedFinalResponse: string | undefined;
+  const noteCapturedFinalResponse = (response: string) => {
+    capturedFinalResponse = response;
+  };
+  const recordProcessed = (
+    outcome: DispatchProcessedOutcome,
+    processedOpts?: DispatchProcessedOptions,
+  ) => {
+    const opts =
+      processedOpts?.finalResponse === undefined && capturedFinalResponse !== undefined
+        ? { ...processedOpts, finalResponse: capturedFinalResponse }
+        : processedOpts;
     noteDispatchProcessedOutcome({
       outcome,
       ...(opts?.reason !== undefined ? { reason: opts.reason } : {}),
@@ -396,26 +445,6 @@ export async function gatherDispatchRequest(
     fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
-  const assertProgressCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-    params.replyOptions?.abortSignal?.throwIfAborted();
-    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
-    assertRequestCurrent();
-  };
-  const verboseProgress = createShouldEmitVerboseProgress({
-    agentId: sessionAgentId,
-    sessionKey: acpDispatchSessionKey,
-    storePath: sessionStoreEntry.storePath,
-    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
-    assertCurrent: assertProgressCurrent,
-    fallbackLevel:
-      normalizeVerboseLevel(
-        sessionStoreEntry.entry?.verboseLevel ??
-          sessionAgentCfg?.verboseDefault ??
-          cfg.agents?.defaults?.verboseDefault ??
-          "",
-      ) ?? "off",
-  });
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -433,7 +462,7 @@ export async function gatherDispatchRequest(
   // A bound ACP key names an external harness, not a configured model-runtime owner.
   // Keep the source owner for Gateway dispatch while ACP execution uses the bound target below.
   const preparedReplyDispatchAgentId = boundAcpDispatchSessionKey
-    ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
+    ? resolveBoundAcpDispatchRuntimeOwner({ sessionKey, cfg, ctx })
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
   let preparedTtsPreferences: PreparedTtsPreferences;
@@ -479,6 +508,27 @@ export async function gatherDispatchRequest(
     sessionWorkerPlacementContext: normalizedParams.sessionWorkerPlacementContext,
   });
   const { getPreDispatchAbortSignal } = replyOperationCoordinator;
+  const assertProgressCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
+    assertRequestCurrent();
+  };
+  const verboseProgress = createShouldEmitVerboseProgress({
+    agentId: sessionAgentId,
+    sessionKey: acpDispatchSessionKey,
+    storePath: sessionStoreEntry.storePath,
+    initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
+    assertCurrent: assertProgressCurrent,
+    fallbackLevel:
+      normalizeVerboseLevel(
+        sessionStoreEntry.entry?.verboseLevel ??
+          sessionAgentCfg?.verboseDefault ??
+          cfg.agents?.defaults?.verboseDefault ??
+          "",
+      ) ?? "off",
+  });
+  onDispose?.(verboseProgress.release);
   const pluginRegistry =
     preparedReplyDispatchRuntime?.inboundPluginRegistry ??
     (await traceReplyPhase("reply.load_runtime_plugin_registry_handle", async () => {
@@ -494,7 +544,7 @@ export async function gatherDispatchRequest(
     }));
   const hookRunner = getGlobalHookRunner();
   const timestamp =
-    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+    ctx.Timestamp !== undefined && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
   const hookCtx = { ...ctx };
@@ -503,9 +553,8 @@ export async function gatherDispatchRequest(
       messageId: messageIdForHook,
     });
     const inboundClaim = toPluginInboundClaimPair(nextHookContext, {
-      commandAuthorized:
-        typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-      wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+      commandAuthorized: ctx.CommandAuthorized,
+      wasMentioned: ctx.WasMentioned,
     });
     return {
       hookContext: nextHookContext,
@@ -573,6 +622,7 @@ export async function gatherDispatchRequest(
     sessionKey,
     traceReplyPhase,
     recordProcessed,
+    noteCapturedFinalResponse,
     recordAgentDispatchStarted,
     recordAgentDispatchCompleted,
     markProcessing: () => messageLifecycle.markProcessing(),

@@ -20,7 +20,7 @@ async function dispatchThrowingHandler(error: Error, respond = vi.fn()) {
     respond,
     client: null,
     isWebchatConnect: () => false,
-    context: {} as never,
+    context: { getRuntimeConfig: () => ({}) } as never,
     extraHandlers: {
       "test.stale-install": async () => {
         throw error;

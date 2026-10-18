@@ -49,6 +49,8 @@ async function seed() {
     await registerSubagentRun({
       runId: id,
       childSessionKey: key(id),
+      childAgentId: "main",
+      sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
       requesterSessionKey: id === "root" ? owner : key("root"),
       requesterAgentId: "main",
       requesterDisplayKey: owner,

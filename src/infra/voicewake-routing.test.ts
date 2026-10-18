@@ -1,22 +1,25 @@
 // Covers voice wake routing normalization and resolution.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { readConfigMachineState } from "../state/config-machine-state.js";
+import { readVoiceWakeMachineState } from "../state/config-machine-state-async.js";
 import { loadVoiceWakeRoutingConfig, resolveVoiceWakeRouteByTrigger } from "./voicewake-routing.js";
 
-vi.mock("../state/config-machine-state.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/config-machine-state.js")>()),
-  readConfigMachineState: vi.fn(),
+vi.mock("../state/config-machine-state-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/config-machine-state-async.js")>()),
+  readVoiceWakeMachineState: vi.fn(),
 }));
 
 beforeEach(() => {
-  vi.mocked(readConfigMachineState).mockReset();
+  vi.mocked(readVoiceWakeMachineState).mockReset();
 });
 
 describe("voicewake routing normalization", () => {
   it("normalizes agentId targets from persisted routes", async () => {
-    vi.mocked(readConfigMachineState).mockReturnValue({
-      defaultTarget: { mode: "current" },
-      routes: [{ trigger: "Wake", target: { agentId: " Main Agent " } }],
+    vi.mocked(readVoiceWakeMachineState).mockResolvedValue({
+      updatedAtMs: 0,
+      value: {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "Wake", target: { agentId: " Main Agent " } }],
+      },
     });
     const normalized = await loadVoiceWakeRoutingConfig();
     expect(normalized.routes).toHaveLength(1);
@@ -24,9 +27,12 @@ describe("voicewake routing normalization", () => {
   });
 
   it("resolves trigger routing with punctuation-insensitive trigger values", async () => {
-    vi.mocked(readConfigMachineState).mockReturnValue({
-      defaultTarget: { mode: "current" },
-      routes: [{ trigger: "Hey, Bot", target: { sessionKey: "agent:main:voice" } }],
+    vi.mocked(readVoiceWakeMachineState).mockResolvedValue({
+      updatedAtMs: 0,
+      value: {
+        defaultTarget: { mode: "current" },
+        routes: [{ trigger: "Hey, Bot", target: { sessionKey: "agent:main:voice" } }],
+      },
     });
     const config = await loadVoiceWakeRoutingConfig();
     expect(resolveVoiceWakeRouteByTrigger({ trigger: "hey bot", config })).toEqual({

@@ -4,7 +4,6 @@ import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
-  parseExecutionIdentityAdmissionEnvelope,
   parseExecutionIdentityAdmissionWork,
   type ExecutionIdentityAdmissionEnvelope,
   type ExecutionIdentityAdmissionFacts,
@@ -127,196 +126,15 @@ describe("execution identity admission envelope", () => {
     expect(Object.isFrozen(envelope)).toBe(true);
     expect(Object.isFrozen(envelope.ingress)).toBe(true);
     expect(Object.isFrozen(envelope.assurance)).toBe(true);
-    expect(parseExecutionIdentityAdmissionEnvelope(structuredClone(envelope))).toEqual(envelope);
+    expect(
+      parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: structuredClone(envelope) }),
+    ).toEqual({ kind: "capture", envelope });
     expect(Buffer.byteLength(JSON.stringify(envelope), "utf8")).toBeLessThanOrEqual(
       ADMISSION_MAX_BYTES,
     );
   });
 
-  it("captures exact present, unknown, and omitted invoker variants", () => {
-    const present = captureEnvelope(
-      facts({
-        invoker: {
-          state: "present",
-          kind: "local-account",
-          rawPrincipalRef: "raw-principal",
-        },
-      }),
-      { contextId: "context-present", executionId: "execution-present", now: 1 },
-    );
-    const unknown = captureEnvelope(facts({ invoker: { state: "unknown" } }), {
-      contextId: "context-unknown",
-      executionId: "execution-unknown",
-      now: 2,
-    });
-    const absent = captureEnvelope(facts(), {
-      contextId: "context-absent",
-      executionId: "execution-absent",
-      now: 3,
-    });
-
-    expect(present.invoker).toEqual({
-      state: "present",
-      kind: "local-account",
-      rawPrincipalRef: "raw-principal",
-    });
-    expect(unknown.invoker).toEqual({ state: "unknown" });
-    expect(absent).not.toHaveProperty("invoker");
-    for (const envelope of [present, unknown, absent]) {
-      expect(parseExecutionIdentityAdmissionEnvelope(structuredClone(envelope))).toEqual(envelope);
-    }
-  });
-
-  it("never reads inherited accessors while treating optional evidence as omitted", () => {
-    const keys = ["invoker", "applicableGrants", "assurance"] as const;
-    const prior = new Map(
-      keys.map((key) => [key, Object.getOwnPropertyDescriptor(Object.prototype, key)]),
-    );
-    const getterReads = new Map(keys.map((key) => [key, 0]));
-    let envelope: ExecutionIdentityAdmissionEnvelope;
-    try {
-      for (const key of keys) {
-        defineObjectPrototypeProperty(key, {
-          configurable: true,
-          enumerable: false,
-          get: () => {
-            getterReads.set(key, getterReads.get(key)! + 1);
-            return key === "invoker"
-              ? { state: "unknown" }
-              : key === "applicableGrants"
-                ? [{ rawGrantRef: "inherited-grant", state: "present" }]
-                : [
-                    {
-                      kind: "other",
-                      rawEvidenceRef: "inherited-assurance",
-                      strength: "self-asserted",
-                    },
-                  ];
-          },
-        });
-      }
-      envelope = captureEnvelope(facts(), {
-        contextId: "context-inherited-getter",
-        executionId: "execution-inherited-getter",
-        now: 1,
-        runtimeInstanceId: "runtime-owned",
-      });
-    } finally {
-      for (const [key, descriptor] of prior) {
-        restoreObjectPrototypeProperty(key, descriptor);
-      }
-    }
-
-    expect(Object.fromEntries(getterReads)).toEqual({
-      invoker: 0,
-      applicableGrants: 0,
-      assurance: 0,
-    });
-    expect(Object.hasOwn(envelope!, "invoker")).toBe(false);
-    expect(envelope!.applicableGrants).toEqual([]);
-    expect(envelope!.assurance).toEqual([
-      {
-        kind: "runtime-binding",
-        rawEvidenceRef: "runtime-owned",
-        strength: "boundary-verified",
-      },
-    ]);
-  });
-
-  it.each([
-    {
-      name: "ingress state",
-      key: "state",
-      value: "unknown",
-      admissionFacts: () => facts(),
-      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
-        expect(envelope.ingress.state).toBe("present");
-      },
-    },
-    {
-      name: "invoker label",
-      key: "displayLabel",
-      value: "inherited-label",
-      admissionFacts: () =>
-        facts({
-          invoker: {
-            state: "present",
-            kind: "local-account",
-            rawPrincipalRef: "owned-principal",
-          },
-        }),
-      assertOmitted: (envelope: ExecutionIdentityAdmissionEnvelope) => {
-        expect(envelope.invoker?.state).toBe("present");
-        expect(Object.hasOwn(envelope.invoker!, "displayLabel")).toBe(false);
-      },
-    },
-  ])("omits inherited optional $name data", ({ key, value, admissionFacts, assertOmitted }) => {
-    const prior = Object.getOwnPropertyDescriptor(Object.prototype, key);
-    let dataEnvelope: ExecutionIdentityAdmissionEnvelope;
-    let getterEnvelope: ExecutionIdentityAdmissionEnvelope;
-    let getterReads = 0;
-    try {
-      defineObjectPrototypeProperty(key, {
-        configurable: true,
-        enumerable: false,
-        value,
-        writable: true,
-      });
-      dataEnvelope = captureEnvelope(admissionFacts(), {
-        contextId: `context-${key}`,
-        executionId: `execution-${key}`,
-        now: 1,
-        runtimeInstanceId: "runtime-owned",
-      });
-      defineObjectPrototypeProperty(key, {
-        configurable: true,
-        enumerable: false,
-        get: () => {
-          getterReads += 1;
-          return value;
-        },
-      });
-      getterEnvelope = captureEnvelope(admissionFacts(), {
-        contextId: `context-${key}-getter`,
-        executionId: `execution-${key}-getter`,
-        now: 2,
-        runtimeInstanceId: "runtime-owned",
-      });
-    } finally {
-      restoreObjectPrototypeProperty(key, prior);
-    }
-    expect(getterReads).toBe(0);
-    assertOmitted(dataEnvelope!);
-    assertOmitted(getterEnvelope!);
-  });
-
-  it.each([
-    ["outer run id", "runId", "inherited-run", () => omitOwn(facts(), "runId")],
-    [
-      "ingress kind",
-      "kind",
-      "local-cli",
-      () => facts({ ingress: { boundary: "agent-command.local" } as never }),
-    ],
-    [
-      "invoker principal",
-      "rawPrincipalRef",
-      "inherited-principal",
-      () => facts({ invoker: { state: "present", kind: "local-account" } as never }),
-    ],
-    [
-      "grant reference",
-      "rawGrantRef",
-      "inherited-grant",
-      () => facts({ applicableGrants: [{ state: "present" } as never] }),
-    ],
-    [
-      "assurance reference",
-      "rawEvidenceRef",
-      "inherited-evidence",
-      () => facts({ assurance: [{ kind: "other", strength: "self-asserted" } as never] }),
-    ],
-  ] as const)(
+  it.each([["outer run id", "runId", "inherited-run", () => omitOwn(facts(), "runId")]] as const)(
     "rejects inherited required $0 before allocation and enqueue",
     (_name, key, inheritedValue, admissionFacts) => {
       const prior = Object.getOwnPropertyDescriptor(Object.prototype, key);
@@ -354,70 +172,6 @@ describe("execution identity admission envelope", () => {
     },
   );
 
-  it.each([
-    {
-      name: "outer ingress",
-      prepare: () => {
-        const admissionFacts = facts();
-        return { admissionFacts, target: admissionFacts, key: "ingress" };
-      },
-    },
-    {
-      name: "nested invoker principal",
-      prepare: () => {
-        const invoker = {
-          state: "present" as const,
-          kind: "local-account" as const,
-          rawPrincipalRef: "owned-principal",
-        };
-        return { admissionFacts: facts({ invoker }), target: invoker, key: "rawPrincipalRef" };
-      },
-    },
-    {
-      name: "grant array entry",
-      prepare: () => {
-        const grant = { rawGrantRef: "owned-grant", state: "present" as const };
-        return {
-          admissionFacts: facts({ applicableGrants: [grant] }),
-          target: grant,
-          key: "rawGrantRef",
-        };
-      },
-    },
-  ])("rejects an own accessor at $name without reading it or allocating", ({ prepare }) => {
-    const { admissionFacts, target, key } = prepare();
-    let accessorReads = 0;
-    let allocationReads = 0;
-    Object.defineProperty(target, key, {
-      configurable: true,
-      enumerable: true,
-      get: () => {
-        accessorReads += 1;
-        return "must-not-read";
-      },
-    });
-    const options = { enabled: true, runtimeInstanceId: "runtime-owned" };
-    Object.defineProperty(options, "contextId", {
-      enumerable: true,
-      get: () => {
-        allocationReads += 1;
-        return "must-not-allocate";
-      },
-    });
-    const sink = vi.fn(() => true);
-    const clear = configureExecutionIdentityAdmissionSink(sink);
-    try {
-      expect(
-        enqueueExecutionIdentityContextAtAdmission(admissionFacts as never, options),
-      ).toBeUndefined();
-    } finally {
-      clear();
-    }
-    expect(accessorReads).toBe(0);
-    expect(allocationReads).toBe(0);
-    expect(sink).not.toHaveBeenCalled();
-  });
-
   it("rejects malformed, ambiguous, oversized, and noncanonical invoker variants", () => {
     const present = captureEnvelope(
       facts({
@@ -444,51 +198,22 @@ describe("execution identity admission envelope", () => {
 
     for (const invoker of invalidInvokers) {
       expect(() =>
-        parseExecutionIdentityAdmissionEnvelope({ ...present, invoker } as never),
+        parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: { ...present, invoker } }),
       ).toThrow("execution identity admission envelope violates its bounded contract");
     }
     expect(() =>
-      parseExecutionIdentityAdmissionEnvelope({
-        ...present,
-        invoker: {
-          kind: "local-account",
-          state: "present",
-          rawPrincipalRef: "raw-principal",
+      parseExecutionIdentityAdmissionWork({
+        kind: "capture",
+        envelope: {
+          ...present,
+          invoker: {
+            kind: "local-account",
+            state: "present",
+            rawPrincipalRef: "raw-principal",
+          },
         },
       }),
     ).toThrow("execution identity admission envelope is not canonical");
-  });
-
-  it.each([
-    ["malformed", { state: "invalid" }],
-    ["mixed", { state: "unknown", rawPrincipalRef: "raw-substitute-secret" }],
-    ["untagged", { kind: "local-account", rawPrincipalRef: "legacy-untagged" }],
-    [
-      "extra-field",
-      {
-        state: "present",
-        kind: "local-account",
-        rawPrincipalRef: "raw-principal",
-        extra: true,
-      },
-    ],
-  ])("rejects %s raw invoker facts before enqueue projection", (_variant, invoker) => {
-    const sink = vi.fn(() => true);
-    const clear = configureExecutionIdentityAdmissionSink(sink);
-    try {
-      expect(
-        enqueueExecutionIdentityContextAtAdmission(facts({ invoker: invoker as never }), {
-          enabled: true,
-          contextId: "context-invalid",
-          executionId: "execution-invalid",
-          now: 1,
-          runtimeInstanceId: "runtime-1",
-        }),
-      ).toBeUndefined();
-      expect(sink).not.toHaveBeenCalled();
-    } finally {
-      clear();
-    }
   });
 
   it("rejects non-plain or lossy clone data without invoking accessors", () => {
@@ -530,9 +255,9 @@ describe("execution identity admission envelope", () => {
       undefinedEnvelope,
       proxyEnvelope,
     ]) {
-      expect(() => parseExecutionIdentityAdmissionEnvelope(invalid)).toThrow(
-        "execution identity admission data must be clone-safe plain data",
-      );
+      expect(() =>
+        parseExecutionIdentityAdmissionWork({ kind: "capture", envelope: invalid }),
+      ).toThrow("execution identity admission data must be clone-safe plain data");
     }
     expect(() => captureEnvelope(customPrototypeFacts)).toThrow("expected admission envelope");
     expect(() => captureEnvelope(accessorFacts)).toThrow("expected admission envelope");
@@ -550,7 +275,7 @@ describe("execution identity admission envelope", () => {
     const priorIngress = Object.getOwnPropertyDescriptor(Object.prototype, "ingress");
     const priorKind = Object.getOwnPropertyDescriptor(Object.prototype, "kind");
     let inheritedReads = 0;
-    let parsed: ExecutionIdentityAdmissionEnvelope;
+    let parsed: ExecutionIdentityAdmissionWork;
     try {
       defineObjectPrototypeProperty("invoker", {
         configurable: true,
@@ -560,7 +285,7 @@ describe("execution identity admission envelope", () => {
           return { state: "unknown" };
         },
       });
-      parsed = parseExecutionIdentityAdmissionEnvelope(envelope);
+      parsed = parseExecutionIdentityAdmissionWork({ kind: "capture", envelope });
 
       defineObjectPrototypeProperty("ingress", {
         configurable: true,
@@ -570,9 +295,12 @@ describe("execution identity admission envelope", () => {
           return envelope.ingress;
         },
       });
-      expect(() => parseExecutionIdentityAdmissionEnvelope(omitOwn(envelope, "ingress"))).toThrow(
-        "execution identity admission envelope violates its bounded contract",
-      );
+      expect(() =>
+        parseExecutionIdentityAdmissionWork({
+          kind: "capture",
+          envelope: omitOwn(envelope, "ingress"),
+        }),
+      ).toThrow("execution identity admission envelope violates its bounded contract");
 
       defineObjectPrototypeProperty("kind", {
         configurable: true,
@@ -595,7 +323,10 @@ describe("execution identity admission envelope", () => {
       }
     }
     expect(inheritedReads).toBe(0);
-    expect(Object.hasOwn(parsed!, "invoker")).toBe(false);
+    if (parsed.kind !== "capture") {
+      throw new Error("expected captured admission work");
+    }
+    expect(Object.hasOwn(parsed.envelope, "invoker")).toBe(false);
   });
 
   it("rejects invalid owned facts, excess items, and oversized encoded envelopes", () => {
@@ -669,29 +400,6 @@ describe("execution identity admission envelope", () => {
       ),
     ).not.toThrow();
     expect(enqueueExecutionIdentityContextAtAdmission(facts(), { enabled: false })).toBeUndefined();
-  });
-
-  it("allocates distinct execution identities for turns that share one run correlation", () => {
-    const work = vi.fn<(item: ExecutionIdentityAdmissionWork) => boolean>(() => true);
-    const clear = configureExecutionIdentityAdmissionSink(work);
-    try {
-      enqueueExecutionIdentityContextAtAdmission(facts({ runId: "session-1" }), {
-        enabled: true,
-      });
-      enqueueExecutionIdentityContextAtAdmission(facts({ runId: "session-1" }), {
-        enabled: true,
-      });
-    } finally {
-      clear();
-    }
-    const captures = work.mock.calls
-      .map(([item]) => item)
-      .filter((item) => item.kind === "capture");
-    expect(captures).toHaveLength(2);
-    expect(captures[0]!.envelope.runId).toBe("session-1");
-    expect(captures[1]!.envelope.runId).toBe("session-1");
-    expect(captures[0]!.envelope.executionId).not.toBe(captures[1]!.envelope.executionId);
-    expect(captures[0]!.envelope.contextId).not.toBe(captures[1]!.envelope.contextId);
   });
 
   it("queues only the safe token for a durable retry reference", () => {

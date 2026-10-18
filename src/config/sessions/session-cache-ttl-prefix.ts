@@ -1,9 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
-import {
-  isCacheTtlTouch,
-  readCacheTtlCheckpoint,
-} from "../../agents/embedded-agent-runner/cache-ttl-checkpoint.js";
 import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
 import type {
   CacheTtlProjectionPrefix,
@@ -13,12 +8,13 @@ import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import { isIndexedSessionEntry } from "./session-entry-codec.js";
+import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import {
   transcriptEventJsonSql,
   transcriptEventModelNavigationSql,
-  transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
 } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Projection dependencies are metadata, separate from the byte-bounded model history. */
 export function readCacheTtlProjectionPrefix(
@@ -27,44 +23,59 @@ export function readCacheTtlProjectionPrefix(
     | { activePosition: number; id: string; entry: Record<string, unknown>; beforeRawSeq?: number }
     | undefined,
 ): CacheTtlProjectionPrefix | undefined {
-  // Every retained branch can end at the anchor, before any later checkpoint.
-  if (
-    !anchor ||
-    (isIndexedSessionEntry(anchor.entry) &&
-      (anchor.entry.type === "reset" || readCacheTtlCheckpoint([anchor.entry])))
-  ) {
+  if (!anchor || anchor.activePosition === 0) {
     return undefined;
   }
-  const lastNavigationValue = (key: "type" | "customType") =>
-    /* kysely-allow-raw: legacy duplicate members follow JSON.parse's last-key semantics. */
-    sql`(SELECT value FROM json_each(${transcriptEventResetNavigationSql("event")})
-      WHERE key = ${key} ORDER BY id DESC LIMIT 1)`;
   const entryType =
     /* kysely-allow-raw: exact-row identities carry the parsed kind; legacy rows retain native navigation. */
-    sql`coalesce(identity.event_type, ${lastNavigationValue("type")})`;
+    sql`coalesce(identity.event_type, ${transcriptPredicateSql(projection.database.db, "navigation_last_type", "event")})`;
+  const db = getActiveTranscriptKysely(projection.database);
+  const indexed = db
+    .selectFrom("transcript_event_identities")
+    .select(["session_id", "seq", "event_type"])
+    .where("session_id", "=", projection.resolved.sessionId);
+  const candidates = projection.hasUnindexedPrefix
+    ? db
+        .selectFrom("session_transcript_active_events as active")
+        .leftJoin("transcript_event_identities as identity", (join) =>
+          join
+            .onRef("identity.session_id", "=", "active.session_id")
+            .onRef("identity.seq", "=", "active.event_seq"),
+        )
+    : db
+        .selectFrom(
+          indexed
+            .where("event_type", "in", ["custom", "reset"])
+            // Keep null-kind malformed rows selectable without turning the type seek into a scan.
+            .unionAll(indexed.where("event_type", "is", null))
+            .as("identity"),
+        )
+        // Start with marker types; active-position order must not drive a full message scan.
+        .crossJoin("session_transcript_active_events as active")
+        .whereRef("identity.session_id", "=", "active.session_id")
+        .whereRef("identity.seq", "=", "active.event_seq");
   const rows = iterateSqliteQuerySync(
     projection.database.db,
-    getActiveTranscriptKysely(projection.database)
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
-      .leftJoin("transcript_event_identities as identity", (join) =>
-        join
-          .onRef("identity.session_id", "=", "active.session_id")
-          .onRef("identity.seq", "=", "active.event_seq"),
-      )
+    candidates
+      .crossJoin("transcript_events as event")
+      .whereRef("event.session_id", "=", "active.session_id")
+      .whereRef("event.seq", "=", "active.event_seq")
       .select((eb) =>
         eb
           .case()
           .when(entryType, "=", "reset")
           // Preserve the classified kind when legacy JSON starts with another duplicate type.
-          .then(transcriptEventModelNavigationSql("event", sql.lit("reset")))
+          .then(
+            transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
+          )
           .else(transcriptEventJsonSql(projection.database.db, "event"))
           .end()
           .as("event_json"),
+      )
+      .select(
+        transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
+          "navigation_valid",
+        ),
       )
       .where("active.session_id", "=", projection.resolved.sessionId)
       .where("active.active_position", "<", anchor.activePosition)
@@ -80,10 +91,23 @@ export function readCacheTtlProjectionPrefix(
           .then(false)
           .else(
             eb.or([
+              eb(
+                transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
+                "=",
+                0,
+              ),
               eb(entryType, "=", "reset"),
               eb.and([
                 eb(entryType, "=", "custom"),
-                eb(lastNavigationValue("customType"), "=", "openclaw.cache-ttl"),
+                eb(
+                  transcriptPredicateSql(
+                    projection.database.db,
+                    "navigation_last_custom_type",
+                    "event",
+                  ),
+                  "=",
+                  "openclaw.cache-ttl",
+                ),
               ]),
             ]),
           )
@@ -91,21 +115,15 @@ export function readCacheTtlProjectionPrefix(
       )
       .orderBy("active.active_position", "desc"),
   );
-  const prefix: Record<string, unknown>[] = [];
-  for (const row of rows) {
-    const entry = asOptionalRecord(JSON.parse(row.event_json));
-    if (
-      !isIndexedSessionEntry(entry) ||
-      (entry.type !== "reset" && (entry.type !== "custom" || isCacheTtlTouch(entry.data)))
-    ) {
-      continue;
-    }
-    prefix.push(entry);
-    if (entry.type === "reset" || readCacheTtlCheckpoint([entry])) {
-      break;
-    }
-  }
-  return prefix.length ? { anchorIds: [anchor.id], entries: prefix.toReversed() } : undefined;
+  return collectCacheTtlProjectionPrefix(
+    anchor,
+    (function* () {
+      for (const row of rows) {
+        assertTranscriptNavigationValid(row.navigation_valid);
+        yield JSON.parse(row.event_json) as unknown;
+      }
+    })(),
+  );
 }
 
 /** Bind hidden anchors while preserving every already-navigable retained boundary. */

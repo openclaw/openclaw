@@ -13,7 +13,10 @@ import {
   isTrustedSecretSurfaceUnavailableError,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
-import type { ControlUiLinkReaderDocument } from "../shared/control-ui-link-reader.js";
+import type {
+  ControlUiLinkReaderDocument,
+  ControlUiLinkReaderSection,
+} from "../shared/control-ui-link-reader.js";
 
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
   "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
@@ -31,8 +34,15 @@ export type ControlUiGitHubPreviewIdentity = {
   cacheScope: string;
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
+  stale?: true;
+  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
+};
+export type ControlUiGitHubSessionIdentity = ControlUiGitHubPreviewIdentity & {
+  host: string;
+  apiBaseUrl: string;
+  repository: { id: number; owner: string; repo: string };
 };
 type ControlUiGitHubPreviewTarget = {
   owner: string;
@@ -43,6 +53,15 @@ type ControlUiGitHubPreviewTarget = {
 type GitHubDetailTarget =
   | ControlUiGitHubPreviewTarget
   | { owner: string; repo: string; kind: "commit"; sha: string };
+
+type GitHubSearchParams = {
+  repository: string;
+  query: string;
+  kind: "issue" | "pull";
+  state: "all" | "open" | "closed";
+  page: number;
+};
+type GitHubReadRequest = { assertActive: () => void; signal: AbortSignal };
 
 /** Host consumers depend on this public read contract, not the plugin's source graph. */
 type GitHubPublicApi = {
@@ -80,7 +99,7 @@ type GitHubPublicApi = {
     fetchImpl: typeof fetch,
     token?: string,
     beforeRedirect?: (url: URL) => Promise<void>,
-    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected">,
+    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "signal">,
     etag?: string,
     signal?: AbortSignal,
     graphql?: { query: string; variables: Record<string, string> },
@@ -108,11 +127,32 @@ type GitHubPublicApi = {
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
+  parseGitHubSearchParams: (params: unknown) => GitHubSearchParams | null;
+  searchPublicGitHubItems: (
+    params: GitHubSearchParams,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    request?: GitHubReadRequest,
+  ) => Promise<unknown>;
   loadGitHubDetail: (
     target: GitHubDetailTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
+    request?: GitHubReadRequest,
+    section?: ControlUiLinkReaderSection,
+  ) => Promise<ControlUiLinkReaderDocument>;
+  loadSessionGitHubPreview: (
+    target: ControlUiGitHubPreviewTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+  ) => Promise<Awaited<ReturnType<GitHubPublicApi["loadControlUiGitHubPreview"]>>>;
+  loadSessionGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity: ControlUiGitHubSessionIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
@@ -175,7 +215,18 @@ export function hasConfiguredGitHubApiCredential(
   );
 }
 
-type GitHubTransportApi = Omit<GitHubPublicApi, "resolveGitHubApiCredentialScope">;
+type GitHubTransportApi = Omit<
+  GitHubPublicApi,
+  "resolveGitHubApiCredentialScope" | "loadGitHubDetail"
+> & {
+  loadGitHubDetail: (
+    target: GitHubDetailTarget,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+    section?: ControlUiLinkReaderSection,
+  ) => Promise<ControlUiLinkReaderDocument>;
+};
 
 // The existing loader owns library caching and retirement. Host-specific
 // callbacks stay here, rather than consulting another loader’s state.
@@ -230,6 +281,28 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
       revalidate: async () => assertSelected(),
     };
   };
+  const resolveReadRequestIdentity = (
+    identity: ControlUiGitHubPreviewIdentity | undefined,
+    request: GitHubReadRequest | undefined,
+  ): ControlUiGitHubPreviewIdentity => {
+    const selected = resolveReadIdentity(identity);
+    // Keep one transport/cooldown owner while each invocation owns its authority.
+    return request
+      ? {
+          ...selected,
+          signal: request.signal,
+          assertSelected() {
+            request.assertActive();
+            selected.assertSelected();
+          },
+          async revalidate() {
+            request.assertActive();
+            await selected.revalidate();
+            request.assertActive();
+          },
+        }
+      : selected;
+  };
   return {
     ...library,
     get GITHUB_API_BASE_URL() {
@@ -261,8 +334,21 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         refresh,
       );
     },
-    loadGitHubDetail(target, identity, fetchImpl, refresh) {
-      return library.loadGitHubDetail(target, resolveReadIdentity(identity), fetchImpl, refresh);
+    searchPublicGitHubItems(params, identity, fetchImpl, request) {
+      return library.searchPublicGitHubItems(
+        params,
+        resolveReadRequestIdentity(identity, request),
+        fetchImpl,
+      );
+    },
+    loadGitHubDetail(target, identity, fetchImpl, refresh, request, section) {
+      return library.loadGitHubDetail(
+        target,
+        resolveReadRequestIdentity(identity, request),
+        fetchImpl,
+        refresh,
+        section,
+      );
     },
   };
 });

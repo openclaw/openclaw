@@ -16,7 +16,6 @@ import { discoverLlamaServer } from "./discovery.js";
 import { resolveLlamaServerEndpoint } from "./endpoint.js";
 import { buildLlamaServerProviderConfig } from "./models.js";
 
-/** Discovers external llama-server models for provider runtime resolution. */
 export async function discoverLlamaServerProvider(
   ctx: ProviderCatalogContext,
 ): Promise<ProviderCatalogResult> {
@@ -41,6 +40,7 @@ export async function discoverLlamaServerProvider(
         baseUrl: configured?.baseUrl,
         apiKey,
         headers,
+        allowPrivateNetwork: configured?.request?.allowPrivateNetwork,
       });
       if (discovery.kind !== "success") {
         if (!configured && !apiKey && !headers) {
@@ -77,6 +77,7 @@ export async function prepareLlamaServerDynamicModel(
     baseUrl: ctx.providerConfig?.baseUrl,
     apiKey: hasLlamaServerAuthorizationHeader(headers) ? undefined : apiKey,
     headers,
+    allowPrivateNetwork: ctx.providerConfig?.request?.allowPrivateNetwork,
   });
   const model =
     discovery.kind === "success"

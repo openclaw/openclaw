@@ -12,8 +12,6 @@ import {
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
 
-type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
-
 /** State shared by native input observation and transcript commands. */
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
@@ -23,7 +21,7 @@ export class TranscriptOffsetState {
     | null = null;
   touching = false;
   touchScrolling = false;
-  renderedScrollState = { atEnd: false, touchActive: false };
+  renderedTouchActive = false;
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   syncNativeOffset: (() => void) | null = null;
@@ -32,10 +30,6 @@ export class TranscriptOffsetState {
 
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
-  }
-
-  renderState(atEnd: boolean): TranscriptScrollRenderState {
-    return { atEnd, touchActive: this.touchActive };
   }
 }
 
@@ -55,13 +49,12 @@ export function isTranscriptProgrammaticScroll(
   state: TranscriptOffsetState,
   element: HTMLDivElement | null,
 ): boolean {
-  // Lit’s listener can precede the offset observer. Read the committed viewport
-  // so the final event publishes settled follow policy.
-  const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
   return (
-    isTranscriptMaintenanceScroll(state, element) ||
     state.pendingScrollOffset !== null ||
-    (state.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+    isTranscriptMaintenanceScroll(state, element) ||
+    (state.scrollCommand !== null &&
+      (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0) >
+        CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
 }
 
@@ -117,8 +110,8 @@ type OffsetOwner = {
   isProgrammaticScroll(): boolean;
   cancelScroll(): void;
   onLayoutCorrection(before: number, after: number): void;
-  requestUpdate(): void;
-  onOffset(): boolean;
+  invalidate(): void;
+  onOffset(): void;
   onReaderScroll(towardEnd?: boolean): void;
   onComposerLayout(changed: boolean): void;
 };
@@ -145,7 +138,7 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
-  const recordProgrammaticScroll = (before: number, after: number, maintenance: boolean) => {
+  const recordProgrammaticScroll = (before: number, after: number) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
     publish({
@@ -155,11 +148,9 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic: owner.isProgrammaticScroll(),
     });
-    // Measurement and clamped retries can run during an outstanding end command.
-    // Keep their provenance after publishing any preceding native input.
-    if (!maintenance && (owner.state.scrollCommand || owner.state.pendingScrollOffset)) {
-      owner.state.maintenanceScrollOffset = null;
-    } else if (before !== after) {
+    // Commands can move upward as rows retire. Keep the actual write's
+    // provenance until its native event arrives, even after command retirement.
+    if (before !== after) {
       owner.state.maintenanceScrollOffset = after;
       maintenanceRevision += 1;
     }
@@ -170,7 +161,7 @@ export function observeTranscriptOffset(
     if (maintenance && before !== after) {
       owner.onLayoutCorrection(before, after);
     }
-    recordProgrammaticScroll(before, after, maintenance);
+    recordProgrammaticScroll(before, after);
   };
   owner.state.recordProgrammaticScroll = recordVirtualizerScroll;
   const stopCorrections = element
@@ -184,7 +175,7 @@ export function observeTranscriptOffset(
         }
         if (observation.type === "resize" && observation.scrollCorrection) {
           const { before, after } = observation.scrollCorrection;
-          recordProgrammaticScroll(before, after, true);
+          recordProgrammaticScroll(before, after);
         }
       })
     : undefined;
@@ -220,13 +211,11 @@ export function observeTranscriptOffset(
       programmatic,
     });
     callback(offset, scrolling);
-    const atEnd = owner.onOffset();
+    owner.onOffset();
     // Range/isScrolling and pane follow policy already invalidate themselves.
-    // The rail observes offsets directly; only changed lifecycle gates need a pane commit.
-    const rendered = owner.state.renderedScrollState;
-    const current = owner.state.renderState(atEnd);
-    if (current.atEnd !== rendered.atEnd || current.touchActive !== rendered.touchActive) {
-      owner.requestUpdate();
+    // The rail observes offsets directly; only touch-held history needs a geometry commit.
+    if (owner.state.touchActive !== owner.state.renderedTouchActive) {
+      owner.invalidate();
     }
   };
   const syncOffset = () => {
@@ -258,14 +247,14 @@ export function observeTranscriptOffset(
     }
     publishInput(event);
     if (wasTouchActive !== owner.state.touchActive) {
-      owner.requestUpdate();
+      owner.invalidate();
     }
   };
   const finishScroll = () => {
     // Only touch scrolling holds history; wheel and trackpad settles need no render.
     if (!owner.state.touching && owner.state.touchScrolling) {
       owner.state.touchScrolling = false;
-      owner.requestUpdate();
+      owner.invalidate();
     }
   };
   const publishReaderIntent = (towardEnd: boolean) => {
@@ -330,7 +319,7 @@ export function observeTranscriptOffset(
     touchY = nextY;
     publishInput(event);
   };
-  // Commit editor-induced geometry before Lit's bubble listener classifies
+  // Commit editor-induced geometry before the pane's bubble listener classifies
   // the native offset. Only the actual correction carries maintenance provenance.
   const commitComposerResize = () => owner.onComposerLayout(true);
   const listeners = new AbortController();
@@ -368,7 +357,7 @@ export function observeTranscriptOffset(
       finishScroll();
     }
     if (!scrolling && owner.prependAnchor.hasPrepend) {
-      owner.requestUpdate();
+      owner.invalidate();
     }
     // Retire a completed journey before delayed native idle can recapture a
     // reader who has since been resize-clamped to a different end. Completion

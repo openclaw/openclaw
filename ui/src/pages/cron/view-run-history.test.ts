@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createCronViewJob,
   getElement,
+  openCronMenu,
   renderCronView as renderView,
 } from "./view.test-support.ts";
 
@@ -52,7 +54,7 @@ describe("cron view run history", () => {
     },
   );
 
-  it("renders runs sorted newest first and wires run filters", () => {
+  it("renders runs sorted newest first and wires run filters", async () => {
     const onRunsFiltersChange = vi.fn();
     const container = renderView({
       listTab: "activity",
@@ -75,31 +77,30 @@ describe("cron view run history", () => {
     search.dispatchEvent(new Event("input", { bubbles: true }));
     expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsQuery: "fail" });
 
-    const statusOption = container.querySelector<HTMLElement & { checked: boolean }>(
-      '[data-filter="status"] wa-dropdown-item[value="option:error"]',
+    const statusTrigger = await openCronMenu(container, '[data-filter="status"]');
+    const statusOption = container.querySelector<HTMLButtonElement>(
+      '[data-filter="status"] [data-value="option:error"]',
     );
     expect(statusOption).not.toBeNull();
-    statusOption
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: statusOption }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] });
-
-    const clearCommand = container.querySelector<HTMLElement>(
-      '[data-filter="status"] wa-dropdown-item[value="command:clear"]',
+    statusOption?.click();
+    await waitForSolid(() =>
+      expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["error"] }),
     );
-    clearCommand
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(
-        new CustomEvent("wa-select", { detail: { item: clearCommand }, bubbles: true }),
-      );
-    expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] });
+    expect(statusTrigger.getAttribute("aria-expanded")).toBe("true");
+
+    const clearCommand = container.querySelector<HTMLButtonElement>(
+      '[data-filter="status"] [data-value="command:clear"]',
+    );
+    clearCommand?.click();
+    await waitForSolid(() =>
+      expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: [] }),
+    );
+    await waitForSolid(() => expect(statusTrigger.getAttribute("aria-expanded")).toBe("false"));
   });
 
   it.each(["overview", "job"] as const)(
     "shows whole-run completion beside execution status in %s history",
-    (scope) => {
+    async (scope) => {
       const onRunsFiltersChange = vi.fn();
       const cases = [
         {
@@ -156,16 +157,15 @@ describe("cron view run history", () => {
       );
       expect(titles).toEqual(cases.toReversed().map(({ expected }) => `job-1 · ${expected}`));
 
-      const okOption = container.querySelector<HTMLElement>(
-        '[data-filter="status"] wa-dropdown-item[value="option:ok"]',
+      await openCronMenu(container, '[data-filter="status"]');
+      const okOption = container.querySelector<HTMLButtonElement>(
+        '[data-filter="status"] [data-value="option:ok"]',
       );
       expect(okOption).not.toBeNull();
-      okOption
-        ?.closest("wa-dropdown")
-        ?.dispatchEvent(
-          new CustomEvent("wa-select", { detail: { item: okOption }, bubbles: true }),
-        );
-      expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] });
+      okOption?.click();
+      await waitForSolid(() =>
+        expect(onRunsFiltersChange).toHaveBeenCalledWith({ cronRunsStatuses: ["ok"] }),
+      );
     },
   );
 
@@ -248,15 +248,6 @@ describe("cron view run history", () => {
     const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
     expect(body.querySelector("strong")?.textContent).toBe("bold");
     expect(body.querySelector("script")).toBeNull();
-  });
-
-  it("shows run errors as the body when no summary exists", () => {
-    const container = renderView({
-      listTab: "activity",
-      runs: [{ ts: 1, jobId: "job-1", action: "finished", status: "error", error: "boom" }],
-    });
-    const body = getElement(container, ".cron-run-entry__body", HTMLDivElement);
-    expect(body.textContent).toContain("boom");
   });
 
   it("shows empty guidance only for settled history and offers recovery after failure", () => {

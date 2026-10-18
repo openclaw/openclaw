@@ -54,18 +54,25 @@ describe("withTestDir", () => {
       await firstCanFinish;
     });
 
-    await withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
-      await fs.writeFile(path.join(dir, "second.txt"), "ok");
-      await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
-    });
+    const firstSettled = first.catch(() => {});
+    try {
+      await withTestDir({ prefix: "openclaw-shared-root-", parentDir }, async (dir) => {
+        await fs.writeFile(path.join(dir, "second.txt"), "ok");
+        await expect(fs.readdir(parentDir)).resolves.toHaveLength(1);
+      });
 
-    if (releaseFirst === undefined) {
-      throw new Error("expected first temp-dir release callback");
+      if (releaseFirst === undefined) {
+        throw new Error("expected first temp-dir release callback");
+      }
+      releaseFirst();
+      await first;
+
+      await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
+    } finally {
+      // Release and join the owned case even when the sibling assertion fails.
+      releaseFirst?.();
+      await firstSettled;
     }
-    releaseFirst();
-    await first;
-
-    await expect(fs.readdir(parentDir)).resolves.toStrictEqual([]);
   });
 
   it("removes the cached sync prefix root when the case finishes", async () => {

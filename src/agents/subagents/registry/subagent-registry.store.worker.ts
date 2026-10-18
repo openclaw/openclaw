@@ -1,7 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
-import { readAcpSessionControlInWorker } from "../../../acp/runtime/session-meta-source.worker.js";
 import { requestSessionEntryCurrentAdmission } from "../../../config/sessions/session-entry-current-admission.worker.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../../../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../../../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../../../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
@@ -22,44 +21,36 @@ import {
   openOpenClawStateReadConnection,
 } from "../../../state/openclaw-state-db-read-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
-import {
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../../../state/openclaw-state-db.js";
 import type {
   OpenClawStateReadCommand,
   OpenClawStateReadResult,
   OpenClawStateReadRequest,
 } from "../../../state/openclaw-state-read.types.js";
+import type { WorkerWriteOperationContext } from "../../../state/worker-operation-registry.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
-import {
-  conflictingSubagentRunVersions,
-  writeSubagentRunValuesInDatabase,
-  type SubagentRegistryWrite,
-  type SubagentRegistryWriteReceipt,
-} from "./subagent-registry.store.kernel.js";
-import { subagentRunRowVersion } from "./subagent-registry.store.row.js";
+import { writeSubagentRunValuesInDatabase } from "./subagent-registry.store.kernel.js";
 import {
   loadSubagentMaintenanceRunsInDatabase,
   loadSubagentRunsForSessionsInDatabase,
-  loadVersionedSubagentRunsInDatabase,
+  loadSubagentRunsByIdsInDatabase,
   loadSubagentRunsForSessionFromSqlite,
 } from "./subagent-registry.store.sqlite.js";
+import type {
+  SubagentRegistryWrite,
+  SubagentRegistryWriteReceipt,
+} from "./subagent-registry.store.types.js";
 
 const log = createSubsystemLogger("state/worker");
 
 export function readSubagentRunsInWorker(
-  db: DatabaseSync,
+  db: EngineConnection,
   command: Extract<OpenClawStateReadCommand, { type: "subagents.runs" }>,
 ): Extract<OpenClawStateReadResult, { type: "subagents.runs" }> {
   if (command.scope.kind === "maintenance") {
-    const maintenance = loadSubagentMaintenanceRunsInDatabase({ db });
     return {
       type: command.type,
       projection: "maintenance",
-      runs: maintenance.runs,
-      maintenanceDigest: maintenance.digest,
+      runs: loadSubagentMaintenanceRunsInDatabase({ db }),
     };
   }
   if (command.scope.kind === "descendants") {
@@ -71,8 +62,7 @@ export function readSubagentRunsInWorker(
     return {
       type: command.type,
       runs: descendants.runs,
-      descendantBasis: {
-        digest: descendants.digest,
+      descendants: {
         sessionKeys: descendants.sessionKeys,
         runIds: descendants.runIds,
       },
@@ -81,7 +71,7 @@ export function readSubagentRunsInWorker(
   if (command.scope.kind === "ids") {
     return {
       type: command.type,
-      ...loadVersionedSubagentRunsInDatabase({ db }, command.scope.runIds),
+      runs: loadSubagentRunsByIdsInDatabase({ db }, command.scope.runIds),
     };
   }
   const rows = loadSubagentRunsForSessionFromSqlite(command.scope.sessionKey, { db });
@@ -105,9 +95,13 @@ export async function streamSubagentRegistryInWorker(
   let count = 0;
   try {
     // sqlite-allow-raw -- Keep the complete streamed read on one read-only snapshot.
-    db.exec("BEGIN");
+    db.exec(
+      isPostgresSqlConnection(db) ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN",
+    );
     assertStateReadSchema(db, input.databasePath);
-    admitSqliteSchema(db);
+    if (!isPostgresSqlConnection(db)) {
+      admitSqliteSchema(db);
+    }
     onAdmitted();
     const query = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "subagent_runs">>(db)
       .selectFrom("subagent_runs")
@@ -126,7 +120,7 @@ export async function streamSubagentRegistryInWorker(
       if (!entry) {
         throw new Error("Canonical subagent restore found an unreadable durable row");
       }
-      batch.push({ entry, version: subagentRunRowVersion(row), createdAt: row.created_at });
+      batch.push({ entry, createdAt: row.created_at });
       bytes += size;
       count += 1;
     }
@@ -134,7 +128,7 @@ export async function streamSubagentRegistryInWorker(
       (await channel.request(batch)).consumed();
     }
   } catch (error) {
-    if (isSqliteCorruptionError(error)) {
+    if (!isPostgresSqlConnection(db) && isSqliteCorruptionError(error)) {
       invalidateOpenClawStateRuntimeIntegrity(db);
     }
     errors.push(error);
@@ -155,66 +149,45 @@ export async function streamSubagentRegistryInWorker(
   return count;
 }
 
-/** The row owner's worker adapter commits selected versions and terminal signals together. */
-export function persistSubagentRunChangesInWorker(
-  input: SubagentRegistryWrite,
-  writeOptions: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): SubagentRegistryWriteReceipt {
-  const { writeId, values, deleteRunIds, versions, terminalEvents = [] } = input;
-  const admittedRunIds = new Set(versions.map(({ runId }) => runId));
-  if (
-    [...values.map((row) => row.run_id), ...deleteRunIds].some(
-      (runId) => !admittedRunIds.has(runId),
-    )
-  ) {
-    throw new Error("Subagent registry write is missing a row version");
-  }
-  let committedReceipt: SubagentRegistryWriteReceipt | undefined;
-  try {
-    return runOpenClawStateWriteTransaction((writer): SubagentRegistryWriteReceipt => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
-      const conflictRunIds = conflictingSubagentRunVersions(writer, versions);
-      if (conflictRunIds.length > 0) {
-        return { writeId, conflictRunIds };
-      }
-      const admitEvents = (stage: "transaction" | "commit") => {
+/** The row owner's worker adapter commits FIFO-planned rows and terminal signals together. */
+export const subagentRegistryOperations = {
+  "subagents.persistChanges": (
+    input: SubagentRegistryWrite,
+    context: WorkerWriteOperationContext,
+  ): SubagentRegistryWriteReceipt => {
+    const { writeId, values, deleteRunIds, terminalEvents = [] } = input;
+    let committedReceipt: SubagentRegistryWriteReceipt | undefined;
+    try {
+      return context.write((writer): SubagentRegistryWriteReceipt => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: writeId });
+        writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
+        const notices: SessionStateNotice[] = [];
+        for (const { event, now } of terminalEvents) {
+          notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
+        }
         for (const [eventIndex, event] of terminalEvents.entries()) {
           requestSessionEntryCurrentAdmission(event.sessionEntryCurrentSource, {
-            stage,
+            stage: "commit",
             facts: { writeId, eventIndex },
           });
-          if (event.acpControl && !readAcpSessionControlInWorker(writer, event.acpControl).row) {
-            throw new Error("ACP task owner could not be verified.");
-          }
         }
-      };
-      admitEvents("transaction");
-      writeSubagentRunValuesInDatabase(writer, values, deleteRunIds);
-      const notices: SessionStateNotice[] = [];
-      for (const { event, now } of terminalEvents) {
-        notices.push(...recordSessionStateEventInDatabase(writer.db, event, now).notices);
-      }
-      admitEvents("commit");
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
-      const receipt: SubagentRegistryWriteReceipt = {
-        writeId,
-        versions: new Map([
-          ...values.map((row) => [row.run_id, subagentRunRowVersion(row)] as const),
-          ...deleteRunIds.map((runId) => [runId, null] as const),
-        ]),
-        notices,
-      };
-      deferSqliteWorkerCommitReceipt(writer.db, receipt);
-      deferSqlitePostCommitPublication(writer.db, () => {
-        committedReceipt = receipt;
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: writeId });
+        const receipt: SubagentRegistryWriteReceipt = {
+          writeId,
+          notices,
+        };
+        deferSqliteWorkerCommitReceipt(writer.db, receipt);
+        deferSqlitePostCommitPublication(writer.db, () => {
+          committedReceipt = receipt;
+        });
+        return receipt;
       });
-      return receipt;
-    }, writeOptions);
-  } catch (error) {
-    if (!committedReceipt) {
-      throw error;
+    } catch (error) {
+      if (!committedReceipt) {
+        throw error;
+      }
+      log.warn("Subagent registry write committed before cleanup failed", { error });
+      return committedReceipt;
     }
-    log.warn("Subagent registry write committed before cleanup failed", { error });
-    return committedReceipt;
-  }
-}
+  },
+};

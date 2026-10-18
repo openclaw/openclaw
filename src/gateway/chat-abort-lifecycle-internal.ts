@@ -81,7 +81,7 @@ export function runWithChatAbortExecution(
     () => {
       settlement.status = "fulfilled";
       settlement.cleanupSettled = true;
-      if (entry.executionSettlement === settlement && entry.registrationCleanupRequested) {
+      if (entry.registrationCleanupRequested) {
         cleanup();
       }
     },
@@ -89,11 +89,7 @@ export function runWithChatAbortExecution(
       // Preserve the rejection; only the resource owner's completed fault can retire custody.
       settlement.status = "rejected";
       settlement.cleanupSettled = error instanceof PluginRuntimeCloseCompletedError;
-      if (
-        settlement.cleanupSettled &&
-        entry.executionSettlement === settlement &&
-        entry.registrationCleanupRequested
-      ) {
+      if (settlement.cleanupSettled && entry.registrationCleanupRequested) {
         cleanup();
       }
     },
@@ -228,12 +224,12 @@ export async function waitForChatAbortControllerRemoval<
     projectSessionTerminalPending?: boolean;
     projectSessionTerminalPersistence?: Promise<void>;
   },
->(
-  params: {
-    entries: ReadonlyMap<string, TEntry>;
-    targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
-  } & ({ timeoutMs: number; signal?: never } | { timeoutMs: null; signal: AbortSignal }),
-): Promise<boolean> {
+>(params: {
+  entries: ReadonlyMap<string, TEntry>;
+  targets: ReadonlyArray<{ runId: string; entry: TEntry }>;
+  timeoutMs: number | null;
+  signal?: AbortSignal;
+}): Promise<boolean> {
   const terminalOwnersSettled = () =>
     params.targets.every(({ entry }) => isChatAbortTerminalPersistenceSettled(entry));
   const registeredWaiters: Array<{ entry: TEntry; resolve: () => void }> = [];

@@ -10,9 +10,15 @@ read_when:
 
 ## Model-visible tools
 
-When code mode is active, the model sees `exec`, `wait`, and any required
-direct-only tool. Every other enabled tool is hidden from the model-facing
-tool list and registered in the code-mode catalog.
+When code mode is active, the model sees `exec`, `wait`, the enabled `message`
+tool, and any required direct-only tool. Keeping `message` visible across reply
+delivery modes preserves the conversation's tool prefix. Every other enabled
+tool is hidden from the model-facing tool list and registered in the code-mode
+catalog.
+
+Execution-restricted background runs retain the admitted catalog descriptions
+for prompt reuse. Their execution permissions still apply to every call;
+restricted Swarm globals are not installed in the guest.
 
 Use `exec` for tool orchestration, data joining, loops, parallel nested calls,
 and structured transforms. Use `wait` only when `exec` returns a resumable
@@ -175,21 +181,11 @@ plan text or silently turn every asynchronous service into required work.
 
 ### Source in session history
 
-In the built-in OpenClaw runtime, the JSON Code Mode tool executes the original
-input. Session history preserves computations such as `const API_TOKEN = computeToken();`
-and boolean or null initializers in the outer call's JavaScript
-`code` and `command` fields, while masking credential literals, recognizable
-tokens, registered secrets, and configured redaction patterns. Credential
-assignments use full masks so repeated storage redaction stays stable.
-
-This treatment does not extend to shell commands, nested tool calls, unrelated
-argument strings, or assistant prose. Large or unrecognized source syntax
-remains subject to diagnostic masking. Stored source is a redacted record, not
-a place to recover credentials; no additional setting is required.
-This applies to new calls; already-redacted source cannot be reconstructed.
-The Copilot runtime's separate transcript journal does not yet preserve this
-source structure. Native Codex uses a separate freeform source path; this
-behavior does not describe its storage.
+Code Mode executes and persists the original tool input without secret masking.
+Source, credential literals, nested tool arguments, and returned text retain their
+contents in model context and session history, subject to size and media limits.
+`logging.redactPatterns` applies to logs and diagnostics, not stored source.
+Already-masked historical source cannot be reconstructed.
 
 ## `wait`
 
@@ -259,6 +255,16 @@ returns `waiting` again, parking starts a fresh snapshot TTL.
 - the selected executor cannot resume (for example, its worker exited or QuickJS restore fails).
 - a QuickJS checkpoint would exceed `maxSnapshotBytes`. Ordinary oversized successful output is truncated and remains successful.
 
+An unavailable or expired ID is not evidence that earlier actions had no effect.
+Review the earlier `exec` and `wait` results before continuing; do not replay the
+original operation just because its continuation is no longer resumable. If another
+`wait` is already resuming the same run, use that wait’s result instead of starting
+a concurrent wait.
+
+A background shell `sessionId` is not a Code Mode `runId`. When the native process
+tool is available, the diagnostic names its callable so you can poll that same
+shell session with `action: "poll"` in a new `exec`. Do not launch the command again.
+
 ## Tool catalog
 
 The hidden catalog includes tools after effective policy filtering, in this
@@ -279,7 +285,7 @@ bridge calls and continuation resume; consumers do not reconstruct it from the
 catalog.
 
 The catalog omits code-mode control tools (`exec`, `wait`, `tool_search`,
-`tool_describe`, `tool_call`) and direct-only tools. Controls
+`tool_describe`, `dispatch_action`) and direct-only tools. Controls
 must not recurse through the catalog; direct-only tools remain model-visible
 because their structured results cannot cross the JSON guest bridge.
 
@@ -298,7 +304,7 @@ is active.
 
 When Code Mode engages through forced `true` or `"auto"` activation:
 
-- OpenClaw does not expose `tool_search`, `tool_describe`, or `tool_call` as
+- OpenClaw does not expose `tool_search`, `tool_describe`, or `dispatch_action` as
   model-visible tools.
 - The same cataloging idea moves inside the guest runtime.
 - The guest runtime receives bare async globals plus callable search/describe

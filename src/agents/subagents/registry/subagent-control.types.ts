@@ -44,3 +44,14 @@ export type SubagentAdminKillParams = {
   expectedOwnerKey?: string;
   onResult?: (result: SubagentAdminKillResult) => undefined;
 };
+
+/** Outcome of one exact-run kill mutation, including cleanup and supersession results. */
+export type SubagentRunKillResult = {
+  killed: boolean;
+  continuationRetired?: true;
+  superseded?: boolean;
+  declined?: true;
+  targetState?: SubagentKillTargetState;
+  error?: string;
+  completedCleanupError?: string;
+};

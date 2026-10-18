@@ -448,9 +448,7 @@ export async function loadChatRoute(
             .then(() => canonicalMainLocation(context, routeLocation, face, target.sessionKey))
             .catch(() => null)
         : undefined;
-    const preferenceLocation = preferenceDerived
-      ? locationWithoutNavigationHints(routeLocation)
-      : null;
+    const navigationLocation = locationWithoutNavigationHints(routeLocation);
     return {
       kind: "session",
       sessionKey: target.sessionKey,
@@ -458,8 +456,8 @@ export async function loadChatRoute(
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
-        : preferenceLocation && preferenceLocation.search !== routeLocation.search
-          ? { canonicalLocation: preferenceLocation, canonicalLocationSource: routeLocation }
+        : navigationLocation.search !== routeLocation.search
+          ? { canonicalLocation: navigationLocation, canonicalLocationSource: routeLocation }
           : {}),
       ...(canonicalLocationReady
         ? { canonicalLocationReady, canonicalLocationSource: routeLocation }
@@ -616,7 +614,7 @@ export async function loadSessionPage(
     }
     if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
       // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
-      await import("./pending-session-create.ts");
+      await import("./pending-session-create.tsx");
       signal.throwIfAborted();
     }
   }

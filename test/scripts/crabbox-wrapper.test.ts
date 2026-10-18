@@ -11,6 +11,7 @@ import {
   cpSync,
   existsSync,
   lstatSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -180,7 +181,7 @@ async function main() {
     if (process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_UNKNOWN_PATH) topFiles.push({ path: "not-a-source-candidate.txt" });
     process.stdout.write(JSON.stringify({ candidate: { files: topFiles.length + Number(process.env.OPENCLAW_FAKE_CRABBOX_SELECTION_COUNT_DELTA || "0") }, topFiles })); return;
   }
-  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.73.0"); return; }
+  if (args[0] === "--version") { console.log(process.env.OPENCLAW_FAKE_CRABBOX_VERSION || "crabbox 0.77.0"); return; }
   if (args[0] === "run" && args[1] === "--help") { process.stdout.write(helpText); return; }
   if (args[0] === "warmup" && args[1] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeWarmupValueOptionHelp}`)}); return; }
   if (args[0] === "actions" && args[1] === "hydrate" && args[2] === "--help") { process.stdout.write(${JSON.stringify(`${helpText}${fakeHydrateValueOptionHelp}`)}); return; }
@@ -289,7 +290,7 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         '  if [ -n "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ]; then',
         `    printf '%s\\n' '["--version"]' >> "$OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG"`,
         "  fi",
-        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.73.0}"`,
+        `  printf '%s\\n' "\${OPENCLAW_FAKE_CRABBOX_VERSION:-crabbox 0.77.0}"`,
         "  exit 0",
         "fi",
         'if [ "$#" -eq 2 ] && [ "$1" = "run" ] && [ "$2" = "--help" ]; then',
@@ -302,6 +303,15 @@ main().catch((error) => { process.stderr.write(String(error?.stack || error) + "
         "fi",
         'if [ "$#" -eq 3 ] && [ "$1" = "actions" ] && [ "$2" = "hydrate" ] && [ "$3" = "--help" ]; then',
         `  printf '%s' ${shellQuote(`${helpText}${fakeHydrateValueOptionHelp}`)}`,
+        "  exit 0",
+        "fi",
+        'if [ "$#" -eq 3 ] && [ "$1" = "config" ] && [ "$2" = "show" ] && [ "$3" = "--json" ] &&',
+        '  [ -z "${OPENCLAW_FAKE_CRABBOX_INVOCATION_LOG:-}" ] && [ "${OPENCLAW_FAKE_CRABBOX_CONFIG_STATUS:-0}" = 0 ]; then',
+        '  if [ "${OPENCLAW_FAKE_CRABBOX_CONFIG_JSON+x}" = x ]; then',
+        "    printf '%s' \"$OPENCLAW_FAKE_CRABBOX_CONFIG_JSON\"",
+        "  else",
+        `    printf '%s' ${shellQuote('{"coordinator":"configured-broker","brokerMode":"managed","brokerAuth":"configured"}')}`,
+        "  fi",
         "  exit 0",
         "fi",
         "fast_run=1",
@@ -333,7 +343,7 @@ function makeSlowHelpCrabbox(helpText: string, delayMs: number): string {
     String.raw`
 const args = process.argv.slice(2);
 if (args[0] === "--version") {
-  console.log("crabbox 0.73.0");
+  console.log("crabbox 0.77.0");
 } else if (args[0] === "run" && args[1] === "--help") {
   setTimeout(() => { process.stderr.write(${JSON.stringify(runHelpText)}); process.exit(0); }, ${delayMs});
 }`,
@@ -441,6 +451,11 @@ if (args[0] === "-C" && args[2] === "rev-parse") {
 }
 if (args[0] === "worktree" && args[1] === "remove") { fs.rmSync(args[3], { recursive: true, force: true }); process.exit(0); }
 const response = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || "{}"))).get(args.join("\u0000"));
+// Fingerprinting reads actual install index/object facts; routing decisions remain stubbed.
+if (!response && ["ls-files", "cat-file"].includes(args[0])) {
+  const result = require("node:child_process").spawnSync("git", args, { env: { ...process.env, PATH: ${JSON.stringify(process.env.PATH ?? "")} }, stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
 if (!response) process.exit(1);
 if (response.stdout) process.stdout.write(response.stdout); if (response.stderr) process.stderr.write(response.stderr);
 process.exit(response.status ?? 0);`;
@@ -717,26 +732,8 @@ function expectMirrorDirectories(syncRoot: string, repository: string, allocatio
   if (allocation) {
     expect(path.basename(allocation)).toBe(`openclaw-crabbox-sync-${id}`);
   }
-  const cursorName = "openclaw-crabbox-sync-discovery";
-  const cursor = path.join(syncRoot, cursorName);
-  if (existsSync(cursor)) {
-    expect(readdirSync(cursor)).toEqual(["position.json"]);
-    const identity = (directory: string) => {
-      const stat = lstatSync(directory, { bigint: true });
-      return { dev: String(stat.dev), ino: String(stat.ino) };
-    };
-    expect(JSON.parse(readFileSync(path.join(cursor, "position.json"), "utf8"))).toMatchObject({
-      version: 1,
-      rootIdentity: identity(syncRoot),
-      cursorIdentity: identity(cursor),
-    });
-  }
   expect(readdirSync(syncRoot).toSorted()).toEqual(
-    [
-      "mirrors",
-      ...(allocation ? [path.basename(allocation)] : []),
-      ...(existsSync(cursor) ? [cursorName] : []),
-    ].toSorted(),
+    ["mirrors", ...(allocation ? [path.basename(allocation)] : [])].toSorted(),
   );
   return { key, id };
 }
@@ -1445,6 +1442,7 @@ function testCrabboxConfigDir(home: string): string {
 }
 
 function testHomeEnv(home: string): Record<string, string> {
+  mkdirSync(home, { recursive: true });
   return {
     APPDATA: path.join(home, "AppData", "Roaming"),
     HOME: home,
@@ -1611,6 +1609,18 @@ function expectChangedGateGitBootstrap(remoteCommand: string): void {
   expect(remoteCommand).not.toMatch(/git (?:reset|clean|restore|commit) /u);
   expect(remoteCommand).not.toContain("remote-testbox-sync");
   expect(remoteCommand).not.toContain("; &&");
+}
+
+function copyDependencyFingerprint(directory: string) {
+  // The CLI runs outside the bundled wrapper and keeps its canonical relative import.
+  for (const file of [
+    ".github/actions/setup-node-env/dependency-fingerprint.mjs",
+    "scripts/lib/pnpm-lockfile-documents.mjs",
+  ]) {
+    const destination = path.join(directory, file);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(repoRoot, file), destination);
+  }
 }
 
 function copyRealWrapper(destination: string) {
@@ -1786,7 +1796,7 @@ describe("scripts/crabbox-wrapper", () => {
       const stateDir = path.join(root, "state");
       const platform = process.platform;
       const arch = process.arch === "x64" ? "amd64" : process.arch;
-      const managed = path.join(stateDir, "tools/crabbox/0.73.0", `${platform}-${arch}`, "crabbox");
+      const managed = path.join(stateDir, "tools/crabbox/0.77.0", `${platform}-${arch}`, "crabbox");
       mkdirSync(path.dirname(managed), { recursive: true });
       // Keep candidate and managed commands distinguishable at the executable boundary.
       const fake = path.join(makeFakeCrabbox(defaultProviderHelp), "crabbox-node");
@@ -1812,7 +1822,7 @@ describe("scripts/crabbox-wrapper", () => {
       };
       const result = runDefaultWrapper(["run", "--provider", provider, "--", "true"], options);
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stderr).toContain(`version=0.73.0 provider=${provider}`);
+      expect(result.stderr).toContain(`version=0.77.0 provider=${provider}`);
       expect(readInvocations(candidateLog)).toEqual([["--version"]]);
       const calls = readInvocations(log);
       expect(calls[0]).toEqual(["--version"]);
@@ -2578,7 +2588,7 @@ describe("scripts/crabbox-wrapper", () => {
       const env = testHomeEnv(home);
       if (customState) {
         env.XDG_STATE_HOME = path.join(home, "selected state");
-        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.73.0";
+        env.OPENCLAW_FAKE_CRABBOX_VERSION = "crabbox 0.77.0";
         const legacyKey = path.join(
           testCrabboxConfigDir(home),
           "testboxes",
@@ -2602,16 +2612,16 @@ describe("scripts/crabbox-wrapper", () => {
   );
 
   it.each([
-    { id: "tbx_default", createKey: true, state: "", version: "0.73.0", selectedKey: false },
-    { id: "tbx_selected", createKey: true, state: "state", version: "0.73.0", selectedKey: true },
-    { id: "blue-hermit", createKey: false, state: "", version: "0.73.0", selectedKey: false },
+    { id: "tbx_default", createKey: true, state: "", version: "0.77.0", selectedKey: false },
+    { id: "tbx_selected", createKey: true, state: "state", version: "0.77.0", selectedKey: true },
+    { id: "blue-hermit", createKey: false, state: "", version: "0.77.0", selectedKey: false },
     ...(process.platform === "win32"
       ? [
           {
             id: "tbx_namespaced",
             createKey: true,
             state: "namespaced",
-            version: "0.73.0",
+            version: "0.77.0",
             selectedKey: true,
           },
         ]
@@ -2672,7 +2682,7 @@ describe("scripts/crabbox-wrapper", () => {
         env: {
           ...testHomeEnv(home),
           XDG_STATE_HOME: stateRoot,
-          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.73.0",
+          OPENCLAW_FAKE_CRABBOX_VERSION: "crabbox 0.77.0",
         },
       },
     );
@@ -2681,7 +2691,7 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain("XDG_STATE_HOME must be absolute");
   });
 
-  it.each([{ version: "0.73.0", stateDirectory: "state " }])(
+  it.each([{ version: "0.77.0", stateDirectory: "state " }])(
     "fails before reuse when a Blacksmith Testbox is claimed by another repo ($version, $stateDirectory)",
     ({ version, stateDirectory }) => {
       const home = invocationLogTempDirs.make("openclaw-crabbox-home-");
@@ -3120,7 +3130,7 @@ esac
       input: ["bun", "--version"],
       includes: [
         "openclaw_crabbox_bootstrap_macos_js",
-        "bun_version=1.4.2",
+        "bun_version=1.4.3",
         'bun_root="$tool_root/bun-v${bun_version}"',
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
@@ -3689,7 +3699,7 @@ esac
       name: "bootstraps Bun for AWS macOS script-stdin bun shebangs",
       input: ["#!/usr/bin/env bun", "console.log(Bun.version);"].join("\n"),
       includes: [
-        "bun_version=1.4.2",
+        "bun_version=1.4.3",
         'npm install --global --prefix "$bun_root" --fetch-timeout=120000 --fetch-retries=2 --fetch-retry-mintimeout=2000 --fetch-retry-maxtimeout=15000 "bun@${bun_version}"',
         "bun --version >&2 || return 1",
       ],
@@ -4081,17 +4091,29 @@ esac
     ).toBe(false);
   });
 
-  it.each([[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]])(
+  it.each(
+    [
+      "ci-check-focused-testbox.yml",
+      "ci-android-focused-testbox.yml",
+      "ci-check-routine-testbox.yml",
+      "ci-check-high-memory-testbox.yml",
+    ].flatMap((workflow) =>
+      [[], ["--blacksmith-ref=old-workflow", "-blacksmith-ref", "main"]].map((refs) => ({
+        workflow,
+        refs,
+      })),
+    ),
+  )(
     "pins Testbox policy independently of configured refs and payload arguments: %j",
-    (...refs) => {
-      const { output } = runSuccessfulDefaultWrapper(
+    ({ workflow, refs }) => {
+      const { output, result } = runSuccessfulDefaultWrapper(
         [
           "run",
           "--provider",
           "blacksmith-testbox",
           ...refs,
           "--blacksmith-workflow",
-          ".github/workflows/ci-check-high-memory-testbox.yml",
+          `.github/workflows/${workflow}`,
           "--blacksmith-job",
           "check",
           "--",
@@ -4109,12 +4131,14 @@ esac
       expect(output.args.slice(0, optionEnd)).toEqual(
         expect.arrayContaining([
           "--blacksmith-workflow",
-          ".github/workflows/ci-check-high-memory-testbox.yml",
+          `.github/workflows/${workflow}`,
           "--blacksmith-job",
           "check",
         ]),
       );
       expect(output.args.at(-1)).toContain("historical-source");
+      expect(result.stderr).toContain("use PR CI or a safe local scope");
+      expect(result.stderr).not.toContain("pass another --provider");
     },
   );
 
@@ -4149,6 +4173,24 @@ esac
     expect(remoteCommand).toContain(
       "corepack pnpm check:changed --base origin/release/2026.7.2 --head HEAD",
     );
+  });
+
+  it("redacts only the Testbox caller command after materializing its source", () => {
+    for (const provider of ["blacksmith-testbox", "aws"]) {
+      const { remoteCommand } = runSuccessfulDefaultWrapper(
+        ["run", "--provider", provider, "--", "corepack", "pnpm", "check:changed"],
+        sparseChangedGateOptions,
+      );
+      const stage = "exec node scripts/crabbox-remote-redact.mjs -- bash -c ";
+      if (provider === "blacksmith-testbox") {
+        expect(remoteCommand).toMatch(/^export CI=true; openclaw_source_root=/u);
+        expect(remoteCommand).toContain(`cd "$openclaw_source_root" || exit $?; ${stage}`);
+        expect(remoteCommand).toMatch(/-- bash -c '.*corepack pnpm check:changed'$/u);
+      } else {
+        expect(remoteCommand).toContain('"baseSha":"abc123"');
+        expect(remoteCommand).not.toContain(stage);
+      }
+    }
   });
 
   it.each(["origin/main~1", "abc123"])("rejects a non-recreatable changed-gate base %s", (base) => {
@@ -4549,8 +4591,13 @@ process.on("exit", () => {
     ["aws", true, "transport"],
     ["aws", false, "transport"],
     ["aws", false, "arbitrary"],
+    ["aws", false, "reuse"],
+    ["aws", false, "unchanged"],
     ["blacksmith-testbox", true, "transport"],
     ["blacksmith-testbox", false, "transport"],
+    ["blacksmith-testbox", false, "reuse"],
+    ["blacksmith-testbox", false, "unchanged"],
+    ["blacksmith-testbox", false, "unrelated-staging"],
     ["blacksmith-testbox", false, "captured-base"],
     ["blacksmith-testbox", false, "graph"],
     ["blacksmith-testbox", false, "frozen"],
@@ -4561,6 +4608,8 @@ process.on("exit", () => {
     "transports verified source and dependencies (provider=%s, shallow=%s, scenario=%s)",
     (provider, shallow, scenario) => {
       const root = makeTempDir(tempDirs, "openclaw-changed-gate-real-git-");
+      const installsDependencies =
+        scenario === "graph" || scenario === "frozen" || scenario.startsWith("lifecycle");
       const origin = path.join(root, "origin");
       const producer = path.join(root, "producer");
       const capturedBundle = path.join(root, "captured.bundle");
@@ -4627,7 +4676,16 @@ process.on("exit", () => {
       };
       mkdirSync(path.join(origin, "scripts"), { recursive: true });
       git(origin, ["init", "-q", "-b", "main"]);
-      writeFileSync(path.join(origin, ".gitignore"), ".tmp/\n*.ignored\n!reincluded.ignored\n");
+      copyDependencyFingerprint(origin);
+      writeFileSync(
+        path.join(origin, "package.json"),
+        '{"name":"transport-fixture","private":true}\n',
+      );
+      writeFileSync(
+        path.join(origin, ".gitignore"),
+        ".tmp/\n*.ignored\n!reincluded.ignored\n" +
+          (installsDependencies ? "" : "/pnpm-lock.yaml\n"),
+      );
       writeFileSync(path.join(origin, ".gitattributes"), "* text=auto eol=lf\n");
       writeFileSync(
         path.join(origin, ".crabbox.yaml"),
@@ -4655,6 +4713,9 @@ process.on("exit", () => {
       for (const file of ["owner.txt", "deleted.txt", "rename-before.txt", "mode.sh"]) {
         writeFileSync(path.join(origin, file), "base\n");
       }
+      if (scenario === "reuse" || scenario === "unchanged") {
+        chmodSync(path.join(origin, "mode.sh"), 0o755);
+      }
       writeFileSync(path.join(origin, "tracked.ignored"), "tracked ignored base\n");
       writeFileSync(path.join(origin, "reincluded.ignored"), "reincluded base\n");
       if (replacedHistory) {
@@ -4675,6 +4736,11 @@ process.on("exit", () => {
       copyFileSync(
         path.join(origin, "scripts/check-changed.mjs"),
         path.join(origin, "scripts/source-fixture.mjs"),
+      );
+      // Real transports carry this repo's Testbox redaction stage; the synthetic source passes through.
+      writeFileSync(
+        path.join(origin, "scripts/crabbox-remote-redact.mjs"),
+        'import { spawnSync } from "node:child_process"; const [, command, ...args] = process.argv.slice(2); process.exit(spawnSync(command, args, { stdio: "inherit" }).status ?? 1);\n',
       );
       if (scenario === "captured-base") {
         writeFileSync(
@@ -4708,6 +4774,14 @@ process.on("exit", () => {
           `?${hiddenObject}`,
         );
       }
+      if (!installsDependencies) {
+        // Admission needs a readable lock, while these source-only cases must not install.
+        // The ignored fixture seed stays outside the capsule; graph cases carry their real lock.
+        writeFileSync(
+          path.join(producer, "pnpm-lock.yaml"),
+          "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+        );
+      }
       expect(git(producer, ["rev-parse", "--is-shallow-repository"])).toBe(String(shallow));
       const alias = provider === "aws" && scenario !== "arbitrary" ? "origin/release/fixture" : "";
       if (alias) {
@@ -4735,6 +4809,18 @@ process.on("exit", () => {
       const scriptBody = '#!/usr/bin/env bash\nexec "$@"\n';
       const scriptInput = path.join(root, "input.sh");
       writeFileSync(scriptInput, scriptBody);
+      const completionProbe =
+        scenario === "unrelated-staging" ? path.join(root, "staging-probe.cjs") : undefined;
+      const stagingScans = path.join(root, "staging-scans");
+      if (completionProbe) {
+        mkdirSync(path.join(root, "sync"), { recursive: true });
+        writeFileSync(
+          completionProbe,
+          `const fs=require('node:fs');const original=fs.opendirSync;
+fs.opendirSync=function(directory,...args){if(fs.realpathSync(directory)===${JSON.stringify(realpathSync(path.join(root, "sync")))})fs.appendFileSync(${JSON.stringify(stagingScans)},'scan\\n');return original.call(this,directory,...args);};
+require('node:module').syncBuiltinESMExports();`,
+        );
+      }
       const runSender = (
         mode: "direct" | "shell" | "script" | "stdin" = "direct",
         delegatedArgs?: string[],
@@ -4752,7 +4838,13 @@ process.on("exit", () => {
           [fixtureWrapper, ...(delegatedArgs ?? ["run", "--provider", provider, ...payload])],
           {
             cwd: producer,
-            env,
+            env: completionProbe
+              ? {
+                  ...env,
+                  NODE_OPTIONS:
+                    `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(completionProbe)}`.trim(),
+                }
+              : env,
             encoding: "utf8",
             input: mode === "stdin" ? scriptBody : undefined,
             timeout: 10_000,
@@ -4802,7 +4894,7 @@ process.on("exit", () => {
         prepareReceiver?: (receiver: string) => void,
       ) => {
         const receiver = path.join(root, name);
-        if (source === origin && nativeSeed) {
+        if (!existsSync(receiver) && source === origin && nativeSeed) {
           git(root, ["clone", "-q", `file://${origin}`, receiver]);
           if (lstatSync(path.join(producer, "source-dir")).isSymbolicLink()) {
             rmSync(path.join(receiver, "source-dir"), { recursive: true });
@@ -4844,13 +4936,13 @@ process.on("exit", () => {
               "stale child\n",
             );
           }
-        } else {
+        } else if (!existsSync(receiver)) {
           mkdirSync(receiver);
         }
         prepareReceiver?.(receiver);
         const transport =
           provider === "blacksmith-testbox" ? path.join(root, `${name}-transport`) : receiver;
-        if (transport !== receiver) {
+        if (transport !== receiver && !existsSync(transport)) {
           mkdirSync(path.join(transport, ".git"), { recursive: true });
           symlinkSync(
             realpathSync(receiver),
@@ -4884,6 +4976,14 @@ process.on("exit", () => {
         }
         return { receiver, result };
       };
+      if (scenario === "unrelated-staging") {
+        runSender();
+        expect(
+          existsSync(stagingScans),
+          "normal completion must not inspect unrelated staging",
+        ).toBe(false);
+        return;
+      }
       if (scenario === "captured-base") {
         const sharedBase = git(producer, ["rev-parse", base + "^"]);
         git(producer, ["update-ref", "refs/remotes/origin/main", sharedBase]);
@@ -4909,7 +5009,65 @@ process.on("exit", () => {
         expect(git(producer, ["diff", "--name-only", sharedBase, "HEAD"])).toContain("mode.sh");
         return;
       }
-      if (scenario !== "transport" && scenario !== "arbitrary") {
+      if (scenario === "reuse" || scenario === "unchanged") {
+        expect(git(producer, ["ls-files", "--stage", "--", "mode.sh"])).toMatch(/^100755 /u);
+        const sent = runSender();
+        const first = receive("reused", sent.remoteCommand, sent.bundle);
+        expect(first.result.status, failureDetail(first.result)).toBe(0);
+        expect(git(first.receiver, ["rev-parse", "--is-shallow-repository"])).toBe("true");
+        const capturedMode = git(first.receiver, ["ls-tree", "HEAD", "--", "mode.sh"]);
+        expect(capturedMode).toMatch(/^100755 blob /u);
+        const retained =
+          scenario === "unchanged"
+            ? ["unchanged.bin", "alias", "directory-alias"].map((file) => ({
+                file,
+                stat: lstatSync(path.join(first.receiver, file)),
+              }))
+            : [];
+        if (scenario === "unchanged") {
+          // Keep the old inode allocated so recreation cannot pass through inode reuse.
+          linkSync(path.join(first.receiver, "unchanged.bin"), path.join(root, "retained-inode"));
+          writeFileSync(path.join(first.receiver, "owner.txt"), "stale physical bytes\n");
+          chmodSync(path.join(first.receiver, "mode.sh"), 0o644);
+          rmSync(path.join(first.receiver, "raw-crlf.txt"));
+          symlinkSync(deletionReferent, path.join(first.receiver, "raw-crlf.txt"), "dir");
+        }
+        // The old private Git owner is removed during promotion. A second import
+        // must work without origin and leave no alternate pointing at that owner.
+        const reused = receive(
+          "reused",
+          sent.remoteCommand,
+          sent.bundle,
+          path.join(root, "unavailable-origin"),
+        );
+        expect(reused.result.status, failureDetail(reused.result)).toBe(0);
+        expect(reused.result.stdout).toBe("transport fixture reached\n");
+        expect(git(reused.receiver, ["rev-parse", "origin/main"])).toBe(base);
+        expect(git(reused.receiver, ["rev-parse", "HEAD^"])).toBe(base);
+        expect(existsSync(path.join(reused.receiver, ".git/objects/info/alternates"))).toBe(false);
+        expect(git(reused.receiver, ["ls-tree", "HEAD", "--", "mode.sh"])).toBe(capturedMode);
+        for (const { file, stat } of retained) {
+          const current = lstatSync(path.join(reused.receiver, file));
+          expect({ dev: current.dev, ino: current.ino, mtimeMs: current.mtimeMs }, file).toEqual({
+            dev: stat.dev,
+            ino: stat.ino,
+            mtimeMs: stat.mtimeMs,
+          });
+        }
+        for (const file of ["owner.txt", "raw-crlf.txt"]) {
+          expect(lstatSync(path.join(reused.receiver, file)).isFile()).toBe(true);
+          expect(readFileSync(path.join(reused.receiver, file))).toEqual(
+            readFileSync(path.join(producer, file)),
+          );
+        }
+        expect(lstatSync(path.join(reused.receiver, "mode.sh")).mode & 0o100).toBe(0o100);
+        expect(readFileSync(path.join(deletionReferent, "canary.txt"), "utf8")).toBe(
+          "private referent\n",
+        );
+        git(reused.receiver, ["fsck", "--connectivity-only", "--no-dangling"]);
+        return;
+      }
+      if (installsDependencies) {
         const installOwner = ".github/actions/setup-node-env/install-dependencies.sh";
         const ownerPath = path.join(repoRoot, installOwner);
         // Baseline uses the same action-owned recipe before its pure extraction.
@@ -5035,16 +5193,16 @@ process.on("exit", () => {
           const mutation =
             scenario === "lifecycle-staged-extra"
               ? [
-                  'const fs = require("node:fs");',
-                  'const { execFileSync } = require("node:child_process");',
+                  'import fs from "node:fs";',
+                  'import { execFileSync } from "node:child_process";',
                   'fs.writeFileSync("lifecycle-extra.mjs", "export const lifecycleExtra = true;\\n");',
                   'execFileSync("git", ["add", "--", "lifecycle-extra.mjs"]);',
                   'fs.writeFileSync(".capsule-proof/lifecycle", "staged-extra");',
                 ]
               : scenario === "lifecycle-base-ref"
                 ? [
-                    'const fs = require("node:fs");',
-                    'const { execFileSync } = require("node:child_process");',
+                    'import fs from "node:fs";',
+                    'import { execFileSync } from "node:child_process";',
                     'const git = (args) => execFileSync("git", args, { encoding: "utf8" });',
                     'const before = git(["rev-parse", "refs/remotes/origin/main"]).trim();',
                     'const head = git(["rev-parse", "HEAD"]).trim();',
@@ -5055,19 +5213,32 @@ process.on("exit", () => {
                     'fs.writeFileSync(".capsule-proof/lifecycle", JSON.stringify({ before, head, after, indexBefore, indexAfter }));',
                   ]
                 : [
-                    'const fs = require("node:fs");',
+                    'import fs from "node:fs";',
                     'fs.writeFileSync(".capsule-proof/lifecycle", "ran");',
                     'fs.writeFileSync("owner.txt", "lifecycle source drift\\n");',
                   ];
           writeFileSync(
-            path.join(producer, "scripts/capsule-lifecycle.cjs"),
+            path.join(producer, "scripts/postinstall-bundled-plugins.mjs"),
             mutation.join("\n") + "\n",
           );
+          // Exercise the audited hook owner, preserving the selected source/index/ref mutation.
+          for (const file of [
+            "check-install-dependency-ownership.mjs",
+            "preinstall-package-manager-warning.mjs",
+            "prepare-git-hooks.mjs",
+          ]) {
+            writeFileSync(path.join(producer, "scripts", file), "");
+          }
           writeFileSync(
             path.join(producer, "package.json"),
             JSON.stringify({
               ...rootManifest,
-              scripts: { postinstall: "node scripts/capsule-lifecycle.cjs" },
+              scripts: {
+                "pnpm:devPreinstall": "node scripts/check-install-dependency-ownership.mjs",
+                preinstall: "node scripts/preinstall-package-manager-warning.mjs",
+                postinstall: "node scripts/postinstall-bundled-plugins.mjs",
+                prepare: "node scripts/prepare-git-hooks.mjs",
+              },
             }),
           );
         }
@@ -5777,7 +5948,7 @@ const original = cp.spawnSync;
 const fault = ${JSON.stringify({ phase, code, errno, signal, stderr })};
 cp.spawnSync = (command, args, options) => {
   const fetchIndex = args.indexOf("fetch");
-  if (command !== "git" || fetchIndex < 0 || args.slice(fetchIndex + 1).includes("origin") !== (fault.phase === "base-fetch"))
+  if (command !== "git" || fetchIndex < 0 || args.slice(fetchIndex + 1).some(arg => arg.endsWith(":refs/remotes/origin/main")) !== (fault.phase === "base-fetch"))
     return original(command, args, options);
   return { status: fault.code || fault.signal ? null : 128, signal: fault.signal ?? null,
     stdout: Buffer.alloc(0), stderr: Buffer.from(fault.stderr ?? "PRIVATE_SENTINEL\\n"),
@@ -5973,17 +6144,24 @@ cp.spawnSync = (command, args, options) => {
             preload,
             `const fs = require("node:fs"); const chmod = fs.chmodSync; fs.chmodSync = (file, mode) => { chmod(file, mode); if (file === "mode.sh") { ${mutation === "mode" ? "chmod(file, mode & ~0o100)" : mutation === "deletion" ? 'fs.writeFileSync("committed-deleted.ignored", "stale restored source")' : 'fs.appendFileSync(file, "corrupted after materialization")'}; } };`,
           );
+          let priorIndex: Buffer | undefined;
           const rejected = receive(
             `receiver-${mutation}-mismatch`,
             candidate.remoteCommand,
             candidate.bundle,
             origin,
             { NODE_OPTIONS: `--require=${preload}` },
+            true,
+            [],
+            (receiver) => {
+              priorIndex = readFileSync(path.join(receiver, ".git", "index"));
+            },
           );
           expect(rejected.result.status, failureDetail(rejected.result)).toBe(2);
           expect(rejected.result.stderr).toContain(`source ${mutation} mismatch`);
           expect(rejected.result.stdout).not.toContain("transport fixture reached");
           expect(git(rejected.receiver, ["rev-parse", "HEAD"])).toBe(base);
+          expect(readFileSync(path.join(rejected.receiver, ".git", "index"))).toEqual(priorIndex);
         }
         const reserved = path.join(producer, ".openclaw-crabbox-changed-gate.bundle");
         const victim = path.join(external, "canary.txt");
@@ -6519,14 +6697,38 @@ cp.spawnSync = (command, args, options) => {
         return result.stdout.trim();
       };
       git("init", "-q", "-b", "main");
+      copyDependencyFingerprint(producer);
+      writeFileSync(
+        path.join(producer, "package.json"),
+        '{"name":"artifact-fixture","private":true}\n',
+      );
+      writeFileSync(
+        path.join(producer, "pnpm-lock.yaml"),
+        "lockfileVersion: '9.0'\nimporters:\n  .: {}\n",
+      );
       writeFileSync(path.join(producer, ".gitignore"), ".tmp/\n.crabbox\n");
       writeFileSync(path.join(producer, "fixture.txt"), "source fixture\n");
-      git("add", ".gitignore", "fixture.txt");
+      git(
+        "add",
+        ".gitignore",
+        "fixture.txt",
+        "package.json",
+        "pnpm-lock.yaml",
+        ".github",
+        "scripts",
+      );
       git("commit", "-qm", "fixture");
       git("remote", "add", "origin", producer);
       git("update-ref", "refs/remotes/origin/main", "HEAD");
       if (mode === "sparse") {
-        git("sparse-checkout", "set", "--no-cone", "/fixture.txt");
+        git(
+          "sparse-checkout",
+          "set",
+          "--no-cone",
+          "/fixture.txt",
+          "/.github/actions/setup-node-env/dependency-fingerprint.mjs",
+          "/scripts/lib/pnpm-lockfile-documents.mjs",
+        );
       }
       const capturePath = ".crabbox/captures/tbx_fixture-20260904T190427Z.tar.gz";
       const runPath = ".crabbox/runs/run_fixture/proof/nested.json";

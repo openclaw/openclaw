@@ -2,10 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import { closeGatewayTestWebSocket } from "../../test/helpers/gateway-websocket.js";
-import type { QueuedCompactionHostOptions } from "../agents/embedded-agent-runner/compact.queued-execution.js";
-import type { CompactEmbeddedAgentSessionParams } from "../agents/embedded-agent-runner/compact.types.js";
+import type {
+  CompactEmbeddedAgentSessionParams,
+  QueuedCompactionHostOptions,
+} from "../agents/embedded-agent-runner/compact.types.js";
 import { acceptCompactionSuccessor } from "../agents/embedded-agent-runner/compaction-successor.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
+import { withSessionCompactionPersistenceAsync } from "../agents/sessions/session-compaction-persistence.js";
 import { enqueueFollowupRun, type FollowupRun } from "../auto-reply/reply/queue.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "../auto-reply/reply/queue/state.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions.js";
@@ -47,6 +50,8 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { loseSessionSignalAcknowledgement } from "./test/session-signal-failure.test-support.js";
 import { registerWorkerInferenceSessionControl } from "./worker-environments/inference-control-internal.js";
+// Load after the fixture mocks, during collection rather than the first RPC deadline.
+import "./server-methods/sessions-compact.js";
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
@@ -141,7 +146,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     message: { role: "user", content: "follow-up", timestamp: 2 },
     now: Date.parse("2026-06-19T12:00:02.000Z"),
   });
-  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params, hostInput) => {
     const call = params as CompactEmbeddedAgentSessionParams;
     if (
       !call.sessionTarget?.agentId ||
@@ -151,24 +156,24 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     ) {
       throw new Error("expected SQLite session target");
     }
-    const targetScope = {
-      agentId: call.sessionTarget.agentId,
-      sessionId: call.sessionTarget.sessionId,
-      sessionKey: call.sessionTarget.sessionKey,
-      storePath: call.sessionTarget.storePath,
-    };
-    const rows = await loadTranscriptEvents(targetScope);
-    expect(rows).toHaveLength(3);
-    await appendTranscriptEvent(targetScope, {
-      type: "compaction",
-      id: "compact-1",
-      parentId: seedMessage.messageId,
-      timestamp: "2026-06-19T12:00:02.000Z",
-      summary: "summary",
-      firstKeptEntryId: seedMessage.messageId,
-      tokensBefore: 120,
-      tokensAfter: 80,
-    });
+    const host = hostInput as QueuedCompactionHostOptions;
+    const manager = host.preparedSession?.sessionManager;
+    if (!manager || !host.withCompactionPersistenceAsync) {
+      throw new Error("expected prepared Gateway compaction persistence");
+    }
+    expect(manager.getEntries()).toHaveLength(2);
+    await withSessionCompactionPersistenceAsync(manager, host.withCompactionPersistenceAsync, () =>
+      manager.appendCompactionAsync(
+        "summary",
+        seedMessage.messageId,
+        120,
+        undefined,
+        undefined,
+        undefined,
+        80,
+      ),
+    );
+    expect(loadSessionEntry(sessionScope)).toMatchObject({ compactionCount: 1, totalTokens: 80 });
     return {
       ok: true,
       compacted: true,
@@ -183,8 +188,6 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
   });
 
   const { ws } = await openClient();
-  // Prepare the lazy handler before arming the RPC and event observers.
-  await import("./server-methods/sessions-compact.js");
   await rpcReq(ws, "sessions.subscribe", {});
   const signalVersion = await getSessionStateVersion(sessionScope.sessionKey, "main");
   const signal = loseSessionSignalAcknowledgement();
@@ -546,6 +549,31 @@ test("sessions.compact rejects stale terminal persistence after the session chan
     const replacedEntry = loadSessionEntry({ sessionKey: "agent:main:main", storePath });
     expect(replacedEntry?.sessionId).toBe("sess-replacement");
     expect(replacedEntry?.compactionCount).toBeUndefined();
+  } finally {
+    compaction.release();
+    await Promise.allSettled([compactResult]);
+    await closeGatewayTestWebSocket(ws);
+  }
+});
+
+test("sessions.compact accounts from the latest entry without overwriting concurrent metadata", async () => {
+  const scope = await createCompactionSession("sess-compact-metadata");
+  const compaction = holdCompaction();
+  const { ws } = await openClient();
+  const compactResult = rpcReq(ws, "sessions.compact", { key: "main" });
+  try {
+    await compaction.waitForEntry(compactResult);
+    await upsertSessionEntryCore(scope, {
+      ...loadSessionEntry(scope),
+      sessionId: scope.sessionId,
+      compactionCount: 3,
+      label: "changed during compaction",
+    });
+    compaction.release();
+    expectMainCompactionResult(await compactResult, true);
+    const entry = loadSessionEntry(scope);
+    expect(entry?.label).toBe("changed during compaction");
+    expect(entry?.compactionCount).toBe(4);
   } finally {
     compaction.release();
     await Promise.allSettled([compactResult]);
@@ -971,7 +999,7 @@ test("sessions.patch preserves nested model ids under provider overrides", async
 
     agentDiscoveryMock.enabled = true;
     agentDiscoveryMock.models = [
-      { id: "moonshotai/kimi-k2.5", name: "Kimi K2.5 (NVIDIA)", provider: "nvidia" },
+      { id: "moonshotai/kimi-k2.6", name: "Kimi K2.6 (NVIDIA)", provider: "nvidia" },
     ];
 
     const context = { getRuntimeConfig: () => runtimeConfig };
@@ -987,17 +1015,17 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       "sessions.patch",
       {
         key: "agent:main:main",
-        model: "nvidia/moonshotai/kimi-k2.5",
+        model: "nvidia/moonshotai/kimi-k2.6",
       },
       { context },
     );
     expect(patched.ok).toBe(true);
-    expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.5");
+    expect(patched.payload?.entry.modelOverride).toBe("moonshotai/kimi-k2.6");
     expect(patched.payload?.entry.providerOverride).toBe("nvidia");
     expect(patched.payload?.entry.model).toBeUndefined();
     expect(patched.payload?.entry.modelProvider).toBeUndefined();
     expect(patched.payload?.resolved?.modelProvider).toBe("nvidia");
-    expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.5");
+    expect(patched.payload?.resolved?.model).toBe("moonshotai/kimi-k2.6");
 
     const listed = await directSessionReq<{
       sessions: Array<{ key: string; modelProvider?: string; model?: string }>;
@@ -1007,6 +1035,6 @@ test("sessions.patch preserves nested model ids under provider overrides", async
       (session) => session.key === "agent:main:main",
     );
     expect(mainSession?.modelProvider).toBe("nvidia");
-    expect(mainSession?.model).toBe("moonshotai/kimi-k2.5");
+    expect(mainSession?.model).toBe("moonshotai/kimi-k2.6");
   });
 });

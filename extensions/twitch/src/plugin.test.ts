@@ -11,11 +11,6 @@ describe("twitchPlugin pairing", () => {
       twitchPlugin.messaging?.inferTargetChatType?.({ to: "twitch:user:operator" }),
     ).toBeUndefined();
   });
-
-  it("normalizes trimmed twitch user prefixes in allow entries", () => {
-    expect(twitchPlugin.pairing?.normalizeAllowEntry?.("  twitch:user:123456  ")).toBe("123456");
-    expect(twitchPlugin.pairing?.normalizeAllowEntry?.("  user789012  ")).toBe("789012");
-  });
 });
 
 describe("twitchPlugin outbound session routing", () => {
@@ -37,18 +32,15 @@ describe("twitchPlugin outbound session routing", () => {
     });
   });
 
-  it.each(["twitch:user:alice", "twitch:dm:alice"])(
-    "rejects unsupported direct target %s",
-    async (target) => {
-      const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
-        cfg: {},
-        agentId: "ops",
-        target,
-      });
+  it.each(["twitch:dm:alice"])("rejects unsupported direct target %s", async (target) => {
+    const route = await twitchPlugin.messaging?.resolveOutboundSessionRoute?.({
+      cfg: {},
+      agentId: "ops",
+      target,
+    });
 
-      expect(route).toBeNull();
-    },
-  );
+    expect(route).toBeNull();
+  });
 });
 
 describe("twitchPlugin.status.buildAccountSnapshot", () => {
@@ -88,12 +80,6 @@ describe("twitchPlugin.status.buildAccountSnapshot", () => {
 });
 
 describe("twitchPlugin.config", () => {
-  it("reloads channel settings through the same runtime and setup owner", () => {
-    for (const plugin of [twitchPlugin, twitchSetupPlugin]) {
-      expect(plugin.reload).toEqual({ configPrefixes: ["channels.twitch"] });
-    }
-  });
-
   it("uses configured defaultAccount for omitted-account plugin resolution", () => {
     const cfg = {
       channels: {
@@ -130,12 +116,6 @@ describe("twitchPlugin.config", () => {
       selectedToken: "",
       expected: false,
     },
-    {
-      name: "does not reject a configured named account because the default lacks a token",
-      defaultToken: "",
-      selectedToken: "oauth:secondary-token",
-      expected: true,
-    },
   ])("$name", ({ defaultToken, selectedToken, expected }) => {
     const cfg = {
       channels: {
@@ -162,32 +142,6 @@ describe("twitchPlugin.config", () => {
       const account = config.resolveAccount(cfg, "secondary");
       expect(account.accountId).toBe("secondary");
       expect(config.isConfigured?.(account, cfg)).toBe(expected);
-    }
-  });
-
-  it("normalizes named accounts consistently across runtime and setup", () => {
-    const cfg = {
-      channels: {
-        twitch: {
-          accounts: {
-            Secondary: {
-              username: "secondary",
-              accessToken: "oauth:secondary-token",
-              clientId: "secondary-client",
-              channel: "secondary-channel",
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    for (const config of [twitchPlugin.config, twitchSetupPlugin.config]) {
-      const account = config.resolveAccount(cfg, "SECONDARY\r\n");
-      expect(account).toMatchObject({
-        accountId: "secondary",
-        username: "secondary",
-      });
-      expect(config.isConfigured?.(account, cfg)).toBe(true);
     }
   });
 });

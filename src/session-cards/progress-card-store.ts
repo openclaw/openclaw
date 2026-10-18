@@ -1,17 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { ProgressCard, ProgressCardStep } from "../../packages/gateway-protocol/src/index.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { ensureOpenClawAgentProgressCardSchemaInTransaction } from "../state/openclaw-agent-progress-card-schema.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
+import { normalizeProgressCardWrite } from "./progress-card-values.js";
 
 type ProgressCardDatabase = Pick<OpenClawAgentKyselyDatabase, "session_progress_cards">;
 type StoredProgressCardRow = Selectable<ProgressCardDatabase["session_progress_cards"]>;
 
-function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgressCardRow | null {
+// Reads run in the transcript/progress workers; the native reset path only clears rows.
+function selectProgressCard(
+  db: EngineConnection,
+  sessionKey: string,
+): StoredProgressCardRow | null {
   const kysely = getNodeSqliteKysely<ProgressCardDatabase>(db);
   return (
     executeSqliteQueryTakeFirstSync(
@@ -26,7 +31,7 @@ function selectProgressCard(db: DatabaseSync, sessionKey: string): StoredProgres
 }
 
 function clearProgressCardInTransaction(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   expectedRevision?: number,
 ): boolean {
@@ -89,7 +94,10 @@ function readStoredSteps(value: string): ProgressCardStep[] {
   });
 }
 
-export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): ProgressCard | null {
+export function readSessionProgressCard(
+  db: EngineConnection,
+  sessionKey: string,
+): ProgressCard | null {
   if (!tableExists(db, "session_progress_cards")) {
     return null;
   }
@@ -98,7 +106,10 @@ export function readSessionProgressCard(db: DatabaseSync, sessionKey: string): P
 }
 
 /** Retain revision tombstones, but keep never-used lazy storage dormant during reset. */
-export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: string): boolean {
+export function clearSessionProgressCardForReset(
+  db: EngineConnection,
+  sessionKey: string,
+): boolean {
   if (!tableExists(db, "session_progress_cards")) {
     return false;
   }
@@ -110,7 +121,7 @@ export function clearSessionProgressCardForReset(db: DatabaseSync, sessionKey: s
 }
 
 export function writeSessionProgressCard(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   input: { markdown?: string; steps?: ProgressCardStep[]; expectedRevision?: number },
 ): { card: ProgressCard | null } | { cleared: true } {
@@ -122,8 +133,7 @@ export function prepareSessionProgressCardWrite(input: {
   steps?: ProgressCardStep[];
   expectedRevision?: number;
 }) {
-  const markdown = input.markdown?.trim() ? input.markdown : undefined;
-  const steps = input.steps && input.steps.length > 0 ? input.steps : undefined;
+  const { markdown, steps } = normalizeProgressCardWrite(input);
   return {
     markdown,
     steps,
@@ -132,8 +142,9 @@ export function prepareSessionProgressCardWrite(input: {
   };
 }
 
+/** The progress-card worker owns writes; native lifecycle reset uses the separate clearer. */
 export function writePreparedSessionProgressCard(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   input: ReturnType<typeof prepareSessionProgressCardWrite>,
 ): { card: ProgressCard | null } | { cleared: true } {

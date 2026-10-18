@@ -8,6 +8,7 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
+import { createDeepSeekWebSearchProvider } from "./web-search-provider.js";
 
 const PROVIDER_ID = "deepseek";
 
@@ -16,6 +17,9 @@ export default defineSingleProviderPluginEntry({
   name: "DeepSeek Provider",
   description: "Bundled DeepSeek provider plugin",
   manifest,
+  register(api) {
+    api.registerWebSearchProvider(createDeepSeekWebSearchProvider());
+  },
   provider: {
     label: "DeepSeek",
     docsPath: "/providers/deepseek",
@@ -42,9 +46,11 @@ export default defineSingleProviderPluginEntry({
     resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
     resolveUsageAuth: async (ctx) => {
-      const apiKey = ctx.resolveApiKeyFromConfigAndStore({
-        envDirect: [ctx.env.DEEPSEEK_API_KEY],
-      });
+      const apiKey = (
+        await ctx.resolveApiKeyCandidatesFromConfigAndStore?.({
+          envDirect: [ctx.env.DEEPSEEK_API_KEY],
+        })
+      )?.[0];
       return apiKey ? { token: apiKey } : null;
     },
     fetchUsageSnapshot: async (ctx) =>

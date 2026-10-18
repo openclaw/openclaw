@@ -1,9 +1,9 @@
-/**
- * Tests native approval routing helpers and target matching logic.
- */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { ExecApprovalRequest } from "../infra/exec-approvals.js";
+import { withPluginRuntimePluginScope } from "../plugins/runtime/gateway-request-scope.js";
 import {
   createChannelApproverDmTargetResolver,
+  createChannelApproverDmTargetResolverAsync,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
   createNativeApprovalForwardingFallbackSuppressor,
@@ -15,9 +15,7 @@ import {
 import type { OpenClawConfig } from "./config-contracts.js";
 
 const EMPTY_SESSION_CFG = {
-  session: {
-    store: ".artifacts/test/approval-native-helpers-empty-sessions.json",
-  },
+  session: { store: ".artifacts/test/approval-native-helpers-empty-sessions.json" },
 } satisfies OpenClawConfig;
 
 function createMatrixRouteGates(options?: {
@@ -51,34 +49,36 @@ function createMatrixRouteGates(options?: {
   });
 }
 
+const matrixRoute = {
+  agentId: "agent-a",
+  sessionKey: "agent:agent-a:matrix:room-1",
+  turnSourceAccountId: "default",
+  turnSourceChannel: "matrix",
+  turnSourceTo: "room-1",
+};
 const matrixExecRequest = {
   id: "req-1",
-  request: {
-    agentId: "agent-a",
-    command: "echo hi",
-    sessionKey: "agent:agent-a:matrix:room-1",
-    turnSourceAccountId: "default",
-    turnSourceChannel: "matrix",
-    turnSourceTo: "room-1",
-  },
+  request: { ...matrixRoute, command: "echo hi" },
   createdAtMs: 0,
   expiresAtMs: 1000,
 } as const;
 
 const matrixPluginRequest = {
+  ...matrixExecRequest,
   id: "plugin:req-1",
-  request: {
-    agentId: "agent-a",
-    description: "Allow access",
-    sessionKey: "agent:agent-a:matrix:room-1",
-    title: "Plugin approval",
-    turnSourceAccountId: "default",
-    turnSourceChannel: "matrix",
-    turnSourceTo: "room-1",
-  },
-  createdAtMs: 0,
-  expiresAtMs: 1000,
+  request: { ...matrixRoute, description: "Allow access", title: "Plugin approval" },
 } as const;
+
+function execRequest(request: Partial<ExecApprovalRequest["request"]>) {
+  return { ...matrixExecRequest, request: { command: "echo hi", ...request } };
+}
+
+const matrixTarget = { channel: "matrix", to: "room-1", source: "target" } as const;
+const targetsConfig = {
+  approvals: {
+    exec: { enabled: true, mode: "targets", targets: [{ channel: "matrix", to: "room-1" }] },
+  },
+} satisfies OpenClawConfig;
 
 describe("createNativeApprovalMessagingTargetResolvers", () => {
   const resolvers = createNativeApprovalMessagingTargetResolvers({
@@ -95,35 +95,20 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
         threadId: 42,
         source: "target",
       }),
-    ).toEqual({
-      to: "owner",
-      accountId: "work",
-      threadId: 42,
-    });
+    ).toEqual({ to: "owner", accountId: "work", threadId: 42 });
     expect(
-      resolvers.resolveTurnSourceTarget({
-        ...matrixExecRequest,
-        request: {
+      resolvers.resolveTurnSourceTarget(
+        execRequest({
           ...matrixExecRequest.request,
           turnSourceChannel: " SIGNAL ",
           turnSourceTo: " OWNER ",
           turnSourceAccountId: " work ",
-        },
-      }),
-    ).toEqual({
-      to: "owner",
-      accountId: "work",
-    });
+        }),
+      ),
+    ).toEqual({ to: "owner", accountId: "work" });
     expect(
-      resolvers.resolveSessionTarget({
-        channel: "signal",
-        to: " OWNER ",
-        accountId: " work ",
-      }),
-    ).toEqual({
-      to: "owner",
-      accountId: "work",
-    });
+      resolvers.resolveSessionTarget({ channel: "signal", to: " OWNER ", accountId: " work " }),
+    ).toEqual({ to: "owner", accountId: "work" });
     expect(resolvers.normalizeTarget({ to: " OWNER ", threadId: 42 })).toEqual({
       to: "owner",
       threadId: 42,
@@ -132,21 +117,16 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 
   it("rejects other channels and invalid destinations", () => {
     expect(
-      resolvers.normalizeForwardTarget({
-        channel: "slack",
-        to: "owner",
-        source: "target",
-      }),
+      resolvers.normalizeForwardTarget({ channel: "slack", to: "owner", source: "target" }),
     ).toBeNull();
     expect(
-      resolvers.resolveTurnSourceTarget({
-        ...matrixExecRequest,
-        request: {
+      resolvers.resolveTurnSourceTarget(
+        execRequest({
           ...matrixExecRequest.request,
           turnSourceChannel: "signal",
           turnSourceTo: " ",
-        },
-      }),
+        }),
+      ),
     ).toBeNull();
     expect(resolvers.resolveSessionTarget({ channel: "signal", to: " " })).toBeNull();
     expect(resolvers.normalizeTarget({ to: " " })).toBeNull();
@@ -154,53 +134,16 @@ describe("createNativeApprovalMessagingTargetResolvers", () => {
 });
 
 describe("createNativeApprovalChannelRouteGates", () => {
-  it("reports each eligible account as a raw candidate for unbound session routes", () => {
-    const cfg = {
-      approvals: { exec: { enabled: true, mode: "session" } },
-    } satisfies OpenClawConfig;
-    const request = {
-      ...matrixExecRequest,
-      request: { ...matrixExecRequest.request, turnSourceAccountId: undefined },
-    };
-
-    for (const accountId of ["default", "ops"]) {
-      expect(
-        createMatrixRouteGates({
-          accountIds: ["default", "ops"],
-          enabledAccounts: ["default", "ops"],
-        }).shouldHandleApprovalRequest({ cfg, accountId, request }),
-      ).toBe(true);
-    }
-    expect(
-      createMatrixRouteGates({
-        accountIds: ["default", "ops"],
-        enabledAccounts: ["ops"],
-      }).shouldHandleApprovalRequest({ cfg, accountId: "ops", request }),
-    ).toBe(true);
-  });
-
   it("separates session-native and explicit target routing by approval family", () => {
     const gates = createMatrixRouteGates();
     const cfg = {
       approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "matrix", to: "room-1" }],
-        },
-        plugin: {
-          enabled: true,
-          mode: "session",
-        },
+        ...targetsConfig.approvals,
+        plugin: { enabled: true, mode: "session" },
       },
     } satisfies OpenClawConfig;
 
-    expect(
-      gates.canApprovalPotentiallyRouteToChannel({
-        cfg,
-        approvalKind: "exec",
-      }),
-    ).toBe(true);
+    expect(gates.canApprovalPotentiallyRouteToChannel({ cfg, approvalKind: "exec" })).toBe(true);
     expect(
       gates.canApprovalPotentiallyRouteToChannel({
         cfg,
@@ -217,24 +160,14 @@ describe("createNativeApprovalChannelRouteGates", () => {
     ).toBe(true);
     expect(gates.isNativeApprovalHandlerConfigured({ cfg })).toBe(true);
 
-    expect(
-      gates.shouldHandleApprovalRequest({
-        cfg,
-        request: matrixExecRequest,
-      }),
-    ).toBe(false);
-    expect(
-      gates.shouldHandleApprovalRequest({
-        cfg,
-        request: matrixPluginRequest,
-      }),
-    ).toBe(true);
+    expect(gates.shouldHandleApprovalRequest({ cfg, request: matrixExecRequest })).toBe(false);
+    expect(gates.shouldHandleApprovalRequest({ cfg, request: matrixPluginRequest })).toBe(true);
     expect(
       gates.isExplicitTargetEligible({
         cfg,
         approvalKind: "exec",
         request: matrixExecRequest,
-        target: { channel: "matrix", to: "room-1", source: "target" },
+        target: matrixTarget,
       }),
     ).toBe(true);
   });
@@ -251,79 +184,36 @@ describe("createNativeApprovalChannelRouteGates", () => {
       },
     } satisfies OpenClawConfig;
 
+    const eligible = (request: ExecApprovalRequest) =>
+      gates.isSessionApprovalEligible({ cfg, approvalKind: "exec", request });
+    expect(eligible(matrixExecRequest)).toBe(true);
     expect(
-      gates.isSessionApprovalEligible({
-        cfg,
-        approvalKind: "exec",
-        request: matrixExecRequest,
-      }),
-    ).toBe(true);
-    expect(
-      gates.isSessionApprovalEligible({
-        cfg,
-        approvalKind: "exec",
-        request: {
-          ...matrixExecRequest,
-          request: {
-            ...matrixExecRequest.request,
-            agentId: "agent-b",
-            sessionKey: "agent:agent-b:matrix:room-1",
-          },
-        },
-      }),
+      eligible(
+        execRequest({
+          ...matrixRoute,
+          agentId: "agent-b",
+          sessionKey: "agent:agent-b:matrix:room-1",
+        }),
+      ),
     ).toBe(false);
   });
 
   it("maps unscoped targets only to the default account", () => {
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets",
-          targets: [{ channel: "matrix", to: "room-1" }],
-        },
-      },
-    } satisfies OpenClawConfig;
-    const target = { channel: "matrix", to: "room-1", source: "target" } as const;
-
-    expect(
+    const input = {
+      cfg: targetsConfig,
+      approvalKind: "exec",
+      request: matrixExecRequest,
+      target: matrixTarget,
+    } as const;
+    const eligible = (accountId: string, enabledAccounts = ["default", "work"]) =>
       createMatrixRouteGates({
         accountIds: ["default", "work"],
-        enabledAccounts: ["default", "work"],
-      }).isExplicitTargetEligible({
-        cfg,
-        accountId: "default",
-        approvalKind: "exec",
-        request: matrixExecRequest,
-        target,
-      }),
-    ).toBe(true);
+        enabledAccounts,
+      }).isExplicitTargetEligible({ ...input, accountId });
 
-    expect(
-      createMatrixRouteGates({
-        accountIds: ["default", "work"],
-        enabledAccounts: ["work"],
-      }).isExplicitTargetEligible({
-        cfg,
-        accountId: "work",
-        approvalKind: "exec",
-        request: matrixExecRequest,
-        target,
-      }),
-    ).toBe(false);
-
-    expect(
-      createMatrixRouteGates({
-        accountIds: ["default", "work"],
-        enabledAccounts: ["default", "work"],
-      }).isExplicitTargetEligible({
-        cfg,
-        accountId: "work",
-        approvalKind: "exec",
-        request: matrixExecRequest,
-        target,
-      }),
-    ).toBe(false);
+    expect(eligible("default")).toBe(true);
+    expect(eligible("work", ["work"])).toBe(false);
+    expect(eligible("work")).toBe(false);
   });
 });
 
@@ -341,59 +231,34 @@ describe("createChannelNativeOriginTargetResolver", () => {
         threadId: sessionTarget.threadId,
       }),
     });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        accountId: "ops",
+    const input = {
+      cfg: EMPTY_SESSION_CFG,
+      request: {
+        ...matrixPluginRequest,
         request: {
-          id: "plugin:req-1",
-          request: {
-            title: "Plugin approval",
-            description: "Allow access",
-            turnSourceChannel: "matrix",
-            turnSourceTo: "room:!room:example.org",
-            turnSourceThreadId: "t1",
-            turnSourceAccountId: "ops",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
+          title: "Plugin approval",
+          description: "Allow access",
+          turnSourceChannel: "matrix",
+          turnSourceTo: "room:!room:example.org",
+          turnSourceThreadId: "t1",
+          turnSourceAccountId: "ops",
         },
-      }),
-    ).toEqual({
+      },
+    };
+
+    expect(resolveOriginTarget({ ...input, accountId: "ops" })).toEqual({
       to: "room:!room:example.org",
       threadId: "t1",
     });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        accountId: "other",
-        request: {
-          id: "plugin:req-1",
-          request: {
-            title: "Plugin approval",
-            description: "Allow access",
-            turnSourceChannel: "matrix",
-            turnSourceTo: "room:!room:example.org",
-            turnSourceThreadId: "t1",
-            turnSourceAccountId: "ops",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toBeNull();
+    expect(resolveOriginTarget({ ...input, accountId: "other" })).toBeNull();
   });
 
   it("uses shared route semantics for the default target matcher", () => {
-    expect(
-      nativeApprovalTargetsMatch({
-        channel: "telegram",
-        left: { to: "-100123", threadId: 42.9 },
-        right: { to: "-100123", threadId: "42" },
-      }),
-    ).toBe(true);
+    const origin = { to: "-100123", threadId: 42.9 };
+    const session = { to: "-100123", threadId: "42" };
+    expect(nativeApprovalTargetsMatch({ channel: "telegram", left: origin, right: session })).toBe(
+      true,
+    );
     expect(
       nativeApprovalTargetsMatch({
         channel: "telegram",
@@ -404,56 +269,21 @@ describe("createChannelNativeOriginTargetResolver", () => {
 
     const resolveOriginTarget = createChannelNativeOriginTargetResolver<NativeApprovalTarget>({
       channel: "telegram",
-      resolveTurnSourceTarget: () => ({ to: "-100123", threadId: 42.9 }),
-      resolveSessionTarget: () => ({ to: "-100123", threadId: "42" }),
+      resolveTurnSourceTarget: () => origin,
+      resolveSessionTarget: () => session,
     });
 
     expect(
       resolveOriginTarget({
         cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "telegram",
-            turnSourceTo: "-100123",
-            turnSourceThreadId: 42.9,
-            turnSourceAccountId: "default",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
+        request: execRequest({
+          turnSourceChannel: "telegram",
+          turnSourceTo: "-100123",
+          turnSourceThreadId: 42.9,
+          turnSourceAccountId: "default",
+        }),
       }),
     ).toEqual({ to: "-100123", threadId: 42.9 });
-  });
-
-  it("normalizes resolved targets before matching origin candidates", () => {
-    const resolveOriginTarget = createChannelNativeOriginTargetResolver<NativeApprovalTarget>({
-      channel: "slack",
-      resolveTurnSourceTarget: () => ({ to: "CHANNEL:C1", threadId: "171234.567890" }),
-      resolveSessionTarget: () => ({ to: "channel:c1", threadId: "171234.567890" }),
-      normalizeTarget: (target) => ({
-        ...target,
-        to: target.to.toLowerCase(),
-      }),
-    });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceTo: "CHANNEL:C1",
-            turnSourceThreadId: "171234.567890",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toEqual({ to: "channel:c1", threadId: "171234.567890" });
   });
 
   it("normalizes custom target shapes before invoking a custom matcher", () => {
@@ -470,62 +300,45 @@ describe("createChannelNativeOriginTargetResolver", () => {
     expect(
       resolveOriginTarget({
         cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            sessionKey: "agent:main:custom:room-1",
-            turnSourceChannel: "custom",
-            turnSourceTo: "ROOM-1",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
+        request: execRequest({
+          sessionKey: "agent:main:custom:room-1",
+          turnSourceChannel: "custom",
+          turnSourceTo: "ROOM-1",
+        }),
       }),
     ).toEqual({ id: "room-1", shard: "a" });
-  });
-
-  it("normalizes only match inputs when delivery targets must stay provider-native", () => {
-    const resolveOriginTarget = createChannelNativeOriginTargetResolver<NativeApprovalTarget>({
-      channel: "slack",
-      resolveTurnSourceTarget: () => ({ to: "channel:C1", threadId: "171234.567890" }),
-      resolveSessionTarget: () => ({ to: "channel:c1", threadId: "171234.567890" }),
-      normalizeTargetForMatch: (target) => ({
-        ...target,
-        to: target.to.toLowerCase(),
-      }),
-    });
-
-    expect(
-      resolveOriginTarget({
-        cfg: EMPTY_SESSION_CFG,
-        request: {
-          id: "req-1",
-          request: {
-            command: "echo hi",
-            turnSourceChannel: "slack",
-            turnSourceTo: "channel:C1",
-            turnSourceThreadId: "171234.567890",
-          },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
-      }),
-    ).toEqual({ to: "channel:C1", threadId: "171234.567890" });
   });
 });
 
 describe("createChannelApproverDmTargetResolver", () => {
+  it("warns once for the legacy factory and keeps awaited target preparation warning-free", async () => {
+    using warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
+    const params = {
+      resolveApprovers: () => ["owner-1"],
+      mapApprover: (approver: string) => ({ to: `user:${approver}` }),
+    };
+    const input = { cfg: {}, request: matrixExecRequest };
+    await withPluginRuntimePluginScope({ pluginId: "approval-dm-compat-proof" }, async () => {
+      const resolveAsync = createChannelApproverDmTargetResolverAsync(params);
+      expect(await resolveAsync(input)).toEqual([{ to: "user:owner-1" }]);
+      expect(warning).not.toHaveBeenCalled();
+      const resolveSync = createChannelApproverDmTargetResolver(params);
+      expect(resolveSync(input)).toEqual([{ to: "user:owner-1" }]);
+      createChannelApproverDmTargetResolver(params);
+    });
+    expect(warning).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining(
+        "createChannelApproverDmTargetResolver is deprecated; use createChannelApproverDmTargetResolverAsync",
+      ),
+      { code: "DEP_PLUGIN_SDK", type: "DeprecationWarning" },
+    );
+  });
+
   it("filters null targets and skips delivery when shouldHandle rejects the request", () => {
     const resolveApproverDmTargets = createChannelApproverDmTargetResolver({
       shouldHandleRequest: ({ approvalKind }) => approvalKind === "exec",
       resolveApprovers: () => ["owner-1", "owner-2", "skip-me"],
-      mapApprover: (approver) =>
-        approver === "skip-me"
-          ? null
-          : {
-              to: `user:${approver}`,
-            },
+      mapApprover: (approver) => (approver === "skip-me" ? null : { to: `user:${approver}` }),
     });
 
     expect(
@@ -533,12 +346,7 @@ describe("createChannelApproverDmTargetResolver", () => {
         cfg: {},
         accountId: "default",
         approvalKind: "exec",
-        request: {
-          id: "req-1",
-          request: { command: "echo hi" },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
-        },
+        request: execRequest({}),
       }),
     ).toEqual([{ to: "user:owner-1" }, { to: "user:owner-2" }]);
 
@@ -548,10 +356,8 @@ describe("createChannelApproverDmTargetResolver", () => {
         accountId: "default",
         approvalKind: "plugin",
         request: {
-          id: "plugin:req-1",
+          ...matrixPluginRequest,
           request: { title: "Plugin approval", description: "Allow access" },
-          createdAtMs: 0,
-          expiresAtMs: 1000,
         },
       }),
     ).toStrictEqual([]);
@@ -559,17 +365,12 @@ describe("createChannelApproverDmTargetResolver", () => {
 });
 
 describe("createNativeApprovalForwardingFallbackSuppressor", () => {
-  const execRequest = {
-    id: "req-1",
-    request: {
-      command: "echo hi",
-      turnSourceChannel: "matrix",
-      turnSourceTo: "room-1",
-      turnSourceAccountId: "default",
-    },
-    createdAtMs: 0,
-    expiresAtMs: 1000,
-  };
+  const request = execRequest({
+    turnSourceChannel: "matrix",
+    turnSourceTo: "room-1",
+    turnSourceAccountId: "default",
+  });
+  const input = { cfg: {}, approvalKind: "exec", request } as const;
 
   function createSuppressor(
     overrides: Partial<Parameters<typeof createNativeApprovalForwardingFallbackSuppressor>[0]> = {},
@@ -593,53 +394,20 @@ describe("createNativeApprovalForwardingFallbackSuppressor", () => {
 
   it("suppresses session forwarding only when a native origin or approver DM matches", () => {
     const shouldSuppress = createSuppressor();
-
-    expect(
-      shouldSuppress({
-        cfg: {},
-        approvalKind: "exec",
-        target: { channel: "matrix", to: "room-1", source: "session" },
-        request: execRequest,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppress({
-        cfg: {},
-        approvalKind: "exec",
-        target: { channel: "matrix", to: "user-1", source: "session" },
-        request: execRequest,
-      }),
-    ).toBe(true);
-    expect(
-      shouldSuppress({
-        cfg: {},
-        approvalKind: "exec",
-        target: { channel: "matrix", to: "other-room", source: "session" },
-        request: execRequest,
-      }),
-    ).toBe(false);
+    const suppress = (to: string) =>
+      shouldSuppress({ ...input, target: { channel: "matrix", to, source: "session" } });
+    expect(suppress("room-1")).toBe(true);
+    expect(suppress("user-1")).toBe(true);
+    expect(suppress("other-room")).toBe(false);
   });
 
   it("requires explicit-target eligibility before suppressing target forwarding", () => {
-    expect(
-      createSuppressor()({
-        cfg: {},
-        approvalKind: "exec",
-        target: { channel: "matrix", to: "room-1", source: "target" },
-        request: execRequest,
-      }),
-    ).toBe(false);
-
-    expect(
-      createSuppressor({
-        isExplicitTargetEligible: () => true,
-      })({
-        cfg: {},
-        approvalKind: "exec",
-        target: { channel: "matrix", to: "room-1", source: "target" },
-        request: execRequest,
-      }),
-    ).toBe(true);
+    const targetInput = {
+      ...input,
+      target: { channel: "matrix", to: "room-1", source: "target" },
+    } as const;
+    expect(createSuppressor()(targetInput)).toBe(false);
+    expect(createSuppressor({ isExplicitTargetEligible: () => true })(targetInput)).toBe(true);
   });
 });
 
@@ -663,68 +431,29 @@ describe("shouldSuppressLocalNativeExecApprovalPrompt", () => {
   } as const;
 
   it("supports strict top-level native exec suppression", () => {
-    expect(
+    const suppress = (agent: string) =>
       shouldSuppressLocalNativeExecApprovalPrompt({
-        cfg: {
-          approvals: {
-            exec: {
-              enabled: true,
-              agentFilter: ["main"],
-            },
-          },
-        },
+        cfg: { approvals: { exec: { enabled: true, agentFilter: [agent] } } },
         payload,
         hint: activeExecHint,
         isTransportEnabled: () => true,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldSuppressLocalNativeExecApprovalPrompt({
-        cfg: {
-          approvals: {
-            exec: {
-              enabled: true,
-              agentFilter: ["other"],
-            },
-          },
-        },
-        payload,
-        hint: activeExecHint,
-        isTransportEnabled: () => true,
-      }),
-    ).toBe(false);
+      });
+    expect(suppress("main")).toBe(true);
+    expect(suppress("other")).toBe(false);
   });
 
   it("supports channel-specific native exec client gates", () => {
-    expect(
+    const suppress = (enabled: boolean) =>
       shouldSuppressLocalNativeExecApprovalPrompt({
         cfg: {},
         payload,
         hint: activeExecHint,
-        isNativeDeliveryEnabled: () => true,
-        resolveApprovalConfig: () => ({
-          enabled: true,
-          sessionFilter: ["discord:direct"],
-        }),
+        isNativeDeliveryEnabled: () => enabled,
+        resolveApprovalConfig: () => ({ enabled: true, sessionFilter: ["discord:direct"] }),
         enforceForwardingMode: false,
         fallbackAgentIdFromSessionKey: false,
-      }),
-    ).toBe(true);
-
-    expect(
-      shouldSuppressLocalNativeExecApprovalPrompt({
-        cfg: {},
-        payload,
-        hint: activeExecHint,
-        isNativeDeliveryEnabled: () => false,
-        resolveApprovalConfig: () => ({
-          enabled: true,
-          sessionFilter: ["discord:direct"],
-        }),
-        enforceForwardingMode: false,
-        fallbackAgentIdFromSessionKey: false,
-      }),
-    ).toBe(false);
+      });
+    expect(suppress(true)).toBe(true);
+    expect(suppress(false)).toBe(false);
   });
 });

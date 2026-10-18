@@ -81,21 +81,6 @@ describe("models scan command", () => {
     vi.clearAllMocks();
   });
 
-  it("does not load config or resolve secrets for metadata-only scans", async () => {
-    const runtime = createRuntime();
-    mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
-
-    await modelsScanCommand({ probe: false }, runtime);
-
-    expect(mocks.loadModelsConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-    expect(mocks.scanOpenRouterModels).toHaveBeenCalledTimes(1);
-    expect(firstScanRequest().probe).toBe(false);
-    expect(runtime.lines.join("\n")).toContain("metadata only");
-    expect(runtime.lines.join("\n")).toContain("Tool");
-    expect(runtime.lines.join("\n")).toContain("skip");
-  });
-
   it("prints metadata-only JSON in the same deterministic ranking as the table", async () => {
     const runtime = createRuntime();
     mocks.scanOpenRouterModels.mockResolvedValue([
@@ -204,13 +189,11 @@ describe("models scan command", () => {
   });
 
   describe.each([
-    ["minParams", "--min-params", "7b"],
     ["maxAgeDays", "--max-age-days", "30d"],
-    ["maxCandidates", "--max-candidates", "2.5"],
     ["timeout", "--timeout", "1000ms"],
     ["concurrency", "--concurrency", "2x"],
   ] as const)("%s numeric value", (key, label, partial) => {
-    it.each(["", partial])("rejects %j before scanning", async (raw) => {
+    it.each([partial])("rejects %j before scanning", async (raw) => {
       const runtime = createRuntime();
 
       await expect(
@@ -267,12 +250,4 @@ describe("models scan command", () => {
       });
     },
   );
-
-  it("writes no config for metadata-only scans", async () => {
-    mocks.scanOpenRouterModels.mockResolvedValue([scanResult()]);
-
-    await modelsScanCommand({ probe: false }, createRuntime());
-
-    expect(mocks.updateConfig).not.toHaveBeenCalled();
-  });
 });

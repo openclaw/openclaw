@@ -41,8 +41,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
 
+// mock-isolation: Connection tests own credential outcomes and must not consult host auth storage.
 vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderAuthProfileConfigured: mocks.isProviderAuthProfileConfiguredMock,
+  isProviderAuthProfileConfiguredAsync: mocks.isProviderAuthProfileConfiguredMock,
   resolveProviderAuthProfileApiKey: mocks.resolveProviderAuthProfileApiKeyMock,
 }));
 import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
@@ -144,12 +146,9 @@ describe("OpenAI realtime voice bridge connection", () => {
     expect(FakeWebSocket.instances).toHaveLength(0);
   });
 
-  it.each([
-    { binding: "modern", throwingCloseCallback: true },
-    { binding: "v2026.8.1", throwingCloseCallback: false },
-  ] as const)(
-    "shares GA policy and retires the $binding binding with throwing callback=$throwingCloseCallback",
-    async ({ binding, throwingCloseCallback }) => {
+  it.each([true, false])(
+    "shares GA policy and retires the gateway binding with throwing callback=%s",
+    async (throwingCloseCallback) => {
       const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture({
         session: { clientSecret: "gateway-token" },
       });
@@ -169,11 +168,13 @@ describe("OpenAI realtime voice bridge connection", () => {
       const cfg = {} as never;
 
       expect(
-        readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilities({
-          cfg,
-          providerConfig: { apiKey: "test-api-key-platform" },
-          model: "gpt-realtime-2.1",
-        }),
+        await readInternalRealtimeVoiceProviderApi(provider).resolveBrowserSessionCapabilitiesAsync(
+          {
+            cfg,
+            providerConfig: { apiKey: "test-api-key-platform" },
+            model: "gpt-realtime-2.1",
+          },
+        ),
       ).toMatchObject({ supportsGatewayControl: true });
       await expect(
         provider.createBrowserSession?.({
@@ -187,12 +188,13 @@ describe("OpenAI realtime voice bridge connection", () => {
           tools: [createRealtimeTool("openclaw_agent_consult")],
           vadThreshold: 0.7,
           voice: "marin",
+          clientControl: { owner: "gateway" },
           gatewayControl: {
             bindBridge,
+            bindControl,
             onEvent,
             onReady,
             onClose,
-            ...(binding === "modern" ? { bindControl } : {}),
           },
         }),
       ).resolves.toMatchObject({
@@ -243,13 +245,8 @@ describe("OpenAI realtime voice bridge connection", () => {
         callId: "rtc_gateway",
         onTerminal,
       });
-      if (binding === "modern") {
-        expect(bindControl).toHaveBeenCalledOnce();
-        expect(bindBridge).not.toHaveBeenCalled();
-      } else {
-        expect(bindBridge).toHaveBeenCalledWith(bridge);
-        expect(bindControl).not.toHaveBeenCalled();
-      }
+      expect(bindControl).toHaveBeenCalledOnce();
+      expect(bindBridge).not.toHaveBeenCalled();
       const { connecting, socket } = beginBridgeConnection(bridge);
       let connectResolved = false;
       void connecting.then(() => {
@@ -300,22 +297,20 @@ describe("OpenAI realtime voice bridge connection", () => {
           audio_end_ms: 3_700,
         },
       ]);
-      if (binding === "modern") {
-        const control = bindControl.mock.calls[0]?.[0];
-        if (!control?.sendUserMessage || !control.submitToolResult) {
-          throw new Error("Expected both GA control operations");
-        }
-        await control.submitToolResult("unknown-call", {});
-        control.sendUserMessage("Read the current status");
-        expect(parseSent(socket)).toContainEqual({
-          type: "conversation.item.create",
-          item: {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "Read the current status" }],
-          },
-        });
+      const control = bindControl.mock.calls[0]?.[0];
+      if (!control?.sendUserMessage || !control.submitToolResult) {
+        throw new Error("Expected both GA control operations");
       }
+      await control.submitToolResult("unknown-call", {});
+      control.sendUserMessage("Read the current status");
+      expect(parseSent(socket)).toContainEqual({
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Read the current status" }],
+        },
+      });
       if (throwingCloseCallback) {
         expect(() => bridge.close()).toThrow("close callback failed");
       } else {

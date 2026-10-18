@@ -29,6 +29,24 @@ describe("resolveEnvironmentValue", () => {
 });
 
 describe("mergeProcessEnv", () => {
+  it.each(["linux", "win32"] as const)(
+    "preserves explicit prototype-named overrides and deletions on %s",
+    (platform) => {
+      const base = Object.freeze({ ["__proto__"]: "inherited", NORMAL_KEY: "control" });
+      const override = Object.freeze({ ["__proto__"]: "configured", constructor: "ordinary" });
+      const merged = mergeProcessEnv([base, override], platform);
+      expect(merged).toEqual({
+        ["__proto__"]: "configured",
+        NORMAL_KEY: "control",
+        constructor: "ordinary",
+      });
+      expect(mergeProcessEnv([merged, { ["__proto__"]: undefined }], platform)).toEqual({
+        NORMAL_KEY: "control",
+        constructor: "ordinary",
+      });
+    },
+  );
+
   it.each([
     {
       key: "temp",

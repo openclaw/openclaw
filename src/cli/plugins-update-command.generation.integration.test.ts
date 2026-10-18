@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { installPluginFromNpmSpec } from "../plugins/install.js";
-import { readPersistedInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndexInstallRecordsAsync } from "../plugins/installed-plugin-index-records.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
@@ -119,7 +119,9 @@ it("publishes the replacement Doctor config when a ClawHub update reuses the ins
       expect(
         JSON.parse(fs.readFileSync(state.configPath, "utf8")).plugins.entries.codex.config,
       ).toEqual({ generation: "2026.9.7" });
-      expect(readPersistedInstalledPluginIndexInstallRecords({ env: state.env })).toEqual({
+      expect(
+        await readPersistedInstalledPluginIndexInstallRecordsAsync({ env: state.env }),
+      ).toEqual({
         codex: next,
       });
       expect(log).toHaveBeenCalledWith("Updates saved; they will load on the next Gateway start.");

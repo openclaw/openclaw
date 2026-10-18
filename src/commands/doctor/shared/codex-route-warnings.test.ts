@@ -36,12 +36,7 @@ import {
   maybeRepairCodexRoutes as maybeRepairCodexRoutesUnderTest,
 } from "./codex-route-warnings.js";
 
-const REPAIRABLE_CODEX_PLUGIN_CONFIG = { allow: ["openai"] };
 const DISABLED_CODEX_PLUGIN_CONFIG = { entries: { codex: { enabled: false } } };
-const CODEX_PLUGIN_REPAIR_CHANGES = [
-  "Enabled plugins.entries.codex because configured agent routes use Codex runtime.",
-  "Added codex to plugins.allow because configured agent routes use Codex runtime.",
-];
 const MODEL_CATALOG_METADATA = {
   name: "Test model",
   reasoning: false,
@@ -50,40 +45,61 @@ const MODEL_CATALOG_METADATA = {
   maxTokens: 4096,
 } satisfies Omit<ModelDefinitionConfig, "id">;
 
-type CodexRouteWarningOptions = Omit<
-  Parameters<typeof collectCodexRouteWarningsUnderTest>[0],
-  "cfg"
->;
-type CodexRouteRepairOptions = Omit<
-  Parameters<typeof maybeRepairCodexRoutesUnderTest>[0],
-  "cfg" | "shouldRepair"
->;
-
-function collectCodexRouteWarnings(
-  cfg: OpenClawConfigWithLegacyRoster,
-  options: CodexRouteWarningOptions = {},
-): string[] {
-  return collectCodexRouteWarningsUnderTest({ cfg, ...options });
+function collectCodexRouteWarnings(cfg: OpenClawConfigWithLegacyRoster): string[] {
+  return collectCodexRouteWarningsUnderTest({ cfg });
 }
 
-function maybeRepairCodexRoutes(
-  cfg: OpenClawConfigWithLegacyRoster,
-  options: CodexRouteRepairOptions = {},
+function maybeRepairCodexRoutes(cfg: OpenClawConfigWithLegacyRoster) {
+  return maybeRepairCodexRoutesUnderTest({ cfg, shouldRepair: true });
+}
+
+type Agents = NonNullable<OpenClawConfigWithLegacyRoster["agents"]>;
+type RouteFixture = Omit<OpenClawConfigWithLegacyRoster, "agents" | "models"> & {
+  defaults?: Agents["defaults"];
+  list?: Agents["list"];
+  entries?: Agents["entries"];
+  providers?: NonNullable<OpenClawConfig["models"]>["providers"];
+};
+function fixture({
+  defaults,
+  list,
+  entries,
+  providers,
+  ...rest
+}: RouteFixture): OpenClawConfigWithLegacyRoster {
+  const agents = {
+    ...(defaults !== undefined ? { defaults } : {}),
+    ...(list ? { list } : {}),
+    ...(entries ? { entries } : {}),
+  };
+  return {
+    ...rest,
+    ...(Object.keys(agents).length ? { agents } : {}),
+    ...(providers ? { models: { providers } } : {}),
+  };
+}
+function repairFixture(config: RouteFixture) {
+  return maybeRepairCodexRoutes(fixture(config));
+}
+
+function computerUseConfig(computerUse: Record<string, unknown>): OpenClawConfig {
+  return { plugins: { entries: { codex: { enabled: true, config: { computerUse } } } } };
+}
+
+function openaiProvider(
+  overrides: Partial<NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]> = {},
 ) {
-  return maybeRepairCodexRoutesUnderTest({
-    cfg,
-    shouldRepair: true,
-    ...options,
-  });
+  return { baseUrl: "https://proxy.example.test/v1", models: [], ...overrides };
 }
 
-function repairDefaultAgent(
-  defaults: NonNullable<OpenClawConfigWithLegacyRoster["agents"]>["defaults"],
-) {
-  return maybeRepairCodexRoutes({ agents: { defaults } });
+function catalogProvider(id: string, overrides: Partial<ModelDefinitionConfig> = {}) {
+  return { baseUrl: "", models: [{ ...MODEL_CATALOG_METADATA, id, ...overrides }] };
 }
 
-type CodexRouteRepairResult = ReturnType<typeof maybeRepairCodexRoutes>;
+function expectModelRuntime(model: { agentRuntime?: { id?: string } } | undefined, id = "codex") {
+  expect(model?.agentRuntime).toEqual({ id });
+}
+
 type AgentRuntime = ReturnType<typeof resolveAgentHarnessPolicy>["runtime"];
 
 function expectAgentRuntime(
@@ -99,34 +115,6 @@ function expectAgentRuntime(
       config,
     }).runtime,
   ).toBe(expected);
-}
-
-function expectCodexPluginEnabled(result: CodexRouteRepairResult) {
-  expect(result.warnings).toStrictEqual([]);
-  expect(result.changes).toStrictEqual(CODEX_PLUGIN_REPAIR_CHANGES);
-  expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
-}
-
-function expectCodexPluginDisabled(result: CodexRouteRepairResult) {
-  expect(result.warnings).toStrictEqual([]);
-  expect(result.changes).toStrictEqual([]);
-  expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
-}
-
-function itReenablesCodexPlugin(title: string, cfg: OpenClawConfigWithLegacyRoster) {
-  it(title, () => {
-    expectCodexPluginEnabled(
-      maybeRepairCodexRoutes({ plugins: REPAIRABLE_CODEX_PLUGIN_CONFIG, ...cfg }),
-    );
-  });
-}
-
-function itKeepsCodexPluginDisabled(title: string, cfg: OpenClawConfigWithLegacyRoster) {
-  it(title, () => {
-    expectCodexPluginDisabled(
-      maybeRepairCodexRoutes({ plugins: DISABLED_CODEX_PLUGIN_CONFIG, ...cfg }),
-    );
-  });
 }
 
 function legacyRouteWarning(...routes: string[]): string {
@@ -161,98 +149,47 @@ function losslessCompactionWarning(...routes: string[]): string {
 }
 
 describe("collectCodexRouteWarnings", () => {
-  it("surfaces enabled Codex Computer Use in doctor warnings", () => {
-    const warnings = collectCodexRouteWarnings({
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: {
-              computerUse: {
-                enabled: true,
-                healthCheckEnabled: true,
-                healthCheckIntervalMinutes: 120,
-                autoRepair: true,
-              },
-            },
-          },
-        },
-      },
-    });
-
+  it.each([false, true])("surfaces Computer Use defaults and opt-ins (opted in=%s)", (optedIn) => {
+    const warnings = collectCodexRouteWarnings(
+      computerUseConfig({
+        enabled: true,
+        ...(optedIn
+          ? { healthCheckEnabled: true, healthCheckIntervalMinutes: 120, autoRepair: true }
+          : {}),
+      }),
+    );
     expect(warnings).toStrictEqual([
       [
         "- Codex Computer Use is enabled.",
         "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` check.",
-        "- Periodic Computer Use health checks are enabled with a 120-minute cadence.",
-        "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children.",
+        optedIn
+          ? "- Periodic Computer Use health checks are enabled with a 120-minute cadence."
+          : "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.",
+        optedIn
+          ? "- Stale Computer Use MCP child repair is enabled and limited to SkyComputerUseClient children."
+          : "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed check.",
       ].join("\n"),
     ]);
-  });
-
-  it("surfaces opt-in defaults for Codex Computer Use health and repair", () => {
-    const warnings = collectCodexRouteWarnings({
-      plugins: {
-        entries: {
-          codex: {
-            enabled: true,
-            config: { computerUse: { enabled: true } },
-          },
-        },
-      },
-    });
-
-    expect(warnings).toStrictEqual([
-      [
-        "- Codex Computer Use is enabled.",
-        "- Doctor config review found Computer Use enabled; run `/codex computer-use status` to inspect installation, exposure, and the live `list_apps` check.",
-        "- Periodic Computer Use health checks are disabled by default; set `computerUse.healthCheckEnabled` to true to enable them.",
-        "- Stale Computer Use MCP child repair is disabled by default; set `computerUse.autoRepair` to true to repair before retrying a failed check.",
-      ].join("\n"),
-    ]);
-  });
-
-  it("repairs legacy openai-codex model refs found only in agents.list.*.models maps", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        list: [
-          {
-            id: "worker",
-            model: "anthropic/claude-sonnet-4-6",
-            models: { "openai-codex/gpt-5.4": { alias: "legacy" } },
-          },
-        ],
-      },
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.alias).toBe("legacy");
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
   });
 
   it("repairs only redundant native Codex service tiers and is idempotent", () => {
     const command = "node -e process.exit(99)";
-    const original = {
-      plugins: { entries: { codex: { enabled: true, config: { appServer: { command } } } } },
-      agents: {
-        defaults: {
-          params: { temperature: 0.7 },
-          models: {
-            "openai/gpt-5.6-sol": {
-              params: { fastMode: true, serviceTier: "priority", temperature: 0.2 },
-              agentRuntime: { id: "codex" },
-            },
-            "openai/gpt-5.6-terra": {
-              params: { fast_mode: "on", service_tier: "PRIORITY" },
-              agentRuntime: { id: "codex" },
-            },
+    const original = fixture({
+      defaults: {
+        params: { temperature: 0.7 },
+        models: {
+          "openai/gpt-5.6-sol": {
+            params: { fastMode: true, serviceTier: "priority", temperature: 0.2 },
+            agentRuntime: { id: "codex" },
+          },
+          "openai/gpt-5.6-terra": {
+            params: { fast_mode: "on", service_tier: "PRIORITY" },
+            agentRuntime: { id: "codex" },
           },
         },
       },
-    };
+      plugins: { entries: { codex: { enabled: true, config: { appServer: { command } } } } },
+    });
 
     const repaired = maybeRepairCodexRoutes(original);
 
@@ -265,14 +202,9 @@ describe("collectCodexRouteWarnings", () => {
         params: { fastMode: true, temperature: 0.2 },
         agentRuntime: { id: "codex" },
       },
-      "openai/gpt-5.6-terra": {
-        params: { fast_mode: "on" },
-        agentRuntime: { id: "codex" },
-      },
+      "openai/gpt-5.6-terra": { params: { fast_mode: "on" }, agentRuntime: { id: "codex" } },
     });
-    expect(repaired.cfg.plugins?.entries?.codex?.config).toEqual({
-      appServer: { command },
-    });
+    expect(repaired.cfg.plugins?.entries?.codex?.config).toEqual({ appServer: { command } });
     expect(repaired.warnings.join("\n")).toContain(
       "Custom Codex app-server command bypasses OpenClaw's managed exact-version binary.",
     );
@@ -280,7 +212,7 @@ describe("collectCodexRouteWarnings", () => {
     expect(repaired.warnings.join("\n")).toContain(
       "agents.defaults.models.openai/gpt-5.6-sol.params.temperature",
     );
-    expect(original.agents.defaults.models["openai/gpt-5.6-sol"].params).toHaveProperty(
+    expect(original.agents?.defaults?.models?.["openai/gpt-5.6-sol"]?.params).toHaveProperty(
       "serviceTier",
     );
 
@@ -290,94 +222,16 @@ describe("collectCodexRouteWarnings", () => {
     expect(second.warnings).toStrictEqual(repaired.warnings);
   });
 
-  it("preserves and reports authored params across effective Codex sources", () => {
-    const original = {
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.6-sol",
-          params: { temperature: 0.7 },
-          models: {
-            "openai/gpt-5.6-sol": {
-              params: {
-                fastMode: true,
-                fast_mode: false,
-                serviceTier: "priority",
-                temperature: 0.2,
-              },
-              agentRuntime: { id: "codex" },
-            },
-            "openai/gpt-5.6-openclaw": {
-              params: { fastMode: true, serviceTier: "priority" },
-              agentRuntime: { id: "openclaw" },
-            },
-          },
-        },
-        entries: {
-          coder: { params: { topP: 0.8 } },
-          worker: {
-            models: {
-              "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        },
-      },
-    };
-
-    const result = maybeRepairCodexRoutes(original);
-
-    expect(result.cfg).toBe(original);
-    expect(result.changes).toStrictEqual([]);
-    expect(result.warnings.join("\n")).toContain(
-      "agents.defaults.models.openai/gpt-5.6-sol.params.serviceTier",
-    );
-    expect(result.warnings.join("\n")).toContain(
-      "agents.defaults.models.openai/gpt-5.6-sol.params.temperature",
-    );
-    expect(result.warnings.join("\n")).toContain("agents.defaults.params.temperature");
-    expect(result.warnings.join("\n")).toContain("agents.entries.coder.params.topP");
-    expect(result.warnings.join("\n")).not.toContain("gpt-5.6-openclaw.params.serviceTier");
-  });
-
-  it("uses the doctor environment snapshot for implicit OpenAI routing", () => {
-    const cfg = {
-      plugins: DISABLED_CODEX_PLUGIN_CONFIG,
-      agents: { defaults: { model: { primary: "openai/gpt-5.4-nano" } } },
-    } satisfies OpenClawConfigWithLegacyRoster;
-
-    expect(
-      collectCodexRouteWarnings(cfg, {
-        env: { OPENAI_BASE_URL: "https://proxy.example.invalid/v1" },
-      }),
-    ).toStrictEqual([]);
-    expect(
-      collectCodexRouteWarnings(cfg, {
-        env: { OPENAI_BASE_URL: "https://chatgpt.com/backend-api/codex" },
-      }),
-    ).toStrictEqual([
-      disabledCodexPluginWarning(
-        "- agents.defaults.model.primary: openai/gpt-5.4-nano resolves to openai/gpt-5.4-nano with Codex runtime while the Codex plugin is disabled by config.",
-      ),
-    ]);
-  });
-
   it("does not migrate mixed Lossless provider-only and summary-model consumers", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        defaults: { model: "openai/gpt-5.5", compaction: { provider: "lossless-claw" } },
-        list: [
-          { id: "fast", model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4-mini" } },
-        ],
-      },
+    const result = repairFixture({
+      defaults: { model: "openai/gpt-5.5", compaction: { provider: "lossless-claw" } },
+      list: [{ id: "fast", model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4-mini" } }],
     });
 
     expect(result.changes).toStrictEqual([]);
     expect(result.cfg.plugins).toBeUndefined();
-    expect(result.cfg.agents?.defaults?.compaction).toEqual({
-      provider: "lossless-claw",
-    });
-    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({
-      model: "openai/gpt-5.4-mini",
-    });
+    expect(result.cfg.agents?.defaults?.compaction).toEqual({ provider: "lossless-claw" });
+    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({ model: "openai/gpt-5.4-mini" });
     expect(result.warnings).toStrictEqual([
       losslessCompactionWarning(
         "- agents.defaults.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
@@ -386,56 +240,30 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
-  it("canonicalizes bare legacy Lossless summary models during migration", () => {
-    const result = repairDefaultAgent({
-      model: "openai/gpt-5.5",
-      compaction: { model: "gpt-5.4-mini", provider: "lossless-claw" },
-    });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.cfg.plugins?.entries?.["lossless-claw"]).toEqual({
-      enabled: true,
-      config: { summaryModel: "openai/gpt-5.4-mini" },
-      llm: {
-        allowModelOverride: true,
-        allowedModels: ["openai/gpt-5.4-mini"],
-      },
-    });
-    expect(result.cfg.agents?.defaults?.compaction).toBeUndefined();
-  });
-
   it("does not grant Lossless model override policy without a migrated summary model", () => {
-    const result = repairDefaultAgent({
-      model: "openai/gpt-5.5",
-      compaction: {
-        provider: "lossless-claw",
-        keepRecentTokens: 10_000,
+    const result = repairFixture({
+      defaults: {
+        model: "openai/gpt-5.5",
+        compaction: { provider: "lossless-claw", keepRecentTokens: 10_000 },
       },
     });
 
     expect(result.warnings).toStrictEqual([]);
     expect(result.cfg.plugins?.slots?.contextEngine).toBe("lossless-claw");
-    expect(result.cfg.plugins?.entries?.["lossless-claw"]).toEqual({
-      enabled: true,
-      config: {},
-    });
-    expect(result.cfg.agents?.defaults?.compaction).toEqual({
-      keepRecentTokens: 10_000,
-    });
+    expect(result.cfg.plugins?.entries?.["lossless-claw"]).toEqual({ enabled: true, config: {} });
+    expect(result.cfg.agents?.defaults?.compaction).toEqual({ keepRecentTokens: 10_000 });
   });
 
   it("migrates numeric string agent ids before treating the path label as an index", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        list: [
-          { id: "other", model: "anthropic/claude-sonnet-4-6" },
-          {
-            id: "0",
-            model: "openai/gpt-5.5",
-            compaction: { model: "openai/gpt-5.4-mini", provider: "lossless-claw" },
-          },
-        ],
-      },
+    const result = repairFixture({
+      list: [
+        { id: "other", model: "anthropic/claude-sonnet-4-6" },
+        {
+          id: "0",
+          model: "openai/gpt-5.5",
+          compaction: { model: "openai/gpt-5.4-mini", provider: "lossless-claw" },
+        },
+      ],
     });
 
     expect(result.warnings).toStrictEqual([]);
@@ -446,49 +274,17 @@ describe("collectCodexRouteWarnings", () => {
     });
   });
 
-  it("does not collapse conflicting per-agent Lossless summary models", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        list: [
-          {
-            id: "fast",
-            model: "openai/gpt-5.5",
-            compaction: { model: "openai/gpt-5.4-mini", provider: "lossless-claw" },
-          },
-          {
-            id: "deep",
-            model: "openai/gpt-5.5",
-            compaction: { model: "openai/gpt-5.5", provider: "lossless-claw" },
-          },
-        ],
-      },
-    });
-
-    expect(result.changes).toStrictEqual([]);
-    expect(result.cfg.plugins).toBeUndefined();
-    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({
-      model: "openai/gpt-5.4-mini",
-      provider: "lossless-claw",
-    });
-    expect(result.cfg.agents?.list?.[1]?.compaction).toEqual({
-      model: "openai/gpt-5.5",
-      provider: "lossless-claw",
-    });
-  });
-
   it("does not overwrite a non-Lossless context-engine slot", () => {
-    const result = maybeRepairCodexRoutes({
-      plugins: { slots: { contextEngine: "custom-context" } },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          compaction: {
-            model: "openai-codex/gpt-5.4",
-            provider: "lossless-claw",
-            memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
-          },
+    const result = repairFixture({
+      defaults: {
+        model: "openai/gpt-5.5",
+        compaction: {
+          model: "openai-codex/gpt-5.4",
+          provider: "lossless-claw",
+          memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
         },
       },
+      plugins: { slots: { contextEngine: "custom-context" } },
     });
 
     expect(result.cfg.agents?.defaults?.compaction).toEqual({
@@ -496,9 +292,7 @@ describe("collectCodexRouteWarnings", () => {
       provider: "lossless-claw",
       memoryFlush: { model: "openai/gpt-5.4-mini" },
     });
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
+    expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]);
     expect(result.warnings).toStrictEqual([
       losslessCompactionWarning(
         "- agents.defaults.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
@@ -507,107 +301,61 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
-  it("preserves Codex runtime policy for each migrated per-agent Lossless model", () => {
-    const result = maybeRepairCodexRoutes({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://proxy.example.test/v1",
-            models: [],
-            agentRuntime: { id: "openclaw" },
-          },
-        },
-      },
-      agents: {
+  it.each([false, true])(
+    "preserves per-agent Lossless runtime policy when migration is blocked=%s",
+    (blocked) => {
+      const summary = "openai-codex/gpt-5.4-mini";
+      const result = repairFixture({
+        providers: { openai: openaiProvider(blocked ? {} : { agentRuntime: { id: "openclaw" } }) },
+        ...(blocked ? { plugins: { slots: { contextEngine: "custom-context" } } } : {}),
         defaults: {
-          model: "openai-codex/gpt-5.5",
-          compaction: { model: "openai-codex/gpt-5.4-mini", provider: "lossless-claw" },
+          model: blocked ? "anthropic/claude-sonnet-4-6" : "openai-codex/gpt-5.5",
+          compaction: { model: summary, ...(!blocked ? { provider: "lossless-claw" } : {}) },
         },
         list: ["fast", "deep"].map((id) => ({
           id,
           model: "openai/gpt-5.5",
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-          compaction: { model: "openai-codex/gpt-5.4-mini" },
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+          compaction: blocked ? { provider: "lossless-claw" } : { model: summary },
         })),
-      },
-    });
-
-    expect(result.cfg.plugins?.slots?.contextEngine).toBe("lossless-claw");
-    expect(result.cfg.plugins?.entries?.["lossless-claw"]?.config).toEqual({
-      summaryModel: "openai/gpt-5.4-mini",
-    });
-    expect(result.cfg.agents?.defaults?.compaction).toBeUndefined();
-    expect(result.cfg.agents?.list?.[0]?.compaction).toBeUndefined();
-    expect(result.cfg.agents?.list?.[1]?.compaction).toBeUndefined();
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expect(result.cfg.agents?.list?.[1]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-  });
-
-  it("canonicalizes inherited Lossless summary models when migration is blocked", () => {
-    const result = maybeRepairCodexRoutes({
-      models: {
-        providers: { openai: { baseUrl: "https://proxy.example.test/v1", models: [] } },
-      },
-      plugins: { slots: { contextEngine: "custom-context" } },
-      agents: {
-        defaults: {
-          model: "anthropic/claude-sonnet-4-6",
-          compaction: { model: "openai-codex/gpt-5.4-mini" },
-        },
-        list: ["fast", "deep"].map((id) => ({
-          id,
-          model: "openai/gpt-5.5",
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-          compaction: { provider: "lossless-claw" },
-        })),
-      },
-    });
-
-    expect(result.cfg.agents?.defaults?.compaction).toEqual({
-      model: "openai/gpt-5.4-mini",
-    });
-    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({
-      provider: "lossless-claw",
-    });
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expect(result.cfg.agents?.list?.[1]?.compaction).toEqual({
-      provider: "lossless-claw",
-    });
-    expect(result.cfg.agents?.list?.[1]?.models?.["openai/gpt-5.4-mini"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expect(result.warnings).toStrictEqual([
-      losslessCompactionWarning(
-        "- agents.list.fast.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-        "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
-        "- agents.list.deep.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
-        "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
-      ),
-    ]);
-  });
+      });
+      expect(result.cfg.agents?.defaults?.compaction).toEqual(
+        blocked ? { model: "openai/gpt-5.4-mini" } : undefined,
+      );
+      const agents = result.cfg.agents?.list;
+      expect(agents?.map((agent) => agent.compaction)).toEqual(
+        blocked
+          ? [{ provider: "lossless-claw" }, { provider: "lossless-claw" }]
+          : [undefined, undefined],
+      );
+      expectModelRuntime(agents?.[0]?.models?.["openai/gpt-5.4-mini"]);
+      expectModelRuntime(agents?.[1]?.models?.["openai/gpt-5.4-mini"]);
+      if (blocked) {
+        expect(result.warnings).toStrictEqual([
+          losslessCompactionWarning(
+            "- agents.list.fast.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
+            "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
+            "- agents.list.deep.compaction.provider: lossless-claw should become plugins.slots.contextEngine: lossless-claw.",
+            "- agents.defaults.compaction.model: openai/gpt-5.4-mini should become plugins.entries.lossless-claw.config.summaryModel.",
+          ),
+        ]);
+      } else {
+        expect(result.cfg.plugins?.slots?.contextEngine).toBe("lossless-claw");
+        expect(result.cfg.plugins?.entries?.["lossless-claw"]?.config).toEqual({
+          summaryModel: "openai/gpt-5.4-mini",
+        });
+      }
+    },
+  );
 
   it("does not discard a legacy Lossless model that conflicts with an existing summary model", () => {
-    const result = maybeRepairCodexRoutes({
-      plugins: {
-        entries: {
-          "lossless-claw": { enabled: true, config: { summaryModel: "openai/gpt-5.5" } },
-        },
+    const result = repairFixture({
+      defaults: {
+        model: "openai/gpt-5.5",
+        compaction: { model: "openai/gpt-5.4", provider: "lossless-claw" },
       },
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          compaction: { model: "openai/gpt-5.4", provider: "lossless-claw" },
-        },
+      plugins: {
+        entries: { "lossless-claw": { enabled: true, config: { summaryModel: "openai/gpt-5.5" } } },
       },
     });
 
@@ -622,20 +370,18 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("preserves shared Lossless summary models inherited by non-Codex agents with local providers", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          compaction: { model: "openai/gpt-5.4", provider: "lossless-claw" },
-        },
-        list: [
-          {
-            id: "worker",
-            model: "anthropic/claude-sonnet-4-6",
-            compaction: { provider: "custom-summary" },
-          },
-        ],
+    const result = repairFixture({
+      defaults: {
+        model: "openai/gpt-5.5",
+        compaction: { model: "openai/gpt-5.4", provider: "lossless-claw" },
       },
+      list: [
+        {
+          id: "worker",
+          model: "anthropic/claude-sonnet-4-6",
+          compaction: { provider: "custom-summary" },
+        },
+      ],
     });
 
     expect(result.changes).toStrictEqual([]);
@@ -644,66 +390,25 @@ describe("collectCodexRouteWarnings", () => {
       model: "openai/gpt-5.4",
       provider: "lossless-claw",
     });
-    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({
-      provider: "custom-summary",
-    });
-  });
-
-  it("removes shared default compaction fields that non-Codex agents override", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-          compaction: {
-            model: "openai/gpt-5.4",
-            provider: "custom-summary",
-            keepRecentTokens: 10_000,
-          },
-        },
-        list: [
-          {
-            id: "worker",
-            model: "anthropic/claude-sonnet-4-6",
-            compaction: { model: "anthropic/claude-haiku-4-6" },
-          },
-        ],
-      },
-    });
-
-    expect(result.cfg.agents?.defaults?.compaction).toEqual({
-      provider: "custom-summary",
-      keepRecentTokens: 10_000,
-    });
-    expect(result.warnings).toStrictEqual([
-      codexCompactionWarning(
-        "- agents.defaults.compaction.provider: custom-summary is ignored while this agent uses Codex runtime.",
-        "- Move or remove shared `agents.defaults.compaction.model/provider` settings manually; doctor keeps shared defaults while non-Codex agents can inherit them.",
-      ),
-    ]);
+    expect(result.cfg.agents?.list?.[0]?.compaction).toEqual({ provider: "custom-summary" });
   });
 
   it("keeps blocked namespace refs while repairing an independent namespace", () => {
-    const result = maybeRepairCodexRoutes({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "",
-            models: [{ ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-responses" }],
-          },
-          "openai-codex": {
-            baseUrl: "",
-            models: [
-              { ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-chatgpt-responses" },
-            ],
-          },
+    const result = repairFixture({
+      defaults: { model: "openai-codex/gpt-5.6-sol" },
+      providers: {
+        openai: {
+          baseUrl: "",
+          models: [{ ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-responses" }],
+        },
+        "openai-codex": {
+          baseUrl: "",
+          models: [
+            { ...MODEL_CATALOG_METADATA, id: "gpt-5.6-sol", api: "openai-chatgpt-responses" },
+          ],
         },
       },
-      agents: {
-        defaults: { model: "openai-codex/gpt-5.6-sol" },
-      },
-      hooks: {
-        mappings: [{ model: "codex/gpt-5.4-mini" }],
-      },
+      hooks: { mappings: [{ model: "codex/gpt-5.4-mini" }] },
     });
 
     expect(result.cfg.agents?.defaults?.model).toBe("openai-codex/gpt-5.6-sol");
@@ -715,8 +420,8 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("keeps doctor fix hint for agent-specific compaction overrides", () => {
-    const warnings = collectCodexRouteWarnings({
-      agents: {
+    const warnings = collectCodexRouteWarnings(
+      fixture({
         defaults: {
           model: "anthropic/claude-sonnet-4-6",
           compaction: { model: "openai/gpt-5.4", provider: "custom-summary" },
@@ -725,8 +430,8 @@ describe("collectCodexRouteWarnings", () => {
           { id: "codex", model: "openai/gpt-5.5", compaction: { model: "openai/gpt-5.4" } },
           { id: "worker", model: "anthropic/claude-sonnet-4-6" },
         ],
-      },
-    });
+      }),
+    );
 
     expect(warnings).toStrictEqual([
       codexCompactionWarning(
@@ -741,24 +446,19 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("does not broaden runtime policy from kept compaction-only refs", () => {
-    const result = maybeRepairCodexRoutes({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
+    const result = repairFixture({
+      defaults: {
+        model: "openai-codex/gpt-5.5",
+        heartbeat: { model: "openai/gpt-5.4" },
+        compaction: { model: "openai-codex/gpt-5.4", provider: "custom-summary" },
       },
-      agents: {
-        defaults: {
-          model: "openai-codex/gpt-5.5",
-          heartbeat: { model: "openai/gpt-5.4" },
-          compaction: { model: "openai-codex/gpt-5.4", provider: "custom-summary" },
-        },
-        list: [{ id: "worker", model: "anthropic/claude-sonnet-4-6" }],
+      providers: {
+        openai: openaiProvider({
+          baseUrl: "https://api.openai.com/v1",
+          agentRuntime: { id: "openclaw" },
+        }),
       },
+      list: [{ id: "worker", model: "anthropic/claude-sonnet-4-6" }],
     });
 
     expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
@@ -772,49 +472,33 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("repairs configured Codex model refs to canonical OpenAI refs with model-scoped Codex runtime", () => {
-    const result = maybeRepairCodexRoutes({
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai-codex/gpt-5.5",
-            fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
-          },
-          heartbeat: { model: "openai-codex/gpt-5.4-mini" },
-          subagents: {
-            model: {
-              primary: "openai-codex/gpt-5.5",
-              fallbacks: ["openai-codex/gpt-5.4"],
-            },
-          },
-          compaction: {
-            model: "openai-codex/gpt-5.4",
-            memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
-          },
-          mediaModels: {
-            image: {
-              primary: "openai-codex/gpt-image-2",
-              fallbacks: ["openai-codex/gpt-image-1"],
-            },
-            video: { primary: "openai-codex/sora-2" },
-          },
-          models: { "openai-codex/gpt-5.5": { alias: "codex" } },
+    const result = repairFixture({
+      defaults: {
+        model: {
+          primary: "openai-codex/gpt-5.5",
+          fallbacks: ["openai-codex/gpt-5.4", "anthropic/claude-sonnet-4-6"],
         },
-        entries: {
-          worker: { model: "openai-codex/gpt-5.4" },
+        heartbeat: { model: "openai-codex/gpt-5.4-mini" },
+        subagents: {
+          model: { primary: "openai-codex/gpt-5.5", fallbacks: ["openai-codex/gpt-5.4"] },
         },
+        compaction: {
+          model: "openai-codex/gpt-5.4",
+          memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
+        },
+        mediaModels: {
+          image: { primary: "openai-codex/gpt-image-2", fallbacks: ["openai-codex/gpt-image-1"] },
+          video: { primary: "openai-codex/sora-2" },
+        },
+        models: { "openai-codex/gpt-5.5": { alias: "codex" } },
       },
-      channels: {
-        modelByChannel: { telegram: { default: "openai-codex/gpt-5.4" } },
-      },
+      channels: { modelByChannel: { telegram: { default: "openai-codex/gpt-5.4" } } },
       hooks: {
-        mappings: [
-          {
-            model: "openai-codex/gpt-5.4-mini",
-          },
-        ],
+        mappings: [{ model: "openai-codex/gpt-5.4-mini" }],
         gmail: { model: "openai-codex/gpt-5.4" },
       },
       tts: { summaryModel: "openai-codex/gpt-5.4-mini" },
+      entries: { worker: { model: "openai-codex/gpt-5.4" } },
     });
 
     expect(result.warnings).toStrictEqual([]);
@@ -833,9 +517,7 @@ describe("collectCodexRouteWarnings", () => {
       primary: "openai/gpt-image-2",
       fallbacks: ["openai/gpt-image-1"],
     });
-    expect(result.cfg.agents?.defaults?.mediaModels?.video).toEqual({
-      primary: "openai/sora-2",
-    });
+    expect(result.cfg.agents?.defaults?.mediaModels?.video).toEqual({ primary: "openai/sora-2" });
     expect(result.cfg.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "codex", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
@@ -851,13 +533,11 @@ describe("collectCodexRouteWarnings", () => {
   });
 
   it("warns without overriding an explicit Codex plugin opt-out", () => {
-    const result = maybeRepairCodexRoutes({
+    const result = repairFixture({
+      defaults: { model: { primary: "gpt-5.5" } },
       plugins: {
         allow: ["openai"],
         entries: { openai: { enabled: true }, codex: { enabled: false } },
-      },
-      agents: {
-        defaults: { model: { primary: "gpt-5.5" } },
       },
     });
 
@@ -872,147 +552,54 @@ describe("collectCodexRouteWarnings", () => {
     expectAgentRuntime(result.cfg, "codex", { modelId: "gpt-5.5" });
   });
 
-  itReenablesCodexPlugin(
-    "re-enables the Codex plugin when an agent model alias resolves to OpenAI",
+  it.each<RouteFixture & { name: string }>([
     {
-      agents: {
-        defaults: {
-          model: "xiaomi/mimo-v2-pro-mit",
-          models: { "openai/xiaomi/mimo-v2-pro-mit": { alias: "xiaomi/mimo-v2-pro-mit" } },
-        },
-      },
-    },
-  );
-
-  itKeepsCodexPluginDisabled(
-    "keeps the Codex plugin disabled when a bare alias inherits a default provider from the primary alias",
-    {
-      agents: {
-        defaults: {
-          model: "sonnet",
-          models: {
-            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            "claude-opus-4-6": { alias: "opus" },
-          },
-          subagents: { model: "opus" },
-        },
-      },
-    },
-  );
-
-  itKeepsCodexPluginDisabled(
-    "keeps Codex disabled when implicit defaults resolve to a configured provider",
-    {
-      models: {
-        providers: {
-          anthropic: {
-            baseUrl: "",
-            models: [{ ...MODEL_CATALOG_METADATA, id: "claude-sonnet-4-6" }],
-          },
-        },
-      },
-      agents: {
-        defaults: {},
-      },
-    },
-  );
-
-  itReenablesCodexPlugin(
-    "re-enables Codex for default model-map runtime policies inherited by listed agents",
-    {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
-        },
-        list: [{ id: "worker", model: "anthropic/claude-sonnet-4-6" }],
-      },
-    },
-  );
-
-  itKeepsCodexPluginDisabled(
-    "keeps Codex disabled when a bare alias inherits an OpenRouter compat primary provider",
-    {
-      agents: {
-        defaults: {
-          model: "openrouter:auto",
-          models: { "claude-sonnet-4-6": { alias: "sonnet" } },
-          subagents: { model: "sonnet" },
-        },
-      },
-    },
-  );
-
-  itKeepsCodexPluginDisabled(
-    "keeps Codex disabled when an alias resolves to an OpenRouter compat model",
-    {
-      agents: {
-        defaults: {
-          model: "router-auto",
-          models: { "openrouter:auto": { alias: "router-auto" } },
-        },
-      },
-    },
-  );
-
-  itReenablesCodexPlugin("checks channel model runtime policy for every configured agent", {
-    agents: {
+      name: "inherited bare aliases",
       defaults: {
-        model: "anthropic/claude-sonnet-4-6",
+        model: "sonnet",
         models: {
-          "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
+          "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          "claude-opus-4-6": { alias: "opus" },
         },
+        subagents: { model: "opus" },
       },
+    },
+    {
+      name: "implicit provider defaults",
+      defaults: {},
+      providers: { anthropic: catalogProvider("claude-sonnet-4-6") },
+    },
+    {
+      name: "OpenRouter compat alias",
+      defaults: { model: "router-auto", models: { "openrouter:auto": { alias: "router-auto" } } },
+    },
+    {
+      name: "normalized runtime agent id",
       list: [
-        { id: "main" },
         {
-          id: "worker",
-          models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-          },
+          id: "",
+          model: "gpt-5.5",
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } } },
         },
       ],
     },
-    channels: {
-      modelByChannel: { telegram: { default: "openai/gpt-5.5" } },
+    {
+      name: "case-insensitive provider model",
+      defaults: { model: "qwen-max" },
+      providers: { "qwen-dashscope": catalogProvider("Qwen-Max") },
     },
+  ])("keeps Codex disabled for $name", ({ name: _name, ...config }) => {
+    const result = repairFixture({ plugins: DISABLED_CODEX_PLUGIN_CONFIG, ...config });
+    expect(result).toMatchObject({
+      warnings: [],
+      changes: [],
+      cfg: { plugins: { entries: { codex: { enabled: false } } } },
+    });
   });
 
-  itKeepsCodexPluginDisabled(
-    "uses normalized runtime agent ids when checking model runtime policy",
-    {
-      agents: {
-        list: [
-          {
-            id: "",
-            model: "gpt-5.5",
-            models: {
-              "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        ],
-      },
-    },
-  );
-
-  itKeepsCodexPluginDisabled(
-    "keeps the Codex plugin disabled when a bare model case-insensitively resolves to a configured provider",
-    {
-      models: {
-        providers: {
-          "qwen-dashscope": {
-            baseUrl: "",
-            models: [{ ...MODEL_CATALOG_METADATA, id: "Qwen-Max" }],
-          },
-        },
-      },
-      agents: { defaults: { model: "qwen-max" } },
-    },
-  );
-
   it("repairs live multi-agent Codex upgrade configs and enables Codex through allowlists", () => {
-    const result = maybeRepairCodexRoutes({
+    const result = repairFixture({
+      defaults: { model: "openai-codex/gpt-5.5" },
       plugins: {
         allow: ["brave", "discord", "whatsapp"],
         entries: {
@@ -1021,14 +608,11 @@ describe("collectCodexRouteWarnings", () => {
           whatsapp: { enabled: true },
         },
       },
-      agents: {
-        defaults: { model: "openai-codex/gpt-5.5" },
-        list: [
-          { id: "main", model: "openai-codex/gpt-5.5" },
-          { id: "meimei", model: "openai-codex/gpt-5.5" },
-          { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
-        ],
-      },
+      list: [
+        { id: "main", model: "openai-codex/gpt-5.5" },
+        { id: "meimei", model: "openai-codex/gpt-5.5" },
+        { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
+      ],
     });
 
     expect(result.warnings).toStrictEqual([]);
@@ -1038,9 +622,7 @@ describe("collectCodexRouteWarnings", () => {
       "openai/gpt-5.5",
       "openai/gpt-5.5",
     ]);
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
+    expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]);
     for (const agent of result.cfg.agents?.list ?? []) {
       expect(agent.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "codex" });
     }
@@ -1048,160 +630,76 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.allow).toEqual(["brave", "discord", "whatsapp", "codex"]);
   });
 
-  it("preserves listed-agent legacy model-map runtime pins while repairing listed-agent refs", () => {
-    const cfg: OpenClawConfigWithLegacyRoster = {
-      agents: {
-        list: [
-          {
-            id: "worker",
-            model: "openai-codex/gpt-5.4",
-            models: {
-              "openai-codex/gpt-5.4": { agentRuntime: { id: "openclaw" } },
-            },
-          },
-        ],
-      },
-    };
-
-    expectAgentRuntime(cfg, "openclaw", { provider: "openai-codex", agentId: "worker" });
-
-    const result = maybeRepairCodexRoutes(cfg);
-
-    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "openclaw",
-    });
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
-    expectAgentRuntime(result.cfg, "openclaw", { agentId: "worker" });
-  });
-
   it("preserves inherited default wildcard runtime pins for listed-agent legacy refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai-codex/*": { agentRuntime: { id: "openclaw" } },
-          },
+    const cfg = fixture({
+      defaults: {
+        models: {
+          "openai-codex/*": { agentRuntime: { id: "openclaw" } },
         },
-        list: [{ id: "worker", model: "openai-codex/gpt-5.4" }],
       },
-    } satisfies OpenClawConfigWithLegacyRoster;
+      list: [{ id: "worker", model: "openai-codex/gpt-5.4" }],
+    }) satisfies OpenClawConfigWithLegacyRoster;
 
     expectAgentRuntime(cfg, "openclaw", { provider: "openai-codex", agentId: "worker" });
 
     const result = maybeRepairCodexRoutes(cfg);
 
-    expect(result.cfg.agents?.defaults?.models?.["openai/*"]?.agentRuntime).toEqual({
-      id: "openclaw",
-    });
+    expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/*"], "openclaw");
     expect(result.cfg.agents?.defaults?.models?.["openai-codex/*"]).toBeUndefined();
     expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
     expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]).toBeUndefined();
     expectAgentRuntime(result.cfg, "openclaw", { agentId: "worker" });
   });
 
-  it("preserves legacy provider catalog runtime pins while repairing default legacy refs", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "openai-codex": {
-            baseUrl: "",
-            models: [
-              { ...MODEL_CATALOG_METADATA, id: "gpt-5.4", agentRuntime: { id: "openclaw" } },
-            ],
-          },
-        },
-      },
-      agents: { defaults: { model: "openai-codex/gpt-5.4" } },
-    } satisfies OpenClawConfigWithLegacyRoster;
-
-    expectAgentRuntime(cfg, "openclaw", { provider: "openai-codex" });
-
-    const result = maybeRepairCodexRoutes(cfg);
-
-    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "openclaw",
-    });
-    expectAgentRuntime(result.cfg, "openclaw");
-  });
-
-  it("shields listed canonical refs when provider-level legacy default pins migrate", () => {
-    const cfg = {
-      models: {
-        providers: {
-          "openai-codex": { baseUrl: "", models: [], agentRuntime: { id: "openclaw" } },
-        },
-      },
-      agents: {
+  it.each(["catalog", "provider"])(
+    "preserves legacy %s runtime pins without broadening canonical agents",
+    (source) => {
+      const providerPin = source === "provider";
+      const cfg = fixture({
         defaults: { model: "openai-codex/gpt-5.4" },
-        list: [
-          { id: "main", default: true },
-          { id: "regular", model: "openai/gpt-5.4" },
-        ],
-      },
-    } satisfies OpenClawConfigWithLegacyRoster;
-
-    expectAgentRuntime(cfg, "openclaw", { provider: "openai-codex", agentId: "main" });
-    expectAgentRuntime(cfg, "codex", { agentId: "regular" });
-
-    const result = maybeRepairCodexRoutes(cfg);
-
-    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "openclaw",
-    });
-    expect(result.cfg.agents?.list?.[0]?.model).toBeUndefined();
-    expect(result.cfg.agents?.list?.[1]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.list?.[1]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expectAgentRuntime(result.cfg, "openclaw", { agentId: "main" });
-    expectAgentRuntime(result.cfg, "codex", { agentId: "regular" });
-  });
-
-  it("does not apply pre-existing canonical default runtime pins to listed-agent legacy refs", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/*": { agentRuntime: { id: "openclaw" } },
-          },
+        providers: {
+          "openai-codex": providerPin
+            ? { baseUrl: "", models: [], agentRuntime: { id: "openclaw" } }
+            : catalogProvider("gpt-5.4", { agentRuntime: { id: "openclaw" } }),
         },
-        list: [{ id: "worker", model: "openai-codex/gpt-5.4" }],
-      },
-    } satisfies OpenClawConfigWithLegacyRoster;
-
-    expectAgentRuntime(cfg, "auto", { provider: "openai-codex", agentId: "worker" });
-
-    const result = maybeRepairCodexRoutes(cfg);
-
-    expect(result.cfg.agents?.defaults?.models?.["openai/*"]?.agentRuntime).toEqual({
-      id: "openclaw",
-    });
-    expect(result.cfg.agents?.list?.[0]?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.list?.[0]?.models?.["openai/gpt-5.4"]?.agentRuntime).toEqual({
-      id: "codex",
-    });
-    expectAgentRuntime(result.cfg, "codex", { agentId: "worker" });
-  });
+        ...(providerPin
+          ? {
+              list: [
+                { id: "main", default: true },
+                { id: "regular", model: "openai/gpt-5.4" },
+              ],
+            }
+          : {}),
+      });
+      const owner = providerPin ? { agentId: "main" } : {};
+      expectAgentRuntime(cfg, "openclaw", { provider: "openai-codex", ...owner });
+      if (providerPin) {
+        expectAgentRuntime(cfg, "codex", { agentId: "regular" });
+      }
+      const result = maybeRepairCodexRoutes(cfg);
+      expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.4");
+      expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"], "openclaw");
+      expectAgentRuntime(result.cfg, "openclaw", owner);
+      if (providerPin) {
+        expect(result.cfg.agents?.list?.[0]?.model).toBeUndefined();
+        expect(result.cfg.agents?.list?.[1]?.model).toBe("openai/gpt-5.4");
+        expectModelRuntime(result.cfg.agents?.list?.[1]?.models?.["openai/gpt-5.4"]);
+        expectAgentRuntime(result.cfg, "codex", { agentId: "regular" });
+      }
+    },
+  );
 
   it("leaves path-scoped agent refs unchanged when repair would broaden another canonical agent slot", () => {
-    const result = maybeRepairCodexRoutes({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
+    const result = repairFixture({
+      defaults: {
+        model: { primary: "openai/gpt-5.4" },
+        heartbeat: { model: "openai-codex/gpt-5.4" },
       },
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.4" },
-          heartbeat: { model: "openai-codex/gpt-5.4" },
-        },
+      providers: {
+        openai: openaiProvider({
+          baseUrl: "https://api.openai.com/v1",
+          agentRuntime: { id: "openclaw" },
+        }),
       },
     });
 
@@ -1217,33 +715,25 @@ describe("collectCodexRouteWarnings", () => {
     ]);
   });
 
-  for (const canonicalRuntimeId of ["auto", "default"] as const) {
-    it(`preserves an explicit legacy runtime pin over canonical ${canonicalRuntimeId} during model-map migration`, () => {
-      const result = maybeRepairCodexRoutes({
-        agents: {
-          defaults: {
-            model: { primary: "openai-codex/gpt-5.4" },
-            models: {
-              "openai-codex/gpt-5.4": { agentRuntime: { id: "openclaw" } },
-              "openai/gpt-5.4": {
-                alias: "canonical-codex",
-                agentRuntime: { id: canonicalRuntimeId },
-              },
-            },
-          },
+  it("preserves an explicit legacy runtime pin over canonical default during model-map migration", () => {
+    const result = repairFixture({
+      defaults: {
+        model: { primary: "openai-codex/gpt-5.4" },
+        models: {
+          "openai-codex/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+          "openai/gpt-5.4": { alias: "canonical-codex", agentRuntime: { id: "default" } },
         },
-        plugins: DISABLED_CODEX_PLUGIN_CONFIG,
-      });
-
-      expect(result.cfg.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.4" });
-      expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
-        alias: "canonical-codex",
-        agentRuntime: { id: "openclaw" },
-      });
-      expect(result.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
-      expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
-      expectAgentRuntime(result.cfg, "openclaw");
+      },
+      plugins: DISABLED_CODEX_PLUGIN_CONFIG,
     });
-  }
+
+    expect(result.cfg.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.4" });
+    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]).toEqual({
+      alias: "canonical-codex",
+      agentRuntime: { id: "openclaw" },
+    });
+    expect(result.cfg.agents?.defaults?.models?.["openai-codex/gpt-5.4"]).toBeUndefined();
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(false);
+    expectAgentRuntime(result.cfg, "openclaw");
+  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

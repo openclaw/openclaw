@@ -7,7 +7,7 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.t
 import { TEST_LINK_READER } from "../test-helpers/link-reader.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
-const TAG = "test-github-seeded-hovercard";
+const TAG = `test-github-seeded-hovercard-${crypto.randomUUID()}`;
 customElements.define(TAG, class extends LinkReaderHovercardProvider {});
 const PR_HREF = "https://github.com/openclaw/openclaw/pull/99815";
 const seed: ControlUiLinkReaderPreview = {

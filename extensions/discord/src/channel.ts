@@ -61,7 +61,7 @@ import {
   probeDiscordStatusAccount,
 } from "./channel.loaders.js";
 import { openDiscordCommandDeployHashStore } from "./command-deploy-store.js";
-import { inspectDiscordConversationRouteOwner } from "./conversation-route-owner.js";
+import { prepareDiscordConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { shouldSuppressLocalDiscordExecApprovalPrompt } from "./exec-approvals.js";
 import {
   resolveDiscordGroupRequireMention,
@@ -177,8 +177,9 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
         stripPatterns: () => ["<@!?\\d+>"],
       },
       agentPrompt: {
+        questionInputMode: "buttons",
         messageToolHints: () => [
-          "- Discord mentions: use canonical outbound syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Plain `@name` text only pings when a configured `mentionAliases` entry rewrites it; do not use the legacy `<@!USER_ID>` nickname form.",
+          "- Discord mentions: use supported mention syntax: users `<@USER_ID>`, channels `<#CHANNEL_ID>`, and roles `<@&ROLE_ID>`. Plain `@name` text only pings when a configured `mentionAliases` entry rewrites it; do not use the legacy `<@!USER_ID>` nickname form.",
           "- Discord components: set `components` when sending messages to include buttons, selects, or v2 containers.",
           "- Forms: add `components.modal` (title, fields). OpenClaw adds a trigger button and routes submissions as new messages.",
         ],
@@ -186,7 +187,7 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe, 
       messaging: {
         directTargetStyle: discordPluginBase.messaging?.directTargetStyle,
         inferTargetChatType: discordPluginBase.messaging?.inferTargetChatType,
-        resolveConversationRouteOwner: inspectDiscordConversationRouteOwner,
+        prepareConversationRouteOwnersAsync: prepareDiscordConversationRouteOwnersAsync,
         targetPrefixes: ["discord"],
         targetIdComparison: "lowercase",
         normalizeTarget: normalizeDiscordMessagingTarget,

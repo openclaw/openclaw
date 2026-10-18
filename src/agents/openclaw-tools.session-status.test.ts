@@ -11,6 +11,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
+import { prepareSharedAuthStoreOwnership } from "./auth-profiles/path-resolve.js";
 import {
   createMockConfig,
   fixedStoreConfig,
@@ -175,7 +176,7 @@ function createModelAuthModuleMock() {
   return {
     resolveEnvApiKey: resolveEnvApiKeyMock,
     resolveUsableCustomProviderApiKey: resolveUsableCustomProviderApiKeyMock,
-    resolveModelAuthMode: () => "api-key",
+    resolveModelAuthModeAsync: () => "api-key",
   };
 }
 
@@ -281,6 +282,7 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: () => [],
 }));
 vi.mock("../agents/auth-profiles.js", createAuthProfilesModuleMock);
+// mock-isolation: Session status uses fixture auth labels without discovering host keys or accounts.
 vi.mock("../agents/model-auth.js", createModelAuthModuleMock);
 vi.mock("../infra/provider-usage.js", createProviderUsageModuleMock);
 vi.mock("../status/status-text.js", createCommandsStatusRuntimeModuleMock);
@@ -305,6 +307,7 @@ vi.mock("../sessions/session-state-events.js", () => ({
 let createSessionStatusTool: typeof import("./tools/session-status-tool.js").createSessionStatusTool;
 
 beforeAll(async () => {
+  await prepareSharedAuthStoreOwnership();
   ({ createSessionStatusTool } = await import("./tools/session-status-tool.js"));
 });
 

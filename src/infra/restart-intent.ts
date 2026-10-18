@@ -1,9 +1,9 @@
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 // Persists short-lived gateway restart intent for supervisor SIGTERM handoff.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
 import { gatewayServiceCommandMatchesRoot } from "../daemon/service-layout.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
@@ -39,6 +39,7 @@ import {
 } from "./restart-intent-payload.js";
 import type { GatewayRestartIntent } from "./restart-lifecycle.types.js";
 import { spawnPsSync } from "./spawn-ps.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -92,10 +93,8 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
 }): Promise<GatewayRestartIntentLegacyProcess | undefined> {
   opts.assertCurrent();
   try {
-    if (
-      readGatewayOwnerLease({ env: opts.env, current: true }) !== undefined ||
-      !existsSync(resolveGatewayLockPaths(opts.env).stateLockPath)
-    ) {
+    const owner = readGatewayOwnerLease({ env: opts.env, current: true });
+    if (owner && owner.state !== "dead") {
       return undefined;
     }
     const pid = asPositiveSafeInteger(opts.runtimePid);
@@ -125,6 +124,34 @@ export async function prepareGatewayRestartIntentLegacyProcess(opts: {
       getFileLockProcessStartTime(pid, opts.env) !== startTime
     ) {
       return undefined;
+    }
+    // Activation can precede publication, leaving no owner or a dead predecessor.
+    // Wait for fresh evidence; an unpublished native PID never authorizes a signal.
+    const deadline = Date.now() + resolveGatewayStartupTiming().deadlineMs;
+    while (true) {
+      const published = readGatewayOwnerLease({ env: opts.env, current: true });
+      if (published && published.state !== "dead") {
+        break;
+      }
+      const legacy = readLegacyGatewayRestartLockSync(opts.env);
+      if (
+        legacy &&
+        !isPidDefinitelyDead(legacy.pid) &&
+        (!published || !isLegacyProcessInService(legacy.pid, pid))
+      ) {
+        break;
+      }
+      opts.assertCurrent();
+      if (
+        Date.now() >= deadline ||
+        !isPidAlive(pid) ||
+        getFileLockProcessStartTime(pid, opts.env) !== startTime
+      ) {
+        return undefined;
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 200);
+      });
     }
     return { pid, startTime };
   } catch {
@@ -323,7 +350,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 
 function writeGatewayRestartIntentForTargetSync(
   opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
-  resolveTargetPid: (db: DatabaseSync) => number | undefined,
+  resolveTargetPid: (db: EngineConnection) => number | undefined,
   assertCurrent?: () => void,
 ): boolean {
   const env = opts.env ?? process.env;

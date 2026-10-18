@@ -10,6 +10,7 @@ import { createWorkboardCapability } from "../../lib/workboard/capability.ts";
 import { createWorkboardCard } from "../../lib/workboard/test/index-helpers.ts";
 import { workboardTestHost } from "../../test/host.setup.ts";
 import { createViewContext } from "../../test/host.ts";
+import { afterWorkboardUpdate } from "../../test/settle.ts";
 import { createWorkboardPage } from "./workboard-page.tsx";
 
 const cleanup: (() => void)[] = [];
@@ -96,12 +97,12 @@ export function mountPage(
 }
 
 export async function openBoardEditor(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() => expect(page.workboard.state.loaded).toBe(true));
+  await afterWorkboardUpdate(() => expect(page.workboard.state.loaded).toBe(true));
   expectDefined(
     page.container.querySelector<HTMLButtonElement>('button[aria-label="Edit board"]'),
     "edit board",
   ).click();
-  return vi.waitFor(() =>
+  return afterWorkboardUpdate(() =>
     expectDefined(
       page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
       "board editor",
@@ -110,7 +111,7 @@ export async function openBoardEditor(page: ReturnType<typeof mountPage>) {
 }
 
 export async function openSessionTab(page: ReturnType<typeof mountPage>) {
-  await vi.waitFor(() =>
+  await afterWorkboardUpdate(() =>
     expect(
       [...page.container.querySelectorAll<HTMLButtonElement>('[role="tab"]')].some(
         (tab) => tab.textContent?.trim() === "Session",

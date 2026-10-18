@@ -5,6 +5,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
@@ -70,6 +71,7 @@ it("closes owned tabs over their transports and rechecks claims after runtime lo
       browser: { profiles: { remote: { driver: "existing-session" as const, cdpUrl } } },
     };
     await state.writeConfig(config);
+    setRuntimeConfigSnapshot(config);
     initializeBrowserSessionTabStore({
       state: {
         openKeyedStore: (options) => createPluginStateKeyedStoreForTests("browser", options),

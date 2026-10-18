@@ -581,7 +581,7 @@ struct ChatLinkPreviewIdentityTests {
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `superseded metadata cannot publish after a URL change`(
+    func `canceled metadata cannot publish after a URL change`(
         revisitsFirst: Bool,
         collapsed: Bool) async throws
     {
@@ -602,6 +602,7 @@ struct ChatLinkPreviewIdentityTests {
         let pending = Task { await model.loadMetadata(first) }
         var iterator = entered.makeAsyncIterator()
         _ = await iterator.next()
+        pending.cancel()
         model.expanded = !collapsed
         await model.loadMetadata(second)
         if revisitsFirst { await model.loadMetadata(first) }
@@ -618,7 +619,7 @@ struct ChatLinkPreviewIdentityTests {
     }
 
     @Test(arguments: [false, true], [false, true])
-    func `superseded image cannot publish after a URL change`(
+    func `canceled image cannot publish after a URL change`(
         revisitsFirst: Bool,
         collapsed: Bool) async throws
     {
@@ -642,6 +643,7 @@ struct ChatLinkPreviewIdentityTests {
         let pending = Task { await model.loadImage() }
         var iterator = entered.makeAsyncIterator()
         _ = await iterator.next()
+        pending.cancel()
         model.expanded = !collapsed
         await model.loadMetadata(second)
         if revisitsFirst { await model.loadMetadata(first) }

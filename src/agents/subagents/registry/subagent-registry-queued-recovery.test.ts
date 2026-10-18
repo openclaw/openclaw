@@ -118,6 +118,8 @@ function createRegistrationFixture() {
   const options: SubagentManagerOptions = {
     acquireTerminalCompletionLock: async () => () => {},
     runs: subagentRuns,
+    getChildSessionCandidates: (key) =>
+      [...subagentRuns.values()].filter((row) => row.childSessionKey === key),
     getRunsForChildSession: (key) =>
       [...subagentRuns.values()].filter((run) => run.childSessionKey === key),
     resumedRuns: new Set(),
@@ -169,6 +171,75 @@ function createRestorer(
   });
 }
 
+it.each(["restartRecovery", "killIntent", "killReconciliation"] as const)(
+  "activates healthy siblings without reading a child owned by %s",
+  async (owner) => {
+    const { manager } = createRegistrationFixture();
+    for (const runId of ["owned-child", "healthy-child"]) {
+      await manager.registerSubagentRun({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        childAgentId: "main",
+        sessionEntry: fixture,
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        requesterDisplayKey: "main",
+        task: "Resume independent children after restart",
+        cleanup: "keep",
+      });
+    }
+    await mutateSubagentRuns(["owned-child"], (rows) => {
+      const entry = expectDefined(rows.get("owned-child"), "owned child");
+      const postimage: SubagentRunRecord = { ...entry };
+      if (owner === "restartRecovery") {
+        postimage.execution = {
+          ...entry.execution,
+          restartRecovery: {
+            sessionId: fixture.sessionId,
+            sessionMarker: "saved-recovery",
+            idempotencyKey: "saved-recovery",
+            phase: "reserved",
+          },
+        };
+      } else if (owner === "killIntent") {
+        postimage.killIntent = { requestedAt: 1, reason: "operator stop" };
+      } else {
+        postimage.killReconciliation = { killedAt: 1 };
+      }
+      return { value: undefined, postimages: new Map([[entry.runId, postimage]]) };
+    });
+    subagentRuns.clear();
+    const gateway = sessionSharingTestContext(vi.fn());
+    const resolver = () => gateway;
+    const resumeRun = vi.fn();
+    const recoverInterruptedRuns = vi.fn(async () => {});
+    const restorer = createRestorer({
+      getGatewayContextResolver: () => resolver,
+      resumeRun,
+      recoverInterruptedRuns,
+    });
+    try {
+      await restorer.restoreOnce();
+      await vi.mocked(loadSubagentSessionEntry).withImplementation(
+        async ({ childSessionKey }) => {
+          if (childSessionKey === "agent:main:subagent:owned-child") {
+            throw new Error("Owned child database is unavailable");
+          }
+          return { ...fixture, updatedAt: 1 };
+        },
+        async () => {
+          await restorer.activate();
+        },
+      );
+      expect(resumeRun).toHaveBeenCalledExactlyOnceWith("healthy-child");
+      expect(recoverInterruptedRuns).toHaveBeenCalledOnce();
+      expect(subagentRuns.get("owned-child")).toBeDefined();
+    } finally {
+      restorer.reset();
+    }
+  },
+);
+
 it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
   "reconciles a retained descriptorless registration through %s",
   async (recovery) => {
@@ -202,6 +273,8 @@ it.each(["restart", "restart with newer sibling", "confirmed Stop"] as const)(
           {
             runId,
             childSessionKey,
+            childAgentId: "main",
+            sessionEntry: fixture,
             requesterSessionKey: "agent:main:main",
             requesterDisplayKey: "main",
             requesterAgentId: "main",
@@ -326,6 +399,8 @@ it("settles an acknowledged queued launch failure through its captured native re
     {
       runId,
       childSessionKey,
+      childAgentId: "main",
+      sessionEntry: fixture,
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       requesterAgentId: "main",
@@ -371,6 +446,8 @@ it("leaves an acknowledged collector rekey with its launch owner during restore 
   await manager.registerSubagentRun({
     runId,
     childSessionKey,
+    childAgentId: "main",
+    sessionEntry: fixture,
     requesterSessionKey: "agent:main:main",
     requesterAgentId: "main",
     requesterDisplayKey: "main",
@@ -434,6 +511,8 @@ it.each(["current", "during hydration"] as const)(
       await manager.registerSubagentRun({
         runId,
         childSessionKey: `agent:main:subagent:${runId}`,
+        childAgentId: "main",
+        sessionEntry: fixture,
         requesterSessionKey: `agent:main:${runId}-requester`,
         requesterAgentId: "main",
         requesterTurnRunId: `${runId}-turn`,
@@ -523,6 +602,8 @@ it("retries retirement when registration supersedes another restored child durin
     manager.registerSubagentRun({
       runId,
       childSessionKey: `agent:main:subagent:${child}`,
+      childAgentId: "main",
+      sessionEntry: fixture,
       requesterSessionKey: "agent:main:retirement-requester",
       requesterAgentId: "main",
       requesterTurnRunId: expectsCompletionMessage ? "retirement-turn" : undefined,

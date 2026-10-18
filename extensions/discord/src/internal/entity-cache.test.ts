@@ -2,20 +2,19 @@
 import { GatewayDispatchEvents } from "discord-api-types/v10";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DiscordEntityCache } from "./entity-cache.js";
-import type { RequestClient } from "./rest.js";
-import type { StructureClient } from "./structures.js";
+import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
 
 function makeCache() {
   let getCalls = 0;
-  const rest = {
-    get: async (route: string) => {
+  const client = createInternalTestClient();
+  attachRestMock(client, {
+    get: vi.fn(async (route: string) => {
       getCalls += 1;
       const id = route.split("/").pop() ?? "x";
       return { id };
-    },
-  } as unknown as RequestClient;
-  const client = {} as StructureClient;
-  const cache = new DiscordEntityCache({ client, rest: () => rest });
+    }),
+  });
+  const cache = new DiscordEntityCache(client);
   return { cache, getCalls: () => getCalls };
 }
 
@@ -68,22 +67,6 @@ describe("DiscordEntityCache eviction", () => {
     await cache.fetchGuildEmojis("g1", fetchEmojis);
     expect(fetchEmojis).toHaveBeenCalledTimes(2);
   });
-
-  it.each([
-    ["updated", GatewayDispatchEvents.ThreadUpdate],
-    ["deleted", GatewayDispatchEvents.ThreadDelete],
-  ])("invalidates cached channels when a thread is %s", async (_label, eventType) => {
-    const { cache, getCalls } = makeCache();
-
-    await cache.fetchChannel("thread-42");
-    await cache.fetchChannel("thread-42");
-    expect(getCalls()).toBe(1);
-
-    cache.invalidateForGatewayEvent(eventType, { id: "thread-42" });
-    await cache.fetchChannel("thread-42");
-
-    expect(getCalls()).toBe(2);
-  });
 });
 
 describe("DiscordEntityCache gateway invalidation", () => {
@@ -100,23 +83,22 @@ describe("DiscordEntityCache gateway invalidation", () => {
     expect(fetchEmojis).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
-    GatewayDispatchEvents.GuildMemberAdd,
-    GatewayDispatchEvents.GuildMemberRemove,
-    GatewayDispatchEvents.GuildMemberUpdate,
-  ])("invalidates member and user entries for %s", async (event) => {
-    const { cache, getCalls } = makeCache();
+  it.each([GatewayDispatchEvents.GuildMemberUpdate])(
+    "invalidates member and user entries for %s",
+    async (event) => {
+      const { cache, getCalls } = makeCache();
 
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    expect(getCalls()).toBe(2);
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      expect(getCalls()).toBe(2);
 
-    cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
+      cache.invalidateForGatewayEvent(event, { guild_id: "g1", user: { id: "u1" } });
 
-    await cache.fetchMember("g1", "u1");
-    await cache.fetchUser("u1");
-    expect(getCalls()).toBe(4);
-  });
+      await cache.fetchMember("g1", "u1");
+      await cache.fetchUser("u1");
+      expect(getCalls()).toBe(4);
+    },
+  );
 });

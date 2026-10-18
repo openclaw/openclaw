@@ -165,6 +165,67 @@ function expectCapturedTail(actual: string, tail: string, prefix: string) {
 
 afterEach(() => vi.useRealTimers());
 
+it("uses display deltas independently of cumulative raw assistant snapshots", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "display-deltas";
+  harness.registerRun(runId, "agent:main:display-deltas");
+  for (const [index, delta] of ["Hello", " world"].entries()) {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      seq: index + 1,
+      ts: Date.now(),
+      stream: "assistant",
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
+    };
+    await harness.handler(event);
+  }
+  vi.advanceTimersByTime(75);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+  expect(payloads(frames, "agent")[0]?.data?.text).toBe("raw transcript text");
+});
+
+it("retains display deltas while a hidden run has no session subscribers", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "hidden-display-deltas";
+  const sessionKey = "agent:main:hidden-display-deltas";
+  harness.registerRun(runId, sessionKey);
+  const emit = (seq: number, delta: string) => {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      sessionKey,
+      seq,
+      ts: Date.now(),
+      stream: "assistant",
+      controlUiVisible: false,
+      projectSessionLifecycle: false,
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
+    };
+    return harness.handler(event);
+  };
+
+  await emit(1, "Hello");
+  expect(frames).toEqual([]);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(2, " world");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+
+  harness.sessionMessageSubscribers.unsubscribe("viewer", sessionKey);
+  const delivered = frames.length;
+  await emit(3, " hidden");
+  expect(frames).toHaveLength(delivered);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(4, " again");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world hidden again");
+  expect(harness.broadcast).not.toHaveBeenCalled();
+  expect(harness.nodeSendToSession).not.toHaveBeenCalled();
+});
+
 it("replaces the wire baseline when a cumulative snapshot restores capped context", () => {
   const state = createChatRunState();
   const runId = "restored-context";
@@ -412,22 +473,6 @@ it.each([
     correctPrefix: false,
     replace: true,
   },
-  {
-    name: "unflagged cumulative snapshot",
-    itemId: "native",
-    savedSize: 600_000,
-    tailSize: 100_000,
-    correctPrefix: true,
-    replace: false,
-  },
-  {
-    name: "unscoped cumulative snapshot",
-    itemId: undefined,
-    savedSize: 600_000,
-    tailSize: 100_000,
-    correctPrefix: true,
-    replace: false,
-  },
 ])(
   "preserves unsaved text after an ambiguous replacement ($name)",
   ({ itemId, savedSize, tailSize, correctPrefix, replace }) => {
@@ -658,7 +703,7 @@ it("sends append-only wire text while retaining snapshots for observers and late
   expect(projectInFlightRunSnapshot({ chatRunState, runId: "wire-run" }).text).toBe(
     "Reset!\n\nOther",
   );
-  await emit(7, "Reset! again", " again");
+  await emit(7, "Reset! again", " again", undefined, "followup");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset! again");
   handler.retireTranscript({
     sessionKey: "agent:main:wire",
@@ -772,7 +817,12 @@ it("retires a real CLI reply before its corrected source snapshot arrives", asyn
   };
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: Date.now() });
   harness.registerRun(runId, target.sessionKey);
-  const context = buildPreparedCliRunContext({ runId, sessionTarget: target, workspaceDir: root });
+  const context = buildPreparedCliRunContext({
+    runId,
+    sessionTarget: target,
+    workspaceDir: root,
+    config: {},
+  });
   context.params.storePath = target.storePath;
   context.params.persistAssistantTranscript = true;
   const cli = createCliEventHandlers({

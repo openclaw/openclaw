@@ -448,7 +448,9 @@ function withNativeRequireAliases<T>(
   moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = resolveAlias(request, parent?.filename);
     if (aliasTarget) {
-      return aliasTarget;
+      // Callers may pass Jiti alias maps (forward slashes on Windows). Bun keys native
+      // modules by this filename, so another spelling loads a second SDK instance.
+      return path.normalize(aliasTarget);
     }
     return originalResolveFilename(request, parent, isMain, options);
   }) satisfies ResolveFilename;

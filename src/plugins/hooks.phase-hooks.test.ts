@@ -367,43 +367,7 @@ describe("prompt hook invocation", () => {
 
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
-describe("before_prompt_build reentrancy", () => {
-  it("runs each handler once when a handler starts a nested prompt build", async () => {
-    const firstHandler = vi.fn(async () => {
-      await runner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
-      return { prependContext: "first" };
-    });
-    const secondHandler = vi.fn(() => ({ appendContext: "second" }));
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: firstHandler,
-          pluginId: "first",
-          priority: 10,
-        },
-        {
-          hookName: "before_prompt_build",
-          handler: secondHandler,
-          pluginId: "second",
-          priority: 1,
-        },
-      ]),
-    );
-
-    await expect(
-      runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX),
-    ).resolves.toEqual({
-      systemPrompt: undefined,
-      prependContext: "first",
-      appendContext: "second",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-    expect(firstHandler).toHaveBeenCalledOnce();
-    expect(secondHandler).toHaveBeenCalledOnce();
-  });
-
+describe("before_prompt_build dispatch", () => {
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));
@@ -584,33 +548,54 @@ describe("before_agent_finalize", () => {
   });
 });
 
-it("keeps the highest-priority model override after a broken plugin", async () => {
-  const registry = createEmptyPluginRegistry();
-  const broken = vi.fn(() => {
-    throw new Error("plugin crashed");
-  });
-  addStaticTestHooks(registry, {
-    hookName: "before_model_resolve",
-    hooks: [
-      {
-        pluginId: "low",
-        result: { modelOverride: "low-model", providerOverride: "low-provider" },
-      },
-      {
-        pluginId: "broken",
-        priority: 100,
-        result: {},
-        handler: broken,
-      },
-      {
-        pluginId: "high",
-        priority: 10,
-        result: { modelOverride: "high-model", providerOverride: "high-provider" },
-      },
-    ],
-  });
-  await expect(
-    createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
-  ).resolves.toEqual({ modelOverride: "high-model", providerOverride: "high-provider" });
-  expect(broken).toHaveBeenCalledOnce();
-});
+it.each([
+  { higher: [], lower: ["local/backup"], priority: 10, expected: [] },
+  { higher: ["local/backup"], lower: [], priority: 10, expected: ["local/backup"] },
+  { higher: undefined, lower: ["local/backup"], priority: 10, expected: ["local/backup"] },
+  { higher: [], lower: ["local/first"], priority: 0, expected: ["local/first"] },
+  { higher: null as unknown as string[], lower: ["local/backup"], priority: 10, expected: [] },
+])(
+  "keeps the first defined routing overrides after a broken plugin ($priority)",
+  async ({ higher, lower, priority, expected }) => {
+    const registry = createEmptyPluginRegistry();
+    const broken = vi.fn(() => {
+      throw new Error("plugin crashed");
+    });
+    addStaticTestHooks(registry, {
+      hookName: "before_model_resolve",
+      hooks: [
+        {
+          pluginId: "low",
+          result: {
+            modelOverride: "low-model",
+            providerOverride: "low-provider",
+            fallbacksOverride: lower,
+          },
+        },
+        {
+          pluginId: "broken",
+          priority: 100,
+          result: {},
+          handler: broken,
+        },
+        {
+          pluginId: "high",
+          priority,
+          result: {
+            modelOverride: "high-model",
+            providerOverride: "high-provider",
+            fallbacksOverride: higher,
+          },
+        },
+      ],
+    });
+    await expect(
+      createHookRunner(registry).runBeforeModelResolve({ prompt: "test" }, TEST_PLUGIN_AGENT_CTX),
+    ).resolves.toEqual({
+      modelOverride: priority ? "high-model" : "low-model",
+      providerOverride: priority ? "high-provider" : "low-provider",
+      fallbacksOverride: expected,
+    });
+    expect(broken).toHaveBeenCalledOnce();
+  },
+);

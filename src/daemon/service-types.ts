@@ -68,6 +68,8 @@ export type GatewayServiceManageArgs = {
 };
 
 export type GatewayServiceControlArgs = {
+  /** One caller-owned budget for native activation and its recovery. */
+  deadline?: { remainingMs: () => number; signal: AbortSignal };
   /** Retained POSIX recovery observes attempts before a native restart can accept writes. */
   onRestartAttempted?: () => void;
   /** Correlation only: native stop needs live update authority and transferred helpers also revalidate their lease. */

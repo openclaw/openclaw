@@ -100,13 +100,13 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await page.locator("#new-session-where-trigger").click();
       const connect = place.getByRole("button", { name: "Connect a device" });
       await connect.waitFor();
       expect(await place.getByText("Your devices", { exact: true }).isVisible()).toBe(true);
       await captureProof(page, "01-picker-foot.png", {
-        surface: place.locator('wa-popup [part="popup"]'),
+        surface: place,
         content: [connect],
       });
       await connect.click();
@@ -190,7 +190,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      const place = page.locator("wa-popover.new-session-page__where-popover");
+      const place = page.locator(".oc-popover.new-session-page__where-popover");
       await page.locator("#new-session-where-trigger").click();
       await place.locator('[data-value="gateway"]').waitFor();
       expect(await place.getByRole("button", { name: "Connect a device" }).count()).toBe(0);

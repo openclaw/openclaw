@@ -4,7 +4,7 @@ import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
 } from "./app/native-device-settings.ts";
-import type { IconName } from "./components/icons.ts";
+import type { IconName } from "./components/icon-data.ts";
 import { t } from "./i18n/index.ts";
 
 export type NavigationRouteId = RouteId;
@@ -56,11 +56,8 @@ export type SidebarZoneEntry =
   | { type: "session"; key: string }
   | { type: "person"; profileId: string };
 
-// Keep the highest-value operational destinations visible on first use. Users
-// can still replace this route set through the customize menu.
-export const DEFAULT_SIDEBAR_ENTRIES = (
-  ["agents-home", "dashboards", "systems", "cron", "plugins"] as const
-).map((route) => serializeSidebarEntry({ type: "route", route }));
+// The rail starts clean; only user-added shortcuts occupy the pins region.
+export const DEFAULT_SIDEBAR_ENTRIES: string[] = [];
 
 /**
  * Parse the compact persisted representation used by browser and synced prefs.
@@ -139,16 +136,6 @@ export function normalizeSidebarEntries(value: unknown): string[] | null {
     }
   }
   return normalized;
-}
-
-export function sidebarMoreRoutes(entries: readonly string[]): SidebarNavRoute[] {
-  const visibleRoutes = new Set(
-    entries.flatMap((entry) => {
-      const parsed = parseSidebarEntry(entry);
-      return parsed?.type === "route" ? [parsed.route] : [];
-    }),
-  );
-  return SIDEBAR_NAV_ROUTES.filter((routeId) => !visibleRoutes.has(routeId));
 }
 
 type SettingsNavigationGroup = {
@@ -303,6 +290,7 @@ function navigationPresentation(icon: IconName, key: string): NavigationPresenta
 const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation> = {
   settings: ["settings", "nav.settings", "common.settingsSections"],
   "agents-home": navigationPresentation("bot", "agentsHome"),
+  claws: navigationPresentation("bot", "claws"),
   agents: navigationPresentation("bot", "agents"),
   activity: navigationPresentation("activity", "activity"),
   meetings: navigationPresentation("book", "meetings"),
@@ -376,23 +364,17 @@ export function titleForRoute(routeId: NavigationRouteId, translate = t): string
   return translate(titleKey);
 }
 
-/** Window/tab title, markers leftmost because tabs truncate from the right.
- * A disconnected Gateway replaces the approval count (a stale queue is not
- * actionable); titles already ending in the brand
- * ("Ask OpenClaw") skip the suffix so it never reads "… OpenClaw — OpenClaw". */
+/** Window/tab title, attention leftmost because tabs truncate from the right.
+ * Titles already ending in the brand skip the suffix to avoid duplication. */
 export function formatDocumentTitle(options: {
   context: string;
   attentionCount?: number;
   brandName?: string;
-  gatewayDisconnected?: boolean;
 }): string {
   const brandName = options.brandName ?? "OpenClaw";
   const base = options.context.endsWith(brandName)
     ? options.context
     : `${options.context} — ${brandName}`;
-  if (options.gatewayDisconnected) {
-    return `(${t("connection.disconnectedTitle")}) ${base}`;
-  }
   if (options.attentionCount && options.attentionCount > 0) {
     return `(${options.attentionCount}) ${base}`;
   }

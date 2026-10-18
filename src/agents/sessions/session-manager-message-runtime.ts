@@ -14,7 +14,10 @@ import {
   type PreparedTranscriptMessageAppend,
 } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import type { SessionActor } from "../../config/sessions/session-actor-contract.js";
-import type { SessionMetadataWorkerOperations } from "../../config/sessions/session-manager-write-contract.js";
+import type {
+  SessionMetadataOperations,
+  SessionMetadataWorkerOperations,
+} from "../../config/sessions/session-manager-write-contract.js";
 import {
   assertSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
@@ -31,8 +34,6 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { Message } from "../../llm/types.js";
-import { readLoggingConfig } from "../../logging/config.js";
-import { getSecretRedactionRegistryRevision } from "../../logging/secret-redaction-registry.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
@@ -72,35 +73,14 @@ export function appendSessionTranscriptMessage(
 export async function appendSessionTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
-  const readRedactPatterns = () =>
-    input.config?.logging?.redactPatterns ?? readLoggingConfig()?.redactPatterns;
-  let redactionRevision = getSecretRedactionRegistryRevision();
-  let redactPatterns = readRedactPatterns()?.slice();
   const prepared = prepareTranscriptMessageAppendForWorker(input);
   Object.freeze(prepared.persistedMessage);
-  const assertPrepared = () => {
-    input.assertCurrent();
-    const revision = getSecretRedactionRegistryRevision();
-    const patterns = readRedactPatterns();
-    if (
-      revision !== redactionRevision ||
-      patterns?.length !== redactPatterns?.length ||
-      patterns?.some((pattern, index) => pattern !== redactPatterns?.[index])
-    ) {
-      if (prepareTranscriptMessageAppendForWorker(input).messageJson !== prepared.messageJson) {
-        throw new Error("Transcript message redaction changed before persistence");
-      }
-      redactionRevision = revision;
-      redactPatterns = patterns?.slice();
-    }
-  };
-  assertPrepared();
+  input.assertCurrent();
   const actorBinding = getOwnedSessionTranscriptActor(input.target);
   if (actorBinding) {
     return appendOwnedActorTranscriptMessage(
       input,
       prepared,
-      assertPrepared,
       actorBinding.actor,
       actorBinding.database,
     );
@@ -108,11 +88,7 @@ export async function appendSessionTranscriptMessage(
   if (!input.candidate) {
     throw new Error("Unbound transcript append requires a captured store candidate");
   }
-  return appendUnboundSdkTranscriptMessage(
-    { ...input, candidate: input.candidate },
-    prepared,
-    assertPrepared,
-  );
+  return appendUnboundSdkTranscriptMessage({ ...input, candidate: input.candidate }, prepared);
 }
 
 type PreparedTranscriptMessage = PreparedTranscriptMessageAppend<TranscriptAppendMessage>;
@@ -122,16 +98,64 @@ type CommittedTranscriptMessage = {
   lifecycleRevision?: string;
 };
 
+function readCommittedMessage(
+  append: SessionMetadataOperations["session.transcript.appendMessage"]["output"],
+  prepared: PreparedTranscriptMessage,
+): CommittedTranscriptMessage {
+  const persisted = append.snapshot;
+  if (!persisted.ok) {
+    throw new Error("Session transcript message was not persisted", { cause: persisted.error });
+  }
+  const result = persisted.value.result;
+  if (!result) {
+    throw new Error("Session transcript message was not persisted");
+  }
+  return {
+    result: {
+      messageId: result.messageId,
+      message: result.message ?? prepared.persistedMessage,
+      appended: result.appended,
+      currentTail: isTranscriptMessageAppendCurrentTail(persisted.value),
+    },
+    version: persisted.value.after,
+    lifecycleRevision: persisted.value.lifecycleRevision,
+  };
+}
+
+function throwTranscriptAppendError(
+  error: unknown,
+  committed: CommittedTranscriptMessage | undefined,
+  target: TranscriptAppendInput<TranscriptAppendMessage>["target"],
+): never {
+  if (committed) {
+    throw new SessionTranscriptMessageCommittedError(
+      committed.result.messageId,
+      error,
+      target,
+      committed.version,
+      committed.lifecycleRevision,
+    );
+  }
+  if (
+    error instanceof Error &&
+    collectNestedErrorCandidates(error).some((cause) =>
+      isSqliteWorkerError(cause, "outcome-unknown"),
+    )
+  ) {
+    recordModelFallbackStop(error);
+  }
+  throw error;
+}
+
 async function appendOwnedActorTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage>,
   prepared: PreparedTranscriptMessage,
-  assertPrepared: () => void,
   actor: SessionActor,
   options: Readonly<OpenClawAgentDatabaseOptions & { agentId: string; path: string }>,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
   const databasePath = options.path;
   const assertCurrent = () => {
-    assertPrepared();
+    input.assertCurrent();
     if (input.candidate) {
       assertSessionStoreReadCandidate(databasePath, [input.candidate]);
     }
@@ -156,26 +180,7 @@ async function appendOwnedActorTranscriptMessage(
         if (append.kind !== "message") {
           throw new Error("Session actor omitted the committed transcript message");
         }
-        const snapshot = append.value.snapshot;
-        if (!snapshot.ok) {
-          throw new Error("Session transcript message was not persisted", {
-            cause: snapshot.error,
-          });
-        }
-        const result = snapshot.value.result;
-        if (!result) {
-          throw new Error("Session transcript message was not persisted");
-        }
-        committed = {
-          result: {
-            messageId: result.messageId,
-            message: result.message ?? prepared.persistedMessage,
-            appended: result.appended,
-            currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
-          },
-          version: snapshot.value.after,
-          lifecycleRevision: snapshot.value.lifecycleRevision,
-        };
+        committed = readCommittedMessage(append.value, prepared);
       },
     });
     if (receipt.failure) {
@@ -193,24 +198,7 @@ async function appendOwnedActorTranscriptMessage(
     }
     return committed.result;
   } catch (error) {
-    if (committed) {
-      throw new SessionTranscriptMessageCommittedError(
-        committed.result.messageId,
-        error,
-        input.target,
-        committed.version,
-        committed.lifecycleRevision,
-      );
-    }
-    if (
-      error instanceof Error &&
-      collectNestedErrorCandidates(error).some((cause) =>
-        isSqliteWorkerError(cause, "outcome-unknown"),
-      )
-    ) {
-      recordModelFallbackStop(error);
-    }
-    throw error;
+    return throwTranscriptAppendError(error, committed, input.target);
   }
 }
 
@@ -218,13 +206,12 @@ async function appendOwnedActorTranscriptMessage(
 async function appendUnboundSdkTranscriptMessage(
   input: TranscriptAppendInput<TranscriptAppendMessage> & { candidate: SessionStoreReadCandidate },
   prepared: PreparedTranscriptMessage,
-  assertPrepared: () => void,
 ): Promise<SessionTranscriptAppendResult<TranscriptAppendMessage>> {
   const resolved = await prepareSqliteTranscriptReadScope(input.target);
   const options = toDatabaseOptions(resolved);
   const databasePath = resolveOpenClawAgentSqlitePath(options);
   const assertCurrent = () => {
-    assertPrepared();
+    input.assertCurrent();
     assertSessionStoreReadCandidate(databasePath, [input.candidate]);
   };
   assertCurrent();
@@ -268,23 +255,7 @@ async function appendUnboundSdkTranscriptMessage(
       if (!reply.ok) {
         throw new SessionTranscriptWriterClaimReboundError(reply.refusal);
       }
-      const snapshot = reply.value.snapshot;
-      if (!snapshot.ok) {
-        throw new Error("Session transcript message was not persisted", { cause: snapshot.error });
-      }
-      if (!snapshot.value.result) {
-        throw new Error("Session transcript message was not persisted");
-      }
-      committed = {
-        result: {
-          messageId: snapshot.value.result.messageId,
-          message: snapshot.value.result.message ?? prepared.persistedMessage,
-          appended: snapshot.value.result.appended,
-          currentTail: isTranscriptMessageAppendCurrentTail(snapshot.value),
-        },
-        version: snapshot.value.after,
-        lifecycleRevision: snapshot.value.lifecycleRevision,
-      };
+      committed = readCommittedMessage(reply.value, prepared);
       admission.publish(reply.value.pendingInputReceipt);
       assertCurrent();
       if (reply.value.projectionNeedsReconcile) {
@@ -318,24 +289,7 @@ async function appendUnboundSdkTranscriptMessage(
     }
     assertCurrent();
   } catch (error) {
-    if (committed) {
-      throw new SessionTranscriptMessageCommittedError(
-        committed.result.messageId,
-        error,
-        input.target,
-        committed.version,
-        committed.lifecycleRevision,
-      );
-    }
-    if (
-      error instanceof Error &&
-      collectNestedErrorCandidates(error).some((cause) =>
-        isSqliteWorkerError(cause, "outcome-unknown"),
-      )
-    ) {
-      recordModelFallbackStop(error);
-    }
-    throw error;
+    return throwTranscriptAppendError(error, committed, input.target);
   }
   if (!committed) {
     throw new Error("Session transcript message was not persisted");

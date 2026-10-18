@@ -1,5 +1,4 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
-import type { SubagentMaintenanceDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
 import { iterateProjectedAgentRunSessionKeys } from "../../infra/agent-run-projection.js";
 import { buildProjectedAgentRunIndex } from "../../infra/agent-run-registry.js";
 import {
@@ -20,7 +19,6 @@ type PreparedSessionMaintenancePreserveKeys = {
   refreshCandidates?(sessionKeys: readonly string[]): Iterable<string> | undefined;
   /** Release prepared source custody; this must not throw. */
   dispose(): void;
-  readonly subagentRunBasis?: SubagentMaintenanceDurableBasis;
 };
 
 type PrepareSessionMaintenancePreserveKeys = (options: {
@@ -34,7 +32,6 @@ export type PreparedSessionMaintenancePreservation = {
     sessionKeys: readonly string[],
   ): SessionMaintenancePreservationSnapshot;
   dispose(this: void): void;
-  readonly subagentRunBasis?: SubagentMaintenanceDurableBasis;
 };
 
 const preserveKeysProviders = new Set<{ prepare: PrepareSessionMaintenancePreserveKeys }>();
@@ -94,12 +91,6 @@ export async function prepareSessionMaintenancePreservation(
       prepared.push(await registration.prepare(options));
       assertProvidersCurrent();
     }
-    const bases = prepared.flatMap((facts) =>
-      facts.subagentRunBasis ? [facts.subagentRunBasis] : [],
-    );
-    if (bases.length > 1) {
-      throw new Error("Session maintenance has competing subagent registry providers");
-    }
     const capture = (sessionKeys?: readonly string[]): SessionMaintenancePreservationSnapshot => {
       assertProvidersCurrent();
       const keys = new Set<string>();
@@ -122,7 +113,6 @@ export async function prepareSessionMaintenancePreservation(
       };
     };
     return {
-      subagentRunBasis: bases[0],
       dispose,
       capture: () => capture(),
       refreshCandidates: capture,

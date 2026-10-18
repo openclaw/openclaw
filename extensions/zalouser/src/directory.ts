@@ -13,8 +13,8 @@ export function mapZalouserDirectoryUser(user: ZcaFriend): ChannelDirectoryEntry
   return {
     kind: "user",
     id: user.userId,
-    name: user.displayName ?? undefined,
-    avatarUrl: user.avatar ?? undefined,
+    name: user.displayName,
+    avatarUrl: user.avatar,
     raw: user,
   };
 }
@@ -32,5 +32,5 @@ export async function listZalouserDirectoryGroupMembers(
   const normalizedGroupId = parseZalouserDirectoryGroupId(params.groupId);
   const members = await deps.listZaloGroupMembers(account.profile, normalizedGroupId);
   const rows = members.map(mapZalouserDirectoryUser);
-  return typeof params.limit === "number" && params.limit > 0 ? rows.slice(0, params.limit) : rows;
+  return params.limit !== undefined && params.limit > 0 ? rows.slice(0, params.limit) : rows;
 }

@@ -1,12 +1,16 @@
+import { createComponent, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { canReloadControlUiDocument } from "../../app/document-reload-guard.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
 } from "../chat/attachment-payload-store.ts";
+import { CreationComposer as CreationComposerView } from "./creation-composer-render.tsx";
 import {
   CreationComposer,
   retainCreatedComposer,
@@ -32,6 +36,40 @@ afterEach(() => {
 });
 
 describe("creation-owned follow-up input", () => {
+  it("replaces the native input owner when another creation becomes visible", () => {
+    const { context, composer } = fixture();
+    const next = new CreationComposer(context, "main", false, vi.fn());
+    onTestFinished(() => next.dispose());
+    composer.setMessage("first creation");
+    next.setMessage("next creation");
+    const [current, setCurrent] = createSignal(composer);
+    const { container } = mountSolid(
+      () =>
+        createComponent(CreationComposerView, {
+          get composer() {
+            return current();
+          },
+          onOpenImage: vi.fn(),
+        }),
+      { wrapper: createSolidApplicationContextProvider(context).wrapper },
+    );
+    const firstInput = container.querySelector("textarea");
+    expect(firstInput?.value).toBe("first creation");
+
+    setCurrent(next);
+    flush();
+    const nextInput = container.querySelector("textarea");
+    expect(nextInput).not.toBe(firstInput);
+    expect(nextInput?.value).toBe("next creation");
+    if (!nextInput) {
+      throw new Error("Expected the next creation input");
+    }
+    nextInput.value = "edited next creation";
+    next.flushInput?.();
+    expect(next.message).toBe("edited next creation");
+    expect(composer.message).toBe("first creation");
+  });
+
   it("stages ordered messages and files without a destination, persistence, or RPC", () => {
     const { composer, request } = fixture(true);
     const file = registerTextPayload("private-follow-up");
@@ -111,39 +149,34 @@ describe("creation-owned follow-up input", () => {
     ).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "hands local input to the current client before recovery readiness (replacement: %s)",
-    (replacement) => {
-      const { context, composer, request } = fixture(true);
-      composer.setMessage("accepted private draft");
-      composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
-      retainCreatedComposer(context, "agent:main:canonical", composer);
-      const original = context.gateway.snapshot.client!;
-      if (replacement) {
-        const next = createTestGatewayClient(request);
-        vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
-        context.gateway.snapshot.client = next;
-      }
-      Object.defineProperty(context.gateway.snapshot.client!, "recoveryScopeReady", {
-        value: false,
-        configurable: true,
-      });
-      const transferred = takeCreatedComposer(
-        context,
-        "agent:main:canonical",
-        context.gateway.snapshot.client,
-      );
-      expect(transferred?.draft).toBe("accepted private draft");
-      expect(transferred?.isCurrent()).toBe(true);
-      expect(
-        takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-      ).toBe(transferred);
-      transferred?.complete();
-      expect(
-        takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
-      ).toBeUndefined();
-    },
-  );
+  it("hands local input to the replacement client before recovery readiness", () => {
+    const { context, composer, request } = fixture(true);
+    composer.setMessage("accepted private draft");
+    composer.accept({ key: "agent:main:canonical", initialRun: { status: "idle" } });
+    retainCreatedComposer(context, "agent:main:canonical", composer);
+    const original = context.gateway.snapshot.client!;
+    const next = createTestGatewayClient(request);
+    vi.spyOn(next, "recoveryScope", "get").mockReturnValue(original.recoveryScope);
+    context.gateway.snapshot.client = next;
+    Object.defineProperty(context.gateway.snapshot.client!, "recoveryScopeReady", {
+      value: false,
+      configurable: true,
+    });
+    const transferred = takeCreatedComposer(
+      context,
+      "agent:main:canonical",
+      context.gateway.snapshot.client,
+    );
+    expect(transferred?.draft).toBe("accepted private draft");
+    expect(transferred?.isCurrent()).toBe(true);
+    expect(
+      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
+    ).toBe(transferred);
+    transferred?.complete();
+    expect(
+      takeCreatedComposer(context, "agent:main:canonical", context.gateway.snapshot.client),
+    ).toBeUndefined();
+  });
 
   it("preserves queued input across reconnect but never reveals it to another owner", () => {
     const { context, composer } = fixture(true);

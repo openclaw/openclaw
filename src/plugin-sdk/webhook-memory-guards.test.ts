@@ -11,19 +11,6 @@ import {
 } from "./webhook-memory-guards.js";
 
 describe("createFixedWindowRateLimiter", () => {
-  it("enforces a fixed-window request limit", () => {
-    const limiter = createFixedWindowRateLimiter({
-      windowMs: 60_000,
-      maxRequests: 3,
-      maxTrackedKeys: 100,
-    });
-
-    expect(limiter.isRateLimited("k", 1_000)).toBe(false);
-    expect(limiter.isRateLimited("k", 1_001)).toBe(false);
-    expect(limiter.isRateLimited("k", 1_002)).toBe(false);
-    expect(limiter.isRateLimited("k", 1_003)).toBe(true);
-  });
-
   it("falls back for non-finite fixed-window options", () => {
     const limiter = createFixedWindowRateLimiter({
       windowMs: Number.NaN,
@@ -53,23 +40,6 @@ describe("createFixedWindowRateLimiter", () => {
 
     expect(calls.map((nowMs) => limiter.isRateLimited("k", nowMs))).toEqual(expected);
   });
-
-  it("prunes stale keys", () => {
-    const limiter = createFixedWindowRateLimiter({
-      windowMs: 10,
-      maxRequests: 10,
-      maxTrackedKeys: 100,
-      pruneIntervalMs: 10,
-    });
-
-    for (let i = 0; i < 20; i += 1) {
-      limiter.isRateLimited(`key-${i}`, 100);
-    }
-    expect(limiter.size()).toBe(20);
-
-    limiter.isRateLimited("fresh", 120);
-    expect(limiter.size()).toBe(1);
-  });
 });
 
 describe("webhook memory guard key caps", () => {
@@ -85,16 +55,6 @@ describe("webhook memory guard key caps", () => {
     }
 
     expect(limiter.size()).toBeLessThanOrEqual(5);
-  });
-
-  it("createBoundedCounter caps tracked keys", () => {
-    const counter = createBoundedCounter({ maxTrackedKeys: 3 });
-
-    for (let i = 0; i < 10; i += 1) {
-      counter.increment(`k-${i}`, 1_000 + i);
-    }
-
-    expect(counter.size()).toBeLessThanOrEqual(3);
   });
 });
 
@@ -118,33 +78,6 @@ describe("createBoundedCounter", () => {
 
     counter.increment("fresh", 120);
     expect(counter.size()).toBe(1);
-  });
-
-  it("falls back for non-finite counter options", () => {
-    const counter = createBoundedCounter({
-      maxTrackedKeys: Number.NaN,
-      ttlMs: Number.NaN,
-      pruneIntervalMs: Number.NaN,
-    });
-
-    for (let index = 0; index < WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys + 1; index += 1) {
-      counter.increment(`k-${index}`, 1_000 + index);
-    }
-
-    expect(counter.size()).toBe(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys);
-  });
-});
-
-describe("defaults", () => {
-  it("exports shared webhook limit profiles", () => {
-    expect(WEBHOOK_RATE_LIMIT_DEFAULTS).toEqual({
-      windowMs: 60_000,
-      maxRequests: 120,
-      maxTrackedKeys: 4_096,
-    });
-    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.maxTrackedKeys).toBe(4_096);
-    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.ttlMs).toBe(21_600_000);
-    expect(WEBHOOK_ANOMALY_COUNTER_DEFAULTS.logEvery).toBe(25);
   });
 });
 

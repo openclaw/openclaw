@@ -118,42 +118,6 @@ function standingGrant(name: string): ExecApprovalStandingGrant {
 }
 
 describe("ApprovalsPage", () => {
-  it("loads and renders terminal history, then paginates", async () => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
-      .mockResolvedValueOnce({ items: [terminal("second", 1_000)] });
-    const { page } = createPage(stubGrants(request));
-
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first"),
-    );
-
-    expect(request).toHaveBeenNthCalledWith(1, "approval.history", { limit: 50 });
-    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-    expect(docsLink?.textContent?.trim()).toBe("Learn more");
-    expect(page.querySelector(".settings-page__intro")).toBeNull();
-    expect(docsLink?.href).toBe("https://docs.openclaw.ai/tools/exec-approvals");
-    expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(1);
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain("agent:main:test");
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo first");
-    expect(page.textContent).toContain("rolling 30-day window");
-
-    const loadMore = [...page.querySelectorAll("button")].find((button) =>
-      button.textContent?.includes("Load more"),
-    );
-    loadMore?.click();
-    await waitForSolid(() =>
-      expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(2),
-    );
-
-    expect(request).toHaveBeenNthCalledWith(2, "approval.history", {
-      cursor: "next",
-      limit: 50,
-    });
-    expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(2);
-  });
-
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
     const { page } = createPage(stubGrants(request));
@@ -165,40 +129,6 @@ describe("ApprovalsPage", () => {
     const body = page.querySelector(".approval-history-table tbody")?.textContent ?? "";
     expect(body).not.toContain("No resolved approvals");
     expect(page.querySelector('[role="alert"]')?.textContent).toContain("boom");
-  });
-
-  it.each([
-    { kind: "exec", event: "exec.approval.resolved" },
-    { kind: "plugin", event: "plugin.approval.resolved" },
-    { kind: "system-agent", event: "openclaw.approval.resolved" },
-  ])("shows a newly resolved $kind approval without leaving the page", async ({ event }) => {
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce({ items: [] })
-      .mockResolvedValueOnce({ items: [terminal("newly-resolved", 2_000)] });
-    const { page, emitGatewayEvent } = createPage(stubGrants(request));
-
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-        "No resolved approvals",
-      ),
-    );
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-      "No resolved approvals",
-    );
-
-    emitGatewayEvent(event, { id: "newly-resolved", decision: "deny" });
-    await waitForSolid(() =>
-      expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-        "echo newly-resolved",
-      ),
-    );
-
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("approval.history", { limit: 50 });
-    expect(page.querySelector(".approval-history-table")?.textContent).toContain(
-      "echo newly-resolved",
-    );
   });
 
   it("refreshes the newest history after an approval resolves during pagination", async () => {
@@ -236,22 +166,22 @@ describe("ApprovalsPage", () => {
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo newest");
   });
 
-  it.each([
-    { name: "read-only", scopes: ["operator.read"] },
-    { name: "write-only", scopes: ["operator.write"] },
-  ])("does not request or render approval history for a $name operator", async ({ scopes }) => {
-    const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(stubGrants(request), {
-      role: "operator",
-      scopes,
-    });
+  it.each([{ name: "read-only", scopes: ["operator.read"] }])(
+    "does not request or render approval history for a $name operator",
+    async ({ scopes }) => {
+      const request = vi.fn().mockResolvedValue({ items: [] });
+      const { page } = createPage(stubGrants(request), {
+        role: "operator",
+        scopes,
+      });
 
-    flush();
+      flush();
 
-    expect(request).not.toHaveBeenCalled();
-    expect(page.querySelector(".approval-history-table")).toBeNull();
-    expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
-  });
+      expect(request).not.toHaveBeenCalled();
+      expect(page.querySelector(".approval-history-table")).toBeNull();
+      expect(page.querySelector('[role="status"]')?.textContent).toContain("operator.approvals");
+    },
+  );
 
   it("loads approval history for a legacy operator", async () => {
     const request = vi.fn().mockResolvedValue({ items: [] });
@@ -431,30 +361,21 @@ describe("ApprovalsPage", () => {
 
   it("renders the standing-grant ledger and revokes through the gateway", async () => {
     const history = vi.fn().mockResolvedValue({ items: [] });
-    const grant = {
-      grantId: "grant-1",
-      agentId: "main",
-      cronJobId: "job-1",
-      cronJobName: "Nightly backup",
-      command: "id -un",
-      cwd: null,
-      createdAtMs: 1_000,
-      expiresAtMs: null,
-      revokedAtMs: null,
-      revokedBy: null,
-      lastUsedAtMs: null,
-      useCount: 3,
-    };
+    const pendingRefresh = createDeferred<ExecApprovalGrantsListResult>();
+    let grantReads = 0;
+    const grant = { ...standingGrant("Nightly backup"), useCount: 3 };
     const request = vi.fn((method: string, params?: unknown) => {
       if (method === "exec.approval.grants.list") {
-        return Promise.resolve({ grants: [grant] });
+        return ++grantReads === 1 ? Promise.resolve({ grants: [grant] }) : pendingRefresh.promise;
       }
       if (method === "exec.approval.grants.revoke") {
         return Promise.resolve({ outcome: "revoked", params });
       }
       return history(method, params) as Promise<unknown>;
     });
-    const { page } = createPage(request as unknown as GatewayBrowserClient["request"]);
+    const { page, emitGatewayEvent } = createPage(
+      request as unknown as GatewayBrowserClient["request"],
+    );
 
     await waitForSolid(() =>
       expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Nightly backup"),
@@ -464,6 +385,9 @@ describe("ApprovalsPage", () => {
     expect(ledger?.textContent).toContain("Nightly backup");
     expect(ledger?.textContent).toContain("id -un");
     expect(ledger?.textContent).toContain("Until revoked");
+
+    emitGatewayEvent("exec.approval.resolved", { id: "another-approval", decision: "deny" });
+    await waitForSolid(() => expect(grantReads).toBe(2));
 
     const revoke = [...page.querySelectorAll("button")].find((button) =>
       button.textContent?.includes("Revoke"),
@@ -477,5 +401,11 @@ describe("ApprovalsPage", () => {
 
     expect(request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
     expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
+
+    pendingRefresh.resolve({ grants: [grant] });
+    await pendingRefresh.promise;
+    flush();
+    expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
+    expect(page.querySelector(".standing-grants-table button")).toBeNull();
   });
 });

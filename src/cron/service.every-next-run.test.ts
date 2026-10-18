@@ -5,9 +5,9 @@ import { createMockCronStateForJobs } from "./service.test-harness.js";
 import {
   computeJobNextRunAtMs,
   hasScheduledNextRunAtMs,
-  recomputeNextRunsForMaintenance,
   resolveJobErrorBackoffUntilMs,
 } from "./service/jobs-scheduling.js";
+import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import type { CronJob } from "./types.js";
 
 const EVERY_30_MIN_MS = 30 * 60_000;

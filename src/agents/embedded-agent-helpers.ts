@@ -1,5 +1,3 @@
-/** Embedded-agent helper barrel for bootstrap, provider error, media, and turn sanitizers. */
-
 export {
   buildBootstrapContextFiles,
   resolveBootstrapMaxChars,
@@ -43,7 +41,6 @@ export {
 export { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
 
 export {
-  downgradeOpenAIFunctionCallReasoningPairs,
   dropStaleOpenAIReasoning,
   normalizeOpenAIResponsesToolCallIds,
 } from "./embedded-agent-helpers/openai.js";

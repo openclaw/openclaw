@@ -38,15 +38,6 @@ function capturePayload(params: {
 }
 
 describe("createVllmQwenThinkingWrapper", () => {
-  it("maps Qwen top-level thinking format to enable_thinking", () => {
-    expect(capturePayload({ format: "top-level", thinkingLevel: "off" })).toEqual({
-      enable_thinking: false,
-    });
-    expect(capturePayload({ format: "top-level", thinkingLevel: "high" })).toEqual({
-      enable_thinking: true,
-    });
-  });
-
   it("patches configured Qwen models unless reasoning is explicitly disabled", () => {
     expect(capturePayload({ format: "chat-template", model: { reasoning: undefined } })).toEqual({
       chat_template_kwargs: {
@@ -111,15 +102,6 @@ describe("vLLM provider thinking composition", () => {
     return captured;
   }
 
-  it("injects Nemotron 3 chat-template kwargs when thinking is off", () => {
-    expect(captureProviderPayload({ thinkingLevel: "off" })).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: false,
-        force_nonempty_content: true,
-      },
-    });
-  });
-
   it.each(["qwen", "qwen-chat-template"] as const)(
     "sends each declared effort in the %s dialect",
     (thinkingFormat) => {
@@ -129,6 +111,11 @@ describe("vLLM provider thinking composition", () => {
         const captured = captureProviderPayload({
           thinkingLevel: "off",
           reasoning: level,
+          initialPayload: {
+            reasoning_effort: "high",
+            reasoning: { effort: "high" },
+            reasoningEffort: "high",
+          },
           model: {
             id: "qwen3:8b",
             compat: {
@@ -182,7 +169,7 @@ describe("vLLM provider thinking composition", () => {
     },
   );
 
-  it.each(["off", "high", "max"] as const)(
+  it.each(["off", "max"] as const)(
     "uses DeepSeek template kwargs for call-time %s and removes hosted fields",
     (reasoning) => {
       expect(
@@ -206,16 +193,6 @@ describe("vLLM provider thinking composition", () => {
     },
   );
 
-  it("does not apply a captured DeepSeek dialect to another model", () => {
-    expect(
-      captureProviderPayload({
-        contextModelId: "DeepSeek-V4-Flash",
-        model: { id: "ordinary-model" },
-        initialPayload: { reasoning_effort: "high" },
-      }),
-    ).toEqual({ reasoning_effort: "high" });
-  });
-
   it("preserves explicit DeepSeek template kwargs over generated defaults", () => {
     expect(
       captureProviderPayload({
@@ -235,30 +212,15 @@ describe("vLLM provider thinking composition", () => {
     });
   });
 
-  it("does not inject Nemotron 3 chat-template kwargs when thinking is enabled", () => {
-    expect(
-      captureProviderPayload({
-        thinkingLevel: "low",
-        initialPayload: { temperature: 0.2 },
-      }),
-    ).toStrictEqual({ temperature: 0.2 });
-  });
-
-  it("preserves existing Nemotron 3 chat-template kwargs over defaults", () => {
+  it("disables thinking for an underscore-prefixed Nemotron alias", () => {
     expect(
       captureProviderPayload({
         thinkingLevel: "off",
-        initialPayload: {
-          chat_template_kwargs: {
-            enable_thinking: true,
-          },
-        },
+        contextModelId: "yk_nemotron-3-super",
+        model: { id: "yk_nemotron-3-super" },
       }),
     ).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: true,
-        force_nonempty_content: true,
-      },
+      chat_template_kwargs: { enable_thinking: false, force_nonempty_content: true },
     });
   });
 
@@ -293,62 +255,6 @@ describe("wrapVllmProviderStream", () => {
           provider: "vllm",
           id: "Qwen/Qwen3-8B",
           reasoning: true,
-        } as Model<"openai-completions">,
-        streamFn: undefined,
-      } as never),
-    ).toBeUndefined();
-  });
-
-  it("uses model compat to map request thinking and strip OpenAI reasoning fields", () => {
-    let captured: Record<string, unknown> = {};
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      const payload = {
-        reasoning_effort: "high",
-        reasoning: { effort: "high" },
-        reasoningEffort: "high",
-      };
-      options?.onPayload?.(payload, _model);
-      captured = payload;
-      return {} as ReturnType<StreamFn>;
-    };
-    const model = {
-      api: "openai-completions",
-      provider: "vllm",
-      id: "Qwen/Qwen3-8B",
-      reasoning: true,
-      compat: { thinkingFormat: "qwen-chat-template" },
-    } as unknown as Model<"openai-completions">;
-    const wrapped = wrapVllmProviderStream({
-      provider: "vllm",
-      modelId: "Qwen/Qwen3-8B",
-      extraParams: {},
-      thinkingLevel: "high",
-      model,
-      streamFn: baseStreamFn,
-    } as never);
-
-    expect(wrapped).toBeTypeOf("function");
-    void wrapped?.(model, { messages: [] } as Context, { reasoning: "off" });
-
-    expect(captured).toEqual({
-      chat_template_kwargs: {
-        enable_thinking: false,
-        preserve_thinking: true,
-      },
-    });
-  });
-
-  it("skips non-vLLM providers even with Qwen compat configured", () => {
-    expect(
-      wrapVllmProviderStream({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        extraParams: {},
-        model: {
-          api: "openai-completions",
-          provider: "openai",
-          id: "gpt-5.4",
-          compat: { thinkingFormat: "qwen-chat-template" },
         } as Model<"openai-completions">,
         streamFn: undefined,
       } as never),

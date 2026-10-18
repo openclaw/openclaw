@@ -6,7 +6,12 @@ import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
-import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntriesCore,
+  replaceSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
@@ -16,8 +21,11 @@ import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
-import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
-import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
+import { captureEnv, setTestEnvValue, withEnvAsync } from "../../../test-utils/env.js";
+import {
+  cleanupSessionStateForTest,
+  drainSessionStateForTest,
+} from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import {
   captureSubagentCompletionReply,
@@ -49,9 +57,10 @@ vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 export const { runOpenClawStateWorkerOperation: runSubagentStateWorkerOperation } =
   await vi.importActual<typeof stateWorker>("../../../state/openclaw-state-worker-store.js");
 
-export function useSubagentControlFixture() {
+export function useSubagentControlFixture(options: { reuseStateDir?: boolean } = {}) {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
+  let caseState: "idle" | "active" | "failed" = "idle";
   let settleRootWork: ReturnType<typeof observeRootWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
@@ -64,17 +73,22 @@ export function useSubagentControlFixture() {
   const pluginRuntime = vi.mocked(loadAgentRuntimePluginRegistryHandle);
   const contextEngine = vi.mocked(resolveContextEngine);
   beforeEach(async () => {
-    stateDir = await realpath(
-      await mkdtemp(path.join(os.tmpdir(), "openclaw-ancestor-retirement-")),
-    );
+    if (options.reuseStateDir && caseState !== "idle") {
+      throw new Error("Previous subagent control fixture cleanup is incomplete");
+    }
+    caseState = "active";
+    if (!options.reuseStateDir || !stateDir) {
+      stateDir = await realpath(
+        await mkdtemp(path.join(os.tmpdir(), "openclaw-ancestor-retirement-")),
+      );
+    }
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({ agents: { defaults: { workspace: stateDir } } }),
-    );
+    const config: OpenClawConfig = { agents: { defaults: { workspace: stateDir } } };
+    await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
     clearConfigCache();
     clearRuntimeConfigSnapshot();
+    setRuntimeConfigSnapshot(config);
     await resetSubagentRegistryForTests({ persist: false });
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
@@ -92,6 +106,9 @@ export function useSubagentControlFixture() {
     settleRootWork = observeRootWork();
   });
   afterEach(async () => {
+    if (options.reuseStateDir && caseState !== "active") {
+      return;
+    }
     const failures: unknown[] = [];
     try {
       await settle(false);
@@ -103,9 +120,33 @@ export function useSubagentControlFixture() {
     // Preserve stores and their environment if detached writers have not settled.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        await resetSubagentRegistryForTests({ persist: false });
+        // Shared fixtures clear durable rows through the registry owner before reusing workers.
+        if (options.reuseStateDir) {
+          worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
+        }
+        await resetSubagentRegistryForTests({ persist: options.reuseStateDir === true });
         schedulerTesting.reset();
-        await cleanupSessionStateForTest({ stateDir });
+        if (options.reuseStateDir) {
+          await drainSessionStateForTest({ stateDir });
+          const target = {
+            agentId: "main",
+            storePath: path.join(stateDir, "agents", "main", "sessions", "sessions.json"),
+          };
+          const removals = listSessionEntriesCore(target).map(({ sessionKey }) => ({
+            sessionKey,
+            deleteOwnedWindows: true,
+          }));
+          if (removals.length > 0) {
+            await applySessionEntryLifecycleMutation({
+              ...target,
+              removals,
+              skipMaintenance: true,
+            });
+            await drainSessionStateForTest({ stateDir });
+          }
+        } else {
+          await cleanupSessionStateForTest({ stateDir });
+        }
         for (const mock of [
           worker,
           gateway,
@@ -122,17 +163,43 @@ export function useSubagentControlFixture() {
         clearConfigCache();
         await flushLogger();
         resetLogger();
-        await rm(stateDir, { recursive: true, force: true });
+        if (!options.reuseStateDir) {
+          await rm(stateDir, { recursive: true, force: true });
+        }
         env.restore();
+        caseState = "idle";
       } catch (error) {
         failures.push(error);
       }
+    }
+    if (caseState === "active") {
+      caseState = "failed";
     }
     if (failures.length === 1) {
       throw failures[0];
     }
     if (failures.length > 1) {
       throw new AggregateError(failures, "Subagent control fixture cleanup failed");
+    }
+  });
+
+  afterAll(async () => {
+    if (
+      options.reuseStateDir &&
+      stateDir &&
+      caseState === "idle" &&
+      getActiveGatewayRootWorkCount() === 0
+    ) {
+      await withEnvAsync(
+        {
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+        },
+        async () => {
+          await cleanupSessionStateForTest({ stateDir });
+          await rm(stateDir, { recursive: true, force: true });
+        },
+      );
     }
   });
 

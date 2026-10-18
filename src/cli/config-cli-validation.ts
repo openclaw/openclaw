@@ -83,10 +83,30 @@ export function ensureValidConfigSnapshotForCli(
   exitCliAfterOutput(runtime, 1);
 }
 
-export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {
-  const prepared = await readConfigFileSnapshotForWrite();
+export async function loadValidConfigForWrite(
+  runtime: RuntimeEnv = defaultRuntime,
+  options?: { databaseOnly?: true },
+) {
+  // Preparation can finish as a preview or no-op without recording state health.
+  const prepared = await readConfigFileSnapshotForWrite({
+    observe: false,
+    ...(options?.databaseOnly ? { pluginValidation: "core-only" } : {}),
+  });
   ensureValidConfigSnapshotForCli(prepared.snapshot, runtime);
-  return prepared;
+  return {
+    ...prepared,
+    writeOptions: {
+      ...prepared.writeOptions,
+      observe: false,
+      ...(options?.databaseOnly
+        ? {
+            databaseAccess: "none" as const,
+            skipPluginValidation: true,
+            skipRuntimeSnapshotRefresh: true,
+          }
+        : {}),
+    },
+  };
 }
 
 export { formatInvalidConfigRepairHint };
@@ -244,11 +264,13 @@ function collectStrictConfigErrors(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
   deferredPluginMigrations?: readonly DeferredPluginMigration[],
+  skipPluginValidation?: true,
 ): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRawWithPlugins(config, {
     semanticValidation: "strict",
     pluginMetadataSnapshot,
     deferredPluginMigrations,
+    ...(skipPluginValidation ? { pluginValidation: "skip" } : {}),
   });
   if (validated.ok) {
     return [];
@@ -263,11 +285,13 @@ export function assertStrictConfigForMutation(
   config: OpenClawConfig,
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">,
   deferredPluginMigrations?: readonly DeferredPluginMigration[],
+  skipPluginValidation?: true,
 ): void {
   const errors = collectStrictConfigErrors(
     config,
     pluginMetadataSnapshot,
     deferredPluginMigrations,
+    skipPluginValidation,
   );
   if (errors.length === 0) {
     return;
@@ -341,6 +365,7 @@ export async function validateConfigMutation(params: {
   unchanged: boolean;
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
+  databaseOnly?: true;
 }): Promise<{ kind: "dry-run"; result: ConfigSetDryRunResult } | { kind: "unchanged" | "write" }> {
   const { config, operations, options, pluginMetadataSnapshot } = params;
   assertDeferredPluginMigrationConfigEditAllowed({
@@ -383,6 +408,7 @@ export async function validateConfigMutation(params: {
         config,
         pluginMetadataSnapshot,
         params.deferredPluginMigrations,
+        params.databaseOnly,
       );
       return { kind: "unchanged" };
     }
@@ -426,7 +452,12 @@ export async function validateConfigMutation(params: {
   errors.push(...providerErrors);
   if (requiresFullSchema) {
     errors.push(
-      ...collectStrictConfigErrors(config, pluginMetadataSnapshot, params.deferredPluginMigrations),
+      ...collectStrictConfigErrors(
+        config,
+        pluginMetadataSnapshot,
+        params.deferredPluginMigrations,
+        params.databaseOnly,
+      ),
     );
   }
   if (checksRefs) {

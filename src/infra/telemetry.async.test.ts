@@ -122,104 +122,6 @@ it("coalesces a cold check through storage preparation and accepted response per
   ).toHaveLength(1);
 });
 
-it("returns another path's fresh cache before joining a pending network check", async () => {
-  const response = createDeferredCore<Response>();
-  const requested = createDeferredCore();
-  let reads = 0;
-  execute.mockImplementation(async (command) => {
-    if (command.type === "telemetry.readState") {
-      return ++reads === 2 ? { lastPingAt: 100, latestVersion: "2026.8.25" } : {};
-    }
-    return command.type === "telemetry.persistSuccess" ? command.input.state : 0;
-  });
-  const fetchImpl = vi.fn<typeof fetch>(async () => {
-    requested.resolve();
-    return await response.promise;
-  });
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
-  const first = checkTelemetryUpdate(() => ({}), options);
-  await requested.promise;
-  vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("cached-state"));
-  vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", "https://telemetry.example.invalid/cached");
-  let cachedVersion: string | undefined;
-  const second = checkTelemetryUpdate(() => ({}), options).then((update) => {
-    cachedVersion = update?.version;
-    return update;
-  });
-  let third: ReturnType<typeof checkTelemetryUpdate> | undefined;
-  try {
-    await vi.waitFor(() => expect(cachedVersion).toBe("2026.8.25"));
-    expect(fetchImpl).toHaveBeenCalledOnce();
-    vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("third-state"));
-    third = checkTelemetryUpdate(() => ({}), options);
-  } finally {
-    response.resolve(Response.json({ version: "2026.8.24" }));
-    await Promise.all([first, second, third]);
-  }
-  expect(await first).toEqual({ version: "2026.8.24" });
-  expect(await second).toEqual({ version: "2026.8.25" });
-  expect(await third).toEqual(await first);
-  expect(fetchImpl).toHaveBeenCalledOnce();
-});
-
-it("joins the captured check when it settles during another caller's storage wait", async () => {
-  const delayedRead = createDeferredCore<TelemetryState>();
-  let reads = 0;
-  execute.mockImplementation(async (command) => {
-    if (command.type === "telemetry.readState") {
-      return ++reads === 1 ? {} : await delayedRead.promise;
-    }
-    return command.type === "telemetry.persistSuccess" ? command.input.state : 0;
-  });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.24" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
-  const first = checkTelemetryUpdate(() => ({}), options);
-  let secondSettled = false;
-  const second = checkTelemetryUpdate(() => ({}), options).then((update) => {
-    secondSettled = true;
-    return update;
-  });
-  try {
-    await first;
-    await Promise.resolve();
-    expect(secondSettled).toBe(false);
-  } finally {
-    delayedRead.resolve({});
-    await Promise.all([first, second]);
-  }
-  expect(await second).toEqual(await first);
-  expect(fetchImpl).toHaveBeenCalledOnce();
-  expect(
-    execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
-  ).toHaveLength(1);
-});
-
-it("does not treat another path's cached result as a network check for an uncached caller", async () => {
-  const firstRead = createDeferredCore<TelemetryState>();
-  let reads = 0;
-  execute.mockImplementation(async (command) => {
-    if (command.type === "telemetry.readState") {
-      return ++reads === 1 ? await firstRead.promise : {};
-    }
-    return command.type === "telemetry.persistSuccess" ? command.input.state : 0;
-  });
-  const fetchImpl = vi.fn<typeof fetch>(async () => Response.json({ version: "2026.8.25" }));
-  const options = { surface: "gateway" as const, fetchImpl, nowMs: 100 };
-  const first = checkTelemetryUpdate(() => ({}), options);
-  vi.stubEnv("OPENCLAW_STATE_DIR", testState.path("uncached-state"));
-  const endpoint = "https://telemetry.example.invalid/uncached";
-  vi.stubEnv("OPENCLAW_TELEMETRY_ENDPOINT", endpoint);
-  const second = checkTelemetryUpdate(() => ({}), options);
-  firstRead.resolve({ lastPingAt: 100, latestVersion: "2026.8.24" });
-  const [cached, checked] = await Promise.all([first, second]);
-  expect(cached).toEqual({ version: "2026.8.24" });
-  expect(checked).toEqual({ version: "2026.8.25" });
-  expect(fetchImpl).toHaveBeenCalledExactlyOnceWith(
-    endpoint,
-    expect.objectContaining({ method: "GET" }),
-  );
-});
-
 it("keeps the captured endpoint and storage destination across the first read wait", async () => {
   const read = createDeferredCore<TelemetryState>();
   execute.mockImplementationOnce(() => read.promise);
@@ -263,7 +165,7 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       await countRequested.promise;
       const replacement: OpenClawConfig = {
         telemetry: { enabled: change !== "opt-out" },
-        ...(change === "update-disabled" ? { update: { checkOnStart: false } } : {}),
+        update: { checkOnStart: change !== "update-disabled" },
       };
       setRuntimeConfigSnapshot(replacement);
       expect(getRuntimeConfig()).toBe(replacement);

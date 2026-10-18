@@ -1,3 +1,5 @@
+import { stripMixedSilentReplyTokens } from "../../auto-reply/reply/mixed-silent-reply-tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent, type AgentEventStream } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -6,6 +8,7 @@ import { projectProgressCardChannelUpdate } from "../../session-cards/progress-c
 import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import { registerListener } from "../../shared/listeners.js";
 import { projectAgentActivityItem } from "../agent-activity-presentation.js";
+import { prepareAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -17,11 +20,7 @@ import type {
 } from "../cli-output-contracts.js";
 import { isClaudeForegroundAgentToolName } from "../cli-output-records.js";
 import type { ToolSummaryTrace } from "../embedded-agent-runner/types.js";
-import {
-  extractToolErrorMessage,
-  sanitizeToolArgs,
-  prepareToolResult,
-} from "../embedded-agent-tool-results.js";
+import { extractToolErrorMessage, prepareToolResult } from "../embedded-agent-tool-results.js";
 import { runAgentHarnessAfterToolCallHook } from "../harness/hook-helpers.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveCliToolTerminalReason } from "../run-termination.js";
@@ -64,6 +63,7 @@ export function createCliEventHandlers(params: {
     });
   };
   let commentaryCounter = 0;
+  let assistantVisibleText = "";
   const toolSummaryById = new Map<
     string,
     { name: string; failed: boolean; terminalObserved?: boolean }
@@ -149,7 +149,7 @@ export function createCliEventHandlers(params: {
         phase: "start",
         name: event.name,
         toolCallId: event.toolCallId,
-        args: sanitizeToolArgs(event.args),
+        args: event.args,
       });
     }
   };
@@ -223,7 +223,7 @@ export function createCliEventHandlers(params: {
           toolCallId: event.toolCallId,
           isError: event.isError,
           result: readResult(),
-          ...(tracked && startedArgs ? { args: sanitizeToolArgs(startedArgs) } : {}),
+          ...(tracked && startedArgs ? { args: startedArgs } : {}),
           ...(resultContentSource ? { resultContentSource } : {}),
         },
         // An ambiguous MCP loopback has no authoritative executed args; native tools do.
@@ -379,6 +379,14 @@ export function createCliEventHandlers(params: {
     if (!emitLiveEvents) {
       return;
     }
+    const prepared = prepareAgentRunTerminalReply({ rawText: text });
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
+    if (!visibleText) {
+      return;
+    }
     commentaryCounter += 1;
     emitLiveEvent("item", () => ({
       kind: "preamble",
@@ -388,10 +396,7 @@ export function createCliEventHandlers(params: {
       phase: "end",
       title: "commentary",
       status: "running",
-      progressText: applyPluginTextReplacements(
-        text,
-        context.backendResolved.textTransforms?.output,
-      ),
+      progressText: visibleText,
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
@@ -399,22 +404,48 @@ export function createCliEventHandlers(params: {
       observedCliActivity = true;
       signalExecutionPhase("assistant_output_started");
     }
+    const candidate = text.trimStart().toUpperCase();
+    const stripped = stripMixedSilentReplyTokens(text);
+    if (
+      stripped === null &&
+      (SILENT_REPLY_TOKEN.startsWith(candidate) || isSilentReplyText(candidate))
+    ) {
+      return;
+    }
+    const sourceText = stripped ?? text;
+    const sourceDelta = sourceText.startsWith(assistantVisibleText)
+      ? sourceText.slice(assistantVisibleText.length)
+      : sourceText;
+    assistantVisibleText = sourceText;
+    const preparedText = applyPluginTextReplacements(
+      sourceText,
+      context.backendResolved.textTransforms?.output,
+    );
     emitLiveEvent("assistant", () => ({
       itemId: cliAssistantItemId(runParams.runId),
-      text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),
-      delta: applyPluginTextReplacements(delta, context.backendResolved.textTransforms?.output),
+      text: preparedText,
+      delta: applyPluginTextReplacements(
+        sourceDelta,
+        context.backendResolved.textTransforms?.output,
+      ),
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
     if (text) {
       observedCliActivity = true;
     }
+    assistantVisibleText = "";
+    const prepared = prepareAgentRunTerminalReply({ rawText: text });
+    const visibleText = applyPluginTextReplacements(
+      prepared.text,
+      context.backendResolved.textTransforms?.output,
+    );
+    if (!visibleText) {
+      return;
+    }
     emitLiveEvent("assistant", () => ({
       assistantMessageIndex,
-      completedText: applyPluginTextReplacements(
-        text,
-        context.backendResolved.textTransforms?.output,
-      ),
+      completedText: visibleText,
     }));
   };
 

@@ -75,7 +75,7 @@ type PreparedReplyDispatchPublicationHost = Readonly<{
   ) => PreparedModelRuntimeLease;
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
-  getPendingReplacement: () => Promise<void> | undefined;
+  getPendingReplacement: (agentId: string) => Promise<void> | undefined;
   isStartupPending: () => boolean;
   ensureReady: (params: PreparedReplyDispatchLoadParams) => Promise<void>;
 }>;
@@ -152,7 +152,7 @@ export class PreparedReplyDispatchPublicationOwner {
       if (!this.host.isGatewayLifecycleActive()) {
         return undefined;
       }
-      const replacement = this.host.getPendingReplacement();
+      const replacement = this.host.getPendingReplacement(agentId);
       const pendingOwner = replacement ? undefined : this.host.getConfiguredOwner(agentId);
       if (replacement) {
         assertPreparedModelRuntimeAdmissionCanWait();
@@ -160,7 +160,6 @@ export class PreparedReplyDispatchPublicationOwner {
         assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
       }
       if (!demandPrepared) {
-        // Demand can join recovery, so preserve admission before that first wait.
         await this.host.ensureReady(params);
         demandPrepared = true;
         continue;

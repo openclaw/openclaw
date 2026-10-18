@@ -1,37 +1,10 @@
-.session-menu__compact-details {
-  display: inline-flex;
-  flex: 0 1 auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  max-width: 96px;
-  overflow: hidden;
-}
-
-wa-dropdown-item.session-menu__item--compact-details::part(label) {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-wa-dropdown-item.session-menu__item--compact-details {
-  box-sizing: border-box;
-  width: 100%;
-  min-width: 0;
-}
-
-wa-dropdown.sidebar-session-sort-menu::part(menu) {
+.sidebar-session-sort-menu.oc-menu {
   box-sizing: border-box;
   width: min(220px, calc(100dvw - 16px));
 }
 
-wa-dropdown-item.sidebar-session-choice-submenu::part(submenu) {
+.sidebar-session-choice-submenu + .oc-menu {
   width: min(220px, calc(100dvw - 16px));
-  max-width: calc(100dvw - 16px);
-}
-
-wa-dropdown-item.sidebar-session-choice-submenu::part(submenu),
-.session-menu__item::part(submenu) {
   max-height: calc(100dvh - 16px);
   overflow: auto;
 }
@@ -40,36 +13,16 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(submenu),
   min-width: 0;
 }
 
-wa-dropdown-item.sidebar-session-choice-submenu::part(submenu-icon) {
-  inset-inline-end: 8px;
-  color: var(--muted);
-  font-size: 10px;
-}
-
 .sidebar-session-choice-submenu {
   color: var(--text);
 }
 
-/* Web Awesome's details part is fixed-size and end-justified, so a selection
-   rail wider than its column spills leftward across the row label. Give the
-   row label its own width (capped so it can still truncate), let the details
-   part absorb the remaining width, and let the rail shrink into it so the
-   selected owner's name truncates before the label does. */
-wa-dropdown-item.sidebar-session-choice-submenu::part(label) {
+.sidebar-session-choice-submenu .oc-menu-item__label {
   display: flex;
-  flex: 0 0 auto;
   align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   min-width: 0;
-  max-width: 60%;
-}
-
-/* Web Awesome also forces a 2em start margin on the slotted rail, which the
-   light DOM cannot outrank. Pull the part back by that margin so the rail keeps
-   the row's 8px gutter instead of stacking a ~30px one. */
-wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
-  flex: 1 1 auto;
-  min-width: 0;
-  margin-inline-start: -2em;
 }
 
 .session-menu__shortcut.sidebar-session-owner-count {
@@ -158,7 +111,7 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   margin: 0;
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-  font-weight: var(--wa-font-weight-semibold);
+  font-weight: var(--control-ui-font-weight-semibold);
   text-transform: uppercase;
 }
 
@@ -202,11 +155,6 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   height: var(--settings-control-height);
 }
 
-.sidebar-session-menu-segmented::part(form-control-input) {
-  flex-wrap: nowrap;
-  gap: calc(var(--space-1) / 2);
-}
-
 .sidebar-session-menu-segmented > .settings-segmented__btn {
   flex: 1 1 auto;
   justify-content: center;
@@ -216,18 +164,13 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   font-size: var(--control-ui-text-xs);
 }
 
-.sidebar-session-menu-segmented > .settings-segmented__btn::part(label) {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
 .sidebar-session-menu-row .picker-select__trigger {
   height: var(--settings-control-height);
   padding-inline: var(--space-2);
 }
 
 .sidebar-session-menu-row .picker-select__label {
-  font-weight: var(--wa-font-weight-normal);
+  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .sidebar-session-filter-panel :is(.picker-select, .picker-select__trigger, .picker-select__option) {
@@ -257,8 +200,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-filter-panel :is(button, a, input):focus-visible {
-  outline: var(--wa-focus-ring);
-  outline-offset: var(--wa-focus-ring-offset);
+  outline: var(--control-ui-focus-ring);
+  outline-offset: var(--control-ui-focus-ring-offset);
 }
 
 /* Accent rings are reserved for keyboard focus: an open trigger keeps its
@@ -304,7 +247,7 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .sidebar-session-filter-panel .picker-select__option .picker-select__label {
-  font-weight: var(--wa-font-weight-normal);
+  font-weight: var(--control-ui-font-weight-normal);
 }
 
 .sidebar-session-filter-panel .picker-select__check {
@@ -317,14 +260,8 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   flex: 1;
 }
 
-.sidebar-session-menu-switch wa-switch {
+.sidebar-session-menu-switch .settings-toggle {
   pointer-events: none;
-}
-
-/* The empty label slot keeps a leading margin that would pull the track off
-   the shared right edge. */
-.sidebar-session-menu-switch wa-switch::part(label) {
-  display: none;
 }
 
 /* Reset's text ends on the controls' edge; its padded hover surface extends past it. */
@@ -388,6 +325,9 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
 }
 
 .shell--mobile-nav .sidebar-session-sort-menu .sidebar-session-filter-panel {
+  position-anchor: auto;
+  position-area: none;
+  margin: 0;
   position: fixed;
   z-index: 121;
   inset: auto var(--safe-area-right) calc(100% - var(--shell-canvas-height)) var(--safe-area-left);
@@ -418,15 +358,18 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   }
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-start] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start] {
   mask-image: linear-gradient(to bottom, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-end] {
   mask-image: linear-gradient(to top, transparent, black 16px);
 }
 
-.sidebar-session-filter-panel .picker-select__options[data-fade-start][data-fade-end] {
+:is(.sidebar-session-filter-panel, .sidebar-session-owner-filter)
+  .picker-select__options[data-fade-start][data-fade-end] {
   mask-image: linear-gradient(transparent, black 16px, black calc(100% - 16px), transparent);
 }
 
@@ -434,4 +377,14 @@ wa-dropdown-item.sidebar-session-choice-submenu::part(details) {
   .sidebar-session-sort-menu .sidebar-session-filter-panel {
     width: calc(100dvw - var(--space-6));
   }
+}
+
+.sidebar-identity-menu [data-value^="gateway:"] > .oc-menu-item__check {
+  display: none;
+}
+
+.sidebar-customize-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

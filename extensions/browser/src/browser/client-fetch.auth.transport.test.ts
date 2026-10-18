@@ -10,7 +10,7 @@ const fixture = vi.hoisted(() => ({ configuredAuth: {} as Auth }));
 vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>();
-  return { ...actual, getRuntimeConfig: () => ({}) };
+  return { ...actual, readRuntimeConfig: () => ({}) };
 });
 vi.mock("./control-auth.js", () => ({
   resolveBrowserControlAuth: () => fixture.configuredAuth,

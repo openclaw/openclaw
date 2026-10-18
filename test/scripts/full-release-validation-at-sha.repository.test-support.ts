@@ -65,13 +65,19 @@ function createDispatchRepository(root: string, options: DispatchRepositoryOptio
   );
   writeFileSync(
     join(checkout, "scripts", "release-ci-summary.mjs"),
-    `const expected = [
+    `import { existsSync, readFileSync } from "node:fs";
+// Admission that advanced P with main verifies against the advanced P.
+const advanced = process.env.MOCK_ADVANCED_P_PATH && existsSync(process.env.MOCK_ADVANCED_P_PATH)
+  ? readFileSync(process.env.MOCK_ADVANCED_P_PATH, "utf8").trim().split("\\n").at(-1)
+  : "";
+const verifierSha = advanced || process.env.MOCK_VERIFIER_SHA || process.env.MOCK_WORKFLOW_SHA;
+const expected = [
   "--validate-run", "123",
 	  "--trusted-workflow-ref", process.env.MOCK_TRUSTED_WORKFLOW_REF,
   "--trusted-workflow-full-ref", process.env.MOCK_TRUSTED_WORKFLOW_FULL_REF,
-  "--trusted-workflow-sha", process.env.MOCK_VERIFIER_SHA || process.env.MOCK_WORKFLOW_SHA,
+  "--trusted-workflow-sha", verifierSha,
 	  "--json",
-  "--verifier-source-sha", process.env.MOCK_VERIFIER_SHA || process.env.MOCK_WORKFLOW_SHA,
+  "--verifier-source-sha", verifierSha,
   "--verifier-source-file", process.argv[1],
 ];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {

@@ -7,6 +7,7 @@ type RegistryAcquisition = ReleasableResource & { registry: PluginRegistry };
 /** The executable owns installed command callbacks until their actual work and cleanup settle. */
 export class CliPluginInvocationResources {
   private readonly work = new AsyncWorkScope();
+  private readonly cleanupWork = new AsyncWorkScope();
   private readonly resources = new Set<ReleasableResource>();
   private readonly registrations = new Set<Promise<void>>();
   private readonly registrationErrors: unknown[] = [];
@@ -29,18 +30,17 @@ export class CliPluginInvocationResources {
 
   acquire(load: () => Promise<RegistryAcquisition>): Promise<PluginRegistry> {
     // Retained cleanup can need its first registry after ordinary admission has closed.
-    // Capture that permission before load: an earlier command load must still reject if late.
-    const cleanupAcquisition = this.phase === "cleanup" && isAsyncWorkScopeActiveHere(this.work);
-    if (this.phase !== "open" && !cleanupAcquisition) {
+    if (
+      this.phase !== "open" &&
+      !(this.phase === "cleanup" && isAsyncWorkScopeActiveHere(this.work))
+    ) {
       return Promise.reject(new Error("Plugin CLI invocation is closed"));
     }
-    return this.work.track(async () => {
+    const work = this.phase === "cleanup" ? this.cleanupWork : this.work;
+    return work.track(async () => {
       const acquisition = await load();
-      // Release owns late acquisitions too, even when admission closed during the load.
+      // Admitted loads may finish during shutdown; the work scope joins them before disposal.
       this.resources.add(acquisition);
-      if (this.phase !== "open" && !(cleanupAcquisition && this.phase === "cleanup")) {
-        throw new Error("Plugin CLI invocation closed during registry acquisition");
-      }
       return acquisition.registry;
     });
   }
@@ -67,7 +67,8 @@ export class CliPluginInvocationResources {
   }
 
   /** Invoke cleanup in this owner so cooperating descendants join its physical lifetime. */
-  runCleanup = <T>(run: () => T | Promise<T>): Promise<T> => this.work.track(run);
+  runCleanup = <T>(run: () => T | Promise<T>): Promise<T> =>
+    this.work.track(() => this.cleanupWork.track(run));
 
   /** Stop admission and cancel cooperating work; final release still owns cleanup ordering. */
   beginClose(reason?: unknown): void {
@@ -80,7 +81,10 @@ export class CliPluginInvocationResources {
   /** Settle admitted work before callers close the resources that work depends on. */
   async settleWork(): Promise<void> {
     this.beginClose();
-    await this.work.runWhenIdle(() => {});
+    await AsyncWorkScope.runWhenAllIdle(
+      () => [this.work, this.cleanupWork],
+      () => {},
+    );
   }
 
   release(): Promise<void> {
@@ -97,13 +101,22 @@ export class CliPluginInvocationResources {
   private async releaseResources(): Promise<void> {
     // Registration disposers can capture this context; terminal closure must follow them.
     this.beginClose();
-    const results = await this.work.runWhenIdle(() => {
-      // Seal in the same continuation that observes idle, before selecting physical releases.
-      this.phase = "disposing";
-      return Promise.allSettled(
-        [...this.resources].map((acquisition) => this.work.track(() => acquisition.release())),
-      );
-    });
+    const results = await AsyncWorkScope.runWhenAllIdle(
+      () => [this.work, this.cleanupWork],
+      () =>
+        this.runCleanup(() => {
+          // Seal in the same continuation that observes idle, before selecting physical releases.
+          this.phase = "disposing";
+          return Promise.allSettled(
+            [...this.resources].map((acquisition) =>
+              this.cleanupWork.track(() => acquisition.release()),
+            ),
+          );
+        }),
+    );
+    // Command cancellation must not abort the reads and descendants needed to release resources.
+    await this.cleanupWork.runWhenIdle(() => {});
+    await this.cleanupWork.drain();
     await this.work.drain();
     this.phase = "closed";
     this.resources.clear();

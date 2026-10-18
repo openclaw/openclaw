@@ -19,16 +19,14 @@ const getMemorySearchManager = vi.hoisted(() => vi.fn());
 const getRuntimeConfig = vi.hoisted(() => vi.fn((): OpenClawConfig => ({})));
 
 vi.mock("./memory/index.js", () => ({ getMemorySearchManager }));
+const resolveCommandSecretRefsViaGateway = vi.hoisted(() => vi.fn());
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-cli", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-cli")>()),
-  resolveCommandSecretRefsViaGateway: async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-  }),
+  resolveCommandSecretRefsViaGateway,
 }));
-vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/memory-core-host-runtime-core")>()),
-  getRuntimeConfig,
+vi.mock("openclaw/plugin-sdk/runtime-config-snapshot", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-config-snapshot")>()),
+  captureRuntimeConfigAsyncReader: () => async () => getRuntimeConfig(),
 }));
 
 let registerMemoryCli: typeof import("./cli.js").registerMemoryCli;
@@ -79,6 +77,10 @@ function output(spy: ReturnType<typeof spyRuntimeLogs>) {
 
 beforeEach(() => {
   process.exitCode = 0;
+  resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  }));
   getMemorySearchManager.mockReset();
   getRuntimeConfig.mockReset().mockReturnValue(knowledgeSlot);
 });
@@ -126,6 +128,62 @@ describe("memory cli when another plugin owns the memory slot", () => {
     ]);
     expect(getMemorySearchManager).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    "resolves the selected provider credential (available=%s)",
+    async (available) => {
+      const credential = { source: "exec", provider: "fixture", id: "token" };
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "knowledge" },
+          entries: { knowledge: { enabled: true, config: { credential } } },
+        },
+      });
+      // The host resolves manifest targets; this boundary must use its materialized config
+      // and refuse provider acquisition when the host reports unresolved credentials.
+      resolveCommandSecretRefsViaGateway.mockResolvedValue({
+        resolvedConfig: {
+          plugins: {
+            slots: { memory: "knowledge" },
+            entries: {
+              knowledge: {
+                enabled: true,
+                config: { credential: available ? "fixture-resolved-token" : undefined },
+              },
+            },
+          },
+        },
+        diagnostics: available ? [] : ["knowledge credential is unavailable"],
+        hadUnresolvedTargets: !available,
+      });
+      const { open } = registerSelectedProvider();
+      const json = spyRuntimeJson(defaultRuntime);
+
+      await runMemoryCli(["status", "--agent", "main", "--json"]);
+
+      if (available) {
+        expect(open).toHaveBeenCalledWith(
+          expect.objectContaining({
+            cfg: expect.objectContaining({
+              plugins: expect.objectContaining({
+                entries: {
+                  knowledge: { enabled: true, config: { credential: "fixture-resolved-token" } },
+                },
+              }),
+            }),
+          }),
+        );
+      } else {
+        expect(open).not.toHaveBeenCalled();
+      }
+      expect(firstWrittenJsonArg(json)).toEqual([
+        expect.objectContaining({
+          provider: "knowledge",
+          health: expect.objectContaining({ status: available ? "ready" : "unavailable" }),
+        }),
+      ]);
+    },
+  );
 
   it("refuses search instead of answering from the sidecar index", async () => {
     const { open } = registerSelectedProvider();

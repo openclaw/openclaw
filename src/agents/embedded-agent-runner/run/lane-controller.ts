@@ -1,4 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { createAbortError } from "../../../infra/abort-signal.js";
 import {
   assertAgentRunLifecycleGenerationCurrent,
@@ -49,6 +50,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
   sessionLane: string;
   setLifecycleGeneration: (generation: string) => void;
   setParams: (params: TParams) => void;
+  onSessionWriterClaimed?: (entry: InternalSessionEntry) => void;
 }) {
   const initialParams = options.getParams();
   const taskIdentity: CommandQueueEnqueueOptions["taskIdentity"] = {
@@ -217,6 +219,11 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       reason === undefined ? undefined : { cause: reason },
     );
   };
+  const assertCurrent = () => {
+    throwIfAborted();
+    assertAgentRunLifecycleGenerationCurrent(options.getLifecycleGeneration());
+    options.getParams().preparedRunAdmission?.assertSourceCurrent();
+  };
   const withLaneTimeout = (
     opts?: CommandQueueEnqueueOptions,
     allowPendingGlobalAdmissionHeartbeat = false,
@@ -272,7 +279,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       });
     }
   };
-  const enqueue = <T>(
+  const enqueue = async <T>(
     params: Pick<LaneParams, "enqueue">,
     lane: string,
     task: () => Promise<T>,
@@ -361,6 +368,7 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           },
         };
         options.setParams(params);
+        options.onSessionWriterClaimed?.(writerClaim.entry);
       }
       return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
         withSessionPlacementTurnAdmission(
@@ -371,7 +379,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
             runId: params.runId,
           },
           params,
-          () => {
+          (signal) => {
+            params = { ...params, abortSignal: signal };
+            options.setParams(params);
             assertPlacementCurrent = resolveSessionPlacementTurnSettlementAssertion();
             return task();
           },
@@ -396,14 +406,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
       );
     };
     const params = options.getParams();
-    let queuedRun: Promise<EmbeddedAgentRunResult>;
-    try {
-      queuedRun = enqueue(params, options.globalLane, taskWithCurrentLifecycle, globalOpts);
-    } catch (error) {
-      finishGlobalLaneAdmission();
-      throw error;
-    }
-    return queuedRun.finally(finishGlobalLaneAdmission).catch(rethrowQueueError);
+    return enqueue(params, options.globalLane, taskWithCurrentLifecycle, globalOpts)
+      .finally(finishGlobalLaneAdmission)
+      .catch(rethrowQueueError);
   };
   const enqueueSession = async <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) => {
     const releaseForeground =
@@ -437,14 +442,9 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
           queuedRunAbortSignal.addEventListener("abort", abandonQueuedContext, { once: true });
         }
       }
-      let queuedRun: Promise<T>;
-      try {
-        queuedRun = enqueue(params, options.sessionLane, admittedTask, sessionOpts, true);
-      } catch (error) {
-        releaseQueuedContext("abandoned");
-        throw error;
-      }
-      return await queuedRun.finally(abandonQueuedContext).catch(rethrowQueueError);
+      return await enqueue(params, options.sessionLane, admittedTask, sessionOpts, true)
+        .finally(abandonQueuedContext)
+        .catch(rethrowQueueError);
     } finally {
       releaseForeground?.();
     }
@@ -460,5 +460,6 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     setLaneTaskDeadline,
     createAttemptControls,
     throwIfAborted,
+    assertCurrent,
   };
 }

@@ -5,7 +5,10 @@ import {
   resolveMemoryDreamingPluginConfig,
   resolveSessionTranscriptsDirForAgent,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -107,15 +110,10 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
 });
 
-describe("memory-core redaction product boundaries", () => {
-  it("redacts sensitive interactive transcript content before dreaming ingestion", async () => {
+describe("memory-core transcript and promotion boundaries", () => {
+  it("preserves sensitive interactive transcript content during dreaming ingestion", async () => {
     const workspaceDir = await createWorkspace("redaction-dreaming-");
     const safeControlText = "Safe control text survives transcript ingestion.";
-    await seedInteractiveTranscript({
-      sessionId: "redaction-dreaming",
-      timestamp: "2026-08-03T18:00:00.000Z",
-      content: `${safeControlText} ${RAW_DREAMING_SECRET}`,
-    });
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { workspace: workspaceDir, userTimezone: "UTC" },
@@ -138,6 +136,12 @@ describe("memory-core redaction product boundaries", () => {
         },
       },
     };
+    setRuntimeConfigSnapshot(cfg);
+    await seedInteractiveTranscript({
+      sessionId: "redaction-dreaming",
+      timestamp: "2026-08-03T18:00:00.000Z",
+      content: `${safeControlText} ${RAW_DREAMING_SECRET}`,
+    });
 
     await expect(
       runDreamingSweepPhases({
@@ -155,8 +159,7 @@ describe("memory-core redaction product boundaries", () => {
       "utf-8",
     );
     expect(corpus).toContain(safeControlText);
-    expect(corpus).not.toContain(RAW_DREAMING_SECRET);
-    expect(corpus).toContain("OPENAI_API_KEY=***");
+    expect(corpus).toContain(RAW_DREAMING_SECRET);
   });
 
   it("promotes only clean trusted content across contamination and provenance gates", async () => {

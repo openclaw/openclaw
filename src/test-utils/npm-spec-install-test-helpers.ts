@@ -133,18 +133,6 @@ export function mockNpmViewMetadataResult(
   });
 }
 
-export async function expectUnsupportedNpmSpec(
-  install: (spec: string) => Promise<InstallResultLike>,
-  spec = "github:evil/evil",
-) {
-  const result = await install(spec);
-  expect(result.ok).toBe(false);
-  if (result.ok) {
-    return;
-  }
-  expect(result.error).toContain("unsupported npm spec");
-}
-
 export function mockNpmPackMetadataResult(
   run: {
     mockImplementation: (

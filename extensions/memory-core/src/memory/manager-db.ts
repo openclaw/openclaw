@@ -5,23 +5,29 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  isPostgresSqlConnection,
   loadSqliteVecExtension,
   MEMORY_INDEX_DERIVED_TABLES,
   MEMORY_INDEX_STATE_TABLE,
   MEMORY_INDEX_VECTOR_TABLE,
   openOpenClawAgentDatabaseReadOnly,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import {
+  openOpenClawAgentSqliteWorkerStoreV2,
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
+  tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import {
   MEMORY_INDEX_STATE_ID,
   memoryDatabaseTableExists as tableExists,
   readMemoryDatabaseRevision,
 } from "./manager-db-kernel.js";
 import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
+import type { MemoryPublicationOperations } from "./manager-publication-task.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -59,6 +65,50 @@ function hasSqliteVecExtension(db: DatabaseSync): boolean {
     return typeof row?.version === "string" && row.version.trim().length > 0;
   } catch {
     return false;
+  }
+}
+
+/** PostgreSQL reset borrows the existing agent owner without creating a missing index. */
+export async function resetPostgresMemoryDatabase(params: {
+  agentId: string;
+  dbPath: string;
+  workspaceDir: string;
+}): Promise<boolean> {
+  const lock = await waitForMemoryReindexLock(params.dbPath);
+  try {
+    return await withMemoryWorkspaceLock(params.workspaceDir, () =>
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
+        const worker = await openOpenClawAgentSqliteWorkerStoreV2<MemoryPublicationOperations>(
+          { agentId: params.agentId, path: params.dbPath },
+          { version: 2, assertCurrent() {} },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(memoryCpuProcessEntrypoints.publication),
+            input: { kind: "agent" },
+          },
+        );
+        try {
+          const receipt = await worker.executeExisting(
+            { type: "database.reset", input: undefined },
+            () => {},
+          );
+          if (!receipt) {
+            return false;
+          }
+          const result = receipt.value;
+          if (!result.ok) {
+            throw Object.assign(new Error(result.error.message), result.error, {
+              entered: result.entered,
+              committed: result.committed,
+            });
+          }
+          return result.value;
+        } finally {
+          await worker.close();
+        }
+      }),
+    );
+  } finally {
+    await lock.release();
   }
 }
 
@@ -220,14 +270,8 @@ export function openMemoryDatabaseAtPath(
 }
 
 function openUninitializedMemoryDatabase(allowExtension: boolean) {
-  const database = openNodeSqliteDatabase(":memory:", { allowExtension });
-  try {
-    database.exec("PRAGMA query_only = ON");
-    return { db: database, release: () => database.close(), hasIndex: false };
-  } catch (error) {
-    database.close();
-    throw error;
-  }
+  const database = openNodeSqliteDatabase(":memory:", { readOnly: true, allowExtension });
+  return { db: database, release: () => database.close(), hasIndex: false };
 }
 
 /** Open an existing memory index through the agent database query-only owner. */
@@ -236,7 +280,10 @@ export function openMemoryDatabaseReadOnlyAtPath(
   allowExtension: boolean,
   agentId: string,
 ) {
-  const opened = openOpenClawAgentDatabaseReadOnly({ agentId, path: dbPath }, { allowExtension });
+  const opened = openOpenClawAgentDatabaseReadOnly(
+    { agentId, path: dbPath },
+    { allowExtension, lifecycle: "agent" },
+  );
   if (!opened.found) {
     if (opened.reason === "database-missing") {
       return openUninitializedMemoryDatabase(allowExtension);
@@ -244,11 +291,16 @@ export function openMemoryDatabaseReadOnlyAtPath(
     throw new Error(`Memory index database schema is missing: ${dbPath}`);
   }
   const { database } = opened;
-  if (!tableExists(database.db, "main", MEMORY_INDEX_STATE_TABLE)) {
+  const db = database.db;
+  if (!admittedTableExists(db, MEMORY_INDEX_STATE_TABLE)) {
     database.close();
     return openUninitializedMemoryDatabase(allowExtension);
   }
-  return { db: database.db, release: database.close, hasIndex: true };
+  if (isPostgresSqlConnection(db)) {
+    database.close();
+    throw new Error("PostgreSQL memory reads require the asynchronous worker API.");
+  }
+  return { db, release: database.close, hasIndex: true };
 }
 
 export function closeMemoryDatabase(db: DatabaseSync): void {

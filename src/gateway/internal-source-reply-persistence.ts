@@ -2,24 +2,22 @@ import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
-  loadExactSessionEntry,
   persistSessionTranscriptTurn,
-  readActiveTranscriptEntryAnchor,
-  resolveSessionEntrySelection,
   type TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
-import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptWriterFence,
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   readAssistantDisplayContent,
   retainAssistantModelContent,
@@ -53,10 +51,12 @@ async function completePersistedInternalSourceReply(params: {
   const scope = {
     agentId: params.agentId,
     sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveSqliteSessionKey(
+      params.sessionKey,
+      params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    ),
     storePath,
   };
-  scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
   const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
   const expected = {
     expectedSessionId: params.expectedSessionId,
@@ -75,21 +75,11 @@ async function completePersistedInternalSourceReply(params: {
   if (!messageId || !message) {
     throw new Error("Internal source reply transcript identity is unavailable");
   }
-  const assertCurrentReplay = (entryId: string) => {
-    assertCurrent();
-    if (
-      !sessionMatchesExpectedTranscriptTurn(loadExactSessionEntry(scope), expected) ||
-      !readActiveTranscriptEntryAnchor({ ...scope, entryId })
-    ) {
-      throw new Error("Internal source reply no longer owns the active transcript");
-    }
-  };
   // Replay also refreshes history when an earlier owned drain suppressed publication.
   // Preserve the original bytes and run provenance; never restage a retry.
   const options: Parameters<typeof persistSessionTranscriptTurn>[1] = {
     config: params.cfg,
     ...expected,
-    assertCurrent,
     messages: [
       {
         eventId: messageId,
@@ -106,7 +96,7 @@ async function completePersistedInternalSourceReply(params: {
     updateMode: "file-only",
     publishWhen: "always",
     onMessageCommitted: (result, acceptCompletion) => {
-      assertCurrentReplay(result.messageId);
+      assertCurrent();
       attachSourceReplyMedia(result, acceptCompletion);
     },
   };
@@ -214,17 +204,7 @@ export async function persistInternalSourceReply(params: {
           attachSourceReplyMedia(result, acceptCompletion);
         },
       };
-      const appended = await appendAssistantMessageToSessionTranscript({
-        ...options,
-        assertCurrent: captureOwnedTranscriptWriteAssertion({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.expectedSessionId,
-          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-            agentId: params.agentId,
-          }),
-        }),
-      });
+      const appended = await appendAssistantMessageToSessionTranscript(options);
       if (!appended.ok) {
         throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
       }

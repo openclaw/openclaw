@@ -102,6 +102,7 @@ export async function runClaudeCliNodeCommand(params: {
       client: params.client,
       frame: params.frame,
       idleTimeoutMs: params.request.idleTimeoutMs,
+      signal: params.signal,
       onError: () => supervisor.cancel(runId),
     });
     // The runtime owns one progress sequence for duplex invocations. Do not

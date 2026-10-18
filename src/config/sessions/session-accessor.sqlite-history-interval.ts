@@ -1,13 +1,21 @@
 import { sql, type Expression, type RawBuilder, type SqlBool } from "kysely";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../../agents/internal-runtime-context.js";
+import { SOURCE_PAGE_MAX_BYTES } from "../../gateway/session-transcript-source-pages.js";
+import { engineIndexHint } from "../../infra/database-engine/index-hint.js";
+import { jsonArrayElements } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   resolveHistoryAnchorPageRange,
   type TranscriptAnchorPageOptions,
 } from "../../sessions/transcript-anchor-page.js";
+import {
+  resolveClosedResetInterval,
+  type ClosedResetInterval,
+} from "./session-accessor.sqlite-closed-reset-interval.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
 import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
@@ -17,41 +25,29 @@ import {
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  readUnindexedHistoryControls,
-  resolveClosedResetInterval,
-  type ClosedResetInterval,
-} from "./session-accessor.sqlite-reset-window.js";
+import { readUnindexedHistoryControls } from "./session-accessor.sqlite-reset-window.js";
+import { isVisibleHistoryNonMessageEvent } from "./session-history-visibility.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql, transcriptEventNavigationSql } from "./transcript-payload.js";
-
-export function isVisibleHistoryNonMessageEvent(event: Record<string, unknown>): boolean {
-  return (
-    event.type === "reset" ||
-    event.type === "compaction" ||
-    (event.type === "custom_message" &&
-      event.display === true &&
-      event.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
-  );
-}
+import { transcriptEventJsonSql, transcriptPredicateSql } from "./transcript-payload.js";
+import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
 /** Select display slots without loading custom content or details into history metadata. */
 export function isVisibleHistoryNonMessageEventSql(
   type: Expression<string | null>,
-  event: Expression<string | null>,
-  activeEventSeq: Expression<number>,
-  eventSeq: Expression<number>,
+  display: Expression<number>,
+  customType: Expression<string | null>,
+  valid: Expression<number>,
 ): RawBuilder<SqlBool> {
-  const activeEvent = /* kysely-allow-raw: JSON parsing requires the joined active-row key. */ sql<
-    string | null
-  >`CASE WHEN ${activeEventSeq} = ${eventSeq} THEN ${event} END`;
-  // Match isVisibleTranscriptRecord; CASE avoids parsing unrelated marker payloads.
-  return /* kysely-allow-raw: query-time display selection leaves canonical events and message indexes unchanged. */ sql<SqlBool>`(${type} IN ('compaction', 'reset', 'custom_message') AND CASE
-    WHEN ${type} IN ('compaction', 'reset') THEN 1
+  return /* kysely-allow-raw: malformed selected custom messages are returned for the existing read refusal. */ sql<SqlBool>`(${type} IN ('compaction', 'reset', 'custom_message') AND CASE
+    WHEN ${type} IN ('compaction', 'reset') THEN TRUE
     WHEN ${type} = 'custom_message' THEN
-      json_type(${activeEvent}, '$.display') = 'true'
-      AND json_extract(${activeEvent}, '$.customType') IS NOT ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}
-    ELSE 0 END)`;
+      ${valid} = 0 OR (${display} = 1 AND (${customType} IS NULL OR ${customType} != ${OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE}))
+    ELSE FALSE END)`;
+}
+
+export function historyNavigationValidSql(database: EngineConnection): RawBuilder<number> {
+  return /* kysely-allow-raw: only custom-message visibility needs navigation parsing. */ sql<number>`CASE WHEN identity.event_type = 'custom_message'
+    THEN ${transcriptPredicateSql(database, "navigation_valid", "event")} ELSE 1 END`;
 }
 
 export function parseStoredTranscriptEvent(eventJson: string): TranscriptEvent {
@@ -72,7 +68,7 @@ function selectHistoricalDisplayEvents(
       .selectFrom("transcript_event_identities")
       .select(["session_id", "seq", "event_type"])
       .modifyEnd(
-        /* kysely-allow-raw: pin the canonical sequence lookup to avoid quadratic cold-history joins. */ sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
+        engineIndexHint(projection.database.db, "idx_agent_transcript_event_identity_sequence"),
       )
       .as("identity");
   const withIdentity = projection.hasUnindexedPrefix
@@ -108,9 +104,9 @@ function selectHistoricalDisplayEvents(
         eb("active.message_position", "is not", null),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          transcriptEventNavigationSql("event"),
-          eb.ref("active.event_seq"),
-          eb.ref("event.seq"),
+          transcriptPredicateSql(projection.database.db, "navigation_display", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_custom_type", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
         ),
         ...(unindexedControls.length > 0
           ? [
@@ -118,7 +114,7 @@ function selectHistoricalDisplayEvents(
                 "active.event_seq",
                 "in",
                 /* kysely-allow-raw: one bounded binding carries recovered control sequences. */
-                sql<number>`(SELECT value FROM json_each(${JSON.stringify(unindexedControls)}))`,
+                sql<number>`(SELECT CAST(value AS BIGINT) FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify(unindexedControls)))})`,
               ),
             ]
           : []),
@@ -148,6 +144,7 @@ function selectDisplayableActiveEventById(
       "active.active_position",
       "active.message_position",
       "identity.event_type",
+      historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     ])
     .where("identity.session_id", "=", projection.resolved.sessionId)
     .where("identity.event_id", "=", eventId)
@@ -156,9 +153,9 @@ function selectDisplayableActiveEventById(
         eb("active.message_position", "is not", null),
         isVisibleHistoryNonMessageEventSql(
           eb.ref("identity.event_type"),
-          transcriptEventNavigationSql("event"),
-          eb.ref("active.event_seq"),
-          eb.ref("event.seq"),
+          transcriptPredicateSql(projection.database.db, "navigation_display", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_custom_type", "event"),
+          transcriptPredicateSql(projection.database.db, "navigation_valid", "event"),
         ),
       ]),
     );
@@ -184,15 +181,18 @@ export function readDisplayableActiveEventById(
             .as("event_json"),
     ),
   );
+  assertTranscriptNavigationValid(indexed?.navigation_valid);
   if (indexed) {
     return indexed.event_json === null ? undefined : { ...indexed, event_json: indexed.event_json };
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
   if (
     !unindexed ||
-    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event)) ||
-    (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes)
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
   ) {
+    return undefined;
+  }
+  if (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes) {
     return undefined;
   }
   const event = executeSqliteQueryTakeFirstSync(
@@ -214,23 +214,31 @@ export function readDisplayableActiveEventById(
     : undefined;
 }
 
-export function readDisplayableActiveResetMetadataById(
+export function readDisplayableActiveEventMetadataById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-): { active_position: number; event_type: "reset" } | undefined {
+) {
   const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     selectDisplayableActiveEventById(projection, eventId),
   );
+  assertTranscriptNavigationValid(indexed?.navigation_valid);
   if (indexed) {
-    return indexed.event_type === "reset"
-      ? { active_position: indexed.active_position, event_type: "reset" }
-      : undefined;
+    return indexed;
   }
   const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
-  return unindexed?.event.type === "reset"
-    ? { active_position: unindexed.active_position, event_type: "reset" }
-    : undefined;
+  if (
+    !unindexed ||
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event))
+  ) {
+    return undefined;
+  }
+  return {
+    event_seq: unindexed.event_seq,
+    active_position: unindexed.active_position,
+    message_position: unindexed.message_position,
+    event_type: typeof unindexed.event.type === "string" ? unindexed.event.type : null,
+  };
 }
 
 function countHistoricalDisplayEvents(
@@ -239,9 +247,13 @@ function countHistoricalDisplayEvents(
   beforeActivePosition: number,
 ): number {
   const query = selectHistoricalDisplayEvents(projection, interval)
-    .select((eb) => eb.fn.countAll<number>().as("event_count"))
+    .select((eb) => [
+      eb.fn.countAll<number>().as("event_count"),
+      eb.fn.min(historyNavigationValidSql(projection.database.db)).as("navigation_valid"),
+    ])
     .where("active.active_position", "<", beforeActivePosition);
   const row = executeSqliteQueryTakeFirstSync(projection.database.db, query);
+  assertTranscriptNavigationValid(row?.navigation_valid ?? undefined);
   return row?.event_count ?? 0;
 }
 
@@ -259,6 +271,7 @@ function readHistoricalDisplayEventRange(
   }
   const query = selectHistoricalDisplayEvents(projection, interval).select((eb) => [
     "active.event_seq",
+    historyNavigationValidSql(projection.database.db).as("navigation_valid"),
     eb(transcriptEventReadBytesSql("event"), "+", 1).as("serialized_bytes"),
   ]);
   const olderCount = anchor.displayPosition - start;
@@ -280,12 +293,21 @@ function readHistoricalDisplayEventRange(
       .orderBy("active.active_position", "asc")
       .limit(count - olderCount),
   ).rows;
-  const ranged = [...older.toReversed(), ...newer].map((row, index) =>
-    Object.assign(row, { displaySeq: start + index + 1 }),
-  );
+  const ranged = [...older.toReversed(), ...newer].map((row, index) => {
+    assertTranscriptNavigationValid(row.navigation_valid);
+    return Object.assign(row, { displaySeq: start + index + 1 });
+  });
   let selected = ranged;
+  if (
+    maxBytes === undefined &&
+    ranged.reduce((bytes, row) => bytes + row.serialized_bytes, 2) > SOURCE_PAGE_MAX_BYTES
+  ) {
+    throw new Error(
+      `Transcript history page exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte limit; request a smaller limit`,
+    );
+  }
   if (maxBytes !== undefined) {
-    const limit = Math.max(1_024, Math.floor(maxBytes));
+    const limit = Math.min(SOURCE_PAGE_MAX_BYTES, Math.max(1_024, Math.floor(maxBytes)));
     let bytes = 2;
     let selectedStart = ranged.length;
     while (selectedStart > 0) {
@@ -389,12 +411,14 @@ export function readHistoricalHistoryAnchorPage(
     projection.database.db,
     selectHistoricalDisplayEvents(projection, interval).select((eb) => [
       eb.fn.countAll<number>().as("total"),
+      eb.fn.min(historyNavigationValidSql(projection.database.db)).as("navigation_valid"),
       eb.fn
         .countAll<number>()
         .filterWhere("active.active_position", "<", row.active_position)
         .as("before_anchor"),
     ]),
   );
+  assertTranscriptNavigationValid(counts?.navigation_valid ?? undefined);
   const anchorPosition = counts?.before_anchor ?? 0;
   const total = excludeClosingReset ? anchorPosition : (counts?.total ?? 0);
   const range = resolveHistoryAnchorPageRange(

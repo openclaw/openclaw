@@ -1,5 +1,11 @@
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
-import { captureIncognitoSessionSource } from "../../config/sessions/session-incognito-binding.js";
+import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntry,
+} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import { SessionRowProjectionBinding } from "../../gateway/session-row-projection-binding.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -22,16 +28,17 @@ type SessionNodeGrantAuthority = NonNullable<
 type SessionNodeAuthorities = {
   invokeWithSessionNodeAuthority?: SessionNodeInvocation;
   nodePlacementGrantAuthority?: SessionNodeGrantAuthority;
+  release?: () => void;
 };
 
 /** Full is admitted host authority, narrowed to one placement claim, never a request flag. */
-export function createSessionNodeAuthorities(
+export async function createSessionNodeAuthorities(
   attempt: HostAttempt,
   pluginId: string,
   requiredNodeCommands: ReadonlySet<string>,
   assertActive: () => void,
   signal: AbortSignal,
-): SessionNodeAuthorities {
+): Promise<SessionNodeAuthorities> {
   const admittedFull = attempt.permissionMode === "full";
   const resolveContext = getGatewayContextResolver(attempt.admittedRunContext);
   const context = resolveContext?.();
@@ -61,30 +68,75 @@ export function createSessionNodeAuthorities(
     sessionKey: attempt.sessionKey,
     storePath: target.storePath,
   };
-  const source = captureIncognitoSessionSource(session);
-  const claim =
-    source && !("kind" in source)
-      ? source.actor.sessions.captureCurrent(session.sessionKey)
+  const source = captureSessionActorStorageOwner(session, {
+    assertCurrent: assertActive,
+    authorize() {},
+  });
+  const readProjected = () => {
+    const owner = context.sessionRowProjectionOwner;
+    return owner instanceof SessionRowProjectionBinding
+      ? owner.readCommittedEntry({
+          agentId: session.agentId,
+          storePath: session.storePath,
+          key: session.sessionKey,
+        })
       : undefined;
+  };
+  const projected = source ? undefined : readProjected();
+  let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let retainedFullPermission: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
+  let sessionAllowed = false;
+  let fullPermissionAllowed = false;
+  if (!source && !projected) {
+    try {
+      await withSessionEntryReadOnlyInWorker(session, assertActive, async (read, owner) => {
+        if (!read.ok) {
+          throw read.error;
+        }
+        const entry = read.value;
+        sessionAllowed = entry?.sessionId === attempt.sessionId;
+        fullPermissionAllowed = entry?.permissionMode === "full";
+        if (owner.source) {
+          const predicate = {
+            databaseIdentity: `file:${owner.source.databaseIdentity}`,
+            sessionKey: resolveSqliteSessionKey(session.sessionKey, session.agentId),
+            entry,
+          };
+          retained = retainPreparedSessionEntryPredicate({
+            ...predicate,
+            matches: (before, after) => before?.sessionId === after?.sessionId,
+          });
+          if (admittedFull) {
+            retainedFullPermission = retainPreparedSessionEntryPredicate({
+              ...predicate,
+              matches: (before, after) => before?.permissionMode === after?.permissionMode,
+            });
+          }
+        }
+      });
+    } catch (error) {
+      retained?.release();
+      retainedFullPermission?.release();
+      throw error;
+    }
+  }
   const assertRequestCurrent = (request: SessionNodeRequest) => {
-    if (
-      request.source === "session-full" &&
-      (!admittedFull || !requiredNodeCommands.has(request.command))
-    ) {
-      throw new Error("admitted node execution authority does not cover this command");
-    }
     assertActive();
-    // This read can only revoke the admitted permission. It cannot create Full authority.
-    source?.admissionSignal?.throwIfAborted();
-    if (source && "kind" in source) {
-      source.assertCurrent();
-    }
-    claim?.assertCurrent();
+    // Live facts can revoke the admitted permission, never create Full authority.
     const entry = source
-      ? "kind" in source
-        ? undefined
-        : source.actor.sessions.readMedia(session.sessionKey)
-      : loadSessionEntryReadOnly(session);
+      ? readCapturedSessionActorEntry(source, session.sessionKey)
+      : projected
+        ? readProjected()?.entry
+        : undefined;
+    const currentSessionAllowed =
+      source || projected
+        ? entry !== undefined &&
+          entry.sessionId === attempt.sessionId &&
+          (request.source !== "session-full" || entry.permissionMode === "full")
+        : sessionAllowed &&
+          retained?.isCurrent() &&
+          (request.source !== "session-full" ||
+            (fullPermissionAllowed && retainedFullPermission?.isCurrent()));
     if (
       signal.aborted ||
       getActivePluginRegistry() !== gatewayRegistry ||
@@ -93,9 +145,7 @@ export function createSessionNodeAuthorities(
         (attempt.permissionMode !== "full" || !requiredNodeCommands.has(request.command))) ||
       (resolveContext && resolveContext() !== context) ||
       request.pluginId !== pluginId ||
-      !entry ||
-      entry.sessionId !== attempt.sessionId ||
-      (request.source === "session-full" && entry.permissionMode !== "full") ||
+      !currentSessionAllowed ||
       request.workspace.sessionKey !== attempt.sessionKey ||
       request.workspace.sessionId !== attempt.sessionId
     ) {
@@ -117,6 +167,10 @@ export function createSessionNodeAuthorities(
     return result;
   };
   return {
+    release: () => {
+      retained?.release();
+      retainedFullPermission?.release();
+    },
     invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: {
       agentId: session.agentId,

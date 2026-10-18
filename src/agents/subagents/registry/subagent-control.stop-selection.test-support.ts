@@ -32,16 +32,82 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
-import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import {
+  createControlRunFixture,
+  enqueueControlRun,
+} from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import type { ResolvedSubagentController } from "./subagent-control.types.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
-import { registerSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
-import { getSubagentRunByChildSessionKey } from "./subagent-registry.test-helpers.js";
+import { getSubagentRunByChildSessionKey as getChildRun } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+const stopContext = (SessionKey: string, Provider = "stop-lookup", room = "room") =>
+  buildTestCtx({
+    CommandBody: "/stop",
+    RawBody: "/stop",
+    CommandAuthorized: true,
+    Provider,
+    Surface: Provider,
+    SessionKey,
+    From: `${Provider}:${room}`,
+    To: `${Provider}:${room}`,
+  });
+const stopResult = (stoppedSubagents: number) => ({
+  handled: true,
+  stoppedSubagents,
+  failedSubagents: 0,
+});
+
+function holdConversationLookup(failure?: Error) {
+  const entered = createDeferred();
+  const released = createDeferred();
+  const registry = captureActivePluginRegistrySnapshot();
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "stop-lookup",
+        source: "test",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "stop-lookup" }),
+          conversationBindings: { supportsCurrentConversationBinding: true },
+        },
+      },
+    ]),
+  );
+  const service = getSessionBindingService();
+  const resolve = service.resolveByConversationAsync.bind(service);
+  const lookup = vi
+    .spyOn(service, "resolveByConversationAsync")
+    .mockImplementationOnce(async (c) => {
+      expect(c).toMatchObject({ channel: "stop-lookup", conversationId: "room" });
+      entered.resolve();
+      await released.promise;
+      if (failure) {
+        throw failure;
+      }
+      return resolve(c);
+    });
+  return {
+    release: released.resolve,
+    wait: (stop: Promise<unknown>, signal: AbortSignal) =>
+      withinTest(
+        awaitGateBeforeSettlement(
+          entered.promise,
+          stop,
+          "Stop completed before its ACP lookup boundary",
+        ),
+        signal,
+      ),
+    restore() {
+      lookup.mockRestore();
+      restoreActivePluginRegistrySnapshot(registry);
+    },
+  };
+}
 
 export function registerQueuedStopControlTests({
   addRun,
@@ -64,31 +130,29 @@ export function registerQueuedStopControlTests({
       const duringLookup = kind === "channel ACP lookup";
       const channelStop = kind === "channel stop" || duringLookup;
       const controllerSessionKey = "agent:main:main";
-      const runningFixture = createSubagentRunRecord({
-        runId: "running-collector",
-        childSessionKey: "agent:main:subagent:running-collector",
-        controllerSessionKey,
-        requesterSessionKey: controllerSessionKey,
-        task: "running collector",
-        collect: true,
-        createdAt: 1,
-        startedAt: 2,
-      });
-      const queuedFixture = createSubagentRunRecord({
-        ...runningFixture,
-        runId: "queued-collector",
-        childSessionKey: "agent:main:subagent:queued-collector",
-        controllerSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        requesterSessionKey: kind.endsWith("tree")
-          ? runningFixture.childSessionKey
-          : controllerSessionKey,
-        execution: { status: "queued" },
-        swarmLaunchPending: true,
-      });
-      const running = await addRun(runningFixture);
-      const queued = await addRun(queuedFixture);
+      const collector = (name: "running" | "queued") => {
+        const queued = name === "queued";
+        const owner =
+          queued && kind.endsWith("tree")
+            ? "agent:main:subagent:running-collector"
+            : controllerSessionKey;
+        return createSubagentRunRecord({
+          runId: `${name}-collector`,
+          childSessionKey: `agent:main:subagent:${name}-collector`,
+          childSessionIdentity: {
+            sessionId: `${name}-session`,
+            lifecycleRevision: `${name}-session-revision`,
+          },
+          controllerSessionKey: owner,
+          requesterSessionKey: owner,
+          collect: true,
+          createdAt: 1,
+          execution: queued ? { status: "queued" } : { status: "running", startedAt: 2 },
+          swarmLaunchPending: queued || undefined,
+        });
+      };
+      const running = await addRun(collector("running"));
+      const queued = await addRun(collector("queued"));
       const storePath = await writeSessionStoreFixture("abort-dispatch", {
         [running.childSessionKey]: { sessionId: "running-session", updatedAt: 1 },
         ...(duringLookup
@@ -104,16 +168,9 @@ export function registerQueuedStopControlTests({
       const started: string[] = [];
       const firstDispatch = createDeferred<string>();
       for (const runId of [queued.runId, "unselected"]) {
-        enqueueSwarmRun({
-          groupId: "cancelled-group",
-          runId,
-          maxConcurrent: 1,
-          activeRunIds: [running.runId],
-          start: async () => {
-            started.push(runId);
-            firstDispatch.resolve(runId);
-          },
-          onStartFailure: () => true,
+        enqueueControlRun("cancelled-group", runId, [running.runId], async () => {
+          started.push(runId);
+          firstDispatch.resolve(runId);
         });
       }
       setSubagentControlDepsForTest({
@@ -144,11 +201,8 @@ export function registerQueuedStopControlTests({
         },
         isStreaming: () => true,
       });
-      const lookupEntered = createDeferred();
-      const releaseLookup = createDeferred();
       let stopDuringLookup: ReturnType<typeof tryFastAbortFromMessage> | undefined;
-      let restoreLookup: (() => void) | undefined;
-      const registry = duringLookup ? captureActivePluginRegistrySnapshot() : undefined;
+      let lookup: ReturnType<typeof holdConversationLookup> | undefined;
       try {
         if (kind === "first cancellation await") {
           const cancellation = killAllControlledSubagentRuns({
@@ -171,53 +225,12 @@ export function registerQueuedStopControlTests({
             }),
           ).toMatchObject({ found: true, killed: true, cascadeKilled: 1 });
         } else if (duringLookup) {
-          setActivePluginRegistry(
-            createTestRegistry([
-              {
-                pluginId: "stop-lookup",
-                source: "test",
-                plugin: {
-                  ...createChannelTestPluginBase({ id: "stop-lookup" }),
-                  conversationBindings: { supportsCurrentConversationBinding: true },
-                },
-              },
-            ]),
-          );
-          const service = getSessionBindingService();
-          const resolve = service.resolveByConversationAsync.bind(service);
-          const lookup = vi
-            .spyOn(service, "resolveByConversationAsync")
-            .mockImplementationOnce(async (conversation) => {
-              expect(conversation).toMatchObject({
-                channel: "stop-lookup",
-                conversationId: "room",
-              });
-              lookupEntered.resolve();
-              await releaseLookup.promise;
-              return resolve(conversation);
-            });
-          restoreLookup = () => lookup.mockRestore();
+          lookup = holdConversationLookup();
           stopDuringLookup = tryFastAbortFromMessage({
             cfg,
-            ctx: buildTestCtx({
-              CommandBody: "/stop",
-              RawBody: "/stop",
-              CommandAuthorized: true,
-              Provider: "stop-lookup",
-              Surface: "stop-lookup",
-              SessionKey: controllerSessionKey,
-              From: "stop-lookup:room",
-              To: "stop-lookup:room",
-            }),
+            ctx: stopContext(controllerSessionKey),
           });
-          await withinTest(
-            awaitGateBeforeSettlement(
-              lookupEntered.promise,
-              stopDuringLookup,
-              "Stop completed before its ACP lookup boundary",
-            ),
-            signal,
-          );
+          await lookup.wait(stopDuringLookup, signal);
           expect(parent?.abortSignal.aborted).toBe(false);
           const later = await addRun({
             runId: "later-human-native-root",
@@ -225,65 +238,43 @@ export function registerQueuedStopControlTests({
             controllerSessionKey,
             requesterSessionKey: controllerSessionKey,
             requesterTurnRunId: "later-human-turn",
-            task: "later human task",
           });
           expect(loadSessionEntry({ storePath, sessionKey: controllerSessionKey })?.sessionId).toBe(
             "parent-session",
           );
           expect(releaseSwarmRun(running.runId)).toBe(true);
-          expect(await getSubagentRunByChildSessionKey(queued.childSessionKey)).toMatchObject({
+          expect(await getChildRun(queued.childSessionKey)).toMatchObject({
             execution: { status: "queued" },
           });
           expect.soft(started, "selected FIFO head must remain held during ACP lookup").toEqual([]);
-          releaseLookup.resolve();
+          lookup.release();
           const stopped = await withinTest(stopDuringLookup, signal);
           const dispatched = await withinTest(firstDispatch.promise, signal);
-          expect
-            .soft(dispatched, "unselected work starts after the selected FIFO head retires")
-            .toBe("unselected");
-          expect
-            .soft(stopped)
-            .toMatchObject({ handled: true, stoppedSubagents: 2, failedSubagents: 0 });
-          expect(
-            (await getSubagentRunByChildSessionKey(later.childSessionKey))?.execution.endedAt,
-          ).toBeUndefined();
+          expect.soft(dispatched).toBe("unselected");
+          expect.soft(stopped).toMatchObject(stopResult(2));
+          expect((await getChildRun(later.childSessionKey))?.execution.endedAt).toBeUndefined();
           expect(parent?.abortSignal.aborted).toBe(true);
         } else {
           expect(
             await tryFastAbortFromMessage({
               cfg,
-              ctx: buildTestCtx({
-                CommandBody: "/stop",
-                RawBody: "/stop",
-                CommandAuthorized: true,
-                Provider: "telegram",
-                Surface: "telegram",
-                SessionKey: controllerSessionKey,
-                From: "telegram:queue-owner",
-                To: "telegram:queue-owner",
-              }),
+              ctx: stopContext(controllerSessionKey, "telegram", "queue-owner"),
             }),
-          ).toMatchObject({ handled: true, stoppedSubagents: 2, failedSubagents: 0 });
+          ).toMatchObject(stopResult(2));
           expect(parent?.abortSignal.aborted).toBe(true);
         }
         for (const entry of [running, queued]) {
-          expect(await getSubagentRunByChildSessionKey(entry.childSessionKey)).toMatchObject({
+          expect(await getChildRun(entry.childSessionKey)).toMatchObject({
             execution: { status: "terminal" },
             endedReason: SUBAGENT_ENDED_REASON_KILLED,
           });
         }
-        expect(
-          started,
-          "selected queued child must never dispatch during cancellation",
-        ).not.toContain(queued.runId);
+        expect(started).not.toContain(queued.runId);
         await vi.waitFor(() => expect(started).toEqual(["unselected"]));
       } finally {
-        releaseLookup.resolve();
+        lookup?.release();
         await stopDuringLookup?.catch(() => {});
-        restoreLookup?.();
-        if (registry) {
-          restoreActivePluginRegistrySnapshot(registry);
-        }
+        lookup?.restore();
         parent?.complete();
         swarmSchedulerTesting.reset();
       }
@@ -292,6 +283,9 @@ export function registerQueuedStopControlTests({
 }
 
 export function registerRequestFrontierControlTests(fixture: { readonly stateDir: string }) {
+  const records = createControlRunFixture(() => fixture.stateDir);
+  const writeSession = (sessionKey: string, sessionId: string, revision: string) =>
+    records.writeSession(sessionKey, revision, { sessionKey, defaultSessionId: sessionId });
   it.for(["success", "lookup rejected", "caller revoked"] as const)(
     "tracks only the original request's late native root across ACP lookup (%s)",
     async (phase, { signal }) => {
@@ -303,20 +297,13 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
       };
       const childKey = "agent:main:subagent:frontier-original-child";
       const humanKey = "agent:main:subagent:frontier-human-child";
-      const storePath = await writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        sessionKey: identity.sessionKey,
-        agentId: "main",
-        defaultSessionId: identity.sessionId,
-        lifecycleRevision: "frontier-parent-revision",
-      });
+      const storePath = await writeSession(
+        identity.sessionKey,
+        identity.sessionId,
+        "frontier-parent-revision",
+      );
       for (const key of [childKey, humanKey]) {
-        await writeSubagentSessionEntry({
-          stateDir: fixture.stateDir,
-          sessionKey: key,
-          agentId: "main",
-          defaultSessionId: `session-${key}`,
-        });
+        await writeSession(key, `session-${key}`, `session-${key}-revision`);
       }
       const cfg = getRuntimeConfig();
       const parent = createReplyOperation({
@@ -332,13 +319,10 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
         ownerEntered.resolve(expectDefined(captureExecRequestOwners(identity), "original owners"));
         await finishOriginal.promise;
       });
-      const lookupEntered = createDeferred();
-      const releaseLookup = createDeferred();
       const firstDispatch = createDeferred<string>();
-      const registry = captureActivePluginRegistrySnapshot();
       let current = true;
       let stopping: ReturnType<typeof tryFastAbortFromMessage> | undefined;
-      let restoreLookup: (() => void) | undefined;
+      let lookup: ReturnType<typeof holdConversationLookup> | undefined;
       try {
         const owners = await withinTest(
           awaitGateBeforeSettlement(
@@ -350,67 +334,19 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
         );
         expect(captureExecRequestCancellation(identity).owners).toEqual(owners);
         expect(subagentRuns.size).toBe(0);
-        setActivePluginRegistry(
-          createTestRegistry([
-            {
-              pluginId: "stop-lookup",
-              source: "test",
-              plugin: {
-                ...createChannelTestPluginBase({ id: "stop-lookup" }),
-                conversationBindings: { supportsCurrentConversationBinding: true },
-              },
-            },
-          ]),
-        );
-        const service = getSessionBindingService();
-        const resolve = service.resolveByConversationAsync.bind(service);
         const lookupFailure = new Error("ACP lookup failed");
-        const lookup = vi
-          .spyOn(service, "resolveByConversationAsync")
-          .mockImplementationOnce(async (conversation) => {
-            expect(conversation).toMatchObject({ channel: "stop-lookup", conversationId: "room" });
-            lookupEntered.resolve();
-            await releaseLookup.promise;
-            if (phase === "lookup rejected") {
-              throw lookupFailure;
-            }
-            return resolve(conversation);
-          });
-        restoreLookup = () => lookup.mockRestore();
+        lookup = holdConversationLookup(phase === "lookup rejected" ? lookupFailure : undefined);
         stopping = tryFastAbortFromMessage({
           cfg,
           isCommandTargetCurrent: () => current,
-          ctx: buildTestCtx({
-            CommandBody: "/stop",
-            RawBody: "/stop",
-            CommandAuthorized: true,
-            Provider: "stop-lookup",
-            Surface: "stop-lookup",
-            SessionKey: identity.sessionKey,
-            From: "stop-lookup:room",
-            To: "stop-lookup:room",
-          }),
+          ctx: stopContext(identity.sessionKey),
         });
-        await withinTest(
-          awaitGateBeforeSettlement(
-            lookupEntered.promise,
-            stopping,
-            "Stop completed before its ACP lookup boundary",
-          ),
-          signal,
-        );
+        await lookup.wait(stopping, signal);
         const runId = "frontier-original-child";
         for (const queuedId of [runId, "frontier-outside"]) {
-          enqueueSwarmRun({
-            groupId: "frontier-capacity",
-            runId: queuedId,
-            maxConcurrent: 1,
-            activeRunIds: ["frontier-blocker"],
-            start: async () => {
-              firstDispatch.resolve(queuedId);
-            },
-            onStartFailure: () => true,
-          });
+          enqueueControlRun("frontier-capacity", queuedId, ["frontier-blocker"], async () =>
+            firstDispatch.resolve(queuedId),
+          );
         }
         const register = (
           childSessionKey: string,
@@ -418,18 +354,21 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
           requesterTurnRunId: string,
           requestOwners: readonly ExecRequestOwner[],
         ) =>
-          registerSubagentRun(
+          records.register(
+            childRunId,
+            undefined,
             {
-              runId: childRunId,
               childSessionKey,
+              sessionEntry: {
+                sessionId: `session-${childSessionKey}`,
+                lifecycleRevision: `session-${childSessionKey}-revision`,
+              },
               requesterSessionKey: identity.sessionKey,
-              requesterAgentId: "main",
               requesterTurnRunId,
               requesterDisplayKey: identity.sessionKey,
-              task: "registered during ACP lookup",
-              cleanup: "keep",
               collect: true,
               queued: true,
+              expectsCompletionMessage: undefined,
             },
             withExecRequestOwners({}, requestOwners),
           );
@@ -448,11 +387,11 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
           return captured;
         });
         const childBefore = expectDefined(
-          await getSubagentRunByChildSessionKey(childKey),
+          await getChildRun(childKey),
           "published original child",
         ).execution;
         const humanBefore = expectDefined(
-          await getSubagentRunByChildSessionKey(humanKey),
+          await getChildRun(humanKey),
           "published human child",
         ).execution;
         expect(childBefore.status).toBe("queued");
@@ -462,14 +401,10 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
         );
         expect(parent.abortSignal.aborted).toBe(false);
         current = phase !== "caller revoked";
-        releaseLookup.resolve();
+        lookup.release();
         if (phase === "success") {
-          expect(await withinTest(stopping, signal)).toMatchObject({
-            handled: true,
-            stoppedSubagents: 1,
-            failedSubagents: 0,
-          });
-          expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
+          expect(await withinTest(stopping, signal)).toMatchObject(stopResult(1));
+          expect(await getChildRun(childKey)).toMatchObject({
             endedReason: SUBAGENT_ENDED_REASON_KILLED,
             execution: { status: "terminal" },
           });
@@ -481,7 +416,7 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
           } else {
             await expect(outcome).rejects.toThrow("selected session changed");
           }
-          expect((await getSubagentRunByChildSessionKey(childKey))?.execution).toEqual(childBefore);
+          expect((await getChildRun(childKey))?.execution).toEqual(childBefore);
           expect(subagentRuns.get(runId)?.killIntent).toBeUndefined();
           expect(owners[0]?.signal.aborted).toBe(false);
           expect(
@@ -491,18 +426,17 @@ export function registerRequestFrontierControlTests(fixture: { readonly stateDir
         expect(cancelParent).not.toHaveBeenCalled();
         expect(parent.abortSignal.aborted).toBe(false);
         expect(humanOwners[0]?.signal.aborted).toBe(false);
-        expect((await getSubagentRunByChildSessionKey(humanKey))?.execution).toEqual(humanBefore);
+        expect((await getChildRun(humanKey))?.execution).toEqual(humanBefore);
         expect(releaseSwarmRun("frontier-blocker")).toBe(true);
         expect(await withinTest(firstDispatch.promise, signal)).toBe(
           phase === "success" ? "frontier-outside" : runId,
         );
       } finally {
-        releaseLookup.resolve();
+        lookup?.release();
         finishOriginal.resolve();
         await stopping?.catch(() => {});
         await originalTurn;
-        restoreLookup?.();
-        restoreActivePluginRegistrySnapshot(registry);
+        lookup?.restore();
         parent.complete();
         swarmSchedulerTesting.reset();
       }
