@@ -32,7 +32,7 @@ suite.define(() => {
           },
           { key: controlUiBundledSettingsStorageKey(suite.server.baseUrl) },
         );
-        const parent: GatewaySessionRow = {
+        const parent = {
           key: "agent:main:dependency-update",
           sessionId: "dependency-update",
           kind: "direct",
@@ -42,31 +42,33 @@ suite.define(() => {
           activeRunIds: ["parent-run"],
           hasActiveSubagentRun: true,
           startedAt: now - 60_000,
-        };
+        } satisfies GatewaySessionRow;
         const titles = [
           "Update Apple Android and Ruby dependencies",
           "Update Rust and Go dependencies",
           "Update standalone npm and CI dependency pins",
           "Migrate upgraded TypeScript native API imports",
         ];
-        const children: GatewaySessionRow[] = titles.map((label, index) => ({
-          key: "agent:main:subagent:dependency-" + index,
-          sessionId: "dependency-" + index,
-          kind: "direct",
-          classification: "subagent",
-          label,
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: ["child-run-" + index],
-          parentSessionKey: parent.key,
-          spawnedBy: parent.key,
-          createdAt: now - 50_000 + index,
-          startedAt: now - 50_000 + index,
-        }));
-        parent.childSessions = children.map((child) => child.key);
+        const children = titles.map(
+          (label, index) =>
+            ({
+              key: "agent:main:subagent:dependency-" + index,
+              sessionId: "dependency-" + index,
+              kind: "direct",
+              classification: "subagent",
+              label,
+              status: "running",
+              hasActiveRun: true,
+              activeRunIds: ["child-run-" + index],
+              parentSessionKey: parent.key,
+              spawnedBy: parent.key,
+              createdAt: now - 50_000 + index,
+              startedAt: now - 50_000 + index,
+            }) satisfies GatewaySessionRow,
+        );
         const gateway = await installMockGateway(page, {
           sessionKey: parent.key,
-          sessions: [parent, ...children],
+          sessions: [{ ...parent, childSessions: children.map((child) => child.key) }, ...children],
           historyMessages: [
             {
               role: "user",
@@ -105,11 +107,11 @@ suite.define(() => {
             );
         expect(await untruncatedTitles()).toBe(true);
         await gateway.waitForRequest("sessions.messages.subscribe", {
-          match: { key: children[0].key, mode: "narration" },
+          match: { key: children[0]!.key, mode: "narration" },
         });
         const emit = (text: string, runId = "child-run-0") =>
           gateway.emitGatewayEvent("session.narration", {
-            sessionKey: children[0].key,
+            sessionKey: children[0]!.key,
             agentId: "main",
             runId,
             text,
