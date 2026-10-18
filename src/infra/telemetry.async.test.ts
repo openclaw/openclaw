@@ -5,10 +5,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import * as workerContext from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
+import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { SqliteWorkerCommand } from "./sqlite-worker-contract.js";
 import type { TelemetryWorkerOperations } from "./telemetry-store.worker.js";
 import type { TelemetryState } from "./telemetry-worker-contract.js";
@@ -35,7 +32,7 @@ vi.mock("../state/openclaw-state-worker-store.js", () => ({
 vi.mock("../plugins/plugin-runtime-inventory.js", () => ({ listEnabledPluginRecords: () => [] }));
 
 let sequence = 0;
-let testState: OpenClawTestState;
+let testState: Awaited<ReturnType<typeof createOpenClawTestState>>;
 let fetchImpl: ReturnType<typeof vi.fn<typeof fetch>>;
 let config: OpenClawConfig;
 function check(readConfig: () => OpenClawConfig = () => config, nowMs?: number) {
@@ -83,13 +80,12 @@ afterEach(async () => {
   await testState.cleanup();
 });
 
-it("retains best-effort reads and accepted updates when storage cannot admit work", async () => {
+it("keeps reads and accepted updates when storage admission is closed", async () => {
   vi.spyOn(workerContext, "captureOpenClawStateWorkerContext").mockImplementation(() => {
     throw new Error("Storage admission is closed");
   });
-  expect(
-    (await buildTelemetryPayload(config, { surface: "gateway" })).features.sessionsLast24h,
-  ).toBe(0);
+  const payload = await buildTelemetryPayload(config, { surface: "gateway" });
+  expect(payload.features.sessionsLast24h).toBe(0);
   expect(await resolveTelemetryStatus(config)).toMatchObject({ enabled: true, reason: "enabled" });
   expect(await check(() => config, 100)).toEqual({ version: "2026.8.24" });
   expect(await check(() => config, 200)).toEqual({ version: "2026.8.24" });
@@ -97,7 +93,7 @@ it("retains best-effort reads and accepted updates when storage cannot admit wor
   expect(execute).not.toHaveBeenCalled();
 });
 
-it("coalesces a cold check through storage preparation and accepted response persistence", async () => {
+it("coalesces checks through storage preparation and persistence", async () => {
   const read = pauseOperation<TelemetryState>("telemetry.readState");
   const persisted = pauseOperation<TelemetryState>("telemetry.persistSuccess");
   let settled = false;
@@ -117,16 +113,14 @@ it("coalesces a cold check through storage preparation and accepted response per
     persisted.resolve({ lastPingAt: 101, latestVersion: "2026.8.25" });
     await Promise.all([first, second]);
   }
-  expect(await Promise.all([first, second])).toEqual([
-    { version: "2026.8.25" },
-    { version: "2026.8.25" },
-  ]);
+  const expected = { version: "2026.8.25" };
+  expect(await Promise.all([first, second])).toEqual([expected, expected]);
   expect(
     execute.mock.calls.filter(([command]) => command.type === "telemetry.persistSuccess"),
   ).toHaveLength(1);
 });
 
-it("keeps the captured endpoint and storage destination across the first read wait", async () => {
+it("keeps the captured endpoint and storage destination across awaits", async () => {
   const read = pauseOperation<TelemetryState>("telemetry.readState");
   const endpoint = process.env.OPENCLAW_TELEMETRY_ENDPOINT;
   const checking = check();
@@ -171,10 +165,8 @@ it.each(["do-not-track", "opt-out", "update-disabled"] as const)(
       expect(fetchImpl).not.toHaveBeenCalled();
       expect(await checking).toBeNull();
     } else {
-      expect(fetchImpl).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({ method: "GET" }),
-      );
+      const get = expect.objectContaining({ method: "GET" });
+      expect(fetchImpl).toHaveBeenCalledWith(expect.any(String), get);
       const request = fetchImpl.mock.calls[0]?.[1];
       expect(request).not.toHaveProperty("body");
       expect(request).not.toHaveProperty("headers.Content-Type");
