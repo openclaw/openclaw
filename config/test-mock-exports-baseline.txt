@@ -732,7 +732,6 @@
 ["extensions/line/src/card-image-url.test.ts","./accounts.js","3effa31d916abb1afc198a1ea526c39c1900e3f8300aed3aa5605e5a03d91f75",1]
 ["extensions/line/src/card-image-url.test.ts","./channel-access-token.js","e13fd0d948f1aa6bacc102f9491eae7ce7f7924de4ed60bfbd62c7cff179e707",1]
 ["extensions/line/src/card-image-url.test.ts","openclaw/plugin-sdk/channel-activity-runtime","5775be3097bd6caaa28a316640c6854006cb8049a735c998c4c50139743163d7",1]
-["extensions/line/src/card-image-url.test.ts","openclaw/plugin-sdk/plugin-config-runtime","d5657512f5e4f3b401f4a9beb1c9af79c7093708b2aab1472c55b1fb4246adc7",1]
 ["extensions/line/src/channel.sendPayload.test.ts","openclaw/plugin-sdk/ssrf-runtime","e01f597886d652dc78a2c3f7899724c7e4ad4cb0ecc5b9e513b5936521ea90fb",1]
 ["extensions/line/src/gateway.test.ts","./monitor.runtime.js","12b1b522bbca473c0e4082dda590e18c8bfcba3da3f5ed53dea35bed49122872",1]
 ["extensions/line/src/gateway.test.ts","./probe.runtime.js","3b54d13b825414b7392ab4cc37f958a72679867b780d0dcdcdfb819e8029c935",1]
