@@ -190,7 +190,8 @@ vi.mock("../../config/config.js", async () => ({
   resolveGatewayPort: (await import("../../config/paths.js")).resolveGatewayPort,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   ensureSandboxWorkspaceForSession: ensureSandboxWorkspaceForSessionMock,
 }));
 

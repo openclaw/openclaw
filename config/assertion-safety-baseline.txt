@@ -27,7 +27,7 @@ extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
 extensions/anthropic/stream-wrappers.ts	1
 extensions/baseten/models.ts	1
-extensions/beam/src/mirror.ts	2
+extensions/beam/src/mirror.ts	1
 extensions/browser/src/browser-node-fallback.ts	1
 extensions/browser/src/browser-node-proxy.ts	2
 extensions/browser/src/browser-proxy-upload.ts	1
@@ -1354,7 +1354,7 @@ src/agents/tool-images.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	3
+src/agents/tool-search-catalog.ts	2
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	1
@@ -1532,7 +1532,7 @@ src/claws/project.ts	2
 src/claws/reader.ts	3
 src/claws/schema.ts	2
 src/cli/acp-cli.ts	7
-src/cli/attach-cli.ts	3
+src/cli/attach-cli.ts	2
 src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
@@ -2006,7 +2006,6 @@ src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
-src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2

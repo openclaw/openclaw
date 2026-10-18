@@ -3,6 +3,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export function GitHubPublicationMenu(props: {
   choices: readonly { source: "shared" | "personal"; login: string; label: string }[];
@@ -26,8 +27,7 @@ export function GitHubPublicationMenu(props: {
       };
       sync();
       if (typeof value !== "boolean") {
-        value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, sync);
-        return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, sync);
+        return listen(value.owner, PRESENTATION_CHANGED_EVENT, sync);
       }
       return undefined;
     },

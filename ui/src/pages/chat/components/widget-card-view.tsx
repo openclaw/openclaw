@@ -4,6 +4,7 @@ import {
   createMemo,
   createSignal,
   onCleanup,
+  onSettled,
   Show,
   untrack,
   useContext,
@@ -31,6 +32,7 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { postWidgetTheme } from "../../../lib/widget-theme.ts";
@@ -47,6 +49,7 @@ registerMcpAppEnglish();
 
 type WidgetCardOptions = {
   rawText?: string | null;
+  toggleRawDetails?: () => boolean;
   canvasPluginSurfaceUrl?: string | null;
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
@@ -181,7 +184,7 @@ function tryAdoptWidgetPromptPort(frame: HTMLIFrameElement) {
   }
   adoptedWidgetPromptFrames.add(frame);
   pendingWidgetPromptPorts.delete(source);
-  port.addEventListener("message", (message: MessageEvent) => {
+  listen(port, "message", (message) => {
     handleWidgetPromptMessage(frame, message.data);
   });
   port.start();
@@ -196,7 +199,7 @@ function installWidgetPromptOfferListener() {
   }
   widgetPromptOfferListenerWindows.add(window);
   // Window-lifetime transport: offers can arrive before any preview frame mounts.
-  window.addEventListener("message", (event: MessageEvent) => {
+  listen(window, "message", (event) => {
     const data: unknown = event.data;
     if (!isRecord(data) || data.type !== WIDGET_PROMPT_OFFER_MESSAGE_TYPE) {
       return;
@@ -234,7 +237,7 @@ function installWidgetSizeListener() {
   }
   widgetSizeListenerWindows.add(window);
   // Window-lifetime transport shared by the registered iframe islands.
-  window.addEventListener("message", (event: MessageEvent) => {
+  listen(window, "message", (event) => {
     const data: unknown = event.data;
     if (
       !isRecord(data) ||
@@ -283,7 +286,7 @@ function WidgetFrame(props: {
   let frame: HTMLIFrameElement | undefined;
   const [reportedHeight, setReportedHeight] = createSignal<number>();
   // Prompt policy is fixed by the outer URL/sandbox identity.
-  const promptCapable = untrack(() => props.params.promptCapable);
+  const initialPromptCapable = untrack(() => props.params.promptCapable);
   installWidgetSizeListener();
   // A hosted bridge keeps the initialized document through capability refreshes.
   // Failed HTTP documents never adopt a bridge and can be replaced on refresh.
@@ -296,16 +299,13 @@ function WidgetFrame(props: {
   const height = () => reportedHeight() ?? props.params.height;
   const Frame = () => {
     let element!: HTMLIFrameElement;
-    createEffect(
-      () => [props.promptAllowed, props.params.onHeightChange] as const,
-      ([promptAllowed, onHeightChange]) => {
-        widgetFramePromptActive.set(element, promptAllowed);
-        widgetFrameResize.set(element, (nextHeight) => {
-          setReportedHeight(nextHeight);
-          onHeightChange?.(nextHeight);
-        });
-      },
-    );
+    onSettled(() => {
+      widgetFramePromptActive.set(element, () => props.promptAllowed());
+      widgetFrameResize.set(element, (nextHeight) => {
+        setReportedHeight(nextHeight);
+        props.params.onHeightChange?.(nextHeight);
+      });
+    });
     onCleanup(() => {
       widgetFrameRegistry.delete(element);
       widgetFrameResize.delete(element);
@@ -326,7 +326,7 @@ function WidgetFrame(props: {
         onLoad={() => {
           loadedWidgetFrames.add(element);
           widgetFrameRegistry.add(element);
-          if (promptCapable) {
+          if (initialPromptCapable) {
             promptEligibleFrames.add(element);
             tryAdoptWidgetPromptPort(element);
           }
@@ -336,7 +336,7 @@ function WidgetFrame(props: {
       />
     );
   };
-  if (promptCapable) {
+  if (initialPromptCapable) {
     installWidgetPromptOfferListener();
   }
   // Use a truthy tuple because an empty src still renders the sandboxed frame.
@@ -481,17 +481,11 @@ function handleWidgetExportAction(
   value: WidgetAction,
   dropdown: HTMLElement,
   title: string | undefined,
+  toggleRawDetails: (() => boolean) | undefined,
 ): WidgetRawDetailsLabel | void {
   // Raw details belong to the enclosing tool card; canvas islands own their iframe DOM.
   if (value === "raw-details") {
-    const host = dropdown.closest(".chat-tool-card__widget-host");
-    const toggle = host?.querySelector<HTMLButtonElement>(
-      ".chat-tool-card__widget-raw .chat-tool-card__raw-toggle",
-    );
-    // Solid commits the toggle after this handler; derive its next label before clicking.
-    const willExpand = toggle?.getAttribute("aria-expanded") !== "true";
-    toggle?.click();
-    return toggle && willExpand ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
+    return toggleRawDetails?.() ? "chat.toolCards.hideRawDetails" : "chat.toolCards.showRawDetails";
   }
   const frame = dropdown
     .closest(".chat-tool-card__preview")
@@ -650,7 +644,14 @@ function CanvasPreview(props: {
             <WidgetCardMenu
               canExportImage={canExportImage()}
               hasRawDetails={Boolean(props.options?.rawText)}
-              onAction={(value, menu) => handleWidgetExportAction(value, menu, props.preview.title)}
+              onAction={(value, menu) =>
+                handleWidgetExportAction(
+                  value,
+                  menu,
+                  props.preview.title,
+                  props.options?.toggleRawDetails,
+                )
+              }
             />
           </Show>
         </div>

@@ -21,6 +21,7 @@ import {
 } from "../../infra/diagnostics-timeline.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
+import { trackSessionControllerSourceWork } from "../../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceIdentity,
   isRpcSourceActive,
@@ -695,6 +696,9 @@ export function startChatDispatch(params: StartChatDispatchParams): Promise<void
       diagnostics.finish(queuedFollowup);
       return dispatchErrorLifecycle.handleError(error);
     });
+  // Runtime completion must not retire the source before media and reply persistence settle.
+  // Keep terminal cleanup outside this receipt because it can join source settlement.
+  trackSessionControllerSourceWork(admission.sourceRef.input, dispatch);
   return (async () => {
     try {
       await dispatch;
