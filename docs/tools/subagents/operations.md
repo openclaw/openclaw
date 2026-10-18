@@ -45,6 +45,11 @@ unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new
 warning. The backlog size does not discard results or change their retention.
 
+When completion delivery expires while the requester is busy, OpenClaw hands
+the result to a later requester wake. If that wake also ends without delivering
+it, the delivery is recorded as failed right away instead of staying suspended;
+the result and the earlier blocked-delivery notice are kept.
+
 A suspended delivery expires after seven days. The warning records its run and
 session identifiers, original delivery error, and suspension time. Expiry ends
 automatic delivery; it does not turn a successful child execution into a failure.

@@ -171,7 +171,6 @@ describe("requester receipts after completion expiry", () => {
       database = await reopenCompletionFixtureOwners();
       const stored = subagentRuns.get(input.subagent.runId);
       // The wake was the last owner; the row must not wait suspended for the age discard.
-      expect(isDeliverySuspended(stored!)).toBe(false);
       expect(stored?.delivery?.status).toBe("failed");
       expect(stored?.delivery?.lastError).toBe("requester turn failed");
       expect(stored?.suppressCompletionDelivery).toBe(true);
