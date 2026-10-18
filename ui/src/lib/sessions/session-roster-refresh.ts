@@ -7,6 +7,7 @@ import {
   isGatewayAvailable,
   resolveGatewayReadRetryDelayMs,
 } from "../gateway-availability.ts";
+import { listen } from "../reactive/listener.ts";
 import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { appendSessionResults, preserveCurrentSessionRow } from "./reconcile.ts";
 import type {
@@ -502,15 +503,13 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     }
   };
 
-  const updatePageLifecycleListeners = (add: boolean) => {
-    const method = add ? "addEventListener" : "removeEventListener";
-    document[method]("visibilitychange", handlePageLifecycle);
-    globalThis[method]("pagehide", handlePageLifecycle);
-    globalThis[method]("pageshow", handlePageLifecycle);
-  };
-  if (observesPageLifecycle) {
-    updatePageLifecycleListeners(true);
-  }
+  const lifecycleListeners = observesPageLifecycle
+    ? [
+        listen(document, "visibilitychange", handlePageLifecycle),
+        listen(globalThis, "pagehide", handlePageLifecycle),
+        listen(globalThis, "pageshow", handlePageLifecycle),
+      ]
+    : [];
 
   const replacementOptions = (agentId?: string | null): SessionRefreshOptions => ({
     ...lastListOptions,
@@ -721,9 +720,7 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     dispose() {
       retireForegroundRefresh();
       eventRefreshCoordinator.dispose();
-      if (observesPageLifecycle) {
-        updatePageLifecycleListeners(false);
-      }
+      lifecycleListeners.forEach((release) => release());
       for (const entry of managedLists.values()) {
         entry.coordinator.dispose();
         entry.listeners.clear();

@@ -19,88 +19,27 @@ import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import {
-  WidgetSandboxHost,
-  WIDGET_LOAD_TIMEOUT_MS,
-  WIDGET_LOAD_NOTICE_MS,
-} from "../lib/widget-sandbox-host.ts";
+import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import {
+  createCanvasWidgetViewLoader,
+  isCanvasWidgetLoadRetryEvent,
+  type CanvasWidgetViewBinding,
+} from "./canvas-widget-view-loader.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
-type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-type ViewBinding = {
-  client: WidgetClient;
-  generation: number;
-  docId: string;
-  sessionKey: string;
+type ViewBinding = CanvasWidgetViewBinding & {
   connectionRevision: number;
   gatewayUrl: string;
   profileId: string | null;
   recoveryScope: string | undefined;
-  operatorRead: boolean;
 };
 // One wake attempt per session/document per page load, including remounts.
 const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
-const pendingViews = new WeakMap<
-  WidgetClient,
-  {
-    generation: number;
-    requests: Map<string, Promise<CanvasDocumentViewResult>>;
-  }
->();
-
-function canvasViewRequestKey(binding: ViewBinding): string {
-  return `${binding.sessionKey}\0${binding.docId}\0${binding.operatorRead}`;
-}
-
-function forgetPendingCanvasView(binding: ViewBinding | undefined): void {
-  if (!binding) {
-    return;
-  }
-  const pending = pendingViews.get(binding.client);
-  if (pending?.generation === binding.generation) {
-    pending.requests.delete(canvasViewRequestKey(binding));
-  }
-}
-
-function loadCanvasView(binding: ViewBinding): Promise<CanvasDocumentViewResult> {
-  let pending = pendingViews.get(binding.client);
-  if (!pending || pending.generation !== binding.generation) {
-    pending = { generation: binding.generation, requests: new Map() };
-    pendingViews.set(binding.client, pending);
-  }
-  const requestKey = canvasViewRequestKey(binding);
-  const existing = pending.requests.get(requestKey);
-  if (existing) {
-    return existing;
-  }
-  const request = binding.client.request<CanvasDocumentViewResult>(
-    "canvas.document.view",
-    {
-      docId: binding.docId,
-      ...(!binding.operatorRead && binding.sessionKey ? { sessionKey: binding.sessionKey } : {}),
-    },
-    { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-  );
-  // Canvas also supports replacing a named document. Share concurrent reads,
-  // but only the mounted view retains bytes; a remount revalidates the source.
-  if (pending.requests.size < 32) {
-    const requests = pending.requests;
-    requests.set(requestKey, request);
-    void request
-      .finally(() => {
-        if (requests.get(requestKey) === request) {
-          requests.delete(requestKey);
-        }
-      })
-      .catch(() => {});
-  }
-  return request;
-}
 
 export type CanvasWidgetViewProps = {
   docId: string;
@@ -123,6 +62,7 @@ function createCanvasWidget(
   element: HTMLElement,
   context: ApplicationContext,
 ) {
+  const loader = createCanvasWidgetViewLoader(context.sessions);
   // Document identity and private-port authority stay synchronous; the view reads a projection.
   const state: {
     view?: CanvasDocumentViewResult;
@@ -193,7 +133,8 @@ function createCanvasWidget(
   }
 
   function clearView(): void {
-    forgetPendingCanvasView(activeBinding);
+    loader.forget(activeBinding);
+    loader.release();
     clearRetry();
     state.awaitingResult = false;
     validatedBinding = undefined;
@@ -270,6 +211,7 @@ function createCanvasWidget(
     // the current generation. Keep the private port inert rather than remounting.
     if (!isGatewayAvailable(gateway.snapshot)) {
       activeBinding = undefined;
+      loader.release();
       clearRetry();
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
@@ -320,11 +262,13 @@ function createCanvasWidget(
         notify();
       }
     }, WIDGET_LOAD_NOTICE_MS);
-    void loadCanvasView(binding)
+    void loader
+      .load(binding, () => isCurrent(binding))
       .then((view) => {
-        if (!isCurrent(binding)) {
+        if (!view || !isCurrent(binding)) {
           return;
         }
+        loader.release();
         clearRetry();
         const previous = state.view;
         if (
@@ -382,30 +326,14 @@ function createCanvasWidget(
   onSettled(() =>
     context.gateway.subscribeEvents((event) => {
       const binding = activeBinding;
-      const payload = asOptionalRecord(event.payload);
-      if (
-        !isCurrent(binding) ||
-        binding.operatorRead ||
-        state.view ||
-        payload?.sessionKey !== binding.sessionKey
-      ) {
+      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
         return;
       }
-      const message = asOptionalRecord(payload.message);
-      const committed =
-        event.event === "session.message" &&
-        message?.role === "toolResult" &&
-        message.toolName === "show_widget";
-      const terminal =
-        event.event === "chat" &&
-        (payload.state === "final" || payload.state === "aborted" || payload.state === "error");
-      if (committed || terminal) {
-        // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
-        forgetPendingCanvasView(binding);
-        activeBinding = undefined;
-        reconcile();
-        notify();
-      }
+      // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
+      loader.forget(binding);
+      activeBinding = undefined;
+      reconcile();
+      notify();
     }),
   );
 

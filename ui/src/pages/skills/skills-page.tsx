@@ -35,7 +35,7 @@ import {
   updateSkillEnabled,
   type SkillsState,
 } from "../../lib/skills/index.ts";
-import { PluginIconController, pluginIconFetchContext } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../plugins/plugin-icon-owner.ts";
 import { PluginsHubHeader } from "../plugins/plugins-hub-header.tsx";
 import { PLUGINS_HUB_PANEL_ID } from "../plugins/plugins-hub.ts";
 import { createSkillLibrary } from "./library-state.ts";
@@ -174,7 +174,7 @@ export function SkillsPage(props: SkillsPageProps) {
     config?.revision();
     return context.config;
   });
-  const clawhubIcons = new PluginIconController({
+  const clawhubIcons = new PluginIconOwner({
     kind: "catalog",
     getFetchContext: () => pluginIconFetchContext(context),
     isConnected: () => gateway.connected,

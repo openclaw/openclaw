@@ -446,6 +446,12 @@ describe("pending spawn invocation authority", () => {
       const work = await beginSessionEffect({
         scope: storePath,
         identities,
+        run: {
+          runId: entry.runId,
+          sessionKey: entry.childSessionKey,
+          sessionId: child.sessionId,
+          agentId: entry.childAgentId,
+        },
         assertAllowed: () => {},
       });
       const interrupted = createDeferred();
@@ -453,7 +459,10 @@ describe("pending spawn invocation authority", () => {
         scope: storePath,
         identities,
         handoffId: work.createHandoff(),
-        onInterrupt: () => interrupted.resolve(),
+        onInterrupt: () => {
+          interrupted.resolve();
+          return { runId: entry.runId };
+        },
       });
       const { generation, createdAt, taskRunId, schedulerSlotId } = entry;
       const runtimeOwner = getSubagentRunRuntimeKey(entry);

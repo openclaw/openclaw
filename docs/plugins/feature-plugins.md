@@ -231,6 +231,15 @@ Use the host for shared application behavior:
 | `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
 | `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
 
+`onEvent("session.message", listener)` listeners receive complete messages;
+delivery begins once the Gateway confirms full-body delivery for this connection.
+The host requests complete roster bodies when the first such listener registers
+and releases that preference when the last listener is removed. Listeners
+registered before connect include the preference in the initial handshake.
+During runtime registration, bodyless roster frames already in flight still
+update core UI consumers but are never delivered to plugin listeners. Other
+event subscriptions are unchanged, and no reconnect is required.
+
 Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that

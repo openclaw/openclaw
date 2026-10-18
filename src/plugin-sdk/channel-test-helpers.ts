@@ -30,10 +30,6 @@ export {
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
-export {
-  createSendCfgThreadingRuntime,
-  expectProvidedCfgSkipsRuntimeLoad,
-} from "./test-helpers/send-config.js";
 export { createStartAccountContext } from "./test-helpers/start-account-context.js";
 export {
   abortStartedAccount,

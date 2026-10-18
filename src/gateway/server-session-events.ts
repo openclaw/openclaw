@@ -33,6 +33,7 @@ import {
   withPreparedEventRow,
 } from "./session-event-prepared-row.js";
 import { prepareSessionEventProjection } from "./session-event-projection.js";
+import { createSessionMessageBodyOmission } from "./session-message-body-delivery.js";
 import {
   resolvePrivateSessionEventBroadcastScope,
   resolveSessionEventAgentScope,
@@ -503,11 +504,19 @@ async function handleTranscriptUpdateBroadcast(
         includeSession: true,
         activeRunState,
       });
+      const omitMessage = createSessionMessageBodyOmission(
+        broadcastKeys,
+        params.sessionMessageSubscribers,
+      );
       const broadcastOptions = {
         sessionEventSubscriptionKeys: broadcastKeys,
         prepareSessionProjection:
           read && projection
-            ? prepareSessionEventProjection(projection, read, { ancestors, encodeMessage: true })
+            ? prepareSessionEventProjection(projection, read, {
+                ancestors,
+                encodeMessage: true,
+                omitMessage,
+              })
             : undefined,
       };
       const messageProjectionParams =
@@ -554,6 +563,7 @@ async function handleTranscriptUpdateBroadcast(
             prepareSessionProjection: prepareSessionEventProjection(projection, read, {
               ancestors,
               encodeMessage: true,
+              omitMessage,
               controlUiOnly: true,
             }),
           });

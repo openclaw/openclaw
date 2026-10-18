@@ -1,5 +1,5 @@
 import { insert } from "@solidjs/web";
-import { createEffect, createMemo, For, Repeat, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createMemo, For, Repeat, onCleanup, onSettled } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
@@ -380,12 +380,12 @@ function PanelView(
           >
             <For each={[...view().state.tabs]} keyed={(item) => item.id}>
               {(item) => {
-                // The keyed row keeps this id for its mounted lifetime.
-                const id = untrack(() => item().id);
+                let id = "";
                 onCleanup(() => content.delete(id));
                 return (
                   <div
                     ref={(element) => {
+                      id = item().id;
                       content.set(id, element);
                     }}
                     class="lr-content"
