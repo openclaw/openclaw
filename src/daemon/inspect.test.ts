@@ -12,7 +12,6 @@ import {
   listManagedOpenClawGatewayServices,
 } from "./inspect.js";
 import * as launchdRuntime from "./launchd-runtime.js";
-import * as systemdServiceFiles from "./systemd-service-files.js";
 
 const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
 const loadedSystemdUnits = vi.hoisted(() =>
@@ -305,8 +304,10 @@ describe("managed Gateway inventory projections", () => {
   it.each<{
     args: string[];
     gateway: boolean;
-    observation?: "unavailable" | "not-loaded";
     executable?: string;
+    executionPath?: string;
+    additionalCommands?: string[][];
+    name?: string;
   }>([
     { args: ["gateway", "install", "--runtime", "bun"], gateway: false },
     { args: ["gateway", "run"], gateway: true },
@@ -329,15 +330,32 @@ describe("managed Gateway inventory projections", () => {
       args: ["--eval", "import('/opt/openclaw/dist/entry.js')", "gateway"],
       gateway: true,
     },
-    { args: ["gateway", "install"], gateway: false, observation: "unavailable" },
-    { args: ["gateway", "install"], gateway: true, observation: "not-loaded" },
+    {
+      args: ["gateway", "install"],
+      additionalCommands: [["/usr/bin/openclaw", "gateway", "run"]],
+      gateway: true,
+    },
+    { args: ["gateway", "install"], additionalCommands: [["/opt/custom-service"]], gateway: true },
+    {
+      args: ["gateway", "install"],
+      additionalCommands: [["/usr/bin/openclaw", "gateway", "status"]],
+      gateway: false,
+    },
+    { args: ["gateway", "install"], name: "openclaw-gateway.service", gateway: true },
+    { args: ["gateway", "install"], executionPath: "/opt/custom-service", gateway: true },
   ])(
-    "uses captured arguments to classify loaded services: $args $observation",
-    async ({ args, gateway, observation, executable = "/usr/bin/openclaw" }) => {
+    "uses captured arguments to classify loaded services: $args",
+    async ({
+      args,
+      gateway,
+      executable = "/usr/bin/openclaw",
+      executionPath = executable,
+      additionalCommands = [],
+      name = "custom-maintenance.service",
+    }) => {
       Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
       const home = tempDirs.make("managed-systemd-command-", os.tmpdir());
       isolateNativeRoots(home);
-      const name = "custom-maintenance.service";
       const unitPath = `/run/systemd/transient/${name}`;
       loadedSystemdUnits.mockImplementation(async (scope) =>
         scope === "system"
@@ -345,35 +363,19 @@ describe("managed Gateway inventory projections", () => {
               {
                 name,
                 fragmentPath: unitPath,
-                execStart: "{ argv[]=/usr/bin/openclaw gateway install ; }",
+                commands: [
+                  { path: executionPath, programArguments: [executable, ...args] },
+                  ...additionalCommands.map((argv) => ({ path: argv[0]!, programArguments: argv })),
+                ],
               },
             ]
           : [],
       );
-      const location = vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation");
-      location.mockResolvedValue({
-        kind: "command",
-        command: { programArguments: [executable, ...args], sourcePath: unitPath },
-      });
-      if (observation === "unavailable") {
-        location.mockRejectedValue(new Error("Synthetic service query failure"));
-      } else if (observation === "not-loaded") {
-        location.mockResolvedValue({ kind: "not-loaded" });
-      }
       const result = await listManagedOpenClawGatewayServices(
         { HOME: home },
         { requireComplete: true },
       );
-      expect(result.errors).toEqual(
-        observation === "unavailable"
-          ? [
-              {
-                source: "systemctl --system",
-                message: "Loaded systemd services could not be inspected.",
-              },
-            ]
-          : [],
-      );
+      expect(result.errors).toEqual([]);
       expect(result.services.map((service) => service.label)).toEqual(gateway ? [name] : []);
     },
   );

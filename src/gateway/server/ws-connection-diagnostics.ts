@@ -87,18 +87,20 @@ export function isWsPayloadLimitError(err: unknown): boolean {
 const gatewayEventNames = new Set(GATEWAY_EVENTS);
 type EventTraffic = Extract<DiagnosticEventInput, { type: "gateway.ws.event" }>;
 let pendingEventTraffic: Map<string, EventTraffic> | undefined;
+const FRAME_BYTE_BOUNDS = [256, 512, 1024, 2048, 4096, 8192, 16384, 65536, Infinity];
 
 export function recordGatewayWsEvent(
   event: string,
   bytes: number,
   sessionEvent?: GatewayWsSessionEventAttribution,
   presenceMode?: GatewayWsPresenceMode,
-): void {
+  wireBytes?: number,
+): boolean {
   if (
     !areDiagnosticsEnabledForProcess() ||
     !hasInternalDiagnosticEventInterest("gateway.ws.event", true)
   ) {
-    return;
+    return false;
   }
   // Bound storage to the protocol catalog and publish once per event-loop turn,
   // so fanout counts every socket without queueing a diagnostic per frame.
@@ -122,16 +124,29 @@ export function recordGatewayWsEvent(
       : name;
   const observation = pendingEventTraffic.get(key);
   if (observation) {
-    observation.count++;
+    observation.count += wireBytes === undefined ? 1 : 0;
     observation.bytes += bytes;
+    if (wireBytes !== undefined) {
+      observation.wireBytes = (observation.wireBytes ?? 0) + wireBytes;
+    }
   } else {
     pendingEventTraffic.set(key, {
       type: "gateway.ws.event",
       event: name,
-      count: 1,
+      count: wireBytes === undefined ? 1 : 0,
       bytes,
+      ...(wireBytes !== undefined ? { wireBytes } : {}),
       ...(sessionEvent ? { sessionEvent } : {}),
       ...(presenceMode ? { presenceMode } : {}),
     });
   }
+  if (wireBytes === undefined) {
+    const current = pendingEventTraffic.get(key)!;
+    const buckets = (current.frameBytes ??= {});
+    for (const bound of FRAME_BYTE_BOUNDS) {
+      const label = bound === Infinity ? "+Inf" : String(bound);
+      buckets[label] = (buckets[label] ?? 0) + (bytes <= bound ? 1 : 0);
+    }
+  }
+  return true;
 }

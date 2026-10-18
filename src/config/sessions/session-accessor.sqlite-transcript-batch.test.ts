@@ -81,13 +81,28 @@ it("creates a new transcript root and keeps its ownership and sequence on later 
 it("batches bounded inserts while preserving order and subsequent identity rejection", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { database, scope, events } = createSessionCompoundWorkerFixture();
-    const rows = Array.from({ length: 130 }, (_, index) =>
+    const rows = Array.from({ length: 1030 }, (_, index) =>
       message(`row-${index}`, index === 0 ? null : `row-${index - 1}`, index + 1),
     );
     const writes = trackSqliteStatementExecutions(
       database.db,
-      ["identities", "payloads", "active", "identityReads", "ftsIdentities", "ftsContent"],
+      [
+        "identities",
+        "payloads",
+        "active",
+        "identityReads",
+        "ftsIdentities",
+        "ftsContent",
+        "classificationReads",
+      ],
       (sql) => {
+        if (
+          /^select /i.test(sql) &&
+          sql.includes('from "session_transcript_active_events"') &&
+          !sql.includes('from "session_transcript_index_state"')
+        ) {
+          return "classificationReads";
+        }
         if (/^insert into "session_transcript_fts_rows"/i.test(sql)) {
           return "ftsIdentities";
         }
@@ -110,7 +125,7 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
     );
     try {
       runOpenClawAgentWriteTransaction(
-        () => expect(appendTranscriptEventsInTransaction(database, scope, rows)).toBe(130),
+        () => expect(appendTranscriptEventsInTransaction(database, scope, rows)).toBe(1030),
         { agentId: "main", path: database.path },
       );
       expect(writes.counts).toEqual({
@@ -120,17 +135,18 @@ it("batches bounded inserts while preserving order and subsequent identity rejec
         identityReads: 1,
         ftsIdentities: 3,
         ftsContent: 3,
+        classificationReads: 0,
       });
     } finally {
       writes.restore();
     }
     runOpenClawAgentWriteTransaction(
       () => {
-        expect(appendTranscriptEventInTransaction(database, scope, rows[64]!)).toBe(false);
+        expect(appendTranscriptEventInTransaction(database, scope, rows[512]!)).toBe(false);
         expect(
           appendTranscriptEventsInTransaction(database, scope, [
-            rows[129]!,
-            message("tail", "row-129", 200),
+            rows[1029]!,
+            message("tail", "row-1029", 2000),
           ]),
         ).toBe(1);
       },
@@ -170,13 +186,13 @@ it.each(
       write(() => {
         appendTranscriptEventInTransaction(database, scope, seed);
       });
-      const rows = Array.from({ length: 70 }, (_, index) =>
+      const rows = Array.from({ length: 520 }, (_, index) =>
         message(`row-${index}`, null, index + 2),
       );
-      for (const index of [0, 1, 69]) {
+      for (const index of [0, 1, 519]) {
         rows[index]!.message.idempotencyKey = "shared";
       }
-      for (const index of [2, 68]) {
+      for (const index of [2, 518]) {
         rows[index]!.message.idempotencyKey = "seeded";
       }
       // The source needs accurate feedback while the accepted prefix is still buffered.
@@ -194,10 +210,10 @@ it.each(
             source === "prepared-array" ? rows : streamRows(),
             { idempotencyKeyMode: mode },
           ),
-        ).toBe(mode === "dedupe" ? 66 : 70);
+        ).toBe(mode === "dedupe" ? 516 : 520);
       });
       const expectedAccepted = rows.map(
-        (_, index) => mode !== "dedupe" || ![1, 2, 68, 69].includes(index),
+        (_, index) => mode !== "dedupe" || ![1, 2, 518, 519].includes(index),
       );
       expect(accepted).toEqual(source === "streaming" ? expectedAccepted : []);
       expect(events().map((event) => event.id)).toEqual([
@@ -212,11 +228,11 @@ it.each(
           .all(scope.sessionId, "shared", "seeded"),
       ).toEqual([
         {
-          event_id: mode === "relocate-owner" ? "row-68" : "seed",
+          event_id: mode === "relocate-owner" ? "row-518" : "seed",
           message_idempotency_key: "seeded",
         },
         {
-          event_id: mode === "relocate-owner" ? "row-69" : "row-0",
+          event_id: mode === "relocate-owner" ? "row-519" : "row-0",
           message_idempotency_key: "shared",
         },
       ]);

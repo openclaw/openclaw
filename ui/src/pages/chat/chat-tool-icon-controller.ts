@@ -3,7 +3,7 @@ import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginActivityIconBlobUrl } from "../plugins/icon-loader.ts";
-import { PluginIconController } from "../plugins/plugin-icon-controller.ts";
+import { PluginIconOwner } from "../plugins/plugin-icon-owner.ts";
 
 type PluginToolIcon = { url: string; onError: () => void };
 export type PluginToolIcons = Pick<ReadonlyMap<string, PluginToolIcon>, "get">;
@@ -49,7 +49,7 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
     const requested = new Set<string>();
     const pending = new Set<string>();
     const isCurrent = () => !disposed && sameBinding(owner, readBinding());
-    const loader = new PluginIconController({
+    const loader = new PluginIconOwner({
       getFetchContext: () => {
         const {
           context: { gateway, resourceBasePath },

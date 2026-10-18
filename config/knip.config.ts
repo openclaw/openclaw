@@ -145,6 +145,9 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/fixtures/config.mjs!",
   "scripts/e2e/lib/fixtures/plugins.mjs!",
   "scripts/e2e/lib/fixtures/workspace.mjs!",
+  // The Docker custody shell copies the server and mounts the scenario by path.
+  "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
+  "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
   // Muse Docker shells invoke auth directly and select deterministic/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
@@ -319,6 +322,8 @@ const repositoryScriptEntries = [
   "scripts/verify-full-release-producer-job.mjs!",
   // Staging and signed-app packaging execute this verifier with each bundled Bun.
   "scripts/verify-mac-runtime.mjs!",
+  // App packaging verifies reusable source artifacts before preserving their build identity.
+  "scripts/verify-mac-source-build.mts!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",

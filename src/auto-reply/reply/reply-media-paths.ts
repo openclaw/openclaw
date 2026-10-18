@@ -18,8 +18,11 @@ import {
   resolveAllowedManagedMediaPath,
   resolveSandboxedMediaSource,
 } from "../../agents/sandbox-paths.js";
-import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "../../agents/sandbox.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxContext,
+} from "../../agents/sandbox/context.js";
 import { withSandboxRuntimeStatusInWorker } from "../../agents/sandbox/runtime-status.js";
 import type { SandboxContext, SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
-import { getEnvironmentData, isMainThread, setEnvironmentData } from "node:worker_threads";
+import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ensureSqliteLibrarySelected,
@@ -175,9 +175,9 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): SqliteIt
   if (validatedSqliteModule?.sqlite === sqlite) {
     return validatedSqliteModule.iteratorBehavior;
   }
-  const inherited = isMainThread
-    ? undefined
-    : parseSqliteNativeRuntimeAdmission(getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY));
+  const inherited = parseSqliteNativeRuntimeAdmission(
+    getEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY),
+  );
   // Worker isolates share the selected native library; another process must probe its own load.
   if (inherited) {
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);

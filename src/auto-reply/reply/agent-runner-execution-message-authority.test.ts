@@ -1,5 +1,5 @@
+import "../../agents/auth-profiles/external-auth.test-support.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing as externalAuthTesting } from "../../agents/auth-profiles/external-auth.test-support.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
@@ -13,6 +13,9 @@ import {
   setupAgentRunnerExecutionTestState,
   type FallbackRunnerParams,
 } from "./agent-runner-execution.test-support.js";
+
+const { testing: externalAuthTesting } =
+  await import("../../agents/auth-profiles/external-auth.test-support.js");
 
 const state = await setupAgentRunnerExecutionTestState();
 const executeChannelTurn = await getExecuteAgentTurnForTest();

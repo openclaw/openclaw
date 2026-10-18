@@ -31,7 +31,7 @@ function describeGitHubPublishTool(
   actionsAvailable: boolean,
 ): string {
   const continuation = automationsAvailable
-    ? 'schedule a continuation into this conversation before ending the turn (automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>")'
+    ? 'schedule a continuation into this conversation before ending the turn (automations: at + agentTurn + sessionTarget "session:<this session key from Runtime>"). While that scheduled continuation waits, use automations next_check to rearm its existing job, not add another job'
     : "continue that work before ending the turn, or explain that a scheduled continuation is unavailable";
   const publication = publicationAvailable
     ? `Publish or edit the current session's PR through Gateway-held credentials, for local or cloud repository workspaces.

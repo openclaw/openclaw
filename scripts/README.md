@@ -43,6 +43,31 @@ new directory taxonomy.
 | Commits         | `git add <files...>` then `git commit -m "<message>"`                          | Stage only the intended files for each commit.                                                                      |
 | Remote proof    | `node scripts/crabbox-wrapper.mjs ...`                                         | Use when the current host lacks the required isolation, OS, device, or capacity; sync each run and reuse the lease. |
 
+## Formatting and lint selection
+
+`lib/dev-tool.mts` selects oxfmt for formatting and oxlint for linting. See the
+[local development tools reference](https://docs.openclaw.ai/reference/test/local#openclaw-bun-fork)
+for pinned Bun opt-in, overrides, and staging. `DEFAULT_FORMAT_TOOL` waits for
+faster write and check timings; `DEFAULT_LINT_TOOL` waits for upstream commit
+`b39aa848` and diagnostic parity. Bun receives the repository's existing
+configuration; no separate formatter configuration is maintained.
+
+| Caller                                                                                                                                | Selection and reason                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `format`, `format:check`, `format:fix`, `format:diff`, `format:all`                                                                   | `run-format.mts` uses the selector. In CI, checks compare oxfmt and Bun on identical arguments and require oxfmt success.         |
+| `check.mts`, `check-changed.mts`, `ci-check-plan.mts`, `ci.yml`                                                                       | Consume `format:check`, including CI parity, without another job or runner.                                                       |
+| `pre-commit/format-staged.sh`, `.pre-commit-config.yaml`                                                                              | `run-node-tool.sh` uses the selector when dependencies exist; index-only formatting and partial staging remain owned by the hook. |
+| Dependency-less `pre-commit/run-node-tool.sh` recovery                                                                                | Retains its verified tooling-owner oxfmt fallback so code-only checkouts can satisfy the CI gate without installing dependencies. |
+| `run-lint.mts` and `run-oxlint-shards.mts`                                                                                            | `run-oxlint.mts` selects the executable after existing scope/resource preparation; all shards honor the override.                 |
+| `format-docs.mts`                                                                                                                     | Retains oxfmt for the dedicated docs CI gate and temporary-copy checks.                                                           |
+| `lib/format-generated-module.mts`, `generate-prompt-snapshots.ts`, `lib/codex-app-server-protocol-source.ts`                          | Retain oxfmt so generated modules, snapshots, and protocol bytes match CI regeneration.                                           |
+| `generate-control-ui-validators.mts`, `plugin-sdk-shipped-surface.mts`, `database-worker-inventory.mjs`, `qa/render-maturity-docs.ts` | Retain the oxfmt API for reproducible generated-artifact gates, including explicit per-artifact options.                          |
+| `crabbox-hydrate.yml`                                                                                                                 | Only verifies the oxfmt dependency is installed for CI; does not invoke formatting.                                               |
+
+There is no lint-staged formatter configuration; staged-file formatting belongs
+to the hooks above. References in configuration, test fixtures, and scope
+classifiers do not invoke a formatter.
+
 ## Script Families
 
 - `check-*.mts` / `check-*.ts` / retained `check-*.mjs`: guardrails for architecture, docs, package

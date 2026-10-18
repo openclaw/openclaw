@@ -2,16 +2,7 @@ import type {
   CanvasDocumentViewResult,
   SessionsFilesAssetsResult,
 } from "@openclaw/gateway-protocol";
-import {
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  runWithOwner,
-  untrack,
-} from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveSandboxHostUrl } from "../../../components/sandbox-host.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
@@ -62,16 +53,11 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
     const gateway = context && projectGateway(context.gateway);
     const [view, setView] = createSignal<PreviewView>();
     const [error, setError] = createSignal("");
-    const [rendered, setRendered] = createSignal(false);
-    const [omittedAssets, setOmittedAssets] = createSignal(0);
     const [retry, setRetry] = createSignal(0);
-    const frameMode = createMemo(() => ({ mode: props.embedSandboxMode }), {
-      equals: (previous, next) => previous.mode === next.mode,
-    });
+    const frameMode = createMemo(() => props.embedSandboxMode);
     let binding: PreviewBinding | undefined;
     let sandboxHost: WidgetSandboxHost | undefined;
     let frameGeneration = 0;
-    let transportMode: EmbedSandboxMode | undefined;
     let disposed = false;
 
     const isCurrent = (candidate: PreviewBinding | undefined): candidate is PreviewBinding =>
@@ -90,19 +76,6 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         candidate.sessionFileSource?.path === host.sessionFileSource?.path,
       );
 
-    // Nested bridge effects may flush while the Solid caller still owns the render stack.
-    const clearSandbox = () =>
-      runWithOwner(null, () => {
-        sandboxHost?.dispose();
-        sandboxHost = undefined;
-        setRendered(false);
-        setOmittedAssets(0);
-      });
-    const fail = (reason: unknown) => {
-      clearSandbox();
-      setError(formatUiError(reason));
-    };
-
     // Bind the external preview RPC to the live Gateway and document identity.
     createEffect(
       () => [
@@ -114,113 +87,100 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
         gateway?.read(),
         retry(),
       ],
-      () =>
-        runWithOwner(null, () => {
-          if (isCurrent(binding)) {
-            return;
-          }
-          clearSandbox();
-          binding = undefined;
-          setView(undefined);
-          const client = context?.gateway.snapshot.client;
-          if (!context || !client || context.gateway.snapshot.phase !== "connected") {
-            setError(t("chat.attachments.previewUnavailable"));
-            return;
-          }
-          const current: PreviewBinding = {
-            client,
-            html: host.html,
-            sourceIdentity: host.sourceIdentity,
-            sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
-            generation: getCanvasWidgetFrameConnectionGeneration(),
-          };
-          binding = current;
-          setError("");
-          void client
-            .request<CanvasDocumentViewResult>(
-              "canvas.document.preview",
-              { html: current.html },
-              { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-            )
-            .then((document) => {
-              if (!isCurrent(current)) {
-                return;
-              }
-              const url = resolveSandboxHostUrl(
-                document.sandboxUrl,
-                document.sandboxPort,
-                document.sandboxOrigin,
-                context.gateway.connection.gatewayUrl,
-                window.location.origin,
-              );
-              setView({ document, binding: current, url, origin: new URL(url).origin });
-            })
-            .catch((reason: unknown) => {
-              if (isCurrent(current)) {
-                fail(reason);
-              }
-            });
-        }),
-    );
-
-    // Reconfigure the sandbox transport on mode changes without rereading its document.
-    createEffect(frameMode, () =>
-      runWithOwner(null, () => {
-        // The mode owns this reset; loading a new document must not retrigger it.
-        if (untrack(view)) {
-          clearSandbox();
-          setError("");
+      () => {
+        if (isCurrent(binding)) {
+          return;
         }
-      }),
+        sandboxHost?.dispose();
+        sandboxHost = undefined;
+        binding = undefined;
+        setView(undefined);
+        const client = context?.gateway.snapshot.client;
+        if (!context || !client || context.gateway.snapshot.phase !== "connected") {
+          setError(t("chat.attachments.previewUnavailable"));
+          return;
+        }
+        const current: PreviewBinding = {
+          client,
+          html: host.html,
+          sourceIdentity: host.sourceIdentity,
+          sessionFileSource: host.sessionFileSource && { ...host.sessionFileSource },
+          generation: getCanvasWidgetFrameConnectionGeneration(),
+        };
+        binding = current;
+        setError("");
+        void client
+          .request<CanvasDocumentViewResult>(
+            "canvas.document.preview",
+            { html: current.html },
+            { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
+          )
+          .then((document) => {
+            if (!isCurrent(current)) {
+              return;
+            }
+            const url = resolveSandboxHostUrl(
+              document.sandboxUrl,
+              document.sandboxPort,
+              document.sandboxOrigin,
+              context.gateway.connection.gatewayUrl,
+              window.location.origin,
+            );
+            setView({ document, binding: current, url, origin: new URL(url).origin });
+          })
+          .catch((reason: unknown) => {
+            if (isCurrent(current)) {
+              setError(formatUiError(reason));
+            }
+          });
+      },
     );
-
-    const handleMessage = (event: MessageEvent) => {
-      const transport = sandboxHost;
-      if (!transport || event.source !== transport.frame.contentWindow) {
-        return;
-      }
-      // Close this frame's unsupported ports without interfering with sibling widgets.
-      for (const port of event.ports) {
-        port.close();
-      }
-      if (
-        !isCurrent(binding) ||
-        event.origin !== new URL(transport.frame.src).origin ||
-        host.embedSandboxMode !== transportMode
-      ) {
-        return;
-      }
-      transport.handleMessage(event);
-    };
-    const stopMessages = listen(window, "message", (event) => {
-      if (event instanceof MessageEvent) {
-        handleMessage(event);
-      }
-    });
     onCleanup(() => {
       disposed = true;
       binding = undefined;
-      stopMessages();
       sandboxHost?.dispose();
       sandboxHost = undefined;
     });
 
-    const Frame = (frameProps: { preview: PreviewView; mode: EmbedSandboxMode }) => {
-      // Keyed preview/mode branches retire this transport before either identity changes.
-      const preview = untrack(() => frameProps.preview);
-      const mode = untrack(() => frameProps.mode);
+    const ErrorNotice = (notice: { message: string }) => (
+      <div class="chat-html-preview__error" role="alert">
+        {notice.message}
+        <button
+          class="btn btn--sm"
+          type="button"
+          onClick={() => {
+            binding = undefined;
+            setRetry((value) => value + 1);
+          }}
+        >
+          {t("common.retry")}
+        </button>
+      </div>
+    );
+
+    // The keyed branches pass plain identity values and own all transport presentation state.
+    const renderFrame = (preview: PreviewView, mode: EmbedSandboxMode) => {
+      const [frameError, setFrameError] = createSignal("");
+      const [rendered, setRendered] = createSignal(false);
+      const [omittedAssets, setOmittedAssets] = createSignal(0);
       const generation = ++frameGeneration;
       let frame!: HTMLIFrameElement;
       let transport: WidgetSandboxHost | undefined;
       const currentFrame = () =>
         isCurrent(preview.binding) && host.embedSandboxMode === mode && sandboxHost === transport;
-      const frameError = (reason: unknown) => {
+      const release = () => {
+        transport?.dispose();
+        if (sandboxHost === transport) {
+          sandboxHost = undefined;
+        }
+      };
+      const fail = (reason: unknown) => {
         if (currentFrame()) {
-          fail(reason);
+          release();
+          setFrameError(formatUiError(reason));
         }
       };
       onSettled(() => {
-        clearSandbox();
         const allowScripts = mode !== "strict";
         transport = new WidgetSandboxHost({
           frame,
@@ -254,63 +214,57 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
               setRendered(true);
             }
           },
-          onError: frameError,
+          onError: fail,
           // Only Retry creates another transport after an unavailable proxy or render timeout.
-          onReadyTimeout: () => frameError(new Error(t("board.widget.sandboxUnavailable"))),
+          onReadyTimeout: () => fail(new Error(t("board.widget.sandboxUnavailable"))),
         });
         sandboxHost = transport;
-        transportMode = mode;
-        return () => {
-          transport?.dispose();
-          if (sandboxHost === transport) {
-            sandboxHost = undefined;
+        const stopMessages = listen(window, "message", (event) => {
+          if (!(event instanceof MessageEvent) || event.source !== frame.contentWindow) {
+            return;
           }
+          // Close this frame's unsupported ports without interfering with sibling widgets.
+          for (const port of event.ports) {
+            port.close();
+          }
+          if (currentFrame() && event.origin === new URL(frame.src).origin) {
+            transport?.handleMessage(event);
+          }
+        });
+        return () => {
+          stopMessages();
+          release();
         };
       });
       return (
-        <iframe
-          ref={(element) => (frame = element)}
-          class="chat-html-preview__frame"
-          title={props.title}
-          src={preview.url}
-          sandbox="allow-scripts allow-same-origin allow-forms"
-          referrerpolicy="origin"
-          onError={() => frameError(new Error(t("board.widget.sandboxUnavailable")))}
-        />
+        <Show when={!frameError()} fallback={<ErrorNotice message={frameError()} />}>
+          <Show when={omittedAssets()}>
+            <div class="file-view__save-notice" role="status">
+              {t("chat.detailPanel.assetsUnavailable", { count: String(omittedAssets()) })}
+            </div>
+          </Show>
+          <Show when={!rendered()}>
+            <div role="status">{t("common.loading")}</div>
+          </Show>
+          <iframe
+            ref={(element) => (frame = element)}
+            class="chat-html-preview__frame"
+            title={props.title}
+            src={preview.url}
+            sandbox="allow-scripts allow-same-origin allow-forms"
+            referrerpolicy="origin"
+            onError={() => fail(new Error(t("board.widget.sandboxUnavailable")))}
+          />
+        </Show>
       );
     };
 
     return (
-      <Show
-        when={!error()}
-        fallback={
-          <div class="chat-html-preview__error" role="alert">
-            {error()}
-            <button
-              class="btn btn--sm"
-              type="button"
-              onClick={() => {
-                binding = undefined;
-                setRetry((value) => value + 1);
-              }}
-            >
-              {t("common.retry")}
-            </button>
-          </div>
-        }
-      >
-        <Show when={omittedAssets()}>
-          <div class="file-view__save-notice" role="status">
-            {t("chat.detailPanel.assetsUnavailable", { count: String(omittedAssets()) })}
-          </div>
-        </Show>
-        <Show when={!rendered()}>
-          <div role="status">{t("common.loading")}</div>
-        </Show>
-        <Show when={view()} keyed>
+      <Show when={!error()} fallback={<ErrorNotice message={error()} />}>
+        <Show when={view()} keyed fallback={<div role="status">{t("common.loading")}</div>}>
           {(preview) => (
             <Show when={frameMode()} keyed>
-              {(mode) => <Frame preview={preview} mode={mode.mode} />}
+              {(mode) => renderFrame(preview, mode)}
             </Show>
           )}
         </Show>

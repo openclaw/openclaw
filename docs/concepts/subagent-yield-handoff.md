@@ -257,8 +257,9 @@ On Telegram and Discord, a confirmed `progress` draft can stay with the yielding
 turn's announcing children instead of the waiting acknowledgment. The channel keeps
 rendering, throttling and deleting it; the native registry only forwards child
 status and prepared operation names (never child prose, commands, arguments or
-results). Public task state remains visible with the detailed tool log disabled;
-`streaming.progress.toolProgress` controls the rolling diagnostic rows. A resumed parent that
+results). Telegram keeps public task state visible with the detailed tool log
+disabled. Discord retains the human-readable work message without lifecycle
+rows unless `streaming.progress.toolProgress` is enabled. A resumed parent that
 yields again keeps the same draft for its new children. The draft is deleted when
 the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
 failure) or when stop or reset cancels the children. It is process-local: a

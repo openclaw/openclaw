@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import type { ChannelsPairingListResult, ChannelsPairingRequest } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorPairingAccess } from "../../app/operator-access.ts";
@@ -27,7 +27,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   const [pairingChannelFilter, setPairingChannelFilter] = createSignal<string | null>(null);
   const [pairingAccountFilter, setPairingAccountFilter] = createSignal<string | null>(null);
   const [pairingNotice, setPairingNotice] = createSignal<string | null>(null);
-  const [pairingScrollPending, setPairingScrollPending] = createSignal(false);
   // Prompt identity admits asynchronous mutations before Solid flushes.
   const operations: {
     prompt: ChannelPairingPrompt | null;
@@ -221,17 +220,13 @@ function createChannelsPage(getContext: () => ApplicationContext) {
   function reviewPairingAccount(channel: string, accountId: string) {
     setSelectedChannel(null);
     setPairingFilter(channel, accountId);
-    setPairingScrollPending(true);
-  }
-
-  function afterRender(pending: boolean) {
-    if (!pending || !active) {
-      return;
-    }
-    setPairingScrollPending(false);
-    pairingRoot?.scrollIntoView({
-      behavior: resolveScrollBehavior(),
-      block: "start",
+    onSettled(() => {
+      if (active) {
+        pairingRoot?.scrollIntoView({
+          behavior: resolveScrollBehavior(),
+          block: "start",
+        });
+      }
     });
   }
 
@@ -350,49 +345,45 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     };
   }
   // Rebind Gateway, channel, config, and theme subscriptions together when their context changes.
-  createEffect(getContext, (context) =>
-    untrack(() => {
-      // Subscription callbacks reconcile synchronous owner receipts; their reads do not subscribe.
-      gatewayProjection.replaceSource(context.gateway);
-      channelsProjection.replaceSource(context.channels);
-      configProjection.replaceSource(context.runtimeConfig);
-      settings.replaceSource(context.theme);
-      // Gateway receipts retire plugin operations and pairing prompts synchronously.
-      connection.refresh();
-      if (channelsSource && channelsSource !== context.channels) {
-        connection.invalidate();
-        pluginPresentation.details.reset();
+  createEffect(getContext, (context) => {
+    // Subscription callbacks reconcile synchronous owner receipts; their reads do not subscribe.
+    gatewayProjection.replaceSource(context.gateway);
+    channelsProjection.replaceSource(context.channels);
+    configProjection.replaceSource(context.runtimeConfig);
+    settings.replaceSource(context.theme);
+    // Gateway receipts retire plugin operations and pairing prompts synchronously.
+    connection.refresh();
+    if (channelsSource && channelsSource !== context.channels) {
+      connection.invalidate();
+      pluginPresentation.details.reset();
+    }
+    channelsSource = context.channels;
+    const applyChannels = () => {
+      if (getContext().channels !== context.channels) {
+        return;
       }
-      channelsSource = context.channels;
-      const applyChannels = () => {
-        if (getContext().channels !== context.channels) {
-          return;
-        }
+      pluginPresentation.details.sync();
+      reconcilePairingFilter(context.channels.state.pairingSnapshot);
+      pluginPresentation.ensure(context.gateway.snapshot.client);
+    };
+    // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
+    const stopChannels = channelsProjection.subscribe(applyChannels);
+    applyChannels();
+    schemaLoadStarted = false;
+    const applyConfig = () => {
+      if (getContext().runtimeConfig === context.runtimeConfig) {
         pluginPresentation.details.sync();
-        reconcilePairingFilter(context.channels.state.pairingSnapshot);
-        pluginPresentation.ensure(context.gateway.snapshot.client);
-      };
-      // Channel receipts reconcile pairing selections and start presentation loads as channel identities arrive.
-      const stopChannels = channelsProjection.subscribe(applyChannels);
-      applyChannels();
-      schemaLoadStarted = false;
-      const applyConfig = () => {
-        if (getContext().runtimeConfig === context.runtimeConfig) {
-          pluginPresentation.details.sync();
-          ensureInitialData();
-        }
-      };
-      // Configuration completion receipts drive the initial channel and schema loading state machine.
-      const stopConfig = configProjection.subscribe(applyConfig);
-      applyConfig();
-      return () => {
-        stopChannels();
-        stopConfig();
-      };
-    }),
-  );
-  // Scroll the pairing section only after its requested DOM has committed.
-  createEffect(pairingScrollPending, afterRender);
+        ensureInitialData();
+      }
+    };
+    // Configuration completion receipts drive the initial channel and schema loading state machine.
+    const stopConfig = configProjection.subscribe(applyConfig);
+    applyConfig();
+    return () => {
+      stopChannels();
+      stopConfig();
+    };
+  });
   onCleanup(() => {
     active = false;
     connection.dispose();
