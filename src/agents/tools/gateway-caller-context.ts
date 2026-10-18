@@ -141,8 +141,7 @@ export function evaluateGatewayToolCallerReceiptAdmission(
   admission: GatewayToolCallerReceiptAdmission,
   otherwise: () => boolean,
 ): boolean {
-  const prepared = receiptAdmissionStorage.getStore()?.get(admission);
-  return prepared ? prepared() : otherwise();
+  return (receiptAdmissionStorage.getStore()?.get(admission) ?? otherwise)();
 }
 
 export type GatewayToolOperatorSelection = Readonly<{

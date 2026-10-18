@@ -91,9 +91,7 @@ export function createUserTurnTranscriptRecorder(
   params: CreateUserTurnTranscriptRecorderParams,
 ): UserTurnTranscriptRecorder {
   const logicalTurnId = randomUUID();
-  let requesterOrigin = params.input?.requesterOrigin
-    ? captureRequesterOrigin({ requesterOrigin: params.input.requesterOrigin })
-    : undefined;
+  let requesterOrigin = captureRequesterOrigin({ requesterOrigin: params.input?.requesterOrigin });
   let message = resolvePersistedUserTurnMessage(params);
   let blocked = false;
   let runtimePersisted = false;
@@ -696,38 +694,24 @@ export function createUserTurnTranscriptRecorder(
     waitForRuntimePersistence,
     persistApproved: async (options) =>
       await persistPrepared({
+        ...options,
         waitForRuntime: false,
         skipWhenBlocked: true,
-        target: options?.target,
-        storageTarget: options?.storageTarget,
-        updateMode: options?.updateMode,
-        cwd: options?.cwd,
-        expectedSessionId: options?.expectedSessionId,
-        expectedSessionState: options?.expectedSessionState,
-        sessionLifecyclePatch: options?.sessionLifecyclePatch,
-        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
-        retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {
       blocked = true;
       return await persistPrepared({
+        ...options,
         waitForRuntime: false,
         skipWhenBlocked: false,
         message: blockedMessage,
-        target: options?.target,
-        storageTarget: options?.storageTarget,
-        updateMode: options?.updateMode,
-        cwd: options?.cwd,
       });
     },
     persistFallback: async (options) =>
       await persistPrepared({
+        ...options,
         waitForRuntime: true,
         skipWhenBlocked: true,
-        target: options?.target,
-        storageTarget: options?.storageTarget,
-        updateMode: options?.updateMode,
-        cwd: options?.cwd,
       }),
   };
   originalInputCommitNotifiers.set(recorder, (anchor) => {
