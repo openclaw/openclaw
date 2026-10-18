@@ -1,4 +1,3 @@
-/** Full-entry coverage for sessions_yield terminal projection. */
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -80,8 +79,6 @@ describe("sessions_yield orchestration", () => {
           requesterTurnRunId: params.runId,
           expectsCompletionMessage: true,
           execution: { status: "running", startedAt: Date.now() },
-          completion: { required: true },
-          delivery: { status: "pending" },
         });
         runs.set(runId, child);
         return { runId, childSessionKey: child.childSessionKey, expectsCompletionMessage: true };
@@ -102,10 +99,7 @@ describe("sessions_yield orchestration", () => {
             outcome: { status: "ok" },
           };
           const assistant = makeAssistantMessageFixture({
-            provider: "openai",
-            api: "openai-responses",
             model: "gpt-5.6-luna",
-            stopReason: "error",
             errorMessage: "Responses stream ended with unresolved tool calls",
             content: [],
           });
@@ -240,8 +234,6 @@ describe("sessions_yield orchestration", () => {
               requesterSessionKey: "agent:main:parent",
               expectsCompletionMessage: true,
               execution: { status: "running" },
-              completion: { required: true },
-              delivery: { status: "pending" },
               suppressCompletionDelivery: registration === "refused",
             }),
           );
@@ -323,36 +315,36 @@ describe("sessions_yield orchestration", () => {
       ).rejects.toThrow("accepted continuation children could not transfer terminal delivery");
     });
 
-    it("yield with async started tool — diagnostic suppressed", async () => {
-      const result = await runAttempt("run-yield-async-tool-suppressed", {
+    it.each([
+      {
+        source: "async-tool",
+        continuation: { toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }] },
+      },
+      {
+        source: "runtime-continuation",
+        continuation: {
+          runtimeContinuationStarted: true,
+          acceptedSessionSpawns: [
+            {
+              runId: "collector-run",
+              childSessionKey: "agent:main:subagent:collector",
+              expectsCompletionMessage: false,
+            },
+          ],
+        },
+      },
+    ])("preserves yield with $source continuation", async ({ source, continuation }) => {
+      const result = await runAttempt(`run-yield-${source}-suppressed`, {
         yieldDetected: true,
         assistantTexts: [],
-        toolMetas: [{ toolName: "my_async_tool", asyncStarted: true }],
+        ...continuation,
       });
       expect(result.payloads).toBeUndefined();
-      expect(result.meta.stopReason).toBe("end_turn");
-      expect(result.meta.yielded).toBe(true);
-    });
-
-    it("preserves runtime continuation when a non-announcing collector was also accepted", async () => {
-      const result = await runAttempt("run-yield-runtime-continuation-suppressed", {
-        yieldDetected: true,
-        assistantTexts: [],
-        runtimeContinuationStarted: true,
-        acceptedSessionSpawns: [
-          {
-            runId: "collector-run",
-            childSessionKey: "agent:main:subagent:collector",
-            expectsCompletionMessage: false,
-          },
-        ],
-      });
-
-      expect(result.payloads).toBeUndefined();
-      expect(result.meta.stopReason).toBe("end_turn");
-      expect(result.meta.yielded).toBe(true);
-      expect(result.meta.replayInvalid).toBe(true);
-      expect(result.requesterContinuationSettled).toBeUndefined();
+      expect(result.meta).toMatchObject({ stopReason: "end_turn", yielded: true });
+      if (source === "runtime-continuation") {
+        expect(result.meta.replayInvalid).toBe(true);
+        expect(result.requesterContinuationSettled).toBeUndefined();
+      }
     });
   });
 

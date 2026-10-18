@@ -321,17 +321,6 @@ describe("embedded run registry lifecycle generations", () => {
     successor.operation.complete();
   });
 
-  it("revokes completed claims on lifecycle rotation", () => {
-    const handle = createRunHandle();
-    const { claimCompletion } = prepareEmbeddedAgentRunCompletionClaim(sessionId, "run");
-    setActiveEmbeddedRun(sessionId, handle);
-    clearActiveEmbeddedRun(sessionId, handle);
-
-    rotateAgentEventLifecycleGeneration();
-
-    expect(claimCompletion()).toBe(false);
-  });
-
   it("publishes backend completion authority and replaces two-argument claims", async () => {
     const handle = createRunHandle({ runId: "claim-run" });
     const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
@@ -371,24 +360,24 @@ describe("embedded run registry lifecycle generations", () => {
     expect(replacement.claimCompletion()).toBe(false);
   });
 
-  it("does not publish completion steering readiness without a tool authority binding", async () => {
-    const handle = createRunHandle({ runId: "claim-run" });
-    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
-
-    setActiveEmbeddedRun("claim-session", handle);
-
-    await expect(prepared.registered).resolves.toBeUndefined();
-    expect(prepared.claimCompletion()).toBe(true);
-  });
-
-  it("settles an unpublished completion registration as revoked on lifecycle rotation", async () => {
-    const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
-
-    rotateAgentEventLifecycleGeneration();
-
-    await expect(prepared.registered).resolves.toBeUndefined();
-    expect(prepared.claimCompletion()).toBe(false);
-  });
+  it.each(["completed", "unbound", "unpublished"] as const)(
+    "settles completion registration after %s ownership",
+    async (state) => {
+      const handle = createRunHandle({ runId: "claim-run" });
+      const prepared = prepareEmbeddedAgentRunCompletionClaim("claim-session", "claim-run");
+      if (state !== "unpublished") {
+        setActiveEmbeddedRun("claim-session", handle);
+      }
+      if (state === "completed") {
+        clearActiveEmbeddedRun("claim-session", handle);
+      }
+      if (state !== "unbound") {
+        rotateAgentEventLifecycleGeneration();
+      }
+      await expect(prepared.registered).resolves.toBeUndefined();
+      expect(prepared.claimCompletion()).toBe(state === "unbound");
+    },
+  );
 
   it("aborts a rootless compacting run when its gateway lifecycle rotates", () => {
     const abort = vi.fn();
@@ -409,48 +398,42 @@ describe("embedded run registry lifecycle generations", () => {
     expect(listActiveSessionRunIds()).not.toContain("rootless-session");
   });
 
-  it("rejects a delayed prior-lifecycle registration for a current session owner", async () => {
-    const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
-    const stale = mockRun("stale-run");
-
-    rotateAgentEventLifecycleGeneration();
-    const current = mockRun("current-run");
-    registerSharedRun(current.handle, "current", undefined, sessionId);
-    registerSharedRun(stale.handle, "stale", priorLifecycleGeneration);
-
-    await expect(steerTestSessionTurn(sessionId, "still live")).resolves.toMatchObject({
-      status: "accepted",
-    });
-    expect(current.queueMessage).toHaveBeenCalledOnce();
-    expect(stale.queueMessage).not.toHaveBeenCalled();
-    expect(stale.abort).toHaveBeenCalledWith("restart");
-    expect(current.abort).not.toHaveBeenCalled();
-    expect(listActiveSessionRunIds()).toContain(sessionId);
-    expect(listActiveSessionRunIds()).not.toContain("shared-session");
-    expect(listActiveSessionRunKeys()).toEqual(["agent:main:current"]);
-
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
-  });
-
-  it("rejects a delayed prior-lifecycle registration without a replacement owner", async () => {
-    const priorLifecycleGeneration = getAgentEventLifecycleGeneration();
-    const stale = mockRun("stale-run");
-
-    rotateAgentEventLifecycleGeneration();
-    registerSharedRun(stale.handle, "stale", priorLifecycleGeneration, "stale-session");
-
-    await expect(steerTestSessionTurn("stale-session", "should not arrive")).resolves.toMatchObject(
-      { status: "rejected", reason: "no_active_run" },
-    );
-    expect(stale.queueMessage).not.toHaveBeenCalled();
-    expect(stale.abort).toHaveBeenCalledWith("restart");
-    expect(listActiveSessionRunIds()).not.toContain("stale-session");
-    expect(listActiveSessionRunKeys()).not.toContain("agent:main:stale");
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
-    expect(
-      resolveActiveEmbeddedRunHandleSessionIdBySessionFile("/tmp/stale-session.jsonl"),
-    ).toBeUndefined();
-  });
+  it.each([false, true])(
+    "rejects prior-lifecycle registration with a replacement: %s",
+    async (replacement) => {
+      const generation = getAgentEventLifecycleGeneration();
+      const stale = mockRun("stale-run");
+      const staleId = replacement ? "shared-session" : "stale-session";
+      rotateAgentEventLifecycleGeneration();
+      const current = mockRun("current-run");
+      if (replacement) {
+        registerSharedRun(current.handle, "current", undefined, sessionId);
+      }
+      registerSharedRun(stale.handle, "stale", generation, staleId);
+      if (replacement) {
+        await expect(steerTestSessionTurn(sessionId, "still live")).resolves.toMatchObject({
+          status: "accepted",
+        });
+        expect(current.queueMessage).toHaveBeenCalledOnce();
+        expect(current.abort).not.toHaveBeenCalled();
+        expect(listActiveSessionRunIds()).toContain(sessionId);
+        expect(listActiveSessionRunKeys()).toEqual(["agent:main:current"]);
+      } else {
+        await expect(steerTestSessionTurn(staleId, "should not arrive")).resolves.toMatchObject({
+          status: "rejected",
+          reason: "no_active_run",
+        });
+        expect(listActiveSessionRunKeys()).not.toContain("agent:main:stale");
+        expect(
+          resolveActiveEmbeddedRunHandleSessionIdBySessionFile("/tmp/stale-session.jsonl"),
+        ).toBeUndefined();
+      }
+      expect(stale.queueMessage).not.toHaveBeenCalled();
+      expect(stale.abort).toHaveBeenCalledWith("restart");
+      expect(listActiveSessionRunIds()).not.toContain(staleId);
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
+    },
+  );
 
   it("retains a handle's original lifecycle fence after eviction and clear", () => {
     const abort = vi.fn();
@@ -515,58 +498,44 @@ describe("embedded run registry lifecycle generations", () => {
     expect(listActiveSessionRunIds()).not.toContain("stale-session");
   });
 
-  it("lets a current-lifecycle owner replace a stale session owner", async () => {
-    const stale = mockRun("stale-run");
-    const staleOperation = registerSharedRun(stale.handle, "stale");
-
-    rotateAgentEventLifecycleGeneration();
-    expect(listActiveSessionRunIds()).toContain("shared-session");
-    clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
-    staleOperation.complete();
-    const current = mockRun("current-run");
-    registerSharedRun(current.handle, "current");
-    clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
-
-    await expect(steerTestSessionTurn("shared-session", "now current")).resolves.toMatchObject({
-      status: "accepted",
-    });
-    expect(current.queueMessage).toHaveBeenCalledOnce();
-    expect(stale.queueMessage).not.toHaveBeenCalled();
-    expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
-    expect(current.abort).not.toHaveBeenCalled();
-    expect(listActiveSessionRunIds()).toContain("shared-session");
-    expect(listActiveSessionRunKeys()).toEqual(["agent:main:current"]);
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:current")).toBe("shared-session");
-    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
-    expect(
-      resolveActiveEmbeddedRunHandleSessionIdBySessionFile("/tmp/stale-session.jsonl"),
-    ).toBeUndefined();
-  });
-
-  it("preserves a current owner registered synchronously by stale abort", async () => {
-    const current = mockRun("current-run");
-    const staleAbort = vi.fn(() => {
-      // This fixture producer returns synchronously before publishing its successor.
-      clearActiveEmbeddedRun("shared-session", staleHandle, "agent:main:stale");
-      staleOperation.complete();
-      registerSharedRun(current.handle, "current");
-    });
-    const staleHandle = createRunHandle({
-      abort: staleAbort,
-      runId: "stale-run",
-    });
-    const staleOperation = registerSharedRun(staleHandle, "stale");
-
-    rotateAgentEventLifecycleGeneration();
-
-    await expect(steerTestSessionTurn("shared-session", "current survives")).resolves.toMatchObject(
-      { status: "accepted" },
-    );
-    expect(staleAbort).toHaveBeenCalledWith("restart");
-    expect(current.abort).not.toHaveBeenCalled();
-    expect(current.queueMessage).toHaveBeenCalledOnce();
-    expect(listActiveSessionRunKeys()).toEqual(["agent:main:current"]);
-  });
+  it.each([false, true])(
+    "preserves a replacement installed during stale abort: %s",
+    async (synchronous) => {
+      const current = mockRun("current-run");
+      const stale = mockRun("stale-run");
+      const replace = () => {
+        clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
+        staleOperation.complete();
+        registerSharedRun(current.handle, "current");
+      };
+      if (synchronous) {
+        stale.abort.mockImplementation(replace);
+      }
+      const staleOperation = registerSharedRun(stale.handle, "stale");
+      rotateAgentEventLifecycleGeneration();
+      if (!synchronous) {
+        expect(listActiveSessionRunIds()).toContain("shared-session");
+        replace();
+      }
+      clearActiveEmbeddedRun("shared-session", stale.handle, "agent:main:stale");
+      await expect(
+        steerTestSessionTurn("shared-session", "current survives"),
+      ).resolves.toMatchObject({
+        status: "accepted",
+      });
+      expect(current.queueMessage).toHaveBeenCalledOnce();
+      expect(stale.queueMessage).not.toHaveBeenCalled();
+      expect(stale.abort).toHaveBeenCalledExactlyOnceWith("restart");
+      expect(current.abort).not.toHaveBeenCalled();
+      expect(listActiveSessionRunIds()).toContain("shared-session");
+      expect(listActiveSessionRunKeys()).toEqual(["agent:main:current"]);
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:current")).toBe("shared-session");
+      expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:stale")).toBeUndefined();
+      expect(
+        resolveActiveEmbeddedRunHandleSessionIdBySessionFile("/tmp/stale-session.jsonl"),
+      ).toBeUndefined();
+    },
+  );
 
   it("closes queued diagnostic authority before rotation eviction and abort failure", async () => {
     const rotationRef = { sessionId: "rotation-session", sessionKey: "agent:main:rotation" };

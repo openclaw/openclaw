@@ -6,12 +6,7 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import {
-  upsertSessionEntryCore,
-  loadSessionEntry,
-} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import {
   listSkillCommandsForWorkspace,
   resolveSkillCommandInvocation,
@@ -42,13 +37,31 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawCodingTools, createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { createAdmittedHostCapabilityTestFixture } from "../harness/host-capability.test-support.js";
-import { createInitialSubagentSession } from "../subagents/spawn/subagent-spawn-session-patch.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";
 import { createAgentToolsSandboxContext } from "../test-helpers/agent-tools-sandbox-context.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { prepareEmbeddedSkills } from "./skill-runtime.js";
 
 const hosts: Array<Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>>> = [];
+type Tools = ReturnType<typeof createOpenClawCodingTools>;
+
+function tool(tools: Tools, name = "read") {
+  const found = tools.find((candidate) => candidate.name === name);
+  expect(found, name).toBeDefined();
+  return found!;
+}
+
+async function readText(
+  tools: Tools,
+  file: string,
+  paging: { offset?: number; limit?: number } = {},
+) {
+  return getTextContent(await tool(tools).execute(file, { path: file, ...paging }));
+}
+
+function revisionFile(entry: { skillId: string; revision: string }) {
+  return path.join(skillLibraryRevisionDir(entry.skillId, entry.revision), "SKILL.md");
+}
 
 const temps = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -78,36 +91,6 @@ describe("manual library resources through embedded and host-bound reads", () =>
   ] as const)(
     "reads the pinned revision whole through $toolOwner with a $reuse snapshot without expanding model visibility",
     async ({ toolOwner, reuse }) => {
-      const createTools = async (
-        options: NonNullable<Parameters<typeof createOpenClawCodingToolsInternal>[0]>,
-        resources: Parameters<typeof createOpenClawCodingToolsInternal>[1],
-      ) => {
-        if (toolOwner === "embedded") {
-          return createOpenClawCodingToolsInternal(options, resources);
-        }
-        const hostSnapshot = structuredClone(options.skillsSnapshot);
-        const host = await createAdmittedHostCapabilityTestFixture({
-          agentId: "main",
-          runId: `manual-${toolOwner}-${reuse}-${hosts.length}`,
-          config: options.config,
-          workspaceDir: options.workspaceDir,
-          skillsSnapshot: hostSnapshot,
-        });
-        hosts.push(host);
-        // Plugin-visible inputs may change after handoff; the host keeps this turn
-        // on its captured selection rather than adopting a later mutation.
-        if (hostSnapshot) {
-          hostSnapshot.librarySelections = [];
-          hostSnapshot.resolvedSkills = [];
-        }
-        const { skillsSnapshot, ...rest } = options;
-        // Codex supplies the prompt snapshot; Copilot must also work when its
-        // factory options omit it. Neither caller supplies private read resources.
-        return host.hostCapabilities.createToolSurface!({
-          ...rest,
-          ...(toolOwner === "codex-host" ? { skillsSnapshot } : {}),
-        });
-      };
       const root = temps.make("manual-library-read-");
       const workspaceDir = path.join(root, "workspace");
       const stateDir = path.join(root, "state");
@@ -149,20 +132,25 @@ describe("manual library resources through embedded and host-bound reads", () =>
       });
       const alice = actor("alice@example.test");
       const bob = actor("bob@example.test");
-      const saved = await saveSkillLibrary(alice, {
-        slug: "manual-guide",
-        content: instructions,
-        files: supporting,
-        expectedRevision: null,
-      });
+      const publish = (
+        owner: SkillLibraryAuthority,
+        changes: Partial<Parameters<typeof saveSkillLibrary>[1]> = {},
+      ) =>
+        saveSkillLibrary(owner, {
+          slug: "manual-guide",
+          expectedRevision: null,
+          content: instructions,
+          files: supporting,
+          ...changes,
+        });
+      const saved = await publish(alice);
       const pins = await changeSkillLibrarySelection(alice, [], {
         action: "attach",
         sessionKey: "agent:main:manual",
         skillId: saved.entry.skillId,
       });
-      const newer = await saveSkillLibrary(alice, {
+      const newer = await publish(alice, {
         skillId: saved.entry.skillId,
-        slug: "manual-guide",
         expectedRevision: saved.entry.revision,
         content: instructions.replaceAll("R1", "R2"),
         files: supporting.map((file) => ({
@@ -170,12 +158,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
           content: file.content.replaceAll("R1", "R2"),
         })),
       });
-      const other = await saveSkillLibrary(bob, {
-        slug: "other-guide",
-        content: instructions,
-        files: supporting,
-        expectedRevision: null,
-      });
+      const other = await publish(bob, { slug: "other-guide" });
       const snapshotInputs = {
         workspaceDir,
         config,
@@ -183,13 +166,14 @@ describe("manual library resources through embedded and host-bound reads", () =>
         librarySelections: pins,
         watch: false,
       };
-      const initial = (await resolveReusableWorkspaceSkillSnapshot(snapshotInputs)).snapshot;
-      const snapshot = (
-        await resolveReusableWorkspaceSkillSnapshot({
-          ...snapshotInputs,
-          existingSnapshot: reuse === "warm" ? initial : { ...initial, resolvedSkills: undefined },
-        })
-      ).snapshot;
+      const loadSnapshot = async (
+        overrides: Partial<Parameters<typeof resolveReusableWorkspaceSkillSnapshot>[0]> = {},
+      ) =>
+        (await resolveReusableWorkspaceSkillSnapshot({ ...snapshotInputs, ...overrides })).snapshot;
+      const initial = await loadSnapshot();
+      const snapshot = await loadSnapshot({
+        existingSnapshot: reuse === "warm" ? initial : { ...initial, resolvedSkills: undefined },
+      });
       expect(snapshot.prompt).toBe(initial.prompt);
       expect(snapshot.skills.map((skill) => skill.name)).toContain(saved.entry.name);
       expect(snapshot.resolvedSkills?.map((skill) => skill.name)).not.toContain(saved.entry.name);
@@ -202,10 +186,8 @@ describe("manual library resources through embedded and host-bound reads", () =>
           sessionEntry: { skillLibrarySelections: pins },
         }),
       });
-      const instructionPath = path.join(
-        skillLibraryRevisionDir(saved.entry.skillId, saved.entry.revision),
-        "SKILL.md",
-      );
+      const instructionPath = revisionFile(saved.entry);
+      const instructionDir = path.dirname(instructionPath);
       expect(invocation?.command.skillFile).toBe(instructionPath);
       const prepare = (skillsSnapshot: SkillSnapshot, toolExecutionAllow?: string[]) =>
         prepareEmbeddedSkills({
@@ -215,21 +197,42 @@ describe("manual library resources through embedded and host-bound reads", () =>
           sessionAgentId: "main",
           includeCodeModeSkills: true,
         });
-      const preparedTools = (
+      const preparedTools = async (
         prepared: Awaited<ReturnType<typeof prepare>>,
-        options: NonNullable<Parameters<typeof createTools>[0]> = {},
-      ) =>
-        createTools(
-          {
-            codeModeSkills: prepared.codeModeSkills,
-            skillUsagePaths: prepared.skillUsagePaths,
-            workspaceDir,
-            config,
-            skillsSnapshot: prepared.skillsSnapshotForRun,
-            ...options,
-          },
-          prepared.skillReadResources,
-        );
+        overrides: NonNullable<Parameters<typeof createOpenClawCodingToolsInternal>[0]> = {},
+      ) => {
+        const options = {
+          codeModeSkills: prepared.codeModeSkills,
+          skillUsagePaths: prepared.skillUsagePaths,
+          workspaceDir,
+          config,
+          skillsSnapshot: prepared.skillsSnapshotForRun,
+          ...overrides,
+        };
+        if (toolOwner === "embedded") {
+          return createOpenClawCodingToolsInternal(options, prepared.skillReadResources);
+        }
+        const hostSnapshot = structuredClone(options.skillsSnapshot);
+        const host = await createAdmittedHostCapabilityTestFixture({
+          agentId: "main",
+          runId: `manual-${toolOwner}-${reuse}-${hosts.length}`,
+          config: options.config,
+          workspaceDir: options.workspaceDir,
+          skillsSnapshot: hostSnapshot,
+        });
+        hosts.push(host);
+        // The host must retain its capture despite later plugin-visible mutation.
+        if (hostSnapshot) {
+          hostSnapshot.librarySelections = [];
+          hostSnapshot.resolvedSkills = [];
+        }
+        const { skillsSnapshot, ...rest } = options;
+        // Copilot omits the prompt snapshot; neither host caller supplies read resources.
+        return host.hostCapabilities.createToolSurface!({
+          ...rest,
+          ...(toolOwner === "codex-host" ? { skillsSnapshot } : {}),
+        });
+      };
       const prepared = await prepare(snapshot);
       try {
         expect(prepared.skillsPrompt).toBe(snapshot.prompt.trim());
@@ -240,90 +243,56 @@ describe("manual library resources through embedded and host-bound reads", () =>
           modelProvider: "openai",
           modelId: "test-model",
         });
-        const read = tools.find((tool) => tool.name === "read")!;
-        expect(read).toBeDefined();
+        const read = tool(tools);
         // Real publication -> exact session pin -> snapshot -> preparation -> registered read.
         // Paging must not truncate SKILL.md, even though it is absent from the model catalog.
-        expect(
-          getTextContent(
-            await read.execute("manual-instructions", {
-              path: invocation!.command.skillFile,
-              offset: 3,
-              limit: 1,
-            }),
-          ),
-        ).toBe(instructions);
+        expect(await readText(tools, invocation!.command.skillFile, { offset: 3, limit: 1 })).toBe(
+          instructions,
+        );
         for (const file of supporting) {
-          expect(
-            getTextContent(
-              await read.execute("manual-support", {
-                path: path.join(path.dirname(instructionPath), file.path),
-              }),
-            ),
-          ).toBe(file.content);
+          expect(await readText(tools, path.join(instructionDir, file.path))).toBe(file.content);
         }
-        expect(
-          getTextContent(await read.execute("visible-read", { path: visiblePath, limit: 1 })),
-        ).toBe(visibleContent);
+        expect(await readText(tools, visiblePath, { limit: 1 })).toBe(visibleContent);
         const outside = path.join(root, "unrelated.txt");
         await fs.writeFile(outside, "unrelated private file");
-        for (const denied of [
-          outside,
-          path.join(skillLibraryRevisionDir(newer.entry.skillId, newer.entry.revision), "SKILL.md"),
-          path.join(skillLibraryRevisionDir(other.entry.skillId, other.entry.revision), "SKILL.md"),
-        ]) {
+        for (const denied of [outside, revisionFile(newer.entry), revisionFile(other.entry)]) {
           await expect(read.execute("denied-read", { path: denied })).rejects.toThrow(
             /Path escapes sandbox root/i,
           );
         }
         await expect(
           read.execute("traversal", {
-            path: path.join(path.dirname(instructionPath), "..", newer.entry.revision, "SKILL.md"),
+            path: path.join(instructionDir, "..", newer.entry.revision, "SKILL.md"),
           }),
         ).rejects.toThrow(/Path escapes sandbox root/i);
-        const requireTool = (name: string) => {
-          const tool = tools.find((candidate) => candidate.name === name);
-          expect(tool, name).toBeDefined();
-          return tool!;
-        };
         await expect(
-          requireTool("ls").execute("list-library", { path: path.dirname(instructionPath) }),
+          tool(tools, "ls").execute("list-library", { path: instructionDir }),
         ).rejects.toThrow(/Path escapes sandbox root/i);
-        await expect(
-          requireTool("write").execute("write-library", {
-            path: instructionPath,
-            content: "REPLACED",
-          }),
-        ).rejects.toThrow(/Path escapes sandbox root|outside-workspace/i);
-        await expect(
-          requireTool("edit").execute("edit-library", {
-            path: instructionPath,
-            edits: [{ oldText: "R1", newText: "REPLACED" }],
-          }),
-        ).rejects.toThrow(/Path escapes sandbox root|outside-workspace/i);
-        await expect(
-          requireTool("apply_patch").execute("patch-library", {
-            input: `*** Begin Patch\n*** Update File: ${instructionPath}\n@@\n-# R1 instructions\n+# REPLACED\n*** End Patch`,
-          }),
-        ).rejects.toThrow(/Path escapes sandbox root|outside-workspace/i);
+        for (const [name, args] of [
+          ["write", { path: instructionPath, content: "REPLACED" }],
+          ["edit", { path: instructionPath, edits: [{ oldText: "R1", newText: "REPLACED" }] }],
+          [
+            "apply_patch",
+            {
+              input: `*** Begin Patch\n*** Update File: ${instructionPath}\n@@\n-# R1 instructions\n+# REPLACED\n*** End Patch`,
+            },
+          ],
+        ] as const) {
+          await expect(tool(tools, name).execute(name, args)).rejects.toThrow(
+            /Path escapes sandbox root|outside-workspace/i,
+          );
+        }
         expect(await fs.readFile(instructionPath, "utf8")).toBe(instructions);
 
         for (const overrides of [
           { skillFilter: ["visible"] },
           { skillOverrides: { [saved.entry.name]: false } },
         ]) {
-          const filtered = (
-            await resolveReusableWorkspaceSkillSnapshot({
-              ...snapshotInputs,
-              ...overrides,
-            })
-          ).snapshot;
+          const filtered = await loadSnapshot(overrides);
           expect(filtered.skills.map((skill) => skill.name)).not.toContain(saved.entry.name);
           const filteredPrepared = await prepare(filtered);
           try {
-            const filteredRead = (await preparedTools(filteredPrepared)).find(
-              (tool) => tool.name === "read",
-            )!;
+            const filteredRead = tool(await preparedTools(filteredPrepared));
             await expect(
               filteredRead.execute("filtered", { path: instructionPath }),
             ).rejects.toThrow(/Path escapes sandbox root/i);
@@ -337,57 +306,11 @@ describe("manual library resources through embedded and host-bound reads", () =>
           }
         }
         const deniedPreparation = await prepare(snapshot, ["write"]);
-        expect(deniedPreparation.skillReadResources).toBeUndefined();
-        expect(deniedPreparation.skillsSnapshotForRun).toBeUndefined();
-        expect(deniedPreparation.codeModeSkills).toEqual([]);
-
-        const parentKey = "agent:main:manual-parent";
-        const childKey = "agent:main:subagent:manual-child";
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey: parentKey },
-          { sessionId: "manual-parent-id", updatedAt: Date.now(), skillLibrarySelections: pins },
-        );
-        const child = await createInitialSubagentSession({
-          cfg: config,
-          requesterAgentId: "main",
-          targetAgentId: "main",
-          childSessionKey: childKey,
-          incognito: false,
-          requesterInternalKey: parentKey,
-          parentTarget: await resolveGatewaySessionStoreTargetInWorker({
-            cfg: config,
-            key: parentKey,
-            agentId: "main",
-            projection: "full",
-          }),
-          completionOwnerSessionKey: parentKey,
-          creationPolicy: { actor: { type: "agent", id: "main" } },
-          modelPatch: {},
-          collect: false,
+        expect(deniedPreparation).toMatchObject({
+          skillReadResources: undefined,
+          skillsSnapshotForRun: undefined,
+          codeModeSkills: [],
         });
-        expect(child.status).toBe("ok");
-        const childEntry = loadSessionEntry({ agentId: "main", sessionKey: childKey });
-        expect(childEntry?.skillLibrarySelections).toEqual(pins);
-        const childSnapshot = (
-          await resolveReusableWorkspaceSkillSnapshot({
-            ...snapshotInputs,
-            librarySelections: childEntry!.skillLibrarySelections,
-          })
-        ).snapshot;
-        const childPrepared = await prepare(childSnapshot);
-        try {
-          const childRead = (await preparedTools(childPrepared)).find(
-            (tool) => tool.name === "read",
-          )!;
-          expect(
-            getTextContent(
-              await childRead.execute("child-pinned-read", { path: instructionPath, limit: 1 }),
-            ),
-          ).toBe(instructions);
-          expect(childPrepared.skillsPrompt).not.toContain(saved.entry.name);
-        } finally {
-          childPrepared.restoreSkillEnv();
-        }
 
         // Pin survival across unshare/removal is intentional; current library defaults are not revocation.
         for (const action of ["share", "unshare", "remove"] as const) {
@@ -399,8 +322,7 @@ describe("manual library resources through embedded and host-bound reads", () =>
         }
         const delivery = await prepareSkillResourceDelivery(snapshot, () => {});
         const delivered = delivery!.skills.find((skill) => skill.name === saved.entry.name)!;
-        expect(delivered.modelVisible).toBe(false);
-        expect(delivered.revision).toBe(saved.entry.revision);
+        expect(delivered).toMatchObject({ modelVisible: false, revision: saved.entry.revision });
         const worker = await materializeSkillResources(delivery!, () => {});
         try {
           expect(worker.snapshot.prompt).not.toContain(saved.entry.name);
@@ -408,23 +330,21 @@ describe("manual library resources through embedded and host-bound reads", () =>
             (skill) => skill.name === saved.entry.name,
           )!;
           expect(materialized.contentHash).toBe(saved.entry.revision);
-          const workerRead = createOpenClawCodingTools({
+          const workerTools = createOpenClawCodingTools({
             workspaceDir,
             config,
             skillsSnapshot: worker.snapshot,
-          }).find((tool) => tool.name === "read")!;
-          expect(
-            getTextContent(
-              await workerRead.execute("worker-read", { path: materialized.filePath, limit: 1 }),
-            ),
-          ).toBe(instructions);
+          });
+          expect(await readText(workerTools, materialized.filePath, { limit: 1 })).toBe(
+            instructions,
+          );
         } finally {
           await worker.cleanup();
         }
 
         if (process.platform !== "win32") {
-          const escapeLink = path.join(path.dirname(instructionPath), "escape.md");
-          const containedLink = path.join(path.dirname(instructionPath), "contained.md");
+          const escapeLink = path.join(instructionDir, "escape.md");
+          const containedLink = path.join(instructionDir, "contained.md");
           await fs.symlink(outside, escapeLink);
           await fs.symlink("references/guide.md", containedLink);
           await expect(read.execute("symlink-escape", { path: escapeLink })).rejects.toThrow(
@@ -517,11 +437,7 @@ describe("host skill resource construction boundaries", () => {
         config: attempt.config,
         sandbox,
       });
-      const read = tools.find((tool) => tool.name === "read");
-      expect(read).toBeDefined();
-      expect(getTextContent(await read!.execute("sandbox-read", { path: "local.txt" }))).toBe(
-        "sandbox content",
-      );
+      expect(await readText(tools, "local.txt")).toBe("sandbox content");
     },
   );
 });

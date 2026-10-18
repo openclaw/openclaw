@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
@@ -15,6 +15,7 @@ import {
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
+const temps = useAutoCleanupTempDirTracker(afterEach);
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
 const hostSkillBaseDir = "/usr/lib/node_modules/openclaw/skills/demo";
 const workspaceSkill = recordSkillFileHost(
@@ -60,35 +61,51 @@ async function writeSkill(root: string, name: string, description: string, metad
   return dir;
 }
 
-describe("resolveSandboxSkillRuntimeInputs", () => {
-  it("keeps snapshots for non-sandboxed runs", () => {
-    expect(
-      resolveSandboxSkillRuntimeInputs({
-        skillsAnchorWorkspace: "/workspace",
-        skillsSnapshot: snapshot,
-      }),
-    ).toEqual({
-      skillsSnapshot: snapshot,
-      skillsPromptWorkspaceDir: "/workspace",
-      skillsWorkspaceDir: "/workspace",
-      workspaceOnly: false,
-    });
+async function promptFor(runtime: ReturnType<typeof resolveSandboxSkillRuntimeInputs>) {
+  const { skillsWorkspaceDir, skillsPromptWorkspaceDir, skillsSnapshot, skillsEligibility } =
+    runtime;
+  const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
+    workspaceDir: skillsWorkspaceDir,
+    eligibility: skillsEligibility,
+    skillsSnapshot,
+    workspaceOnly: runtime.workspaceOnly,
   });
+  const entries = mapSandboxSkillEntriesForPrompt({
+    entries: shouldLoadSkillEntries ? skillEntries : undefined,
+    skillsWorkspaceDir,
+    skillsPromptWorkspaceDir,
+  });
+  const prompt = await resolveSkillsPrompt({
+    skillsSnapshot,
+    entries,
+    workspaceDir: skillsPromptWorkspaceDir,
+    eligibility: skillsEligibility,
+  });
+  return { prompt, skillEntries };
+}
 
-  it("uses the skills anchor for sandbox contexts without materialized skills", () => {
-    expect(
-      resolveSandboxSkillRuntimeInputs({
-        sandbox: { enabled: true },
-        skillsAnchorWorkspace: "/workspace",
-        skillsSnapshot: snapshot,
-      }),
-    ).toEqual({
-      skillsSnapshot: undefined,
-      skillsPromptWorkspaceDir: "/workspace",
-      skillsWorkspaceDir: "/workspace",
-      workspaceOnly: true,
-    });
-  });
+function remoteEligibility(platform: string, note: string, hasAnyBin = (_bins: string[]) => false) {
+  return { remote: { platforms: [platform], note, hasBin: () => false, hasAnyBin } };
+}
+
+describe("resolveSandboxSkillRuntimeInputs", () => {
+  it.each([false, true])(
+    "uses the anchor without materialized skills (sandbox: %s)",
+    (sandboxed) => {
+      expect(
+        resolveSandboxSkillRuntimeInputs({
+          sandbox: sandboxed ? { enabled: true } : undefined,
+          skillsAnchorWorkspace: "/workspace",
+          skillsSnapshot: snapshot,
+        }),
+      ).toEqual({
+        skillsSnapshot: sandboxed ? undefined : snapshot,
+        skillsPromptWorkspaceDir: "/workspace",
+        skillsWorkspaceDir: "/workspace",
+        workspaceOnly: sandboxed,
+      });
+    },
+  );
 
   it("maps materialized read paths while preserving original file identities", () => {
     expect(
@@ -162,19 +179,16 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
         "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md before acting.",
     );
     const selections = [
-      recordExplicitSkillSelectionFileHost({ name: "demo-2", path: hostSkillPath }, "workspace"),
-      recordExplicitSkillSelectionFileHost(
-        { name: "gateway-demo", path: hostSkillPath },
-        "gateway",
-      ),
-      recordExplicitSkillSelectionFileHost(
-        { name: "hidden-2", path: hiddenSkillPath },
-        "workspace",
-      ),
-    ];
+      ["demo-2", hostSkillPath, "workspace"],
+      ["gateway-demo", hostSkillPath, "gateway"],
+      ["hidden-2", hiddenSkillPath, "workspace"],
+    ] as const;
     expect(
-      selections.map((selection) =>
-        remapExplicitSkillSelectionPath(selection, runtime.skillUsagePaths),
+      selections.map(([name, filePath, host]) =>
+        remapExplicitSkillSelectionPath(
+          recordExplicitSkillSelectionFileHost({ name, path: filePath }, host),
+          runtime.skillUsagePaths,
+        ),
       ),
     ).toEqual([
       "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
@@ -190,119 +204,64 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
       skillsSnapshot: { prompt: "", skills: [] },
     },
   ])("$label", async ({ skillsSnapshot }) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    try {
-      const effectiveWorkspace = path.join(root, "workspace");
-      const materializedWorkspace = path.join(root, "state", "sandbox-skills");
-      const skillDir = await writeSkill(
-        materializedWorkspace,
-        "demo",
-        "Demo skill",
-        '{"requires":{"anyBins":["sandboxbin"]}}',
-      );
-      const skillsEligibility = {
-        remote: {
-          platforms: ["linux"],
-          hasBin: () => false,
-          hasAnyBin: (bins: string[]) => bins.includes("sandboxbin"),
-          note: "sandbox",
-        },
-      };
+    const root = temps.make("openclaw-sandbox-skills-");
+    const effectiveWorkspace = path.join(root, "workspace");
+    const materializedWorkspace = path.join(root, "state", "sandbox-skills");
+    const skillDir = await writeSkill(
+      materializedWorkspace,
+      "demo",
+      "Demo skill",
+      '{"requires":{"anyBins":["sandboxbin"]}}',
+    );
+    const skillsEligibility = remoteEligibility("linux", "sandbox", (bins) =>
+      bins.includes("sandboxbin"),
+    );
 
-      const {
-        skillsEligibility: skillsEligibilityForRun,
-        skillsPromptWorkspaceDir,
-        skillsSnapshot: skillsSnapshotForRun,
-        skillsWorkspaceDir,
-        workspaceOnly,
-      } = resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          containerWorkdir: "/workspace",
-          skillsEligibility,
-          skillsWorkspaceDir: materializedWorkspace,
-          skillUsagePaths: [
-            {
-              readPath: path.join(skillDir, "SKILL.md"),
-              skillFile: hostSkillPath,
-              skillName: "demo",
-              skillSource: "workspace",
-            },
-          ],
-          workspaceAccess: "rw",
-        },
-        skillsAnchorWorkspace: effectiveWorkspace,
-        skillsSnapshot,
-      });
-      const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
-        workspaceDir: skillsWorkspaceDir,
-        eligibility: skillsEligibilityForRun,
-        skillsSnapshot: skillsSnapshotForRun,
-        workspaceOnly,
-      });
-      const promptSkillEntries = mapSandboxSkillEntriesForPrompt({
-        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-        skillsWorkspaceDir,
-        skillsPromptWorkspaceDir,
-      });
-      const prompt = await resolveSkillsPrompt({
-        skillsSnapshot: skillsSnapshotForRun,
-        entries: promptSkillEntries,
-        workspaceDir: skillsPromptWorkspaceDir,
-        eligibility: skillsEligibilityForRun,
-      });
+    const runtime = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        containerWorkdir: "/workspace",
+        skillsEligibility,
+        skillsWorkspaceDir: materializedWorkspace,
+        skillUsagePaths: [{ ...usagePath("demo"), readPath: path.join(skillDir, "SKILL.md") }],
+        workspaceAccess: "rw",
+      },
+      skillsAnchorWorkspace: effectiveWorkspace,
+      skillsSnapshot,
+    });
+    const { prompt, skillEntries } = await promptFor(runtime);
 
-      if (skillsSnapshot === snapshot) {
-        expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
-        const deliveredSkill = skillsSnapshotForRun?.resolvedSkills?.[0];
-        expect(deliveredSkill).toBeDefined();
-        if (!deliveredSkill) {
-          throw new Error("missing delivered sandbox skill");
-        }
-        expect(resolveSkillFileHost(deliveredSkill)).toBeUndefined();
-      } else {
-        expect(prompt).toBe("");
-        expect(skillEntries).toEqual([]);
+    if (skillsSnapshot === snapshot) {
+      expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+      const deliveredSkill = runtime.skillsSnapshot?.resolvedSkills?.[0];
+      expect(deliveredSkill).toBeDefined();
+      if (!deliveredSkill) {
+        throw new Error("missing delivered sandbox skill");
       }
-      expect(prompt.replaceAll("\\", "/")).not.toContain(
-        materializedWorkspace.replaceAll("\\", "/"),
-      );
-      expect(prompt).not.toContain(hostSkillPath);
-      expect(prompt).not.toContain("plugin-skills");
-      expect(prompt.replaceAll("\\", "/")).not.toContain("/skills/canvas/SKILL.md");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
+      expect(resolveSkillFileHost(deliveredSkill)).toBeUndefined();
+    } else {
+      expect(prompt).toBe("");
+      expect(skillEntries).toEqual([]);
     }
+    expect(prompt.replaceAll("\\", "/")).not.toContain(materializedWorkspace.replaceAll("\\", "/"));
+    expect(prompt).not.toContain(hostSkillPath);
+    expect(prompt).not.toContain("plugin-skills");
+    expect(prompt.replaceAll("\\", "/")).not.toContain("/skills/canvas/SKILL.md");
   });
 
   it("preserves remote eligibility when rebuilding sandbox prompts", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sandbox-skills-"));
-    try {
-      await writeSkill(root, "macskill", "Mac-only remote skill", '{"os":["darwin"]}');
-      const skillsEligibility = {
-        remote: {
-          platforms: ["darwin"],
-          hasBin: () => false,
-          hasAnyBin: () => false,
-          note: "remote mac available",
-        },
-      };
+    const root = temps.make("openclaw-sandbox-skills-");
+    await writeSkill(root, "macskill", "Mac-only remote skill", '{"os":["darwin"]}');
+    const skillsEligibility = remoteEligibility("darwin", "remote mac available");
 
-      const { shouldLoadSkillEntries, skillEntries } = await resolveEmbeddedRunSkillEntries({
-        workspaceDir: root,
-        eligibility: skillsEligibility,
-        workspaceOnly: true,
-      });
-      const prompt = await resolveSkillsPrompt({
-        entries: shouldLoadSkillEntries ? skillEntries : undefined,
-        workspaceDir: root,
-        eligibility: skillsEligibility,
-      });
+    const { prompt } = await promptFor({
+      skillsWorkspaceDir: root,
+      skillsPromptWorkspaceDir: root,
+      skillsEligibility,
+      workspaceOnly: true,
+    });
 
-      expect(prompt).toContain("remote mac available");
-      expect(prompt).toContain("macskill");
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    expect(prompt).toContain("remote mac available");
+    expect(prompt).toContain("macskill");
   });
 });

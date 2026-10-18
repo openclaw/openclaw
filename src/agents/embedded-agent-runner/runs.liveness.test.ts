@@ -34,6 +34,7 @@ import {
 import { resolveActiveEmbeddedRunRecoveryBlocker } from "./run-state.js";
 import type { EmbeddedAgentQueueHandle } from "./run-state.js";
 import {
+  createEmbeddedRunHandle,
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   testing,
@@ -64,21 +65,9 @@ beforeEach(async () => {
   });
   queueMessage.mockClear();
   const backend = {
+    ...createEmbeddedRunHandle({ runId, queueMessage, abort, guarded: true }),
     kind: "embedded" as const,
-    runId,
-    queueMessage,
-    messageInjectionV2: {
-      version: 2 as const,
-      isAvailable: () => true,
-      queueMessage: async (_text: string, _options: unknown, assertCurrent: () => void) => {
-        assertCurrent();
-        return queueMessage();
-      },
-    },
-    isStreaming: () => true,
-    isCompacting: () => false,
     ownsLiveness: () => runtimeOwnsLiveness,
-    abort,
     cancel: abort,
   };
   handle = backend;
