@@ -9,6 +9,7 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
+import type { SessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
   SessionDiffFileTextLoader,
   SessionDiffLoader,
@@ -29,6 +30,7 @@ export type SidebarFullMessageLoader = (
 
 type MarkdownSidebarContent = {
   kind: "markdown";
+  file?: FilePreviewSource;
   content: string;
   rawText?: string | null;
   fileLinkSessionKey?: string;
@@ -50,7 +52,16 @@ type CanvasSidebarContent = {
   rawText?: string | null;
 };
 
+export type FilePreviewSource = {
+  path: string;
+  absolutePath?: string;
+  root?: string;
+  artifactId?: string;
+  download: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
+};
+
 type ImageSidebarContent = {
+  file?: FilePreviewSource;
   kind: "image";
   title: string;
   src: string;
@@ -86,6 +97,7 @@ export type AttachmentSidebarRuntime = {
 
 type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
+  file?: FilePreviewSource;
   attachmentKind?: "audio" | "video" | "document" | "image";
   title: string;
   /** Static sources only; expiring sources are resolved live through resolveSource. */
@@ -125,13 +137,26 @@ type FileSidebarEdit = {
   fetchLatest: () => Promise<{ content: string; hash: string; editable: boolean } | null>;
 };
 
+export type FileReaderView = "reading" | "highlighted" | "plain" | "edit";
+
+/** Allocate once per explicit action, after the native open resolves its retained file. */
+export type FileReaderViewRequest = {
+  file: FileSidebarContent;
+  view: FileReaderView;
+};
+
 export type FileSidebarNavigation = { line: number };
 
 export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
 
+export type FileReaderDownload = SessionFileDownload | { blob: Blob; filename: string };
+
 export type FileSidebarContent = {
   kind: "file";
+  /** Empty for artifacts, which have an identity but no physical file path. */
   path: string;
+  artifactId?: string;
+  absolutePath?: string;
   name: string;
   content: string;
   download?: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
@@ -182,7 +207,7 @@ export type SidebarSelection = (
   // Keep failed opens attached to their selected surface instead of falling back
   // to unrelated content.
   | { kind: "unavailable"; message: string }
-) & { fileTab?: { id: string; label: string } };
+) & { fileTab?: { id: string; label: string; disposition?: "pinned" | "preview" } };
 
 export type ChatDetailPanelProps = {
   content: ChatDetailPanelContent | null;
@@ -199,4 +224,29 @@ export type ChatDetailPanelProps = {
   onOpenSessionLink: ((target: SessionLinkTarget) => void) | null;
   onRevealInWorkspace: ((path: string) => void) | null;
   onOpenImage: ((item: ImageLightboxItem) => void) | null;
+};
+
+/** Navigation facts/operations supplied by the workspace/tab owner, never a reader-local stack. */
+export type FileReaderWorkspace = {
+  path: string;
+  rootLabel: string;
+  sourceLabel?: string;
+  catalog: SessionWorkspaceProps;
+  /** The tab owner switches the content mode of this same document tab. */
+  showingFolder: boolean;
+  onBrowsePath: (path: string) => void;
+};
+
+export type FileReaderInteraction = "selection" | "copy" | "link" | "edit";
+
+/** Live reader facts and operations; the tabs owner decides whether to close. */
+export type FileReaderDraftState = {
+  file: FileSidebarContent;
+  editing: boolean;
+  dirty: boolean;
+  saving: boolean;
+  /** False on failure, concurrent edits, pending save, or retired selection. */
+  save: () => Promise<boolean>;
+  /** False while saving or after this selection has been retired. */
+  discard: () => boolean;
 };
