@@ -2,7 +2,7 @@ import type {
   MediaUnderstandingProvider,
   VideoDescriptionRequest,
 } from "openclaw/plugin-sdk/media-understanding";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createRequestCaptureJsonFetch,

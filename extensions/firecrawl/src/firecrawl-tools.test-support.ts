@@ -9,7 +9,7 @@ export function captureFirecrawlTools(config: OpenClawConfig = {}) {
     createTestPluginApi({
       config,
       registerTool(tool) {
-        if (typeof tool === "function") {
+        if (typeof tool === "function" || "contextVersion" in tool) {
           throw new Error("Expected Firecrawl tools to register as tool definitions");
         }
         tools.set(tool.name, tool);
