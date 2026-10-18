@@ -98,6 +98,8 @@ const enGitHub = {
     },
   },
   githubPublication: {
+    title: "Publication",
+    publishAsLabel: "Publish as",
     personal: "My GitHub",
     system: "System",
     agent: "Agent override",
