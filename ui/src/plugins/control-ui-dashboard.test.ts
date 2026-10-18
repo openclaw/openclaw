@@ -234,9 +234,14 @@ it("updates mounted dashboard controls immediately when gateway permissions or c
   expect([board.canMutate, board.canGrant]).toEqual([true, true]);
   expect(allow.disabled).toBe(false);
 
+  toggle(element).click();
+  await element.updateComplete;
+  expect(expanded(element)).toBe("false");
+
   for (const permitted of [false, true]) {
     await setPermissions(element, permitted);
     expect(allow.disabled).toBe(!permitted);
+    expect(expanded(element)).toBe("false");
   }
   element.connected = false;
   await settle(element);

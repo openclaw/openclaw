@@ -171,6 +171,59 @@ afterEach(() => {
 });
 
 describe("native UI built-in delegation", () => {
+  it.each(["native", "solid"])(
+    "coalesces %s property updates for the mounted plugin",
+    async (mode) => {
+      const updates: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
+      const replacement: ControlUiReplacement<"workspace"> = {
+        id: "batched",
+        label: "Batched workspace",
+        surface: "workspace",
+        mount(container) {
+          container.textContent = "Synthetic workspace";
+          return { update: (context) => updates.push(context) };
+        },
+      };
+      let view: HTMLElementTagNameMap["openclaw-plugin-view"];
+      let refresh: () => void;
+      let cleanup: () => void;
+      if (mode === "native") {
+        const mounted = mountView(replacement);
+        view = mounted.view;
+        refresh = () => {
+          view.props = { sessionKey: "main", agentId: "main", routeId: "activity" };
+          view.presented = false;
+          view.props = { sessionKey: "main", agentId: "main", routeId: "chat" };
+          view.presented = true;
+        };
+        cleanup = () => mounted.provider.remove();
+      } else {
+        const mounted = mountSurface(replacement);
+        view = mounted.host.querySelector("openclaw-plugin-view")!;
+        refresh = () => {
+          mounted.update();
+          mounted.update();
+          mounted.setPresented(false);
+          mounted.setPresented(true);
+        };
+        cleanup = mounted.unmount;
+      }
+      try {
+        await view.updateComplete;
+        flush();
+        updates.length = 0;
+        refresh();
+        await view.updateComplete;
+        flush();
+        expect(updates).toHaveLength(1);
+        expect(updates[0]?.props.routeId).toBe("chat");
+        expect(updates[0]?.presented).toBe(true);
+      } finally {
+        cleanup();
+      }
+    },
+  );
+
   it("gives delegated renderer mounts independent lifetimes and restores fallback after failure", async () => {
     const mounted: HTMLElement[] = [];
     const disposed: HTMLElement[] = [];

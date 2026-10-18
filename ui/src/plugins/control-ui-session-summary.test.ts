@@ -99,6 +99,11 @@ it("refreshes visible message avatars from identity and stops hydrating while hi
   element.agentIdentity!.invalidate(["main"]);
   await avatarLoaded();
 
+  const replacement = createAgentIdentityCapability(element.gateway!);
+  element.agentIdentity = replacement;
+  await avatarLoaded();
+  expect(replacement.get("main")?.avatar).toBe(avatar);
+
   element.presented = false;
   await element.updateComplete;
   const beforeHiddenInvalidation = identityRequests().length;
