@@ -849,6 +849,14 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
+    "src/logging/diagnostic-memory.ts": ["exports"],
+    "src/logging/diagnostic-phase.ts": ["exports"],
+    "src/logging/diagnostic-run-activity.ts": ["exports"],
+    "src/logging/diagnostic-runtime.ts": ["exports"],
+    "src/logging/diagnostic-session-recovery-coordinator.ts": ["exports"],
+    "src/logging/diagnostic-session-state.ts": ["exports"],
+    "src/logging/diagnostic-stability.ts": ["exports"],
     "src/boards/board-notices.ts": ["exports"],
     "src/boards/board-store.ts": ["exports"],
     "src/gateway/board-view-ticket.ts": ["exports"],

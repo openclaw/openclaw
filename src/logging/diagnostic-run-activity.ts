@@ -647,6 +647,7 @@ function markDiagnosticModelStartedForTest(params: ModelStartedActivityEvent): v
   recordModelStarted(params, undefined, true);
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticRunActivityForTest(): void {
   stopDiagnosticRunActivityTracking();
   installDiagnosticRunActivityTestApi();

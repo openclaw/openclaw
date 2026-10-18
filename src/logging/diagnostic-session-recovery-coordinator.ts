@@ -216,6 +216,7 @@ export function requestStuckSessionRecovery(params: RequestStuckSessionRecoveryP
   }
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticSessionRecoveryCoordinatorForTest(): void {
   recoveryRequestsInFlight.clear();
 }

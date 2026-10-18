@@ -1790,6 +1790,14 @@ their existing close and revocation paths. Reuse preserves read admission and
 owning-writer invalidation, without changing schemas, stored retention, or update
 behavior. The idle window is an internal constant, not a configuration option.
 
+Agent database handles and executors hold a lease that Doctor maintenance waits
+for, and no owner can tell an idle holder in another process that an update is
+waiting. CLI processes therefore retire an unused agent handle, executor, or
+session reclamation Worker 30 seconds after its last use; the Gateway (including
+the bare `openclaw` TUI entry) and embedders that install no process role keep
+the 30-minute window. Borrowed handles, open transactions, and an executor's
+pinned Worker handle keep their lease until the work settles.
+
 Explicit artifact-preserving inspections, private snapshots, and extension-enabled or nested
 transaction reads retain their isolated connection and cleanup contracts.
 

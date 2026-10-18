@@ -482,13 +482,7 @@ export const en: TranslationMap & {
       subtitle: "Bot status and channel configuration.",
     },
     whatsapp: {
-      title: "WhatsApp",
-      subtitle: "Link WhatsApp Web and monitor connection health.",
-      phoneNumber: "Phone number",
       loggedOut: "Logged out.",
-      logoutConfirmTitle: "Log out of WhatsApp account {accountId}?",
-      logoutConfirmMessage:
-        "Logging out of account {accountId} stops its listener and deletes its saved credentials.",
       logoutNotCleared:
         "No stored WhatsApp session was cleared. It may already be absent, or its auth directory may require manual cleanup.",
     },

@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { testing } from "./exec-approvals-cli.js";
 
 const {
   callGatewayFromCli,
@@ -537,12 +536,40 @@ describe("exec approvals CLI", () => {
     );
   });
 
-  it("bounds approvals JSON read from stdin", async () => {
-    await expect(testing.readStdin(Readable.from(["12345"]), 5)).resolves.toBe("12345");
-    await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
-      "Exec approvals stdin exceeds 5 bytes.",
-    );
-  });
+  it.each([0, 1])(
+    "enforces the stdin byte cap with %i excess bytes before saving",
+    async (excessBytes) => {
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (!originalStdin) {
+        throw new Error("Expected process.stdin");
+      }
+      const input = '{defaults:{security:"deny"}}';
+      const stream = Readable.from([
+        input,
+        Buffer.alloc(1024 * 1024 - Buffer.byteLength(input) + excessBytes, " "),
+      ]);
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      Object.defineProperty(process, "stdin", { configurable: true, value: stream });
+      try {
+        const command = runApprovalsCommand(["approvals", "set", "--stdin", "--json"]);
+        if (excessBytes) {
+          await expect(command).rejects.toThrow("Exec approvals stdin exceeds 1048576 bytes.");
+          expect(updateExecApprovals).not.toHaveBeenCalled();
+          expect(localSnapshot.file).toEqual({ version: 1, agents: {} });
+          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        } else {
+          await command;
+          expect(updateExecApprovals).toHaveBeenCalledTimes(1);
+          expect(localSnapshot.file.defaults).toEqual({ security: "deny" });
+          expect(requireRecord(writtenJson().file, "JSON approvals file").defaults).toEqual({
+            security: "deny",
+          });
+        }
+      } finally {
+        Object.defineProperty(process, "stdin", originalStdin);
+      }
+    },
+  );
 
   it("rejects a file that grows past the limit after opening", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-growth-");

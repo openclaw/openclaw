@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { NativeWorker } from "../infra/worker-native-handle.js";
 import {
   captureRetainedNativeWorkerSource,
   closeDefaultRetainedNativeWorkerSource,
@@ -17,12 +19,90 @@ import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-sto
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
+import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import type { GenerationWorkerInput } from "./plugin-generation-worker-contract.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
-import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
+import {
+  nativeAdmissionStateFor,
+  preparePluginNativeAdmissions,
+} from "./plugin-native-admission-state.js";
 import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
+
+it("scopes worker admission metadata while reusing native captures from another plugin", async () => {
+  await withOpenClawTestState({ label: "worker-admission-scope" }, async (state) => {
+    const fixture = createFixture(state.path("installed"), false);
+    const neighbor = createFixture(state.path("installed-neighbor"), false);
+    const cache = createPluginCache();
+    const posts = vi.spyOn(NativeWorker.prototype, "postMessage");
+    try {
+      await withArtifactPreservingStateReads(() =>
+        withPluginCache(cache, () =>
+          withPluginSourceCaptureStorage(
+            { stateDir: state.stateDir, placement: "temporary" },
+            async () => {
+              preparePluginNativeAdmissions(fixture.index, cache);
+              preparePluginNativeAdmissions(neighbor.index, cache);
+              const shared = capturePluginGenerationArtifact(neighbor.root);
+              try {
+                const sharedNative = fs.realpathSync(shared.resolve(neighbor.filename));
+                for (const warm of [false, true]) {
+                  posts.mockClear();
+                  const prepared = await preparePluginGenerationArtifact({
+                    rootDir: fixture.root,
+                    source: fixture.entry,
+                  });
+                  try {
+                    const task = posts.mock.calls
+                      .map(([value]) => (isRecord(value) ? value.input : undefined))
+                      .find((input) => isRecord(input) && input.operation === "capture");
+                    expect(task).toBeDefined();
+                    // The observed task is the real capture packet, before structured cloning.
+                    const { admission } = task as Extract<
+                      GenerationWorkerInput,
+                      { operation: "capture" }
+                    >;
+                    expect([...admission.owners.keys()]).toEqual([fixture.root]);
+                    expect(admission.owners.get(fixture.root)).toEqual({
+                      pluginId: "fixture",
+                      rootDir: fixture.root,
+                      source: fixture.entry,
+                      setupSource: undefined,
+                      installRecordHash: undefined,
+                    });
+                    expect([...admission.receipts.keys()]).toEqual(
+                      warm ? [`${fixture.root}\0`] : [],
+                    );
+                    expect(nativeAdmissionStateFor().receipts.size).toBe(2);
+                    expect(fs.readFileSync(prepared.artifact.resolve(fixture.filename))).toEqual(
+                      fixture.bytes,
+                    );
+                    const captured = prepared.artifact.captureResolvedModule(neighbor.filename)!;
+                    const sharedStat = fs.statSync(sharedNative, { bigint: true });
+                    expect(fs.statSync(captured, { bigint: true })).toMatchObject({
+                      dev: sharedStat.dev,
+                      ino: sharedStat.ino,
+                    });
+                    expect(fs.readFileSync(captured)).toEqual(neighbor.bytes);
+                  } finally {
+                    await prepared.artifact.disposeAsync();
+                  }
+                }
+              } finally {
+                await shared.disposeAsync();
+              }
+            },
+          ),
+        ),
+      );
+    } finally {
+      posts.mockRestore();
+      await retirePluginCache(cache);
+    }
+  });
+});
 
 it("joins retained capture workers before terminal native-source shutdown", async () => {
   const root = fs.realpathSync(temp.make("plugin-generation-worker-shutdown-"));

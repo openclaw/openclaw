@@ -17,7 +17,6 @@ import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { createChannelPluginPresentation } from "./plugin-presentation-loader.ts";
 import { ChannelsView, resolveChannelOrder } from "./view.tsx";
 import type { ChannelPairingPrompt, ChannelsProps } from "./view.types.ts";
-import { runWhatsAppLogoutConfirmation } from "./whatsapp-logout.ts";
 import { createChannelSetup } from "./wizard-setup.ts";
 
 const CHANNEL_PAIRING_POLL_INTERVAL_MS = 30_000;
@@ -195,21 +194,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
     await context.channels.refresh(true);
   }
 
-  async function confirmWhatsAppLogout() {
-    const context = getContext();
-    const channels = context.channels;
-    const scope = connection.capture();
-    if (!scope || channelsSource !== channels) {
-      return;
-    }
-    await runWhatsAppLogoutConfirmation({
-      channels,
-      getWizardAccountId: () => wizardHost.whatsappAccountId(),
-      isCurrent: () =>
-        connection.isCurrent(scope) && getContext() === context && channelsSource === channels,
-    });
-  }
-
   function reconcilePairingFilter(snapshot: ChannelsPairingListResult | null) {
     if (!snapshot || !pairingChannelFilter()) {
       return;
@@ -359,7 +343,6 @@ function createChannelsPage(getContext: () => ApplicationContext) {
       onWhatsAppStart: (force) =>
         void context.channels.startWhatsApp(force, wizardHost.whatsappAccountId()),
       onWhatsAppWait: () => void context.channels.waitWhatsApp(wizardHost.whatsappAccountId()),
-      onWhatsAppLogout: () => void confirmWhatsAppLogout(),
       onShowAdvancedSettings: setShowAdvancedSettings,
       onConfigPatch: (path, value) => context.runtimeConfig.patchForm(path, value),
       onConfigSave: () => void saveChannelConfig(),

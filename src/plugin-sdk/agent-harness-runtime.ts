@@ -113,6 +113,7 @@ export { projectProgressCardChannelUpdate } from "../session-cards/progress-card
 export {
   isDeliveredMessageToolOnlySourceReplyResult,
   isDeliveredMessagingToolResult,
+  resolveMessageToolSourceReplyFinal,
 } from "../agents/embedded-agent-message-tool-source-reply.js";
 export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
 export type { AgentMessage } from "../agents/runtime/index.js";

@@ -100,12 +100,9 @@ const APPROVAL_ID_TOKEN_PREFIX = "id64_";
 const APPROVAL_TERMINAL_UNSAFE_CHAR =
   /^[\p{Cc}\p{Cf}\p{Cs}\p{Zl}\p{Zp}\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000\u115F\u1160\u3164\uFFA0]$/u;
 
-async function readStdin(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
-): Promise<string> {
-  const bytes = await readByteStreamWithLimit(stream, {
-    maxBytes,
+async function readStdin(): Promise<string> {
+  const bytes = await readByteStreamWithLimit(process.stdin, {
+    maxBytes: EXEC_APPROVALS_STDIN_MAX_BYTES,
     onOverflow: ({ maxBytes: limit }) => new Error(`Exec approvals stdin exceeds ${limit} bytes.`),
   });
   return bytes.toString("utf8");
@@ -1335,7 +1332,4 @@ export function registerExecApprovalsCli(program: Command) {
   applyParentDefaultHelpAction(approvals);
 }
 
-export const testing = {
-  readStdin,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

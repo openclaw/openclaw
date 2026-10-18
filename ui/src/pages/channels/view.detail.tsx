@@ -27,7 +27,6 @@ import {
   resolveChannelDisplayState,
 } from "./view.shared.tsx";
 import type { ChannelsProps } from "./view.types.ts";
-import { WhatsAppCard } from "./view.whatsapp.tsx";
 
 function ChannelStatusBody(params: {
   channelId: string;
@@ -239,9 +238,7 @@ export function renderChannelDetail(params: {
             )}
           </For>
           {renderChannelPairingDetail(params.channelId, params.props)}{" "}
-          {params.channelId === "whatsapp" ? (
-            <WhatsAppCard {...params.props} />
-          ) : params.props.presentation.details.has(params.channelId) ? (
+          {params.props.presentation.details.has(params.channelId) ? (
             <ChannelSettingsSlot
               channelId={params.channelId}
               presentation={params.props.presentation.details}

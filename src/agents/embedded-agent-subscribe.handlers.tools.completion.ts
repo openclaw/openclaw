@@ -330,7 +330,7 @@ export async function handleToolExecutionEnd(
     });
   const sourceReplyFinal =
     deliveredMessageToolSourceReply || messageDelivery?.sourceReplyDelivered
-      ? resolveMessageToolSourceReplyFinal(startArgs)
+      ? resolveMessageToolSourceReplyFinal(startArgs, ctx.params.messageToolFinalByDefault)
       : undefined;
   ctx.state.sourceReplyDelivered ||= messageDelivery?.sourceReplyDelivered;
   if (

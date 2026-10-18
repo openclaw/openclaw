@@ -109,6 +109,23 @@ export function getActiveOpenClawStateDatabaseReadSnapshot(
   return current?.path === resolveReadOnlyPath(options) ? current.readSource() : undefined;
 }
 
+/** Prepare lazy snapshot bytes without blocking asynchronous discovery callers. */
+export async function getActiveOpenClawStateDatabaseReadSnapshotAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<Readonly<{ location: string; cleanClose?: boolean }> | undefined> {
+  const current = stateSnapshotReads.getStore();
+  if (current?.path !== resolveReadOnlyPath(options)) {
+    return undefined;
+  }
+  // Retain preparation through cancellation/drainage, then recheck read admission
+  // before publishing the same identity used by synchronous readers.
+  return current.work.track(async () => {
+    await current.prepareSource?.();
+    resolveStateReadCallerSignal()?.throwIfAborted();
+    return getActiveOpenClawStateDatabaseReadSnapshot(options);
+  });
+}
+
 /** Use a SQLite snapshot or the PostgreSQL read owner without redirecting live writers. */
 export async function withOpenClawStateDatabaseReadSnapshot<T>(
   operation: () => Promise<T>,
