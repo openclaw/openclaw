@@ -47,6 +47,14 @@ const TEST_ACCOUNT = {
 } as unknown as ResolvedZaloAccount;
 
 const TEST_CONFIG = {} as OpenClawConfig;
+const READY_STATUS = {
+  running: true,
+  connected: true,
+  lifecycle: "ready",
+  terminalDisconnect: undefined,
+  lastConnectedAt: expect.any(Number),
+  lastError: null,
+};
 let testStateDir: string | undefined;
 let previousStateDir: string | undefined;
 
@@ -181,16 +189,7 @@ describe("monitorZaloProvider lifecycle", () => {
     const statusSink = vi.fn();
     const { abort, run } = await startLifecycleMonitor({ statusSink });
 
-    await vi.waitFor(() =>
-      expect(statusSink).toHaveBeenCalledWith({
-        running: true,
-        connected: true,
-        lifecycle: "ready",
-        terminalDisconnect: undefined,
-        lastConnectedAt: expect.any(Number),
-        lastError: null,
-      }),
-    );
+    await vi.waitFor(() => expect(statusSink).toHaveBeenCalledWith(READY_STATUS));
     abort.abort();
     await run;
   });
@@ -281,28 +280,19 @@ describe("monitorZaloProvider lifecycle", () => {
     const registry = createEmptyPluginRegistry();
     setActivePluginRegistry(registry);
 
-    let resolveSetWebhookCalled: (() => void) | undefined;
-    const setWebhookCalled = new Promise<void>((resolve) => {
-      resolveSetWebhookCalled = resolve;
-    });
+    const setWebhookCalled = Promise.withResolvers<void>();
     setWebhookMock.mockImplementationOnce(async () => {
       expect(registry.httpRoutes).toHaveLength(2);
-      resolveSetWebhookCalled?.();
+      setWebhookCalled.resolve();
       return { ok: true, result: { url: "" } };
     });
 
-    let resolveDeleteWebhookCalled: (() => void) | undefined;
-    const deleteWebhookCalled = new Promise<void>((resolve) => {
-      resolveDeleteWebhookCalled = resolve;
+    const deleteWebhookCalled = Promise.withResolvers<void>();
+    const deleted = Promise.withResolvers<Awaited<ReturnType<typeof deleteWebhookMock>>>();
+    deleteWebhookMock.mockImplementationOnce(() => {
+      deleteWebhookCalled.resolve();
+      return deleted.promise;
     });
-    let resolveDeleteWebhook: (() => void) | undefined;
-    deleteWebhookMock.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolveDeleteWebhookCalled?.();
-          resolveDeleteWebhook = () => resolve({ ok: true, result: { url: "" } });
-        }),
-    );
 
     let settled = false;
     const statusSink = vi.fn();
@@ -316,29 +306,22 @@ describe("monitorZaloProvider lifecycle", () => {
       settled = true;
     });
 
-    await setWebhookCalled;
+    await setWebhookCalled.promise;
     await settleLifecycleWork();
-    expect(statusSink).toHaveBeenCalledWith({
-      running: true,
-      connected: true,
-      lifecycle: "ready",
-      terminalDisconnect: undefined,
-      lastConnectedAt: expect.any(Number),
-      lastError: null,
-    });
+    expect(statusSink).toHaveBeenCalledWith(READY_STATUS);
     await settleLifecycleWork();
     expect(setWebhookMock).toHaveBeenCalledTimes(1);
     expect(registry.httpRoutes).toHaveLength(2);
 
     abort.abort();
 
-    await deleteWebhookCalled;
+    await deleteWebhookCalled.promise;
     expect(deleteWebhookMock).toHaveBeenCalledTimes(1);
     expect(deleteWebhookMock).toHaveBeenCalledWith("test-token", undefined, 5000);
     expect(settled).toBe(false);
     expect(registry.httpRoutes).toHaveLength(2);
 
-    resolveDeleteWebhook?.();
+    deleted.resolve({ ok: true, result: { url: "" } });
     await monitoredRun;
 
     expect(settled).toBe(true);
@@ -346,15 +329,15 @@ describe("monitorZaloProvider lifecycle", () => {
     expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
   });
 
-  it("cleans up and rejects startup when the webhook route cannot bind", async () => {
+  async function expectRouteConflict(useWebhook: boolean) {
     const registry = createEmptyPluginRegistry();
     const existingRoute = {
-      path: "/hooks/zalo",
-      match: "exact" as const,
+      path: useWebhook ? "/hooks/zalo" : "/hooks/zalo/media",
+      match: useWebhook ? ("exact" as const) : ("prefix" as const),
       auth: "plugin" as const,
       handler: () => {},
       pluginId: "other-plugin",
-      source: "other-webhook",
+      source: useWebhook ? "other-webhook" : "other-media",
     };
     registry.httpRoutes.push(existingRoute);
     setActivePluginRegistry(registry);
@@ -362,55 +345,39 @@ describe("monitorZaloProvider lifecycle", () => {
 
     const { runtime, run } = await startLifecycleMonitor({
       statusSink,
-      useWebhook: true,
+      useWebhook,
       webhookUrl: "https://example.com/hooks/zalo",
       webhookSecret: "supersecret", // pragma: allowlist secret
     });
 
-    await expect(run).rejects.toThrow("route replacement denied");
+    const error = useWebhook ? "route replacement denied" : "route reuse denied";
+    await expect(run).rejects.toThrow(error);
 
     expect(setWebhookMock).not.toHaveBeenCalled();
+    if (!useWebhook) {
+      expect(getWebhookInfoMock).not.toHaveBeenCalled();
+      expect(getUpdatesMock).not.toHaveBeenCalled();
+    }
     expect(registry.httpRoutes).toEqual([existingRoute]);
     expect(statusSink).toHaveBeenCalledWith({
       connected: false,
       lifecycle: "recovering",
-      lastError: expect.stringContaining("route replacement denied"),
+      lastError: expect.stringContaining(error),
     });
     expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("route replacement denied"));
-    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=webhook");
+    if (useWebhook) {
+      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
+    }
+    expect(runtime.log).toHaveBeenCalledWith(
+      `[default] Zalo provider stopped mode=${useWebhook ? "webhook" : "polling"}`,
+    );
+  }
+
+  it("cleans up and rejects startup when the webhook route cannot bind", async () => {
+    await expectRouteConflict(true);
   });
 
   it("rejects startup when a foreign plugin owns the hosted-media route", async () => {
-    const registry = createEmptyPluginRegistry();
-    const existingRoute = {
-      path: "/hooks/zalo/media",
-      match: "prefix" as const,
-      auth: "plugin" as const,
-      handler: () => {},
-      pluginId: "other-plugin",
-      source: "other-media",
-    };
-    registry.httpRoutes.push(existingRoute);
-    setActivePluginRegistry(registry);
-    const statusSink = vi.fn();
-
-    const { runtime, run } = await startLifecycleMonitor({
-      statusSink,
-      webhookUrl: "https://example.com/hooks/zalo",
-    });
-
-    await expect(run).rejects.toThrow("route reuse denied");
-
-    expect(getWebhookInfoMock).not.toHaveBeenCalled();
-    expect(getUpdatesMock).not.toHaveBeenCalled();
-    expect(registry.httpRoutes).toEqual([existingRoute]);
-    expect(statusSink).toHaveBeenCalledWith({
-      connected: false,
-      lifecycle: "recovering",
-      lastError: expect.stringContaining("route reuse denied"),
-    });
-    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
-    expect(runtime.log).toHaveBeenCalledWith("[default] Zalo provider stopped mode=polling");
+    await expectRouteConflict(false);
   });
 });

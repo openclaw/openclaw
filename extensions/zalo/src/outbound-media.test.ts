@@ -69,6 +69,17 @@ function prepareMedia(overrides: Partial<Parameters<typeof prepareHostedZaloMedi
   });
 }
 
+async function requestMedia(url: string | URL, method = "GET") {
+  const { pathname, search } = new URL(url, "https://gateway.example.com");
+  const response = createMockResponse();
+  const handled = await tryHandleHostedZaloMediaRequest(
+    { method, url: `${pathname}${search}` } as never,
+    response.res as never,
+  );
+  expect(handled).toBe(true);
+  return response;
+}
+
 describe("zalo outbound hosted media", () => {
   beforeEach(async () => {
     installZaloRuntimeForTest();
@@ -94,50 +105,26 @@ describe("zalo outbound hosted media", () => {
   });
 
   it("preserves the root webhook path when deriving the hosted media route", () => {
-    expect(
-      resolveHostedZaloMediaRoutePrefix({
-        webhookUrl: "https://gateway.example.com/",
-      }),
-    ).toBe("/media");
+    expect(resolveHostedZaloMediaRoutePrefix({ webhookUrl: "https://gateway.example.com/" })).toBe(
+      "/media",
+    );
   });
 
   it("serves HEAD metadata without consuming the hosted media", async () => {
     const hostedUrl = await prepareMedia();
-    const { pathname, search } = new URL(hostedUrl);
-    const headResponse = createMockResponse();
-
-    const handledHead = await tryHandleHostedZaloMediaRequest(
-      {
-        method: "HEAD",
-        url: `${pathname}${search}`,
-      } as never,
-      headResponse.res as never,
-    );
-
-    expect(handledHead).toBe(true);
+    const headResponse = await requestMedia(hostedUrl, "HEAD");
     expect(headResponse.res.statusCode).toBe(200);
     expect(headResponse.headers.get("Content-Length")).toBe(
       String(Buffer.byteLength("image-bytes")),
     );
     expect(headResponse.res.end).toHaveBeenCalledWith(undefined);
 
-    const getResponse = createMockResponse();
-    await tryHandleHostedZaloMediaRequest(
-      {
-        method: "GET",
-        url: `${pathname}${search}`,
-      } as never,
-      getResponse.res as never,
-    );
+    const getResponse = await requestMedia(hostedUrl);
     expect(getResponse.res.statusCode).toBe(200);
     expect(getResponse.headers.get("Content-Type")).toBe("image/png");
     expect(getResponse.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
 
-    const consumedResponse = createMockResponse();
-    await tryHandleHostedZaloMediaRequest(
-      { method: "GET", url: `${pathname}${search}` } as never,
-      consumedResponse.res as never,
-    );
+    const consumedResponse = await requestMedia(hostedUrl);
     expect(consumedResponse.res.statusCode).toBe(404);
   });
 
@@ -149,20 +136,12 @@ describe("zalo outbound hosted media", () => {
     );
     try {
       installZaloRuntimeForTest({ ...testStateEnv, OPENCLAW_STATE_DIR: replacementStateDir });
-      const response = createMockResponse();
-      await tryHandleHostedZaloMediaRequest(
-        { method: "HEAD", url: `${hostedUrl.pathname}${hostedUrl.search}` } as never,
-        response.res as never,
-      );
+      const response = await requestMedia(hostedUrl, "HEAD");
       expect(response.res.statusCode).toBe(404);
       expect(response.res.end).toHaveBeenCalledWith("Not Found");
 
       installZaloRuntimeForTest();
-      const original = createMockResponse();
-      await tryHandleHostedZaloMediaRequest(
-        { method: "GET", url: `${hostedUrl.pathname}${hostedUrl.search}` } as never,
-        original.res as never,
-      );
+      const original = await requestMedia(hostedUrl);
       expect(original.res.statusCode).toBe(200);
       expect(original.res.end).toHaveBeenCalledWith(Buffer.from("image-bytes"));
     } finally {
@@ -188,33 +167,13 @@ describe("zalo outbound hosted media", () => {
       webhookPath: "/custom/zalo-hook",
     });
     const pathname = new URL(hostedUrl).pathname;
-    const response = createMockResponse();
-
-    const handled = await tryHandleHostedZaloMediaRequest(
-      {
-        method: "GET",
-        url: `${pathname}?token=wrong`,
-      } as never,
-      response.res as never,
-    );
-
-    expect(handled).toBe(true);
+    const response = await requestMedia(`${pathname}?token=wrong`);
     expect(response.res.statusCode).toBe(401);
     expect(response.res.end).toHaveBeenCalledWith("Unauthorized");
   });
 
   it("rejects malformed hosted media ids before touching disk", async () => {
-    const response = createMockResponse();
-
-    const handled = await tryHandleHostedZaloMediaRequest(
-      {
-        method: "GET",
-        url: "/zalo-webhook/media/not-a-valid-hex-id?token=wrong",
-      } as never,
-      response.res as never,
-    );
-
-    expect(handled).toBe(true);
+    const response = await requestMedia("/zalo-webhook/media/not-a-valid-hex-id?token=wrong");
     expect(response.res.statusCode).toBe(404);
     expect(response.res.end).toHaveBeenCalledWith("Not Found");
   });

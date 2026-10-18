@@ -32,6 +32,7 @@ async function startImageMonitor(
     ...setup,
   });
   const runtime = createRuntimeEnv();
+  const started = Date.now();
   const run = monitorZaloProvider({
     token: "zalo-token",
     account,
@@ -39,10 +40,22 @@ async function startImageMonitor(
     runtime,
     abortSignal: abort.signal,
   });
-  return { abort, run, runtime };
+  return { abort, run, runtime, started };
+}
+
+function queueImage(params?: Parameters<typeof createImageUpdate>[0]) {
+  const processed = Promise.withResolvers<void>();
+  getUpdatesMock
+    .mockResolvedValueOnce({ ok: true, result: createImageUpdate(params) })
+    .mockImplementation(() => {
+      processed.resolve();
+      return new Promise(() => {});
+    });
+  return processed.promise;
 }
 
 describe("Zalo polling image handling", () => {
+  const imageCore = createImageLifecycleCore();
   const {
     core,
     finalizeInboundContextMock,
@@ -50,7 +63,7 @@ describe("Zalo polling image handling", () => {
     readRemoteMediaBufferMock,
     saveRemoteMediaMock,
     saveMediaBufferMock,
-  } = createImageLifecycleCore();
+  } = imageCore;
 
   beforeEach(async () => {
     await resetLifecycleTestState();
@@ -62,29 +75,14 @@ describe("Zalo polling image handling", () => {
   });
 
   it("downloads inbound image media from photo_url and preserves display_name", async () => {
-    const processed = Promise.withResolvers<void>();
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createImageUpdate({ date: 1774084566880 }),
-      })
-      .mockImplementation(() => {
-        processed.resolve();
-        return new Promise(() => {});
-      });
+    const processed = queueImage({ date: 1774084566880 });
 
     const { abort, run } = await startImageMonitor({ allowFrom: [" zl:user-123 "] });
 
-    await processed.promise;
+    await processed;
     expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
-    expectImageLifecycleDelivery({
-      readRemoteMediaBufferMock,
-      saveRemoteMediaMock,
-      saveMediaBufferMock,
-      finalizeInboundContextMock,
-      recordInboundSessionMock,
-    });
+    expectImageLifecycleDelivery(imageCore);
     expect(finalizeInboundContextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         Timestamp: 1774084566880,
@@ -149,29 +147,18 @@ describe("Zalo polling image handling", () => {
 
       expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
       expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
-      expectImageLifecycleDelivery({
-        readRemoteMediaBufferMock,
-        saveRemoteMediaMock,
-        saveMediaBufferMock,
-        finalizeInboundContextMock,
-        recordInboundSessionMock,
-      });
+      expectImageLifecycleDelivery(imageCore);
     } finally {
       await monitor.stop();
     }
   });
 
   it("rejects unauthorized DM images before downloading media", async () => {
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createImageUpdate({
-          messageId: "msg-unauthorized-1",
-          userId: "user-unauthorized-1",
-          chatId: "chat-unauthorized-1",
-        }),
-      })
-      .mockImplementation(() => new Promise(() => {}));
+    queueImage({
+      messageId: "msg-unauthorized-1",
+      userId: "user-unauthorized-1",
+      chatId: "chat-unauthorized-1",
+    });
 
     const { abort, run } = await startImageMonitor({
       dmPolicy: "pairing",
@@ -191,27 +178,18 @@ describe("Zalo polling image handling", () => {
   });
 
   it("keeps the caption fallback without logging the failed image source", async () => {
-    const processed = Promise.withResolvers<void>();
     const photoUrl = "https://example.com/private-zalo-photo.jpg?access=private-source-marker";
     saveRemoteMediaMock.mockRejectedValueOnce(
       new MediaFetchError("http_error", `Failed to fetch media from ${photoUrl}: HTTP 403`, {
         status: 403,
       }),
     );
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createImageUpdate({ caption: "/reset", photoUrl }),
-      })
-      .mockImplementation(() => {
-        processed.resolve();
-        return new Promise(() => {});
-      });
+    const processed = queueImage({ caption: "/reset", photoUrl });
 
     const { abort, run, runtime } = await startImageMonitor();
 
     try {
-      await processed.promise;
+      await processed;
       expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
       expect(finalizeInboundContextMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -235,19 +213,13 @@ describe("Zalo polling image handling", () => {
   });
 
   it("keeps failed media-only command text empty while preserving the native image fact", async () => {
-    const processed = Promise.withResolvers<void>();
     saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
-    getUpdatesMock
-      .mockResolvedValueOnce({ ok: true, result: createImageUpdate() })
-      .mockImplementation(() => {
-        processed.resolve();
-        return new Promise(() => {});
-      });
+    const processed = queueImage();
 
     const { abort, run } = await startImageMonitor({}, "zalo-image-media-only-failure");
 
     try {
-      await processed.promise;
+      await processed;
       expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
       expect(finalizeInboundContextMock).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -301,38 +273,11 @@ describe("Zalo polling image handling", () => {
     };
     saveRemoteMediaMock.mockImplementation(saveRemoteMediaWithHeaderTimeout);
 
-    const processed = Promise.withResolvers<void>();
-    getUpdatesMock
-      .mockResolvedValueOnce({
-        ok: true,
-        result: createImageUpdate({
-          caption: "stalled photo",
-          photoUrl: stallUrl,
-        }),
-      })
-      .mockImplementation(() => {
-        processed.resolve();
-        return new Promise(() => {});
-      });
-
-    const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule("zalo-image-polling");
-    const abort = new AbortController();
-    const runtime = createRuntimeEnv();
-    const { account, config } = createLifecycleMonitorSetup({
-      accountId: "default",
-      dmPolicy: "open",
-    });
-    const started = Date.now();
-    const run = monitorZaloProvider({
-      token: "zalo-token", // pragma: allowlist secret
-      account,
-      config,
-      runtime,
-      abortSignal: abort.signal,
-    });
+    const processed = queueImage({ caption: "stalled photo", photoUrl: stallUrl });
+    const { abort, run, started } = await startImageMonitor();
 
     try {
-      await processed.promise;
+      await processed;
       expect(finalizeInboundContextMock).toHaveBeenCalledTimes(1);
       const elapsedMs = Date.now() - started;
       expect(elapsedMs).toBeGreaterThanOrEqual(headerTimeoutMs - 50);
@@ -362,12 +307,7 @@ describe("Zalo polling image handling", () => {
   ])(
     "caps inbound image downloads at $expectedMaxBytes bytes when mediaMaxMb is $mediaMaxMb",
     async ({ mediaMaxMb, expectedMaxBytes }) => {
-      getUpdatesMock
-        .mockResolvedValueOnce({
-          ok: true,
-          result: createImageUpdate({ messageId: `zalo-image-cap-${mediaMaxMb}` }),
-        })
-        .mockImplementation(() => new Promise(() => {}));
+      queueImage({ messageId: `zalo-image-cap-${mediaMaxMb}` });
 
       const { abort, run } = await startImageMonitor({ mediaMaxMb });
 
