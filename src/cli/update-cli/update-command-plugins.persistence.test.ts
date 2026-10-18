@@ -21,6 +21,19 @@ import { updatePluginsAfterCoreUpdate } from "./update-command-plugins.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+function convergenceResult(config: OpenClawConfig) {
+  return {
+    config,
+    configChanges: [],
+    installedPluginIdRecovery: new Map(),
+    changes: [],
+    warnings: [],
+    errored: false,
+    smokeFailures: [],
+    installRecords: {},
+  };
+}
+
 async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
   // Config-write custody uses a host control store outside the profile database.
   const control = state.path("control");
@@ -40,6 +53,26 @@ async function prepareUpdate(state: OpenClawTestState, config: OpenClawConfig) {
 }
 
 describe("updater plugin commit cancellation", () => {
+  it("prints each skipped plugin and its reason after the update counts", async () => {
+    await withOpenClawTestState({ label: "updater-plugin-skip-reasons" }, async (state) => {
+      const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
+      const message = "Package is managed outside OpenClaw.";
+      mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
+        ...convergenceResult(candidate),
+        outcomes: [{ pluginId: "cursor-cli", status: "skipped", message }],
+      }));
+      const log = vi.fn();
+      await updatePluginsAfterCoreUpdate({
+        ...prepared,
+        configWriteOptions: {},
+        json: false,
+        runtime: { log, error: vi.fn(), exit: vi.fn() },
+      });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("1 skipped"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining(`cursor-cli: ${message}`));
+    });
+  });
+
   it("rolls back the tentative index after a config failure under a live owner", async () => {
     await withOpenClawTestState({ label: "updater-plugin-config-failed" }, async (state) => {
       const prepared = await prepareUpdate(state, { plugins: { enabled: false } });
@@ -50,13 +83,7 @@ describe("updater plugin commit cancellation", () => {
       mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => {
         await Promise.resolve();
         return {
-          config: candidate,
-          configChanges: [],
-          installedPluginIdRecovery: new Map(),
-          changes: [],
-          warnings: [],
-          errored: false,
-          smokeFailures: [],
+          ...convergenceResult(candidate),
           installRecords: { next: { source: "archive" } },
         };
       });
@@ -95,16 +122,9 @@ describe("updater explicit reference intent", () => {
           const snapshot = prepared.configSnapshot;
           expect(snapshot.valid).toBe(true);
           expect(snapshot.sourceConfig.browser?.executablePath).toBe("${BROWSER_BIN}");
-          mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) => ({
-            config: candidate,
-            configChanges: [],
-            installedPluginIdRecovery: new Map(),
-            changes: [],
-            warnings: [],
-            errored: false,
-            smokeFailures: [],
-            installRecords: {},
-          }));
+          mocks.convergence.mockImplementationOnce(async ({ cfg: candidate }) =>
+            convergenceResult(candidate),
+          );
           await updatePluginsAfterCoreUpdate({
             ...prepared,
             configWriteOptions: {
@@ -158,13 +178,10 @@ describe("updater recovery compatibility context", () => {
               });
               expect(recovery.recovery.size).toBe(1);
               return {
+                ...convergenceResult(recovery.config),
                 config: recovery.config,
                 configChanges: recovery.changes,
                 installedPluginIdRecovery: recovery.recovery,
-                changes: [],
-                warnings: [],
-                errored: false,
-                smokeFailures: [],
                 installRecords: owner.records,
               };
             },

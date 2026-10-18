@@ -21,7 +21,6 @@ function hasUnjoinedTree(error: unknown) {
 }
 
 export const TSX_SHIM_WRAPPERS = [
-  "scripts/run-vitest.mjs",
   "scripts/lib/plugin-npm-package-manifest.mjs",
   "scripts/e2e/kitchen-sink-rpc-walk.mjs",
 ] as const;
@@ -74,6 +73,7 @@ console.log(JSON.stringify({ value: first.value, evaluations: globalThis.pluginE
 export async function withShimFixture<T>(
   wrapper:
     | (typeof TSX_SHIM_WRAPPERS)[number]
+    | "scripts/run-vitest.mjs"
     | "scripts/check-changed.mjs"
     | "scripts/run-tsgo.mjs"
     | "scripts/run-oxlint.mjs"
@@ -85,7 +85,12 @@ export async function withShimFixture<T>(
     fixtureRoot: string;
     implementationPath: string;
     wrapperPath: string;
-    runNode: (args: string[], env: NodeJS.ProcessEnv, cwd: string) => Promise<NodeResult>;
+    runNode: (
+      args: string[],
+      env: NodeJS.ProcessEnv,
+      cwd: string,
+      onReady?: NonNullable<Parameters<typeof runNodeScript>[3]>["onReady"],
+    ) => Promise<NodeResult>;
   }) => T,
 ) {
   // spawnOwnedVitestProcess gives POSIX Vitest a disposable temp namespace.
@@ -114,6 +119,7 @@ export async function withShimFixture<T>(
       "scripts/lib/managed-child-process.mts",
       "scripts/lib/managed-cleanup-handoff.mts",
       "scripts/lib/vitest-resource-ownership.mts",
+      "scripts/lib/vitest-worker-descriptor.mts",
       "scripts/lib/windows-taskkill.mjs",
     ]) {
       copyFileSync(source, path.join(checkoutRoot, source));
@@ -125,8 +131,8 @@ export async function withShimFixture<T>(
         fixtureRoot,
         implementationPath,
         wrapperPath,
-        runNode(args, env, cwd) {
-          const command = runNodeScript(args, env, 10_000, { cwd });
+        runNode(args, env, cwd, onReady) {
+          const command = runNodeScript(args, env, 10_000, { cwd, onReady });
           commands.push(command);
           return command;
         },

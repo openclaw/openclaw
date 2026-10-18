@@ -32,6 +32,9 @@ function classifyReplyRequest(signal: FailoverSignal) {
 
 // The shared corpus also feeds retry tests; select only distinct classification paths here.
 const representativeCorpusIds = new Set([
+  "patterns-context-tgi-input",
+  "patterns-context-tgi-total",
+  "structured-tgi-output-only",
   "patterns-context-lmstudio-loaded-length-400",
   "billing-together-payment-required",
   "billing-proxy-subscription",
@@ -40,6 +43,7 @@ const representativeCorpusIds = new Set([
   "billing-periodic-limit-402",
   "billing-custom-proxy",
   "billing-zhipu-periodic-limit",
+  "billing-minimax-chinese-usage-limit",
   "billing-subscription-quota-refresh",
   "billing-org-period",
   "retry-429-insufficient-quota-short",
@@ -50,6 +54,7 @@ const representativeCorpusIds = new Set([
   "patterns-html-407",
   "bedrock-deprecated-temperature",
   "billing-context-reasoning-required",
+  "billing-context-dashscope-range",
   "http-legacy-bad-request-normalized",
   "billing-image-dimension",
   "billing-image-size",
@@ -105,6 +110,40 @@ describe("cross-layer failover behavior", () => {
 
     expect(isRateLimitErrorMessage(message)).toBe(false);
     expect(classifyFailoverSignal({ message })).toBeNull();
+  });
+
+  it.each([
+    {
+      signal: {
+        message:
+          "Google Generative AI API error (503): The service is currently unavailable. [code=UNAVAILABLE]",
+      },
+      expected: { kind: "reason", reason: "server_error" },
+    },
+    {
+      signal: { message: "Google Generative AI API error (429): Retry later." },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: {
+        status: 429,
+        message: "Google Generative AI API error (503): The service is currently unavailable.",
+      },
+      expected: { kind: "reason", reason: "rate_limit" },
+    },
+    {
+      signal: { message: "Provider selected candidate (503) before request dispatch." },
+      expected: null,
+    },
+    {
+      signal: {
+        message:
+          'Invalid request: user text contained "Google Generative AI API error (503): unavailable".',
+      },
+      expected: null,
+    },
+  ])("classifies only guarded provider-wrapped statuses: $signal", ({ signal, expected }) => {
+    expect(classifyFailoverSignal(signal)).toEqual(expected);
   });
 
   it("classifies a bare HTTP 503 service-unavailable response as overloaded", () => {

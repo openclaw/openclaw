@@ -509,7 +509,7 @@ export async function prepareAgentWorkspaceAttachments(params: {
     }
     if (!note?.trim()) {
       throw new Error(
-        `Workspace attachment ${index + 1} could not be prepared; ensure every attachment is available to the registered attachment provider before retrying`,
+        `Workspace attachment ${index + 1} could not be prepared; check that every attachment is available to the registered attachment provider before retrying`,
       );
     }
     if (!notes.has(note)) {

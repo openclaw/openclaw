@@ -1,4 +1,3 @@
-// Legacy web tool migration tests cover provider-owned search and fetch config repair.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
@@ -8,36 +7,34 @@ import {
   migrateLegacyXSearchConfig,
 } from "./legacy-web-tools-migrate.js";
 
-type LegacyWebSearchConfig = Omit<OpenClawConfig, "tools"> & {
-  tools?: { web?: { search?: Record<string, unknown> } };
-};
+const searchConfig = <T>(value: T) => ({ tools: { web: { search: value } } });
 
-describe("legacy web search config", () => {
+function search(value: Record<string, unknown>, plugins?: OpenClawConfig["plugins"]) {
+  return migrateLegacyWebSearchConfig({ ...searchConfig(value), plugins });
+}
+
+const pluginSearch = (webSearch: Record<string, unknown>) => ({
+  enabled: true,
+  config: { webSearch },
+});
+const movedXAuth = "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.";
+const xSearch = (x_search: Record<string, unknown>) =>
+  migrateLegacyXSearchConfig({ tools: { web: { x_search } } });
+
+describe("legacy web tool config", () => {
   it("migrates provider config in deterministic owner order", () => {
-    const result = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
-      tools: {
-        web: {
-          search: {
-            provider: "grok",
-            apiKey: "test-key",
-            grok: { apiKey: "test-secret", model: "grok-4-1-fast" },
-            kimi: { apiKey: "sample", model: "kimi-k2.5" },
-          },
-        },
-      },
+    const result = search({
+      provider: "grok",
+      apiKey: "test-key",
+      grok: { apiKey: "test-secret", model: "grok-4-1-fast" },
+      kimi: { apiKey: "sample", model: "kimi-k2.5" },
     });
 
     expect(result.config.tools?.web?.search).toEqual({ provider: "grok" });
-    expect(result.config.plugins?.entries?.brave?.config?.webSearch).toEqual({
-      apiKey: "test-key",
-    });
-    expect(result.config.plugins?.entries?.xai?.config?.webSearch).toEqual({
-      apiKey: "test-secret",
-      model: "grok-4.3",
-    });
-    expect(result.config.plugins?.entries?.moonshot?.config?.webSearch).toEqual({
-      apiKey: "sample",
-      model: "kimi-k2.5",
+    expect(result.config.plugins?.entries).toEqual({
+      brave: pluginSearch({ apiKey: "test-key" }),
+      xai: pluginSearch({ apiKey: "test-secret", model: "grok-4.3" }),
+      moonshot: pluginSearch({ apiKey: "sample", model: "kimi-k2.5" }),
     });
     expect(result.changes).toEqual([
       "Moved tools.web.search.apiKey → plugins.entries.brave.config.webSearch.apiKey.",
@@ -48,27 +45,13 @@ describe("legacy web search config", () => {
   });
 
   it("gives global auth precedence over Brave source while recursively preserving plugin config", () => {
-    const result = migrateLegacyWebSearchConfig<LegacyWebSearchConfig>({
-      tools: {
-        web: {
-          search: {
-            apiKey: "example",
-            brave: {
-              apiKey: "test-key",
-              nested: { fromLegacy: true, shared: "legacy" },
-            },
-          },
-        },
+    const result = search(
+      {
+        apiKey: "example",
+        brave: { apiKey: "test-key", nested: { fromLegacy: true, shared: "legacy" } },
       },
-      plugins: {
-        entries: {
-          brave: {
-            enabled: true,
-            config: { webSearch: { nested: { shared: "plugin" } } },
-          },
-        },
-      },
-    });
+      { entries: { brave: pluginSearch({ nested: { shared: "plugin" } }) } },
+    );
 
     expect(result.config.plugins?.entries?.brave?.config?.webSearch).toEqual({
       apiKey: "example",
@@ -80,31 +63,23 @@ describe("legacy web search config", () => {
   });
 
   it("strips empty mapped records without mutating the input or inventing a change", () => {
-    const input = { tools: { web: { search: { provider: "grok", grok: {} } } } };
+    const input = searchConfig({ provider: "grok", grok: {} });
     const result = migrateLegacyWebSearchConfig(input);
 
     expect(result.config).not.toBe(input);
-    expect(result.config.tools.web.search).toEqual({ provider: "grok" });
-    expect(result.config).not.toHaveProperty("plugins");
-    expect(result.changes).toStrictEqual([]);
+    expect(result).toStrictEqual({ config: searchConfig({ provider: "grok" }), changes: [] });
     expect(input.tools.web.search).toEqual({ provider: "grok", grok: {} });
   });
 
   it("preserves unknown fields, drops dangerous keys, and lists mapped paths", () => {
-    const input = {
-      tools: {
-        web: {
-          search: {
-            apiKey: "test-key",
-            grok: { apiKey: "test-secret", model: "grok-latest" },
-            customSearch: { endpoint: "https://search.example.test" },
-            ["__proto__"]: { polluted: true },
-            constructor: { polluted: true },
-            prototype: { polluted: true },
-          },
-        },
-      },
-    };
+    const input = searchConfig({
+      apiKey: "test-key",
+      grok: { apiKey: "test-secret", model: "grok-latest" },
+      customSearch: { endpoint: "https://search.example.test" },
+      ["__proto__"]: { polluted: true },
+      constructor: { polluted: true },
+      prototype: { polluted: true },
+    });
 
     expect(listLegacyWebSearchConfigPaths(input)).toEqual([
       "tools.web.search.apiKey",
@@ -115,31 +90,16 @@ describe("legacy web search config", () => {
       customSearch: { endpoint: "https://search.example.test" },
     });
   });
-});
-
-describe("legacy web fetch config", () => {
   it("moves Firecrawl config, discards enabled, and preserves other fetch knobs", () => {
-    const result = migrateLegacyWebFetchConfig({
-      tools: {
-        web: {
-          fetch: {
-            provider: "firecrawl",
-            timeoutSeconds: 15,
-            firecrawl: {
-              enabled: false,
-              apiKey: "dummy",
-              onlyMainContent: false,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig);
-
-    expect(result.config.tools?.web?.fetch).toEqual({
+    const fetch = {
       provider: "firecrawl",
       timeoutSeconds: 15,
-    });
-    expect(result.config.plugins?.entries?.firecrawl).toEqual({
+      firecrawl: { enabled: false, apiKey: "dummy", onlyMainContent: false },
+    };
+    const result = migrateLegacyWebFetchConfig({ tools: { web: { fetch } } });
+
+    expect(result.config.tools?.web?.fetch).toEqual({ provider: "firecrawl", timeoutSeconds: 15 });
+    expect(result.config).toHaveProperty("plugins.entries.firecrawl", {
       enabled: true,
       config: { webFetch: { apiKey: "dummy", onlyMainContent: false } },
     });
@@ -150,20 +110,16 @@ describe("legacy web fetch config", () => {
 
   it("removes an empty Firecrawl payload without creating plugin config", () => {
     const fetch = { firecrawl: { enabled: false }, timeoutSeconds: 10 };
-    const result = migrateLegacyWebFetchConfig({ tools: { web: { fetch } } });
-
-    expect(result.config.tools.web.fetch).toEqual({ timeoutSeconds: 10 });
-    expect(result.config).not.toHaveProperty("plugins");
-    expect(result.changes).toEqual(["Removed empty tools.web.fetch.firecrawl."]);
+    expect(migrateLegacyWebFetchConfig({ tools: { web: { fetch } } })).toStrictEqual({
+      config: { tools: { web: { fetch: { timeoutSeconds: 10 } } } },
+      changes: ["Removed empty tools.web.fetch.firecrawl."],
+    });
   });
-});
-
-describe("legacy x_search config", () => {
   it("keeps explicit plugin-owned auth", () => {
     const webSearch = { apiKey: "test-token" };
     const result = migrateLegacyXSearchConfig({
       tools: { web: { x_search: { apiKey: "placeholder", cacheTtlMinutes: 5 } } },
-      plugins: { entries: { xai: { enabled: true, config: { webSearch } } } },
+      plugins: { entries: { xai: pluginSearch(webSearch) } },
     });
 
     expect(result.config.plugins.entries.xai.config.webSearch).toEqual(webSearch);
@@ -173,39 +129,29 @@ describe("legacy x_search config", () => {
     ]);
   });
 
-  it("repairs model before auth and removes an emptied source after activating the plugin", () => {
-    const combined = migrateLegacyXSearchConfig({
-      tools: { web: { x_search: { apiKey: "placeholder", model: "grok-3" } } },
-    });
-    const authOnly = migrateLegacyXSearchConfig({
-      tools: { web: { x_search: { apiKey: "placeholder" } } },
-    });
-
-    expect(combined.config.tools.web.x_search).toEqual({ model: "grok-4.3" });
-    expect(combined.changes).toEqual([
-      'Updated tools.web.x_search.model from "grok-3" to "grok-4.3".',
-      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
-    ]);
-    expect(authOnly.config.tools.web).not.toHaveProperty("x_search");
-    expect(authOnly.changes).toEqual([
-      "Moved tools.web.x_search.apiKey → plugins.entries.xai.config.webSearch.apiKey.",
-      "Removed empty tools.web.x_search.",
-    ]);
+  it.each([
+    [
+      "repairs models before moving auth",
+      { apiKey: "placeholder", model: "grok-3" },
+      { x_search: { model: "grok-4.3" } },
+      ['Updated tools.web.x_search.model from "grok-3" to "grok-4.3".', movedXAuth],
+    ],
+    [
+      "removes an emptied source",
+      { apiKey: "placeholder" },
+      {},
+      [movedXAuth, "Removed empty tools.web.x_search."],
+    ],
+  ] as const)("%s", (_name, input, web, changes) => {
+    const result = xSearch(input);
+    expect(result.config.tools.web).toEqual(web);
+    expect(result.changes).toEqual(changes);
   });
 
   it("repairs retired model-only aliases without creating plugin config", () => {
-    const retired = migrateLegacyXSearchConfig({
-      tools: { web: { x_search: { enabled: true, model: "grok-code-fast-1" } } },
-    });
-    const current = migrateLegacyXSearchConfig({
-      tools: { web: { x_search: { model: "grok-latest" } } },
-    });
-
-    expect(retired.config.tools.web.x_search).toEqual({
-      enabled: true,
-      model: "grok-build-0.1",
-    });
+    const retired = xSearch({ enabled: true, model: "grok-code-fast-1" });
+    expect(retired.config.tools.web.x_search).toEqual({ enabled: true, model: "grok-build-0.1" });
     expect(retired.config).not.toHaveProperty("plugins");
-    expect(current.changes).toStrictEqual([]);
+    expect(xSearch({ model: "grok-latest" }).changes).toStrictEqual([]);
   });
 });

@@ -1,12 +1,12 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
-import type { WorkerSessionPlacementChangeSnapshot } from "./worker-environments/placement-record.js";
+import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 
 export function createGatewayWorkerPlacementChangePublisher(params: {
-  placements: Pick<WorkerSessionPlacementStore, "readChangeSnapshot">;
+  placements: Pick<WorkerSessionPlacementStore, "subscribeChanges">;
   getSessionChangeContext?: () => Parameters<typeof emitSessionsChanged>[0] | undefined;
   warn: (message: string) => void;
 }) {
@@ -17,67 +17,34 @@ export function createGatewayWorkerPlacementChangePublisher(params: {
       // Reporting failures must never replace a committed placement outcome.
     }
   };
-  const snapshotPlacements = async () =>
-    new Map(
-      (await params.placements.readChangeSnapshot()).map((placement) => [
-        placement.sessionId,
-        placement,
-      ]),
-    );
-  return async <T>(
-    operation: () => Promise<T>,
-    preparedBefore?: readonly WorkerSessionPlacementChangeSnapshot[],
-  ): Promise<T> => {
+  return async <T>(operation: () => Promise<T>): Promise<T> => {
     let context: ReturnType<NonNullable<typeof params.getSessionChangeContext>>;
-    let before: Awaited<ReturnType<typeof snapshotPlacements>> | undefined;
     try {
       context = params.getSessionChangeContext?.();
-      if (context) {
-        before = preparedBefore
-          ? new Map(preparedBefore.map((placement) => [placement.sessionId, placement]))
-          : await snapshotPlacements();
-      }
     } catch (error) {
       warnPlacementChangeFailure(error);
     }
-    if (!context || !before) {
+    if (!context) {
       return await operation();
     }
+    const changed = new Map<string, WorkerSessionPlacementIdentity>();
+    const unsubscribe = params.placements.subscribeChanges((placement) => {
+      changed.set(placement.sessionId, placement);
+    });
     try {
       return await operation();
     } finally {
-      try {
-        const after = await snapshotPlacements();
-        for (const [sessionId, previous] of before) {
-          const current = after.get(sessionId);
-          if (
-            current &&
-            current.state === previous.state &&
-            current.generation === previous.generation &&
-            current.updatedAtMs === previous.updatedAtMs &&
-            current.sessionKey === previous.sessionKey &&
-            current.agentId === previous.agentId
-          ) {
-            after.delete(sessionId);
-            continue;
-          }
-          if (!current) {
-            after.set(sessionId, previous);
-          }
+      unsubscribe();
+      for (const placement of changed.values()) {
+        try {
+          emitSessionsChanged(context, {
+            reason: "placement",
+            sessionKey: placement.sessionKey,
+            agentId: placement.agentId,
+          });
+        } catch (error) {
+          warnPlacementChangeFailure(error);
         }
-        for (const placement of after.values()) {
-          try {
-            emitSessionsChanged(context, {
-              reason: "placement",
-              sessionKey: placement.sessionKey,
-              agentId: placement.agentId,
-            });
-          } catch (error) {
-            warnPlacementChangeFailure(error);
-          }
-        }
-      } catch (error) {
-        warnPlacementChangeFailure(error);
       }
     }
   };

@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."worker_environment_ssh_fallback_ports" (
+CREATE TABLE "worker_environment_ssh_fallback_ports" (
   "environment_id" text COLLATE "C" NOT NULL,
   "position" bigint NOT NULL,
   "port" bigint NOT NULL,
@@ -14,6 +10,4 @@ CREATE TABLE "openclaw_state"."worker_environment_ssh_fallback_ports" (
   UNIQUE ("environment_id", "port")
 );
 
-ALTER TABLE "openclaw_state"."worker_environment_ssh_fallback_ports" ADD FOREIGN KEY ("environment_id") REFERENCES "openclaw_state"."worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;
-
-COMMIT;
+ALTER TABLE "worker_environment_ssh_fallback_ports" ADD FOREIGN KEY ("environment_id") REFERENCES "worker_environments" ("environment_id") ON UPDATE NO ACTION ON DELETE CASCADE NOT DEFERRABLE;

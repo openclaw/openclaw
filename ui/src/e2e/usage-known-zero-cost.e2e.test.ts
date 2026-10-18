@@ -63,7 +63,6 @@ suite.define(() => {
       async ({ page }) => {
         await page.clock.setFixedTime(new Date(updatedAt));
         const gateway = await installMockGateway(page, {
-          communityInviteDismissed: true,
           methodResponses: responses,
         });
         await page.goto(`${suite.server.baseUrl}usage`);
@@ -71,9 +70,7 @@ suite.define(() => {
         const hintButton = page.locator("#usage-summary-hint-average-cost");
         const card = page.locator(".usage-summary-card").filter({ has: hintButton });
         const tooltipHost = hintButton.locator("xpath=..");
-        const tooltip = tooltipHost.locator("wa-tooltip");
-        const tooltipBody = tooltip.locator('[part="body"]');
-        const popup = tooltip.locator('wa-popup [part="popup"]');
+        const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
         const hintContent = tooltipHost.locator('[slot="content"]');
         const value = card.locator(".usage-summary-value");
         const steps = [
@@ -99,14 +96,20 @@ suite.define(() => {
             element.scrollIntoView({ block: "center", behavior: "instant" }),
           );
           await hintButton.click();
-          await expect.poll(() => tooltip.getAttribute("open")).toBe("");
-          await expect.poll(() => tooltipBody.isVisible()).toBe(true);
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(true);
+          await expect.poll(() => tooltip.isVisible()).toBe(true);
           await expect.poll(() => hintContent.isVisible()).toBe(true);
           if (artifactDir && ["mixed", "known-zero"].includes(step.stage)) {
             const screenshot = path.join(artifactDir, `${step.stage}.png`);
             await writeFile(
               screenshot,
-              await takeControlUiViewportScreenshot(page, popup, [hintButton, hintContent, value]),
+              await takeControlUiViewportScreenshot(page, tooltip, [
+                hintButton,
+                hintContent,
+                value,
+              ]),
             );
             screenshots.push(screenshot);
           }
@@ -116,15 +119,17 @@ suite.define(() => {
             hint: (await hintContent.textContent())?.trim() ?? "",
             value: (await value.textContent())?.trim() ?? "",
             labels: (await page.locator(".session-bar-title").allTextContents()).toSorted(),
-            visible: await tooltipBody.isVisible(),
+            visible: await tooltip.isVisible(),
           };
           observations.push(observed);
           if (step.stage !== "known-zero") {
             expect(observed.hint).toBe(step.stage === "positive" ? normalHint : missingHint);
           }
           await hintButton.press("Escape");
-          await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
-          await expect.poll(() => tooltipBody.isVisible()).toBe(false);
+          await expect
+            .poll(() => tooltip.evaluate((element) => element.matches(":popover-open")))
+            .toBe(false);
+          await expect.poll(() => tooltip.isVisible()).toBe(false);
         }
         const requests = await gateway.getRequests();
         expect(requests.some(({ method }) => method === "sessions.usage")).toBe(true);

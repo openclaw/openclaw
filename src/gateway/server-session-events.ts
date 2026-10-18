@@ -1,4 +1,3 @@
-// Gateway session event broadcaster.
 // Projects transcript and lifecycle updates to websocket subscribers.
 import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
@@ -13,12 +12,12 @@ import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-m
 import { isSessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import type { SessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
-import { prepareForwardedMessageCronJobNameResolver } from "./chat-display-projection.history.js";
+import {
+  prepareForwardedMessageCronJobNameResolver,
+  readPluginSteeringId,
+} from "./chat-display-projection.history.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type {
@@ -26,6 +25,7 @@ import type {
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import { hasSessionChangeReceivers } from "./session-change-receivers.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import {
@@ -51,7 +51,6 @@ import {
 
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
-type GenerationObservation = ReturnType<SessionRowProjection["observeGeneration"]>;
 
 function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): boolean {
   return Boolean(
@@ -62,13 +61,13 @@ function hasCompleteTranscriptTarget(update: InternalSessionTranscriptUpdate): b
   );
 }
 
-/** Creates a serialized transcript-update broadcaster for session websocket clients. */
+/** Creates a serialized broadcaster; false reports a temporary canonical-read failure. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
   sessionMessageSubscribers: SessionMessageSubscribers;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
+  resolveGatewayContext?: GatewayContextResolver;
 }) {
   // Ordering is a per-transcript contract: subscribers merge each session's
   // updates independently, so lanes keyed by transcript identity keep message
@@ -85,7 +84,7 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     }
   >();
   const unresolvedQueueKeys = new Set<string>();
-  return (update: InternalSessionTranscriptUpdate): Promise<void> => {
+  return (update: InternalSessionTranscriptUpdate): Promise<false | void> => {
     const projection = params.getSessionRowProjection?.();
     // Capture legacy ownership before the async queue can cross a same-id reset;
     // committed producer ownership always wins over a later session-store read.
@@ -97,7 +96,6 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     const lifecycleRevision =
       suppliedRevision ??
       (update.message !== undefined ? lifecycleOwner?.lifecycleRevision : undefined);
-    const queuedUpdate = lifecycleRevision ? { ...update, lifecycleRevision } : update;
     const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
     const markerCaptured =
       legacyMarker && !hasCompleteTranscriptTarget(update)
@@ -117,10 +115,17 @@ export function createTranscriptUpdateBroadcastHandler(params: {
     if (agentScope === null) {
       return Promise.resolve();
     }
-    const markerObservation =
-      projection && legacyMarker && !hasCompleteTranscriptTarget(update) && !markerCaptured
-        ? projection.observeGeneration(legacyMarker)
-        : undefined;
+    // Without an original incarnation, notify history instead of retargeting inline bytes.
+    const queuedUpdate =
+      projection &&
+      legacyMarker &&
+      !hasCompleteTranscriptTarget(update) &&
+      !markerCaptured &&
+      !lifecycleRevision
+        ? { ...update, message: undefined }
+        : lifecycleRevision
+          ? { ...update, lifecycleRevision }
+          : update;
     // Raw global is per-agent storage identity; its qualified aliases must share a lane.
     const laneKey =
       sessionKey && agentScope?.[1]
@@ -199,18 +204,16 @@ export function createTranscriptUpdateBroadcastHandler(params: {
         if (sessionKey) {
           await joinQueue(laneKey);
         }
-        await handleTranscriptUpdateBroadcast(
+        return await handleTranscriptUpdateBroadcast(
           params,
           queuedUpdate,
           agentScope,
           projection,
           markerCaptured,
-          markerObservation,
           sessionKey ? undefined : joinQueue,
         );
       } finally {
         keyReady.resolve(undefined);
-        markerObservation?.dispose();
       }
     });
     const settled = task.then(
@@ -249,16 +252,15 @@ async function handleTranscriptUpdateBroadcast(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     sessionEventSubscribers: SessionEventSubscribers;
     sessionMessageSubscribers: SessionMessageSubscribers;
-    chatAbortControllers: Map<string, ChatAbortControllerEntry>;
     getSessionRowProjection?: () => SessionRowProjection | undefined;
+    resolveGatewayContext?: GatewayContextResolver;
   },
   update: InternalSessionTranscriptUpdate,
   capturedAgentScope: SessionEventAgentScope | undefined,
   projection: SessionRowProjection | undefined,
   markerCaptured: ReturnType<SessionRowProjection["capture"]>,
-  markerObservation: GenerationObservation | undefined,
   joinQueue?: (key: string) => Promise<void>,
-): Promise<void> {
+): Promise<false | void> {
   const legacyMarker = parseSqliteSessionFileMarker(update.sessionFile);
   const targetAgentId = normalizeOptionalString(update.target?.agentId);
   const targetSessionId = normalizeOptionalString(update.target?.sessionId);
@@ -315,16 +317,7 @@ async function handleTranscriptUpdateBroadcast(
     return;
   }
   const publicationStorePath = targetStorePath ?? compatibleLegacyMarker?.storePath;
-  const markerOwner = compatibleLegacyMarker
-    ? projection?.capture({
-        agentId: compatibleLegacyMarker.agentId,
-        key: sessionKey,
-        storePath: compatibleLegacyMarker.storePath,
-      })
-    : undefined;
-  const markerIsCurrent = () =>
-    (!markerCaptured || projection?.isCurrent(markerCaptured)) &&
-    (!markerObservation || (markerOwner && markerObservation.isCurrent(markerOwner)));
+  const markerIsCurrent = () => !markerCaptured || projection?.isCurrent(markerCaptured);
   if (!markerIsCurrent()) {
     return;
   }
@@ -347,7 +340,6 @@ async function handleTranscriptUpdateBroadcast(
     }
   }
   const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-  const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope);
   const connIds = new Set(params.sessionEventSubscribers.getAll());
   const broadcastKeys = routingAgentId
     ? resolveSessionSubscriptionKeys(sessionKey, routingAgentId, compatibilityOwnerAgentId)
@@ -367,11 +359,7 @@ async function handleTranscriptUpdateBroadcast(
       return;
     }
   }
-  const lifecycleRevision =
-    normalizeOptionalString(update.lifecycleRevision) ??
-    (markerObservation
-      ? normalizeOptionalString(markerOwner?.entry?.lifecycleRevision)
-      : undefined);
+  const lifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
   const lifecycleIsCurrent = () => {
     if (!lifecycleRevision) {
       return true;
@@ -390,13 +378,15 @@ async function handleTranscriptUpdateBroadcast(
       { sessionKey, phase: "message", ts: Date.now() },
       connIds,
       {
-        ...privateBroadcastScope,
+        ...resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope),
+        sessionEventSubscriptionKeys: broadcastKeys,
         dropIfSlow: true,
       },
     );
     return;
   }
   let message = update.message;
+  let publicationFailed = false;
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   let transcriptPosition: TranscriptDisplayPosition | undefined;
   if (message !== undefined && update.messageId && completeTarget && targetSessionId) {
@@ -425,25 +415,25 @@ async function handleTranscriptUpdateBroadcast(
         throw error;
       }
       message = undefined;
+      publicationFailed = true;
     }
   } else if (message !== undefined && messageSeq === undefined) {
     // Updates from raw transcript events may not carry seq; fall back to the
     // current transcript line count for cursor-compatible live history.
-    const updateStorePath = publicationStorePath;
     do {
       await projection?.prepareMembership();
     } while (projection?.needsMembershipPreparation());
     const fallbackTarget = projection?.selectEntries({
       agentId: routingAgentId,
       key: sessionKey,
-      storePath: updateStorePath,
+      storePath: publicationStorePath,
     })[0];
     const entry = fallbackTarget?.entry;
     const messageSessionId =
       compatibleLegacyMarker?.sessionId ??
       normalizeOptionalString(update.target?.sessionId) ??
       entry?.sessionId;
-    const storePath = updateStorePath ?? fallbackTarget?.storeTarget.storePath;
+    const storePath = publicationStorePath ?? fallbackTarget?.storeTarget.storePath;
     try {
       messageSeq = messageSessionId
         ? asPositiveSafeInteger(
@@ -461,6 +451,7 @@ async function handleTranscriptUpdateBroadcast(
         throw error;
       }
       message = undefined;
+      publicationFailed = true;
     }
   }
   const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
@@ -471,7 +462,7 @@ async function handleTranscriptUpdateBroadcast(
     routingAgentId
       ? { key: sessionKey, agentId: routingAgentId, storePath: publicationStorePath }
       : undefined,
-    (read) => {
+    (read, ancestors) => {
       if (params.getSessionRowProjection?.() !== projection) {
         return;
       }
@@ -491,16 +482,19 @@ async function handleTranscriptUpdateBroadcast(
         : undefined;
       const sessionRow = record && read?.present(record);
       const activeRunState =
+        record &&
         sessionRow &&
         (sessionRow.key !== "global" || routingAgentId !== undefined || compatibilityOwnerAgentId)
           ? resolveVisibleActiveSessionRunState({
-              context: params,
+              storePath: record.storeTarget.storePath,
+              resolveGatewayContext: params.resolveGatewayContext,
               requestedKey: sessionKey,
               canonicalKey: sessionRow.key,
               sessionId: sessionRow.sessionId,
               ...(routingAgentId ? { agentId: routingAgentId } : {}),
               defaultAgentId: compatibilityOwnerAgentId,
               projectedAgentRunIndex: projection?.state.rowContext.projectedAgentRuns,
+              physicalPaths: read?.physicalPaths ?? projection?.physicalPaths,
             })
           : null;
       const sessionSnapshot = buildGatewaySessionSnapshot({
@@ -509,14 +503,17 @@ async function handleTranscriptUpdateBroadcast(
         includeSession: true,
         activeRunState,
       });
-      const broadcastOptions =
-        read && projection
-          ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
-          : undefined;
-      const projected =
+      const broadcastOptions = {
+        sessionEventSubscriptionKeys: broadcastKeys,
+        prepareSessionProjection:
+          read && projection
+            ? prepareSessionEventProjection(projection, read, { ancestors, encodeMessage: true })
+            : undefined,
+      };
+      const messageProjectionParams =
         message === undefined
           ? undefined
-          : projectSessionMessagePayload({
+          : {
               sessionKey,
               ...(eventAgentId ? { agentId: eventAgentId } : {}),
               message,
@@ -526,11 +523,41 @@ async function handleTranscriptUpdateBroadcast(
               ...(messageSeq !== undefined ? { messageSeq } : {}),
               ...(update.runId ? { runId: update.runId } : {}),
               sessionSnapshot,
-            });
+            };
+      const projected =
+        messageProjectionParams && projectSessionMessagePayload(messageProjectionParams);
+      // Do not invalidate history for a recoverable attempt: a refetch could
+      // publish its durable error row before the owning run settles.
+      if (projected?.deferredAssistantError) {
+        return;
+      }
       const historyReset = message === undefined || projected?.requiresHistoryReset;
       if (!historyReset && projected?.payload) {
         params.broadcastToConnIds("session.message", projected.payload, connIds, broadcastOptions);
         return;
+      }
+      if (
+        !historyReset &&
+        !projected?.payload &&
+        messageProjectionParams &&
+        read &&
+        projection &&
+        readPluginSteeringId(message)
+      ) {
+        const controlUiProjection = projectSessionMessagePayload({
+          ...messageProjectionParams,
+          includePluginSteering: true,
+        });
+        if (controlUiProjection.payload) {
+          params.broadcastToConnIds("session.message", controlUiProjection.payload, connIds, {
+            sessionEventSubscriptionKeys: broadcastKeys,
+            prepareSessionProjection: prepareSessionEventProjection(projection, read, {
+              ancestors,
+              encodeMessage: true,
+              controlUiOnly: true,
+            }),
+          });
+        }
       }
 
       // Resets invalidate both audiences; hidden messages notify only broad session listeners.
@@ -556,136 +583,5 @@ async function handleTranscriptUpdateBroadcast(
       );
     },
   );
-}
-
-/** Creates a lifecycle-event broadcaster for session list refreshes. */
-export function createLifecycleEventBroadcastHandler(params: {
-  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-  sessionEventSubscribers: SessionEventSubscribers;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  getSessionRowProjection?: () => SessionRowProjection | undefined;
-}) {
-  return async (event: SessionLifecycleEvent): Promise<void> => {
-    const connIds = params.sessionEventSubscribers.getAll();
-    if (!hasSessionChangeReceivers(connIds)) {
-      return;
-    }
-    const agentScope = resolveSessionEventAgentScope(
-      getRuntimeConfig(),
-      event.sessionKey,
-      normalizeOptionalString(event.agentId),
-      true,
-    );
-    if (!agentScope) {
-      return;
-    }
-    const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-    const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(
-      event.sessionKey,
-      agentScope,
-    );
-    const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
-    // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
-    if (
-      event.reason === "delete" ||
-      !routingAgentId ||
-      (!eventAgentId && !compatibilityOwnerAgentId)
-    ) {
-      params.broadcastToConnIds(
-        "sessions.changed",
-        {
-          sessionKey: event.sessionKey,
-          ...(eventAgentId ? { agentId: eventAgentId } : {}),
-          reason: event.reason,
-          ...(event.catalogChanged ? { catalogChanged: true } : {}),
-          ts: Date.now(),
-        },
-        connIds,
-        broadcastOptions,
-      );
-      return;
-    }
-    const projection = params.getSessionRowProjection?.();
-    const query = { key: event.sessionKey, agentId: routingAgentId };
-    const captured = projection?.capture(query);
-    const readActiveState = (session: { key: string; sessionId?: string }) =>
-      resolveVisibleActiveSessionRunState({
-        context: params,
-        requestedKey: event.sessionKey,
-        canonicalKey: session.key,
-        sessionId: session.sessionId,
-        agentId: routingAgentId,
-        defaultAgentId: compatibilityOwnerAgentId,
-        // Capacity transitions retain their synchronous memory edge before row preparation.
-        projectedAgentRunIndex:
-          event.reason === "run-capacity"
-            ? undefined
-            : projection?.state.rowContext.projectedAgentRuns,
-      });
-    // Capacity acquisition and release can both occur before row preparation settles.
-    const capacityState =
-      event.reason === "run-capacity"
-        ? readActiveState({
-            key: captured?.key ?? event.sessionKey,
-            sessionId: captured?.entry?.sessionId,
-          })
-        : undefined;
-    const observation = !captured ? projection?.observeGeneration(query) : undefined;
-    try {
-      // Committed lifecycle publications settle with the Gateway, not their producer's scope.
-      await runOutsideAsyncWorkScope(() =>
-        withPreparedEventRow(projection, query, (read) => {
-          const current = captured ?? projection?.capture(query);
-          if (
-            params.getSessionRowProjection?.() !== projection ||
-            (projection && (!current || !projection.isCurrent(current))) ||
-            (observation && (!current || !observation.isCurrent(current)))
-          ) {
-            return;
-          }
-          const record = read?.describe(query);
-          const sessionRow = record && read?.present(record);
-          const activeRunState = capacityState ?? (sessionRow ? readActiveState(sessionRow) : null);
-          params.broadcastToConnIds(
-            "sessions.changed",
-            {
-              sessionKey: event.sessionKey,
-              ...(eventAgentId ? { agentId: eventAgentId } : {}),
-              reason: event.reason,
-              ...(event.catalogChanged ? { catalogChanged: true } : {}),
-              parentSessionKey: event.parentSessionKey,
-              label: event.label,
-              displayName: event.displayName,
-              ts: Date.now(),
-              ...buildGatewaySessionSnapshot({
-                sessionRow,
-                includeSession: true,
-                agentId: eventAgentId,
-                label: event.label,
-                displayName: event.displayName,
-                parentSessionKey: event.parentSessionKey,
-                activeRunState,
-              }),
-              ...(event.swarmGroupId
-                ? {
-                    swarmGroupId: event.swarmGroupId,
-                    kind: event.kind,
-                    text: event.text,
-                  }
-                : {}),
-            },
-            connIds,
-            {
-              dropIfSlow: true,
-              ...(read && projection
-                ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
-                : {}),
-            },
-          );
-        }),
-      );
-    } finally {
-      observation?.dispose();
-    }
-  };
+  return publicationFailed ? false : undefined;
 }

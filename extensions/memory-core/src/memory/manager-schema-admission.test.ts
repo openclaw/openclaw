@@ -11,7 +11,10 @@ import {
   resolveOpenClawAgentSqlitePath,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-runtime";
-import { observeHostDataSql } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  requireNativeSqliteDatabase,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import {
   openNodeSqliteDatabase,
   readSqliteDatabaseWriteTokenForPath,
@@ -154,22 +157,21 @@ describe("memory index schema admission", () => {
         publishedAdmitted = true;
         await manager.sync({ reason: "test", force: true });
         expect.soft(schemaSql.splice(0), "shadow admission").toEqual([]);
-        expect(manager.status()).toMatchObject({
+        expect(await manager.statusAsync()).toMatchObject({
           files: 1,
           fts: { available: true },
           custom: { indexIdentity: { status: "valid" } },
         });
-        if (vectorEnabled) {
-          const { db } = openOpenClawAgentDatabase({ agentId: "main" });
-          expect(tableExists(db, "memory_index_chunks_vec")).toBe(true);
-          expect.soft(schemaSql.splice(0), "vector schema publication").toEqual([]);
-        }
         expect(await manager.search("Zebra")).toEqual([
           expect.objectContaining({ path: "memory/2026-01-12.md" }),
         ]);
         expect.soft(schemaSql, "search after vector publication").toEqual([]);
       } finally {
         observed.restore();
+      }
+      if (vectorEnabled) {
+        const { db } = openOpenClawAgentDatabase({ agentId: "main" });
+        expect(tableExists(db, "memory_index_chunks_vec")).toBe(true);
       }
     },
   );
@@ -182,16 +184,22 @@ describe("memory index schema admission", () => {
     expect(readSqliteDatabaseWriteTokenForPath(quarantinePath)).toBeDefined();
     using quarantine = openNodeSqliteDatabase(quarantinePath, { readOnly: true });
     expect(quarantine.isOpen).toBe(true);
-    const loaded = await loadSqliteVecExtension({ db: database.db });
+    const loaded = await loadSqliteVecExtension({ db: requireNativeSqliteDatabase(database.db) });
     expect(loaded.ok, loaded.error).toBe(true);
     const reader = openOpenClawAgentDatabaseReadOnly(options, { allowExtension: true });
     assert(reader.found, "Expected an admitted reader");
     const backend = bindSqliteWorkerBackend(
       { kind: "agent" },
-      { databasePath: database.path, database: database.db, admit: () => {} },
+      {
+        databasePath: database.path,
+        database: requireNativeSqliteDatabase(database.db),
+        admit: () => {},
+      },
     );
     try {
-      const readerExtension = await loadSqliteVecExtension({ db: reader.database.db });
+      const readerExtension = await loadSqliteVecExtension({
+        db: requireNativeSqliteDatabase(reader.database.db),
+      });
       expect(readerExtension.ok, readerExtension.error).toBe(true);
       expect(tableExists(database.db, "memory_index_chunks_vec")).toBe(false);
       expect(tableExists(reader.database.db, "memory_index_chunks_vec")).toBe(false);

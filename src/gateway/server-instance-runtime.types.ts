@@ -4,6 +4,7 @@ import type { SubagentCompletionToolHandoffRegistration } from "../agents/subage
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayNativeApprovalRuntime } from "../infra/approval-gateway-runtime.types.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
+import type { SessionControllerInput } from "../sessions/session-controller.contracts.js";
 import type {
   AgentTurnStartOwner,
   InternalAgentTurnFacadeFactory,
@@ -13,6 +14,8 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 export type GatewayInstanceAgentDispatchOptions = {
   /** Exact source custody to re-admit; the instance reads its private durable record itself. */
   restartRecoveryOperatorTarget?: import("./operator-run-recovery.js").OperatorRecoveryTarget;
+  /** Exact process-local source reserved by a durable lifecycle owner. */
+  controllerInput?: SessionControllerInput;
   assertAdmissionCurrent?: () => void;
   /** Refresh source facts immediately before dispatch; the accepted turn owns execution. */
   prepareDispatchCurrent?: () => Promise<void>;
@@ -23,9 +26,7 @@ export type GatewayInstanceAgentDispatchOptions = {
   expectFinal?: boolean;
   /** Instance-owned dispatch always uses a synthetic client. */
   forceSyntheticClient?: boolean;
-  internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
-  internalDeliverySuppressText?: boolean;
   /** Keep runtime error payloads (timeouts, provider failures) out of the delivered reply. */
   internalDeliverySuppressErrors?: boolean;
   onAccepted?: (payload: unknown) => void;
@@ -38,7 +39,7 @@ export type GatewayInstanceAgentDispatchOptions = {
 };
 
 export type GatewayApprovalEventPublisher = {
-  /** @deprecated Use publishRequestedAsync; removed in the next Plugin SDK major. */
+  /** @deprecated Use publishRequestedAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
   publishRequested: (kind: ChannelApprovalKind, request: unknown) => number;
   publishRequestedAsync?: (kind: ChannelApprovalKind, request: unknown) => Promise<number>;
   publishResolved: (kind: ChannelApprovalKind, resolved: unknown) => void;

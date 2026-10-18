@@ -1,7 +1,6 @@
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,6 +14,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import * as embeddedStateLock from "../infra/embedded-state-lock.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -83,6 +83,13 @@ describe("agent exec retained-state ownership", () => {
           ),
         );
         expect(result.exitCode).toBe(1);
+        expect(result.envelope).toMatchObject({
+          ok: false,
+          status: "error",
+          final: "done",
+          payloads: [{ text: "done" }],
+          error: { kind: "cleanup" },
+        });
         expect(cleanupScope.outcome).toBe("uncertain");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         if (fixture) {
@@ -137,36 +144,56 @@ describe("agent exec retained-state ownership", () => {
     expect((await fs.readdir(stateDir)).toSorted()).toEqual(["gateway-locks", "keep.txt", "tmp"]);
   });
 
-  it("releases the embedded state lock when SIGTERM aborts the run", async () => {
-    const { stateDir, lockPath } = stateFixture();
+  it.each([
+    { retained: false, signal: "SIGINT", exitCode: 130 },
+    { retained: false, signal: "SIGTERM", exitCode: 143 },
+    { retained: true, signal: "SIGINT", exitCode: 130 },
+    { retained: true, signal: "SIGTERM", exitCode: 143 },
+  ] as const)("settles state after $signal (retained: $retained)", async (testCase) => {
+    const fixture = testCase.retained ? stateFixture() : undefined;
     const signals = new EventEmitter();
     const entered = createDeferred();
     const runtime = createTestRuntime();
+    let stateDir = "";
     vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementation(() =>
       createSignalBridge(signals),
     );
-    const run = runAgentExecWithMock("inspect", { stateDir }, runtime, async (opts) => {
-      const signal = opts.abortSignal as AbortSignal;
-      const pending = new Promise<never>((_, reject) => {
-        signal.addEventListener(
-          "abort",
-          () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
-          { once: true },
-        );
-      });
-      entered.resolve();
-      return pending;
-    });
+    const run = runAgentExecWithMock(
+      "inspect",
+      fixture ? { stateDir: fixture.stateDir } : {},
+      runtime,
+      async (opts) => {
+        stateDir = process.env.OPENCLAW_STATE_DIR!;
+        await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
+        const signal = opts.abortSignal as AbortSignal;
+        const pending = new Promise<never>((_, reject) => {
+          signal.addEventListener(
+            "abort",
+            () => reject(Object.assign(new Error("agent exec aborted"), { name: "AbortError" })),
+            { once: true },
+          );
+        });
+        entered.resolve();
+        return pending;
+      },
+    );
     await Promise.race([
       entered.promise,
       run.then(() => {
         throw new Error("Run ended before signal admission");
       }),
     ]);
-    signals.emit("SIGTERM");
+    signals.emit(testCase.signal);
     await run;
-    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    expect(runtime.exit).toHaveBeenCalledWith(143, { resetStream: process.stderr });
+    if (fixture) {
+      await expect(fs.stat(fixture.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
+    } else {
+      await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(signals.listenerCount("SIGINT")).toBe(0);
+    expect(signals.listenerCount("SIGTERM")).toBe(0);
+    expect(runtime.exit).toHaveBeenCalledWith(testCase.exitCode, { resetStream: process.stderr });
   });
 });
 
@@ -180,7 +207,7 @@ it("closes temporary databases before removal and preserves independent handles"
   let runStateDir: string | undefined;
   let agentPath: string | undefined;
   let statePath: string | undefined;
-  const handles: DatabaseSync[] = [];
+  const handles: EngineConnection[] = [];
   const remove = fs.rm.bind(fs);
   const removed = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
     if (pathname === runStateDir) {

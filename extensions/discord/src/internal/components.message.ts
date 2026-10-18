@@ -21,7 +21,7 @@ import {
   colorToNumber,
 } from "./components.base.js";
 
-abstract class BaseButton extends BaseMessageInteractiveComponent {
+export abstract class Button extends BaseMessageInteractiveComponent {
   readonly type = ComponentType.Button;
   abstract label: string;
   emoji?: { name: string; id?: string; animated?: boolean };
@@ -41,9 +41,7 @@ abstract class BaseButton extends BaseMessageInteractiveComponent {
   }
 }
 
-export abstract class Button extends BaseButton {}
-
-export abstract class LinkButton extends BaseButton {
+export abstract class LinkButton extends Button {
   customId = "";
   abstract url: string;
   override style = ButtonStyle.Link;

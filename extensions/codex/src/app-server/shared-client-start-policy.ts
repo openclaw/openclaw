@@ -1,9 +1,9 @@
-import type { CodexAppServerStartOptions } from "./config-contracts.js";
+import type { CodexAppServerStartOptions, CodexPluginConfig } from "./config-contracts.js";
 import { resolveCodexComputerUseConfig } from "./config-runtime.js";
 
 export function shouldTrackDesktopGeneration(
   startOptions: CodexAppServerStartOptions,
-  pluginConfig: unknown,
+  pluginConfig: CodexPluginConfig | undefined,
 ): boolean {
   if (startOptions.transport !== "stdio") {
     return false;

@@ -113,6 +113,9 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 
 </Accordion>
 
+`mediaMaxMb` accepts fractional limits. Oversize warnings report the effective
+limit using binary units, so `mediaMaxMb: 0.5` appears as `512KB`.
+
 <Note>
 Multi-account precedence: with two or more account IDs configured, set `channels.telegram.defaultAccount` (or include `channels.telegram.accounts.default`) to make default routing explicit. Otherwise OpenClaw falls back to the first normalized account ID and `openclaw doctor` warns. Omitted account `dmPolicy`, `groupPolicy`, `allowFrom`, and `groupAllowFrom` inherit the channel root, not `accounts.default.*`. Explicit account policies win; if neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 </Note>

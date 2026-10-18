@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Insertable, Selectable, Updateable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { sandboxRegistryPublication } from "./registry-publication.js";
 import type { SandboxBrowserRegistryEntry, SandboxRegistryEntry } from "./registry.types.js";
@@ -46,7 +46,7 @@ function rowToUpdate(row: SandboxRegistryInsert): Updateable<DB["sandbox_registr
 }
 
 export function reserveSandboxRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   candidate: SandboxRegistryEntry,
 ): SandboxRegistryEntry {
   const rows = readRegistryRows(db, "container", {
@@ -85,7 +85,7 @@ export function shouldPruneSandboxRegistryEntry(
 }
 
 export function beginSandboxRegistryRemovalInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   {
     entry,
     reserveRuntime,
@@ -116,7 +116,10 @@ export function beginSandboxRegistryRemovalInDatabase(
   return next;
 }
 
-function insertSandboxRegistryRowInDatabase(db: DatabaseSync, row: SandboxRegistryInsert): void {
+function insertSandboxRegistryRowInDatabase(
+  db: EngineConnection,
+  row: SandboxRegistryInsert,
+): void {
   const { rows } = executeSqliteQuerySync(
     db,
     getNodeSqliteKysely<SandboxRegistryDatabase>(db)
@@ -163,7 +166,7 @@ export function assertSandboxRegistryGenerationCurrent(
 }
 
 function removeRegistryRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   containerName: string,
 ): void {
@@ -179,7 +182,7 @@ function removeRegistryRowInDatabase(
 }
 
 export function writeSandboxRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   write: SandboxRegistryWrite,
 ): void {
   if (write.operation === "removeGeneration") {
@@ -308,7 +311,7 @@ function registryEntryToRow({
 }
 
 export function insertSandboxRegistryRowIfMissingInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   row: SandboxRegistryInsert,
 ): void {
   const { rows } = executeSqliteQuerySync(
@@ -388,7 +391,7 @@ function normalizeSandboxRegistryEntry(entry: SandboxRegistryEntry): SandboxRegi
 }
 
 function readRegistryRows(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   filter?: { backendId: string; scopeKey: string },
 ): SandboxRegistryRow[] {
@@ -410,7 +413,7 @@ function readRegistryRows(
 }
 
 export function readSandboxRegistryEntryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   containerName: string,
 ): SandboxRegistryEntry | null {
   const row = readSandboxRegistryRowInDatabase(db, "container", containerName);
@@ -418,7 +421,7 @@ export function readSandboxRegistryEntryInDatabase(
 }
 
 function readSandboxRegistryRowInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   kind: "container" | "browser",
   containerName: string,
 ): SandboxRegistryRow | null {
@@ -435,14 +438,14 @@ function readSandboxRegistryRowInDatabase(
   );
 }
 
-export function readSandboxRegistryInDatabase(db: DatabaseSync): SandboxRegistryEntry[] {
+export function readSandboxRegistryInDatabase(db: EngineConnection): SandboxRegistryEntry[] {
   return readRegistryRows(db, "container")
     .map(rowToContainerEntry)
     .filter((entry): entry is SandboxRegistryEntry => entry !== null);
 }
 
 export function readSandboxRuntimeIdsInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   filter: { backendId: string; scopeKey: string },
 ): string[] {
   return readRegistryRows(db, "container", filter)
@@ -452,7 +455,7 @@ export function readSandboxRuntimeIdsInDatabase(
 }
 
 export function readSandboxBrowserRegistryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
 ): SandboxBrowserRegistryEntry[] {
   return readRegistryRows(db, "browser")
     .map(rowToBrowserEntry)

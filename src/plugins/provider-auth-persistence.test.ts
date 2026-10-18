@@ -367,9 +367,7 @@ describe("provider auth protected persistence", () => {
       }
       expect(rollbackError).toBeInstanceOf(AggregateError);
       await expect(staged.rollback()).rejects.toBe(rollbackError);
-      await expect(staged.commit()).rejects.toThrow(
-        "Cannot commit provider auth persistence after rollback failed",
-      );
+      await expect(staged.commit()).rejects.toBe(rollbackError);
       expect(
         await readSecretStoreValue({
           scope: { kind: "team" },

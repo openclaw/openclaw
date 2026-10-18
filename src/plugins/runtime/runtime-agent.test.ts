@@ -15,10 +15,10 @@ import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
   closeAgentWorkAdmissions,
-  interruptSessionWorkAdmissions,
-  isSessionLifecycleMutationActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  interruptSessionControllerEffects,
+  isSessionMutationActive,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as workerStore from "../../state/openclaw-state-worker-store.js";
@@ -291,7 +291,7 @@ describe("plugin runtime session creation", () => {
         },
       });
       await callbackStarted.promise;
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(true);
+      expect(isSessionMutationActive(storePath, [key])).toBe(true);
       expect(
         runtime.session.getSessionEntry({ sessionKey: key, readConsistency: "latest" }),
       ).toMatchObject({
@@ -317,7 +317,7 @@ describe("plugin runtime session creation", () => {
       const created = await creation;
       await work;
       expect(workRan).toBe(true);
-      expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(false);
+      expect(isSessionMutationActive(storePath, [key])).toBe(false);
       expect(created.entry.pluginExtensions).toEqual({
         codex: { supervision: { modelLocked: true } },
       });
@@ -655,7 +655,7 @@ describe("plugin runtime session creation", () => {
             initializationPending: true,
           },
         });
-        expect(isSessionLifecycleMutationActive(storePath, [key])).toBe(false);
+        expect(isSessionMutationActive(storePath, [key])).toBe(false);
         let workRan = false;
 
         await expect(
@@ -774,7 +774,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -806,7 +806,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
+    const mutation = runSessionMutation({
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -824,14 +824,20 @@ describe("plugin runtime session work admission", () => {
     await mutationStarted.promise;
 
     const snapshotRead = createDeferred();
-    const readEntry = sessionEntryRead.readSessionEntryReadOnlyInWorker;
+    const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
     using captureRead = vi
-      .spyOn(sessionEntryRead, "readSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce(async (...args) => {
-        const entry = await readEntry(...args);
-        snapshotRead.resolve();
-        return entry;
-      });
+      .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce((input, assertCurrent, consume, ...rest) =>
+        readEntry(
+          input,
+          assertCurrent,
+          async (...result) => {
+            snapshotRead.resolve();
+            return consume(...result);
+          },
+          ...rest,
+        ),
+      );
     const run = vi.fn(async () => {});
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
     try {
@@ -860,7 +866,7 @@ describe("plugin runtime session work admission", () => {
     });
     await workStarted.promise;
 
-    await interruptSessionWorkAdmissions({
+    await interruptSessionControllerEffects({
       scope: storePath,
       identities: [sessionKey, sessionId],
     });

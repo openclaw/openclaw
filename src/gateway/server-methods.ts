@@ -335,6 +335,7 @@ export async function handleGatewayRequest(
     const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
     const releaseForegroundWork = retainSessionListForegroundWork();
     let sessionAccessAuthority: GatewaySessionAccessAuthority | undefined;
+    let releaseSessionMutation: (() => void) | undefined;
     try {
       entry?.assertOpen();
       const requestMutationAuthority = readGatewayRequestMutationAuthority(opts);
@@ -372,6 +373,7 @@ export async function handleGatewayRequest(
         },
       });
       sessionAccessAuthority = authorization.sessionAccessAuthority;
+      releaseSessionMutation = authorization.sessionMutationAuthorization?.release;
       entry?.assertOpen();
       if (authorization.error) {
         respond(false, undefined, authorization.error);
@@ -476,6 +478,7 @@ export async function handleGatewayRequest(
             isWebchatConnect,
             respond: respondAuthorized,
             acceptsSerializedJson: opts.acceptsSerializedJson,
+            acceptsDeflatedSegments: opts.acceptsDeflatedSegments,
             context,
             signal,
             ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
@@ -508,6 +511,7 @@ export async function handleGatewayRequest(
           : undefined;
         chatSendPhase?.finish();
         return GatewayRpcDiagnostics.runHandler(
+          req.method,
           () =>
             sharing
               ? dispatchSharedRead(preparedHandler, handlerOptions, sharing, () => {
@@ -548,6 +552,7 @@ export async function handleGatewayRequest(
       }
       respond(false, undefined, error.error);
     } finally {
+      releaseSessionMutation?.();
       sessionAccessAuthority?.release();
       releaseForegroundWork();
       // Transport/import owners retain failures through their response and logging paths.

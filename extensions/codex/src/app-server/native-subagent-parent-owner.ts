@@ -363,6 +363,9 @@ export async function registerNativeSubagentParent(
         await Promise.allSettled([dependencies.submissions.drain(registeredState)]);
         await Promise.allSettled([dependencies.assignments.drain(registeredState)]);
         dependencies.prune(registeredState);
+        if (params.submissionStore !== registeredState.submissionStore) {
+          params.submissionStore?.release?.();
+        }
       })();
       return settlement;
     },

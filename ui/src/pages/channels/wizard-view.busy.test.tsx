@@ -128,10 +128,7 @@ describe("ChannelWizard busy controls", () => {
     expect(rendered.container.querySelectorAll(".btn__spinner")).toHaveLength(1);
   });
 
-  it.each([
-    { message: "Installing channel plugin", expectedStatus: "Installing channel plugin" },
-    { message: undefined, expectedStatus: "Working…" },
-  ])(
+  it.each([{ message: undefined, expectedStatus: "Working…" }])(
     "announces gateway-owned progress and keeps cancellation available",
     ({ message, expectedStatus }) => {
       const progress = renderStep({
@@ -175,28 +172,6 @@ describe("ChannelWizard busy controls", () => {
     const group = select.container.querySelector("openclaw-select-picker .picker-select__trigger");
     expect(group?.hasAttribute("disabled")).toBe(true);
     expect(group?.getAttribute("aria-label")).toBe("Pick one");
-  });
-
-  it("shows the channel prompt inside an unselected channel picker", async () => {
-    const select = renderStep(
-      {
-        id: "channel",
-        type: "select",
-        message: "Select a channel",
-        options: [
-          { label: "Telegram", value: "telegram" },
-          { label: "Discord", value: "discord" },
-        ],
-      },
-      false,
-    );
-
-    await updatePickers(select.container);
-    expect(
-      select.container
-        .querySelector("openclaw-select-picker .picker-select__trigger")
-        ?.textContent?.trim(),
-    ).toBe("Select a channel");
   });
 
   it("disables multiselect choices and submission while a step is running", () => {

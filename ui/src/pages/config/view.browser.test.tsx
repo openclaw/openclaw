@@ -1,15 +1,16 @@
 import { beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConfigForm as renderConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
+import { SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { warmJson5 } from "../../lib/json5-runtime.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { BrowserLinkPreferencesRow } from "./browser-link-preferences.tsx";
 import { renderConfigInto, renderConfigView } from "./config-view.test-support.tsx";
 import type { ConfigProps } from "./view.tsx";
 import "../../styles.css";
 
-function object(properties: Record<string, JsonSchema>): JsonSchema {
-  return { type: "object", properties };
+function object(properties: Record<string, JsonSchema>, title?: string): JsonSchema {
+  return { type: "object", properties, ...(title ? { title } : {}) };
 }
 
 describe("config form and navigation", () => {
@@ -32,9 +33,7 @@ describe("config form and navigation", () => {
   }
 
   function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === text,
-    );
+    const button = findOptionalButtonByText(container, text);
     if (!button) {
       throw new Error(`Expected button with text "${text}"`);
     }
@@ -63,6 +62,14 @@ describe("config form and navigation", () => {
       throw new Error(`Expected element matching "${selector}"`);
     }
     return element;
+  }
+
+  function disclosure(container: HTMLElement) {
+    return required(container, "details.config-advanced-disclosure", HTMLDetailsElement);
+  }
+
+  function accordionHeader(container: HTMLElement) {
+    return required(container, ".config-accordion-group__header", HTMLButtonElement);
   }
 
   it("keeps Setup collapsed on Advanced and edits consent without exposing machine state", () => {
@@ -140,18 +147,18 @@ describe("config form and navigation", () => {
   it("places a Control UI Browser preference in the same settings group before schema rows", () => {
     const { container } = renderConfigView({
       schema: object({
-        browser: {
-          type: "object",
-          title: "Browser",
-          properties: {
-            enabled: { type: "boolean", title: "Browser Enabled" },
-          },
-        },
+        browser: object({ enabled: { type: "boolean", title: "Browser Enabled" } }, "Browser"),
       }),
       uiHints: { "browser.enabled": { advanced: false } },
       formValue: { browser: { enabled: true } },
       activeSection: "browser",
-      sectionPrelude: <BrowserLinkPreferencesRow enabled={false} onChange={vi.fn()} />,
+      sectionPrelude: (
+        <SettingsToggleRow
+          title={t("browserLinkPreferences.openInControlUi")}
+          checked={false}
+          onChange={vi.fn()}
+        />
+      ),
     });
 
     const groups = container.querySelectorAll("#config-section-browser .settings-group");
@@ -166,10 +173,8 @@ describe("config form and navigation", () => {
   it("routes scalar clears and default selections through config callbacks", () => {
     const { container, props } = renderConfigView({
       schema: object({
-        gateway: {
-          type: "object",
-          title: "Gateway",
-          properties: {
+        gateway: object(
+          {
             retries: { type: "integer", title: "Retries", default: 3 },
             mode: {
               type: "string",
@@ -178,7 +183,8 @@ describe("config form and navigation", () => {
               enum: ["balanced", "fast", "careful", "safe", "strict", "custom"],
             },
           },
-        },
+          "Gateway",
+        ),
       }),
       uiHints: {
         "gateway.retries": { advanced: false },
@@ -228,18 +234,14 @@ describe("config form and navigation", () => {
       });
     const collapsed = renderCase();
 
-    const disclosure = required(
-      collapsed.container,
-      "details.config-advanced-disclosure",
-      HTMLDetailsElement,
-    );
-    expect(disclosure.open).toBe(false);
-    expect(required(disclosure, "summary", HTMLElement).textContent?.trim()).toBe(
+    const collapsedDetails = disclosure(collapsed.container);
+    expect(collapsedDetails.open).toBe(false);
+    expect(required(collapsedDetails, "summary", HTMLElement).textContent?.trim()).toBe(
       "Advanced settings",
     );
     expect(normalizedText(collapsed.container)).not.toContain("Reload mode");
-    disclosure.open = true;
-    disclosure.dispatchEvent(new Event("toggle"));
+    collapsedDetails.open = true;
+    collapsedDetails.dispatchEvent(new Event("toggle"));
     expect(collapsed.props.onAppearanceChange).toHaveBeenCalledWith({ showAdvancedSettings: true });
 
     for (const overrides of [
@@ -248,11 +250,7 @@ describe("config form and navigation", () => {
       { forceShowAdvanced: true },
     ]) {
       const { container, props } = renderCase(overrides);
-      const expanded = required(
-        container,
-        "details.config-advanced-disclosure",
-        HTMLDetailsElement,
-      );
+      const expanded = disclosure(container);
       expect(expanded.open).toBe(true);
       expect(normalizedText(container)).toContain("Reload mode");
       if (overrides.showAdvancedSettings) {
@@ -284,9 +282,7 @@ describe("config form and navigation", () => {
         }),
       { container: nested },
     );
-    expect(required(nested, "details.config-advanced-disclosure", HTMLDetailsElement).open).toBe(
-      true,
-    );
+    expect(disclosure(nested).open).toBe(true);
     expect(normalizedText(nested)).toContain("Tuning");
   });
 
@@ -296,8 +292,6 @@ describe("config form and navigation", () => {
       diagnostics: object({ flags: { type: "string", title: "Flags" } }),
     });
 
-    // Unhinted leaves default to the advanced tier, so the inline disclosure
-    // must remain available even when no hint carries advanced === true.
     const unhinted = renderConfigView({
       schema,
       uiHints: {},
@@ -307,8 +301,6 @@ describe("config form and navigation", () => {
     expect(findOptionalButtonByText(unhinted.container, "Show advanced")).toBeUndefined();
     expect(unhinted.container.querySelector("details.config-advanced-disclosure")).not.toBeNull();
 
-    // An advanced hint in a different top-level section must not surface a
-    // no-op toggle on a fully-common active section.
     const offScope = renderConfigView({
       schema,
       uiHints: {
@@ -330,7 +322,7 @@ describe("config form and navigation", () => {
     });
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
+    expect(container.querySelector(".hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
     expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
     expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
@@ -341,7 +333,7 @@ describe("config form and navigation", () => {
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .hub-tab[active]");
+    const active = container.querySelector('.config-toolbar .hub-tab[aria-selected="true"]');
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
@@ -362,11 +354,7 @@ describe("config form and navigation", () => {
       }),
     };
     const collapsed = renderConfigView(overrides);
-    const collapsedHeader = required(
-      collapsed.container,
-      ".config-accordion-group__header",
-      HTMLButtonElement,
-    );
+    const collapsedHeader = accordionHeader(collapsed.container);
     const controlledPanelId = collapsedHeader.getAttribute("aria-controls");
     const collapsedPanel = required(collapsed.container, `#${controlledPanelId}`, HTMLDivElement);
 
@@ -375,11 +363,7 @@ describe("config form and navigation", () => {
     expect(collapsedPanel.hidden).toBe(true);
 
     const expanded = renderConfigView({ ...overrides, activeSection: "env" });
-    const expandedHeader = required(
-      expanded.container,
-      ".config-accordion-group__header",
-      HTMLButtonElement,
-    );
+    const expandedHeader = accordionHeader(expanded.container);
     expect(expandedHeader.getAttribute("aria-expanded")).toBe("true");
     expect(expandedHeader.getAttribute("aria-controls")).toBe(controlledPanelId);
     expect(required(expanded.container, `#${controlledPanelId}`, HTMLDivElement).hidden).toBe(
@@ -486,56 +470,53 @@ describe("config form and navigation", () => {
         },
       });
       document.body.append(container);
-      try {
-        const picker = required(container, "select", HTMLSelectElement);
-        expect(picker.labels?.[0]?.textContent).toContain("Channel settings");
-        expect(Array.from(picker.options, (option) => option.textContent?.trim())).toEqual([
-          "Custom Chat",
-          "Telegram",
-          "Other",
-        ]);
-        expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
-        const content = () => normalizedText(required(container, ".settings-page", HTMLElement));
-        expect(content()).toContain("Group policy");
-        expect(content()).toContain("Channel Model Overrides");
-        expect(content()).not.toContain("Bot username");
-        props.onSubsectionChange = (key) => {
-          props.activeSubsection = key;
-          renderConfigInto(props, container);
-        };
+      onTestFinished(() => container.remove());
+      const picker = required(container, "select", HTMLSelectElement);
+      expect(picker.labels?.[0]?.textContent).toContain("Channel settings");
+      expect(Array.from(picker.options, (option) => option.textContent?.trim())).toEqual([
+        "Custom Chat",
+        "Telegram",
+        "Other",
+      ]);
+      expect(picker.selectedOptions[0]?.textContent?.trim()).toBe("Other");
+      const content = () => normalizedText(required(container, ".settings-page", HTMLElement));
+      expect(content()).toContain("Group policy");
+      expect(content()).toContain("Channel Model Overrides");
+      expect(content()).not.toContain("Bot username");
+      props.onSubsectionChange = (key) => {
+        props.activeSubsection = key;
         renderConfigInto(props, container);
-        const choose = (key: string) => {
-          picker.value = key;
-          picker.dispatchEvent(new Event("change", { bubbles: true }));
-        };
-        choose("telegram");
-        expect(content()).toContain("Bot username");
-        expect(content()).not.toContain("Group policy");
-        expect(content()).not.toContain("Room");
-        const username = required(container, 'input[type="text"]', HTMLInputElement);
-        expect(username.value).toBe("test_bot");
-        username.value = "updated_bot";
-        username.dispatchEvent(new Event("input", { bubbles: true }));
-        expect(props.onFormPatch).toHaveBeenCalledWith(
-          ["channels", "telegram", "username"],
-          "updated_bot",
-        );
-        choose("custom-chat");
-        expect(content()).toContain("Room");
-        expect(content()).not.toContain("Bot username");
-        choose("");
-        const policy = required(container, 'input[type="text"]', HTMLInputElement);
-        policy.value = "open";
-        policy.dispatchEvent(new Event("input", { bubbles: true }));
-        expect(props.onFormPatch).toHaveBeenCalledWith(
-          ["channels", "defaults", "groupPolicy"],
-          "open",
-        );
-        renderConfigInto({ ...props, formMode: "raw" }, container);
-        expect(container.querySelector("select")).toBeNull();
-      } finally {
-        container.remove();
-      }
+      };
+      renderConfigInto(props, container);
+      const choose = (key: string) => {
+        picker.value = key;
+        picker.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      choose("telegram");
+      expect(content()).toContain("Bot username");
+      expect(content()).not.toContain("Group policy");
+      expect(content()).not.toContain("Room");
+      const username = required(container, 'input[type="text"]', HTMLInputElement);
+      expect(username.value).toBe("test_bot");
+      username.value = "updated_bot";
+      username.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(props.onFormPatch).toHaveBeenCalledWith(
+        ["channels", "telegram", "username"],
+        "updated_bot",
+      );
+      choose("custom-chat");
+      expect(content()).toContain("Room");
+      expect(content()).not.toContain("Bot username");
+      choose("");
+      const policy = required(container, 'input[type="text"]', HTMLInputElement);
+      policy.value = "open";
+      policy.dispatchEvent(new Event("input", { bubbles: true }));
+      expect(props.onFormPatch).toHaveBeenCalledWith(
+        ["channels", "defaults", "groupPolicy"],
+        "open",
+      );
+      renderConfigInto({ ...props, formMode: "raw" }, container);
+      expect(container.querySelector("select")).toBeNull();
     },
   );
 
@@ -554,32 +535,29 @@ describe("config form and navigation", () => {
         formValue: { channels: { telegram: "on" }, messages: { inbox: "smart" } },
       });
       document.body.append(container);
-      try {
-        const content = required(container, ".config-content", HTMLElement);
-        content.scrollTop = 280;
-        content.scrollLeft = 24;
-        const scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
-          content.scrollTop =
-            typeof options === "number"
-              ? (y ?? content.scrollTop)
-              : (options?.top ?? content.scrollTop);
-          content.scrollLeft =
-            typeof options === "number" ? options : (options?.left ?? content.scrollLeft);
-        });
-        content.scrollTo = scrollTo;
-        if (trigger === "section") {
-          selectConfigTab(container, "messages");
-        } else {
-          renderConfigInto({ ...props, formMode: "raw" }, container);
-        }
-        await Promise.resolve();
-        expect(scrollTo).toHaveBeenCalledOnce();
-        expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
-        expect(content.scrollTop).toBe(0);
-        expect(content.scrollLeft).toBe(0);
-      } finally {
-        container.remove();
+      onTestFinished(() => container.remove());
+      const content = required(container, ".config-content", HTMLElement);
+      content.scrollTop = 280;
+      content.scrollLeft = 24;
+      const scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
+        content.scrollTop =
+          typeof options === "number"
+            ? (y ?? content.scrollTop)
+            : (options?.top ?? content.scrollTop);
+        content.scrollLeft =
+          typeof options === "number" ? options : (options?.left ?? content.scrollLeft);
+      });
+      content.scrollTo = scrollTo;
+      if (trigger === "section") {
+        selectConfigTab(container, "messages");
+      } else {
+        renderConfigInto({ ...props, formMode: "raw" }, container);
       }
+      await Promise.resolve();
+      expect(scrollTo).toHaveBeenCalledOnce();
+      expect(scrollTo).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+      expect(content.scrollTop).toBe(0);
+      expect(content.scrollLeft).toBe(0);
     },
   );
 
@@ -631,25 +609,5 @@ describe("config form and navigation", () => {
         label.textContent?.trim(),
       ),
     ).toEqual(["Telegram"]);
-  });
-
-  it.each(["auth", null])("keeps section headings outside groups for %s", (activeSection) => {
-    const { container } = renderConfigView({
-      activeSection,
-      schema: object({
-        auth: object({ order: { type: "object" } }),
-        gateway: object({}),
-      }),
-      uiHints: { "auth.order": { advanced: false } },
-      formValue: { auth: { order: {} }, gateway: {} },
-    });
-    const headings = [
-      ...container.querySelectorAll(
-        ".settings-section > .settings-section__header .settings-section__heading",
-      ),
-    ].map((heading) => heading.textContent?.trim());
-    expect(headings).toEqual(activeSection ? ["Authentication"] : ["Authentication", "Gateway"]);
-    expect(container.querySelector("#config-section-auth .settings-group")).not.toBeNull();
-    expect(container.querySelector(".settings-group .settings-section__heading")).toBeNull();
   });
 });

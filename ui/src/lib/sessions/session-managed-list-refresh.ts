@@ -20,6 +20,7 @@ import type {
   ManagedSessionListRefresh,
   ObservedSessionList,
 } from "./session-list-query.ts";
+import { sessionListReadNeedsEventRefresh } from "./session-list-query.ts";
 import {
   normalizeManagedSessionListQuery,
   requestSessionListParams,
@@ -30,7 +31,11 @@ import type { createSessionRosterObservations } from "./session-roster-observati
 export function getManagedSessionList(
   lists: Map<string, ManagedSessionList>,
   scope: SessionListScope,
-  refresh: (entry: ManagedSessionList, isCurrent: () => boolean) => Promise<void>,
+  refresh: (
+    entry: ManagedSessionList,
+    isCurrent: () => boolean,
+    immediate: boolean,
+  ) => Promise<void>,
 ): ManagedSessionList {
   const key = sessionListQueryKey(scope);
   const current = lists.get(key);
@@ -46,12 +51,13 @@ export function getManagedSessionList(
     receivedKeys: new Set(),
     startupRetryAttempt: 0,
     readGeneration: 0,
+    readRevision: 0,
     connectionEpoch: null,
     snapshot: { result: null, agentId: null, loading: false, error: null },
     listeners: new Set(),
     coordinator: createSessionEventRefreshCoordinator({
       active: false,
-      refresh: (isCurrent) => refresh(entry, isCurrent),
+      refresh: (isCurrent, immediate) => refresh(entry, isCurrent, immediate),
     }),
     pending: null,
     queued: null,
@@ -103,7 +109,7 @@ export function createSessionManagedListRefresh(
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "accept" | "stageObservedRows" | "mergeRows"
+      "accept" | "stageObservedRows" | "mergeRows" | "rowRevision"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
@@ -128,7 +134,7 @@ export function createSessionManagedListRefresh(
         (!refresh.background || !entry.queued || entry.queued.background)
       ) {
         entry.readGeneration += 1;
-        entry.queued = refresh;
+        entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
       }
       return entry.pending;
     }
@@ -160,9 +166,10 @@ export function createSessionManagedListRefresh(
           limit: next.append ? entry.query.limit : entry.retainedLimit,
           ...(next.append && next.offset !== undefined ? { offset: next.offset } : {}),
         };
+        const issuedRevision = nextRevision();
+        entry.readRevision = issuedRevision;
         publishManagedList(entry, { ...entry.snapshot, loading: true, error: null }, isCurrent);
         try {
-          const issuedRevision = nextRevision();
           const generation = entry.readGeneration;
           const readIsCurrent = () =>
             isCurrent() &&
@@ -213,6 +220,18 @@ export function createSessionManagedListRefresh(
             observed && next.append && requestParams.offset && previous
               ? appendSessionResults(previous, observed)
               : observed;
+          if (
+            sessionListReadNeedsEventRefresh(
+              previous,
+              result,
+              nextResult,
+              issuedRevision,
+              entry.scope,
+              observations.rowRevision,
+            )
+          ) {
+            entry.coordinator.schedule();
+          }
           const appending = Boolean(next.append && requestParams.offset && previous);
           const receivedKeys = new Set(appending ? entry.receivedKeys : []);
           for (const row of response.sessions) {
@@ -312,7 +331,7 @@ export function createSessionManagedListRefresh(
         entry.pending = null;
         if (entry.queued?.background && isCurrent() && isPageActive()) {
           // Release this request's admission before scheduling its automatic successor.
-          entry.coordinator.schedule();
+          entry.coordinator.schedule(entry.queued.immediate);
         }
       }
     });
@@ -329,7 +348,7 @@ export function createSessionManagedListRefresh(
       return refreshManagedList(entry, refresh);
     }
     if (!entry.queued || (refresh.invalidated && entry.queued.background)) {
-      entry.queued = refresh;
+      entry.queued = { ...refresh, immediate: refresh.immediate || entry.queued?.immediate };
     }
     return host.background(entry, async () => {
       if (isCurrent() && managedLists.get(entry.key) === entry && entry.listeners.size > 0) {

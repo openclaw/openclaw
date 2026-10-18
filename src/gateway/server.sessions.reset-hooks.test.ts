@@ -1,16 +1,24 @@
-// Session reset hook tests cover before/after reset payloads, transcript reset
-// events, CLI bindings, browser cleanup, and active-run shutdown.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
-import { listSessionEntriesCore, loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  listSessionEntriesCore,
+  loadSessionEntry,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginHookSessionContext } from "../plugins/session-end-transcript.js";
 import { readAttachedSessionEndTranscriptSourceForTest } from "../plugins/session-end-transcript.test-support.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
-import { embeddedRunMock, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsHandlerTestHarness,
   sessionHookMocks,
@@ -34,12 +42,7 @@ afterEach(async () => {
   pendingHookCleanups.clear();
 });
 
-type HookEventRecord = Record<string, unknown> & {
-  context?: Record<string, unknown> & {
-    previousSessionEntry?: { sessionId?: string };
-  };
-  messages?: Array<{ role?: string; content?: unknown }>;
-};
+type HookEventRecord = Record<string, unknown>;
 
 type CommandNewHookEvent = {
   type: string;
@@ -48,16 +51,7 @@ type CommandNewHookEvent = {
   context?: {
     agentId?: string;
     commandSource?: string;
-    previousSessionEntry?: { sessionId?: string };
   };
-};
-
-type SessionEntryWithCliBindings = {
-  agentHarnessId?: string;
-  sessionId?: string;
-  claudeCliSessionId?: string;
-  cliSessionBindings?: unknown;
-  cliSessionIds?: unknown;
 };
 
 function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord, HookEventRecord] {
@@ -68,24 +62,6 @@ function firstHookCall(mock: { mock: { calls: unknown[][] } }): [HookEventRecord
   return [call[0] as HookEventRecord, call[1] as HookEventRecord];
 }
 
-function expectTranscriptResetEvent(params: {
-  event: HookEventRecord;
-  sessionFile: string;
-  content: string;
-}) {
-  expect(params.event.sessionFile).toBe(params.sessionFile);
-  expect(params.event.reason).toBe("new");
-  expect(params.event.messages).toHaveLength(1);
-  expect(params.event.messages?.[0]?.role).toBe("user");
-  expect(params.event.messages?.[0]?.content).toBe(params.content);
-}
-
-function expectMainHookContext(context: HookEventRecord, sessionId: string) {
-  expect(context.agentId).toBe("main");
-  expect(context.sessionKey).toBe("agent:main:main");
-  expect(context.sessionId).toBe(sessionId);
-}
-
 function expectStringValue(value: unknown, label: string): string {
   expect(typeof value, label).toBe("string");
   if (typeof value !== "string") {
@@ -94,14 +70,8 @@ function expectStringValue(value: unknown, label: string): string {
   return value;
 }
 
-function expectStringWithPrefix(value: unknown, prefix: string, label: string): string {
-  const text = expectStringValue(value, label);
-  expect(text.startsWith(prefix), label).toBe(true);
-  expect(text.length, label).toBeGreaterThan(prefix.length);
-  return text;
-}
-
-async function configureGlobalAgentSessionStore(dir: string) {
+async function withGlobalAgentSessionStore(run: (storePath: string) => Promise<void>) {
+  const { dir } = await createSessionStoreDir();
   const storeTemplate = path.join(dir, "agents", "{agentId}", "sessions", "sessions.json");
   const configPath = expectStringValue(process.env.OPENCLAW_CONFIG_PATH, "OPENCLAW_CONFIG_PATH");
   const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
@@ -109,128 +79,57 @@ async function configureGlobalAgentSessionStore(dir: string) {
   testState.sessionConfig = { scope: "global" };
   await fs.writeFile(
     configPath,
-    `${JSON.stringify(
-      {
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId: "main" } },
-          entries: { main: {}, work: {} },
-        },
-        session: { scope: "global", store: storeTemplate },
+    JSON.stringify({
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
       },
-      null,
-      2,
-    )}\n`,
+      session: { scope: "global", store: storeTemplate },
+    }),
     "utf-8",
   );
   clearRuntimeConfigSnapshot();
   clearConfigCache();
-  return {
-    storeTemplate,
-    configPath,
-    mainStorePath: storeTemplate.replace("{agentId}", "main"),
-    workStorePath: storeTemplate.replace("{agentId}", "work"),
-    cleanup: async () => {
-      testState.sessionStorePath = undefined;
-      testState.sessionConfig = undefined;
-      await fs.writeFile(configPath, "{}\n", "utf-8");
-      clearRuntimeConfigSnapshot();
-      clearConfigCache();
-    },
-  };
-}
-
-async function withGlobalAgentSessionStore<T>(
-  dir: string,
-  run: (globalConfig: Awaited<ReturnType<typeof configureGlobalAgentSessionStore>>) => Promise<T>,
-) {
-  const globalConfig = await configureGlobalAgentSessionStore(dir);
   try {
-    return await run(globalConfig);
+    await run(storeTemplate.replace("{agentId}", "work"));
   } finally {
-    await globalConfig.cleanup();
+    testState.sessionStorePath = undefined;
+    testState.sessionConfig = undefined;
+    await fs.writeFile(configPath, "{}\n", "utf-8");
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
   }
 }
 
-async function writeGlobalSessionFile(storePath: string, sessionId: string) {
-  const agentId = path.basename(path.dirname(path.dirname(storePath)));
-  await writeSessionStore({
-    agentId,
-    entries: {
-      global: sessionStoreEntry(sessionId),
-    },
-    storePath,
-  });
-}
-
-async function writeMessageTranscript(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  agentId?: string;
-  content: string;
-  messageId?: string;
-}) {
-  await seedSessionTranscript({
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-    messages: [{ role: "user", content: params.content, id: params.messageId ?? "m1" }],
-  });
-}
-
-async function writeMainTranscriptSession(params: {
-  sessionId: string;
-  content: string;
-  messageId?: string;
-}) {
-  const storePath = expectStringValue(testState.sessionStorePath, "testState.sessionStorePath");
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: params.sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
-  await writeMessageTranscript({
-    ...params,
-    agentId: "main",
-    sessionKey: "agent:main:main",
-    storePath,
-  });
-  return formatSqliteSessionFileMarker({
-    agentId: "main",
-    sessionId: params.sessionId,
-    storePath,
-  });
-}
-
-function loadEntry(params: { agentId?: string; sessionKey: string; storePath: string }) {
-  return loadSessionEntry({
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-    storePath: params.storePath,
-  });
-}
-
-async function writeMainSessionEntry(
+async function writeStoredSession(
   sessionId: string,
-  overrides: Parameters<typeof sessionStoreEntry>[1] = {},
+  {
+    key = "main",
+    content,
+    messageId = "m1",
+    ...entry
+  }: Parameters<typeof sessionStoreEntry>[1] & {
+    key?: string;
+    content?: string;
+    messageId?: string;
+  } = {},
 ) {
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry(sessionId, overrides),
-    },
-  });
+  const storePath = expectStringValue(testState.sessionStorePath, "testState.sessionStorePath");
+  await writeSessionStore({ entries: { [key]: sessionStoreEntry(sessionId, entry) } });
+  if (content !== undefined) {
+    await seedSessionTranscript({
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${key}`,
+      storePath,
+      messages: [{ role: "user", content, id: messageId }],
+    });
+  }
+  return formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath });
 }
 
-async function resetMainSession() {
-  return resetSession("main");
-}
-
-async function resetSession(key: string) {
+async function resetSession(key = "main") {
   const reset = await directSessionReq<{ ok: true; key: string }>("sessions.reset", {
     key,
     reason: "new",
@@ -239,13 +138,30 @@ async function resetSession(key: string) {
   return reset;
 }
 
-async function createFromMainSession(params: { emitCommandHooks?: boolean } = {}) {
-  const result = await directSessionReq<{ ok: boolean; key: string }>("sessions.create", {
-    parentSessionKey: "main",
-    ...params,
-  });
-  expect(result.ok).toBe(true);
-  return result;
+async function resetWithBroadcast(key: string, connId: string) {
+  const broadcast = vi.fn();
+  const reset = await directSessionReq<{ key: string; deleted?: boolean }>(
+    "sessions.reset",
+    { key, reason: "reset" },
+    {
+      context: {
+        broadcastToConnIds: broadcast,
+        getSessionEventSubscriberConnIds: () => new Set([connId]),
+      },
+    },
+  );
+  expect(reset.ok).toBe(true);
+  return { reset, broadcast };
+}
+
+function createFromMainSession(params: { emitCommandHooks?: boolean; key?: string } = {}) {
+  return directSessionReq<{ key: string; sessionId: string; runStarted: boolean }>(
+    "sessions.create",
+    {
+      parentSessionKey: "main",
+      ...params,
+    },
+  );
 }
 
 async function performSessionReset(params: {
@@ -254,48 +170,28 @@ async function performSessionReset(params: {
   reason: "new" | "reset";
   commandSource: string;
   assertCurrent?: () => void;
-  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
   const { performGatewaySessionReset } = await import("./session-reset-service.js");
   return performGatewaySessionReset({ ...params, workerPlacementContext: {} });
 }
 
-function expectResetErrorMessage(
-  reset: Awaited<ReturnType<typeof performSessionReset>>,
-  message: string,
-) {
-  expect(reset.ok).toBe(false);
-  if (reset.ok) {
-    throw new Error("expected reset to fail");
-  }
-  expect(reset.error.message).toBe(message);
-}
-
-function isCommandNewHookEvent(event: unknown): event is CommandNewHookEvent {
+function isCommandHookEvent(event: unknown, action: string): event is CommandNewHookEvent {
   return (
     Boolean(event) &&
     typeof event === "object" &&
     (event as { type?: unknown }).type === "command" &&
-    (event as { action?: unknown }).action === "new"
+    (event as { action?: unknown }).action === action
   );
 }
 
-function commandNewHookEvents() {
+function commandHookEvents(action = "new") {
   return (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
     .map((call) => call[0])
-    .filter(isCommandNewHookEvent);
+    .filter((event) => isCommandHookEvent(event, action));
 }
 
 function expectSingleCommandHookEvent(action: "new" | "reset") {
-  const events = (sessionHookMocks.triggerInternalHook.mock.calls as unknown as Array<[unknown]>)
-    .map((call) => call[0])
-    .filter(
-      (event): event is CommandNewHookEvent =>
-        Boolean(event) &&
-        typeof event === "object" &&
-        (event as { type?: unknown }).type === "command" &&
-        (event as { action?: unknown }).action === action,
-    );
+  const events = commandHookEvents(action);
   expect(events).toHaveLength(1);
   const event = events[0];
   if (!event) {
@@ -309,61 +205,54 @@ function expectSingleCommandHookEvent(action: "new" | "reset") {
 function claudeCliBindings(sessionId: string) {
   return {
     claudeCliSessionId: sessionId,
-    cliSessionBindings: {
-      "claude-cli": { sessionId },
-    },
+    cliSessionBindings: { "claude-cli": { sessionId } },
     cliSessionIds: { "claude-cli": sessionId },
   };
 }
 
-function cliBoundSessionEntry(
-  sessionId: string,
-  cliSessionId: string,
-  overrides: Parameters<typeof sessionStoreEntry>[1] = {},
-) {
-  return sessionStoreEntry(sessionId, {
-    ...overrides,
-    ...claudeCliBindings(cliSessionId),
-  });
-}
-
-async function resolveGatewaySessionStorePathForKey(key: string) {
-  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTarget }] = await Promise.all([
+async function loadGatewaySessionStoreForKey(key: string) {
+  const [{ getRuntimeConfig }, { resolveGatewaySessionStoreTargetInWorker }] = await Promise.all([
     import("../config/config.js"),
-    import("./session-utils.js"),
+    import("./session-utils-store-worker.js"),
   ]);
-  return resolveGatewaySessionStoreTarget({
+  const { storePath } = await resolveGatewaySessionStoreTargetInWorker({
     cfg: getRuntimeConfig(),
     key,
-  }).storePath;
-}
-
-async function loadGatewaySessionStoreForKey(key: string) {
-  const gatewayStorePath = await resolveGatewaySessionStorePathForKey(key);
+  });
   return Object.fromEntries(
-    listSessionEntriesCore({ storePath: gatewayStorePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
+    listSessionEntriesCore({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
 }
 
-function expectCliBindingsCleared(
-  nextEntry: SessionEntryWithCliBindings | undefined,
-  previousSessionId: string,
-) {
-  expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).toBe(previousSessionId);
-  expect(nextEntry?.agentHarnessId).toBeUndefined();
-  expect(nextEntry?.claudeCliSessionId).toBeUndefined();
-  expect(nextEntry?.cliSessionBindings).toBeUndefined();
-  expect(nextEntry?.cliSessionIds).toBeUndefined();
+function expectNoCreationHooks() {
+  expect(commandHookEvents()).toHaveLength(0);
+  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
+  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+}
+
+function lifecycleEvents(): [HookEventRecord, HookEventRecord] {
+  expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
+  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
+  return [
+    firstHookCall(sessionLifecycleHookMocks.runSessionEnd)[0],
+    firstHookCall(sessionLifecycleHookMocks.runSessionStart)[0],
+  ];
+}
+
+async function withMainDmScope(run: () => Promise<void>) {
+  testState.sessionConfig = { dmScope: "main" };
+  try {
+    await run();
+  } finally {
+    testState.sessionConfig = undefined;
+  }
 }
 
 test("sessions.reset removes automatic recovery state from the replacement session", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-recovery", "hello");
-  await writeMainSessionEntry("sess-recovery", {
+  await writeStoredSession("sess-recovery", {
     abortedLastRun: true,
     restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration: "generation-1" }],
     mainRestartRecovery: {
@@ -374,9 +263,7 @@ test("sessions.reset removes automatic recovery state from the replacement sessi
         lifecycleGeneration: "generation-1",
         tokens: ["foreground-owner"],
       },
-      tombstone: {
-        reason: "exhausted",
-      },
+      tombstone: { reason: "exhausted" },
     },
     subagentRecovery: {
       automaticAttempts: 2,
@@ -387,12 +274,11 @@ test("sessions.reset removes automatic recovery state from the replacement sessi
     },
   });
 
-  await resetMainSession();
+  await resetSession();
 
   const store = await loadGatewaySessionStoreForKey("main");
   const replacement = store["agent:main:main"];
-  expect(replacement?.sessionId).toBe("sess-recovery");
-  expect(replacement?.abortedLastRun).toBe(false);
+  expect(replacement).toMatchObject({ sessionId: "sess-recovery", abortedLastRun: false });
   expect(replacement?.restartRecoveryRuns).toBeUndefined();
   expect((replacement as InternalSessionEntry | undefined)?.mainRestartRecovery).toBeUndefined();
   expect(replacement?.subagentRecovery).toBeUndefined();
@@ -401,7 +287,7 @@ test("sessions.reset removes automatic recovery state from the replacement sessi
 test("sessions.reset does not begin cleanup after losing lifecycle ownership", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeMainSessionEntry("sess-main");
+  await writeStoredSession("sess-main");
   let ownershipChecks = 0;
 
   await expect(
@@ -425,30 +311,17 @@ test("sessions.reset does not begin cleanup after losing lifecycle ownership", a
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
 });
 
-test("sessions.reset rejects selected global agentId conflicts", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async () => {
+test.each([
+  { key: "agent:main:main", agentId: "work", message: "session key agent does not match agentId" },
+  { key: "agent:typo:main", agentId: undefined, message: "Unknown agent id: typo" },
+])("sessions.reset rejects invalid global selection: $message", async ({ message, ...target }) => {
+  await withGlobalAgentSessionStore(async () => {
     const reset = await performSessionReset({
-      key: "agent:main:main",
-      agentId: "work",
+      ...target,
       reason: "reset",
       commandSource: "gateway:sessions.reset",
     });
-
-    expectResetErrorMessage(reset, "session key agent does not match agentId");
-  });
-});
-
-test("sessions.reset rejects unknown selected global agents", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async () => {
-    const reset = await performSessionReset({
-      key: "agent:typo:main",
-      reason: "reset",
-      commandSource: "gateway:sessions.reset",
-    });
-
-    expectResetErrorMessage(reset, "Unknown agent id: typo");
+    expect(reset).toMatchObject({ ok: false, error: { message } });
   });
 });
 
@@ -456,9 +329,9 @@ test.each(["!!!", "   "])(
   "sessions.reset rejects an unrepresentable explicit agent %j without resetting main",
   async (agentId) => {
     const { storePath } = await createSessionStoreDir();
-    await writeMainSessionEntry("sess-preserved");
+    await writeStoredSession("sess-preserved");
     const scope = { agentId: "main", sessionKey: "agent:main:main", storePath };
-    const before = loadEntry(scope);
+    const before = loadSessionEntry(scope);
 
     const reset = await directSessionReq("sessions.reset", {
       key: scope.sessionKey,
@@ -470,37 +343,26 @@ test.each(["!!!", "   "])(
       code: "INVALID_REQUEST",
       message: expect.stringContaining("Unknown agent id"),
     });
-    expect(loadEntry(scope)).toEqual(before);
+    expect(loadSessionEntry(scope)).toEqual(before);
     expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
   },
 );
 
 test("sessions.reset emits inferred selected global agent scope", async () => {
-  const { dir } = await createSessionStoreDir();
-  await withGlobalAgentSessionStore(dir, async (globalConfig) => {
-    await writeGlobalSessionFile(globalConfig.workStorePath, "sess-work-global");
-    const broadcast = vi.fn();
-    const reset = await directSessionReq<{ ok: true; key: string }>(
-      "sessions.reset",
-      { key: "agent:work:main", reason: "reset" },
-      {
-        context: {
-          broadcastToConnIds: broadcast,
-          getSessionEventSubscriberConnIds: () => new Set(["conn-work"]),
-        },
-      },
-    );
-
-    expect(reset.ok).toBe(true);
-    expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-    expect(broadcast.mock.calls[0]?.[1]).toEqual(
-      expect.objectContaining({
-        sessionKey: "global",
-        agentId: "work",
-        reason: "reset",
-      }),
-    );
-    expect(broadcast.mock.calls[0]?.[2]).toEqual(new Set(["conn-work"]));
+  await withGlobalAgentSessionStore(async (storePath) => {
+    await writeSessionStore({
+      agentId: "work",
+      storePath,
+      entries: { global: sessionStoreEntry("sess-work-global") },
+    });
+    const { broadcast } = await resetWithBroadcast("agent:work:main", "conn-work");
+    for (const [index, name] of ["socket.drain", "sessions.changed"].entries()) {
+      expect(broadcast.mock.calls[index]?.slice(0, 3)).toEqual([
+        name,
+        expect.objectContaining({ sessionKey: "global", agentId: "work", reason: "reset" }),
+        new Set(["conn-work"]),
+      ]);
+    }
     const hookEvent = expectSingleCommandHookEvent("reset");
     expect(hookEvent.sessionKey).toBe("global");
     expect(hookEvent.context?.agentId).toBe("work");
@@ -509,116 +371,118 @@ test("sessions.reset emits inferred selected global agent scope", async () => {
 
 test("sessions.reset of an incognito session broadcasts a delete, not a reset", async () => {
   await createSessionStoreDir();
-  await writeSessionStore({
-    entries: {
-      "incognito-chat": sessionStoreEntry("sess-incognito", { incognito: true }),
-    },
-  });
-  const broadcast = vi.fn();
-  const reset = await directSessionReq<{ ok: true; key: string; deleted?: boolean }>(
-    "sessions.reset",
-    { key: "incognito-chat", reason: "reset" },
-    {
-      context: {
-        broadcastToConnIds: broadcast,
-        getSessionEventSubscriberConnIds: () => new Set(["conn-incognito"]),
-      },
-    },
-  );
-
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.deleted).toBe(true);
-  const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-  expect(
-    readAttachedSessionEndTranscriptSourceForTest(incognitoEndContext as PluginHookSessionContext),
-  ).toEqual({
-    available: false,
-    reason: "incognito-deleted",
-  });
-  // The row is gone; only reason "delete" makes clients drop it and navigate away.
-  expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-  expect(broadcast.mock.calls[0]?.[1]).toEqual({
-    sessionKey: reset.payload?.key,
+  const location = {
     agentId: "main",
-    sessionId: "sess-incognito",
-    reason: "delete",
-    ts: expect.any(Number),
-  });
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+  };
+  const sessionKey = "agent:main:dashboard:incognito-chat";
+  const scope = { agentId: "main", storePath: location.path, sessionKey };
+  try {
+    await upsertSessionEntryCore(scope, sessionStoreEntry("sess-incognito", { incognito: true }));
+    const { reset, broadcast } = await resetWithBroadcast(sessionKey, "conn-incognito");
+    expect(reset.payload?.deleted).toBe(true);
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    const [, incognitoEndContext] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
+    const transcript = readAttachedSessionEndTranscriptSourceForTest(
+      incognitoEndContext as PluginHookSessionContext,
+    );
+    expect(transcript).toEqual({ available: false, reason: "incognito-deleted" });
+    // The row is gone; only reason "delete" makes clients drop it and navigate away.
+    expect(broadcast.mock.calls[0]?.[0]).toBe("socket.drain");
+    expect(broadcast.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ reason: "delete" }));
+    expect(broadcast.mock.calls[1]?.[0]).toBe("sessions.changed");
+    expect(broadcast.mock.calls[1]?.[1]).toEqual({
+      sessionKey: reset.payload?.key,
+      agentId: "main",
+      sessionId: "sess-incognito",
+      reason: "delete",
+      ts: expect.any(Number),
+    });
+  } finally {
+    memorySessionActorOwners.closeDatabase(location);
+  }
 });
 
 test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks against parent (#76957)", async () => {
   await createSessionStoreDir();
-  const transcriptPath = await writeMainTranscriptSession({
-    sessionId: "sess-parent-hooks",
+  const transcriptPath = await writeStoredSession("sess-parent-hooks", {
     content: "remember this before new",
   });
 
   beforeResetHookState.hasBeforeResetHook = true;
 
-  await createFromMainSession({ emitCommandHooks: true });
+  expect((await createFromMainSession({ emitCommandHooks: true })).ok).toBe(true);
 
   expect(beforeResetHookMocks.runBeforeReset).toHaveBeenCalledTimes(1);
   const [beforeResetEvent, beforeResetContext] = firstHookCall(beforeResetHookMocks.runBeforeReset);
-  expectTranscriptResetEvent({
-    event: beforeResetEvent,
+  expect(beforeResetEvent).toMatchObject({
     sessionFile: transcriptPath,
-    content: "remember this before new",
+    reason: "new",
+    messages: [{ role: "user", content: "remember this before new" }],
   });
-  expectMainHookContext(beforeResetContext, "sess-parent-hooks");
+  expect(beforeResetContext).toMatchObject({
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    sessionId: "sess-parent-hooks",
+  });
 
-  expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-  expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
-  const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-  const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-  expect(endEvent.sessionId).toBe("sess-parent-hooks");
-  expect(endEvent.sessionKey).toBe("agent:main:main");
-  expect(endEvent.reason).toBe("new");
-  expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
-  expect(endEvent.nextSessionKey).toBe(startEvent.sessionKey);
+  const [endEvent, startEvent] = lifecycleEvents();
+  expect(endEvent).toMatchObject({
+    sessionId: "sess-parent-hooks",
+    sessionKey: "agent:main:main",
+    reason: "new",
+    nextSessionId: startEvent.sessionId,
+    nextSessionKey: startEvent.sessionKey,
+  });
   expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
   expect(startEvent.sessionId).toBeTypeOf("string");
   expect(startEvent.sessionId).not.toBe("");
-  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
+  const key = expectStringValue(startEvent.sessionKey, "created session key");
+  expect(key).toMatch(/^agent:main:dashboard:[\s\S]+$/);
 });
 
 test("sessions.create waits for the parent run lifecycle before firing hooks", async () => {
-  await createSessionStoreDir();
-  await writeMainSessionEntry("sess-active-parent");
-  embeddedRunMock.activeIds.add("sess-active-parent");
-
-  const result = await directSessionReq("sessions.create", {
-    key: "tui-next",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
+  const { storePath } = await createSessionStoreDir();
+  await writeStoredSession("sess-active-parent");
+  const operation = createReplyOperation({
+    sessionKey: "agent:main:main",
+    sessionId: "sess-active-parent",
+    agentId: "main",
+    resetTriggered: false,
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: "agent:main:main",
+      incarnation: "sess-active-parent",
+      agentId: "main",
+    }),
   });
+  operation.setPhase("running");
+  try {
+    const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
 
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
-  expect(result.error?.message).toMatch(/parent session.*still active/i);
-  expect(commandNewHookEvents()).toHaveLength(0);
-  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
-  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
+    expect(result.error?.message).toMatch(/parent session.*still active/i);
+    expectNoCreationHooks();
+  } finally {
+    operation.complete();
+  }
 });
 
 test("sessions.create waits for the parent work admission to release", async () => {
   const { storePath } = await createSessionStoreDir();
-  await writeMainSessionEntry("sess-finishing-parent");
-  const admission = await beginSessionWorkAdmission({
+  await writeStoredSession("sess-finishing-parent");
+  const admission = await beginSessionEffect({
     scope: storePath,
     identities: ["agent:main:main", "sess-finishing-parent"],
     assertAllowed: () => {},
   });
   try {
-    const result = await directSessionReq("sessions.create", {
-      key: "tui-next",
-      parentSessionKey: "main",
-      emitCommandHooks: true,
-    });
+    const result = await createFromMainSession({ key: "tui-next", emitCommandHooks: true });
 
     expect(result.ok).toBe(false);
     expect(result.error).toMatchObject({ code: "UNAVAILABLE" });
-    expect(commandNewHookEvents()).toHaveLength(0);
+    expect(commandHookEvents()).toHaveLength(0);
     expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
   } finally {
     admission.release();
@@ -627,21 +491,17 @@ test("sessions.create waits for the parent work admission to release", async () 
 
 test("sessions.create fences new parent work while rollover hooks run", async () => {
   const { storePath } = await createSessionStoreDir();
-  await writeMainSessionEntry("sess-parent-fenced");
+  await writeStoredSession("sess-parent-fenced");
   const hookEntered = createDeferred();
   const releaseHook = createDeferred();
   const admissionController = new AbortController();
-  let admission: ReturnType<typeof beginSessionWorkAdmission> | undefined;
+  let admission: ReturnType<typeof beginSessionEffect> | undefined;
   sessionHookMocks.triggerInternalHook.mockImplementationOnce(async () => {
     hookEntered.resolve();
     await releaseHook.promise;
   });
 
-  const creating = directSessionReq("sessions.create", {
-    key: "tui-next",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-  });
+  const creating = createFromMainSession({ key: "tui-next", emitCommandHooks: true });
   const settledWork: Promise<unknown>[] = [Promise.allSettled([creating])];
   let cleaningUp: Promise<void> | undefined;
   const cleanup = () => {
@@ -668,7 +528,7 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
     expect(sessionHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
 
     let admissionStarted = false;
-    admission = beginSessionWorkAdmission({
+    admission = beginSessionEffect({
       scope: storePath,
       identities: ["agent:main:main", "sess-parent-fenced"],
       signal: admissionController.signal,
@@ -691,74 +551,36 @@ test("sessions.create fences new parent work while rollover hooks run", async ()
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
-  const { storePath } = await createSessionStoreDir();
-
-  testState.sessionConfig = { dmScope: "main" };
-  try {
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-parent-dms",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    await writeMessageTranscript({
-      agentId: "main",
-      sessionId: "sess-parent-dms",
-      sessionKey: "agent:main:main",
-      storePath,
+  await createSessionStoreDir();
+  await withMainDmScope(async () => {
+    await writeStoredSession("sess-parent-dms", {
       content: "hello before /new",
     });
-    embeddedRunMock.activeIds.add("sess-parent-dms");
-
-    const result = await directSessionReq<{
-      ok: boolean;
-      key: string;
-      sessionId: string;
-      runStarted: boolean;
-    }>("sessions.create", {
-      parentSessionKey: "main",
-      emitCommandHooks: true,
-    });
+    const result = await createFromMainSession({ emitCommandHooks: true });
     expect(result.ok).toBe(true);
     // Reset-in-place: response key matches the parent main key, NOT a dashboard child.
-    expect(result.payload?.key).toBe("agent:main:main");
-    expect(result.payload?.runStarted).toBe(false);
-    expect(result.payload?.sessionId).toBe("sess-parent-dms");
-
-    expect(sessionLifecycleHookMocks.runSessionEnd).toHaveBeenCalledTimes(1);
-    expect(sessionLifecycleHookMocks.runSessionStart).toHaveBeenCalledTimes(1);
-    const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
-    const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-    expect(endEvent.sessionId).toBe("sess-parent-dms");
-    expect(endEvent.sessionKey).toBe("agent:main:main");
-    expect(endEvent.reason).toBe("new");
-    expect(startEvent.sessionKey).toBe("agent:main:main");
-    expect(startEvent.resumedFrom).toBe("sess-parent-dms");
-  } finally {
-    testState.sessionConfig = undefined;
-  }
+    expect(result.payload).toMatchObject({
+      key: "agent:main:main",
+      runStarted: false,
+      sessionId: "sess-parent-dms",
+    });
+    const [endEvent, startEvent] = lifecycleEvents();
+    expect(endEvent).toMatchObject({
+      sessionId: "sess-parent-dms",
+      sessionKey: "agent:main:main",
+      reason: "new",
+    });
+    expect(startEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      resumedFrom: "sess-parent-dms",
+    });
+  });
 });
 
 test("sessions.create keeps an explicit TUI child key when session.dmScope is 'main'", async () => {
-  const { storePath } = await createSessionStoreDir();
-
-  testState.sessionConfig = { dmScope: "main" };
-  try {
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-parent-tui",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-    await writeMessageTranscript({
-      agentId: "main",
-      sessionId: "sess-parent-tui",
-      sessionKey: "agent:main:main",
-      storePath,
+  await createSessionStoreDir();
+  await withMainDmScope(async () => {
+    await writeStoredSession("sess-parent-tui", {
       content: "hello before TUI /new",
     });
 
@@ -775,51 +597,32 @@ test("sessions.create keeps an explicit TUI child key when session.dmScope is 'm
     expect(expectSingleCommandHookEvent("new").context?.commandSource).toBe("webchat");
     const [endEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionEnd);
     const [startEvent] = firstHookCall(sessionLifecycleHookMocks.runSessionStart);
-    expect(endEvent.sessionKey).toBe("agent:main:main");
-    expect(endEvent.nextSessionKey).toBe("agent:main:tui-explicit");
+    expect(endEvent).toMatchObject({
+      sessionKey: "agent:main:main",
+      nextSessionKey: "agent:main:tui-explicit",
+    });
     expect(startEvent.sessionKey).toBe("agent:main:tui-explicit");
-  } finally {
-    testState.sessionConfig = undefined;
-  }
+  });
 });
 
 test("sessions.create without emitCommandHooks does not fire command:new hook (#76957)", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-parent2", "hello from parent 2");
 
-  await writeMainSessionEntry("sess-parent2");
+  await writeStoredSession("sess-parent2");
 
-  await createFromMainSession();
+  expect((await createFromMainSession()).ok).toBe(true);
 
-  expect(commandNewHookEvents()).toHaveLength(0);
-  expect(beforeResetHookMocks.runBeforeReset).not.toHaveBeenCalled();
-  expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-  expect(sessionLifecycleHookMocks.runSessionStart).not.toHaveBeenCalled();
+  expectNoCreationHooks();
 });
 
 test("sessions.reset clears cli session bindings for parent-linked non-subagent sessions (e.g. dashboard children)", async () => {
-  const { storePath } = await createSessionStoreDir();
-
-  await writeSessionStore({
-    entries: {
-      "dashboard:child:42": cliBoundSessionEntry(
-        "sess-dashboard-child",
-        "claude-cli-dashboard-session",
-        {
-          // parentSessionKey is set but the session key carries no `:subagent:`
-          // marker, so this is a user-facing parent-linked session, not a
-          // spawned subagent. The tighter predicate should still clear the
-          // CLI binding here so /reset matches user intuition.
-          parentSessionKey: "agent:main:main",
-        },
-      ),
-    },
-  });
-  await writeMessageTranscript({
-    agentId: "main",
-    sessionId: "sess-dashboard-child",
-    sessionKey: "agent:main:dashboard:child:42",
-    storePath,
+  await createSessionStoreDir();
+  await writeStoredSession("sess-dashboard-child", {
+    key: "dashboard:child:42",
+    ...claudeCliBindings("claude-cli-dashboard-session"),
+    // Parent linkage alone does not make this a spawned subagent.
+    parentSessionKey: "agent:main:main",
     content: "hello from dashboard child",
     messageId: "m-dashboard",
   });
@@ -827,13 +630,23 @@ test("sessions.reset clears cli session bindings for parent-linked non-subagent 
   await resetSession("dashboard:child:42");
 
   const store = await loadGatewaySessionStoreForKey("dashboard:child:42");
-  expectCliBindingsCleared(store["agent:main:dashboard:child:42"], "sess-dashboard-child");
+  const nextEntry = store["agent:main:dashboard:child:42"];
+  expect(nextEntry?.sessionId).toBe("sess-dashboard-child");
+  for (const key of [
+    "agentHarnessId",
+    "claudeCliSessionId",
+    "cliSessionBindings",
+    "cliSessionIds",
+  ] as const) {
+    expect(nextEntry?.[key]).toBeUndefined();
+  }
 });
 
 test("sessions.reset preserves cli session bindings for spawned subagents (Tak Hoffman's fa56682b3ced contract)", async () => {
-  const { storePath } = await createSessionStoreDir();
+  await createSessionStoreDir();
   const reseedPromptHash = "a".repeat(64);
-  const childEntry = cliBoundSessionEntry("sess-spawned-child", "claude-cli-child-session", {
+  const childEntry = sessionStoreEntry("sess-spawned-child", {
+    ...claudeCliBindings("claude-cli-child-session"),
     agentHarnessId: "codex",
     parentSessionKey: "agent:main:main",
     spawnedBy: "agent:main:main",
@@ -851,16 +664,9 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
     },
   };
 
-  await writeSessionStore({
-    entries: {
-      "subagent:child": childEntry,
-    },
-  });
-  await writeMessageTranscript({
-    agentId: "main",
-    sessionId: "sess-spawned-child",
-    sessionKey: "agent:main:subagent:child",
-    storePath,
+  await writeStoredSession("sess-spawned-child", {
+    ...childEntry,
+    key: "subagent:child",
     content: "hello from spawned child",
     messageId: "m-child",
   });
@@ -869,22 +675,13 @@ test("sessions.reset preserves cli session bindings for spawned subagents (Tak H
 
   const store = await loadGatewaySessionStoreForKey("subagent:child");
   const nextEntry = store["agent:main:subagent:child"];
-  expect(nextEntry).toBeDefined();
-  expect(nextEntry?.sessionId).toBe("sess-spawned-child");
+  expect(nextEntry).toMatchObject({
+    sessionId: "sess-spawned-child",
+    claudeCliSessionId: "claude-cli-child-session",
+  });
   expect(nextEntry?.agentHarnessId).toBeUndefined();
-  expect(nextEntry?.claudeCliSessionId).toBe("claude-cli-child-session");
   expect(nextEntry?.cliSessionIds).toEqual({
     "claude-cli": "claude-cli-child-session",
   });
-  expect(nextEntry?.cliSessionBindings).toEqual({
-    "claude-cli": {
-      sessionId: "claude-cli-child-session",
-      reseedReceipt: {
-        version: 1,
-        promptHash: reseedPromptHash,
-        localSessionId: nextEntry?.sessionId,
-        userTurnDisposition: "omitted",
-      },
-    },
-  });
+  expect(nextEntry?.cliSessionBindings).toEqual(childEntry.cliSessionBindings);
 });

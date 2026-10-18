@@ -135,6 +135,12 @@ export async function updateAcpSessionStoreEntry(params: {
           receipt.membershipInvalidatedKeys,
           receipt.sharingUnchangedKeys,
           receipt.generationUnchangedKeys,
+          undefined,
+          new Map(
+            [...receipt.current].filter(
+              ([key]) => !receipt.unavailableParticipantKeys?.includes(key),
+            ),
+          ),
         );
       }
     },
@@ -153,12 +159,12 @@ export async function updateAcpSessionStoreEntry(params: {
       maintenanceConfig,
       storePath: params.storePath,
     });
+    kickSessionHistoryDiskBudgetMaintenance({
+      agentId: scope.agentId,
+      env: scope.env,
+      storePath: params.storePath,
+      maintenanceConfig,
+    });
   }
-  kickSessionHistoryDiskBudgetMaintenance({
-    agentId: scope.agentId,
-    env: scope.env,
-    storePath: params.storePath,
-    maintenanceConfig,
-  });
   return result;
 }

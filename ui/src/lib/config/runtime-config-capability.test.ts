@@ -13,6 +13,33 @@ import {
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 describe("runtime config capability", () => {
+  it("does not load configuration for session-only connections, including reconnect refresh", async () => {
+    const request = vi.fn(async () => ({ config: {}, hash: "ready", valid: true, issues: [] }));
+    let auth: GatewayHelloOk["auth"] = { role: "operator", scopes: ["operator.sessions.read"] };
+    const client = {
+      request,
+      get auth() {
+        return auth;
+      },
+    } as unknown as GatewayBrowserClient;
+    const { gateway, publish } = createGatewayHarness(client);
+    const runtimeConfig = createRuntimeConfigCapability(gateway);
+    await runtimeConfig.ensureLoaded();
+    await runtimeConfig.refreshSchema();
+    publish(false, client);
+    publish(true, client);
+    await runtimeConfig.refresh();
+    expect(request).not.toHaveBeenCalled();
+
+    auth = { role: "operator", scopes: ["operator.admin"] };
+    publish(false, client);
+    publish(true, client);
+    await runtimeConfig.ensureLoaded();
+    expect(request).toHaveBeenCalledWith("config.get", {});
+    expect(runtimeConfig.state.configSnapshot?.hash).toBe("ready");
+    runtimeConfig.dispose();
+  });
+
   it("config.set does not stage a default agent after access downgrades", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "config.get") {
@@ -105,17 +132,24 @@ describe("runtime config capability", () => {
     runtimeConfig.dispose();
   });
 
-  it("refreshes config but skips schema after a replacement without config.schema", async () => {
+  it("surfaces a missing mandatory schema method after a client replacement", async () => {
     let current = false;
+    const configRefresh = deferred();
     const createRequest = () =>
       vi.fn(async (method: string) => {
         if (method === "config.get") {
+          if (current) {
+            await configRefresh.promise;
+          }
           return {
             config: { endpoint: current ? "current" : "initial" },
             hash: current ? "hash-current" : "hash-initial",
             valid: true,
             issues: [],
           };
+        }
+        if (current && method === "config.schema") {
+          throw new Error("unknown method: config.schema");
         }
         return method === "config.schema"
           ? { schema: {}, uiHints: {}, version: "schema-initial", generatedAt: "" }
@@ -139,12 +173,16 @@ describe("runtime config capability", () => {
       features: { methods: ["config.get"] },
     } as GatewayHelloOk);
 
-    await vi.waitFor(() => expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current"));
+    await vi.waitFor(() => expect(runtimeConfig.state.configLoading).toBe(true));
+    configRefresh.resolve();
+    await vi.waitFor(() => {
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-current");
+      expect(runtimeConfig.state.lastError).toContain("unknown method: config.schema");
+    });
     expect(runtimeConfig.state.configForm).toEqual({ endpoint: "current" });
     expect(runtimeConfig.state.configSchemaVersion).toBe("schema-initial");
-    expect(runtimeConfig.state.lastError).toBeNull();
     expect(requestB.mock.calls.filter(([method]) => method === "config.get")).toHaveLength(1);
-    expect(requestB.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(0);
+    expect(requestB.mock.calls.filter(([method]) => method === "config.schema")).toHaveLength(1);
     runtimeConfig.dispose();
   });
 

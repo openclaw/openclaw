@@ -65,8 +65,11 @@ Most skills configuration lives under `skills` in
 </ParamField>
 
 <ParamField path="skills.load.watch" type="boolean" default="true">
-  Watch skill folders and refresh the skills snapshot when `SKILL.md` files
-  change. Covers nested files under grouped skill roots.
+  Enable passive automatic skill discovery. One background worker checks local
+  skill roots about once per minute, including nested files under grouped roots.
+  Set to `false` to disable passive rescans. Explicit OpenClaw skill changes,
+  relevant configuration changes, and Gateway startup still request an immediate
+  rescan. Existing sessions use changed snapshots on their next agent turn.
 </ParamField>
 
 ## Install (`skills.install`)
@@ -77,7 +80,7 @@ Most skills configuration lives under `skills` in
 
 <ParamField path="skills.install.nodeManager" type='"npm" | "pnpm" | "yarn" | "bun"' default='"npm"'>
   Node package manager preference for skill installs. This only affects skill
-  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4+
+  installs. Node remains the primary and recommended OpenClaw runtime; Bun 1.4.3+
   with WAL-reset-safe `node:sqlite` is supported as an explicit runtime opt-in.
   `openclaw setup --node-manager` and `openclaw onboard --node-manager` accept
   `npm`, `pnpm`, or `bun`; set `"yarn"` directly in config for Yarn-backed skill

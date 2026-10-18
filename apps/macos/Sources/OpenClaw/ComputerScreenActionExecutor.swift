@@ -428,7 +428,7 @@ final class ComputerScreenActionExecutor {
     #endif
 
     private func resolveDisplay(params: OpenClawComputerActParams) async throws -> ScreenCaptureDisplayGeometry {
-        try ScreenCaptureSupport.requirePermission(failure: ComputerActionError.refused)
+        try await ScreenCaptureSupport.requirePermission()
         // Match ScreenSnapshotService display ordering so a computer.act
         // screenIndex targets the same display the model saw in screen.snapshot.
         let display = try await ScreenCaptureSupport.display(

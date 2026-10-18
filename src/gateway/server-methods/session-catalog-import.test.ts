@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { preserveSessionCatalogHistory } from "../../plugins/session-catalog-history-import.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { createGatewaySession } from "../session-create-service.js";
-import type { resolveSessionMutationAuthorization } from "../session-sharing.js";
+import type { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import type { SessionCatalogThreadVisibility } from "./session-catalog-visibility.js";
 import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
 
@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   create: vi.fn<typeof createGatewaySession>(),
   preserve: vi.fn<typeof preserveSessionCatalogHistory>(),
   record: vi.fn(),
-  authorize: vi.fn<typeof resolveSessionMutationAuthorization>(),
+  authorize: vi.fn<typeof resolveSessionMutationAuthorizationAsync>(),
   visibility: vi.fn<() => SessionCatalogThreadVisibility["visibility"]>(),
   visibilityAllowed:
     vi.fn<typeof import("../session-sharing-policy.js").isSessionVisibilityAllowed>(),
@@ -31,8 +31,9 @@ vi.mock("../../plugins/session-catalog-history-import.js", async (importOriginal
   ...(await importOriginal<typeof import("../../plugins/session-catalog-history-import.js")>()),
   preserveSessionCatalogHistory: mocks.preserve,
 }));
-vi.mock("../session-sharing.js", () => ({
-  resolveSessionMutationAuthorization: mocks.authorize,
+// mock-isolation: Exercise import orchestration without loading the live sharing/admission owners.
+vi.mock("../session-sharing-authorization-async.js", () => ({
+  resolveSessionMutationAuthorizationAsync: mocks.authorize,
 }));
 vi.mock("../session-sharing-policy.js", () => ({
   hasSessionReadAccessChanged: vi.fn(),
@@ -98,7 +99,7 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.visibility.mockReturnValue(visibility);
   mocks.visibilityAllowed.mockReturnValue(true);
-  mocks.authorize.mockReturnValue({ error: null });
+  mocks.authorize.mockResolvedValue({ error: null });
 });
 
 describe("session catalog import orchestration", () => {
@@ -130,7 +131,7 @@ describe("session catalog import orchestration", () => {
     async (stage) => {
       const subject = fixture();
       if (stage === "destination") {
-        mocks.authorize.mockReturnValue({ error: denied });
+        mocks.authorize.mockResolvedValue({ error: denied });
       } else if (stage === "source") {
         subject.reauthorize.mockResolvedValue(null);
       } else if (stage === "creation") {
@@ -170,7 +171,7 @@ describe("session catalog import orchestration", () => {
     ["destination", "Destination authority revoked"],
   ] as const)("rechecks %s authority at the creation commit boundary", async (authority, error) => {
     if (authority === "destination") {
-      mocks.authorize.mockReturnValue({
+      mocks.authorize.mockResolvedValue({
         error: null,
         authorization: {
           assertCurrent: () => {

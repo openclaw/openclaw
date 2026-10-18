@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -127,23 +128,11 @@ suite.define(() => {
       await page.getByRole("button", { name: "Send message" }).click();
       await page.locator(".chat-queue").getByText("Applying chat settings").waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await gateway.resolveDeferred("sessions.list");
-      await waitForRequests(gateway, "sessions.list", listsBefore + 2, rosterMatch);
-      await gateway.deferNext("sessions.list", rosterMatch);
-      await page.evaluate(() => {
-        const app = document.querySelector("openclaw-app") as HTMLElement & {
-          runtime: {
-            context: {
-              sessions: {
-                refresh: (options: { force: boolean; backgroundHydrate: boolean }) => Promise<void>;
-              };
-            };
-          };
-        };
-        void app.runtime.context.sessions.refresh({ force: true, backgroundHydrate: true });
+      await evaluateControlUiContext(page, (application) => {
+        void application.sessions.refresh({ force: true, backgroundHydrate: true });
       });
       await gateway.resolveDeferred("sessions.list");
-      await waitForRequests(gateway, "sessions.list", listsBefore + 3, rosterMatch);
+      await waitForRequests(gateway, "sessions.list", listsBefore + 2, rosterMatch);
       const request = await gateway.waitForRequest("chat.send");
       expect(requireRecord(request.params).message).toBe("send after my settings");
       await gateway.emitChatFinal({

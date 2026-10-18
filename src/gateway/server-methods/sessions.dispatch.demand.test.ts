@@ -70,7 +70,7 @@ async function withDemandFixture(
     const sessionRuntime =
       await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
     dispatchTestMocks.resolveTarget.mockImplementation(
-      sessionRuntime.resolveGatewaySessionStoreTargetWithStore,
+      sessionRuntime.resolveGatewaySessionStoreTargetInWorker,
     );
     dispatchTestMocks.findLiveByOwner.mockImplementation((_kind: string, sessionKey: string) => ({
       id: sessionKey,
@@ -91,17 +91,15 @@ async function withDemandFixture(
     const placements = new Map<string, WorkerSessionPlacementRecord>();
     const environments = new Map<string, Environment>();
     const placementReader = {
-      prepareRuntimeRefresh: async (sessionId: string) => {
-        const placement = placements.get(sessionId);
+      prepareSessionPlacement: async (sessionId: string) => {
         let released = false;
         return {
-          placement,
-          move: undefined,
-          pendingResult: undefined,
-          assertCurrent: () => {
-            if (released || placements.get(sessionId) !== placement) {
+          prepareRead: () => undefined,
+          current: () => {
+            if (released) {
               throw new Error("Worker placement observation is no longer current");
             }
+            return placements.get(sessionId);
           },
           release: () => {
             released = true;
@@ -154,8 +152,6 @@ async function withDemandFixture(
         async (_request, dispatch) => await dispatch(),
       );
     const context = makeDispatchTestContext({
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       chatRunState: createChatRunState(),
       dedupe: new Map(),
       agentRunSeq: new Map(),
@@ -190,7 +186,7 @@ async function withDemandFixture(
     };
     const heldTurns = new Map<string, HeldTurn>();
     // Preserve the real admission/ACK; the simulated node has not published a physical launch yet.
-    vi.spyOn(chatDispatch, "startChatDispatch").mockImplementation((turn) => {
+    vi.spyOn(chatDispatch, "startChatDispatch").mockImplementation(async (turn) => {
       heldTurns.set(turn.session.entry!.sessionId, turn);
     });
     const sessionKey = (id: string) => `agent:main:${id}`;

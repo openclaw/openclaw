@@ -117,8 +117,8 @@ describe("Sessions transcript search", () => {
     await page.runTranscriptSearch();
     await page.updateComplete;
     expect(request).not.toHaveBeenCalled();
-    expect(find("status")?.textContent?.trim()).toBe("");
-    expect(submit().disabled).toBe(true);
+    expect(find("status")).toBeNull();
+    expect(submit().disabled).toBe(false);
     page.updateTranscriptSearchQuery("not advertised");
     await vi.waitFor(() => expect(submit().disabled).toBe(false));
     find("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -139,14 +139,13 @@ describe("Sessions transcript search", () => {
         .mockResolvedValue(matches("replacement needle"))
         .mockReturnValueOnce(response.promise);
       const { page, managed, find } = await mount(request);
+      page.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger")!.click();
       page.updateTranscriptSearchQuery("needle");
       const pending = page.runTranscriptSearch();
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
       await page.updateComplete;
       if (action === "clear") {
-        page
-          .querySelector<HTMLButtonElement>('.sessions-transcript-search button[type="button"]')!
-          .click();
+        page.querySelector<HTMLButtonElement>(".sessions-transcript-search__clear")!.click();
       } else if (action === "replace") {
         page.updateTranscriptSearchQuery("replacement needle");
         await page.runTranscriptSearch();
@@ -166,7 +165,11 @@ describe("Sessions transcript search", () => {
             ? "replacement needle"
             : undefined,
       );
-      expect(find("status")?.getAttribute("aria-busy")).toBe("false");
+      if (action === "clear") {
+        expect(find("status")).toBeNull();
+      } else {
+        expect(find("status")?.getAttribute("aria-busy")).toBe("false");
+      }
     },
   );
 
@@ -225,6 +228,10 @@ describe("Sessions transcript search", () => {
   it("keeps transcript titles independent of metadata filtering", async () => {
     const request = vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue(matches());
     const { page, managed, find } = await mount(request);
+    page.querySelector<HTMLButtonElement>(".sessions-transcript-search__trigger")!.click();
+    await vi.waitFor(() =>
+      expect(page.querySelector(".sessions-transcript-search__input input")).not.toBeNull(),
+    );
     const heading = () => find("result-header strong")?.textContent;
     const submit = () =>
       find("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -239,7 +246,7 @@ describe("Sessions transcript search", () => {
     );
     submit();
     await vi.waitFor(() => expect(heading()).toBe(row.label));
-    const search = page.querySelector<HTMLInputElement>(".sessions-toolbar__search input")!;
+    const search = page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
     search.value = "metadata-only";
     search.dispatchEvent(new Event("input", { bubbles: true }));
     await page.updateComplete;
@@ -279,7 +286,7 @@ describe("Sessions transcript search", () => {
     expect(page.statusFilter).toBe("archived");
     expect(find("snippet")).toBeNull();
     expect(page.transcriptSearchQuery).toBe("release notes");
-    await vi.waitFor(() => expect(find("status")?.textContent?.trim()).toBe(""));
+    await vi.waitFor(() => expect(find("status")).toBeNull());
     request.mockResolvedValueOnce({ results: [], sessions: [] });
     await page.runTranscriptSearch();
     await page.updateComplete;

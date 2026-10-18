@@ -65,6 +65,31 @@ afterEach(() => vi.unstubAllEnvs());
 
 describe("resolveSkillDispatchTools", () => {
   it.each([
+    { message: { surface: "webchat" }, deny: false, available: true },
+    { message: { surface: "whatsapp" }, deny: false, available: false },
+    { message: { surface: "webchat" }, deny: true, available: false },
+    {
+      message: { surface: "unknown-channel", provider: "webchat" },
+      deny: false,
+      available: false,
+    },
+  ])(
+    "gates ask_user on the inbound $message.surface surface (deny: $deny)",
+    async ({ message, deny, available }) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        tools: { allow: ["ask_user"], deny: deny ? ["ask_user"] : [] },
+      };
+      setRuntimeConfigSnapshot(cfg);
+      const tools = await resolveSkillDispatchTools(
+        { ...dispatchDefaults, message, cfg },
+        { createOpenClawToolsAsync },
+      );
+      expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
+    },
+  );
+
+  it.each([
     { tools: { profile: "coding" }, actions: ["update.run"] },
     {
       tools: { profile: "full" },
@@ -155,19 +180,6 @@ describe("resolveSkillDispatchTools", () => {
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");
     expect(args?.sessionConfigSource).toBe("runtime");
-  });
-
-  it("passes unrestricted skill-dispatch tool surfaces to cron jobs", async () => {
-    const tools = await resolveSkillDispatchTools(dispatchDefaults, dependencies);
-
-    const args = createOpenClawToolsAsyncMock.mock.calls.at(-1)?.[0];
-    expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec", "conversations_send"]);
-    expect(args?.cronCreatorToolAllowlist).toEqual([
-      { name: "read" },
-      { name: "automations" },
-      { name: "exec" },
-      { name: "conversations_send" },
-    ]);
   });
 
   it("carries command skill file identity into tool diagnostics", async () => {

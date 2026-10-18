@@ -108,6 +108,10 @@ export function registerAlreadyCurrentAdmissionTests(f: CurrentAdmissionFixture)
   it.each(["unavailable plugin", "changed service owner"])(
     "handles %s before already-current convergence",
     async (failure) => {
+      if (failure === "changed service owner") {
+        // Already-current ownership refresh belongs to systemd policy maintenance.
+        vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      }
       const root = await f.prepareCurrentPackage("openclaw-update");
       f.mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
       if (failure === "unavailable plugin") {

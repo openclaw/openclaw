@@ -2,16 +2,14 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { openaiTTS } from "./tts.js";
 
 const mocks = vi.hoisted(() => ({
-  captureAvailable: true,
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureHttpExchangeAsync>(),
   fetch: vi.fn(),
   release: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
-  get captureHttpExchangeAsync() {
-    return mocks.captureAvailable ? mocks.capture : undefined;
-  },
+vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/proxy-capture")>()),
+  captureHttpExchangeAsync: mocks.capture,
   isDebugProxyGlobalFetchPatchInstalled: () => false,
 }));
 
@@ -29,10 +27,9 @@ beforeEach(() => {
   });
 });
 
-it.each(["absent", "present", "rejected"] as const)(
+it.each(["present", "rejected"] as const)(
   "returns synthesized audio and releases transport when async capture is %s",
   async (capture) => {
-    mocks.captureAvailable = capture !== "absent";
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
@@ -51,12 +48,8 @@ it.each(["absent", "present", "rejected"] as const)(
       expect.objectContaining({ url: "https://api.openai.com/v1/audio/speech" }),
     );
     expect(mocks.release).toHaveBeenCalledOnce();
-    if (capture === "absent") {
-      expect(mocks.capture).not.toHaveBeenCalled();
-    } else {
-      expect(mocks.capture).toHaveBeenCalledWith(
-        expect.objectContaining({ meta: { provider: "openai", capability: "tts" } }),
-      );
-    }
+    expect(mocks.capture).toHaveBeenCalledWith(
+      expect.objectContaining({ meta: { provider: "openai", capability: "tts" } }),
+    );
   },
 );

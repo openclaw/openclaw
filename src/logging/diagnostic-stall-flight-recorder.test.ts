@@ -57,16 +57,16 @@ function profile(start: number, name: string, url = "node:timers") {
         id: 1,
         callFrame: {
           functionName: "(root)",
-          url: "",
-          scriptId: 0,
           lineNumber: -1,
           columnNumber: -1,
+          scriptId: 0,
+          url: "",
         },
         children: [2],
       },
       {
         id: 2,
-        callFrame: { functionName: name, url, scriptId: 1, lineNumber: 9, columnNumber: 0 },
+        callFrame: { functionName: name, lineNumber: 9, columnNumber: 0, scriptId: 1, url },
       },
     ],
     samples: [2, 2],
@@ -121,6 +121,39 @@ describe("stall flight recorder", () => {
     const result = recorder.sample(1_500);
     expect(result).toContain("inclusive=[]");
     expect(result).not.toMatch(/secretAccount|private|person/);
+  });
+
+  it.each([
+    'quoted"file.js',
+    String.raw`windows\file.js`,
+    "line\nbreak.js",
+    'json-{"key":"value"}-file.js',
+  ])("keeps trusted caller attribution when native script names contain %j", (filename) => {
+    const { recorder, handles, warn, at } = fixture();
+    // V8's native serializer writes these strings verbatim, without JSON escaping.
+    handles[0]!.stop.mockReturnValue(
+      profile(0, "secretAccount")
+        .replace('"functionName":"(root)"', '"functionName":"trustedCaller"')
+        .replace('"url":"node:timers"', `"url":"file:///private/${filename}"`)
+        .replace('"url":""', '"url":"node:timers"'),
+    );
+    at(1_500);
+    const result = recorder.sample(1_500);
+    expect(result).toContain('inclusive=[["trustedCaller@node:timers:0",2]]');
+    expect(result).not.toMatch(/secretAccount|private|quoted|windows|break/);
+    expect(warn).not.toHaveBeenCalled();
+    at(6_500);
+    expect(recorder.sample(1_500)).toContain("work1@node:timers:10");
+  });
+
+  it("redacts raw native function names before reporting the rest of the stack", () => {
+    const { recorder, handles, warn, at } = fixture();
+    handles[0]!.stop.mockReturnValue(
+      profile(0, "placeholder").replace('"placeholder"', '"private"name\\with\ncontrols"'),
+    );
+    at(1_500);
+    expect(recorder.sample(1_500)).toContain('inclusive=[["[redacted]@node:timers:10",2]]');
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("caps oversized windows and disables failed capture without failing the sampler", () => {

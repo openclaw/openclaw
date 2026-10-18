@@ -25,6 +25,7 @@ import {
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "./update-managed-service-handoff.js";
+import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import { getUpdateRunAsync as getUpdateRun, listUpdateRunsAsync } from "./update-run-reader.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
@@ -103,23 +104,34 @@ export async function runAutoUpdateCommand(
   });
   const handoffFailure = async (error: unknown): Promise<AutoUpdateRunResult> => {
     log.info("automatic update handoff failed", { error: formatErrorMessage(error) });
-    const reason = "managed-service-handoff-failed";
-    const fact = createUpdateErrorFact("managed-service", error);
+    const reason =
+      error instanceof UpdatePreMutationError ? error.reason : "managed-service-handoff-failed";
+    const failureFacts =
+      error instanceof UpdatePreMutationError
+        ? error.failureFacts
+        : [createUpdateErrorFact("managed-service", error)];
+    const detail = failureFacts.map((fact) => fact.message ?? fact.code).join("; ");
     // Cancellation may finish the run; retain its cause before that ownership transition.
     try {
-      await recordUpdateRunStep(params.runId, { step: "requested", status: "failed", reason });
+      await recordUpdateRunStep(params.runId, {
+        step: "requested",
+        status: "failed",
+        reason,
+        detail: `${reason}: ${detail}`,
+        failureFacts,
+      });
     } catch {
       log.info("Update failure state could not be recorded; preserving the original error.");
     }
     await recordUpdateRunDiagnostics(
       params.runId,
-      { failure: { step: "managed-service", detail: fact.message, failureFacts: [fact] } },
+      { failure: { step: "managed-service", detail, failureFacts } },
       (message) => log.info(message),
     );
     const code = extractErrorCode(error);
     const outcome = failure(
       reason,
-      `Automatic update handoff failed${code ? ` (${code})` : ""}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
+      `Automatic update handoff failed${code ? ` (${code})` : ""}: ${reason}: ${detail}. Inspect the Gateway log, then run \`${command}\` from a shell to retry.`,
     );
     outcome.result.steps = [
       {
@@ -128,7 +140,7 @@ export async function runAutoUpdateCommand(
         cwd: "",
         durationMs: 0,
         exitCode: 1,
-        failureFacts: [fact],
+        failureFacts,
       },
     ];
     outcome.result.rollbackOutcome = {
@@ -259,7 +271,7 @@ export async function runCampaignUpdate(params: {
   runAuto: AutoUpdateRunner;
   canApply: () => boolean;
   campaign: UpdateCampaignController;
-  onAttempt: (version: string) => void;
+  onAttempt: (version: string) => Promise<void> | void;
   onUpdateRunCreated?: () => void;
   signal?: AbortSignal;
 }): Promise<"handoff" | "applied" | "failed"> {
@@ -343,7 +355,10 @@ export async function runCampaignUpdate(params: {
     if (!isCurrent()) {
       return "failed";
     }
-    params.onAttempt(params.version);
+    await params.onAttempt(params.version);
+    if (!isCurrent()) {
+      return "failed";
+    }
 
     const outcome = await params.runAuto({
       runId,

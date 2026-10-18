@@ -42,8 +42,6 @@ const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 export const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
-// The relay starts a niced Node subprocess, so busy hosts can exceed the former
-// five-second relay timeout before policy and native admission work completes.
 const CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC = 10;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
@@ -211,6 +209,7 @@ export function createCodexNativeHookRelay(params: {
   };
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
+  retainExecutionPolicy?: () => () => void;
   onPreToolUseFailure: (failure: CodexNativePreToolUseFailure) => void | Promise<void>;
 }): CodexNativeHookRelay | undefined {
   if (params.options?.enabled === false) {
@@ -235,6 +234,7 @@ export function createCodexNativeHookRelay(params: {
     pendingDirectChildAdmissions.clear();
   };
   let releaseProcessAdmission: (() => void) | undefined;
+  let releaseExecutionPolicy: (() => void) | undefined;
   let processAdmissionDisposed = false;
   let remoteCredential: ReturnType<typeof createCodexNativeHookRemoteCredential> | undefined;
   let remoteCleanup: Promise<void> | undefined;
@@ -420,6 +420,7 @@ export function createCodexNativeHookRelay(params: {
         rejectPendingAdmissions("native hook relay registration closed");
         processAdmissionDisposed = true;
         releaseProcessAdmission?.();
+        releaseExecutionPolicy?.();
         if (remoteCredential) {
           remoteCleanup = remoteCredential
             .dispose()
@@ -434,9 +435,6 @@ export function createCodexNativeHookRelay(params: {
     },
     onPreToolUseFailure: params.onPreToolUseFailure,
     command: {
-      // Hook relay subprocesses are observational for most tool events; keep
-      // them lower priority so they do not compete with the active reply turn.
-      nice: 10,
       timeoutMs: params.hostCapabilities.workspaceReadiness
         ? Math.max(params.options?.gatewayTimeoutMs ?? 0, params.attemptTimeoutMs)
         : params.options?.gatewayTimeoutMs,
@@ -444,6 +442,7 @@ export function createCodexNativeHookRelay(params: {
   });
   if (!processAdmissionDisposed) {
     try {
+      releaseExecutionPolicy = params.retainExecutionPolicy?.();
       releaseProcessAdmission = params.nativeProcessAuthority?.owner.retainAdmission();
     } catch (error) {
       relay.unregister();
@@ -669,7 +668,7 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 }
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+  return value !== undefined && Number.isFinite(value) && value > 0
     ? Math.ceil(value)
     : CODEX_NATIVE_HOOK_RELAY_DEFAULT_TIMEOUT_SEC;
 }

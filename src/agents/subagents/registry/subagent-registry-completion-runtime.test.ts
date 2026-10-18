@@ -22,8 +22,12 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
 import { installLifecycleWorkerAckFixture } from "./subagent-registry-lifecycle-controller.test-support.js";
-import type { SubagentCompletionRequest } from "./subagent-registry.types.js";
-import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  getSubagentRunRuntimeKey,
+  isSameSubagentRunOwner,
+  retainSubagentRunRuntimeOwner,
+} from "./subagent-run-generation.js";
 
 function createHarness() {
   const entry = createSubagentRunRecord({
@@ -329,6 +333,95 @@ describe("subagent completion rejection ownership", () => {
         expect(h.scheduleSweep).not.toHaveBeenCalled();
         expect(h.entry.cleanupHandled).toBe(true);
         expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
+      } finally {
+        release.resolve();
+        await completion;
+      }
+    },
+  );
+
+  it.each(
+    (["immediate", "restart"] as const).flatMap((retry) =>
+      (
+        ["unchanged", "resumed", "yielded-again", "killed", "new-terminal", "replacement"] as const
+      ).map((change) => ({ retry, change })),
+    ),
+  )(
+    "rechecks a committed yielded settlement before retrying its effects ($retry, $change)",
+    async ({ retry, change }) => {
+      const h = createHarness();
+      h.entry.pauseReason = "sessions_yield";
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let published: SubagentRunRecord | undefined;
+      h.completeSubagentRun
+        .mockImplementationOnce(async (request) => {
+          expect(request.settleYielded).toBe(true);
+          // The controller reports its immutable postimage before running terminal effects.
+          published = {
+            ...h.entry,
+            pauseReason: undefined,
+            collectorCompletion: { status: "failed" },
+          };
+          retainSubagentRunRuntimeOwner(h.entry, published);
+          h.runs.set(h.entry.runId, published);
+          request.recoveryCurrent?.onPublished?.(published);
+          if (retry === "restart") {
+            markGatewayRestartDraining();
+          }
+          entered.resolve();
+          await release.promise;
+          throw new Error("postcommit effect failed");
+        })
+        .mockImplementation(async (request) => {
+          if (retry === "restart" && h.completeSubagentRun.mock.calls.length === 2) {
+            throw new Error("second postcommit effect failed");
+          }
+          expect(request.settleYielded).toBeUndefined();
+          expect(await request.recoveryCurrent?.prepare()).toBe(true);
+          expect(request.recoveryCurrent?.isHostCurrent()).toBe(true);
+        });
+      const completion = h.runtime.completeSubagentRunWithRecovery(
+        { ...h.request, settleYielded: true },
+        "sweeper",
+      );
+      try {
+        await entered.promise;
+        if (!published) {
+          throw new Error("Expected the committed settlement");
+        }
+        if (retry === "restart") {
+          release.resolve();
+          await completion;
+          expect(h.retryTimers.size).toBe(1);
+        }
+        const current = { ...published };
+        retainSubagentRunRuntimeOwner(published, current);
+        h.runs.set(h.entry.runId, current);
+        if (change === "resumed") {
+          current.execution = { status: "running", startedAt: 2 };
+        } else if (change === "yielded-again") {
+          current.pauseReason = "sessions_yield";
+        } else if (change === "killed") {
+          current.killIntent = { requestedAt: 2, reason: "stop" };
+        } else if (change === "new-terminal") {
+          // Retain outcome and runtime owner: the execution boundary itself changed.
+          current.execution = { ...published.execution, startedAt: 2, endedAt: 3 };
+        } else if (change === "replacement") {
+          h.runs.set(h.entry.runId, { ...published });
+        }
+        release.resolve();
+        await completion;
+        if (retry === "restart") {
+          resetGatewayWorkAdmission();
+          await vi.advanceTimersByTimeAsync(1_000);
+          expect(h.retryTimers.size).toBe(0);
+        }
+        expect(h.completeSubagentRun).toHaveBeenCalledTimes(
+          (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
+        );
+        expect(h.resumeRun).toHaveBeenCalledTimes(retry === "restart" ? 1 : 0);
+        expect(h.scheduleSweep).not.toHaveBeenCalled();
       } finally {
         release.resolve();
         await completion;

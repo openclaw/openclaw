@@ -197,11 +197,9 @@ export async function resolveMSTeamsInboundMedia(params: {
           authAllowHosts: params.authAllowHosts,
           deadline: params.deadline,
         });
-        if (bfMedia.media.length > 0) {
-          mediaList = mergeMSTeamsMediaFacts(mediaList, bfMedia.media, {
-            positionallyAligned: false,
-          });
-        }
+        mediaList = mergeMSTeamsMediaFacts(mediaList, bfMedia.media, {
+          positionallyAligned: false,
+        });
         if (!hasMaterializedMedia(bfMedia.media)) {
           log.debug?.("bot framework attachments fetch empty", {
             conversationType,
@@ -211,11 +209,7 @@ export async function resolveMSTeamsInboundMedia(params: {
       }
     }
 
-    if (
-      shouldFetchGraphMessage &&
-      !hasMaterializedMedia(mediaList) &&
-      !isBotFrameworkPersonalChat
-    ) {
+    if (shouldFetchGraphMessage && !isBotFrameworkPersonalChat) {
       const graphTeamAadGroupId =
         conversationType.trim().toLowerCase() === "channel" && !teamAadGroupId
           ? await params.resolveTeamAadGroupId?.()
@@ -223,7 +217,7 @@ export async function resolveMSTeamsInboundMedia(params: {
       const messageUrl = buildMSTeamsGraphMessageUrl({
         conversationType,
         conversationId,
-        messageId: activity.id ?? undefined,
+        messageId: activity.id,
         threadRootMessageId: conversationMessageId ?? activity.replyToId,
         teamAadGroupId: graphTeamAadGroupId,
         channelId: activity.channelData?.channel?.id,
@@ -232,8 +226,8 @@ export async function resolveMSTeamsInboundMedia(params: {
         log.debug?.("graph message url unavailable", {
           conversationType,
           hasChannelData: Boolean(activity.channelData),
-          messageId: activity.id ?? undefined,
-          replyToId: activity.replyToId ?? undefined,
+          messageId: activity.id,
+          replyToId: activity.replyToId,
         });
       } else {
         const graphMedia = await downloadMSTeamsGraphMedia({
@@ -245,11 +239,9 @@ export async function resolveMSTeamsInboundMedia(params: {
           deadline: params.deadline,
           logger: log,
         });
-        if (graphMedia.media.length > 0) {
-          mediaList = mergeMSTeamsMediaFacts(mediaList, graphMedia.media, {
-            positionallyAligned: false,
-          });
-        }
+        mediaList = mergeMSTeamsMediaFacts(mediaList, graphMedia.media, {
+          positionallyAligned: false,
+        });
         if (!hasMaterializedMedia(mediaList)) {
           log.debug?.("graph media fetch empty", {
             messageUrl,

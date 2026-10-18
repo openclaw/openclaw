@@ -14,7 +14,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sql
 import { replaceTranscriptEventsSync } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
 import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
-import * as lifecycleAdmission from "../sessions/session-lifecycle-admission.js";
+import * as sessionController from "../sessions/session-controller.lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import * as agentExecution from "../state/openclaw-agent-execution.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
@@ -92,37 +92,41 @@ it("persists an accepted fork and queued rewind across the close prelude before 
   let rewinding: Promise<SessionsRewindResult> | undefined;
   let closing: Promise<void> | undefined;
   try {
-    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
     let executions = 0;
-    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
-      (...args): ReturnType<typeof capture> => {
-        const owner = capture(...args);
-        return {
-          ...owner,
-          get fileIdentity() {
-            return owner.fileIdentity;
-          },
-          runExisting: (source, operation, options) =>
-            owner.runExisting(
-              source,
-              (worker) =>
-                operation({
-                  execute: async (command, commandOptions) => {
-                    if (
-                      command.type === "session.messageCut.commit" ||
-                      command.type === "database.domain.publish"
-                    ) {
-                      executions++;
-                      accepted.resolve();
-                      await releasePersistence.promise;
-                    }
-                    return await worker.execute(command, commandOptions);
-                  },
-                }),
-              options,
-            ),
-        };
+    const wrapExecution = (
+      owner: ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution>,
+    ): ReturnType<typeof agentExecution.captureOpenClawAgentDatabaseExecution> => ({
+      ...owner,
+      get fileIdentity() {
+        return owner.fileIdentity;
       },
+      runExisting: (source, operation, options) =>
+        owner.runExisting(
+          source,
+          (worker) =>
+            operation({
+              execute: async (command, commandOptions) => {
+                if (
+                  command.type === "session.messageCut.commit" ||
+                  command.type === "database.domain.publish"
+                ) {
+                  executions++;
+                  accepted.resolve();
+                  await releasePersistence.promise;
+                }
+                return await worker.execute(command, commandOptions);
+              },
+            }),
+          options,
+        ),
+    });
+    const capture = agentExecution.captureOpenClawAgentDatabaseExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
+      (...args) => wrapExecution(capture(...args)),
+    );
+    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
+      (...args) => wrapExecution(capturePreparation(...args)),
     );
     const dispatchOptions = {
       client: createSyntheticPluginRuntimeClient({ scopes: ["operator.admin"] }),
@@ -143,14 +147,11 @@ it("persists an accepted fork and queued rewind across the close prelude before 
       ),
       signal,
     );
-    const mutate = lifecycleAdmission.runExclusiveSessionLifecycleMutation;
-    vi.spyOn(lifecycleAdmission, "runExclusiveSessionLifecycleMutation").mockImplementation(
-      <T>(...args: Parameters<typeof mutate<T>>): Promise<T> => {
-        const [operation, options] = args;
-        const pending = mutate(operation, options);
-        if (operation === "rewind") {
-          rewindQueued.resolve();
-        }
+    const mutate = sessionController.runSessionMutation;
+    vi.spyOn(sessionController, "runSessionMutation").mockImplementation(
+      <T>(mutationParams: Parameters<typeof mutate<T>>[0]): Promise<T> => {
+        const pending = mutate(mutationParams);
+        rewindQueued.resolve();
         return pending;
       },
     );

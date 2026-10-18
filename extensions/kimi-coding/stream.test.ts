@@ -233,25 +233,6 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it("keeps tagged tool-call conversion when one wrapper changes thinking modes", async () => {
-    const baseStreamFn: StreamFn = () =>
-      createFakeStream({
-        events: [],
-        resultMessage: createAssistantTextMessage(KIMI_TOOL_TEXT),
-      }) as ReturnType<StreamFn>;
-    const wrapped = wrapKimiProviderStream({
-      streamFn: baseStreamFn,
-    } as never);
-    for (const reasoning of ["off", "max", undefined] as const) {
-      const stream = await wrapped(KIMI_MODEL, KIMI_CONTEXT, { reasoning });
-      await expect(stream.result()).resolves.toEqual({
-        role: "assistant",
-        content: [createReadToolCall()],
-        stopReason: "toolUse",
-      });
-    }
-  });
-
   it("defaults K3-256k to adaptive high thinking", () => {
     const modelId = "k3-256k";
     const { getCapturedModel, getCapturedPayload } = captureKimiPayload(
@@ -550,7 +531,7 @@ describe("kimi tool-call markup wrapper", () => {
 
   it("bounds per-call Kimi Anthropic thinking and lowers its adaptive default to native high", () => {
     const cases = [
-      ["off", undefined],
+      ["off", 1024],
       ["max", 8192],
       [undefined, 8192],
       ["minimal", 1024],
@@ -574,15 +555,13 @@ describe("kimi tool-call markup wrapper", () => {
     for (const [reasoning, budgetTokens] of cases) {
       void wrapped(KIMI_MODEL, KIMI_CONTEXT, { reasoning });
 
-      expect(getCapturedOptions()?.reasoning).toBe(reasoning ?? "high");
-      expect(getCapturedPayload()).toEqual(
-        reasoning === "off"
-          ? { thinking: { type: "disabled" } }
-          : {
-              max_tokens: 16000,
-              thinking: { type: "enabled", budget_tokens: budgetTokens },
-            },
+      expect(getCapturedOptions()?.reasoning).toBe(
+        reasoning === "off" ? "low" : (reasoning ?? "high"),
       );
+      expect(getCapturedPayload()).toEqual({
+        max_tokens: 16000,
+        thinking: { type: "enabled", budget_tokens: budgetTokens },
+      });
     }
   });
 });

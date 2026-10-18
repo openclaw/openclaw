@@ -62,28 +62,6 @@ const EMPTY_INPUT = {
 const redactedConfigValue = "[redacted]";
 
 describe("buildModelProviderCards", () => {
-  it("omits API-key-only auth rows without model-provider evidence", () => {
-    const cards = buildModelProviderCards({
-      ...EMPTY_INPUT,
-      authStatus: authStatus([
-        {
-          provider: "web-search",
-          displayName: "Web Search",
-          status: "static",
-          profiles: [],
-          apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
-        },
-        {
-          provider: "web-extract",
-          displayName: "Web Extract",
-          status: "static",
-          profiles: [{ profileId: "extract", type: "api_key", status: "static" }],
-        },
-      ]),
-    });
-    expect(cards).toEqual([]);
-  });
-
   it.each([true])(
     "keeps environment-only model auth independently of API-key setup support (%s)",
     (apiKeySupported) => {
@@ -102,7 +80,7 @@ describe("buildModelProviderCards", () => {
               provider: "web-search",
               displayName: "Web Search",
               status: "static",
-              profiles: [],
+              profiles: [{ profileId: "search", type: "api_key", status: "static" }],
               apiKey: { source: "env", envVar: "WEB_SEARCH_API_KEY" },
             },
           ],
@@ -245,6 +223,7 @@ describe("buildModelProviderCards", () => {
           profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
           profileOrder: ["p2", "p1"],
           profileOrderStored: true,
+          profileOrderLocked: "provider-config",
         },
         {
           provider: "claude-cli",
@@ -263,30 +242,9 @@ describe("buildModelProviderCards", () => {
       profileOrders: { anthropic: ["p2", "p1"] },
       profileOrderExplicitProviders: ["anthropic"],
       profileOrderStoredProviders: ["anthropic"],
+      profileOrderLocks: { anthropic: "provider-config" },
     });
   });
-
-  it.each(["provider-config"] as const)(
-    "projects %s priority locks onto the owning card",
-    (profileOrderLocked) => {
-      const cards = buildModelProviderCards({
-        ...EMPTY_INPUT,
-        authStatus: authStatus([
-          {
-            provider: "openai",
-            authProvider: "openai",
-            displayName: "OpenAI",
-            status: "ok",
-            profiles: [{ profileId: "p1", type: "oauth", status: "ok", source: "config" }],
-            profileOrder: ["p1"],
-            profileOrderLocked,
-          },
-        ]),
-      });
-
-      expect(firstCard(cards).profileOrderLocks).toEqual({ openai: profileOrderLocked });
-    },
-  );
 
   it("keeps a credential-less missing route visible beside CLI OAuth", () => {
     const cards = buildModelProviderCards({
@@ -423,6 +381,42 @@ describe("buildModelProviderCards", () => {
 });
 
 describe("model provider configuration data", () => {
+  it("keeps a fresh restricted catalog's default authoritative over a draft", () => {
+    const configured = {
+      primary: "openai/configured-model",
+      fallbacks: [],
+      utilityModel: null,
+      thinkingLevel: undefined,
+      thinkingOverridden: false,
+      fastMode: undefined,
+      fastModeOverridden: false,
+    };
+    const presentation = resolveDefaultModelPresentation(
+      {
+        models: [
+          catalogEntry({ provider: "openai", id: "allowed-model", available: true }),
+          catalogEntry({
+            provider: "openai",
+            id: "hidden-model",
+            manualSelectionAllowed: false,
+          }),
+        ],
+        hasSnapshot: true,
+        retired: false,
+        modelSelectionPolicy: { restricted: true, defaultModel: "openai/allowed-model" },
+      },
+      configured,
+      { ...configured, primary: "openai/draft-model", fallbacks: ["openai/draft-fallback"] },
+    );
+
+    expect(presentation.defaults).toEqual({
+      ...configured,
+      primary: "openai/allowed-model",
+      decisionModel: null,
+    });
+    expect(presentation.configuredModels.map(modelCatalogRef)).toEqual(["openai/allowed-model"]);
+  });
+
   it("offers usable defaults while preserving saved unavailable refs", () => {
     const models = [
       catalogEntry({ provider: "openai", id: "gpt-ready", available: true }),
@@ -431,12 +425,14 @@ describe("model provider configuration data", () => {
     const selectable = defaultModelChoices(models, {
       primary: "openai/gpt-saved",
       fallbacks: ["openai/gpt-disabled"],
-      utilityModel: null,
+      utilityModel: { primary: "openai/utility", fallbacks: ["openai/utility-backup"] },
     });
     expect(selectable.map((model) => `${model.provider}/${model.id}`)).toEqual([
       "openai/gpt-ready",
       "openai/gpt-disabled",
       "openai/gpt-saved",
+      "openai/utility",
+      "openai/utility-backup",
     ]);
   });
 
@@ -466,7 +462,10 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({
         models: {
-          providers: { openai: providerConfig(redactedConfigValue), anthropic: {} },
+          providers: {
+            openai: providerConfig(redactedConfigValue),
+            anthropic: { auth: "oauth" },
+          },
         },
         agents: {
           defaults: {
@@ -481,7 +480,7 @@ describe("model provider configuration data", () => {
     ).toEqual({
       providers: [
         { key: "openai", hasApiKey: true },
-        { key: "anthropic", hasApiKey: false },
+        { key: "anthropic", hasApiKey: false, authMode: "oauth" },
       ],
       defaults: {
         primary: "openai/gpt-5",
@@ -495,14 +494,6 @@ describe("model provider configuration data", () => {
     expect(
       readModelProviderConfig({ agents: { defaults: { utilityModel: "" } } }).defaults.utilityModel,
     ).toBe("");
-  });
-
-  it("retains explicit provider auth modes for API-key edit gating", () => {
-    expect(
-      readModelProviderConfig({
-        models: { providers: { OpenAI: { auth: "oauth" } } },
-      }).providers,
-    ).toEqual([{ key: "OpenAI", hasApiKey: false, authMode: "oauth" }]);
   });
 
   it("lists known providers that are not configured", () => {

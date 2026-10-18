@@ -66,7 +66,9 @@ function resolveMemoryEmbeddingProviderContract(params: {
     if (providerConfig) {
       providerConfigs.set(candidateId, {
         baseUrl: providerConfig.baseUrl,
-        apiKey: providerConfig.apiKey,
+        apiKey: params.context.managedSyntheticAuthProviders?.has(candidateId)
+          ? undefined
+          : providerConfig.apiKey,
         auth: providerConfig.auth,
         authHeader: providerConfig.authHeader,
         headers: providerConfig.headers,

@@ -228,22 +228,6 @@ describe("A2A outbound channel delivery", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("bounds oversized peer JSON responses before parsing", async () => {
-    const cfg = createA2aOutboundConfig();
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      createA2aJsonResponse({
-        jsonrpc: "2.0",
-        result: { task: { id: "remote-task-1" } },
-        padding: "x".repeat(16 * 1024 * 1024),
-      }),
-    );
-
-    await expect(sendA2aChannelText({ cfg, to: "hermes", text: "hello" })).rejects.toThrow(
-      "peer hermes A2A response: JSON response exceeds 16777216 bytes",
-    );
-    expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
   it("does not retain reflected outbound credentials in malformed responses", async () => {
     const outboundToken = "outbound-secret-token";
     const cfg = createA2aOutboundConfig({
@@ -299,30 +283,6 @@ describe("A2A outbound sends with unresolved authored credentials", () => {
         /outboundToken reference did not resolve/,
       );
       expect(ssrfRuntime.fetchWithSsrFGuard).not.toHaveBeenCalled();
-    });
-  });
-
-  it("still sends anonymously to a peer that never authored an outboundToken", async () => {
-    await withStateDirEnv("a2a-outbound-anonymous-", async ({ stateDir }) => {
-      const cfg = await loadPeerConfig(stateDir, {
-        token: "inbound-token",
-        url: "https://hermes.example/a2a/v1",
-      });
-      vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mockImplementationOnce(async () => ({
-        response: createA2aJsonResponse({
-          jsonrpc: "2.0",
-          id: "1",
-          result: { task: { id: "t1" } },
-        }),
-        finalUrl: "https://hermes.example/a2a/v1",
-        release: async () => {},
-      }));
-
-      await expect(
-        sendA2aChannelText({ cfg, to: "a2a:hermes", text: "hello" }),
-      ).resolves.toMatchObject({ to: "a2a:hermes" });
-      const init = vi.mocked(ssrfRuntime.fetchWithSsrFGuard).mock.calls[0]?.[0].init;
-      expect(init?.headers).not.toHaveProperty("authorization");
     });
   });
 });

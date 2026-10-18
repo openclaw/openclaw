@@ -1,13 +1,30 @@
 import { flush } from "solid-js";
-import { onTestFinished, vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardSnapshot, BoardWidget } from "../../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../../lib/board/view-types.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
+import {
+  createApplicationContextProvider,
+  createApplicationGateway,
+} from "../../test-helpers/application-context.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 
 type OpenClawBoardView = HTMLElementTagNameMap["openclaw-board-view"];
 type OpenClawBoardWidgetCell = HTMLElementTagNameMap["openclaw-board-widget-cell"];
+
+export async function openBoardMenu(
+  root: ParentNode,
+  selector = ".board-widget__menu-trigger",
+): Promise<void> {
+  const trigger = root.querySelector<HTMLButtonElement>(selector)!;
+  trigger.click();
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+}
 
 export function boardWidget(overrides: Partial<BoardWidget> = {}): BoardWidget {
   return {
@@ -61,16 +78,14 @@ export function callbacks(overrides: Partial<BoardViewCallbacks> = {}): BoardVie
   };
 }
 
-export function gatewayContext(
-  client: { request: ReturnType<typeof vi.fn> } | null,
-  basePath = "",
-) {
+export function gatewayContext(client: { request: GatewayRequestHandler } | null, basePath = "") {
+  const { gateway } = createApplicationGateway();
+  gateway.connection.gatewayUrl = "";
+  gateway.snapshot.client = client ? createTestGatewayClient(client.request) : null;
+  gateway.snapshot.phase = "connected";
   return {
     basePath,
-    gateway: {
-      connection: { gatewayUrl: "" },
-      snapshot: { client, phase: "connected" },
-    },
+    gateway,
   } as unknown as ApplicationContext;
 }
 

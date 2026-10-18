@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { seedCronStoreInCurrentDatabase } from "../../test/helpers/cron/store.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CronService } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
@@ -37,7 +39,7 @@ function makeJob(id: string, fields: Partial<CronStoredJob> = {}): CronStoredJob
   };
 }
 
-function readDurableRows(db: DatabaseSync) {
+function readDurableRows(db: EngineConnection) {
   return {
     jobs: db.prepare("SELECT * FROM cron_jobs ORDER BY store_key, job_id").all(),
     scratch: db.prepare("SELECT * FROM cron_job_scratch ORDER BY store_key, job_id").all(),
@@ -112,7 +114,7 @@ async function withFamilyStore(
       ]);
       await run({
         cron,
-        db: openOpenClawStateDatabase().db,
+        db: requireNativeSqliteDatabase(openOpenClawStateDatabase().db),
         activeStore,
         staleStore,
         removeFamilyNative: async (identity) =>

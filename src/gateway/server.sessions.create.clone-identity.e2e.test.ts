@@ -11,11 +11,11 @@ import { getRuntimeConfig } from "../config/io.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as processExec from "../process/exec.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { controlUiClient } from "./server.sessions.create.projects.test-support.js";
-import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { dispatchInboundMessageMock } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -92,10 +92,7 @@ test.each(
       counts: { block: 0, final: 0, tool: 0 },
     });
     const broadcast = vi.fn();
-    const context = {
-      broadcast,
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
-    };
+    const context = { broadcast };
     let sequence = 0;
     const errors = () =>
       JSON.stringify(
@@ -124,14 +121,14 @@ test.each(
       expect(created.ok, JSON.stringify(created.error)).toBe(true);
       expect(created.payload).toMatchObject({ runStarted: true });
       const { key, runId } = created.payload!;
-      const target = loadGatewaySessionEntryReadOnly(key, { agentId: "main" });
-      const released = getSessionWorkAdmissionRelease({
+      const target = await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" });
+      const released = captureSessionControllerSettlement({
         scope: target.storePath,
         identities: [key],
       });
       await released;
-      expect(context.chatAbortControllers.has(runId)).toBe(false);
-      const entry = loadGatewaySessionEntryReadOnly(key, { agentId: "main" }).entry;
+      expect(getRpcSource(runId)).toBeUndefined();
+      const entry = (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" })).entry;
       expect(
         entry,
         JSON.stringify({

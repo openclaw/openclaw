@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { type RawData, WebSocketServer } from "ws";
 import { createQaGatewayChild, type QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import {
@@ -25,15 +25,8 @@ import {
   loadOrCreateDeviceIdentity,
   type DeviceIdentity,
 } from "../../../../src/infra/device-identity.js";
-import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
-
-const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
-afterEach(async () => {
-  for (const owner of gatewayOwners.splice(0)) {
-    await stopQaGatewayFixture(owner);
-  }
-});
 
 const TEST_TIMEOUT_MS = 180_000;
 const REQUEST_TIMEOUT_MS = 20_000;
@@ -94,42 +87,72 @@ type StoppableFixture = {
 
 describe("Gateway node control plane", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: GatewayHandle;
+  let pluginFixture: Awaited<ReturnType<typeof createFixturePlugin>> | undefined;
+
+  // Pairing and protocol behavior use distinct devices; Gateway startup is not under test.
+  beforeAll(async () => {
+    const fixture = (pluginFixture = await createFixturePlugin());
+    gateway = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      command: {
+        executablePath: process.execPath,
+        argsPrefix: ["dist/entry.js"],
+        cwd: process.cwd(),
+        usePackagedPlugins: true,
+      },
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiEnabled: false,
+      runtimeEnvPatch: {
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_PROVIDERS: "1",
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      },
+      mutateConfig: (cfg) => {
+        // This control-plane fixture must not request unrelated QA runtime plugin installs.
+        return {
+          ...cfg,
+          plugins: {
+            enabled: true,
+            allow: [FIXTURE_PLUGIN_ID],
+            slots: { memory: "none" },
+            load: { paths: [fixture.pluginDir] },
+            entries: { [FIXTURE_PLUGIN_ID]: { enabled: true } },
+          },
+          gateway: {
+            ...cfg.gateway,
+            nodes: {
+              ...cfg.gateway?.nodes,
+              commands: { allow: [...NODE_COMMANDS, FIXTURE_COMMAND] },
+            },
+          },
+        };
+      },
+    });
+  });
+
+  afterAll(async () => {
+    await runQaGatewayFixture(
+      async () => {
+        await stopQaGatewayFixture(gatewayOwner);
+        if (gateway) {
+          expect(existsSync(gateway.tempRoot)).toBe(false);
+        }
+      },
+      async () => {
+        if (pluginFixture) {
+          await pluginFixture.cleanup();
+          expect(existsSync(pluginFixture.root)).toBe(false);
+        }
+      },
+    );
+  });
 
   it(
     "pairs, inventories, invokes, and records presence for one remote device",
     { timeout: TEST_TIMEOUT_MS },
     async () => {
-      const gatewayOwner = createQaGatewayChild();
-      gatewayOwners.push(gatewayOwner);
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        command: {
-          executablePath: process.execPath,
-          argsPrefix: ["dist/entry.js"],
-          cwd: process.cwd(),
-          usePackagedPlugins: true,
-        },
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiEnabled: false,
-        runtimeEnvPatch: {
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        },
-        mutateConfig: (cfg) => {
-          return {
-            ...cfg,
-            plugins: { enabled: false },
-            gateway: {
-              ...cfg.gateway,
-              nodes: {
-                ...cfg.gateway?.nodes,
-                commands: { allow: NODE_COMMANDS },
-              },
-            },
-          };
-        },
-      });
       const identity = loadOrCreateDeviceIdentity({
         path: path.join(gateway.tempRoot, "control-plane-node.sqlite"),
       });
@@ -312,9 +335,6 @@ describe("Gateway node control plane", () => {
           ...(node ? [node.stopAndWait({ timeoutMs: 1_000 })] : []),
           ...(operator ? [operator.stopAndWait({ timeoutMs: 1_000 })] : []),
         ]);
-        const tempRoot = gateway.tempRoot;
-        await gateway.stop();
-        expect(existsSync(tempRoot)).toBe(false);
       }
     },
   );
@@ -504,8 +524,6 @@ describe("Gateway node control plane", () => {
       expect(MIN_NODE_PROTOCOL_VERSION).toBe(3);
       expect(PROTOCOL_VERSION).toBe(4);
 
-      const fixture = await createFixturePlugin();
-      let gateway: GatewayHandle | undefined;
       let operator: GatewayClient | undefined;
       let node: GatewayClient | undefined;
       let proofError: unknown;
@@ -515,44 +533,6 @@ describe("Gateway node control plane", () => {
       const invocationResponses: Promise<void>[] = [];
 
       try {
-        const gatewayOwner = createQaGatewayChild();
-        gatewayOwners.push(gatewayOwner);
-        gateway = await gatewayOwner.start({
-          repoRoot: process.cwd(),
-          command: {
-            executablePath: process.execPath,
-            argsPrefix: ["dist/entry.js"],
-            cwd: process.cwd(),
-            usePackagedPlugins: true,
-          },
-          transportBaseUrl: "http://127.0.0.1",
-          controlUiEnabled: false,
-          runtimeEnvPatch: {
-            OPENCLAW_SKIP_CHANNELS: "1",
-            OPENCLAW_SKIP_PROVIDERS: "1",
-            OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          },
-          mutateConfig: (cfg) => {
-            // This control-plane fixture must not request unrelated QA runtime plugin installs.
-            return {
-              ...cfg,
-              plugins: {
-                enabled: true,
-                allow: [FIXTURE_PLUGIN_ID],
-                slots: { memory: "none" },
-                load: { paths: [fixture.pluginDir] },
-                entries: { [FIXTURE_PLUGIN_ID]: { enabled: true } },
-              },
-              gateway: {
-                ...cfg.gateway,
-                nodes: {
-                  ...cfg.gateway?.nodes,
-                  commands: { allow: ["camera.list", FIXTURE_COMMAND] },
-                },
-              },
-            };
-          },
-        });
         const identity = loadOrCreateDeviceIdentity({
           path: path.join(gateway.tempRoot, "rolling-compat-node.sqlite"),
         });
@@ -698,21 +678,6 @@ describe("Gateway node control plane", () => {
           if (result.status === "rejected") {
             cleanupErrors.push(result.reason);
           }
-        }
-        if (gateway) {
-          const tempRoot = gateway.tempRoot;
-          try {
-            await gateway.stop();
-            expect(existsSync(tempRoot)).toBe(false);
-          } catch (error) {
-            cleanupErrors.push(error);
-          }
-        }
-        try {
-          await fixture.cleanup();
-          expect(existsSync(fixture.root)).toBe(false);
-        } catch (error) {
-          cleanupErrors.push(error);
         }
       }
       const failures = proofError === undefined ? cleanupErrors : [proofError, ...cleanupErrors];

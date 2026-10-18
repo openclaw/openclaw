@@ -29,14 +29,15 @@ vi.mock("../config/config.js", () => ({
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { waitForSessionParticipantRecording } from "../sessions/session-participant-recording.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/runs.js";
 import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
-import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  testing as embeddedRunsTesting,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -69,13 +70,20 @@ afterEach(() => {
 });
 
 it.each([
-  { supportsTranscriptCommitWait: false },
-  { supportsTranscriptCommitWait: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
+  {},
+  { mode: "steer" as const, alternateStore: true },
+  { mode: "steer" as const, hiddenRun: true },
 ])(
-  "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
-  async ({ supportsTranscriptCommitWait, mode, alternateStore, hiddenRun }) => {
+  "sessions_send persists steered provenance with mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
+  async ({
+    mode,
+    alternateStore,
+    hiddenRun,
+  }: {
+    mode?: "steer";
+    alternateStore?: boolean;
+    hiddenRun?: boolean;
+  }) => {
     const runId = "hidden-sessions-send-steering-run";
     const runScopedCallerKey =
       mode === "steer"
@@ -149,11 +157,16 @@ it.each([
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           isStreaming: () => true,
           isCompacting: () => false,
-          supportsTranscriptCommitWait,
+          supportsTranscriptCommitWait: true,
           sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
           abort: () => {},
         },
         runScopedCallerKey,
+        undefined,
+        scope.agentId,
+        undefined,
+        undefined,
+        { storeScope: scope.storePath },
       );
       if (hiddenRun) {
         registerAgentRunContext(runId, {
@@ -219,9 +232,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
-      );
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(mode !== "steer");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = SessionManager.open(scope, dir).getEntries();
       expect(
@@ -245,6 +256,7 @@ it.each([
       expect(callGatewayMock.mock.calls.some(([request]) => request.method === "agent")).toBe(
         false,
       );
+      await waitForSessionParticipantRecording(scope);
       expect(listSessionParticipantsReadOnly(scope).get(runScopedCallerKey)).toEqual([
         expect.objectContaining({
           identity: { type: "agent", id: "re-portal" },

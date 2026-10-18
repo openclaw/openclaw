@@ -1,6 +1,9 @@
+from contextlib import redirect_stdout
+import io
+import hashlib
+import json
 import os
 from pathlib import Path
-import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -8,6 +11,8 @@ from unittest.mock import Mock, patch
 
 from first_run import role_matches
 from gateway_switch import GatewayOnboardingFixture, GatewaySwitchFixture
+from inline_browser import GatewayFixture
+from stage_onboarding_runtime import stage_onboarding_runtime
 
 
 class GatewayPointerTests(unittest.TestCase):
@@ -53,7 +58,7 @@ class GatewayPointerTests(unittest.TestCase):
 
 
 class OnboardingResourcesTests(unittest.TestCase):
-    def test_stages_runtime_and_installs_a_canonical_launcher(self):
+    def test_stages_the_compiled_runtime_without_a_parallel_installer(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             binary = root / "source/openclaw-desktop"
@@ -72,17 +77,35 @@ class OnboardingResourcesTests(unittest.TestCase):
                 for relative in ("manifest.json", "bin/bun"):
                     self.assertEqual((staged.parent / "desktop-runtime" / relative).read_bytes(),
                                      (runtime / relative).read_bytes())
-                subprocess.run([
-                    "bash", str(staged.parent / "install-cli.sh"), "--json", "--no-onboard",
-                    "--prefix", str(prefix), "--version", "main", "--runtime-only",
-                    "--install-method", "git", "--git-dir", str(prefix / "dev/openclaw"),
-                ], cwd=home, check=True, capture_output=True)
-                cli = prefix / "bin/openclaw"
-                self.assertEqual(cli.read_text(), '#!/usr/bin/env bash\nset -euo pipefail\n'
-                                 f'exec "{prefix}/tools/node/bin/node" "{prefix}/dev/openclaw/dist/entry.js" "$@"\n')
-                self.assertIn("OpenClaw fixture", subprocess.check_output([str(cli), "--version"], text=True))
-                self.assertTrue((home / "fixture-installer-called").is_file())
-                self.assertFalse((home / "fixture-runtime-installed.json").exists())
+                self.assertFalse((staged.parent / "install-cli.sh").exists())
+
+    def test_fixture_package_replaces_core_but_preserves_the_pinned_runtime(self):
+        for with_package in (False, True):
+            with self.subTest(with_package=with_package), tempfile.TemporaryDirectory() as temporary:
+                runtime = Path(temporary) / "desktop-runtime"
+                runtime.mkdir()
+                copied = runtime.parent / "debug/desktop-runtime"
+                copied.mkdir(parents=True)
+                (copied / "stale.js").touch()
+                package = runtime / "package"
+                files = {"bin/bun": "runtime-hash"}
+                if with_package:
+                    package.mkdir()
+                    (package / "old.js").write_text("old core")
+                    files["package/old.js"] = "old-hash"
+                (runtime / "manifest.json").write_text(json.dumps({
+                    "revision": "pinned", "files": files,
+                }))
+                stage_onboarding_runtime(runtime)
+                manifest = json.loads((runtime / "manifest.json").read_text())
+                entry = "package/node_modules/openclaw/openclaw.mjs"
+                content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
+                self.assertEqual(manifest, {"revision": "pinned", "files": {
+                    "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
+                }})
+                self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
+                self.assertFalse((package / "old.js").exists())
+                self.assertFalse(copied.exists())
 
     def test_missing_runtime_resources_fail_before_launch(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -156,6 +179,100 @@ class RoleMatchingTests(unittest.TestCase):
         ):
             with self.subTest(attributes=attributes):
                 self.assertFalse(role_matches("article", "heading", attributes))
+
+
+class NativeMenuTests(unittest.TestCase):
+    invalid_id = "org.gtk.GDBus.UnmappedGError.Quark._LIBDBUSMENU_2dGLIB.Code0"
+
+    def open_menu(self, rejection):
+        class BusError(RuntimeError):
+            pass
+
+        calls, delivered = [], []
+        current_id = 44
+        click_count = 0
+        error = BusError("Synthetic D-Bus rejection")
+        error.remote = rejection
+        app = SimpleNamespace(pid=1234, poll=lambda: None)
+
+        def variant(signature, value):
+            return SimpleNamespace(value=value, unpack=lambda: value)
+
+        def call(service, path, interface, method, arguments, *_args):
+            nonlocal current_id, click_count
+            values = arguments.value if arguments else None
+            calls.append((method, values))
+            if method == "ListNames":
+                result = ([":1.7"],)
+            elif method == "GetConnectionUnixProcessID":
+                result = (app.pid,)
+            elif method == "Introspect":
+                result = ('<node><interface name="com.canonical.dbusmenu"/></node>',)
+            elif method == "AboutToShow":
+                result = (False,)
+            elif method == "GetLayout":
+                item = (current_id, {"label": "Manage Gateways…"}, [])
+                submenu = (10, {"label": "Gateways", "children-display": "submenu"}, [item])
+                if values[0] == 0:
+                    if values[1] == 1:
+                        submenu = (submenu[0], submenu[1], [])
+                    result = (1, (0, {}, [submenu]))
+                else:
+                    result = (1, submenu)
+            elif method == "Event":
+                item_id, event, _, _ = values
+                if event == "clicked":
+                    click_count += 1
+                    if rejection and (click_count == 1 or rejection == "always-stale"):
+                        current_id = 45
+                        if rejection == "always-stale":
+                            error.remote = self.invalid_id
+                        raise error
+                    delivered.append(item_id)
+                result = ()
+            else:
+                raise AssertionError(f"Unexpected D-Bus call: {method}")
+            return variant("", result)
+
+        gio = SimpleNamespace(
+            bus_get_sync=lambda *_: SimpleNamespace(call_sync=call),
+            BusType=SimpleNamespace(SESSION=0),
+            DBusCallFlags=SimpleNamespace(NONE=0),
+            DBusError=SimpleNamespace(get_remote_error=lambda error: error.remote),
+        )
+        glib = SimpleNamespace(Variant=variant, Error=BusError)
+        modules = {"gi": SimpleNamespace(), "gi.repository": SimpleNamespace(Gio=gio, GLib=glib)}
+        self.calls, self.delivered = calls, delivered
+        with patch.dict("sys.modules", modules), redirect_stdout(io.StringIO()):
+            GatewayFixture.__new__(GatewayFixture).open_native_menu(app, "Manage Gateways…")
+
+    def test_refreshes_a_rejected_menu_id_and_delivers_one_click(self):
+        self.open_menu(self.invalid_id)
+        self.assertEqual(self.delivered, [45])
+        clicks = [values[0] for method, values in self.calls
+                  if method == "Event" and values[1] == "clicked"]
+        self.assertEqual(clicks, [44, 45])
+        first_click = next(index for index, (method, values) in enumerate(self.calls)
+                           if method == "Event" and values[1] == "clicked")
+        before_click = self.calls[:first_click]
+        self.assertIn(("AboutToShow", (0,)), before_click)
+        self.assertIn(("AboutToShow", (10,)), before_click)
+        self.assertTrue(any(method == "Event" and values[:2] == (10, "opened")
+                            for method, values in before_click))
+
+    def test_other_dbus_errors_are_not_retried(self):
+        with self.assertRaisesRegex(RuntimeError, "Synthetic D-Bus rejection"):
+            self.open_menu("org.freedesktop.DBus.Error.AccessDenied")
+        self.assertEqual(self.delivered, [])
+        self.assertEqual(sum(method == "Event" and values[1] == "clicked"
+                             for method, values in self.calls), 1)
+
+    def test_a_second_stale_id_is_not_retried_again(self):
+        with self.assertRaisesRegex(RuntimeError, "Synthetic D-Bus rejection"):
+            self.open_menu("always-stale")
+        self.assertEqual(self.delivered, [])
+        self.assertEqual(sum(method == "Event" and values[1] == "clicked"
+                             for method, values in self.calls), 2)
 
 
 if __name__ == "__main__":

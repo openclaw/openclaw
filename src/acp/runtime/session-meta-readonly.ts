@@ -9,11 +9,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   buildAcpDatabaseSessionKey,
+  readPublishedAcpSessionRows,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -51,13 +55,30 @@ export async function readAcpSessionMetaForEntries(
         }
       : undefined,
   }));
+  const database = {
+    env: params.env,
+    path: params.databasePath ?? resolveOpenClawStateSqlitePath(params.env),
+  };
+  const context =
+    options.current || !getActiveOpenClawStateDatabaseReadSnapshot(database)
+      ? captureOpenClawStateReadWorkerContext(database)
+      : undefined;
+  if (context) {
+    const published = readPublishedAcpSessionRows(database.path, entries);
+    if (published) {
+      options.signal?.throwIfAborted();
+      context.maintenanceScope?.assertAdmission();
+      context.admission.assertCurrent();
+      return published.map((row) => (row ? rowToAcpSessionMeta(row) : null));
+    }
+  }
   const result = await executeExistingOpenClawStateRead(
-    { env: params.env, path: params.databasePath },
+    database,
     {
       type: "acpSessions.metadata",
       entries,
     },
-    options,
+    { ...options, context },
   );
   if (result === undefined) {
     return entries.map(() => null);
@@ -87,7 +108,9 @@ export async function readAcpSessionMetaForEntryAsync(
   return metadata ?? undefined;
 }
 
-export function rowToAcpSessionMeta(row: AcpSessionRow): SessionAcpMeta {
+export function rowToAcpSessionMeta(
+  row: Omit<AcpSessionRow, "resume_agent_session_id" | "resume_acpx_session_id">,
+): SessionAcpMeta {
   // SAFETY: These JSON columns are written from the typed ACP metadata by its storage owner.
   const identity = safeParseJsonRecord(row.identity_json ?? "") as SessionAcpIdentity | undefined;
   // SAFETY: Runtime options share the same typed persisted metadata contract.

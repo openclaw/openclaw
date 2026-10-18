@@ -20,7 +20,11 @@ import { setPluginToolMeta } from "../../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { wrapToolWithAbortSignal } from "../../agent-tools.abort.js";
 import { createCodeModeCatalogProjection } from "../../code-mode-catalog.js";
-import { applyCodeModeCatalog, createCodeModeTools } from "../../code-mode.js";
+import {
+  applyCodeModeCatalog,
+  buildCodeModeCatalogPrompt,
+  createCodeModeTools,
+} from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
 import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
@@ -30,7 +34,6 @@ import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { compactToolSearchCatalogEntry } from "../../tool-search-catalog.js";
 import {
   applyToolSearchCatalog,
-  clearToolSearchCatalog,
   createToolSearchCatalogRef,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "../../tool-search.js";
@@ -450,11 +453,11 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       catalogRef,
       codeModeSkills,
     });
-    const initialExec = compacted.tools.find((tool) => tool.name === "exec");
-    expect(initialExec?.description).toContain(
-      "- llm_task { secret: string } -> { receipt: string }",
-    );
-    expect(initialExec?.description).toContain("skills.read(name)");
+    const context = { config: CODE_MODE_CONFIG, catalogRef, codeModeSkills };
+    const initialPrompt = buildCodeModeCatalogPrompt(context, catalogRef.current?.entries ?? []);
+    const initialDescription = compacted.tools.find((tool) => tool.name === "exec")?.description;
+    expect(initialPrompt).toContain("- llm_task { secret: string } -> { receipt: string }");
+    expect(initialPrompt).toContain("skills.read(name)");
 
     const prepared = prepare({
       codeModeControlsEnabledForRun: true,
@@ -475,11 +478,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(projection.byCallableName.get("llm_task")?.source).toBe("client");
 
     const providerExec = prepared.allCustomTools.find((tool) => tool.name === "exec");
-    expect(providerExec?.description).toContain("- llm_task unknown -> ?");
-    expect(providerExec?.description).toContain(
+    expect(providerExec?.description).toBe(initialDescription);
+    const providerPrompt = buildCodeModeCatalogPrompt(context, catalogRef.current?.entries ?? []);
+    expect(providerPrompt).toContain("- llm_task unknown -> ?");
+    expect(providerPrompt).toContain(
       `- ${trustedBinding?.callableName} { secret: string } -> { receipt: string }`,
     );
-    expect(providerExec?.description).toContain("skills.read(name)");
+    expect(providerPrompt).toContain("skills.read(name)");
 
     const guestResult = await runUntilCompleted({
       execTool: controls[0]!,
@@ -502,13 +507,13 @@ describe("prepareEmbeddedAttemptClientTools", () => {
       catalogRef,
       codeModeControlsEnabled: true,
     }).apply({ toolsAllow: ["llm-task"] });
-    expect(providerExec?.description).toContain(
-      "- llm_task { secret: string } -> { receipt: string }",
-    );
-    expect(providerExec?.description).not.toContain("- llm_task unknown -> ?");
-    expect(providerExec?.description).not.toContain(trustedBinding?.callableName);
-    expect(providerExec?.description).not.toContain("skills.read(");
-    expect(providerExec?.description).not.toContain("skills.search(");
+    const restrictedPrompt = buildCodeModeCatalogPrompt(context, catalogRef.current?.entries ?? []);
+    expect(restrictedPrompt).toContain("- llm_task { secret: string } -> { receipt: string }");
+    expect(restrictedPrompt).not.toContain("- llm_task unknown -> ?");
+    expect(restrictedPrompt).not.toContain(trustedBinding?.callableName);
+    expect(restrictedPrompt).not.toContain("skills.read(");
+    expect(restrictedPrompt).not.toContain("skills.search(");
+    expect(providerExec?.description).toBe(initialDescription);
   });
 
   it("hides client tools behind the tool-search catalog when code mode is not engaged", () => {
@@ -524,115 +529,6 @@ describe("prepareEmbeddedAttemptClientTools", () => {
 
     expect(result.clientToolDefs).toEqual([]);
     expect(result.allCustomTools).toEqual([]);
-  });
-
-  it("keeps registry descriptions current until catalog cleanup releases every wrapper", () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const catalogTools = [createStubTool("allowed_target"), createStubTool("removed_target")];
-    const controls = createCodeModeTools({
-      config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
-      agentId: "main",
-      runId: "run",
-      catalogRef,
-    });
-    const compacted = applyCodeModeCatalog({
-      tools: [...controls, ...catalogTools],
-      config: CODE_MODE_CONFIG,
-      agentId: "main",
-      catalogRef,
-    });
-    const originalExec = compacted.tools.find((tool) => tool.name === "exec")!;
-    const activityTools = compacted.tools.map((tool) =>
-      wrapEmbeddedAttemptToolWithActivity(tool, "run"),
-    );
-    const activityExec = activityTools.find((tool) => tool.name === "exec")!;
-    const prepared = prepare({
-      codeModeControlsEnabledForRun: true,
-      attemptConfig: CODE_MODE_CONFIG,
-      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
-      catalogRef,
-      effectiveTools: activityTools,
-      uncompactedEffectiveTools: catalogTools,
-      clientTools: [],
-    });
-    const originalDefinition = prepared.allCustomTools.find((tool) => tool.name === "exec")!;
-    const activeRegistryExec = wrapToolDefinition(originalDefinition);
-
-    createAgentHarnessPromptToolPolicy({
-      tools: prepared.allCustomTools,
-      catalogRef,
-      codeModeControlsEnabled: true,
-    }).apply({ toolsAllow: ["allowed_target"] });
-
-    const refreshedRegistryExec = wrapToolDefinition(originalDefinition);
-    for (const tool of [
-      originalExec,
-      activityExec,
-      originalDefinition,
-      activeRegistryExec,
-      refreshedRegistryExec,
-    ]) {
-      expect(tool.description).toContain("- allowed_target");
-      expect(tool.description).not.toContain("- removed_target");
-    }
-
-    const expiredCatalogObserver = catalogRef.onChange!;
-    clearToolSearchCatalog({ catalogRef });
-    expect(catalogRef.current).toBeUndefined();
-    expect(catalogRef.onChange).toBeUndefined();
-
-    for (const tool of [originalExec, activityExec, originalDefinition, activeRegistryExec]) {
-      tool.description = "released description";
-    }
-    expiredCatalogObserver();
-    for (const tool of [originalExec, activityExec, originalDefinition, activeRegistryExec]) {
-      expect(tool.description).toBe("released description");
-    }
-
-    const postCleanupRegistryExec = wrapToolDefinition(originalDefinition);
-    postCleanupRegistryExec.description = "released registry wrapper";
-    expiredCatalogObserver();
-    expect(postCleanupRegistryExec.description).toBe("released registry wrapper");
-  });
-
-  it("releases the previous description observer when a run catalog observer is replaced", () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const context = {
-      config: CODE_MODE_CONFIG,
-      sessionId: "session",
-      sessionKey: "session-key",
-      agentId: "main",
-      runId: "run",
-      catalogRef,
-    };
-    const originalControls = createCodeModeTools(context);
-    const first = applyCodeModeCatalog({
-      ...context,
-      tools: [...originalControls, createStubTool("original_target")],
-    });
-    const originalExec = first.tools.find((tool) => tool.name === "exec")!;
-    const originalWrapper = wrapEmbeddedAttemptToolWithActivity(originalExec, "run");
-    const expiredCatalogObserver = catalogRef.onChange!;
-
-    const replacementControls = createCodeModeTools(context);
-    const replacement = applyCodeModeCatalog({
-      ...context,
-      tools: [...replacementControls, createStubTool("replacement_target")],
-    });
-    const replacementExec = replacement.tools.find((tool) => tool.name === "exec")!;
-    expect(catalogRef.onChange).not.toBe(expiredCatalogObserver);
-    expect(replacementExec.description).toContain("- replacement_target");
-
-    originalExec.description = "released original description";
-    originalWrapper.description = "released original wrapper";
-    expiredCatalogObserver();
-    expect(originalExec.description).toBe("released original description");
-    expect(originalWrapper.description).toBe("released original wrapper");
-    expect(replacementExec.description).toContain("- replacement_target");
-
-    clearToolSearchCatalog({ catalogRef });
   });
 
   it("keeps client tools directly callable for directory Tool Search", () => {

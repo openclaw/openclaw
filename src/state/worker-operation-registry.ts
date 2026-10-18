@@ -100,7 +100,7 @@ export function createWorkerOperationRegistry<
     },
     has(command: {
       type: PropertyKey;
-      input: unknown;
+      input?: unknown;
     }): command is SqliteWorkerCommand<Operations> {
       return handlerFor(command.type) !== undefined;
     },

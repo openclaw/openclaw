@@ -7,7 +7,6 @@ import {
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getTotalQueueSize,
   setCommandLaneConcurrency,
@@ -226,26 +225,7 @@ describe("ownerless reservation and manual completion", () => {
     } finally {
       release.resolve();
       await blocker;
-      clearCommandLane(CommandLane.Cron);
     }
-  });
-
-  it("returns ownerless for a direct run without a terminal tracker", async () => {
-    const job = commandJob("ownerless-direct");
-    const { state, events, execute } = await setupOwnerlessJob(job);
-    await expect(run(state, job.id, "force")).resolves.toEqual({
-      ok: true,
-      ran: false,
-      reason: "ownerless",
-    });
-    expect(events.filter((event) => event.action === "finished")).toEqual([
-      expect.objectContaining({
-        jobId: job.id,
-        status: "skipped",
-        error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE,
-      }),
-    ]);
-    expect(execute).not.toHaveBeenCalled();
   });
 });
 
@@ -399,7 +379,6 @@ describe("ownerless skip transaction guards", () => {
     const job = commandJob("ownerless-live-receipt");
     const { state, storePath, events, execute } = await setupOwnerlessJob(job, () => owner);
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "ops",
@@ -409,7 +388,6 @@ describe("ownerless skip transaction guards", () => {
       claimCronRunReceiptInDatabaseForTest({
         database: db,
         prepared,
-        resolveAgentId: () => "ops",
       }),
     );
     owner = undefined;

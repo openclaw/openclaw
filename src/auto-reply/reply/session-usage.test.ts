@@ -4,10 +4,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import * as sessionActors from "../../config/sessions/session-actor.js";
 import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { runOutsideStoreWriterContext } from "../../shared/store-writer-queue.js";
 import {
   closeOpenClawAgentDatabasesAsync,
@@ -17,9 +19,7 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareSessionUsageUpdate } from "./session-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -37,12 +37,7 @@ describe("session actor usage accounting", () => {
     const storePath = seed.incognito
       ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env })
       : path.join(root, "agents", "main", "sessions", "sessions.json");
-    const scope = {
-      agentId: "main",
-      storePath,
-      sessionKey,
-      ...(seed.incognito ? { env } : {}),
-    };
+    const scope = { agentId: "main", storePath, sessionKey, ...(seed.incognito ? { env } : {}) };
     await replaceSessionEntry(scope, { sessionId: "s1", updatedAt: 1, ...seed });
     const read = () => expectDefined(loadSessionEntry(scope), "stored session");
     return {
@@ -79,6 +74,7 @@ describe("session actor usage accounting", () => {
           );
         } finally {
           operation.complete();
+          await operation.ownerSettlement;
         }
       },
       read,
@@ -149,28 +145,27 @@ describe("session actor usage accounting", () => {
     }
   });
 
-  it("completes usage in the existing unbound native incognito owner", async () => {
+  it("completes usage in the existing unbound memory actor", async () => {
     const session = await usageSession(
       { incognito: true },
-      "agent:main:dashboard:incognito-native-completion",
+      "agent:main:dashboard:incognito-memory-completion",
     );
     const { scope } = session;
     const database = { agentId: scope.agentId, path: scope.storePath, env: scope.env };
-    const native = expectDefined(
-      getOpenClawAgentDatabaseIfOpen(database),
-      "native incognito owner",
-    );
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
+    const memory = expectDefined(memorySessionActorOwners.read(database), "memory session owner");
+    try {
+      await session.update(producingUpdate);
 
-    await session.update(producingUpdate);
-
-    expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
-    expect(getOpenClawAgentDatabaseIfOpen(database)).toBe(native);
-    expect(captureOpenClawAgentDatabaseExecution.listIncognito(scope.env)).toEqual([]);
-    expect(existsSync(scope.storePath)).toBe(false);
-    expect(
-      existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
-    ).toBe(false);
+      expect(session.read()).toMatchObject({ incognito: true, inputTokens: 120, outputTokens: 8 });
+      expect(memorySessionActorOwners.read(database)).toBe(memory);
+      expect(getOpenClawAgentDatabaseIfOpen(database)).toBeUndefined();
+      expect(existsSync(scope.storePath)).toBe(false);
+      expect(
+        existsSync(resolveOpenClawAgentSqlitePath({ agentId: scope.agentId, env: scope.env })),
+      ).toBe(false);
+    } finally {
+      memorySessionActorOwners.closeDatabase(database);
+    }
   });
 
   const retainedRuntime = {
@@ -284,6 +279,51 @@ describe("session actor usage accounting", () => {
       },
     },
     {
+      name: "clears a previous complete snapshot after an interrupted response",
+      seed: {
+        inputTokens: 123,
+        outputTokens: 45,
+        cacheRead: 12,
+        estimatedCostUsd: 0.25,
+        totalTokens: 135,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+      update: {
+        usage: { usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } },
+        currentContextSnapshot: { tokens: undefined },
+      },
+      expected: {
+        usageReport: { state: "unavailable" },
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        estimatedCostUsd: undefined,
+        totalTokens: undefined,
+        totalTokensFresh: false,
+        totalTokensVersion: undefined,
+      },
+    },
+    {
+      name: "persists complete zero accounting without a price over a previous snapshot",
+      seed: {
+        inputTokens: 100,
+        outputTokens: 20,
+        cacheRead: 5,
+        cacheWrite: 2,
+        estimatedCostUsd: 0.5,
+      },
+      update: { usage: { input: 0, output: 0, total: 0, usageReport: { state: "available" } } },
+      expected: {
+        usageReport: { state: "available" },
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      absent: ["estimatedCostUsd"],
+    },
+    {
       name: "persists totalTokens from promptTokens when usage is unavailable",
       seed: { inputTokens: 1_234, outputTokens: 456 },
       update: { usage: undefined, promptTokens: 39_000 },
@@ -381,16 +421,10 @@ describe("session actor usage accounting", () => {
   });
 
   it("snapshots estimatedCostUsd instead of accumulating (fixes #69347)", async () => {
-    const session = await usageSession({
-      sessionId: "s1",
-      updatedAt: Date.now(),
-    });
+    const session = await usageSession({ sessionId: "s1", updatedAt: Date.now() });
 
     const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { main: {}, other: {} },
-      },
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
       models: {
         providers: {
           openai: {

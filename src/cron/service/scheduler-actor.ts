@@ -15,16 +15,21 @@ import {
   type OpenClawStateWorkerLease,
 } from "../../state/openclaw-state-worker-store.js";
 import { CRON_AGENT_SELECTION_REQUIRED_MESSAGE } from "../agent-id.js";
-import { noteCronJobsStoreCommit } from "../store.js";
+import { getCronJobsStoreRevision } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronSchedulerResult } from "../store/scheduler-actor.types.js";
+import { locked } from "./locked.js";
 import { registerCronSchedulerRefresh } from "./run-queue-wake.js";
-import { adoptCronRunRequests, drainCronRunQueue } from "./run-queue.js";
+import {
+  adoptCronRunRequests,
+  getCronRunQueueRequests,
+  launchCronRunQueueResult,
+} from "./run-queue.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import { runCronSchedulerMaintenance } from "./scheduler-maintenance.js";
 import { emit, type CronServiceState } from "./state.js";
-import { runPostPersistCronNotifications } from "./store.js";
+import { noteLoadedCronStoreCommit, runPostPersistCronNotifications } from "./store.js";
 
 type ActorConnection = {
   lease: OpenClawStateWorkerLease;
@@ -38,10 +43,14 @@ type ActorConnection = {
 
 const connections = new WeakMap<CronServiceState, ActorConnection>();
 
-async function publish(state: CronServiceState, result: CronSchedulerResult): Promise<void> {
+async function publish(
+  state: CronServiceState,
+  result: CronSchedulerResult,
+  observedRevision: number,
+): Promise<number> {
   if (result.jobs.length > 0) {
-    noteCronJobsStoreCommit(cronStoreKey(state.deps.storePath));
     applyCronRuntimeRowsToState(state, result.jobs);
+    noteLoadedCronStoreCommit(state, observedRevision);
   }
   for (const log of result.logs) {
     state.deps.log[log.level](log.fields, log.message);
@@ -59,7 +68,9 @@ async function publish(state: CronServiceState, result: CronSchedulerResult): Pr
       nextRunAtMs: job.state.nextRunAtMs,
     });
   }
+  const publishedRevision = getCronJobsStoreRevision(state.deps.storePath);
   await runPostPersistCronNotifications(state, result.notifications);
+  return publishedRevision;
 }
 
 export async function startCronScheduler(
@@ -125,6 +136,7 @@ export async function startCronScheduler(
   let started = false;
   try {
     await lease.ready;
+    const observedRevision = getCronJobsStoreRevision(storeKey);
     const result = await lease.execute({
       type: "cron.schedulerStart",
       input: {
@@ -135,6 +147,8 @@ export async function startCronScheduler(
         monotonicMs: performance.now(),
         skipJobIds: [...skipJobIds],
         deferAgentWork: true,
+        paused: state.schedulingPaused,
+        requests: getCronRunQueueRequests(state),
       },
     });
     const requests = adoptCronRunRequests(
@@ -146,8 +160,8 @@ export async function startCronScheduler(
     );
     started = true;
     state.schedulerStarted = true;
-    await publish(state, result);
-    await drainCronRunQueue(state);
+    const publishedRevision = await publish(state, result, observedRevision);
+    await locked(state, () => launchCronRunQueueResult(state, result, context, publishedRevision));
     const completed = await Promise.allSettled(requests.map((request) => request.completion));
     const failed = completed.find((completion) => completion.status === "rejected");
     if (failed?.status === "rejected") {
@@ -203,20 +217,24 @@ async function runCronSchedulerTick(
         return;
       }
       await runCronSchedulerMaintenance(state);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
       const result = await connection.lease.execute({
         type: "cron.schedulerTick",
         input: {
           storeKey: cronStoreKey(state.deps.storePath),
           channelName: connection.channelName,
           paused: false,
+          requests: getCronRunQueueRequests(state),
           snapshot: await captureCronSchedulerSnapshot(state),
           nowMs: state.deps.nowMs(),
           monotonicMs: performance.now(),
         },
       });
       adoptCronRunRequests(state, result.accepted, { source: "scheduled" }, undefined, generation);
-      await publish(state, result);
-      await drainCronRunQueue(state);
+      const publishedRevision = await publish(state, result, observedRevision);
+      await locked(state, () =>
+        launchCronRunQueueResult(state, result, undefined, publishedRevision),
+      );
     });
   } finally {
     admission.release();
@@ -235,6 +253,7 @@ export function refreshCronScheduler(state: CronServiceState): void {
         return;
       }
       const snapshot = await captureCronSchedulerSnapshot(state);
+      const observedRevision = getCronJobsStoreRevision(state.deps.storePath);
       await publish(
         state,
         await connection.lease.execute({
@@ -247,6 +266,7 @@ export function refreshCronScheduler(state: CronServiceState): void {
             nowMs: state.deps.nowMs(),
           },
         }),
+        observedRevision,
       );
     })
     .catch((error: unknown) => {

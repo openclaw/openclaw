@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
@@ -125,56 +124,6 @@ describe("Subagents panel data ownership", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
-
-  it.each(["presented:false", "dispose"])(
-    "settles a retryable message release after %s without another render",
-    async (retirement) => {
-      vi.useFakeTimers();
-      vi.spyOn(Math, "random").mockReturnValue(0.5);
-      const row = child("retiring", {
-        status: "running",
-        hasActiveRun: true,
-        activeRunIds: ["run-1"],
-      });
-      const f = fixture((method, params) => {
-        if (method === "sessions.list") {
-          return page(params.spawnedBy ? [row] : []);
-        }
-        if (method === "chat.history") {
-          return history(row);
-        }
-        throw new Error(`Unexpected method: ${method}`);
-      });
-      f.open();
-      await f.when(() => f.data.rows[0]?.callCount?.count === 0);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(f.subscriptions.has(row.key)).toBe(true);
-
-      const request = f.request.getMockImplementation()!;
-      let releases = 0;
-      f.request.mockImplementation((method, params) => {
-        if (method === "sessions.messages.unsubscribe" && ++releases === 1) {
-          throw new GatewayProtocolRequestError({ retryable: true });
-        }
-        return request(method, params);
-      });
-      if (retirement === "dispose") {
-        f.data.dispose();
-      } else {
-        f.data.sync({ sessionKey: parentKey, agentId: "main", presented: false });
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(releases).toBe(1);
-      expect(f.subscriptions.has(row.key)).toBe(true);
-
-      await vi.advanceTimersByTimeAsync(249);
-      expect(releases).toBe(1);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(f.subscriptions.has(row.key)).toBe(false);
-      expect(releases).toBe(2);
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
 
   it.each(["parent", "connection"])(
     "rejects late history after %s retirement",

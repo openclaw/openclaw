@@ -75,7 +75,7 @@ for provider examples and precedence.
 - `cwd`: optional working directory for reply runs, separate from `workspace`. Overrides `agents.defaults.cwd`; see [Working directory](/gateway/config-agents/workspace-and-bootstrap#agents.defaults.cwd) for precedence and sandbox restrictions.
 - `default` is retired. Exactly one configured agent resolves implicitly; multi-agent operations require a binding, surface `agentId` target, scoped session/store owner, or explicit `--agent`/request field.
 - `model`: string form sets a strict per-agent primary with no model fallback; object form `{ primary }` is also strict unless you add `fallbacks`. Use `{ primary, fallbacks: [...] }` to opt that agent into fallback, or `{ primary, fallbacks: [] }` to make strict behavior explicit. Cron jobs that only override `primary` still inherit default fallbacks unless you set `fallbacks: []`.
-- `utilityModel`: optional per-agent override for short internal tasks such as generated session and thread titles. Falls back to `agents.defaults.utilityModel`, then the effective session provider's declared small-model default. Dashboard titles retry once with the effective regular session model. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
+- `utilityModel`: optional per-agent string, alias, or `{ primary, fallbacks }` override for short internal tasks such as generated session and thread titles. An omitted setting inherits `agents.defaults.utilityModel`. A fallback-only object inherits the default primary; an explicit primary without `fallbacks`, or `fallbacks: []`, clears inherited utility fallbacks. Utility fallback lists are independent of `model.fallbacks` and use the same retry, alias resolution, and model-selection policy as configured model fallbacks. With no explicit or inherited utility primary, automatic utility selection applies; if no automatic route is available, the first utility fallback starts the chain. Dashboard titles retry once with the effective regular session model after the utility chain is exhausted. An empty string skips the alternate utility route for this agent without disabling dashboard title generation.
 - `params`: agent-wide stream params merged over shared and agent-specific per-model params. Use this for overrides like `cacheRetention`, `temperature`, or `maxTokens` that should apply across the agent's models.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `tts`, so keep shared provider credentials and fallback policy in `tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
@@ -83,6 +83,7 @@ for provider examples and precedence.
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.
 - `models`: optional per-agent model settings keyed by full `provider/model` ids. Use `models["provider/model"].params` for model-specific request settings and `models["provider/model"].agentRuntime` for runtime exceptions. `models["provider/model"].codeMode` accepts `true` or `false` and takes precedence over the agent's `tools.codeMode` activation, the shared model override, and the global default. Omit it to inherit; it does not affect Codex native Code Mode.
+- `nativeRuntimeConsent`: optional list of harness IDs, such as `["muse"]`, remembered during setup. Applies only to this agent; it has no global or defaults inheritance. An administrator selecting a remembered harness or creating a chat with it automatically uses Full access with the optional sandbox disabled. This promotion uses the same permission-change lifecycle as explicit settings changes and refuses changes during an active run. Non-admin clients cannot use remembered consent to raise a chat's permissions; their existing restrictions still apply. Mandatory sandbox and workspace boundaries still reject the runtime. Each turn checks the current list, current session identity, Full access, sandbox off, and absence of tool allowlists, disabled tools, or swarm collection. The current live configuration is checked again immediately before native dispatch, so removing consent also blocks queued or prepared work that relied on it. Remove an ID in Settings under **Remembered native runtime permissions** to revoke it for every chat relying on remembered consent. Explicit **Continue for this chat** consent remains unchanged. The field is additive and requires no migration.
 - `runtime`: optional per-agent runtime descriptor. Use `type: "acp"` with `runtime.acp` defaults (`agent`, `backend`, `mode`, `cwd`) when the agent should default to ACP harness sessions.
 - `identity.avatar`: workspace-relative path, `http(s)` URL, or `data:` URI.
 - Local workspace-relative `identity.avatar` image files are limited to 2 MB. `http(s)` URLs and `data:` URIs are not checked against the local file-size limit.
@@ -130,14 +131,14 @@ Run multiple isolated agents inside one Gateway. See [Multi-Agent](/concepts/mul
 - `session` (optional; route bindings only): `{ dmScope, groupScope }` overrides session routing for matched peers
 - `acp` (optional; only for `type: "acp"`): `{ mode, label, cwd, backend }`
 
-**Deterministic match order:**
+**Fixed match order:**
 
 1. `match.peer`
 2. `match.guildId`
 3. `match.teamId`
 4. `match.accountId` (exact, no peer/guild/team)
 5. `match.accountId: "*"` (channel-wide)
-6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding fail closed)
+6. Sole-agent fallback (only when exactly one agent is configured; explicit multi-agent fleets without a matching binding reject the request)
 
 Within each tier, the first matching `bindings` entry wins.
 

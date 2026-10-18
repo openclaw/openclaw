@@ -35,6 +35,7 @@ import {
 } from "../../agents/agent-scope.js";
 import {
   resolveSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
 } from "../../agents/auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
@@ -57,7 +58,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { withAgentExecApprovalsRemoved } from "../../infra/exec-approvals.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import { closeAgentWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { AgentDeletionPendingError } from "../../sessions/session-agent-work-admission.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
 import {
   readAgentDeletionJournalAsync,
   type AgentDeletionJournalCleanupPath,
@@ -84,7 +86,8 @@ type AgentDeleteFailedPath = NonNullable<AgentsDeleteResult["failed"]>[number];
 
 export class AgentSharedAuthStoreOwnerError extends Error {}
 
-export function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): boolean {
+async function agentOwnsSharedAuthStore(cfg: OpenClawConfig, agentId: string): Promise<boolean> {
+  await prepareSharedAuthStoreOwnership();
   const agentDir = resolveAgentDir(cfg, agentId);
   return isSharedAuthStoreOwner({
     ownership: resolveSharedAuthStoreOwnership(),
@@ -114,18 +117,20 @@ export async function deleteGatewayAgent(
           throw new Error(`Agent ${agentId} deletion recovery no longer owns its journal.`);
         }
         const configured = isConfiguredAgent(lockedConfig, agentId);
-        if (agentOwnsSharedAuthStore(lockedConfig, agentId)) {
+        if (await agentOwnsSharedAuthStore(lockedConfig, agentId)) {
           throw new AgentSharedAuthStoreOwnerError(formatSharedAuthStoreOwnerDeleteError(agentId));
         }
         if (!configured && (!lockedJournal || lockedJournal.cleanupCompleted)) {
           throw new AgentConfigPreconditionError(`agent "${agentId}" not found`);
         }
         if (agentId === tryResolveSoleAgentId(lockedConfig)) {
-          throw new AgentConfigPreconditionError(`agent "${agentId}" is the only configured agent`);
+          throw new AgentConfigPreconditionError(
+            `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
+          );
         }
         if (isInheritedAuthStoreOwner(lockedConfig, agentId)) {
           throw new AgentConfigPreconditionError(
-            `agent "${agentId}" owns agents.defaults.authInheritance.agentId; relocate credentials and re-point it first`,
+            `Agent "${agentId}" owns inherited credentials through agents.defaults.authInheritance.agentId and cannot be deleted. Relocate those credentials, then re-point or remove that binding before retrying.`,
           );
         }
         if (configured && lockedJournal?.cleanupCompleted) {
@@ -139,7 +144,9 @@ export async function deleteGatewayAgent(
         const deleteFiles = lockedJournal?.deleteFiles ?? requestedDeleteFiles;
         releaseIngress = closeAgentWorkAdmissions({
           agentId,
-          reason: new Error(`Agent ${agentId} deletion is draining active work.`),
+          reason: new AgentDeletionPendingError(
+            `Agent ${agentId} deletion is draining active work.`,
+          ),
         });
         const deletion = await begin(
           lockedJournal ?? {
@@ -183,7 +190,7 @@ export async function deleteGatewayAgent(
           await deletion.assertCurrentAsync();
           await assertAgentSessionStoreDeletionSafe(lockedConfig, agentId);
           if (
-            agentOwnsSharedAuthStore(lockedConfig, agentId) ||
+            (await agentOwnsSharedAuthStore(lockedConfig, agentId)) ||
             isInheritedAuthStoreOwner(lockedConfig, agentId)
           ) {
             throw new AgentSharedAuthStoreOwnerError(
@@ -192,7 +199,7 @@ export async function deleteGatewayAgent(
           }
           if (agentId === tryResolveSoleAgentId(lockedConfig)) {
             throw new AgentConfigPreconditionError(
-              `agent "${agentId}" is the only configured agent`,
+              `Agent "${agentId}" is the only configured agent and cannot be deleted.`,
             );
           }
           prepareJournaledAgentDirOwnership(lockedConfig, agentId, journal.agentDir);
@@ -412,7 +419,11 @@ export async function deleteGatewayAgent(
                 ) {
                   return entry;
                 }
-                const updated = Object.assign({}, entry, { done: true });
+                const updated = Object.assign({}, entry, {
+                  done: true,
+                  dev: cleanupPath.preparedIdentity?.dev ?? null,
+                  ino: cleanupPath.preparedIdentity?.ino ?? null,
+                });
                 if (note) {
                   updated.note = note;
                 }

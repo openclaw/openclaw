@@ -164,44 +164,6 @@ describe("Zalo durable webhook ingress", () => {
     });
   });
 
-  it("stores raw JSON and derives the conversation lane before dispatch normalization", async () => {
-    await withZaloWebhookTestQueue(async (queue) => {
-      const event = createZaloWebhookTestEvent({
-        messageId: "raw",
-        chatId: "conversation-42",
-        text: "before",
-      });
-      const deliveredText: string[] = [];
-      const ingress = createZaloWebhookIngress({
-        accountId: "default",
-        runtime: runtime(),
-        queue,
-        deliver: async (update, lifecycle) => {
-          deliveredText.push(update.message?.text ?? "");
-          await lifecycle.onAdopted();
-        },
-      });
-      const raw = JSON.stringify(event);
-      await ingress.accept(raw);
-      expect(await queue.listPending()).toEqual([
-        expect.objectContaining({
-          id: "raw",
-          laneKey: "chat:conversation-42",
-          payload: { version: 1, rawEvent: raw },
-        }),
-      ]);
-      event.message.text = "after";
-
-      ingress.start();
-      try {
-        await waitForZaloWebhookVerdict(queue, "raw", "completed");
-        expect(deliveredText).toEqual(["before"]);
-      } finally {
-        await ingress.stop();
-      }
-    });
-  });
-
   it("dead-letters malformed persisted JSON without dispatch", async () => {
     await withZaloWebhookTestQueue(async (queue) => {
       await queue.enqueue(

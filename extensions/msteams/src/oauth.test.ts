@@ -24,14 +24,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildMSTeamsAuthUrl } from "./oauth.flow.js";
 import { loginMSTeamsDelegated } from "./oauth.js";
-import {
-  MSTEAMS_DEFAULT_DELEGATED_SCOPES,
-  MSTEAMS_OAUTH_REDIRECT_URI,
-  buildMSTeamsAuthEndpoint,
-  buildMSTeamsTokenEndpoint,
-} from "./oauth.shared.js";
+import { MSTEAMS_OAUTH_REDIRECT_URI, buildMSTeamsTokenEndpoint } from "./oauth.shared.js";
 import { exchangeMSTeamsCodeForTokens, refreshMSTeamsDelegatedTokens } from "./oauth.token.js";
 
 function responseJson(body: unknown, status = 200): Response {
@@ -94,6 +88,19 @@ describe("manual delegated sign-in", () => {
         accessToken: "access",
         refreshToken: "refresh",
       });
+      expect(authUrl!.origin + authUrl!.pathname).toBe(
+        "https://login.microsoftonline.com/tenant/oauth2/v2.0/authorize",
+      );
+      expect(authUrl!.searchParams.get("client_id")).toBe("client");
+      expect(authUrl!.searchParams.get("response_type")).toBe("code");
+      expect(authUrl!.searchParams.get("redirect_uri")).toBe(
+        "http://localhost:8086/oauth2callback",
+      );
+      expect(authUrl!.searchParams.get("scope")).toBe(
+        "ChatMessage.Send ChannelMessage.Send Chat.ReadWrite offline_access",
+      );
+      expect(authUrl!.searchParams.get("code_challenge_method")).toBe("S256");
+      expect(authUrl!.searchParams.get("prompt")).toBe("consent");
       const [url, init] = firstFetchCall(fetchSpy);
       expect(url).toBe(buildMSTeamsTokenEndpoint("tenant"));
       const body = new URLSearchParams(init.body as string);
@@ -105,44 +112,9 @@ describe("manual delegated sign-in", () => {
       expect(createHash("sha256").update(body.get("code_verifier")!).digest("base64url")).toBe(
         authUrl!.searchParams.get("code_challenge"),
       );
+      expect(authUrl!.searchParams.get("state")).not.toBe(body.get("code_verifier"));
     },
   );
-});
-
-describe("buildMSTeamsAuthUrl", () => {
-  it("includes correct tenant, client_id, scopes, PKCE params, and redirect_uri", () => {
-    const challenge = "challenge-value";
-    const state = "state-value";
-    const url = buildMSTeamsAuthUrl({
-      tenantId: "my-tenant-id",
-      clientId: "my-client-id",
-      challenge,
-      state,
-    });
-
-    const parsed = new URL(url);
-    expect(parsed.origin + parsed.pathname).toBe(buildMSTeamsAuthEndpoint("my-tenant-id"));
-    expect(parsed.searchParams.get("client_id")).toBe("my-client-id");
-    expect(parsed.searchParams.get("response_type")).toBe("code");
-    expect(parsed.searchParams.get("redirect_uri")).toBe(MSTEAMS_OAUTH_REDIRECT_URI);
-    expect(parsed.searchParams.get("scope")).toBe(MSTEAMS_DEFAULT_DELEGATED_SCOPES.join(" "));
-    expect(parsed.searchParams.get("code_challenge")).toBe(challenge);
-    expect(parsed.searchParams.get("code_challenge_method")).toBe("S256");
-    expect(parsed.searchParams.get("state")).toBe(state);
-    expect(parsed.searchParams.get("prompt")).toBe("consent");
-  });
-
-  it("uses custom scopes when provided", () => {
-    const url = buildMSTeamsAuthUrl({
-      tenantId: "t",
-      clientId: "c",
-      challenge: "ch",
-      state: "s",
-      scopes: ["User.Read", "offline_access"],
-    });
-    const parsed = new URL(url);
-    expect(parsed.searchParams.get("scope")).toBe("User.Read offline_access");
-  });
 });
 
 describe("exchangeMSTeamsCodeForTokens", () => {

@@ -84,6 +84,7 @@ describe("handleDirFetch — happy path", () => {
     await fs.writeFile(path.join(tmpRoot, "c", "z.txt"), "first subtree\n");
     await fs.mkdir(path.join(tmpRoot, "c\u200d"));
     await fs.writeFile(path.join(tmpRoot, "c\u200d", "a.txt"), "second subtree\n");
+    await fs.symlink("missing-target", path.join(tmpRoot, "dangling-link"));
 
     const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
     if (!r.ok) {
@@ -103,6 +104,7 @@ describe("handleDirFetch — happy path", () => {
       "c/z.txt",
       "c\u200d",
       "c\u200d/a.txt",
+      "dangling-link",
       "sub",
       "sub/b.txt",
     ]);
@@ -141,7 +143,7 @@ describe("handleDirFetch — happy path", () => {
       expect(result).toEqual({
         ok: false,
         code: "CANONICAL_PATH_CHANGED",
-        message: "canonical path differs from the authorized target",
+        message: "resolved path differs from the authorized target",
         canonicalPath: second,
       });
     },
@@ -191,24 +193,6 @@ describe("handleDirFetch — happy path", () => {
       });
 
       expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
-    },
-  );
-
-  it.runIf(HAS_TAR && process.platform !== "win32")(
-    "preflights symlinks without following their targets",
-    async () => {
-      await fs.writeFile(path.join(tmpRoot, "a.txt"), "alpha\n");
-      await fs.symlink("missing-target", path.join(tmpRoot, "dangling-link"));
-
-      const r = await handleDirFetch({ path: tmpRoot, preflightOnly: true });
-      if (!r.ok) {
-        throw new Error(`expected ok, got ${r.code}: ${r.message}`);
-      }
-
-      expect(r.tarBase64).toBe("");
-      expect(r.entries).toContain("a.txt");
-      expect(r.entries).toContain("dangling-link");
-      expect(r.fileCount).toBe(r.entries?.length);
     },
   );
 

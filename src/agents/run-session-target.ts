@@ -9,8 +9,11 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { resolveSessionKeyBySessionIdAsync } from "../config/sessions/session-accessor.transcript-target.js";
 import type { SessionTranscriptRuntimeScope } from "../config/sessions/session-accessor.types.js";
+import {
+  captureSessionActorStorageOwner,
+  readCapturedSessionActorEntries,
+} from "../config/sessions/session-actor-storage-binding.js";
 import { readSessionEntrySummariesInWorker } from "../config/sessions/session-entry-read-runtime.js";
-import { captureIncognitoSessionSource } from "../config/sessions/session-incognito-binding.js";
 import { resolvePersistedSessionStoreOwnerForTarget } from "../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey, toAgentStoreSessionKey } from "../routing/session-key.js";
@@ -34,7 +37,6 @@ class AgentRunSessionTargetResolutionError extends Error {
   }
 }
 
-/** Resolves the active runtime target used by current run/session internals. */
 export async function resolveAgentRunSessionTarget(
   input: {
     agentId?: string;
@@ -104,10 +106,12 @@ export async function resolveAgentRunSessionTarget(
     recognizedCompatibilitySessionKey ??
     (params.missingSessionKey === "create" ? plainCompatibilitySessionKey : undefined);
   const activeMarker = hasCompleteTypedTarget ? undefined : legacyMarker;
-  const markerSource = activeMarker ? captureIncognitoSessionSource(activeMarker) : undefined;
+  const markerSource = activeMarker
+    ? captureSessionActorStorageOwner(activeMarker, { assertCurrent() {}, authorize() {} })
+    : undefined;
   const markerEntries = activeMarker
-    ? markerSource && "kind" in markerSource
-      ? []
+    ? markerSource
+      ? readCapturedSessionActorEntries(markerSource)
       : await readSessionEntrySummariesInWorker({
           agentId: activeMarker.agentId,
           storePath: activeMarker.storePath,
@@ -162,12 +166,12 @@ export async function resolveAgentRunSessionTarget(
     !legacyMarker;
   const configuredStoreResolution = shouldResolveConfiguredStoreRow
     ? agentId
-      ? resolveStoredSessionKeyForSessionId({
+      ? await resolveStoredSessionKeyForSessionId({
           cfg: config,
           sessionId,
           agentId,
         })
-      : resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
+      : await resolveExistingSessionKeyForRequest({ cfg: config, sessionId })
     : undefined;
   const fixedAgentId =
     (hasCompleteTypedTarget || trustExplicitAlternateStoreAgent ? targetAgentId : undefined) ??

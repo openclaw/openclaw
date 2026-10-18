@@ -13,6 +13,7 @@ import {
 } from "../../../process/gateway-work-admission.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
+import { reserveRestoredSubagentControllerSources } from "../announce/subagent-announce-controller-source.js";
 import { applySubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
 import { readGatewayRunId } from "../spawn/subagent-spawn-gateway.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
@@ -167,6 +168,8 @@ export function createSubagentRegistryRestorer(config: {
     cfg: ReturnType<typeof getRuntimeConfig>,
     assertCurrent: () => void,
   ) {
+    await reserveRestoredSubagentControllerSources([...runs.values()]);
+    assertCurrent();
     if (runs.size === 0) {
       return;
     }
@@ -189,10 +192,14 @@ export function createSubagentRegistryRestorer(config: {
         assertCurrent();
       }
       const selected = getCurrentSubagentRunOwner(runs, snapshot);
+      // Recovery and cancellation prepare their own session reads.
       if (
         !selected ||
         selected.runId !== runId ||
-        resolveSubagentChildAuthority(selected).status === "mismatch"
+        resolveSubagentChildAuthority(selected).status === "mismatch" ||
+        selected.execution.restartRecovery ||
+        selected.killIntent ||
+        selected.killReconciliation
       ) {
         continue;
       }
@@ -219,7 +226,6 @@ export function createSubagentRegistryRestorer(config: {
       if (authority.status === "mismatch") {
         continue;
       }
-      warnLegacySubagentAuthority(entry, warn);
       if (entry.collect && entry.execution.status === "queued") {
         const { childSessionIdentity: cleanupSessionEntry, queuedLaunch: launch } = entry;
         if (!launch || authority.status === "legacy-unverified") {
@@ -388,6 +394,7 @@ export function createSubagentRegistryRestorer(config: {
           await restoreSubagentRunMetadata(runs, stateContext, assertCurrent);
           assertCurrent();
         }
+        warnLegacySubagentAuthority(runs.values(), warn);
         await completeRestore();
       } catch (err) {
         if (restoreState !== "succeeded") {
@@ -425,7 +432,6 @@ export function createSubagentRegistryRestorer(config: {
       if (authority.status === "mismatch") {
         return false;
       }
-      warnLegacySubagentAuthority(entry, warn);
       // Descriptorless restore failures enter here without onStartFailure; their
       // provisional session must survive the same pending cancellation receipt.
       for (

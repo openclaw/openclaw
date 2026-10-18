@@ -3,11 +3,13 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { revokeSqliteDatabaseAdmissions } from "../infra/sqlite-database-admission.js";
 import { repairDoctorSqliteIndexCorruption } from "../infra/sqlite-index-recovery.js";
+import { repairCanonicalSqliteIndexes } from "../infra/sqlite-index-schema.js";
 import {
-  repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexes,
-} from "../infra/sqlite-index-schema.js";
-import { assertSqliteIntegrity, assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
+  assertSqliteIntegrity,
+  assertSqliteTableIntegrity,
+  isTerminalSqliteIntegrityError,
+  SqliteRepairableForeignKeyError,
+} from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { assertSqliteSchemaTablesPresent } from "../infra/sqlite-schema-contract.js";
@@ -38,8 +40,10 @@ import {
 } from "./openclaw-state-db-doctor-schema.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
 import {
+  assertMigratedStateTableIntegrity,
   assertOpenClawStateDatabaseOwner,
   markCurrentStateSchemaVersion,
+  migrateBoundedStateSchema,
   openClawStateMigrationAssertions,
   versionedStateMigrations,
   runStateSchemaMigrationTransaction,
@@ -74,11 +78,13 @@ import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
+import { resolveSchemaMigrationIntegrityCheck } from "./schema-migration-backup-scope.js";
 
 export function repairStateSchema(
   pathname: string,
   env: NodeJS.ProcessEnv,
-  scope: "automatic" | "doctor" | "readability" | "indexes",
+  scope: "automatic" | "doctor" | "readability" | "indexes" | "version",
+  integrityCheck: "quick" | "full" = "quick",
 ): {
   changes: string[];
   warnings: string[];
@@ -116,9 +122,50 @@ export function repairStateSchema(
         warnings: [],
       };
     }
+    if (scope === "version") {
+      const changes = runStateSchemaMigrationTransaction(
+        db,
+        pathname,
+        () => {
+          assertOpenClawStateDatabaseOwner(db, { pathname });
+          const previousVersion = readStateSchemaContentVersion(db);
+          if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
+            return [];
+          }
+          const applied = migrateBoundedStateSchema(db, previousVersion, {
+            versionMigrationOnly: true,
+          });
+          if (!applied) {
+            throw new Error(`No bounded shared-state migration from v${previousVersion}.`);
+          }
+          markCurrentStateSchemaVersion(db);
+          assertMigratedStateTableIntegrity(db, pathname, previousVersion);
+          return applied;
+        },
+        {
+          busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          databaseLabel: pathname,
+          operationLabel: "state.schema.version-migration",
+        },
+      );
+      // Full-shape admission and quarantine cleanup belong to later Doctor repair.
+      return { changes, warnings: [] };
+    }
     const repairAdmittedSchema = prepareStateDatabaseSchemaRepair(db, pathname, env);
     const canInspectIndexes =
       scope !== "readability" && !hasDanglingSkillWorkshopCollectionReviewIndex(db);
+    let previousVersion = canInspectIndexes ? readStateSchemaContentVersion(db) : undefined;
+    let integrity =
+      previousVersion === undefined
+        ? undefined
+        : resolveSchemaMigrationIntegrityCheck(
+            {
+              kind: "state",
+              foundVersion: previousVersion,
+              supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+            },
+            integrityCheck,
+          );
     const assertIndexRepairCurrent = () => {
       assertOpenClawStateDatabaseOwner(db, { pathname });
       assertOpenClawStateWriteAllowed({
@@ -128,26 +175,46 @@ export function repairStateSchema(
         inspectOwnership: true,
       });
     };
-    indexChanges = canInspectIndexes
-      ? repairDoctorSqliteIndexCorruption(db, pathname, {
-          label: "shared-state",
-          assertCurrent: assertIndexRepairCurrent,
-        })
-      : [];
+    const recordedDamage =
+      canInspectIndexes &&
+      Boolean(
+        openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
+        readOpenClawDatabaseQuarantineFailure("state", pathname, { env, fresh: true }),
+      );
+    let scanCorruptIndexes = recordedDamage || (scope === "indexes" && integrityCheck === "full");
+    let sourceIntegrityVerified = false;
+    if (canInspectIndexes && !scanCorruptIndexes) {
+      try {
+        assertSqliteIntegrity(db, pathname, integrity);
+        sourceIntegrityVerified = true;
+      } catch (error) {
+        if (error instanceof Error && isTerminalSqliteIntegrityError(error)) {
+          scanCorruptIndexes = true;
+        } else if (!(error instanceof SqliteRepairableForeignKeyError)) {
+          throw error;
+        }
+        // Known orphan rows retain their preserving recovery inside the write transaction.
+      }
+    }
+    indexChanges =
+      canInspectIndexes && scanCorruptIndexes
+        ? repairDoctorSqliteIndexCorruption(db, pathname, {
+            label: "shared-state",
+            assertCurrent: assertIndexRepairCurrent,
+          })
+        : [];
+    if (indexChanges.length > 0) {
+      sourceIntegrityVerified = true;
+    } else if (recordedDamage) {
+      // A clean quick result cannot retire a recorded full-integrity failure.
+      assertSqliteIntegrity(db, pathname);
+      sourceIntegrityVerified = true;
+    }
     if (scope === "indexes") {
-      if (
-        canInspectIndexes &&
-        (indexChanges.length > 0 ||
-          openClawStateDatabaseCache.getOpenClawStateDatabaseRecordedFailure(pathname) ||
-          readOpenClawDatabaseQuarantineFailure("state", pathname, { env, fresh: true }))
-      ) {
+      if (canInspectIndexes && (indexChanges.length > 0 || recordedDamage)) {
         runSqliteImmediateTransactionSync(
           db,
           () => {
-            // A previous REINDEX can commit before quarantine cleanup succeeds.
-            if (indexChanges.length === 0) {
-              assertSqliteIntegrity(db, pathname);
-            }
             assertIndexRepairCurrent();
             if (!clearOpenClawDatabaseQuarantine(pathname, { env })) {
               throw new Error(
@@ -209,8 +276,30 @@ export function repairStateSchema(
       db,
       pathname,
       () => {
+        previousVersion ??= readStateSchemaContentVersion(db);
+        integrity ??= resolveSchemaMigrationIntegrityCheck(
+          {
+            kind: "state",
+            foundVersion: previousVersion,
+            supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+          },
+          integrityCheck,
+        );
         applied.push(...recoverOrphanTaskDeliveryRows(db, pathname));
-        const previousVersion = readStateSchemaContentVersion(db);
+        if (!sourceIntegrityVerified) {
+          assertSqliteIntegrity(db, pathname, integrity);
+        }
+        if (previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION) {
+          openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
+          const boundedChanges = migrateBoundedStateSchema(db, previousVersion);
+          if (boundedChanges) {
+            applied.push(...boundedChanges);
+            markCurrentStateSchemaVersion(db);
+            assertCurrentStateRuntimeSchema(db, pathname);
+            assertMigratedStateTableIntegrity(db, pathname, previousVersion);
+            return applied;
+          }
+        }
         const includeAgentDeletionJournal =
           tableExists(db, "agent_deletion_journal") || hasPreJournalStateSchema(db);
         const preAuditSchema = previousVersion === 1 && !tableExists(db, "audit_events");
@@ -218,22 +307,11 @@ export function repairStateSchema(
           assertOpenClawStateDatabaseOwner(db, { pathname });
         }
         if (previousVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
-          for (const name of verifyAndRepairCanonicalSqliteIndexes(
-            db,
-            pathname,
-            OPENCLAW_STATE_SCHEMA_SQL,
-            { allowMissingColumns: true },
-          )) {
-            rebuiltIndexNames.add(name);
-          }
           // Current-schema doctor repair may normalize recognized columns or
           // table options, but it must never recreate a missing table empty.
           assertSqliteSchemaTablesPresent(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             allowedMissingTables: [...LAZY_ADDITIVE_STATE_TABLES, ...DOCTOR_OWNED_STATE_TABLES],
           });
-        } else {
-          openClawStateMigrationAssertions.get(previousVersion)?.(db, { pathname });
-          assertSqliteIntegrity(db, pathname);
         }
         dropLegacyStateTables(db);
         applied.push(...retirements.runRetiredStateTableMigrations(db, previousVersion));
@@ -291,7 +369,7 @@ export function repairStateSchema(
               includeVersionLazyAdditiveTables: previousVersion !== OPENCLAW_STATE_SCHEMA_VERSION,
               includeAgentDeletionJournal: tableExists(db, "agent_deletion_journal"),
             }),
-            { databaseLabel: pathname },
+            { databaseLabel: pathname, integrityCheck },
           );
           if (strictMigration.migratedTables.length > 0) {
             applied.push(
@@ -300,6 +378,7 @@ export function repairStateSchema(
           }
           for (const name of repairCanonicalSqliteIndexes(db, pathname, OPENCLAW_STATE_SCHEMA_SQL, {
             verifyPhysicalIntegrity: false,
+            integrity,
           })) {
             rebuiltIndexNames.add(name);
           }
@@ -309,6 +388,9 @@ export function repairStateSchema(
         });
         if (readStateSchemaContentVersion(db) === OPENCLAW_STATE_SCHEMA_VERSION) {
           assertCurrentStateRuntimeSchema(db, pathname);
+        }
+        if (previousVersion < OPENCLAW_STATE_SCHEMA_VERSION) {
+          assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         }
         if (rebuiltIndexNames.size > 0) {
           applied.push(`Rebuilt canonical shared-state SQLite indexes (${rebuiltIndexNames.size})`);

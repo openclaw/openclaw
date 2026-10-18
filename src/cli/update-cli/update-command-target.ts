@@ -409,7 +409,6 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         recoveryState.triageTarget.root = root;
         recoveryState.triageTarget.nodeRunner = packageUpdateNodeRunner;
-        packageInstallEnv = await createGlobalInstallEnv();
         installedPackageName = (await readPackageName(root)) ?? DEFAULT_PACKAGE_NAME;
         const manager = await resolveGlobalManager({
           root,
@@ -452,6 +451,7 @@ export async function resolveUpdateCommandTarget(
           packageName: installedPackageName,
           pkgOwnership,
         });
+        packageInstallEnv = await createGlobalInstallEnv(undefined, packageInstallTarget);
         if (packageInstallTarget.manager === "npm") {
           const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
           if (destination.kind !== "owned" && destination.kind !== "empty") {

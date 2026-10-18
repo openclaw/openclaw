@@ -1,9 +1,10 @@
 import { ComponentType } from "discord-api-types/v10";
 import { parseDiscordComponentCustomIdForInteraction } from "../component-custom-id.js";
+import type { DiscordComponentSelectType } from "../components.types.js";
 import {
   BaseMessageInteractiveComponent,
   Button,
-  type ButtonInteraction,
+  type BaseComponentInteraction,
   type ComponentData,
 } from "../internal/discord.js";
 import { parseDiscordComponentData, resolveInteractionCustomId } from "./agent-components-data.js";
@@ -23,7 +24,7 @@ export type DiscordComponentControlHandlers = {
   }) => Promise<void>;
   handleModalTrigger: (params: {
     ctx: AgentComponentContext;
-    interaction: ButtonInteraction;
+    interaction: BaseComponentInteraction;
     data: ComponentData;
     label: string;
   }) => Promise<void>;
@@ -31,7 +32,7 @@ export type DiscordComponentControlHandlers = {
 
 type SelectControlSpec = {
   type: ComponentType;
-  kind: "string" | "user" | "role" | "mentionable" | "channel";
+  kind: DiscordComponentSelectType;
 };
 
 const SELECT_CONTROLS = [
@@ -86,7 +87,7 @@ function createDiscordComponentButton(
     override customId = "__openclaw_discord_component_button_wildcard__";
     override customIdParser = parseDiscordComponentCustomIdForInteraction;
 
-    override async run(interaction: ButtonInteraction, data: ComponentData): Promise<void> {
+    override async run(interaction: BaseComponentInteraction, data: ComponentData): Promise<void> {
       const parsed = parseDiscordComponentData(data, resolveInteractionCustomId(interaction));
       if (parsed?.modalId) {
         await handlers.handleModalTrigger({

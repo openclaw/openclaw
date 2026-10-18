@@ -1,12 +1,9 @@
 import { Routes } from "discord-api-types/v10";
 import { createFinalizableDraftLifecycle } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import {
-  deleteChannelMessage,
-  editChannelMessage,
-  type RequestClient,
-} from "./internal/discord.js";
+import { deleteChannelMessage, editChannelMessage } from "./internal/api.messages.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import type { RequestClient } from "./internal/rest.js";
 import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */

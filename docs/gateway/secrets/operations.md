@@ -16,6 +16,20 @@ Supported and unsupported credentials are listed in [SecretRef Credential Surfac
 Runtime-minted or rotating credentials and OAuth refresh material are intentionally excluded from read-only SecretRef resolution.
 </Note>
 
+Config secret-target lookup follows config ownership. Core owns roots other than
+`channels` and `plugins`; plugin manifest secret inputs are relative to
+`plugins.entries.<plugin-id>.config`. Channel secret contracts can describe
+credentials under `channels` and their own plugin config schema, including
+contracts shared by multiple channel owners. They do not extend core config schemas.
+
+Secret-target lookup for ordinary core config paths does not discover plugin
+metadata. An explicit plugin config path tries that plugin's manifest targets,
+then its channel contract on a miss.
+Channel lookups try the channel contract first, then use broader discovery on a
+miss so external owners can extend even bundled channel IDs. Audit and
+configuration still include disabled plugins; runtime activation keeps its
+existing enablement rules.
+
 ## Required behavior and precedence
 
 - Field without a ref: unchanged.

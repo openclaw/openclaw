@@ -1,4 +1,8 @@
 import { inheritToolSchemaTruncation, wasToolSchemaTruncated } from "./tool-schema-depth.js";
+import {
+  getPublishedRuntimeToolInputSchema,
+  publishRuntimeToolInputSchema,
+} from "./tool-schema-json-projection.js";
 
 export type PreparedToolSchemaNormalization = {
   readonly source: object;
@@ -72,7 +76,15 @@ export function createToolSchemaNormalizationCache<T>(maxEntries: number) {
       const result = inheritToolSchemaTruncation(source, value);
       const prepared = preparedSchemas?.get(source);
       if (!prepared) {
-        return directCache.remember(source, key, result);
+        const published = getPublishedRuntimeToolInputSchema(source)
+          ? publishRuntimeToolInputSchema(result)
+          : undefined;
+        return directCache.remember(
+          source,
+          key,
+          // SAFETY: This cache only stores JSON-schema outputs; publication preserves their structural type.
+          published?.violations.length === 0 ? (published.schema as T) : result,
+        );
       }
       const outputJson = JSON.stringify(result);
       if (outputJson !== undefined) {

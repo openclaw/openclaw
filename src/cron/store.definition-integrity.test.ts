@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCronJobsStoreUnchanged,
@@ -360,7 +361,7 @@ describe("cron jobs fingerprint guard", () => {
           (id) => makeStore(id, true).jobs[0],
         );
         await saveCronStore(storePath, { version: 1, jobs });
-        const db = openOpenClawStateDatabase().db;
+        const db = requireNativeSqliteDatabase(openOpenClawStateDatabase().db);
         expect(db.prepare("PRAGMA encoding").get()).toEqual({ encoding });
         const storeKey = cronStoreKey(storePath);
         db.prepare(

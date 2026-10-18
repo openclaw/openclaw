@@ -11,6 +11,7 @@ import {
   agentSessionAutomaticCompaction,
   agentSessionSetContextReplacementHook,
 } from "../sessions/agent-session-compaction.js";
+import type { AgentSession } from "../sessions/agent-session.js";
 import type { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import {
   getMemoryProviderMock,
@@ -37,6 +38,11 @@ import {
 import { createCompactionSessionManagerMock } from "./compact.session-manager.test-support.js";
 import type { resolveModelAsync } from "./model.js";
 import type { attemptServerEndpointCompaction } from "./server-endpoint-compaction.js";
+
+export {
+  getMemorySearchManagerMock,
+  resolveMemorySearchConfigMock,
+} from "./compact.hooks.memory.test-support.js";
 
 type MockEmbeddedAgentStreamFn = Mock<
   (model?: unknown, context?: unknown, options?: unknown) => unknown
@@ -105,15 +111,15 @@ const validateReplayTurnsMock = vi.fn(async ({ messages }: { messages: unknown[]
 export const resolveSessionAgentIdMock = vi.fn<
   typeof import("../agent-scope.js").resolveSessionAgentId
 >(() => "main");
-const resolveSessionAgentIdsMock = vi.fn<typeof import("../agent-scope.js").resolveSessionAgentIds>(
-  () => ({
-    defaultAgentId: "main",
-    sessionAgentId: "main",
-  }),
-);
+export const resolveSessionAgentIdsMock = vi.fn<
+  typeof import("../agent-scope.js").resolveSessionAgentIds
+>(() => ({
+  defaultAgentId: "main",
+  sessionAgentId: "main",
+}));
 const resolveAgentConfigMock = vi.fn((_config?: unknown, _agentId?: string): unknown => undefined);
 let fixture: { workspaceDir: string; sessionId: string };
-const resolveDefaultAgentDirMock = vi.fn<() => string>();
+export const resolveDefaultAgentDirMock = vi.fn<() => string>();
 export const estimateTokensMock = vi.fn((_message?: unknown) => 10);
 export const resolveAgentHarnessPolicyMock = vi.fn(() => ({ runtime: "openclaw" }));
 function createSelectedAgentHarnessMock(params: {
@@ -131,7 +137,7 @@ function createSelectedAgentHarnessMock(params: {
     runAttempt: vi.fn(),
   };
 }
-export const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
+const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
 export const selectAgentHarnessForPreparedModelProvidersMock = vi.fn(
   createSelectedAgentHarnessMock,
 );
@@ -181,7 +187,7 @@ function createMockCompactionSession() {
       sessionManualCompactionMock();
       return (await completeCompaction()).result;
     }),
-    [agentSessionAutomaticCompaction]: vi.fn(
+    [agentSessionAutomaticCompaction]: vi.fn<AgentSession[typeof agentSessionAutomaticCompaction]>(
       async (customInstructions, requestState, summaryOutputPolicy) => {
         sessionAutomaticCompactionMock(customInstructions, requestState, summaryOutputPolicy);
         return { status: "completed" as const, ...(await completeCompaction()) };
@@ -202,7 +208,7 @@ function createMockCompactionSession() {
   async function completeCompaction() {
     const result = await sessionCompactImpl();
     session.messages.splice(1);
-    const tokensAfter = session.messages.reduce<number>(
+    const tokensAfter: number = session.messages.reduce<number>(
       (tokens, message) => tokens + estimateTokensMock(message),
       0,
     );
@@ -355,7 +361,6 @@ function createCompactHooksRuntimePlan(params: BuildAgentRuntimePlanParams): Age
       resolvePolicy: vi.fn(() => transcriptPolicy),
     },
     delivery: {
-      isSilentPayload: vi.fn(() => false),
       resolveFollowupRoute: vi.fn(() => undefined),
     },
     outcome: {
@@ -384,7 +389,7 @@ export const acquireAgentRunPreparedModelRuntimeMock = vi.fn(
   acquireCompactHooksPreparedModelRuntime,
 );
 
-export function resetCompactSessionStateMocks(): void {
+function resetCompactSessionStateMocks(): void {
   sanitizeSessionHistoryMock.mockReset();
   sanitizeSessionHistoryMock.mockImplementation(async (params: { messages: unknown[] }) => {
     return params.messages;
@@ -533,11 +538,6 @@ export function resetCompactHooksHarnessMocks(workspaceDir: string, sessionId = 
       _options?: Parameters<typeof resolveModelAsync>[4],
     ) => resolveModelMock(provider, modelId, agentDir, cfg),
   );
-  resolveAgentHarnessPolicyMock.mockReset();
-  resolveAgentHarnessPolicyMock.mockReturnValue({ runtime: "openclaw" });
-  resolveContextWindowInfoMock.mockReset();
-  resolveContextWindowInfoMock.mockReturnValue({ tokens: 128_000 });
-
   sessionCompactImpl.mockReset();
   sessionCompactImpl.mockResolvedValue({
     summary: "summary",
@@ -744,23 +744,23 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     shouldPreferExplicitConfigApiKeyAuth: shouldPreferExplicitConfigApiKeyAuthMock,
   }));
 
-  vi.doMock("../sandbox.js", () => ({
+  vi.doMock("../sandbox/context.js", async () => ({
+    ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
     resolveSandboxContext: resolveSandboxContextMock,
   }));
 
   mockCompactHooksContextEngine(resolveContextEngineMock);
 
+  // mock-isolation: compaction hook fixtures replace the command-lane backend and its drain state.
   vi.doMock("../../process/command-queue.js", () => ({
     enqueueCommandInLane: enqueueCommandInLaneMock,
-    clearCommandLane: vi.fn(() => 0),
     GatewayDrainingError: class GatewayDrainingError extends Error {},
     isGatewayDraining: vi.fn(() => false),
     isCommandLaneTaskTimeoutError: vi.fn(() => false),
   }));
 
+  // mock-isolation: compaction hook fixtures pin lane selection without loading lane runtime state.
   vi.doMock("./lanes.js", () => ({
-    resolveSessionLane: vi.fn(() => "test-session-lane"),
-    resolveEmbeddedSessionLane: vi.fn(() => "test-session-lane"),
     resolveGlobalLane: vi.fn(() => "test-global-lane"),
   }));
 
@@ -845,6 +845,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     })),
   }));
 
+  // mock-isolation: Keep extension state isolated while safeguard tests install their own factories.
   vi.doMock("./extensions.js", () => ({
     buildEmbeddedExtensionFactories: buildEmbeddedExtensionFactoriesMock,
   }));
@@ -947,11 +948,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
-  vi.doMock("../embedded-agent-helpers.js", async () => {
-    const { pickFallbackThinkingLevel } = await import("../embedded-agent-helpers/thinking.js");
+  vi.doMock("../embedded-agent-helpers/turns.js", async () => {
+    const actual = await vi.importActual<typeof import("../embedded-agent-helpers/turns.js")>(
+      "../embedded-agent-helpers/turns.js",
+    );
     return {
-      ensureSessionHeader: vi.fn(async () => {}),
-      pickFallbackThinkingLevel,
+      ...actual,
       validateAnthropicTurns: vi.fn((m: unknown[]) => m),
       validateGeminiTurns: vi.fn((m: unknown[]) => m),
     };

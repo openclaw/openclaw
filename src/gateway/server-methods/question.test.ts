@@ -1,4 +1,4 @@
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
@@ -8,6 +8,7 @@ import {
   claimAgentRunDelegatedAuthority,
   getAgentRunContext,
   releaseAgentRunDelegatedAuthority,
+  rotateAgentRunRegistryLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { isSecretValueRegisteredForRedaction } from "../../logging/secret-redaction-registry.js";
@@ -17,20 +18,20 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../../secrets/store/secret-store.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  abortChatRunById,
-  registerChatAbortController,
-  type ChatAbortControllerEntry,
-} from "../chat-abort.js";
+import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import type { GatewayWsClient } from "../server/ws-types.js";
-import { canReceiveSessionEvent } from "../session-sharing.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
+import { canReceiveSessionEvent, prepareProjectedSessionSharing } from "../session-sharing.js";
+import { resolveSessionStoreIdentity } from "../session-store-key.js";
 import {
   adminRequestClient,
   broadcast,
@@ -45,6 +46,7 @@ import {
   secretRequestQuestion,
   storeWriteService,
 } from "./question.test-support.js";
+import { captureRpcTargetForTest } from "./rpc-source-fixtures.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 installQuestionTestHooks();
@@ -120,7 +122,7 @@ async function sharingFixture(others: "none" | "suggest" = "none") {
 }
 
 it("conceals foreign session questions for role-none readers while preserving global prompts", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { client, cfg } = await sharingFixture();
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     manager.request({ ...requestParams, id: "foreign-question" });
@@ -148,7 +150,7 @@ it("conceals foreign session questions for role-none readers while preserving gl
 });
 
 it("requires membership to resolve a suggest-capped guest question", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { owner, guest, cfg, client } = await sharingFixture("suggest");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     manager.request({ ...requestParams, id: "foreign-question" });
@@ -168,7 +170,7 @@ it("requires membership to resolve a suggest-capped guest question", async () =>
 });
 
 it("scopes requested and resolved questions to operators allowed to see their session", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const { owner, guest, cfg, profile: userProfile } = await sharingFixture();
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const viewer = ensureProfileForEmail("viewer@example.test");
@@ -188,11 +190,15 @@ it("scopes requested and resolved questions to operators allowed to see their se
         usesSharedGatewayAuth: false,
         authenticatedUserProfile: userProfile(profile),
       };
+      prepareGatewayRecipientProfile(client);
       return { client, socket };
     };
     const ownerClient = makeQuestionClient(owner, "question-owner");
     const viewerClient = makeQuestionClient(viewer, "question-viewer");
     const guestClient = makeQuestionClient(guest, "question-guest");
+    const projection = await createSessionRowProjection({ cfg });
+    onTestFinished(() => projection.dispose());
+    await projection.ensureMaterialized();
     const gatewayBroadcaster = createGatewayBroadcaster({
       clients: new GatewayClientRegistry([
         ownerClient.client,
@@ -200,7 +206,30 @@ it("scopes requested and resolved questions to operators allowed to see their se
         guestClient.client,
       ]),
       canReceiveSessionEvent: (client, sessionKeys, agentId, event, payload) =>
-        canReceiveSessionEvent({ cfg, client, sessionKeys, agentId, event, payload }),
+        canReceiveSessionEvent({
+          cfg,
+          client,
+          sessionKeys,
+          agentId,
+          event,
+          payload,
+          prepared: {
+            sharing: prepareProjectedSessionSharing({
+              cfg,
+              client,
+              isMember: (target, identityId) =>
+                projection.hasMembership(target.storePath, target.storeKey, identityId),
+            }),
+            target: (key, targetAgentId) => {
+              const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
+                cfg,
+                sessionKey: key,
+                agentId: targetAgentId,
+              });
+              return projection.sharingTarget({ key, agentId: ownerAgentId });
+            },
+          },
+        }),
     });
     broadcast.mockImplementation(gatewayBroadcaster.broadcast);
 
@@ -385,25 +414,32 @@ it("requires admin scope to mint store-bound questions", async () => {
   expect(manager.list()).toEqual([]);
 });
 
-it.each(["replacement", "abort"] as const)(
+it.each(["release", "replacement", "rotation", "abort"] as const)(
   "fences a pending credential on exact requester %s while preserving ordinary questions",
   async (closure) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       const id = await requestSecretQuestion();
       const ordinary = await call("question.request", requestParams);
       const ordinaryId = (ordinary[1] as { id: string }).id;
       const waiting = manager.waitAnswer(id);
       let successor: AgentRunDelegatedAuthority | undefined;
-      if (closure === "replacement") {
+      if (closure === "release") {
+        releaseAgentRunDelegatedAuthority(requesterAuthority);
+      } else if (closure === "replacement") {
         successor = claimAgentRunDelegatedAuthority({
           instanceId: "successor-instance",
           runId: requestParams.runId,
         });
+      } else if (closure === "rotation") {
+        rotateAgentRunRegistryLifecycleGeneration();
       } else {
-        const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+        rpcSourceTesting.clear();
         const registration = registerChatAbortController({
-          chatAbortControllers,
+          target: captureRpcTargetForTest({
+            sessionKey: requestParams.sessionKey,
+            sessionId: "question-session",
+          }),
           runId: requestParams.runId,
           sessionId: "question-session",
           sessionKey: requestParams.sessionKey,
@@ -417,7 +453,6 @@ it.each(["replacement", "abort"] as const)(
           expect(
             abortChatRunById(
               {
-                chatAbortControllers,
                 chatRunState: createChatRunState(),
                 removeChatRun: () => undefined,
                 agentRunSeq: new Map(),
@@ -431,6 +466,7 @@ it.each(["replacement", "abort"] as const)(
           registration.cleanup();
         }
       }
+
       try {
         if (closure !== "abort") {
           expect(getAgentRunContext(requestParams.runId)).toBeDefined();
@@ -507,7 +543,7 @@ it("requires admitted authority, not an admin's supplied run metadata", async ()
 });
 
 it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
     const value = "test-secret-value-gateway-diversion-123";
@@ -549,7 +585,7 @@ it("diverts operator-entered credentials into the store and exposes only a store
 });
 
 it("uses operator-edited hosts and keeps invalid store submissions pending for retry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
     const value = "test-secret-value-retry-123";
@@ -587,7 +623,7 @@ it.each([
     answers: { secret_value: ["test-secret-value-only"], destination: ["Home"] },
   },
 ])("keeps a secret question pending when there is $behavior", async ({ answers }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     const id = await requestSecretQuestion();
 
@@ -600,7 +636,7 @@ it.each([
 });
 
 it("rejects masked env requests while preserving ordinary question host validation and cancellation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     expect(
       await call(
@@ -636,7 +672,7 @@ it("rejects masked env requests while preserving ordinary question host validati
 });
 
 it("settles the SQLite commit before a second answer races its deferred refresh", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     mockReferencedStoreSnapshot();
     const reload = createDeferred<{ warningCount: number }>();
@@ -693,7 +729,7 @@ it("settles the SQLite commit before a second answer races its deferred refresh"
 });
 
 it("keeps a committed answer terminal and reports refresh failure without inviting overwrite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     mockReferencedStoreSnapshot();
     reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
@@ -740,7 +776,7 @@ it("keeps a committed answer terminal and reports refresh failure without inviti
 });
 
 it("keeps store-bound questions pending when the write service is unavailable", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     setRuntimeConfigSnapshot({});
     vi.spyOn(storeWriteService, "write").mockImplementation(() => {
       throw new Error("database unavailable");
@@ -816,7 +852,7 @@ it.each([
 ])(
   "saves only the consented host policy: $scenario",
   async ({ existing, proposal, override, shown }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
       setRuntimeConfigSnapshot({});
       const entry = {
         scope: { kind: "team" as const },

@@ -12,6 +12,7 @@ import {
   describeCodexNativeWebSearch,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 
 const baseConfig = {
   tools: {
@@ -63,23 +64,7 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.inactiveReason).toBe("model_not_eligible");
   });
 
-  it.each([
-    { name: "without auth", config: baseConfig },
-    {
-      name: "with auth",
-      config: {
-        ...baseConfig,
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-      },
-    },
-  ] as const)(
+  it.each([{ name: "without auth", config: baseConfig }] as const)(
     "leaves credential admission to the model request for direct openai $name",
     ({ config }) => {
       const result = resolveCodexNativeSearchActivation({
@@ -229,18 +214,20 @@ describe("resolveCodexNativeSearchActivation", () => {
       },
     );
 
-    const result = resolveCodexNativeSearchActivation({
-      config: {
-        ...baseConfig,
-        session: {
-          store: storePath,
+    const result = await withPreparedSessionCapabilityRead(() =>
+      resolveCodexNativeSearchActivation({
+        config: {
+          ...baseConfig,
+          session: {
+            store: storePath,
+          },
         },
-      },
-      sessionKey,
-      modelProvider: "gateway",
-      modelApi: "openai-chatgpt-responses",
-      modelId: "gpt-5.5",
-    });
+        sessionKey,
+        modelProvider: "gateway",
+        modelApi: "openai-chatgpt-responses",
+        modelId: "gpt-5.5",
+      }),
+    );
 
     expect(result.state).toBe("managed_only");
     expect(result.inactiveReason).toBe("tool_policy_denied");

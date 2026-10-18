@@ -50,7 +50,10 @@ function fixture(method: "preview" | "detail") {
     config,
     id: "github",
     name: "GitHub",
-    contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    contracts: {
+      tools: ["github_read", "github_search"],
+      gatewayMethodDispatch: ["authenticated-request"],
+    },
     register: expectDefined(github.register, "GitHub registration"),
   });
   setTestPluginRegistry(registry.registry);
@@ -172,7 +175,7 @@ describe("registered GitHub readers", () => {
     expect(f.readResponse).toHaveBeenCalledExactlyOnceWith(false, undefined, {
       code: "UNAVAILABLE",
       message: "GitHub request is no longer active. Try again.",
-      retryable: true,
+      retryable: false,
     });
     expect(f.harness.send).not.toHaveBeenCalledWith(
       expect.objectContaining({ id: "github-read", ok: true }),

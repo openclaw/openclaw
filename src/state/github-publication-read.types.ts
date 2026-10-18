@@ -57,14 +57,13 @@ export type GitHubSessionReceiptIdentities = Record<
 >;
 
 export type SharedGitHubPublicationReadInput = {
-  kind: "repository" | "worktree";
   session: {
     agentId: string;
     sessionKey: string;
     sessionId: string;
     lifecycleRevision?: string | null;
   };
-  selector: { requestId: string } | { idempotencyKey?: string };
+  selector: { requestId: string } | { idempotencyKey?: string; status?: "published" };
   entry: {
     archivedAt?: number;
     repositoryWorkspaceId?: string;

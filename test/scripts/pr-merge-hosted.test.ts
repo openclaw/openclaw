@@ -7,6 +7,43 @@ import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const outcomeRef = "refs/openclaw/pr-merge-outcomes/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
+type Fixture = ReturnType<typeof createMainRefreshFixture>;
+type Event = ReturnType<Fixture["events"]>[number];
+const isMerge = (event: Event) =>
+  event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge";
+const isGraphqlMerge = (event: Event) =>
+  event.kind === "gh" &&
+  event.args?.[0] === "api" &&
+  event.args.includes("graphql") &&
+  event.args.includes("--input");
+const readLocal = (f: Fixture, name: string) => readFileSync(join(f.local, name), "utf8");
+const writeGates = (f: Fixture, contents: string) =>
+  writeFileSync(join(f.local, "gates.env"), contents);
+function observe(f: Fixture, action: () => ReturnType<Fixture["shell"]>, expected = 0) {
+  const before = f.events().length;
+  const result = action();
+  const output = result.stdout + result.stderr;
+  expect(result.status, output).toBe(expected);
+  return { ...result, output, events: f.events().slice(before) };
+}
+const outcomeRecord = (f: Fixture) =>
+  JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`));
+function expectNoIntent(f: Fixture) {
+  expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", outcomeRef)).toBe("");
+}
+function verify(f: Fixture, autoMergeRequested = false) {
+  const options = {
+    replacementHead: "",
+    autoMergeRequested,
+    observation: null,
+    qualifiedRefusal: false,
+  };
+  return f.shell(`merge_verify 42 '${JSON.stringify(options)}' || exit 1`);
+}
+function checkRow(bucket: "skipping" | "pending" | "pass" | "fail", name = "openclaw/ci-gate") {
+  const states = { skipping: "SKIPPED", pending: "PENDING", pass: "SUCCESS", fail: "FAILURE" };
+  return { name, bucket, state: states[bucket] };
+}
 
 describePosix("native hosted merge handoff", () => {
   let f: ReturnType<typeof createMainRefreshFixture>;
@@ -15,20 +52,16 @@ describePosix("native hosted merge handoff", () => {
   beforeAll(() => {
     f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-hosted-"));
     f.configure({ hostedCi: "release" });
-    const prepare = f.run("prepare-run");
-    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
-    preparedGates = readFileSync(join(f.local, "gates.env"), "utf8");
-    expect(
-      JSON.parse(readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8")),
-    ).toMatchObject({
+    observe(f, () => f.run("prepare-run"));
+    preparedGates = readLocal(f, "gates.env");
+    expect(JSON.parse(readLocal(f, "gates-hosted-checks.json"))).toMatchObject({
       headSha: f.head,
       workflows: expect.arrayContaining([
         expect.objectContaining({ id: 6, event: "workflow_dispatch", headSha: f.head }),
       ]),
     });
     delete f.env.OPENCLAW_TESTBOX;
-    // A changelog-only checkout must not narrow the prepared source change's
-    // gates, nor may a PR-controlled helper replace the canonical verifier.
+    // Neither unrelated checkout changes nor a PR-controlled verifier may replace prepared proof.
     f.git(f.worktree, "checkout", "--detach", f.main);
     writeFileSync(join(f.worktree, "CHANGELOG.md"), "Unrelated changelog-only checkout.\n");
     f.git(f.worktree, "add", "CHANGELOG.md");
@@ -40,10 +73,9 @@ describePosix("native hosted merge handoff", () => {
   });
 
   beforeEach(() => {
-    // Reuse one successful preparation. Rejections must not dispatch or damage
-    // that state; the final case alone completes the synthetic server merge.
+    // Only the final case may consume the shared preparation by merging.
     f.configure({ hostedCi: "release", requiredChecks: "pass" });
-    writeFileSync(join(f.local, "gates.env"), preparedGates);
+    writeGates(f, preparedGates);
     rmSync(join(f.local, "merge-checks-watch.log"), { force: true });
   });
 
@@ -55,14 +87,12 @@ describePosix("native hosted merge handoff", () => {
     "required-pending",
     "required-api-error",
   ] as const)("blocks %s evidence before merge dispatch in an OR-list caller", (fault) => {
-    const requiredChecks =
-      fault === "required-fail"
-        ? "fail"
-        : fault === "required-pending"
-          ? "pending"
-          : fault === "required-api-error"
-            ? "api-error"
-            : undefined;
+    const requiredFaults: Partial<Record<string, "fail" | "pending" | "api-error">> = {
+      "required-fail": "fail",
+      "required-pending": "pending",
+      "required-api-error": "api-error",
+    };
+    const requiredChecks = requiredFaults[fault];
     if (requiredChecks) {
       f.configure({ requiredChecks });
     } else if (fault === "missing" || fault === "api-error") {
@@ -70,12 +100,8 @@ describePosix("native hosted merge handoff", () => {
     } else {
       rmSync(join(f.local, "gates.env"));
     }
-    const savedProof = readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8");
-    const before = f.events().length;
-    const result = f.shell("merge_run 42 || exit 1");
-    const output = result.stdout + result.stderr;
-    expect(result.status, output).toBe(1);
-    const events = f.events().slice(before);
+    const savedProof = readLocal(f, "gates-hosted-checks.json");
+    const { stdout, output, events } = observe(f, () => f.shell("merge_run 42 || exit 1"), 1);
     expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
     if (requiredChecks) {
       expect(output).toContain(
@@ -89,31 +115,23 @@ describePosix("native hosted merge handoff", () => {
         events.findIndex((event) => event.kind === "hosted-gate"),
       );
     } else if (fault === "missing-artifact") {
-      expect(result.stdout).toContain("Missing required artifact: .local/gates.env");
+      expect(stdout).toContain("Missing required artifact: .local/gates.env");
     } else {
       expect(output).toContain("hosted CI/Testbox gates failed");
-      expect(readFileSync(join(f.local, "gates-hosted-checks.log"), "utf8")).toContain(
+      expect(readLocal(f, "gates-hosted-checks.log")).toContain(
         fault === "api-error" ? "Hosted API unavailable" : "Missing successful recent CI workflow",
       );
       expect(events.some((event) => event.kind === "required-checks")).toBe(false);
-      expect(readFileSync(join(f.local, "gates-hosted-checks.json"), "utf8")).toBe(savedProof);
+      expect(readLocal(f, "gates-hosted-checks.json")).toBe(savedProof);
     }
     expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
-    expect(f.git(f.canonical, "for-each-ref", "--format=%(refname)", outcomeRef)).toBe("");
+    expectNoIntent(f);
   });
 
   it.each(["full", "remote_crabbox_aws"])("retains the PR CI wait for %s preparation", (mode) => {
     f.configure({ hostedCi: "scheduled" });
-    writeFileSync(
-      join(f.local, "gates.env"),
-      preparedGates.replace("hosted_exact_or_recent_parent", mode),
-    );
-    const before = f.events().length;
-    const result = f.shell(
-      `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const events = f.events().slice(before);
+    writeGates(f, preparedGates.replace("hosted_exact_or_recent_parent", mode));
+    const { events } = observe(f, () => verify(f));
     const watched = events.findIndex((event) => event.kind === "ci-watched");
     expect(watched).toBeGreaterThanOrEqual(0);
     expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(watched);
@@ -121,35 +139,20 @@ describePosix("native hosted merge handoff", () => {
   });
 
   it("dispatches once with the exact prepared head and ordinary server enforcement", () => {
-    const before = f.events().length;
-    const result = f.run("merge-run");
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    const mergeCalls = f
-      .events()
-      .filter(
-        (event) =>
-          event.kind === "gh" &&
-          event.args?.[0] === "api" &&
-          event.args.includes("graphql") &&
-          event.args.includes("--input"),
-      );
+    const { output, events } = observe(f, () => f.run("merge-run"));
+    const mergeCalls = f.events().filter(isGraphqlMerge);
     expect(mergeCalls).toHaveLength(1);
-    const events = f.events().slice(before);
     const watchLog = join(f.local, "merge-checks-watch.log");
     expect(existsSync(watchLog) ? readFileSync(watchLog, "utf8") : "").toBe("");
     const hosted = events.findIndex((event) => event.kind === "hosted-gate");
     expect(hosted).toBeGreaterThanOrEqual(0);
     expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
     expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
-    expect(
-      events.some(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
-      ),
-    ).toBe(false);
+    expect(events.some(isMerge)).toBe(false);
     expect(f.git(f.origin, "log", "-1", "--format=%B", "main")).toBe(
       "Fixture squash\n\nReviewed fixture body",
     );
-    expect(JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`))).toMatchObject({
+    expect(outcomeRecord(f)).toMatchObject({
       head: f.head,
       route: "immediate",
       phase: "commented",
@@ -159,18 +162,13 @@ describePosix("native hosted merge handoff", () => {
     expect(readFileSync(join(f.worktree, "scripts/verify-pr-hosted-gates.mts"), "utf8")).toBe(
       "throw new Error('PR helper executed');\n",
     );
-    expect(result.stdout + result.stderr).toContain("worktree has local changes or is locked");
+    expect(output).toContain("worktree has local changes or is locked");
     expect(
-      f
-        .events()
-        .slice(before)
-        .some(
-          (event) =>
-            event.kind === "gh" &&
-            event.args?.some(
-              (arg) => arg.includes("/collaborators/") && arg.endsWith("/permission"),
-            ),
-        ),
+      events.some(
+        (event) =>
+          event.kind === "gh" &&
+          event.args?.some((arg) => arg.includes("/collaborators/") && arg.endsWith("/permission")),
+      ),
     ).toBe(false);
   });
 });
@@ -188,14 +186,13 @@ describePosix("native pending GitHub merge handoff", () => {
       requiredChecks: "pending",
       metadata: { ...f.metadata, mergeStateStatus: "BLOCKED" },
     });
-    const prepare = f.run("prepare-run");
-    expect(prepare.status, prepare.stdout + prepare.stderr).toBe(0);
-    pendingGates = readFileSync(join(f.local, "gates.env"), "utf8");
+    observe(f, () => f.run("prepare-run"));
+    pendingGates = readLocal(f, "gates.env");
   });
 
   beforeEach(() => {
     f.configure({ requiredChecks: "pending", requiredCheckRows: undefined });
-    writeFileSync(join(f.local, "gates.env"), pendingGates);
+    writeGates(f, pendingGates);
   });
 
   it.each([
@@ -214,10 +211,7 @@ describePosix("native pending GitHub merge handoff", () => {
     };
     let command = `merge_verify 42 '${JSON.stringify(verification)}'`;
     if (fault === "different gate head") {
-      writeFileSync(
-        join(f.local, "gates.env"),
-        `${pendingGates}\nHOSTED_GATES_TARGET_HEAD_SHA=${f.sameTreeHead}\n`,
-      );
+      writeGates(f, `${pendingGates}\nHOSTED_GATES_TARGET_HEAD_SHA=${f.sameTreeHead}\n`);
     } else if (fault === "REST transport") {
       command = `MERGE_TRANSPORT=rest ${command}`;
     } else if (fault === "missing required gate" || fault === "failed required check") {
@@ -226,10 +220,7 @@ describePosix("native pending GitHub merge handoff", () => {
       });
       command = "merge_run 42 true";
     }
-    const before = f.events().length;
-    const result = f.shell(`${command} || exit 1`);
-    const output = result.stdout + result.stderr;
-    expect(result.status, output).toBe(1);
+    const { output, events } = observe(f, () => f.shell(`${command} || exit 1`), 1);
     expect(output).toContain(
       fault === "missing required gate"
         ? "require the enforced openclaw/ci-gate context"
@@ -237,23 +228,11 @@ describePosix("native pending GitHub merge handoff", () => {
           ? "Required checks are failing; fix them before requesting auto-merge"
           : "require --auto-merge at the exact prepared head",
     );
-    const events = f.events().slice(before);
     expect(
       events.some((event) => event.kind === "ci-watched" || event.kind === "hosted-gate"),
     ).toBe(false);
-    expect(
-      events.some(
-        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
-      ),
-    ).toBe(false);
-    expect(
-      f.git(
-        f.canonical,
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/openclaw/pr-merge-outcomes/42",
-      ),
-    ).toBe("");
+    expect(events.some(isMerge)).toBe(false);
+    expectNoIntent(f);
   });
 
   it.each(["pending", "pass"] as const)(
@@ -261,54 +240,29 @@ describePosix("native pending GitHub merge handoff", () => {
     (bucket) => {
       f.configure({
         requiredChecks: bucket,
-        requiredCheckRows: [
-          { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
-          { name: "openclaw/ci-gate", bucket, state: bucket === "pass" ? "SUCCESS" : "PENDING" },
-        ],
+        requiredCheckRows: [checkRow("skipping"), checkRow(bucket)],
       });
-      const result = f.shell(
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":true,"observation":null,"qualifiedRefusal":false}' || exit 1`,
-      );
-      expect(result.status, result.stdout + result.stderr).toBe(0);
+      observe(f, () => verify(f, true));
     },
   );
 
   it.each([
-    ["skipped only", [{ name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" }]],
+    ["skipped only", [checkRow("skipping")]],
     [
       "unmatched skipped gate",
-      [
-        { name: "openclaw/ci-gate", bucket: "pending", state: "PENDING" },
-        { name: "independent required check", bucket: "skipping", state: "SKIPPED" },
-      ],
+      [checkRow("pending"), checkRow("skipping", "independent required check")],
     ],
-    [
-      "failed current gate",
-      [
-        { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
-        { name: "openclaw/ci-gate", bucket: "fail", state: "FAILURE" },
-      ],
-    ],
+    ["failed current gate", [checkRow("skipping"), checkRow("fail")]],
   ])("rejects %s before auto-merge dispatch", (_name, requiredCheckRows) => {
     f.configure({ requiredCheckRows });
-    const before = f.events().length;
-    const result = f.shell("merge_run 42 true || exit 1");
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stdout + result.stderr).toContain("Required checks are failing");
-    expect(
-      f
-        .events()
-        .slice(before)
-        .some((event) => event.kind === "gh" && event.args?.[1] === "merge"),
-    ).toBe(false);
+    const { output, events } = observe(f, () => f.shell("merge_run 42 true || exit 1"), 1);
+    expect(output).toContain("Required checks are failing");
+    expect(events.some((event) => event.kind === "gh" && event.args?.[1] === "merge")).toBe(false);
   });
 
   it("submits one exact-head auto request and returns pending without polling or cleanup", () => {
-    const before = f.events().length;
-    const result = f.run(["merge-run", "42", "--auto-merge"]);
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
-    const events = f.events().slice(before);
+    const { stdout, events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]));
+    expect(stdout).toContain("AUTO/QUEUE PENDING for PR #42; not merged");
     const pullReads = events.filter(
       (event) => event.kind === "gh" && event.args?.includes("repos/fixture/repo/pulls/42"),
     );
@@ -321,9 +275,7 @@ describePosix("native pending GitHub merge handoff", () => {
       "Cache-Control: max-age=0",
     ];
     expect(pullReads.map((event) => event.args)).toEqual([expectedRead, expectedRead]);
-    const mergeCalls = events.filter(
-      (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
-    );
+    const mergeCalls = events.filter(isMerge);
     expect(mergeCalls).toHaveLength(1);
     expect(mergeCalls[0]?.args).toEqual([
       "pr",
@@ -352,7 +304,7 @@ describePosix("native pending GitHub merge handoff", () => {
       ),
     ).toHaveLength(2);
     expect(events.some((event) => event.kind === "gh" && event.args?.includes("POST"))).toBe(false);
-    expect(JSON.parse(f.git(f.canonical, "show", `${outcomeRef}:outcome.json`))).toMatchObject({
+    expect(outcomeRecord(f)).toMatchObject({
       head: f.head,
       route: "auto",
       phase: "intent",
@@ -362,5 +314,81 @@ describePosix("native pending GitHub merge handoff", () => {
     expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
     expect(f.git(f.origin, "rev-parse", "topic")).toBe(f.head);
     expect(existsSync(f.worktree)).toBe(true);
+  });
+});
+
+describePosix("native superseded-only UNSTABLE merge handoff", () => {
+  let f: ReturnType<typeof createMainRefreshFixture>;
+
+  function rollup(replacement: "SUCCESS" | "FAILURE" | null) {
+    function check(name: string, conclusion: string, run: number, workflow: number) {
+      return {
+        kind: "CheckRun" as const,
+        databaseId: run * 10,
+        name,
+        status: "COMPLETED",
+        conclusion,
+        checkSuite: {
+          databaseId: run * 100,
+          workflowRun: {
+            databaseId: run,
+            event: name === "dispatch" ? "pull_request_target" : "pull_request",
+            workflow: { databaseId: workflow },
+          },
+        },
+      };
+    }
+    const nodes = [check("CI", "SUCCESS", 1, 10), check("dispatch", "CANCELLED", 100, 20)];
+    if (replacement) {
+      nodes.push(check("dispatch", replacement, 200, 20));
+    }
+    return {
+      state: "FAILURE",
+      contexts: {
+        totalCount: nodes.length,
+        pageInfo: { hasNextPage: false, endCursor: null },
+        nodes,
+      },
+    };
+  }
+
+  beforeAll(() => {
+    f = createMainRefreshFixture(tempDirs.make("openclaw-pr-merge-unstable-"));
+    delete f.env.OPENCLAW_TESTBOX;
+    f.env.OPENCLAW_PR_GATES_REMOTE = "github";
+    f.seedPreparedMerge();
+    writeGates(
+      f,
+      `PR_NUMBER=42\nDOCS_ONLY=false\nCHANGELOG_REQUIRED=false\nGATES_MODE=github_pending\nHOSTED_GATES_TARGET_HEAD_SHA=${f.head}\n`,
+    );
+    f.configure({
+      metadata: { ...f.metadata, mergeStateStatus: "UNSTABLE" },
+      requiredChecks: "pass",
+    });
+  });
+
+  it.each([
+    { fault: "unsuperseded cancellation", replacement: null, hostedCi: "scheduled" },
+    { fault: "failing replacement", replacement: "FAILURE", hostedCi: "scheduled" },
+    { fault: "unsuccessful ci.yml run", replacement: "SUCCESS", hostedCi: "missing" },
+  ] as const)("refuses $fault before intent or dispatch", ({ replacement, hostedCi }) => {
+    f.configure({ rollup: rollup(replacement), hostedCi });
+    const { output, events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]), 1);
+    expect(output).toContain(
+      "auto-merge admission of MERGEABLE/UNSTABLE requires a GREEN CI watcher pass at the prepared head",
+    );
+    expect(events.some((event) => isGraphqlMerge(event) || isMerge(event))).toBe(false);
+    expectNoIntent(f);
+    expect(f.git(f.origin, "rev-parse", "main")).toBe(f.main);
+  });
+
+  it("dispatches one immediate exact-head squash after the real watcher exits GREEN", () => {
+    f.configure({ rollup: rollup("SUCCESS"), hostedCi: "scheduled" });
+    const { events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]));
+    expect(events.filter(isGraphqlMerge)).toHaveLength(1);
+    expect(events.some(isMerge)).toBe(false);
+    expect(events.some((event) => event.kind === "ci-watched")).toBe(true);
+    expect(events.some((event) => event.kind === "rollup-read")).toBe(true);
+    expect(outcomeRecord(f)).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
   });
 });

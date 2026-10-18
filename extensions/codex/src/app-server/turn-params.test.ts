@@ -245,7 +245,7 @@ describe("buildTurnStartParams source-delivery context", () => {
     );
     const values = turns.map((turn) => turn.additionalContext?.openclaw_source_delivery?.value);
     expect(values[0]).toContain("OpenClaw delivers your final response automatically");
-    expect(values[0]).toContain("sending a message doesn’t end your task");
+    expect(values[0]).toContain("is your complete reply");
     expect(values[0]).toContain("Commentary is optional progress and may be hidden");
     expect(values[0]).toContain("`message(action=send, final=false)`");
     expect(values[0]).toContain("deliver every still-pending answer");
@@ -255,6 +255,14 @@ describe("buildTurnStartParams source-delivery context", () => {
     expect(values[1]).toContain("current source is default target");
     expect(values[1]).toContain("`message(action=send, final=false)`");
     expect(values[2]).toBe(values[0]);
+    const deliveryOnly = await buildTurnStartParams(
+      { ...params, sourceReplyDeliveryMode: undefined, messageToolFinalByDefault: false },
+      options,
+    );
+    const deliveryOnlyValue = deliveryOnly.additionalContext?.openclaw_source_delivery?.value;
+    expect(deliveryOnlyValue).toContain("(`final=true`) or an added reaction");
+    expect(deliveryOnlyValue).toContain("A send ends this turn only with `final=true`.");
+    expect(values[0]).not.toContain("A send ends this turn only");
     for (const turn of turns) {
       expect(turn.input).toEqual([{ type: "text", text: params.prompt, text_elements: [] }]);
       expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();

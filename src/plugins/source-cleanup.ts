@@ -1,12 +1,11 @@
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
-import { readCurrentConfigForPolicyCheckWithMigrations } from "../config/io.runtime.js";
+import { readCurrentConfigForPolicyCheck } from "../config/io.runtime.js";
 import { formatConfigIssueSummary } from "../config/issue-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withConfigSourceLocks } from "../config/write-lock.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
-import { readDeferredPluginMigrationsAsync } from "../infra/deferred-plugin-migrations.js";
 import { isPluginSourcePathInUse } from "./installed-plugin-package-ownership.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
 
@@ -25,11 +24,6 @@ export async function withPluginSourceCleanup<T>(
   return await withPluginLifecycleLease(options, async (lease) => {
     const assertOwned = () => lease.assertOwned();
     assertOwned();
-    const deferredPluginMigrations = await readDeferredPluginMigrationsAsync({
-      env,
-      path: lease.databasePath,
-    });
-    assertOwned();
     const readSources = async () => {
       assertOwned();
       const { snapshot, writeOptions } = await createConfigIO({
@@ -37,7 +31,6 @@ export async function withPluginSourceCleanup<T>(
         env: cloneEnvWithPlatformSemantics(env),
         observe: false,
         pluginValidation: "core-only",
-        deferredPluginMigrations,
         shellEnvFallback: "defer",
         suppressFutureVersionWarning: true,
         logger: { warn: () => {}, error: () => {} },
@@ -74,10 +67,9 @@ export async function withPluginSourceCleanup<T>(
           }
           const assertCleanup = () => {
             assertCurrent();
-            const config = readCurrentConfigForPolicyCheckWithMigrations({
+            const config = readCurrentConfigForPolicyCheck({
               configPath,
               env,
-              deferredPluginMigrations,
             });
             const referenced = options.isReferenced
               ? options.isReferenced(config)

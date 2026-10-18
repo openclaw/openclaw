@@ -1,4 +1,3 @@
-import type WaDialog from "@awesome.me/webawesome/dist/components/dialog/dialog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawModalDialog } from "./modal-dialog.ts";
 import "./file-preview-modal-registration.ts";
@@ -31,15 +30,13 @@ afterEach(() => {
 
 async function resolveRenderedDialog(modal: OpenClawModalDialog) {
   await modal.updateComplete;
-  const webAwesomeDialog = modal.shadowRoot?.querySelector<WaDialog>("wa-dialog");
-  expect(webAwesomeDialog).toBeInstanceOf(HTMLElement);
-  await webAwesomeDialog?.updateComplete;
+
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
-  const dialog = webAwesomeDialog?.shadowRoot?.querySelector("dialog");
+  const dialog = modal.querySelector("dialog");
   expect(dialog?.open).toBe(true);
-  // Web Awesome opens at 80% scale; measure the settled dialog, not its first animation frame.
+  // The modal opens at 80% scale; measure the settled dialog, not its first animation frame.
   await Promise.all(dialog!.getAnimations().map((animation) => animation.finished));
   return dialog!;
 }
@@ -49,7 +46,7 @@ async function mountPreview(width: number, activePath = initialFilePath) {
   await page.viewport(width, 844);
 
   const preview = document.createElement("openclaw-file-preview-modal");
-  preview.style.setProperty("--wa-transition-normal", "150ms");
+  preview.style.setProperty("--openclaw-modal-show-duration", "150ms");
   preview.files = files;
   preview.activePath = activePath;
   document.body.append(preview);
@@ -74,7 +71,7 @@ async function mountModal(
 
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Preview";
-  modal.style.setProperty("--wa-transition-normal", "150ms");
+  modal.style.setProperty("--openclaw-modal-show-duration", "150ms");
   modal.style.setProperty("--openclaw-modal-width", options.modalWidth);
   modal.classList.toggle("fullscreen", options.fullscreen === true);
   modal.classList.toggle("drawer", options.kind !== undefined);
@@ -103,7 +100,15 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(activeItem).toBeInstanceOf(HTMLElement);
     expect(title).toBeInstanceOf(HTMLElement);
 
+    const footer = preview.querySelector<HTMLElement>(".foot")!;
+    const actions = footer.querySelector<HTMLElement>("openclaw-modal-actions")!;
+    const close = actions.querySelector<HTMLButtonElement>("button")!;
     const dialogBounds = dialog.getBoundingClientRect();
+    expect(footer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      preview.querySelector<HTMLElement>(".body")!.getBoundingClientRect().bottom - 1,
+    );
+    expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(close.getBoundingClientRect().bottom).toBeLessThanOrEqual(dialogBounds.bottom + 1);
     const listBounds = list!.getBoundingClientRect();
     const detailBounds = detail!.getBoundingClientRect();
     const copyBounds = copy!.getBoundingClientRect();
@@ -169,7 +174,15 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(preview.querySelector(".chat-copy-btn")).toBeNull();
     expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
 
+    const footer = preview.querySelector<HTMLElement>(".foot")!;
+    const actions = footer.querySelector<HTMLElement>("openclaw-modal-actions")!;
+    const close = actions.querySelector<HTMLButtonElement>("button")!;
     const dialogBounds = dialog.getBoundingClientRect();
+    expect(footer.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      preview.querySelector<HTMLElement>(".body")!.getBoundingClientRect().bottom - 1,
+    );
+    expect(close.getBoundingClientRect().right).toBeLessThanOrEqual(dialogBounds.right + 1);
+    expect(close.getBoundingClientRect().bottom).toBeLessThanOrEqual(dialogBounds.bottom + 1);
     const detailBounds = detail!.getBoundingClientRect();
     const detailBodyBounds = detailBody!.getBoundingClientRect();
     expect(detailBounds.left).toBeGreaterThanOrEqual(dialogBounds.left - 1);
@@ -263,6 +276,7 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
       const owner = preview.querySelector<OpenClawModalDialog>("openclaw-modal-dialog")!;
       const dialog = await resolveRenderedDialog(owner);
       expect(preview.querySelector(".search")).toBeNull();
+      expect(preview.querySelector("openclaw-modal-actions")).toBeNull();
       expect(
         preview.querySelector(".chips, .item-meta, .state, .list-section, .detail-head, .foot"),
       ).toBeNull();

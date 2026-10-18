@@ -1,14 +1,20 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
-import type { ReplyBackendMessageInjectionV2 } from "../../auto-reply/reply/reply-run-registry.contracts.js";
-import {
-  createReplyOperation,
-  replyRunRegistry,
-} from "../../auto-reply/reply/reply-run-registry.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.entry.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
+import {
+  createReplyOperation,
+  captureCurrentReplyMessageInjectionTarget,
+} from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+} from "../../sessions/session-controller.mailbox.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -25,6 +31,10 @@ it.each(
       const runId = "gateway-hidden-question-owner";
       const text = "Green";
       const storePath = path.join(state.sessionsDir(), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath },
+        { sessionId, updatedAt: 1 },
+      );
       const owner = createQueueTestRun({ prompt: "child coordination" });
       owner.run = {
         ...owner.run,
@@ -47,8 +57,8 @@ it.each(
         },
       };
       const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
-      operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(owner));
-      const fingerprint = operation.bindToolAuthorityRoute({
+      await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(owner));
+      const fingerprint = await operation.bindToolAuthorityRouteAsync({
         provider: owner.run.provider,
         model: owner.run.model,
       });
@@ -71,6 +81,7 @@ it.each(
       );
       operation.attachBackend({
         kind: "embedded",
+        supportsTranscriptCommitWait: true,
         runId,
         toolAuthorityFingerprint: fingerprint,
         cancel: vi.fn(),
@@ -85,9 +96,20 @@ it.each(
       operation.setPhase("running");
       registerAgentRunContext(runId, { isControlUiVisible: false, projectSessionMessages: false });
       try {
-        const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+        const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
         expect(target).toBeDefined();
+        const adapter = { sessionKey, sessionId, scope: storePath };
+        const input = reserveSessionControllerSource(sessionKey, {
+          adapter,
+          policy: { mode: "steer" },
+          target: captureSessionTarget({
+            storeScope: storePath,
+            sessionKey,
+            incarnation: sessionId,
+          }),
+        });
         const start = createChatSendMessageInjectionStarter({
+          sourceRef: { input, adapter },
           target,
           abortSignal: operation.abortSignal,
           assertCurrent: () => operation.abortSignal.throwIfAborted(),
@@ -136,6 +158,7 @@ it.each(
         expect(claim).toHaveBeenCalledTimes(!restricted && !image ? 1 : 0);
         expect(cancel).toHaveBeenCalledTimes(!restricted && image ? 1 : 0);
         expect(queueMessage).not.toHaveBeenCalled();
+        retireSessionControllerInput(input);
       } finally {
         clearAgentRunContext(runId);
         operation.complete();

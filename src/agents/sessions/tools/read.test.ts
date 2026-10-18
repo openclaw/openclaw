@@ -105,26 +105,20 @@ describe("read tool", () => {
     }
   });
 
-  it.each(["extension", "embedded"])("omits images for a non-vision %s model", async (source) => {
+  it("omits images for a non-vision extension model", async () => {
     const stateDir = tempDirs.make("openclaw-read-vision-");
     const imagePath = path.join(stateDir, "pixel.png");
     await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
 
-    const result =
-      source === "embedded"
-        ? await createReadTool(stateDir, {
-            autoResizeImages: false,
-            modelHasVision: false,
-          }).execute("embedded-read", { path: imagePath })
-        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
-            "extension-read",
-            { path: imagePath },
-            undefined,
-            undefined,
-            {
-              model: { input: ["text"] },
-            } as never,
-          );
+    const result = await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+      "extension-read",
+      { path: imagePath },
+      undefined,
+      undefined,
+      {
+        model: { input: ["text"] },
+      } as never,
+    );
     const imageParts = result.content.filter((part) => part.type === "image");
     expect(imageParts).toHaveLength(0);
     expect(textContent(result)).toContain("does not support images");

@@ -5,7 +5,7 @@ read_when:
 title: "Nextcloud Talk"
 ---
 
-Nextcloud Talk is a downloadable channel plugin (`@openclaw/nextcloud-talk`) that connects OpenClaw to a self-hosted Nextcloud instance through a Talk webhook bot. Direct messages, rooms, reactions, and markdown messages are supported; media goes out as URLs.
+Nextcloud Talk is a downloadable channel plugin (`@openclaw/nextcloud-talk`) that connects OpenClaw to a self-hosted Nextcloud instance through a Talk webhook bot. Direct messages, rooms, reactions, markdown messages, and inbound Talk file shares are supported; outbound media goes out as URLs.
 
 ## Install
 
@@ -14,6 +14,8 @@ openclaw plugins install @openclaw/nextcloud-talk
 ```
 
 Use the bare package spec to follow the current official release tag. Pin an exact version only when you need a reproducible install.
+
+Inbound attachments require a host that provides `runtime.channel.media.deleteMediaBuffer`. A source checkout passing tests is not proof that an already published host provides this API. Use the coordinated host/plugin release qualified below, not a standalone build of this plugin with its historical compatibility metadata.
 
 From a local checkout (dev workflows):
 
@@ -115,8 +117,8 @@ Minimal config:
 - Message webhooks return HTTP 200 only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`. Unsupported non-message events return HTTP 200 without the marker and are logged as ignored.
 - The webhook listener admits at most 64 concurrent unauthenticated body reads; overflow requests receive `HTTP/1.1 429` with `Connection: close`. Requests on one keep-alive connection are answered in order, so a queued delivery's `200` acknowledgement always flushes before any overflow rejection closes the socket. The 64-read budget is fixed and not configurable. Accounts sharing a Gateway pathname share its admission and failed-authentication budgets; each retained legacy host and port keeps independent budgets. Deployments that regularly saturate it should reduce or buffer upstream concurrency (for example, cap reverse-proxy fan-in toward the listener) and accept that deliveries refused during saturation may be lost.
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
-- The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
-- Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
+- The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room. Inbound attachment retrieval also requires this API account.
+- Network fetches, including authenticated inbound attachment requests and outbound requests, go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
 - With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` checks the bot and warns when the `response` feature is missing.
 
 Pre-July-2026 JSON replay caches under `<state-dir>/nextcloud-talk/replay-dedupe/`
@@ -215,16 +217,68 @@ the main Gateway port keeps its existing JSON check responses.
 - Per-room keys: `requireMention` (default true), `enabled` (false disables the room), `allowFrom` (per-room sender allowlist), `tools` (allow/deny tool overrides), `skills` (limit loaded skills), `systemPrompt`.
 - To allow no rooms, keep the allowlist empty or set `channels.nextcloud-talk.groupPolicy="disabled"`.
 
+## Inbound file shares
+
+- Share the file into the Talk conversation to notify the bot. Uploading it only to Nextcloud Files, or creating a Files share without posting it in Talk, does not emit a supported Talk file-share webhook.
+- `channels.nextcloud-talk.mediaAllowFrom` is an account-level allowlist of Nextcloud user IDs whose attachments may be downloaded and processed. It fails closed when omitted or empty at the channel root. Named accounts inherit the root setting when omitted; an explicit empty list denies that account’s media. Use `["*"]` only when every otherwise-authorized sender may send media.
+- This media gate never expands access. The ordinary DM/group, room, sender, and mention requirements must admit the message first. When only the media gate denies an attachment, the file is not downloaded, but an otherwise-admissible caption continues through the ordinary text path.
+- `channels.nextcloud-talk.mediaMaxMb` limits inbound staging and outbound media size. When unset, it falls back to `agents.defaults.mediaMaxMb` (default: 20 MB).
+- Talk's webhook link must be on the exact configured `baseUrl` origin (same scheme, hostname, and effective port). Because Talk room shares are participant-only, OpenClaw uses the configured `apiUser`/API password to reread the exact room message without changing its read, notification, or online state; verify its file metadata against the signed webhook; resolve the account's canonical Nextcloud user ID; and verify the WebDAV file ID before retrieving the file. The API account must be able to access the room share; no sender credentials are requested or used.
+- Authenticated attachment requests never follow redirects. Talk's `hide-download` restriction, the existing SSRF/private-network policy, and the configured byte limit remain enforced before or during staging.
+- After media authorization, a hidden, malformed, wrong-origin, unavailable, or oversize file is omitted from media context. Its caption continues with a generic attachment-unavailable marker for the agent, while the specific bounded reason is logged for operators.
+
+## Release qualification for attachment support
+
+The release owner must qualify the first host release containing
+`runtime.channel.media.deleteMediaBuffer` before publishing this plugin with
+attachment support. This change does not assign that future release number or
+claim that an existing registry artifact contains the API.
+
+Use the existing full-release candidate and publication workflow, not a separate
+plugin-only publication:
+
+1. Select the actual new host release version and run the normal version sync.
+   `scripts/sync-plugin-versions.ts` raises this official plugin’s version,
+   `openclaw.compat.pluginApi`, peer requirement, and build version to that release.
+   It intentionally leaves `openclaw.install.minHostVersion` unchanged: the
+   release-aligned **plugin API floor** is what excludes hosts missing this API.
+   Do not publish the attachment implementation with the old API floor.
+2. Qualify the exact host and plugin tarballs bound by the immutable full-release
+   candidate manifest. Require the SDK surface report and its explicit release
+   acknowledgement through the existing release gates. A manifest or a successful
+   source test alone does not establish stock-runtime compatibility.
+3. Test the exact artifacts together: the new host must load the new plugin and
+   stage, retain accepted, and delete rejected/cancelled attachments through the
+   public runtime API. The previous supported host must reject an explicit new
+   plugin install before activation. Also test a host downgrade with the new
+   plugin already installed: external-plugin discovery must skip the incompatible
+   API floor and preserve its configuration. Check the new host with the previous
+   plugin and the unpinned stable installer’s compatible-version fallback.
+4. Preserve the existing publication ordering. The combined workflow publishes
+   plugin npm artifacts before core npm, with ClawHub publication started alongside
+   plugins. Those registries are not an atomic transaction. During the gap, the
+   new plugin’s API floor must prevent activation on an old host; an unpinned
+   stable install can select an older compatible plugin instead. Publishing the
+   host first is not a substitute for this compatibility contract.
+5. Before declaring the release available, read back the exact published host and
+   plugin artifacts, npm dist-tags, and ClawHub version/compatibility metadata.
+   Verify them against the qualified manifest and repeat the stock-artifact
+   compatibility checks. A queued ClawHub publication is not metadata availability.
+
+The package-version sync and install/discovery regression tests exercise the
+local enforcement path. Registry readback, actual stock-runtime tests, and release
+SDK acknowledgement remain release-time responsibilities.
+
 ## Capabilities
 
-| Feature         | Status        |
-| --------------- | ------------- |
-| Direct messages | Supported     |
-| Rooms           | Supported     |
-| Threads         | Not supported |
-| Media           | URL-only      |
-| Reactions       | Supported     |
-| Native commands | Not supported |
+| Feature         | Status                                 |
+| --------------- | -------------------------------------- |
+| Direct messages | Supported                              |
+| Rooms           | Supported                              |
+| Threads         | Not supported                          |
+| Media           | Inbound file shares; outbound URL-only |
+| Reactions       | Supported                              |
+| Native commands | Not supported                          |
 
 ## Configuration reference (Nextcloud Talk)
 
@@ -236,14 +290,15 @@ Provider options:
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
-- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status check.
-- `channels.nextcloud-talk.apiPassword`: API/app password for room lookups.
+- `channels.nextcloud-talk.apiUser`: API login for room lookups (DM detection), the status check, and authorized inbound attachment retrieval. OpenClaw resolves the login to its canonical Nextcloud user ID for WebDAV paths.
+- `channels.nextcloud-talk.apiPassword`: API/app password for authenticated room lookups and inbound attachment retrieval.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.
 - `channels.nextcloud-talk.legacyWebhook`: `false | { port, host? }`. An object opens a forwarding listener; `host` defaults to `0.0.0.0`. Omitted or `false` opens no listener. Named accounts inherit the root setting unless they override it.
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: externally reachable webhook URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing). `open` requires `allowFrom=["*"]`.
 - `channels.nextcloud-talk.allowFrom`: DM allowlist (user IDs).
+- `channels.nextcloud-talk.mediaAllowFrom`: inbound attachment allowlist (user IDs); omitted or empty at the root fails closed. Named accounts inherit the root list unless overridden; an explicit empty list denies media. It never bypasses ordinary authorization or mention gating.
 - `channels.nextcloud-talk.groupPolicy`: `allowlist | open | disabled` (default: allowlist).
 - `channels.nextcloud-talk.groupAllowFrom`: room sender allowlist (user IDs); falls back to `allowFrom` when unset.
 - `channels.nextcloud-talk.rooms`: per-room settings and allowlist (see above).
@@ -252,6 +307,7 @@ Provider options:
 - `channels.nextcloud-talk.dmHistoryLimit`: DM history limit (0 disables).
 - `channels.nextcloud-talk.dms`: per-DM overrides keyed by user ID (`historyLimit`).
 - `channels.nextcloud-talk.textChunkLimit`: outbound text chunk size in chars (default: 4000).
+- `channels.nextcloud-talk.mediaMaxMb`: inbound/outbound media size limit in MB; falls back to `agents.defaults.mediaMaxMb` (default: 20).
 - `channels.nextcloud-talk.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.nextcloud-talk.streaming.block.enabled`: enable or disable block streaming for this channel.
 - `channels.nextcloud-talk.streaming.block.coalesce`: block streaming coalesce tuning.

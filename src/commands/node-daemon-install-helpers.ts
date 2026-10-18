@@ -1,4 +1,3 @@
-/** Managed node-host install plan builder. */
 import { formatCliCommand } from "../cli/command-format.js";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { resolveDurableNodeEntrypoint } from "../daemon/npx-service-install.js";
@@ -19,7 +18,6 @@ import {
 } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 
-/** Builds launch arguments, environment, and metadata for a managed node-host service install. */
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
@@ -38,6 +36,7 @@ export async function buildNodeInstallPlan(params: {
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
+  serviceCli?: { executable: string; entrypoint: string };
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<
@@ -46,10 +45,12 @@ export async function buildNodeInstallPlan(params: {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     ...params,
+    devMode: params.serviceCli ? false : params.devMode,
     wrapperPath,
   });
   const cliEntrypoint =
-    !devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(params.env) : undefined;
+    params.serviceCli?.entrypoint ??
+    (!devMode && !wrapperPath ? await resolveDurableNodeEntrypoint(params.env) : undefined);
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
     host: params.host,
@@ -81,6 +82,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
+    execPath: params.serviceCli?.executable,
     runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.

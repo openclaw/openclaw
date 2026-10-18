@@ -1,12 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  loadSessionEntry,
   publishTranscriptUpdate,
   readActiveTranscriptEntryAnchor,
   resolveSessionTranscriptDatabasePath,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions/session-entry-current-check.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "../config/sessions/session-message-rewrite.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
@@ -40,7 +40,6 @@ export function bindUserTurnTranscriptAnnotation(params: {
   let admission = structuredClone(receipt);
   let admittedMessage = structuredClone(message);
   const target = { ...params.target };
-  const selected = loadSessionEntry({ ...target, readConsistency: "latest" });
   const fence = getOwnedSessionTranscriptWriterFence({ sessionTarget: target });
   if (
     target.sessionId !== admission.sessionId ||
@@ -49,19 +48,10 @@ export function bindUserTurnTranscriptAnnotation(params: {
     !isSameOpenClawAgentDatabasePath(
       resolveSessionTranscriptDatabasePath(target),
       admission.storePath,
-    ) ||
-    !selected ||
-    selected.sessionId !== admission.sessionId ||
-    (selected.activeWriterRunId !== undefined && selected.activeWriterRunId !== params.runId)
+    )
   ) {
     return undefined;
   }
-  const expectedLifecycleRevision =
-    target.expectedLifecycleRevision ??
-    fence?.expectedLifecycleRevision ??
-    selected.lifecycleRevision ??
-    null;
-  const expectedWriterRunId = target.expectedWriterRunId ?? fence?.expectedWriterRunId;
   const assertLive = () => {
     params.assertCurrent();
     if (
@@ -70,26 +60,6 @@ export function bindUserTurnTranscriptAnnotation(params: {
       !isDeepStrictEqual(owner.receipt(), admission) ||
       !isDeepStrictEqual(owner.message(), admittedMessage) ||
       admittedMessage["__openclaw"]?.steerTargetRunId !== undefined
-    ) {
-      throw new Error("current user admission is no longer available for native annotation");
-    }
-  };
-  const assertNativeCurrent = () => {
-    assertLive();
-    const current = loadSessionEntry({ ...target, readConsistency: "latest" });
-    const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
-    if (
-      !sessionMatchesExpectedTranscriptTurn(current ? { entry: current } : undefined, {
-        expectedSessionId: admission.sessionId,
-        expectedLifecycleRevision,
-        expectedWriterRunId,
-      }) ||
-      (fence?.expectedWriterRunId !== undefined &&
-        current?.activeWriterRunId !== fence.expectedWriterRunId) ||
-      (fence?.expectedLifecycleRevision !== undefined &&
-        current?.lifecycleRevision !== fence.expectedLifecycleRevision) ||
-      current?.activeWriterRunId !== selected.activeWriterRunId ||
-      !isDeepStrictEqual(readActiveTranscriptEntryAnchor(admission), anchor)
     ) {
       throw new Error("current user admission is no longer available for native annotation");
     }
@@ -124,56 +94,103 @@ export function bindUserTurnTranscriptAnnotation(params: {
     if (fingerprint !== fields.mirrorSourceFingerprint) {
       throw new Error("native prompt annotation does not match admitted content");
     }
-    let verified = false;
-    const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
-    const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
-      anchor,
-      (current) => {
+    const entryAuthority = await captureSessionEntryCurrentCheckAsyncInternal({
+      ...target,
+      fields: ["sessionId", "lifecycleRevision", "activeWriterRunId"],
+      errorMessage: "current user admission is no longer available for native annotation",
+    });
+    try {
+      const selected = entryAuthority.entry;
+      if (
+        !selected ||
+        selected.sessionId !== admission.sessionId ||
+        (selected.activeWriterRunId !== undefined && selected.activeWriterRunId !== params.runId)
+      ) {
+        throw new Error("current user admission is no longer available for native annotation");
+      }
+      const expectedLifecycleRevision =
+        target.expectedLifecycleRevision ??
+        fence?.expectedLifecycleRevision ??
+        selected.lifecycleRevision ??
+        null;
+      const expectedWriterRunId = target.expectedWriterRunId ?? fence?.expectedWriterRunId;
+      if (
+        !sessionMatchesExpectedTranscriptTurn(
+          { entry: selected },
+          {
+            expectedSessionId: admission.sessionId,
+            expectedLifecycleRevision,
+            expectedWriterRunId,
+          },
+        ) ||
+        (fence?.expectedWriterRunId !== undefined &&
+          selected.activeWriterRunId !== fence.expectedWriterRunId) ||
+        (fence?.expectedLifecycleRevision !== undefined &&
+          selected.lifecycleRevision !== fence.expectedLifecycleRevision)
+      ) {
+        throw new Error("current user admission is no longer available for native annotation");
+      }
+      const assertNativeCurrent = () => {
         assertLive();
-        if (!isDeepStrictEqual(current, admittedMessage)) {
-          throw new Error("native prompt annotation cannot replace an edited admission");
+        entryAuthority.source();
+        const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
+        if (!isDeepStrictEqual(readActiveTranscriptEntryAnchor(admission), anchor)) {
+          throw new Error("current user admission is no longer available for native annotation");
         }
-        const metadata = admittedMessage["__openclaw"] ?? {};
-        if (
-          metadata.runTerminal !== undefined ||
-          Object.entries(fields).some(
-            ([key, value]) => metadata[key] !== undefined && metadata[key] !== value,
-          )
-        ) {
-          throw new Error("native prompt annotation conflicts with recorded provenance");
-        }
-        const next = { ...admittedMessage, __openclaw: { ...metadata, ...fields } };
-        verified = true;
-        return isDeepStrictEqual(next, admittedMessage) ? undefined : next;
-      },
-      {
-        active: "exact",
-        expectedEntry: {
-          lifecycleRevision: expectedLifecycleRevision,
-          activeWriterRunId: expectedWriterRunId ?? selected.activeWriterRunId ?? null,
+      };
+      let verified = false;
+      const { logicalTurnId: _logicalTurnId, role: _role, ...anchor } = admission;
+      const rewritten = await rewritePreparedTranscriptMessageAtAnchor(
+        anchor,
+        (current) => {
+          assertLive();
+          if (!isDeepStrictEqual(current, admittedMessage)) {
+            throw new Error("native prompt annotation cannot replace an edited admission");
+          }
+          const metadata = admittedMessage["__openclaw"] ?? {};
+          if (
+            metadata.runTerminal !== undefined ||
+            Object.entries(fields).some(
+              ([key, value]) => metadata[key] !== undefined && metadata[key] !== value,
+            )
+          ) {
+            throw new Error("native prompt annotation conflicts with recorded provenance");
+          }
+          const next = { ...admittedMessage, __openclaw: { ...metadata, ...fields } };
+          verified = true;
+          return isDeepStrictEqual(next, admittedMessage) ? undefined : next;
         },
-        assertCurrent: assertLive,
-        assertNativeCurrent,
-      },
-    );
-    if (!verified) {
-      throw new Error("native prompt admission disappeared before annotation");
-    }
-    if (rewritten) {
-      admission = { ...admission, generation: rewritten.generation };
-      // Recorder getters and update listeners must never expose the private validation snapshot.
-      admittedMessage = structuredClone(rewritten.message);
-      owner.refresh({ ...admission }, rewritten.message);
-      await waitForSessionTranscriptProjection(admission, params.abortSignal);
-    }
-    assertLive();
-    if (rewritten) {
-      await publishTranscriptUpdate(admission, {
-        message: rewritten.message,
-        messageId: admission.entryId,
-        messageSeq: admission.activeMessagePosition + 1,
-      });
+        {
+          active: "exact",
+          expectedEntry: {
+            lifecycleRevision: expectedLifecycleRevision,
+            activeWriterRunId: expectedWriterRunId ?? selected.activeWriterRunId ?? null,
+          },
+          assertCurrent: assertLive,
+          assertNativeCurrent,
+        },
+      );
+      if (!verified) {
+        throw new Error("native prompt admission disappeared before annotation");
+      }
+      if (rewritten) {
+        admission = { ...admission, generation: rewritten.generation };
+        // Recorder getters and update listeners must never expose the private validation snapshot.
+        admittedMessage = structuredClone(rewritten.message);
+        owner.refresh({ ...admission }, rewritten.message);
+        await waitForSessionTranscriptProjection(admission, params.abortSignal);
+      }
       assertLive();
+      if (rewritten) {
+        await publishTranscriptUpdate(admission, {
+          message: rewritten.message,
+          messageId: admission.entryId,
+          messageSeq: admission.activeMessagePosition + 1,
+        });
+        assertLive();
+      }
+    } finally {
+      entryAuthority.release();
     }
   };
 }

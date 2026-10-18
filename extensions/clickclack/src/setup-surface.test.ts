@@ -14,7 +14,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   me: vi.fn(),
-  resolveWorkspaceId: vi.fn(),
   workspaces: vi.fn(),
 }));
 
@@ -26,10 +25,6 @@ vi.mock("./http-client.js", () => ({
       workspaces: mocks.workspaces,
     };
   },
-}));
-
-vi.mock("./resolve.js", () => ({
-  resolveWorkspaceId: mocks.resolveWorkspaceId,
 }));
 
 import { clickClackSetupPlugin } from "./channel.setup.js";
@@ -58,10 +53,8 @@ describe("ClickClack setup wizard", () => {
   beforeEach(() => {
     mocks.createClient.mockReset();
     mocks.me.mockReset();
-    mocks.resolveWorkspaceId.mockReset();
     mocks.workspaces.mockReset();
     mocks.me.mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
-    mocks.resolveWorkspaceId.mockResolvedValue("wsp_default");
     mocks.workspaces.mockResolvedValue([
       { id: "wsp_default", name: "Default", slug: "default", created_at: "2026-01-01" },
     ]);
@@ -186,7 +179,10 @@ describe("ClickClack setup wizard", () => {
       workspace: "default",
     });
     expect(mocks.me).toHaveBeenCalledTimes(1);
-    expect(mocks.resolveWorkspaceId).toHaveBeenCalledTimes(1);
+    expect(queued.prompter.note).toHaveBeenCalledWith(
+      "Connected as @openclaw — workspace Default resolved.",
+      "ClickClack connection",
+    );
   });
 
   it("uses the resolved setup credential for live validation", async () => {
@@ -224,7 +220,6 @@ describe("ClickClack setup wizard", () => {
   });
 
   it("keeps setup saved when workspace resolution fails", async () => {
-    mocks.resolveWorkspaceId.mockResolvedValue("wsp_missing");
     mocks.workspaces.mockResolvedValue([]);
     const note = vi.fn(async () => undefined);
 

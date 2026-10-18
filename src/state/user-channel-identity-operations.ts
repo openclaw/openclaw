@@ -21,7 +21,11 @@ import {
   publishUserProfileAliasChange,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import { isUserProfileCatalogReady, readUserProfileIdentity } from "./user-profile-list.js";
+import {
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -114,13 +118,23 @@ async function changeIdentity(
           context.admission.assertCurrent();
           assertCurrent?.();
           if (request.stage === "commit" && captured.action !== "authorize") {
-            fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: request.facts.profiles,
-              identities: [],
-              channels: request.facts.channels,
-            });
+            const { profiles, channels } = request.facts;
+            if (
+              !grant(() => {
+                fence = fenceUserProfileMutationAuthority(context.admission, {
+                  profiles,
+                  identities: [],
+                  channels,
+                });
+              })
+            ) {
+              // An expired grant cannot commit; release its fence before another attempt.
+              fence?.settle(true);
+              fence = undefined;
+            }
+          } else {
+            grant();
           }
-          grant();
         });
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
@@ -261,8 +275,8 @@ export async function prepareUserProfileRolePolicyAuthority(
 ) {
   return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
     const source = { path: context.admission.databasePath };
-    if (isUserProfileCatalogReady(source)) {
-      const profile = readUserProfileIdentity(profileId, source);
+    if (isUserProfileCatalogReady(source.path)) {
+      const profile = readResidentUserProfileIdentity(profileId, source);
       return (
         profile && {
           profileId: profile.profileId,
@@ -299,18 +313,15 @@ async function prepareUserProfileAuthority(
     options,
     dependency,
     async (context) => {
-      const reply = await executeExistingOpenClawStateRead(
-        { path: context.admission.databasePath, env: context.environment },
-        {
-          type: "userProfiles.authority.resolve",
-          profileId,
-          ...(includeProfile ? { includeProfile } : {}),
-        },
-      );
-      if (!reply) {
-        return undefined;
+      const catalog = await prepareUserProfileCatalog({
+        ...options,
+        path: context.admission.databasePath,
+      });
+      try {
+        return catalog.readCurrentAuthority(profileId, includeProfile);
+      } finally {
+        catalog.release();
       }
-      return reply.profile;
     },
     includeProfile,
   );

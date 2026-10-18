@@ -13,7 +13,7 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
-import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
+import { WorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -73,6 +73,7 @@ function connectionHarness() {
     get state() {
       return state;
     },
+    isTerminal: () => WorkerConnection.prototype.isTerminal(state),
     waitForReady,
     rpc: {
       request: (
@@ -210,6 +211,19 @@ function doneOutcome(): Extract<WorkerInferenceTerminalOutcome, { type: "done" }
 }
 
 describe("worker transcript commit client", () => {
+  it("rejects a message beyond the frame byte ceiling before submitting it", async () => {
+    const harness = connectionHarness();
+    const client = new WorkerTranscriptCommitClient(harness.connection, {
+      runEpoch: 3,
+      baseLeafId: null,
+    });
+
+    await expect(client.commit([userMessage("a".repeat(80_000))])).rejects.toThrow(
+      "worker transcript message exceeds the protocol payload limit",
+    );
+    expect(harness.requestTranscriptCommit).not.toHaveBeenCalled();
+  });
+
   it("splits semantic batches at the gateway frame byte ceiling", async () => {
     const harness = connectionHarness();
     harness.requestTranscriptCommit
@@ -471,12 +485,7 @@ describe("worker inference proxy client", () => {
     const onStreamGap = vi.fn();
     const terminal = doneOutcome();
 
-    const request = {
-      ...structuredClone(INFERENCE_REQUEST),
-      modelRef: { ...INFERENCE_REQUEST.modelRef },
-    };
-    const outcome = client.start(request, { onEvent, onStreamGap });
-    request.modelRef.model = "caller-mutation";
+    const outcome = client.start(INFERENCE_REQUEST, { onEvent, onStreamGap });
     await vi.waitFor(() => expect(harness.requestInferenceStart).toHaveBeenCalledOnce());
     expect(harness.requestInferenceStart.mock.calls[0]?.[1]).toEqual(INFERENCE_REQUEST);
     harness.emitInferenceEvent({

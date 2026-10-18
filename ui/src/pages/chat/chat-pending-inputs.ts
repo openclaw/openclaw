@@ -14,8 +14,10 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.ts";
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
+import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+import { publishChatRunState } from "./chat-state-render.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -24,31 +26,6 @@ import {
   reconcileChatInputCustody,
 } from "./history-merge.ts";
 import type { PendingInputStatus } from "./system-notice-kinds.ts";
-
-type PendingInputRequest = {
-  before?: number;
-  kind: "navigation" | "refresh" | "discovery";
-  client: NonNullable<ChatState["client"]>;
-  connectionEpoch: number;
-};
-
-type PendingInputView = {
-  sessionKey: string;
-  sessionId: string | null;
-  agentId: string | undefined;
-  page: ChatPendingInputsPage;
-  /** Live custody receipts keep the queue independent of retained-input pagination. */
-  queuedInputs: ChatPendingInputsPage["items"];
-  receiptRunIds: string[];
-  queuedCount: number;
-  queueBefore?: number;
-  before?: number;
-  readonly loading: boolean;
-  error?: string;
-  revision: number;
-  request?: PendingInputRequest;
-};
-const pendingInputViews = new WeakMap<ChatState, PendingInputView>();
 
 function reconcileQueuedInputs(
   queued: ChatPendingInputsPage["items"],
@@ -127,8 +104,9 @@ export function buildPendingInputItems(
     ) {
       continue;
     }
-    let pendingStatus: PendingInputStatus | undefined;
+    let pendingStatus: PendingInputStatus;
     if (input.state === "queued") {
+      pendingStatus = "queued";
       if (input.runId && (workerSetupPending || workspaceSyncPendingRunIds.includes(input.runId))) {
         pendingStatus = workerSetupPending ? "waitingForWorkerSetup" : "waitingForWorkspaceSync";
       }
@@ -153,25 +131,19 @@ export function buildPendingInputItems(
       ...buildMessageItems([input.message], () =>
         input.runId ? `send:${input.runId}` : `pending-input:${input.id}`,
       ).flatMap((item) =>
-        projectChatSystemNotice(
-          { ...item, startsTurn: true },
-          undefined,
-          pendingStatus
-            ? {
-                status: pendingStatus,
-                key: `pending-input:${input.id}:state`,
-                timestamp: input.acceptedAt,
-              }
-            : undefined,
-        ),
+        projectChatSystemNotice({ ...item, startsTurn: true }, undefined, {
+          status: pendingStatus,
+          key: `pending-input:${input.id}:state`,
+          timestamp: input.acceptedAt,
+        }),
       ),
     );
   }
   return items;
 }
 
-export function getChatPendingInputs(state: ChatState): PendingInputView | undefined {
-  const view = pendingInputViews.get(state);
+export function getChatPendingInputs(state: ChatState): ChatPendingInputView | undefined {
+  const view = state.chatPendingInputs;
   return view?.sessionKey === state.sessionKey &&
     view.sessionId === (state.currentSessionId ?? null) &&
     view.agentId === resolveUiSelectedSessionAgentId(state)
@@ -180,7 +152,7 @@ export function getChatPendingInputs(state: ChatState): PendingInputView | undef
 }
 
 export function clearChatPendingInputs(state: ChatState): void {
-  pendingInputViews.delete(state);
+  state.chatPendingInputs = undefined;
 }
 
 function collectChatInputRunIds(state: ChatState): string[] {
@@ -214,7 +186,7 @@ export function readChatInputRunIds(state: ChatState): string[] {
 
 function rotateInputReceipts(
   state: ChatState,
-  view: PendingInputView,
+  view: ChatPendingInputView,
   queriedRunIds: readonly string[] = [],
 ): void {
   const observed = new Set(queriedRunIds);
@@ -263,7 +235,7 @@ function reconcilePendingInputPage(
 
 function ownsPendingInputRequest(
   state: ChatState,
-  view: PendingInputView,
+  view: ChatPendingInputView,
   request: PendingInputRequest,
 ): boolean {
   return (
@@ -298,17 +270,15 @@ export function applyChatPendingInputs(
       receiptRunIds: [],
       queuedCount: displayPage.queuedCount ?? 0,
       queueBefore: displayPage.nextBefore,
-      revision: 0,
       get loading() {
         return this.request?.kind === "navigation";
       },
     };
-    pendingInputViews.set(state, view);
+    state.chatPendingInputs = view;
   } else {
     view.queuedInputs = queuedInputs;
     view.queuedCount = displayPage.queuedCount ?? 0;
     view.queueBefore = displayPage.nextBefore;
-    view.revision += 1;
     if (view.request && !ownsPendingInputRequest(state, view, view.request)) {
       view.request = undefined;
     }
@@ -329,7 +299,7 @@ export function applyChatPendingInputs(
   ) {
     void requestPendingInputPage(state, view.queueBefore, "discovery");
   }
-  state.requestUpdate?.();
+  publishChatRunState(state);
 }
 
 async function requestPendingInputPage(
@@ -353,12 +323,11 @@ async function requestPendingInputPage(
   view.request = request;
   view.error = undefined;
   if (kind === "navigation") {
-    state.requestUpdate?.();
+    publishChatRunState(state);
   }
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
     while (current()) {
-      const revision = view.revision;
       const inputRunIds = readChatInputRunIds(state);
       const result = await client.request<{
         sessionId?: string;
@@ -375,10 +344,8 @@ async function requestPendingInputPage(
       if (!current() || result.sessionId !== view.sessionId) {
         return;
       }
-      // Coalesce newer custody publications into a fresh read of the same target.
-      if (view.revision !== revision) {
-        continue;
-      }
+      // An overlapping live update may leave this page briefly behind; the next
+      // ordinary refresh catches it up without restarting navigation reads.
       const page = reconcilePendingInputPage(state, result.pendingInputs, result.inputReceipts);
       view.queuedInputs = reconcileQueuedInputs(
         view.queuedInputs,
@@ -410,7 +377,7 @@ async function requestPendingInputPage(
     if (view.request === request) {
       view.request = undefined;
       if (getChatPendingInputs(state) === view) {
-        state.requestUpdate?.();
+        publishChatRunState(state);
       }
     }
   }

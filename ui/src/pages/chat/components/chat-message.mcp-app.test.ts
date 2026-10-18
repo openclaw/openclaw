@@ -1,22 +1,28 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
-import { renderMessageGroup } from "./chat-message-group.ts";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantCanvasBlock,
   createAssistantMessage,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
-import { renderToolFixture, settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 it("keeps MCP App raw details reachable from its widget menu", async () => {
-  const container = createApplicationContextProvider(createInitializationContext());
+  const context = createInitializationContext();
+  const container = document.body.appendChild(createApplicationContextProvider(context));
+  const view = createMessageGroupHarness(container, {
+    wrapper: createSolidApplicationContextProvider(context).wrapper,
+  });
   onTestFinished(async () => {
     await vi.dynamicImportSettled();
-    render(null, container);
+    view.unmount();
+    container.remove();
   });
   const block = createAssistantCanvasBlock({ suffix: "mcp-raw" });
   const group = createMessageGroup(
@@ -26,43 +32,56 @@ it("keeps MCP App raw details reachable from its widget menu", async () => {
     ),
     "assistant",
   );
-  const draw = () =>
-    renderToolFixture(
-      renderMessageGroup(group, {
-        showReasoning: true,
-        showToolCalls: true,
-        assistantName: "OpenClaw",
-        assistantAvatar: null,
-        sessionKey: "agent:main:main",
-      }),
-      container,
-    );
+  const draw = async () => {
+    view.render(group, {
+      showReasoning: true,
+      showToolCalls: true,
+      assistantName: "OpenClaw",
+      assistantAvatar: null,
+      sessionKey: "agent:main:main",
+    });
+    await settleToolBridges(container);
+  };
   await draw();
   await vi.dynamicImportSettled();
   expect(customElements.get("mcp-app-view")).toBeDefined();
   await settleToolBridges(container);
 
-  const dropdown = container.querySelector("wa-dropdown");
-  expect(dropdown).toBeInstanceOf(HTMLElement);
-  expect(dropdown?.querySelectorAll("wa-dropdown-item")).toHaveLength(1);
-  const selectRawDetails = () =>
-    dropdown?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "raw-details" } },
-      }),
+  const menu = container.querySelector(".chat-tool-card__widget-actions");
+  expect(menu).toBeInstanceOf(HTMLElement);
+  expect(menu?.querySelectorAll('[role="menuitem"]')).toHaveLength(0);
+  const rawAction = () => menu?.querySelector<HTMLButtonElement>('[data-value="raw-details"]');
+  const openMenu = async () => {
+    menu?.querySelector<HTMLButtonElement>(".chat-tool-card__widget-actions-trigger")?.click();
+    await waitForSolid(() =>
+      expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(true),
     );
+  };
+  const selectRawDetails = async () => {
+    rawAction()?.click();
+    await waitForSolid(() => {
+      expect(menu?.querySelector('[role="menu"]')?.matches(":popover-open")).toBe(false);
+      expect(rawAction()).toBeNull();
+    });
+  };
   const expanded = () =>
     container
       .querySelector(".chat-tool-card__widget-raw .chat-tool-card__raw-toggle")
       ?.getAttribute("aria-expanded");
-  selectRawDetails();
+  await openMenu();
+  await selectRawDetails();
   expect(expanded()).toBe("true");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
+  await openMenu();
+  expect(rawAction()?.textContent).toContain("Hide raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
   await draw();
-  expect(container.querySelector("wa-dropdown")).toBe(dropdown);
+  expect(container.querySelector(".chat-tool-card__widget-actions")).toBe(menu);
   expect(expanded()).toBe("true");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Hide raw details");
-  selectRawDetails();
+  expect(rawAction()?.textContent).toContain("Hide raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Hide raw details");
+  await selectRawDetails();
   expect(expanded()).toBe("false");
-  expect(dropdown?.querySelector("[data-raw-label]")?.textContent).toBe("Show raw details");
+  await openMenu();
+  expect(rawAction()?.textContent).toContain("Show raw details");
+  expect(rawAction()?.getAttribute("aria-label")).toBe("Show raw details");
 });

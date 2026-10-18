@@ -3,6 +3,10 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { ApplicationPlacementStartupStatus } from "../../app/session-placement-startup.ts";
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
+import {
+  repositorySessionNeedsWorker,
+  sessionPlacementActionReason,
+} from "../../components/session-placement-action.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { registerSessionPlacementEnglish } from "../../i18n/locales/en-session-placement.ts";
@@ -96,6 +100,7 @@ function resolvePlacementComposerState(params: {
 
 export function resolvePlacementComposer(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey: string | null;
@@ -199,10 +204,6 @@ export function resolvePlacementComposer(params: {
   };
 }
 
-export function repositorySessionNeedsWorker(row: GatewaySessionRow | undefined): boolean {
-  return Boolean(row?.repositoryWorkspaceId && (!row.placement || row.placement.state === "local"));
-}
-
 export function resolveChatPaneWorkerPresentation(
   session: GatewaySessionRow,
   startup: Pick<ApplicationPlacementStartupStatus, "phase" | "targetKind"> | null | undefined,
@@ -266,6 +267,7 @@ export function resolveChatPaneDesktopTarget(
 
 export function resolveChatPanePlacement(params: {
   gatewaySnapshot: ApplicationGatewaySnapshot;
+  requiredProfile?: string;
   movingKey: string | null;
   reclaimingKey: string | null;
   restartingKey?: string | null;
@@ -285,7 +287,6 @@ export function resolveChatPanePlacement(params: {
   const action = resolveCloudWorkerStopAction(params.row?.placement);
   const readWriteAccess = (method: string) =>
     readSessionMethodAccess(params.gatewaySnapshot, { method, requiredScope: "operator.write" });
-  const moveAccess = readWriteAccess("sessions.move");
   const reclaimAccess = readWriteAccess("sessions.reclaim");
   const restartAccess = readWriteAccess("sessions.dispatch");
   const placementState = params.row?.placement?.state;
@@ -296,14 +297,15 @@ export function resolveChatPanePlacement(params: {
   const deviceOffline = runner?.kind === "device" && runner.status === "offline";
   const moveDisabledReason = moving
     ? t("common.loading")
-    : reclaiming || placementState !== "active"
+    : reclaiming || !params.row
       ? t("sessionsView.actionUnavailable")
-      : moveAccess.allowed
-        ? undefined
-        : moveAccess.reason;
+      : sessionPlacementActionReason(params.gatewaySnapshot, params.row, params.requiredProfile);
   const recoveryDisabledReason = restarting
     ? t("common.loading")
-    : moving || reclaiming || (!dispatchRequired && recoveryAction !== "restart")
+    : moving ||
+        reclaiming ||
+        params.row?.placementMove !== undefined ||
+        (!dispatchRequired && recoveryAction !== "restart")
       ? t("sessionsView.actionUnavailable")
       : params.row?.archived
         ? t("chat.archivedSessionDisabled")

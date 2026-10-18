@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."node_worker_launches" (
+CREATE TABLE "node_worker_launches" (
   "launch_id" text COLLATE "C" NOT NULL,
   "plan_hash" text COLLATE "C" NOT NULL,
   "gateway_namespace" text COLLATE "C" NOT NULL,
@@ -47,6 +43,4 @@ CREATE TABLE "openclaw_state"."node_worker_launches" (
   CHECK ((("state" = 'pending') AND "worker_pid" IS NULL AND "result_json" IS NULL AND "error_text" IS NULL AND "completed_at_ms" IS NULL) OR (("state" = 'running') AND "worker_pid" IS NOT NULL AND "result_json" IS NULL AND "error_text" IS NULL AND "completed_at_ms" IS NULL) OR (("state" = 'completed') AND "result_json" IS NOT NULL AND "error_text" IS NULL AND ("completed_at_ms" BETWEEN "created_at_ms" AND "updated_at_ms")) OR (("state" IN ('failed', 'interrupted', 'cancelled')) AND "result_json" IS NULL AND "error_text" IS NOT NULL AND ("completed_at_ms" BETWEEN "created_at_ms" AND "updated_at_ms")))
 );
 
-CREATE INDEX "idx_node_worker_launches_terminal_completed" ON "openclaw_state"."node_worker_launches" (("completed_at_ms") ASC NULLS FIRST, ("launch_id") ASC NULLS FIRST) WHERE "completed_at_ms" IS NOT NULL;
-
-COMMIT;
+CREATE INDEX "idx_node_worker_launches_terminal_completed" ON "node_worker_launches" (("completed_at_ms") ASC NULLS FIRST, ("launch_id") ASC NULLS FIRST) WHERE "completed_at_ms" IS NOT NULL;

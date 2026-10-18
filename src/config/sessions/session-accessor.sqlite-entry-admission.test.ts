@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sqlite from "../../infra/node-sqlite.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
 import * as integrity from "../../infra/sqlite-integrity-worker.js";
 import * as writerQueue from "../../shared/store-writer-queue.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -16,7 +17,6 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -27,6 +27,7 @@ import {
   loadSessionEntry,
   onSessionIdentityMutation,
   patchSessionEntryCore,
+  createSessionEntryWithTranscript,
 } from "./session-accessor.js";
 import {
   patchSessionEntryTarget,
@@ -39,6 +40,7 @@ import {
   runExclusiveSqliteSessionWrite,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
+import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 
 const roots = createTempDirTracker();
 const worker = vi.hoisted(() => ({
@@ -82,6 +84,7 @@ afterEach(async () => {
   }
   await closeOpenClawAgentDatabasesAsync();
   await closeOpenClawStateDatabaseAsync();
+  memorySessionActorOwners.reset();
   if (worker.gate) {
     expect([...worker.gate.workers].every((observed) => observed.threadId === -1)).toBe(true);
     worker.gate = undefined;
@@ -110,19 +113,31 @@ function fixture(sessionKey = "agent:main:admission") {
   return { root, env, scope, database, databasePath: database.path };
 }
 
+async function memoryFixture() {
+  const root = roots.make("session-memory-patch-admission-");
+  const env = { OPENCLAW_STATE_DIR: root };
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  const scope = { agentId: "main", env, sessionKey: "agent:main:dashboard:incognito-admission" };
+  await createSessionEntryWithTranscript(scope, () => ({
+    ok: true,
+    entry: { sessionId: "original", updatedAt: 1, incognito: true },
+  }));
+  return { root, env, scope };
+}
+
 function evictHandle(databasePath: string) {
   const database = getOpenClawAgentDatabaseIfOpen({ agentId: "main", path: databasePath });
   if (!database) {
     throw new Error("Fixture lost its cached handle before eviction");
   }
-  closeCachedOpenClawAgentDatabase(database, { eviction: true });
+  closeCachedOpenClawAgentDatabase(database);
   expect(database.db.isOpen).toBe(false);
 }
 
 function closeCold(f: ReturnType<typeof fixture>) {
   evictHandle(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
 }
 
 function nativeChecks(databasePath: string) {
@@ -237,9 +252,7 @@ it.each([
 it.each(["worker", "legacy callback", "incognito"] as const)(
   "admits %s updater invocation through its owner",
   async (mode) => {
-    const f = fixture(
-      mode === "incognito" ? "agent:main:dashboard:incognito-admission" : undefined,
-    );
+    const f = mode === "incognito" ? await memoryFixture() : fixture();
     const native = vi.spyOn(integrity, "assertSqliteIntegrityInWorker");
     let called = false;
     const operation = own(
@@ -366,7 +379,7 @@ it("retains FIFO, caller context and publication across cold admission", async (
   const f = fixture();
   closeOpenClawAgentDatabaseByPath(f.databasePath);
   invalidateOpenClawAgentDatabaseValidation(f.databasePath);
-  clearOpenClawAgentIntegrityVerification(f.databasePath, f.env);
+  revokeSqliteDatabaseAdmissionsForPath(f.databasePath);
   const gate = holdWorkerValidation(f.databasePath);
   const contexts = new AsyncLocalStorage<string>();
   const order: string[] = [];

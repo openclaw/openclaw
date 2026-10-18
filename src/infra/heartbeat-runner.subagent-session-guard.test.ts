@@ -6,7 +6,10 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
-import { withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
+import {
+  setHeartbeatSilentCompletion,
+  withTempHeartbeatSandbox,
+} from "./heartbeat-runner.test-utils.js";
 import {
   enqueueSystemEvent,
   peekSystemEventEntries,
@@ -63,7 +66,10 @@ describe("runHeartbeatOnce", () => {
       enqueueSystemEvent("Exec completed (run-dm, code 0)", {
         sessionKey: mainSessionKey,
       });
-      replySpy.mockResolvedValue({ text: "NO_REPLY" });
+      replySpy.mockImplementation(async (_ctx, options) => {
+        setHeartbeatSilentCompletion(options);
+        return undefined;
+      });
 
       await runHeartbeatOnce({
         cfg,
@@ -72,7 +78,6 @@ describe("runHeartbeatOnce", () => {
         deps: {
           getReplyFromConfig: replySpy,
           telegram: vi.fn().mockResolvedValue({ messageId: "m1", chatId: "123" }),
-          getQueueSize: () => 0,
           nowMs: () => 0,
         },
       });

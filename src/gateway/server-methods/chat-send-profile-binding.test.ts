@@ -9,15 +9,17 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createExpectedProfileBinding } from "../expected-profile.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionRowProjection } from "../session-row-projection.js";
+import * as sessionSharingFacts from "../session-sharing-facts-read.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { admitChatSend } from "./chat-send-admission.js";
 import {
@@ -118,25 +120,13 @@ describe("native profile-bound input admission", () => {
       }
       const entered = createDeferred();
       const release = createDeferred();
-      const read = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const read = sessionSharingFacts.readSessionSharingFactsInWorker;
       let held = false;
-      const workerRead = vi
-        .spyOn(targetDiscoveryLane.pool, "run")
-        .mockImplementation(async (prepare, options) => {
-          if (typeof prepare !== "function") {
-            return read(prepare, options);
-          }
-          let authorizationRead = false;
-          const result = await read(async () => {
-            const input = await prepare();
-            authorizationRead =
-              input.kind === "session-exact-entries" &&
-              input.includeMembers === true &&
-              input.selection === undefined &&
-              input.sessionKeys.includes(fixture.scope.sessionKey);
-            return input;
-          }, options);
-          if (!held && authorizationRead) {
+      const sharingRead = vi
+        .spyOn(sessionSharingFacts, "readSessionSharingFactsInWorker")
+        .mockImplementation(async (input, prepareSource) => {
+          const result = await read(input, prepareSource);
+          if (!held && input.sessionKeys.includes(fixture.scope.sessionKey)) {
             held = true;
             entered.resolve();
             await release.promise;
@@ -168,7 +158,7 @@ describe("native profile-bound input admission", () => {
             }),
           );
           expect(fixture.context.dedupe.size).toBe(0);
-          expect(fixture.context.chatAbortControllers.size).toBe(0);
+          expect(getRpcSource(fixture.params.idempotencyKey)).toBeUndefined();
           expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
           expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
@@ -179,7 +169,7 @@ describe("native profile-bound input admission", () => {
         }
       } finally {
         release.resolve();
-        workerRead.mockRestore();
+        sharingRead.mockRestore();
         await request;
         await fixture.cleanup();
       }
@@ -216,7 +206,7 @@ describe("native profile-bound input admission", () => {
           if (!prepared.ok) {
             throw new Error("Native session preparation failed");
           }
-          const session = qualifyChatSendSession(prepared.value);
+          const session = await qualifyChatSendSession(prepared.value);
           const binding = (await createExpectedProfileBinding(source.id, fixture.client))!;
           binding.markInvoked();
           linkEmail(email, target.id);
@@ -228,7 +218,7 @@ describe("native profile-bound input admission", () => {
               context: fixture.context,
               respond: vi.fn(),
               assertCurrent: binding.assertCurrent,
-            }).finally(session.releaseSessionTarget),
+            }),
           ).rejects.toMatchObject({
             error: {
               details: { reason: "EXPECTED_PROFILE_MISMATCH", execution: "may_have_executed" },
@@ -285,8 +275,7 @@ describe("native profile-bound input admission", () => {
         expect(loadSessionEntry(fixture.scope)).toEqual(before);
         expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(fixture.activeTranscript);
-        expect(fixture.context.chatAbortControllers.size).toBe(0);
-        expect(fixture.context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         const cached = fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`);
         expect(cached?.payload).toBeUndefined();
@@ -355,8 +344,7 @@ describe("native profile-bound input admission", () => {
         }),
         expect.anything(),
       );
-      expect.soft(fixture.context.chatAbortControllers.size).toBe(0);
-      expect.soft(fixture.context.chatQueuedTurns.size).toBe(0);
+      expect.soft(rpcSourceTesting.size).toBe(0);
       expect.soft(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
     } finally {
       await fixture.cleanup();
@@ -392,9 +380,9 @@ describe("native profile-bound input admission", () => {
         expect(accepted.at(-1)).toMatchObject({
           message: { content: fixture.approvedContent },
         });
-        const owner = fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey);
+        const owner = rpcSourceTesting.get(fixture.params.idempotencyKey);
         expect(owner).toBeDefined();
-        const ownerConnId = owner?.ownerConnId;
+        const ownerConnId = owner?.adapter.requester?.connectionId;
         const cached = structuredClone(
           fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`),
         );
@@ -418,9 +406,9 @@ describe("native profile-bound input admission", () => {
         } else {
           expect(retry.mock.calls[0]?.[1]).toMatchObject({ status: "in_flight" });
         }
-        expect(fixture.context.chatAbortControllers.get(fixture.params.idempotencyKey)).toBe(owner);
-        expect(owner?.ownerConnId).toBe(ownerConnId);
-        expect(owner?.controller.signal.aborted).toBe(false);
+        expect(rpcSourceTesting.get(fixture.params.idempotencyKey)).toBe(owner);
+        expect(owner?.adapter.requester?.connectionId).toBe(ownerConnId);
+        expect(owner?.input.abortSignal.aborted).toBe(false);
         expect(loadTranscriptEventsSync(fixture.scope)).toEqual(accepted);
         expect(recorder.getAdmissionReceipt()).toEqual(receipt);
         expect(fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)).toEqual(cached);
@@ -523,8 +511,7 @@ describe("native profile-bound input admission", () => {
           }),
         );
         expect(fixture.context.dedupe.get(`chat:${fixture.params.idempotencyKey}`)).toEqual(cached);
-        expect(fixture.context.chatAbortControllers.size).toBe(0);
-        expect(fixture.context.chatQueuedTurns.size).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
       } finally {
         await fixture.cleanup();
       }

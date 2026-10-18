@@ -208,7 +208,7 @@ describe("Codex initialization through the registered session deletion owner", (
             isWebchatConnect: () => false,
             context: {
               getRuntimeConfig: () => ({}),
-              chatAbortControllers: new Map(),
+              rpcSources: new Map(),
               getSessionEventSubscriberConnIds: () => new Set(),
               broadcastToConnIds: vi.fn(),
             } as unknown as GatewayRequestContext,
@@ -259,12 +259,17 @@ describe("Codex initialization through the registered session deletion owner", (
                   context.agentId,
                 );
               }
-              if (failure === "import") {
-                openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
-                  "CREATE TEMP TRIGGER reject_import BEFORE INSERT ON transcript_events BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
-                );
+              let patch: Awaited<ReturnType<NonNullable<typeof input.afterCreate>>>;
+              try {
+                patch = await input.afterCreate!(context);
+              } finally {
+                if (failure === "import") {
+                  // The import fault must not alter schema admission during rollback.
+                  openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+                    "DROP TRIGGER reject_import",
+                  );
+                }
               }
-              const patch = await input.afterCreate!(context);
               if (!patch) {
                 throw new Error("Codex initializer did not return its final patch");
               }
@@ -368,6 +373,12 @@ describe("Codex initialization through the registered session deletion owner", (
           return attached;
         });
 
+        if (failure === "import") {
+          // Allow the child header so the callback captures identity before imported messages fail.
+          openOpenClawAgentDatabase({ agentId: "main" }).db.exec(
+            "CREATE TRIGGER reject_import BEFORE INSERT ON transcript_events WHEN NEW.navigation_type = 'message' BEGIN SELECT RAISE(ABORT, 'injected import failure'); END",
+          );
+        }
         const result = await withPluginRuntimeRegistryScope(
           registry,
           flow === "fork" ? invokeFork : fixture.adopt,
@@ -375,6 +386,9 @@ describe("Codex initialization through the registered session deletion owner", (
 
         if (failure === "rollback commit") {
           expect(rollbackCommitRefused).toBe(true);
+        }
+        if (failure === "import") {
+          expect(result.message).toContain("injected import failure");
         }
         if (failure === "final readiness") {
           expect(readinessCommitRefused).toBe(true);

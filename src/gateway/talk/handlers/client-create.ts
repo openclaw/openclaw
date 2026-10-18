@@ -68,6 +68,7 @@ import {
   resolveTalkClientLaunchError,
 } from "../session-config.js";
 import { readTalkRealtimeInitialItems } from "../session-history.js";
+import { restoreTalkSessionTarget } from "../session-start.js";
 import { requirePreparedTalkSessionTarget } from "../session-target.js";
 import {
   markTalkVoiceSessionReady,
@@ -185,6 +186,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
     });
     assertTargetCurrent();
     if (resolution.provider.createBrowserSession) {
+      await restoreTalkSessionTarget(request, target, replacement?.source(target).assertCurrent);
       const initialItems = await readTalkRealtimeInitialItems(target, assertTargetCurrent);
       assertTargetCurrent();
       const controlSource =
@@ -344,6 +346,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     entryId,
                     role,
                     text,
+                    providerOwned: controlSource === "delegation",
                     config: runtimeConfig,
                   },
                   writer,
@@ -498,6 +501,8 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                   ]),
                   source: sessionMutationAuthorization?.assertCurrent,
                   prepareWorkerGrant: sessionMutationAuthorization?.prepareWorkerGrant,
+                  followRegistration: (change) =>
+                    sessionMutationAuthorization?.followRegistration?.(sessionTarget, change),
                   assertCurrent: () => {
                     requester.assertPreparationCurrent();
                     gatewayControlOwner.assertOpen();
@@ -506,6 +511,7 @@ export const createTalkClient: GatewayRequestHandler = async (request) => {
                     sessionMutationAuthorization?.recordCreatedSession?.({
                       ...sessionTarget,
                       sessionId: entry.sessionId,
+                      entry,
                       lifecycleRevision: entry.lifecycleRevision,
                       readSource,
                     }),

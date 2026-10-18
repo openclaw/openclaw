@@ -4,10 +4,8 @@ import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
-import {
-  getSessionMcpRuntimeManagerForTesting,
-  setSessionMcpRuntimeScheduler,
-} from "../../agents/agent-bundle-mcp-manager-api.js";
+import { setSessionMcpRuntimeScheduler } from "../../agents/agent-bundle-mcp-manager-api.js";
+import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
@@ -205,7 +203,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
       expect(loadSessionEntry(scope)?.compactionCount).toBe(1);
     } finally {
       await waitForSessionMaintenance(sessionKey);
-      const mcpManager = getSessionMcpRuntimeManagerForTesting();
+      const mcpManager = getSessionMcpRuntimeTestManager();
       for (const runtimeSessionId of mcpManager.listSessionIds()) {
         await mcpManager.disposeSession(runtimeSessionId);
       }

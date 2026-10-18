@@ -8,7 +8,6 @@ import {
   classifyUpdateOutcome,
   isReportableUpdateRun,
 } from "../../../../src/shared/update-outcome.ts";
-import "../../components/update-run-view.ts";
 import type { UpdateScheduleState } from "../../api/types.ts";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type { NativeDeviceSettingsCapability } from "../../app/native-device-settings.ts";
@@ -28,6 +27,7 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
+import { UpdateRunView } from "../../components/update-run-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
@@ -122,7 +122,7 @@ function RecordedAttempt(props: UpdatesViewProps) {
           }
         >
           <div class="settings-row settings-row--stacked">
-            <openclaw-update-run-view prop:run={run()} prop:connected={props.connected} />
+            <UpdateRunView run={run()} connected={props.connected} />
           </div>
         </Show>
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
@@ -230,13 +230,15 @@ function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotic
         error: "updates.page.reportError",
       }[result().status],
     );
-  const url = () => {
+  const links = () => {
     const value = result();
-    return "url" in value && value.url ? value.url : null;
-  };
-  const fallbackUrl = () => {
-    const value = result();
-    return "fallbackUrl" in value && value.fallbackUrl ? value.fallbackUrl : null;
+    return [
+      { href: "url" in value ? value.url : null, labelKey: "updates.page.openIssue" },
+      {
+        href: "fallbackUrl" in value ? value.fallbackUrl : null,
+        labelKey: "updates.page.openPrefilledIssue",
+      },
+    ];
   };
   const message = () => {
     const value = result();
@@ -249,24 +251,19 @@ function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotic
       control={
         <div class="updates-attempt-details" role="status">
           <div>{label()}</div>
-          <Show when={url()}>
-            {(href) => (
-              <div>
-                <a href={href()} target="_blank" rel="noreferrer">
-                  {t("updates.page.openIssue")}
-                </a>
-              </div>
+          <For each={links()} keyed={(link) => link.labelKey}>
+            {(link) => (
+              <Show when={link().href}>
+                {(href) => (
+                  <div>
+                    <a href={href()} target="_blank" rel="noreferrer">
+                      {t(link().labelKey)}
+                    </a>
+                  </div>
+                )}
+              </Show>
             )}
-          </Show>
-          <Show when={fallbackUrl()}>
-            {(href) => (
-              <div>
-                <a href={href()} target="_blank" rel="noreferrer">
-                  {t("updates.page.openPrefilledIssue")}
-                </a>
-              </div>
-            )}
-          </Show>
+          </For>
           <Show when={message()}>{(text) => <div>{text()}</div>}</Show>
         </div>
       }
@@ -308,6 +305,28 @@ function Timestamp(props: { timestampMs: number; nowMs?: number }) {
   );
 }
 
+function BuildIdentifier(props: { title: string; value: string | null; short?: boolean }) {
+  return (
+    <SettingsRow
+      title={props.title}
+      control={
+        <SettingsValue
+          mono
+          value={
+            props.value ? (
+              <code dir="ltr" title={props.value}>
+                {props.short ? props.value.slice(0, 12) : props.value}
+              </code>
+            ) : (
+              t("common.na")
+            )
+          }
+        />
+      }
+    />
+  );
+}
+
 function BuildFacts(props: UpdatesViewProps) {
   const installKind = () => props.update.updateSchedule?.install?.kind;
   const git = () => props.update.updateSchedule?.install?.git;
@@ -316,39 +335,11 @@ function BuildFacts(props: UpdatesViewProps) {
     git()?.commitAtMs ?? parseDateStringTimestampMs(props.controlUiCommitAt) ?? null;
   return (
     <SettingsSection title={t("updates.page.buildTitle")}>
-      <SettingsRow
-        title={t("updates.page.gatewayVersion")}
-        control={
-          <SettingsValue
-            mono
-            value={
-              props.gatewayVersion ? (
-                <code dir="ltr" title={props.gatewayVersion}>
-                  {props.gatewayVersion}
-                </code>
-              ) : (
-                t("common.na")
-              )
-            }
-          />
-        }
-      />
-      <SettingsRow
+      <BuildIdentifier title={t("updates.page.gatewayVersion")} value={props.gatewayVersion} />
+      <BuildIdentifier
         title={t("updates.page.controlUiCommit")}
-        control={
-          <SettingsValue
-            mono
-            value={
-              props.controlUiCommit ? (
-                <code dir="ltr" title={props.controlUiCommit}>
-                  {props.controlUiCommit.slice(0, 12)}
-                </code>
-              ) : (
-                t("common.na")
-              )
-            }
-          />
-        }
+        value={props.controlUiCommit}
+        short
       />
       <Show when={builtAtMs() !== null}>
         <SettingsRow

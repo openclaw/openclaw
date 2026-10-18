@@ -1,12 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { readConfigMachineStateRowInDatabase } from "../state/config-machine-state.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import { ensureColumn, tableHasColumn } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import type {
   SessionGroupCatalogMutation,
   SessionGroupCatalogMutationResult,
@@ -18,17 +19,17 @@ import { registerSessionGroupInDatabase } from "./session-group-registration.ker
 import type { SessionMutationTarget } from "./session-mutation-authorization-error.js";
 
 const SIDEBAR_ORDER = "sidebar.sectionOrder";
-const defaultsDatabases = new WeakSet<DatabaseSync>();
-const kyselyFor = (db: DatabaseSync) =>
+const defaultsDatabases = new WeakSet<EngineConnection>();
+const kyselyFor = (db: EngineConnection) =>
   getNodeSqliteKysely<Pick<DB, "session_groups" | "config_machine_state">>(db);
 
-function hasDefaults(db: DatabaseSync): boolean {
+function hasDefaults(db: EngineConnection): boolean {
   return (
     tableHasColumn(db, "session_groups", "cwd") && tableHasColumn(db, "session_groups", "worktree")
   );
 }
 
-export function readSessionGroupCatalogEntry(db: DatabaseSync, name: string) {
+export function readSessionGroupCatalogEntry(db: EngineConnection, name: string) {
   const query = kyselyFor(db).selectFrom("session_groups").where("name", "=", name).limit(1);
   const row = executeSqliteQuerySync(
     db,
@@ -38,7 +39,7 @@ export function readSessionGroupCatalogEntry(db: DatabaseSync, name: string) {
   return row && { ...row };
 }
 
-export function readSessionGroupCatalogSnapshot(db: DatabaseSync): SessionGroupCatalogSnapshot {
+export function readSessionGroupCatalogSnapshot(db: EngineConnection): SessionGroupCatalogSnapshot {
   const query = kyselyFor(db).selectFrom("session_groups").orderBy("position").orderBy("name");
   const defaultsSchema = hasDefaults(db);
   const rows: Array<{
@@ -72,7 +73,7 @@ export function readSessionGroupCatalogSnapshot(db: DatabaseSync): SessionGroupC
 }
 
 function updateSidebarOrder(
-  db: DatabaseSync,
+  db: EngineConnection,
   update: (current: string[] | undefined) => string[] | undefined,
 ) {
   const row = readConfigMachineStateRowInDatabase(db, SIDEBAR_ORDER);
@@ -223,3 +224,8 @@ export function mutateSessionGroupCatalogInDatabase(
   }
   return result;
 }
+
+export const sessionGroupOperations = {
+  "sessionGroups.mutate": (input: SessionGroupCatalogMutation, context: WorkerOperationContext) =>
+    mutateSessionGroupCatalogInDatabase(context.open(), input, context.stateOptions().env),
+};

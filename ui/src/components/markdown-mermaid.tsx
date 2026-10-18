@@ -3,16 +3,16 @@ import {
   renderMermaidSvg,
   type MermaidTheme,
 } from "@openclaw/mermaid-renderer";
-import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, createUniqueId, onCleanup, Show } from "solid-js";
 import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { resolveThemeColor } from "../lib/theme-color.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
+import { Menu } from "./solid/menu.tsx";
 import mermaidStyles from "./markdown-mermaid.css?inline";
 import "./image-lightbox.tsx";
-import "./web-awesome.ts";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -65,6 +65,7 @@ type MermaidElement = SolidBridgeElement<MermaidProps>;
 type RenderStatus = "rendering" | "error" | "rendererError" | "imageError";
 
 function MermaidContent(props: MermaidProps, host: MermaidElement) {
+  const menuId = createUniqueId();
   const [imageUrl, setImageUrl] = createSignal("");
   const [showSource, setShowSource] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
@@ -177,40 +178,32 @@ function MermaidContent(props: MermaidProps, host: MermaidElement) {
             <Icon name={copyResult() === undefined ? "copy" : copyResult() ? "check" : "x"} />
           </span>
         </button>
-        <wa-dropdown
+        <Menu
+          id={menuId}
+          label={t("chat.mermaid.options")}
           placement="bottom-end"
-          prop:size="s"
-          prop:distance={4}
-          aria-label={t("chat.mermaid.options")}
-          onWa-select={(event) => {
-            const action = event.detail.item.value;
-            if (action === "expand") {
-              setExpanded(true);
-            } else if (action === "source" || action === "diagram") {
-              setShowSource(action === "source");
-            }
-          }}
-        >
-          <button
-            slot="trigger"
-            type="button"
-            aria-label={t("chat.mermaid.options")}
-            title={t("chat.mermaid.options")}
-          >
+          triggerAttributes={{ title: t("chat.mermaid.options") }}
+          trigger={
             <span aria-hidden="true">
               <Icon name="moreHorizontal" />
             </span>
-          </button>
-          <wa-dropdown-item
-            value={sourceVisible() ? "diagram" : "source"}
-            disabled={sourceVisible() && !imageUrl()}
-          >
-            {t(sourceVisible() ? "chat.mermaid.diagram" : "chat.mermaid.source")}
-          </wa-dropdown-item>
-          <wa-dropdown-item value="expand" disabled={!imageUrl()}>
-            {t("chat.mermaid.expand")}
-          </wa-dropdown-item>
-        </wa-dropdown>
+          }
+          items={[
+            {
+              id: sourceVisible() ? "diagram" : "source",
+              label: t(sourceVisible() ? "chat.mermaid.diagram" : "chat.mermaid.source"),
+              disabled: sourceVisible() && !imageUrl(),
+            },
+            { id: "expand", label: t("chat.mermaid.expand"), disabled: !imageUrl() },
+          ]}
+          onSelect={(item) => {
+            if (item.id === "expand") {
+              setExpanded(true);
+            } else if (item.id === "source" || item.id === "diagram") {
+              setShowSource(item.id === "source");
+            }
+          }}
+        />
       </div>
       <span class="copy-feedback" aria-live="polite">
         {copyResult() === undefined ? undefined : copyLabel()}

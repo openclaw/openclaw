@@ -1,9 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { ensureCanonicalUserProfileForEmail } from "../../state/user-profile-writes.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -88,8 +85,6 @@ describe("session Portal authority through worker dispatch", () => {
     const environment = captureEnv(["OPENCLAW_STATE_DIR"]);
     onTestFinished(() => environment.restore());
     setTestEnvValue("OPENCLAW_STATE_DIR", support.testState.root);
-    setRuntimeConfigSnapshot(support.testState.config);
-    onTestFinished(clearRuntimeConfigSnapshot);
     const writer = await ensureCanonicalUserProfileForEmail("portal-writer@example.test");
     const unrelated = await ensureCanonicalUserProfileForEmail("portal-unrelated@example.test");
     const identity = {

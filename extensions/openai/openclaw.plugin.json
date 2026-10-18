@@ -166,6 +166,28 @@
           {
             "id": "gpt-6-luna",
             "name": "GPT-6 Luna",
+            "inference": {
+              "chat": true,
+              "decision": {
+                "protocol": "openai-decisions",
+                "input": ["text", "image"],
+                "reasoning": { "modes": ["auto"] },
+                "questions": {
+                  "boolean": { "probabilities": "boolean", "abstention": false },
+                  "choice": { "probabilities": "categorical", "abstention": false, "minOptions": 2, "maxOptions": 255 },
+                  "score": { "probabilities": "categorical", "abstention": false }
+                },
+                "confidence": "provider-specific",
+                "limits": {
+                  "maxQuestions": 200,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+                    "remoteUrls": false
+                  }
+                }
+              }
+            },
             "reasoning": true,
             "input": ["text", "image"],
             "contextWindow": 1050000,
@@ -429,6 +451,7 @@
     }
   ],
   "contracts": {
+    "decisionProviders": ["openai"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
@@ -475,7 +498,7 @@
         "type": "string",
         "enum": ["friendly", "on", "off"],
         "default": "friendly",
-        "description": "Controls the canonical OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
+        "description": "Controls the shared OpenAI-family GPT-5 friendly interaction style. Defaults to `friendly`; `on` aliases `friendly`; `off` removes only the style layer while shared stable behavior remains."
       }
     }
   }

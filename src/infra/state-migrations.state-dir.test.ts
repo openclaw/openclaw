@@ -19,53 +19,65 @@ async function withStateDirFixture(run: (root: string) => Promise<void>): Promis
 }
 
 describe("legacy state dir auto-migration", () => {
-  it("preserves retired OAuth sidecars selected by config before relocating state", async () => {
-    await withStateDirFixture(async (root) => {
-      const legacyDir = path.join(root, ".clawdbot");
-      const targetDir = path.join(root, ".openclaw");
-      const oauthDir = path.join(legacyDir, "oauth$old");
-      const sidecarPath = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
-      const sidecarBytes = Buffer.from("retired encrypted bytes\u0000not parsed\n");
-      const env: NodeJS.ProcessEnv = { HOME: root };
-      fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
-      fs.writeFileSync(sidecarPath, sidecarBytes);
-      const authStorePath = path.join(legacyDir, "agents/main/agent/auth-profiles.json");
-      fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
-      fs.writeFileSync(
-        authStorePath,
-        JSON.stringify({
-          profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              oauthRef: {
-                source: "openclaw-credentials",
+  it.each(["config", "environment"])(
+    "preserves retired OAuth sidecars selected by %s and reports their relocated recovery path",
+    async (selection) => {
+      await withStateDirFixture(async (root) => {
+        const legacyDir = path.join(root, ".clawdbot");
+        const targetDir = path.join(root, ".openclaw");
+        const oauthDir = path.join(legacyDir, "oauth$old");
+        const sidecarPath = path.join(oauthDir, "auth-profiles", `${"a".repeat(32)}.json`);
+        const sidecarBytes = Buffer.from("retired encrypted bytes\u0000not parsed\n");
+        const env: NodeJS.ProcessEnv = {
+          HOME: root,
+          ...(selection === "environment" ? { OPENCLAW_OAUTH_DIR: oauthDir } : {}),
+        };
+        fs.mkdirSync(path.dirname(sidecarPath), { recursive: true });
+        fs.writeFileSync(sidecarPath, sidecarBytes);
+        const authStorePath = path.join(legacyDir, "agents/main/agent/auth-profiles.json");
+        fs.mkdirSync(path.dirname(authStorePath), { recursive: true });
+        fs.writeFileSync(
+          authStorePath,
+          JSON.stringify({
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
                 provider: "openai-codex",
-                id: "a".repeat(32),
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "a".repeat(32),
+                },
               },
             },
-          },
-        }),
-      );
-      const configPath = path.join(legacyDir, "clawdbot.json");
-      const configBytes = JSON.stringify({
-        env: { vars: { OPENCLAW_OAUTH_DIR: "~/.clawdbot/oauth$old" } },
-      });
-      fs.writeFileSync(configPath, configBytes);
-      const envBefore = { ...env };
-
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        await expect(autoMigrateLegacyStateDir({ env, homedir: () => root })).rejects.toThrow(
-          "Upgrade through OpenClaw 2026.9.7",
+          }),
         );
-        expect(fs.lstatSync(legacyDir).isSymbolicLink()).toBe(false);
-        expect(fs.existsSync(targetDir)).toBe(false);
-        expect(fs.readFileSync(sidecarPath)).toEqual(sidecarBytes);
-        expect(fs.readFileSync(configPath, "utf8")).toBe(configBytes);
+        const configPath = path.join(legacyDir, "clawdbot.json");
+        const configBytes = JSON.stringify(
+          selection === "config"
+            ? { env: { vars: { OPENCLAW_OAUTH_DIR: "~/.clawdbot/oauth$old" } } }
+            : {},
+        );
+        fs.writeFileSync(configPath, configBytes);
+        const envBefore = { ...env };
+
+        const result = await autoMigrateLegacyStateDir({ env, homedir: () => root });
+        const movedOAuthDir = path.join(targetDir, "oauth$old");
+        expect(result).toMatchObject({ migrated: true, skipped: false });
+        expect(result.warnings).toEqual([
+          expect.stringContaining(`OPENCLAW_OAUTH_DIR='${movedOAuthDir}' openclaw doctor --fix`),
+        ]);
+        expect(result.warnings[0]).toContain(oauthDir);
+        expect(result.warnings[0]).toContain("update the configured OPENCLAW_OAUTH_DIR");
+        expect(fs.existsSync(legacyDir)).toBe(false);
+        expect(
+          fs.readFileSync(path.join(movedOAuthDir, "auth-profiles", `${"a".repeat(32)}.json`)),
+        ).toEqual(sidecarBytes);
+        expect(fs.readFileSync(path.join(targetDir, "clawdbot.json"), "utf8")).toBe(configBytes);
         expect(env).toEqual(envBefore);
-      }
-    });
-  });
+      });
+    },
+  );
 
   it("skips a legacy symlinked state dir when it points outside supported legacy roots", async () => {
     await withStateDirFixture(async (root) => {
@@ -140,37 +152,31 @@ describe("legacy state dir auto-migration", () => {
     },
   );
 
-  it.each(["legacy"] as const)(
-    "refuses pre-July plugin JSON without moving or changing the %s state root",
-    async (location) => {
-      await withStateDirFixture(async (root) => {
-        const stateDir = path.join(root, ".clawdbot");
-        const sourcePath = path.join(stateDir, "plugins", "installs.json");
-        const source = '{"records":{"demo":{"source":"npm","spec":"demo@1.0.0"}}}';
-        fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-        fs.writeFileSync(sourcePath, source);
+  it("relocates pre-July plugin JSON unchanged for Doctor repair", async () => {
+    await withStateDirFixture(async (root) => {
+      const stateDir = path.join(root, ".clawdbot");
+      const sourcePath = path.join(stateDir, "plugins", "installs.json");
+      const source = '{"records":{"demo":{"source":"npm","spec":"demo@1.0.0"}}}';
+      fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+      fs.writeFileSync(sourcePath, source);
 
-        const result = await autoMigrateLegacyStateDir({
-          env: {},
-          homedir: () => root,
-        });
-
-        expect(result).toMatchObject({ migrated: false, skipped: false, changes: [] });
-        expect(result.warnings).toEqual([
-          expect.stringContaining("Run openclaw doctor --fix on 2026.9.5 with a pre-update backup"),
-        ]);
-        expect(fs.readFileSync(sourcePath, "utf8")).toBe(source);
-        expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
-        expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
-        expect(fs.lstatSync(stateDir).isSymbolicLink()).toBe(false);
-        if (location === "legacy") {
-          expect(fs.existsSync(path.join(root, ".openclaw"))).toBe(false);
-        }
+      const result = await autoMigrateLegacyStateDir({
+        env: {},
+        homedir: () => root,
       });
-    },
-  );
 
-  it("refuses retired session delivery state without relocation or archival", async () => {
+      const targetDir = path.join(root, ".openclaw");
+      expect(result).toMatchObject({ migrated: true, skipped: false, warnings: [] });
+      expect(fs.readFileSync(path.join(targetDir, "plugins", "installs.json"), "utf8")).toBe(
+        source,
+      );
+      expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+      expect(fs.existsSync(path.join(targetDir, "state", "openclaw.sqlite"))).toBe(false);
+      expect(fs.existsSync(stateDir)).toBe(false);
+    });
+  });
+
+  it("relocates retired session delivery state unchanged for Doctor archival", async () => {
     await withStateDirFixture(async (root) => {
       const legacyDir = path.join(root, ".clawdbot");
       const targetDir = path.join(root, ".openclaw");
@@ -186,20 +192,6 @@ describe("legacy state dir auto-migration", () => {
         homedir: () => root,
       };
 
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        const migration = autoMigrateLegacyStateDir(params);
-        await expect(migration).rejects.toMatchObject({
-          message: expect.stringContaining(sourcePath),
-        });
-        await expect(migration).rejects.toThrow(/July 1, 2026.*OpenClaw 2026\.9\.7/);
-        expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
-        expect(fs.readdirSync(path.dirname(sourcePath))).toEqual([path.basename(sourcePath)]);
-        expect(fs.lstatSync(legacyDir).isSymbolicLink()).toBe(false);
-        expect(fs.readFileSync(path.join(legacyDir, "marker.txt"), "utf8")).toBe("ok");
-        expect(fs.existsSync(targetDir)).toBe(false);
-      }
-
-      fs.renameSync(sourcePath, path.join(root, "retired-source.backup.json"));
       const recovered = await autoMigrateLegacyStateDir(params);
       expect(recovered).toMatchObject({
         migrated: true,
@@ -207,6 +199,9 @@ describe("legacy state dir auto-migration", () => {
         warnings: [],
       });
       expect(fs.existsSync(legacyDir)).toBe(false);
+      expect(fs.readFileSync(path.join(targetDir, "session-delivery-queue/pending.json"))).toEqual(
+        sourceBytes,
+      );
       expect(fs.readFileSync(path.join(targetDir, "marker.txt"), "utf8")).toBe("ok");
     });
   });

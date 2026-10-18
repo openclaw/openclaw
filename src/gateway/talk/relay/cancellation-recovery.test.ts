@@ -49,7 +49,6 @@ async function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridg
       broadcastToConnIds,
       broadcast: vi.fn(),
       logGateway: { warn },
-      chatAbortControllers: new Map(),
     } as never,
     connId: "conn-1",
     provider,
@@ -59,7 +58,7 @@ async function createRelayFixture(transportOverrides: Partial<RealtimeVoiceBridg
     controlSource: capabilities?.handlesAgentConsult === true ? "delegation" : "transcript",
     capabilities,
     cfg,
-    sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+    sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
   });
   activeRelaySessions.set(session.relaySessionId, "conn-1");
   const relay = relaySessions.get(session.relaySessionId);

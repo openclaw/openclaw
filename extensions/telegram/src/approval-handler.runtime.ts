@@ -3,7 +3,7 @@ import type {
   ChannelApprovalKind,
   PendingApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import { createChannelApprovalNativeRuntimeAdapterAsync } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
 import {
   buildPluginApprovalPendingReplyPayload,
@@ -151,7 +151,7 @@ function buildPendingPayload(params: {
   };
 }
 
-export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapter<
+export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeAdapterAsync<
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number; directMessagesTopicId?: number },
   { chatId: string; messageId: string },

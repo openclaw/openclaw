@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."execution_identity_contexts" (
+CREATE TABLE "execution_identity_contexts" (
   "context_id" text COLLATE "C" NOT NULL,
   "execution_id" text COLLATE "C" NOT NULL,
   "run_id" text COLLATE "C" NOT NULL,
@@ -24,6 +20,4 @@ CREATE TABLE "openclaw_state"."execution_identity_contexts" (
   UNIQUE ("created_at", "context_id")
 );
 
-CREATE INDEX "execution_identity_contexts_run_created_idx" ON "openclaw_state"."execution_identity_contexts" (("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("execution_id") ASC NULLS FIRST);
-
-COMMIT;
+CREATE INDEX "execution_identity_contexts_run_created_idx" ON "execution_identity_contexts" (("run_id") ASC NULLS FIRST, ("created_at") ASC NULLS FIRST, ("execution_id") ASC NULLS FIRST);

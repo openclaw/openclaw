@@ -4,7 +4,7 @@ import type {
   SkillWorkshopSkillSummary,
 } from "@openclaw/gateway-protocol";
 import { createMemo, For, Show } from "solid-js";
-import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -16,7 +16,6 @@ import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import "../../styles/chat/text.css";
 import "../../styles/plugins.css";
 import "../../styles/skill-workshop.css";
@@ -79,10 +78,10 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
         onSelect={(tab) => props.view().context.navigate(tab)}
       />
       <SettingsWorkspace>
-        <wa-tab-panel
+        <div
           id={PLUGINS_HUB_PANEL_ID}
-          name="skill-workshop"
-          prop:active={true}
+          role="tabpanel"
+          tabindex="0"
           aria-labelledby="plugins-tab-skill-workshop"
         >
           <SettingsPage wide carapace>
@@ -109,7 +108,7 @@ export function SkillWorkshopView(props: { view: WorkshopView }) {
               <Library view={props.view} />
             </Show>
           </SettingsPage>
-        </wa-tab-panel>
+        </div>
       </SettingsWorkspace>
     </>
   );
@@ -140,15 +139,11 @@ function Toolbar(props: { view: WorkshopView }) {
   return (
     <div class="sw-toolbar">
       <div class="sw-toolbar__start">
-        <LitContent
-          render={() =>
-            renderAgentScopeControl({
-              agents: props.view().context.agents.state.agentsList?.agents ?? [],
-              selection: props.view().context.agentSelection,
-              selectedId: props.view().agentId,
-              allowAll: false,
-            })
-          }
+        <AgentScopeControl
+          agents={props.view().context.agents.state.agentsList?.agents ?? []}
+          selection={props.view().context.agentSelection}
+          selectedId={props.view().agentId}
+          allowAll={false}
         />
       </div>
       <div class="sw-toolbar__end">
@@ -292,8 +287,11 @@ function Library(props: { view: WorkshopView }) {
 function SkillRow(props: { skill: SkillRowEntry; view: WorkshopView }) {
   const live = () => ("versions" in props.skill ? null : props.skill);
   const archived = () => ("versions" in props.skill ? props.skill : null);
-  const change = () =>
-    live() ? latestChanges(props.view().snapshot!.changes).get(props.skill.name) : undefined;
+  const change = createMemo(() =>
+    live()
+      ? props.view().snapshot!.changes.find((entry) => entry.skillName === props.skill.name)
+      : undefined,
+  );
   const unused = () => {
     const skill = live();
     return skill ? unusedDays(skill, change(), props.view().mode) : null;

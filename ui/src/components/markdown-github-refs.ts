@@ -12,7 +12,9 @@ import { replaceMarkdownTextMatches } from "./markdown-text-replacements.ts";
 // Keep item numbers aligned with parseGitHubItemPath; short numbers need a keyword.
 // A trailing `.` or `-` only disqualifies when it continues into a word (`#12.txt`,
 // `#12-rc`), so a reference that ends a sentence still links.
-const GITHUB_ITEM_REF_RE = /#([1-9]\d{0,9})(?!\w|[.-]\w)/g;
+// An identifier boundary avoids rescanning each suffix of long unqualified words.
+const GITHUB_ITEM_REF_RE =
+  /(?<![A-Za-z0-9_.-])(?:([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+))?#([1-9]\d{0,9})(?!\w|[.-]\w)/g;
 const GITHUB_ITEM_KEYWORD_RE = /(PR|pull request|pull|issue|fixes|closes|resolves)\s+$/i;
 
 function qualifiedRepository(prefix: string) {
@@ -161,7 +163,7 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
             index,
             GITHUB_ITEM_REF_RE,
             (match) => {
-              const number = match[1];
+              const number = match[2];
               if (!number) {
                 return null;
               }
@@ -171,8 +173,11 @@ export function installMarkdownGitHubRefs(markdownParser: MarkdownIt): void {
               const endInRun = context.offset + end;
               const content = context.run.content;
               const preceding = content.slice(context.run.scannedTo, startInRun);
-              const direct = qualifiedRepository(preceding);
-              const keywordEnd = direct ? startInRun - direct.length : startInRun;
+              const direct = qualifiedRepository(match[1] ?? preceding);
+              if (match[1] && !direct) {
+                return null;
+              }
+              const keywordEnd = direct && !match[1] ? startInRun - direct.length : startInRun;
               const prefix = content
                 .slice(context.run.scannedTo, keywordEnd)
                 .match(GITHUB_ITEM_KEYWORD_RE);

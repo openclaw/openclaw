@@ -20,10 +20,9 @@ import {
 import { isLoopbackAddress, isTrustedProxyAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createGatewayEnvSecretRef } from "../secrets/ref-contract.js";
 import { t } from "../wizard/i18n/index.js";
-import { createConfigurePrompts } from "./configure.prompts.js";
+import { configurePrompts as prompts } from "./configure.prompts.js";
 import {
   normalizeGatewayTokenInput,
   randomToken,
@@ -33,15 +32,11 @@ import {
 type GatewayAuthChoice = "token" | "password" | "trusted-proxy";
 type GatewayTokenInputMode = "plaintext" | "ref";
 
-export async function promptGatewayConfig(
-  cfg: OpenClawConfig,
-  runtime: RuntimeEnv,
-): Promise<{
+export async function promptGatewayConfig(cfg: OpenClawConfig): Promise<{
   config: OpenClawConfig;
   port: number;
   token?: string;
 }> {
-  const prompts = createConfigurePrompts(runtime);
   const portRaw = await prompts.text({
     message: "Gateway port",
     initialValue: String(resolveGatewayPort(cfg)),

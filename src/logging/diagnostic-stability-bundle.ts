@@ -15,10 +15,12 @@ import {
   isMissingPathError,
 } from "../infra/errors.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { readMemoryUsage } from "./diagnostic-memory-bundle.js";
 import {
   assignOptionalFields,
   readObject,
+  readOptionalNumber,
   readOptionalPositiveInteger,
   readRequiredNumber,
 } from "./diagnostic-stability-readers.js";
@@ -30,7 +32,7 @@ import {
 import { redactSensitiveText } from "./redact.js";
 import { formatDiagnosticFilenameTimestamp } from "./timestamps.js";
 
-export const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
+const DIAGNOSTIC_STABILITY_BUNDLE_VERSION = 1;
 const DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
@@ -104,6 +106,9 @@ export type DiagnosticStabilityBundle = {
     arch: string;
     node: string;
     uptimeMs: number;
+    openclawVersion?: string;
+    buildId?: string;
+    commit?: string;
   };
   host: {
     hostname: string;
@@ -238,13 +243,6 @@ function readTimestampMs(value: unknown, label: string): number {
   return timestamp;
 }
 
-function readOptionalNumber(value: unknown, label: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  return readRequiredNumber(value, label);
-}
-
 function readRequiredString(value: unknown, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`Invalid stability bundle: ${label} must be a string`);
@@ -274,6 +272,26 @@ function readOptionalCodeString(value: unknown, label: string): string | undefin
   }
   const code = readRequiredString(value, label);
   return SAFE_REASON_CODE.test(code) ? code : undefined;
+}
+
+function readProcessBuildIdentity(source: Record<string, unknown>) {
+  const identity: Pick<
+    DiagnosticStabilityBundle["process"],
+    "openclawVersion" | "buildId" | "commit"
+  > = {};
+  // Preserve SemVer metadata and generated build IDs without importing paths,
+  // terminal controls, or unbounded strings from externally supplied bundles.
+  for (const [field, pattern] of [
+    ["openclawVersion", /^[A-Za-z0-9.+_-]{1,256}$/u],
+    ["buildId", /^[A-Za-z0-9._-]{1,96}$/u],
+    ["commit", /^[0-9a-f]{7,40}$/iu],
+  ] as const) {
+    const value = source[field];
+    if (typeof value === "string" && pattern.test(value)) {
+      identity[field] = value;
+    }
+  }
+  return identity;
 }
 
 function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
@@ -559,6 +577,7 @@ function readStabilityEventRecord(
       "pairedToolName",
       "provider",
       "model",
+      "failureKind",
     ],
     readOptionalCodeString,
   );
@@ -569,6 +588,8 @@ function readStabilityEventRecord(
     label,
     [
       "durationMs",
+      "providerProcessingMs",
+      "providerWaitEstimateMs",
       "requestBytes",
       "responseBytes",
       "timeToFirstByteMs",
@@ -683,6 +704,7 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
       arch: readCodeString(processInfo.arch, "process.arch"),
       node: readCodeString(processInfo.node, "process.node"),
       uptimeMs: readRequiredNumber(processInfo.uptimeMs, "process.uptimeMs"),
+      ...readProcessBuildIdentity(processInfo),
     },
     host: {
       hostname: REDACTED_HOSTNAME,
@@ -849,6 +871,13 @@ export function writeDiagnosticStabilityBundleForFailureSync(
         arch: process.arch,
         node: process.versions.node,
         uptimeMs: Math.round(process.uptime() * 1000),
+        // These values were captured when the runtime loaded, before an updater
+        // could replace the installation that this failing process still runs.
+        ...readProcessBuildIdentity({
+          openclawVersion: VERSION,
+          buildId: resolveRuntimeServiceBuildId(),
+          commit: resolveRuntimeServiceCommit(),
+        }),
       },
       host: {
         hostname: REDACTED_HOSTNAME,

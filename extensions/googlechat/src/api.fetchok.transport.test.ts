@@ -1,9 +1,9 @@
 // Exercise Google Chat requests through a real guarded HTTP transport.
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
-import { deleteGoogleChatMessage } from "./api.js";
+import { deleteGoogleChatMessage, GoogleChatApiError } from "./api.js";
 
 const proofToken = "googlechat-transport-test-token";
 
@@ -13,6 +13,7 @@ const loopback = vi.hoisted(() => ({
   rejectCancellation: false,
   releases: [] as Array<{ bodyIsNull: boolean; bodyUsed: boolean }>,
   signal: undefined as AbortSignal | undefined,
+  onResponse: undefined as ((status: number) => void) | undefined,
 }));
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -31,6 +32,7 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
         ...params,
         url: params.url.replace("https://chat.googleapis.com", loopback.baseUrl),
         policy: { allowPrivateNetwork: true },
+        onResponse: loopback.onResponse,
         ...(loopback.signal ? { signal: loopback.signal } : {}),
       });
 
@@ -126,10 +128,38 @@ describe("Google Chat real guarded transport", () => {
     loopback.rejectCancellation = false;
     loopback.releases = [];
     loopback.signal = undefined;
+    loopback.onResponse = undefined;
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("preserves an authoritative 404 when its response body is truncated", async () => {
+    let brokenResponse: ServerResponse | undefined;
+    loopback.onResponse = () => brokenResponse?.destroy();
+    const server = createServer((_request, response) => {
+      brokenResponse = response;
+      response.writeHead(404, {
+        "Content-Type": "application/json",
+        "Content-Length": "100",
+      });
+      response.write("{}");
+    });
+
+    loopback.baseUrl = await listen(server);
+    try {
+      const outcome = await withinDeadline(
+        deleteGoogleChatMessage({ account, messageName: "spaces/AAA/messages/MISSING" }).catch(
+          (error: unknown) => error,
+        ),
+      );
+      expect(outcome).toBeInstanceOf(GoogleChatApiError);
+      expect(outcome).toMatchObject({ status: 404 });
+      expect(loopback.releases).toEqual([{ bodyIsNull: false, bodyUsed: true }]);
+    } finally {
+      await closeServer(server);
+    }
   });
 
   it("delivers task-list fallback at the default chunk limit through the SDK", async () => {

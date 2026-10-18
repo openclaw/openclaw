@@ -1,5 +1,5 @@
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 export type AgentDatabaseReadCandidate = { path: string; scope?: "sibling-family" };
@@ -30,6 +30,9 @@ export function matchesAgentDatabaseReadCandidatePath(
   candidate: AgentDatabaseReadCandidate,
   pathname: string,
 ): boolean {
+  if (candidate.path === pathname) {
+    return true;
+  }
   const capturedPath = path.resolve(candidate.path);
   const resolvedPath = path.resolve(pathname);
   if (capturedPath === resolvedPath) {
@@ -58,10 +61,6 @@ export function registerAgentDatabaseReaderCloser(closer: AgentDatabaseReaderClo
 /** A deleted agent's database stays closed in this isolate until the roster admits the agent again. */
 export function isDeletedAgentDatabasePath(pathname: string): boolean {
   return readers.deleted.has(path.resolve(pathname));
-}
-
-export function hasDeletedAgentDatabases(): boolean {
-  return readers.deleted.size > 0;
 }
 
 /** Task admission carries the parent owner's current fences into every worker generation. */
@@ -161,9 +160,7 @@ export function decodeAgentDatabaseReaderRequest(
   if ("candidates" in parsed && !("deleted" in parsed)) {
     const candidates = normalizeCandidates(parsed.candidates);
     const retainedPaths = parsed.retainedPaths;
-    return candidates &&
-      Array.isArray(retainedPaths) &&
-      retainedPaths.every((entry) => typeof entry === "string")
+    return candidates && isStringArray(retainedPaths)
       ? { kind: "close", candidates, retainedPaths, deleted: false }
       : undefined;
   }
@@ -173,11 +170,7 @@ export function decodeAgentDatabaseReaderRequest(
       ? { kind: "close", candidates, deleted: true, agentId: parsed.agentId }
       : undefined;
   }
-  if (
-    "revive" in parsed &&
-    Array.isArray(parsed.revive) &&
-    parsed.revive.every((agentId) => typeof agentId === "string")
-  ) {
+  if ("revive" in parsed && isStringArray(parsed.revive)) {
     return { kind: "revive", agentIds: parsed.revive };
   }
   return undefined;

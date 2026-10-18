@@ -5,6 +5,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { NodePermissionDetails } from "../../packages/gateway-protocol/src/node-permissions.js";
 import { validateSystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
@@ -31,7 +32,6 @@ import {
   EXEC_AUTO_REVIEW_SHELL_STARTUP_WARNING,
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
-  type ExecAutoReviewer,
 } from "../infra/exec-auto-review.js";
 import {
   requestExecHostViaSocket,
@@ -82,34 +82,19 @@ import {
   resolveSystemRunExecArgv,
 } from "./invoke-system-run-allowlist.js";
 import {
+  normalizeDeniedReason,
+  sendSystemRunDenied,
+  type SystemRunDeniedReason,
+  type SystemRunInvokeResult,
+} from "./invoke-system-run-denied.js";
+import {
   buildEnvOverrideRejectionMessage,
   hardenApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
-import type {
-  ExecEventPayload,
-  RunResult,
-  SkillBinsProvider,
-  SystemRunParams,
-} from "./invoke-types.js";
+import type { ExecEventPayload, RunResult, SystemRunParams } from "./invoke-types.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 
 const OUTPUT_EVENT_TAIL = 20_000;
-
-type SystemRunInvokeResult = {
-  ok: boolean;
-  payloadJSON?: string | null;
-  error?: { code?: string; message?: string } | null;
-};
-
-type SystemRunDeniedReason =
-  | "security=deny"
-  | "approval-required"
-  | "auto-review-denied"
-  | "approval-state-write-failed"
-  | "allowlist-miss"
-  | "execution-plan-miss"
-  | "companion-unavailable"
-  | "cwd-unavailable"
-  | "permission:screenRecording";
 
 type SystemRunExecutionContext = SystemRunParsePhase["execution"];
 
@@ -130,21 +115,6 @@ function warnWritableTrustedDirOnce(message: string): void {
     return;
   }
   logWarn(message);
-}
-
-function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
-  switch (reason) {
-    case "security=deny":
-    case "approval-required":
-    case "allowlist-miss":
-    case "execution-plan-miss":
-    case "companion-unavailable":
-    case "cwd-unavailable":
-    case "permission:screenRecording":
-      return reason;
-    default:
-      return "approval-required";
-  }
 }
 
 export async function resolveEffectiveSystemRunExecPolicy(params: {
@@ -178,35 +148,7 @@ type HandleSystemRunInvokeOptions = {
   sendNodeEvent?: (event: string, payload: ExecEventPayload) => Promise<void>;
   sendInvokeResult: (result: SystemRunInvokeResult) => Promise<void>;
   preferMacAppExecHost: boolean;
-  getRuntimeConfig?: () => OpenClawConfig;
-  autoReviewer?: ExecAutoReviewer;
-  commitExecAuthorization?: typeof commitExecAuthorizationLocked;
 };
-
-async function sendSystemRunDenied(
-  opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
-  execution: SystemRunExecutionContext,
-  message: string,
-  reason: SystemRunDeniedReason = "approval-required",
-): Promise<null> {
-  await opts.sendNodeEvent?.("exec.denied", {
-    sessionKey: execution.sessionKey,
-    runId: execution.runId,
-    host: "node",
-    command: execution.commandText,
-    reason,
-    suppressNotifyOnExit: execution.suppressNotifyOnExit,
-  });
-  await opts.sendInvokeResult({
-    ok: false,
-    // A missing companion reply can follow execution; it is not a policy denial.
-    error: {
-      code: reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message,
-    },
-  });
-  return null;
-}
 
 async function sendSystemRunCompleted(
   opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
@@ -370,8 +312,11 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     sessionKey,
     runId,
     execution,
-    deny: (message: string, reason?: SystemRunDeniedReason): Promise<null> =>
-      sendSystemRunDenied(opts, execution, message, reason),
+    deny: (
+      message: string,
+      reason?: SystemRunDeniedReason,
+      permissionDetails?: NodePermissionDetails,
+    ): Promise<null> => sendSystemRunDenied(opts, execution, message, reason, permissionDetails),
     approvalDecision,
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
@@ -388,7 +333,7 @@ async function evaluateSystemRunPolicyPhase(
   opts: HandleSystemRunInvokeOptions,
   parsed: SystemRunParsePhase,
 ) {
-  const cfg = opts.getRuntimeConfig?.() ?? (await import("../config/config.js")).getRuntimeConfig();
+  const cfg = (await import("../config/config.js")).getRuntimeConfig();
   const effectivePolicy = await resolveEffectiveSystemRunExecPolicy({
     cfg,
     agentId: parsed.agentId,
@@ -569,13 +514,13 @@ async function evaluateSystemRunPolicyPhase(
       autoReviewEligibility.eligible &&
       policy.eventReason !== "security=deny";
     if (canAutoReviewApprovalMiss) {
-      const reviewer =
-        opts.autoReviewer ??
-        (await import("../agents/exec-auto-reviewer.js")).createModelExecAutoReviewer({
-          cfg,
-          agentId: parsed.agentId,
-          reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
-        });
+      const reviewer = (
+        await import("../agents/exec-auto-reviewer.js")
+      ).createModelExecAutoReviewer({
+        cfg,
+        agentId: parsed.agentId,
+        reviewer: agentExec?.reviewer ?? globalExec?.reviewer,
+      });
       const decision = await resolveExecAutoReviewDecision(reviewer, {
         command: parsed.commandText,
         argv: autoReviewArgv,
@@ -823,7 +768,11 @@ async function executeSystemRunPhase(
       return;
     }
     if (!response.ok) {
-      await phase.deny(response.error.message, normalizeDeniedReason(response.error.reason));
+      await phase.deny(
+        response.error.message,
+        normalizeDeniedReason(response.error.reason),
+        response.error.code === "PERMISSION_MISSING" ? response.error.details : undefined,
+      );
       return;
     }
     const result: ExecHostRunResult = response.payload;
@@ -832,7 +781,10 @@ async function executeSystemRunPhase(
   }
 
   if (phase.needsScreenRecording) {
-    await phase.deny("PERMISSION_MISSING: screenRecording", "permission:screenRecording");
+    await phase.deny("PERMISSION_MISSING: screenRecording", "permission:screenRecording", {
+      capabilities: ["screenRecording"],
+      state: "not-determined",
+    });
     return;
   }
 
@@ -870,9 +822,7 @@ async function executeSystemRunPhase(
 
   let assertCommittedAuthorization: () => void;
   try {
-    assertCommittedAuthorization = await (
-      opts.commitExecAuthorization ?? commitExecAuthorizationLocked
-    )({
+    assertCommittedAuthorization = await commitExecAuthorizationLocked({
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,

@@ -4,7 +4,6 @@ import {
   estimateUtf8Bytes,
   type EmbeddingInput,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import {
   asOptionalRecord,
@@ -266,21 +265,4 @@ export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(par
   }
   await params.onSuccess?.(params.items, outputs);
   return outputs;
-}
-
-export function countBatchSources(items: Array<{ source: MemorySource }>): Record<string, number> {
-  const counts: Record<string, number> = {};
-  for (const item of items) {
-    counts[item.source] = (counts[item.source] ?? 0) + 1;
-  }
-  return counts;
-}
-
-export function formatBatchSourceCounts(counts: Record<string, number>): string {
-  return (
-    Object.entries(counts)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([source, count]) => `${source}=${count}`)
-      .join(",") || "none"
-  );
 }

@@ -2,7 +2,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
-import { readFileSync, writeFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { subagentRuns } from "../../agents/subagents/registry/subagent-registry-memory.js";
@@ -17,8 +16,11 @@ import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-acc
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import * as sessionLifecycle from "../../sessions/session-lifecycle-admission.js";
-import { observeSessionWorkAdmissionDrain } from "../../sessions/session-lifecycle-admission.test-support.js";
+import * as sessionLifecycle from "../../sessions/session-controller.lifecycle.js";
+import {
+  observeSessionWorkAdmissionDrain,
+  rpcSourceTesting,
+} from "../../sessions/session-lifecycle-admission.test-support.js";
 import { closeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.test-support.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
@@ -43,7 +45,7 @@ function abortParent() {
     getSessionEventSubscriberConnIds: () => new Set(),
   });
   const parent = createActiveRun(parentKey, { agentId: "main", owner: { connId: "owner" } });
-  context.chatAbortControllers.set("parent", parent);
+  rpcSourceTesting.set("parent", parent);
   return {
     context,
     parent,
@@ -115,7 +117,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const resume = createDeferred();
     const endedMutationEntered = createDeferred();
     const resumeEndedMutation = createDeferred();
-    const admission = await sessionLifecycle.beginSessionWorkAdmission({
+    const admission = await sessionLifecycle.beginSessionEffect({
       scope: storePath,
       identities: [activeKey, "active-session"],
       run: {
@@ -127,11 +129,11 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       assertAllowed: () => {},
       onInterrupt: () => admission.release(),
     });
-    const mutateSession = sessionLifecycle.runExclusiveSessionLifecycleMutation;
+    const mutateSession = sessionLifecycle.runSessionMutation;
     let holdEndedMutation = !completed;
     const mutation = vi
-      .spyOn(sessionLifecycle, "runExclusiveSessionLifecycleMutation")
-      .mockImplementation(async (operation, params) => {
+      .spyOn(sessionLifecycle, "runSessionMutation")
+      .mockImplementation(async (params) => {
         if (
           holdEndedMutation &&
           "scope" in params &&
@@ -144,10 +146,15 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           endedMutationEntered.resolve();
           await resumeEndedMutation.promise;
         }
-        return await mutateSession(operation, params);
+        return await mutateSession(params);
       });
     const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
-      if (params.scope === storePath && Array.from(params.identities).includes(activeKey)) {
+      if (
+        ("target" in params ? params.target.storeScope : params.scope) === storePath &&
+        Array.from("target" in params ? params.target.aliases : params.identities).includes(
+          activeKey,
+        )
+      ) {
         expect(released).toBe(true);
         // Keep the captured kill scope pending after the real drain. A cold
         // sibling reset must not consume the active admission's deadline.
@@ -158,9 +165,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
     const abort = abortParent();
     const dispatch = vi.fn(async () => {});
     const interrupted = vi.fn();
-    let newAdmission:
-      | Awaited<ReturnType<typeof sessionLifecycle.beginSessionWorkAdmission>>
-      | undefined;
+    let newAdmission: Awaited<ReturnType<typeof sessionLifecycle.beginSessionEffect>> | undefined;
     try {
       await Promise.race([
         entered.promise,
@@ -168,8 +173,8 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
           throw new Error("abort missed admission drain");
         }),
       ]);
-      expect(abort.parent.controller.signal.aborted).toBe(true);
-      expect(sessionLifecycle.isSessionWorkAdmissionActive(storePath, [activeKey])).toBe(false);
+      expect(abort.parent.input.abortSignal.aborted).toBe(true);
+      expect(sessionLifecycle.isSessionControllerWorkActive(storePath, [activeKey])).toBe(false);
       if (!completed) {
         await endedMutationEntered.promise;
       }
@@ -194,7 +199,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
       expect(session?.lifecycleRevision === "original").toBe(!reset);
       expect(isSameSubagentRunOwner(subagentRuns.get("ended"), ended)).toBe(true);
       if (!completed) {
-        newAdmission = await sessionLifecycle.beginSessionWorkAdmission({
+        newAdmission = await sessionLifecycle.beginSessionEffect({
           scope: storePath,
           identities: [endedKey, "ended-session"],
           assertAllowed: () => {},
@@ -269,7 +274,7 @@ it.each([false, true].flatMap((reset) => [true, false].map((completed) => ({ res
 );
 
 it.each(["child", "ancestor"])(
-  "retained durable intent prevents queued dispatch when the %s identity read fails",
+  "retained durable intent prevents queued dispatch when the %s identity owner closes",
   async (faultOwner) => {
     const childAgent = faultOwner === "ancestor" ? "worker" : "broken";
     const badKey = `agent:${childAgent}:subagent:bad`;
@@ -344,17 +349,17 @@ it.each(["child", "ancestor"])(
       (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
     )!;
     expect(database).toBeDefined();
-    let original: Buffer | undefined;
+    let closed = false;
     let fault: unknown;
     const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
-      if (original || !subagentRuns.get("bad")?.killIntent) {
+      if (closed || !subagentRuns.get("bad")?.killIntent) {
         return;
       }
       try {
         expect(loadSubagentRegistryFromSqlite().get("bad")?.killIntent).toBeDefined();
+        // Closure revokes the prepared identity synchronously; worker teardown may still run.
         expect(closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        original = readFileSync(database.path);
-        writeFileSync(database.path, "not a SQLite database");
+        closed = true;
       } catch (error) {
         fault = error;
       }
@@ -362,6 +367,7 @@ it.each(["child", "ancestor"])(
     const badDispatch = vi.fn(async () => {});
     const healthyDispatch = vi.fn(async () => {});
     const survivorDispatch = vi.fn(async () => {});
+    const capacityOwner = "read-failure-capacity";
     for (const [runId, start] of [
       ["bad", badDispatch],
       ["healthy", healthyDispatch],
@@ -371,7 +377,8 @@ it.each(["child", "ancestor"])(
         groupId: "read-failure",
         runId,
         maxConcurrent: 1,
-        activeRunIds: [],
+        // Keep these reservations queued while Stop prepares its session snapshot.
+        activeRunIds: [capacityOwner],
         start,
         onStartFailure: () => true,
       });
@@ -380,8 +387,8 @@ it.each(["child", "ancestor"])(
       const { parent, pending } = abortParent();
       const respond = await pending;
       expect(fault).toBeUndefined();
-      expect(original).toBeDefined();
-      expect(parent.controller.signal.aborted).toBe(true);
+      expect(closed).toBe(true);
+      expect(parent.input.abortSignal.aborted).toBe(true);
       expect(respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -390,11 +397,6 @@ it.each(["child", "ancestor"])(
           message: expect.stringContaining("descendant cancellation was incomplete"),
         }),
       );
-      expect(() =>
-        loadExactSessionEntryReadOnly({
-          sessionKey: faultOwner === "ancestor" ? ancestorKey : badKey,
-        }),
-      ).toThrow();
       if (faultOwner === "ancestor") {
         expect(
           loadExactSessionEntryReadOnly({ storePath, sessionKey: badKey })?.entry.sessionId,
@@ -404,17 +406,16 @@ it.each(["child", "ancestor"])(
         reason: "killed",
       });
       expect(subagentRuns.get("healthy")?.endedReason).toBe("subagent-killed");
+      expect(releaseSwarmRun(capacityOwner)).toBe(true);
+      await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(
         badDispatch,
         "retained durable intent must withdraw its exact never-started reservation",
       ).not.toHaveBeenCalled();
-      await vi.waitFor(() => expect(survivorDispatch).toHaveBeenCalledOnce());
     } finally {
       unsubscribe();
-      if (original) {
-        writeFileSync(database.path, original);
-      }
+      releaseSwarmRun(capacityOwner);
       releaseSwarmRun("bad");
       releaseSwarmRun("survivor");
     }

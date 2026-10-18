@@ -1118,7 +1118,6 @@ describe("models.list", () => {
         expect(respond).not.toHaveBeenCalled();
 
         catalog.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]);
-        await vi.runAllTimersAsync();
         await request;
 
         expect(respond).toHaveBeenCalledWith(

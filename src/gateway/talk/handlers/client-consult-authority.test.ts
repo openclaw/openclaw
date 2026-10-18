@@ -7,7 +7,6 @@ import {
   isSessionEntryDataSql,
   observeHostDataSql,
   observeSqliteReadSql,
-  trackSqliteStatementExecutions,
 } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/io.runtime.js";
@@ -19,13 +18,10 @@ import {
 import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db-lifecycle.js";
-import { retainOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
 import { getOpenClawAgentDatabaseIfOpen } from "../../../state/openclaw-agent-db.js";
-import {
-  resolveIncognitoOpenClawAgentSqlitePath,
-  resolveOpenClawAgentSqlitePath,
-} from "../../../state/openclaw-agent-db.paths.js";
+import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import * as voiceSessionReaders from "../../../talk/client-voice-session-read.js";
 import { readVoiceSessionRecord } from "../../../talk/client-voice-session-store.js";
@@ -35,10 +31,13 @@ import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { registerChatAbortController } from "../../chat-abort.js";
 import type { ChatSendInternalOptions } from "../../server-methods/chat-send-options.js";
-import type { GatewayRequestHandlerOptions } from "../../server-methods/types.js";
+import type {
+  GatewayRequestHandlerOptions,
+  SessionMutationAuthorization,
+} from "../../server-methods/types.js";
 import { createGatewayRequestContext } from "../../server-request-context.js";
 import { makeContextParams } from "../../server-request-context.test-support.js";
-import { resolveSessionMutationAuthorization } from "../../session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../session-sharing-authorization-async.js";
 import { createIdleRelayProvider } from "../relay/index.test-support.js";
 import { closeRelaySession, registerTalkRealtimeRelayAgentRun } from "../relay/operations.js";
 import { createTalkRealtimeRelaySession } from "../relay/session-create.js";
@@ -93,10 +92,14 @@ let tempDir: string;
 let inWorkerGrant = false;
 let workerGrantReads: string[] = [];
 let sqlReads: ReturnType<typeof observeSqliteReadSql> | undefined;
+const authorizations: SessionMutationAuthorization[] = [];
 
 describe("voice consult registration authority", () => {
   const tempDirs = useAutoCleanupTempDirTracker((remove) =>
     afterEach(async () => {
+      for (const authorization of authorizations.splice(0)) {
+        authorization.release?.();
+      }
       clientVoiceSessionTesting.reset();
       try {
         await cleanupSessionStateForTest({ stateDir: tempDir });
@@ -160,6 +163,7 @@ describe("voice consult registration authority", () => {
       context.getRuntimeConfig = () => config;
       context.getCommittedRuntimeConfig = () => config;
       const client = { connId: `${origin}-${wait}-delegation-source` };
+      const sessionTarget = await prepareTalkSessionTarget(config, scope.sessionKey);
       const created =
         origin === "relay"
           ? createTalkRealtimeRelaySession({
@@ -171,7 +175,7 @@ describe("voice consult registration authority", () => {
               instructions: "brief",
               tools: [],
               controlSource: "transcript",
-              sessionTarget: prepareTalkSessionTarget(config, scope.sessionKey),
+              sessionTarget,
             })
           : undefined;
       const relay = created ? relaySessions.get(created.relaySessionId)! : undefined;
@@ -179,6 +183,19 @@ describe("voice consult registration authority", () => {
       const waiting = createDeferred();
       const resume = createDeferred();
       let pending: Promise<unknown> | undefined;
+      const registration = registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: sessionTarget.canonicalKey,
+          agentId: sessionTarget.agentId,
+          incarnation: "original-consult-session",
+        }),
+        runId: "queued-consult",
+        sessionId: "original-consult-session",
+        sessionKey: scope.sessionKey,
+        ownerConnId: client.connId,
+        timeoutMs: 60_000,
+      });
       try {
         setTestEnvValue("OPENCLAW_STATE_DIR", successor);
         await voiceSessions.createOrResumeClientVoiceSession({
@@ -195,12 +212,15 @@ describe("voice consult registration authority", () => {
           name: "openclaw_agent_consult",
           args: { question: "Report fixture status" },
         };
-        const authorized = resolveSessionMutationAuthorization({
+        const authorized = await resolveSessionMutationAuthorizationAsync({
           method: "talk.client.toolCall",
           requestParams: params,
           context,
           client: client as never,
         });
+        if (authorized.authorization) {
+          authorizations.push(authorized.authorization);
+        }
         expect(authorized.error).toBeNull();
         if (wait === "preparation") {
           const lookup = voiceSessionReaders.resolveOpenClientVoiceSessionId;
@@ -259,6 +279,7 @@ describe("voice consult registration authority", () => {
         if (relay) {
           await closeRelaySession(relay, "completed");
         }
+        registration.cleanup();
         await cleanupSessionStateForTest({ stateDir: successor, rootPath: successor });
       }
     },
@@ -270,6 +291,7 @@ describe("voice consult registration authority", () => {
       const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => ({});
       const client = { connId: "replacement-registration" };
+      const sessionTarget = await prepareTalkSessionTarget({}, scope.sessionKey);
       const created = createTalkRealtimeRelaySession({
         context,
         connId: client.connId,
@@ -279,15 +301,21 @@ describe("voice consult registration authority", () => {
         instructions: "brief",
         tools: [],
         controlSource: "transcript",
-        sessionTarget: prepareTalkSessionTarget({}, scope.sessionKey),
+        sessionTarget,
       });
       const relay = relaySessions.get(created.relaySessionId)!;
       const runId = "queued-consult";
       const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
+        target: captureSessionTarget({
+          storeScope: sessionTarget.storePath,
+          sessionKey: sessionTarget.canonicalKey,
+          agentId: sessionTarget.agentId,
+          incarnation: "original-consult-session",
+        }),
         runId,
         sessionId: "original-consult-session",
         sessionKey: scope.sessionKey,
+        ownerConnId: client.connId,
         timeoutMs: 60_000,
       });
       const held = createDeferred();
@@ -309,12 +337,15 @@ describe("voice consult registration authority", () => {
         name: "openclaw_agent_consult",
         args: { question: "Report fixture status" },
       };
-      const authorized = resolveSessionMutationAuthorization({
+      const authorized = await resolveSessionMutationAuthorizationAsync({
         method: "talk.client.toolCall",
         requestParams: params,
         context,
         client: client as never,
       });
+      if (authorized.authorization) {
+        authorizations.push(authorized.authorization);
+      }
       const respond = vi.fn();
       const pending = talkClientHandlers["talk.client.toolCall"]!({
         req: { type: "req", id: "replacement-registration", method: "talk.client.toolCall" },
@@ -388,12 +419,15 @@ describe("voice consult registration authority", () => {
         name: "openclaw_agent_consult",
         args: { question: "Report the fixture status" },
       };
-      const authorized = resolveSessionMutationAuthorization({
+      const authorized = await resolveSessionMutationAuthorizationAsync({
         method: "talk.client.toolCall",
         requestParams: params,
         context,
         client: null,
       });
+      if (authorized.authorization) {
+        authorizations.push(authorized.authorization);
+      }
       expect(authorized.error).toBeNull();
       expect(getOpenClawAgentDatabaseIfOpen(scope)).toBeUndefined();
       const targetPath = resolveOpenClawAgentSqlitePath(scope);
@@ -471,12 +505,15 @@ describe("voice consult registration authority", () => {
         name: "openclaw_agent_consult",
         args: { question: "Report the fixture status" },
       };
-      const authorized = resolveSessionMutationAuthorization({
+      const authorized = await resolveSessionMutationAuthorizationAsync({
         method: "talk.client.toolCall",
         requestParams: params,
         context,
         client: null,
       });
+      if (authorized.authorization) {
+        authorizations.push(authorized.authorization);
+      }
       expect(authorized.error).toBeNull();
       const queued = createDeferred();
       const entered = createDeferred();
@@ -564,37 +601,31 @@ describe("voice consult registration authority", () => {
     },
   );
 
-  it("checks a process-held source inside the durable native voice transaction", async () => {
+  it("checks a memory source at durable voice write admission without session SQL", async () => {
     const sessionKey = "agent:main:dashboard:incognito-native-voice";
-    replaceSessionEntrySync(
+    await replaceSessionEntry(
       { agentId: "main", sessionKey },
       { sessionId: "native-voice-source", updatedAt: 1, incognito: true },
     );
-    const authorization = resolveSessionMutationAuthorization({
+    const authorization = await resolveSessionMutationAuthorizationAsync({
       method: "talk.client.create",
       requestParams: { sessionKey },
       context: { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
       client: null,
     });
+    if (authorization.authorization) {
+      authorizations.push(authorization.authorization);
+    }
     expect(authorization.error).toBeNull();
     const target = authorization.authorization?.talkSessionTarget;
     if (!target) {
       throw new Error("Expected a prepared incognito Talk source");
     }
-    const source = retainOpenClawAgentDatabaseReadOnly({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-    if (!source.found) {
-      throw new Error("Expected the process-held source to remain open");
-    }
     let nativeAuthorityObserved = false;
-    const reads = trackSqliteStatementExecutions(source.database.db, ["source"], (sql) => {
-      if (!isSessionEntryDataSql(sql)) {
-        return null;
-      }
-      return "source";
-    });
+    let workerAuthorityObserved = false;
+    sqlReads?.restore();
+    sqlReads = undefined;
+    const reads = observeHostDataSql();
     try {
       await voiceSessions.createOrResumeClientVoiceSession({
         agentId: "main",
@@ -607,52 +638,46 @@ describe("voice consult registration authority", () => {
             [authorization.authorization!.assertCurrent],
             (assertSource) => {
               assertSource();
+              workerAuthorityObserved ||= inWorkerGrant;
               nativeAuthorityObserved ||=
                 getOpenClawAgentDatabaseIfOpen({ agentId: "main" })?.db.isTransaction === true;
             },
           ),
         },
       });
-      expect(reads.counts.source).toBeGreaterThan(0);
-      expect(nativeAuthorityObserved).toBe(true);
+      expect(reads.queries.filter(isSessionEntryDataSql)).toEqual([]);
+      expect(workerAuthorityObserved).toBe(true);
+      expect(nativeAuthorityObserved).toBe(false);
       expect(clientVoiceSessionTesting.readRecord("main", "native-source-voice")).toMatchObject({
         sessionKey,
         status: "open",
       });
     } finally {
       reads.restore();
-      source.claim.release();
     }
   });
 
   it.each(["foreign", "incognito"] as const)(
-    "prepares a cold native target for a %s requester without caller-thread schema work",
+    "prepares a cold durable target for a %s requester without caller-thread schema work",
     async (kind) => {
       const sourceKey =
         kind === "incognito" ? "agent:main:dashboard:incognito-cold-native" : scope.sessionKey;
       if (kind === "incognito") {
-        replaceSessionEntrySync(
+        await replaceSessionEntry(
           { agentId: "main", sessionKey: sourceKey },
           { sessionId: "cold-native-source", updatedAt: 1, incognito: true },
         );
       }
-      const authorized = resolveSessionMutationAuthorization({
+      const authorized = await resolveSessionMutationAuthorizationAsync({
         method: "talk.client.create",
         requestParams: { sessionKey: sourceKey },
         context: { getRuntimeConfig: () => ({}) } as GatewayRequestHandlerOptions["context"],
         client: null,
       });
-      expect(authorized.error).toBeNull();
-      const source =
-        kind === "incognito"
-          ? retainOpenClawAgentDatabaseReadOnly({
-              agentId: "main",
-              path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-            })
-          : undefined;
-      if (source && !source.found) {
-        throw new Error("Expected the process-held source to remain open");
+      if (authorized.authorization) {
+        authorizations.push(authorized.authorization);
       }
+      expect(authorized.error).toBeNull();
       const target = {
         agentId: `cold-native-${kind}`,
         sessionKey: `agent:cold-native-${kind}:main`,
@@ -664,7 +689,7 @@ describe("voice consult registration authority", () => {
       ]);
       expect(existsSync(targetPath)).toBe(false);
       let nativeAuthorityObserved = false;
-      let preparedAuthorityObserved = false;
+      let workerAuthorityObserved = false;
       const schemaSql: string[] = [];
       sqlReads?.restore();
       sqlReads = undefined;
@@ -687,22 +712,19 @@ describe("voice consult registration authority", () => {
           requester: composeSessionSourceAssertion(
             [authorized.authorization!.assertCurrent],
             (assertSource) => {
-              expect(inWorkerGrant).toBe(false);
               assertSource();
+              workerAuthorityObserved ||= inWorkerGrant;
               nativeAuthorityObserved ||=
                 getOpenClawAgentDatabaseIfOpen(target)?.db.isTransaction === true;
             },
             {
-              preparedCheck: (assertSource) => {
-                preparedAuthorityObserved ||= inWorkerGrant;
-                assertSource();
-              },
+              preparedCheck: (assertSource) => assertSource(),
             },
           ),
         });
         expect(schemaSql).toEqual([]);
-        expect(preparedAuthorityObserved).toBe(true);
-        expect(nativeAuthorityObserved).toBe(true);
+        expect(workerAuthorityObserved).toBe(true);
+        expect(nativeAuthorityObserved).toBe(false);
         expect(
           clientVoiceSessionTesting.readRecord(target.agentId, "cold-native-voice"),
         ).toMatchObject({
@@ -711,7 +733,6 @@ describe("voice consult registration authority", () => {
         });
       } finally {
         sql.restore();
-        source?.claim.release();
       }
     },
   );

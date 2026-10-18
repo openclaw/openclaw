@@ -1,10 +1,6 @@
--- Generated lazy feature; create dependencies first.
+-- Generated runtime DDL; the owner supplies search_path and the transaction.
 
-BEGIN;
-
-SET LOCAL standard_conforming_strings = on;
-
-CREATE TABLE "openclaw_state"."session_repository_workspaces" (
+CREATE TABLE "session_repository_workspaces" (
   "workspace_id" text COLLATE "C" NOT NULL,
   "agent_id" text COLLATE "C" NOT NULL,
   "session_key" text COLLATE "C" NOT NULL,
@@ -33,5 +29,3 @@ CREATE TABLE "openclaw_state"."session_repository_workspaces" (
   CHECK (("checkpoint_ref" IS NULL AND "manifest_hash" IS NULL) OR ("checkpoint_ref" IS NOT NULL AND "manifest_hash" IS NOT NULL AND "base_manifest_hash" IS NOT NULL)),
   UNIQUE ("agent_id", "session_key")
 );
-
-COMMIT;

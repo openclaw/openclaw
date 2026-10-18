@@ -10,7 +10,7 @@ export async function requestSessionRecovery(
 ): Promise<SessionsRecoverResult> {
   const result = await client.request<SessionsRecoverResult>("sessions.recover", params);
   if (!result?.key?.trim() || !result?.sessionId?.trim()) {
-    throw new Error("sessions.recover returned no successor identity");
+    throw new Error("sessions.recover returned no session identity");
   }
   return result;
 }

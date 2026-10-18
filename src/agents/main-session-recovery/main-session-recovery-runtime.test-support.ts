@@ -8,7 +8,7 @@ import { sessionChanges } from "../../sessions/session-row-changes.js";
 type RecoveryScope = { storePath: string; sessionKey: string };
 
 export function createRecoveryRuntimeFixture(params: {
-  callGateway: typeof callGateway;
+  callGateway: (options: Parameters<typeof callGateway>[0]) => Promise<unknown>;
   getDispatchSettlement: () => Promise<void>;
   sendRecoveryNotice: GatewayRecoveryRuntime["sendRecoveryNotice"];
 }) {
@@ -107,7 +107,7 @@ export function createRecoveryRuntimeFixture(params: {
       const status = (result as { status?: unknown } | undefined)?.status;
       if (status === undefined) {
         options?.onStartOwner?.({
-          observe: () => ({ executionStarted: true, expiresAtMs: Date.now() + 60_000 }),
+          observe: () => ({ executionStarted: true, startDeadlineAtMs: Date.now() + 60_000 }),
           abort: () => false,
         });
         options?.onAccepted?.(result);

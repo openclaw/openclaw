@@ -9,8 +9,8 @@ import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
 import {
   FaceTimeHelperAmbiguousError,
+  assertFaceTimeNativeAction,
   projectCompleteFaceTimeAbsence,
-  projectFaceTimeNativeAction,
   type HelperActionResult,
 } from "./helper-results.js";
 import type { FaceTimeHelperSocketServer } from "./helper-rpc.js";
@@ -48,7 +48,7 @@ export function createFaceTimeCallControl(params: {
           allowClosing: true,
           action: async () => await request.run(candidate),
         });
-        projectFaceTimeNativeAction(request.action, result);
+        assertFaceTimeNativeAction(request.action, result);
         request.call.promoteCarrierCallUUID(candidate);
         return result;
       } catch (error) {
@@ -113,14 +113,14 @@ export function createFaceTimeCallControl(params: {
     });
     call.lastHelperAction = mutedResult;
     retainHelperResultPeers(call, mutedResult);
-    projectFaceTimeNativeAction("unmute", mutedResult);
+    assertFaceTimeNativeAction("unmute", mutedResult);
     const transmissionResult = await call.runCarrierCommand({
       generation,
       action: async () => await params.helper.startTransmission(call.carrierCallUUID),
     });
     call.lastHelperAction = transmissionResult;
     retainHelperResultPeers(call, transmissionResult);
-    projectFaceTimeNativeAction("activate", transmissionResult);
+    assertFaceTimeNativeAction("activate", transmissionResult);
     call.markCarrierActive(generation);
     if (call.audioTransport) {
       call.audioTransport.processInputVerified = true;
@@ -302,7 +302,7 @@ export function createFaceTimeCallControl(params: {
     } catch (error) {
       await call.talk?.suspendMedia("runtime-stop-carrier-unconfirmed");
       throw new Error(
-        `FaceTime fail-closed carrier termination failed: ${formatErrorMessage(error)}; carrier closure remains unconfirmed`,
+        `FaceTime safety shutdown failed: ${formatErrorMessage(error)}; carrier closure remains unconfirmed`,
         { cause: error },
       );
     }
@@ -368,10 +368,8 @@ export function createFaceTimeCallControl(params: {
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();
-        call.assertCurrent(generation);
         call.markModelReady(generation);
         await enableCallAudio(call);
-        call.assertCurrent(generation);
         call.markModelActive(generation);
         call.talk?.activate();
       })();

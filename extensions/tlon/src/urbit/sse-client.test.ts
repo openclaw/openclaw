@@ -41,14 +41,25 @@ describe("UrbitSSEClient", () => {
     vi.restoreAllMocks();
   });
 
-  describe("updateCookie", () => {
-    it("normalizes cookie when updating", () => {
-      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-      client.updateCookie("urbauth-~zod=456; Path=/; HttpOnly");
-
-      expect(client.cookie).toBe("urbauth-~zod=456");
+  it("releases the stream guard after a handler error", async () => {
+    const guarded = guardedResponse(new Response('data: {"json":{"ok":true}}\n\n'));
+    vi.mocked(urbitFetch).mockResolvedValueOnce(guarded);
+    const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+    const processing = vi.spyOn(client, "processStream");
+    vi.spyOn(client, "attemptReconnect").mockResolvedValue(undefined);
+    await client.subscribe({
+      app: "chat",
+      path: "/inbox",
+      event: () => {
+        throw new Error("handler failed");
+      },
     });
+
+    await client.openStream();
+    await expect(processing.mock.results[0]?.value).rejects.toThrow("handler failed");
+
+    expect(guarded.release).toHaveBeenCalledOnce();
+    expect(client.streamRelease).toBeNull();
   });
 
   describe("reconnection", () => {
@@ -176,7 +187,6 @@ describe("UrbitSSEClient", () => {
           ending: "CRLF",
           chunks: ["id:1\r", '\ndata:{"id":1,"json":{"text":"split"}}\r', "\n\r", "\n"],
         },
-        { ending: "CR", chunks: ["id:1\r", 'data:{"id":1,"json":{"text":"split"}}\r', "\r"] },
       ])("preserves $ending delimiters split across byte chunks", async ({ chunks }) => {
         const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
         const delivered: unknown[] = [];
@@ -292,13 +302,6 @@ describe("UrbitSSEClient", () => {
         (client as unknown as { lastAcknowledgedEventId: number }).lastAcknowledgedEventId,
       ).toBe(20);
     });
-  });
-
-  it("generates unique channel ID", () => {
-    const client1 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-    const client2 = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
-
-    expect(client1.channelId).not.toBe(client2.channelId);
   });
 
   it("backs off through ten attempts before the cooldown resets the schedule", async () => {

@@ -1,4 +1,5 @@
 // Feishu tests cover monitor.startup plugin behavior.
+import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -41,13 +42,11 @@ vi.mock("./bot-identity-cache.js", () => ({
   writeCachedFeishuBotIdentity: writeCachedFeishuBotIdentityMock,
 }));
 
-vi.mock("./client.js", async () => {
-  const { createFeishuClientMockModule } = await import("./monitor.test-mocks.js");
-  return {
-    ...createFeishuClientMockModule(),
-    createEventDispatcher: createEventDispatcherMock,
-  };
-});
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  createFeishuWSClient: vi.fn(() => ({ start: vi.fn(), close: vi.fn() })),
+  createEventDispatcher: createEventDispatcherMock,
+}));
 vi.mock("./feishu-ingress.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./feishu-ingress.js")>();
   return {
@@ -69,7 +68,7 @@ beforeEach(() => {
   registerFeishuAiAgentMock.mockReset().mockResolvedValue({ ok: true });
   readCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(null);
   writeCachedFeishuBotIdentityMock.mockReset().mockResolvedValue(undefined);
-  createEventDispatcherMock.mockReset().mockReturnValue({ register: vi.fn() });
+  createEventDispatcherMock.mockReset().mockImplementation(() => new EventDispatcher({}));
   createFeishuDurableIngressMock.mockReset().mockReturnValue(undefined);
 });
 
@@ -113,7 +112,6 @@ describe("Feishu monitor startup preflight", () => {
       throw startError;
     });
     const ingressStop = vi.fn().mockResolvedValue(undefined);
-    createEventDispatcherMock.mockReturnValue({ register: vi.fn(), invoke: vi.fn() });
     createFeishuDurableIngressMock.mockReturnValue({
       invoke: vi.fn(),
       resolveLifecycle: vi.fn(),

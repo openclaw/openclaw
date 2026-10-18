@@ -31,6 +31,7 @@ import {
   isTrustedToolExecutionPreflightError,
   protectNetworkToolExecutionError,
 } from "./tool-result-error.js";
+import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
@@ -63,6 +64,7 @@ import type {
   ToolSearchToolContext,
   UnknownToolErrorOptions,
 } from "./tool-search-types.js";
+import { ToolSourceReplyCell } from "./tool-source-reply-completion.js";
 import { textResult, ToolInputError } from "./tools/common.js";
 
 type ToolSearchExactCallOptions = Pick<
@@ -131,12 +133,6 @@ async function validateCatalogSchemaValue(
   }
   try {
     if (schemaName === "outputSchema") {
-      if (
-        outputSelection &&
-        readToolOutputSchemaVariants(schema)?.inputProperty !== outputSelection.inputProperty
-      ) {
-        throw new Error("Tool output discriminator changed during execution.");
-      }
       schema = selectToolOutputSchema(
         schema,
         outputSelection ? { [outputSelection.inputProperty]: outputSelection.value } : undefined,
@@ -214,6 +210,7 @@ function sanitizeToolCallIdPart(value: string): string {
 }
 
 export class ToolSearchRuntime {
+  readonly sourceReplyCell = new ToolSourceReplyCell();
   private readonly pluginRuntimeRefresh = captureAgentPluginRuntimeRefresh();
   private callSequence = 0;
   private readonly terminalTargetBatchByParent = new Map<string, boolean>();
@@ -310,29 +307,21 @@ export class ToolSearchRuntime {
     return describeEntry(entry);
   };
 
-  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }),
-      input,
-      options,
-    );
+  call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
+    await this.callEntry(id, input, options);
+
+  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
+    await this.callEntry(id, input, options, false, "exact-id");
+
+  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) => {
+    return projectToolResultValue((await this.callEntry(id, input, options, true)).result);
   };
 
-  callExactId = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
-    const catalog = resolveCatalog(this.ctx);
-    return await this.callEntry(
-      findEntry(catalog, id, { ...options, codeModeSkills: this.ctx.codeModeSkills }, "exact-id"),
-      input,
-      options,
+  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) => {
+    return projectToolResultValue(
+      (await this.callEntry(id, input, options, true, "exact-id")).result,
     );
   };
-
-  callValue = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>
-    projectToolResultValue((await this.call(id, input, options)).result);
-
-  callExactValue = async (id: string, input?: unknown, options?: ToolSearchExactCallOptions) =>
-    projectToolResultValue((await this.callExactId(id, input, options)).result);
 
   observeNetworkContent(parentToolCallId: string): void {
     const state = this.networkInvocations.get(parentToolCallId) ?? { active: 0, observed: false };
@@ -379,16 +368,25 @@ export class ToolSearchRuntime {
   };
 
   private readonly callEntry = (
-    entry: ToolSearchCatalogEntry,
+    id: string,
     input?: unknown,
     options?: ToolSearchCallOptions,
+    fullValue = false,
+    match: "id-or-name" | "exact-id" = "id-or-name",
   ) =>
     runScheduledToolSearchCall({
       ctx: this.ctx,
-      entry,
+      entry: findEntry(
+        resolveCatalog(this.ctx),
+        id,
+        { ...options, codeModeSkills: this.ctx.codeModeSkills },
+        match,
+      ),
       signal: options?.signal,
       execute: (currentEntry, signal) =>
-        this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        runWithToolResultDelivery(fullValue, () =>
+          this.executeEntry(resolveCatalog(this.ctx), currentEntry, input, { ...options, signal }),
+        ),
     });
 
   private readonly executeEntry = async (
@@ -432,6 +430,8 @@ export class ToolSearchRuntime {
     // Reuse only this call's accepted snapshot; outer schema validation must still run.
     let acceptedSnapshot: AgentToolResult<unknown> | undefined;
     const acceptResultBeforeProjection = async (candidate: AgentToolResult<unknown>) => {
+      // Projection failure cannot revoke delivery already committed by the producer.
+      this.sourceReplyCell.observe(candidate);
       if (isPreExecutionBlockedToolResult(candidate)) {
         // The JSON-safe snapshot drops the private blocked-result marker.
         preExecutionBlocked = true;

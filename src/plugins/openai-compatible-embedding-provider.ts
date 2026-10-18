@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAzureApiVersionRequestTarget } from "../../packages/memory-host-sdk/src/host/azure-api-version-request.js";
 import { readEmbeddingVectors } from "../../packages/memory-host-sdk/src/host/embedding-vectors.js";
 import {
   addEmbeddingErrorContext,
@@ -19,8 +20,6 @@ import type {
   AcquireConfiguredProviderLocalService,
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
-import { resolveProviderTransportSsrFPolicy } from "../agents/provider-network-policy.js";
-import { resolveProviderRequestPolicyConfig } from "../agents/provider-request-config.js";
 import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
@@ -49,6 +48,7 @@ type OpenAICompatibleEmbeddingClient = {
   baseUrl: string;
   endpointUrl: string;
   headers: Record<string, string>;
+  authHeaderName?: string;
   ssrfPolicy?: SsrFPolicy;
   model: string;
   dimensions?: number;
@@ -169,9 +169,14 @@ function isSensitiveHeaderName(name: string): boolean {
   );
 }
 
-function sanitizeCacheHeaders(headers: Record<string, string>): Record<string, string> | undefined {
+function sanitizeCacheHeaders(
+  headers: Record<string, string>,
+  authHeaderName?: string,
+): Record<string, string> | undefined {
   const safeHeaders = Object.fromEntries(
-    Object.entries(headers).filter(([name]) => !isSensitiveHeaderName(name)),
+    Object.entries(headers).filter(
+      ([name]) => name !== authHeaderName && !isSensitiveHeaderName(name),
+    ),
   );
   return Object.keys(safeHeaders).length > 0 ? safeHeaders : undefined;
 }
@@ -181,6 +186,16 @@ async function resolveConfiguredProviderApiKey(params: {
   options: EmbeddingProviderCreateOptions;
   configuredProvider: ConfiguredEmbeddingProvider | undefined;
 }): Promise<string | undefined> {
+  if (params.configuredProvider?.localService) {
+    const { resolveManagedLocalProviderAuth } = await import("../agents/model-auth-runtime.js");
+    const auth = resolveManagedLocalProviderAuth({
+      cfg: params.options.config,
+      provider: params.providerId,
+    });
+    if (auth) {
+      return auth.apiKey;
+    }
+  }
   const apiKey = normalizeResolvedSecretInputString({
     value: params.configuredProvider?.apiKey,
     path: `${appendConfigPathSegment("models.providers", params.providerId)}.apiKey`,
@@ -347,11 +362,15 @@ async function postEmbeddingRequest(params: {
       context,
       inputCount: input.length,
     });
-    return await withRemoteHttpResponse({
+    const target = resolveAzureApiVersionRequestTarget({
       url: client.endpointUrl,
+      headers: client.headers,
+    });
+    return await withRemoteHttpResponse({
+      url: target.url,
       init: {
         method: "POST",
-        headers: client.headers,
+        headers: target.headers,
         body: JSON.stringify(body),
       },
       signal: callOptions?.signal,
@@ -402,8 +421,11 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerBaseUrl = normalizeOptionalString(configuredProvider?.baseUrl);
   const baseUrl = normalizeBaseUrl(remoteBaseUrl ?? providerBaseUrl);
   // The embedding SDK also loads the provider registry; keep this shared policy edge lazy.
-  const { embeddingProviderOwnsDestination, resolveEmbeddingEndpointUrl } =
-    await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
+  const {
+    embeddingProviderOwnsDestination,
+    resolveEmbeddingEndpointUrl,
+    resolveEmbeddingProviderSsrFPolicy,
+  } = await import("../plugin-sdk/memory-core-host-engine-embeddings.js");
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
@@ -429,23 +451,20 @@ async function createOpenAICompatibleEmbeddingClient(
     }
   }
   const localServiceOptions = options as LocalServiceAwareEmbeddingOptions;
-  const policy = resolveProviderRequestPolicyConfig({
-    provider: providerId,
-    api: configuredProvider?.api ?? "openai-completions",
-    baseUrl,
-    capability: "other",
-    request: { allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork },
-  });
   return {
     providerId,
     baseUrl,
     endpointUrl: resolveEmbeddingEndpointUrl(baseUrl, "embeddings"),
     headers,
-    ssrfPolicy: resolveProviderTransportSsrFPolicy({
+    authHeaderName:
+      providerOwnsDestination && configuredProvider?.request?.auth?.mode === "header"
+        ? configuredProvider.request.auth.headerName.trim().toLowerCase()
+        : undefined,
+    ssrfPolicy: resolveEmbeddingProviderSsrFPolicy({
+      provider: providerId,
+      api: configuredProvider?.api ?? "openai-completions",
       baseUrl,
-      url: baseUrl,
-      allowPrivateNetwork: policy.allowPrivateNetwork,
-      trustConfiguredBaseUrlOrigin: policy.trustConfiguredBaseUrlOrigin,
+      allowPrivateNetwork: configuredProvider?.request?.allowPrivateNetwork,
     }),
     model,
     ...(configuredProvider?.localService && !remoteBaseUrl
@@ -483,7 +502,24 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
         callOptions,
       });
     };
-    const cacheHeaders = sanitizeCacheHeaders(client.headers);
+    const cacheHeaders = sanitizeCacheHeaders(client.headers, client.authHeaderName);
+    const cacheKeyData = {
+      provider: client.providerId,
+      baseUrl: client.baseUrl,
+      model: client.model,
+      ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
+      ...(client.inputType ? { inputType: client.inputType } : {}),
+      ...(client.queryInputType ? { queryInputType: client.queryInputType } : {}),
+      ...(client.documentInputType ? { documentInputType: client.documentInputType } : {}),
+      ...(cacheHeaders ? { headers: cacheHeaders } : {}),
+    };
+    // Older indexes included declared auth headers not recognized by the sensitive-name filter.
+    const legacyHeaders =
+      client.authHeaderName &&
+      Object.hasOwn(client.headers, client.authHeaderName) &&
+      !isSensitiveHeaderName(client.authHeaderName)
+        ? sanitizeCacheHeaders(client.headers)
+        : undefined;
     return {
       provider: {
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
@@ -501,16 +537,14 @@ export const openAICompatibleEmbeddingProviderAdapter: EmbeddingProviderAdapter 
       runtime: {
         id: OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID,
         inlineBatchTimeoutMs: 10 * 60_000,
-        cacheKeyData: {
-          provider: client.providerId,
-          baseUrl: client.baseUrl,
-          model: client.model,
-          ...(typeof client.dimensions === "number" ? { dimensions: client.dimensions } : {}),
-          ...(client.inputType ? { inputType: client.inputType } : {}),
-          ...(client.queryInputType ? { queryInputType: client.queryInputType } : {}),
-          ...(client.documentInputType ? { documentInputType: client.documentInputType } : {}),
-          ...(cacheHeaders ? { headers: cacheHeaders } : {}),
-        },
+        cacheKeyData,
+        ...(legacyHeaders
+          ? {
+              indexIdentityAliases: [
+                { model: client.model, cacheKeyData: { ...cacheKeyData, headers: legacyHeaders } },
+              ],
+            }
+          : {}),
       },
     };
   },

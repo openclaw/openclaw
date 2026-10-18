@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import type { ReplyPayload } from "../types.js";
 import { withAgentTurnCompletion } from "./agent-runner-completion.js";
@@ -21,12 +22,7 @@ import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-acc
 import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
-import {
-  createReplyOperation,
-  retainReplyOperationUntilComplete,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 import { createReplySessionEntryHandle } from "./session-entry-handle.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -57,18 +53,23 @@ export async function createAgentAccountingPersistenceFixture({
   storePath,
   root,
   fixtureId,
+  incognito = false,
   registerOperation,
 }: {
   storePath: string;
   root: string;
   fixtureId: number;
+  incognito?: boolean;
   registerOperation: (operation: ReplyOperation) => void;
 }) {
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
+  const sessionKey = incognito
+    ? `agent:main:dashboard:incognito-accounting-${fixtureId}`
+    : `agent:main:accounting-${fixtureId}`;
   const sessionId = `accounting-session-${fixtureId}`;
   const runId = `context-pressure-run-${fixtureId}`;
   const entry: InternalSessionEntry = {
     sessionId,
+    ...(incognito ? { incognito: true } : {}),
     lifecycleRevision: "generation-1",
     activeWriterRunId: runId,
     updatedAt: 1,
@@ -117,7 +118,6 @@ export async function createAgentAccountingPersistenceFixture({
     resetTriggered: false,
   });
   replyOperation.setPhase("running");
-  retainReplyOperationUntilComplete(replyOperation);
   registerOperation(replyOperation);
   const context: FinalizeReplyAgentRunInput & { storePath: string } = {
     activeIsNewSession: false,
@@ -159,7 +159,6 @@ export async function createAgentAccountingPersistenceFixture({
       },
       fallback: { exhausted: false, attempts: [] },
       autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
     },
     runId,
     runStartedAt: Date.now(),
@@ -177,7 +176,6 @@ export async function createAgentAccountingPersistenceFixture({
     sessionEntry: entry,
     sessionStore,
     sessionKey,
-    generationFence: { sessionId: entry.sessionId, expectedStoreEntry: entry },
   });
   const turn: AdmittedFollowupTurn = {
     runId: context.runId,
@@ -190,7 +188,6 @@ export async function createAgentAccountingPersistenceFixture({
       storePath,
       current: () => handle.getCurrent(),
       publish: (next) => next && handle.replaceCurrent(next),
-      adopt: (next) => handle.adoptCurrent(next),
     },
     sessionStore: handle.toCompatSessionStore(),
     sendPolicy: "allow",
@@ -334,9 +331,11 @@ export async function createAgentAccountingPersistenceFixture({
             prepared: {
               kind: "continue",
               activeSessionEntry: accounting.activeSessionEntry,
+              replyCompletion: { expectation: "required", outcome: "delivered" },
               // The reply was already delivered; exercise completion bookkeeping
               // without creating another pending delivery intent.
               completedSourceReplyDelivery: true,
+              reminderNoteAppended: false,
               guardedReplyPayloads: [],
               responseUsageLine: undefined,
             },

@@ -32,7 +32,7 @@ export async function prepareGitHubPublicationClaimWorkspace(
   }
   await params.placements.prepareWorkspaceResultClaim(claim);
   const first = rows[0]!;
-  const worktreeOwner = await readGitHubPublicationWorktreeOwner({
+  using worktreeOwner = await readGitHubPublicationWorktreeOwner({
     sessionId: first.session_id,
     sessionKey: first.session_key,
     agentId: first.agent_id,
@@ -42,6 +42,7 @@ export async function prepareGitHubPublicationClaimWorkspace(
       branch: first.branch,
     },
   });
+
   const { worktree } = worktreeOwner;
   if (!params.placements.validateWorkspaceResultClaim(claim)) {
     throw new Error("GitHub publication lost its workspace result claim before snapshot.");

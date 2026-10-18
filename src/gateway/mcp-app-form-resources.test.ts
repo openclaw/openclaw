@@ -25,6 +25,7 @@ import {
   type McpFormResourceUpload,
 } from "../agents/mcp-ui-resource.js";
 import { testing as viewTesting } from "../agents/mcp-ui-resource.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { QuestionManager } from "./question-manager.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
@@ -56,8 +57,42 @@ vi.mock("./question-session-access.js", () => ({
     return consume([undefined]);
   },
 }));
-vi.mock("./server-methods/sessions-files.js", () => ({
+vi.mock("./server-methods/sessions-files.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-methods/sessions-files.js")>()),
   resolveLocalSessionWorkspaceRoot: () => state.root,
+  withSessionFileRoot: async (
+    params: { sessionKey: string; agentId?: string },
+    cfg: OpenClawConfig,
+    consume: (
+      loaded: {
+        canonicalKey: string;
+        agentId: string;
+        storePath: string;
+        cfg: OpenClawConfig;
+        entry: { sessionId: string; updatedAt: number };
+      },
+      assertCurrent: () => void,
+    ) => Promise<unknown>,
+  ) =>
+    consume(
+      {
+        canonicalKey: params.sessionKey,
+        agentId: params.agentId ?? "main",
+        storePath: state.root,
+        cfg,
+        entry: { sessionId: "session-1", updatedAt: 0 },
+      },
+      () => {},
+    ),
+}));
+vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/sessions/session-entry-read-facts.js")>()),
+  readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
+    entries: request.sessionKeys.map((sessionKey) => ({
+      sessionKey,
+      entry: { sessionId: "session-1", updatedAt: 0 },
+    })),
+  }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-api.js", () => ({
   peekSessionMcpRuntime: () => undefined,

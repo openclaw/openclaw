@@ -5,7 +5,7 @@ import type {
   ModelProviderConfig,
   ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -67,7 +67,7 @@ export function readOllamaStringValue(value: unknown): string | undefined {
   return undefined;
 }
 
-function isOllamaApiKeyMarker(value: string): boolean {
+export function isOllamaApiKeyMarker(value: string | undefined): boolean {
   return value === "OLLAMA_API_KEY" || value === OLLAMA_DEFAULT_API_KEY;
 }
 
@@ -222,7 +222,7 @@ function hasMeaningfulExplicitOllamaConfig(
   if (!providerConfig) {
     return false;
   }
-  if (Array.isArray(providerConfig.models) && providerConfig.models.length > 0) {
+  if (providerConfig.models?.length) {
     return true;
   }
   const baseUrl = readProviderBaseUrl(providerConfig);
@@ -232,12 +232,10 @@ function hasMeaningfulExplicitOllamaConfig(
   return Boolean(
     readOllamaStringValue(providerConfig.apiKey) ||
     providerConfig.auth ||
-    typeof providerConfig.authHeader === "boolean" ||
-    (providerConfig.headers &&
-      typeof providerConfig.headers === "object" &&
-      Object.keys(providerConfig.headers).length > 0) ||
+    providerConfig.authHeader !== undefined ||
+    (providerConfig.headers && Object.keys(providerConfig.headers).length > 0) ||
     providerConfig.request ||
-    typeof providerConfig.injectNumCtxForOpenAICompat === "boolean",
+    providerConfig.injectNumCtxForOpenAICompat !== undefined,
   );
 }
 
@@ -257,7 +255,7 @@ export async function resolveOllamaDiscoveryResult(params: {
     return null;
   }
   const explicit = params.ctx.config.models?.providers?.ollama;
-  const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
+  const hasExplicitModels = Boolean(explicit?.models?.length);
   const hasMeaningfulExplicitConfig = hasMeaningfulExplicitOllamaConfig(explicit);
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
@@ -317,8 +315,7 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
-      // Keep configured settings, including tool workarounds, while filling missing native
-      // thinking metadata so mandatory-thinking models keep reasoning out of answer text.
+      // Keep configured settings while filling provider-owned model size and native thinking metadata.
       const configuredModels = new Map(explicit?.models?.map((model) => [model.id, model]));
       return {
         ...(modelIds
@@ -341,11 +338,23 @@ export async function resolveOllamaDiscoveryResult(params: {
               const sameEndpoint =
                 !configured.baseUrl ||
                 resolveOllamaApiBase(configured.baseUrl) === resolveOllamaApiBase(provider.baseUrl);
-              return (configured.api ?? api) === "ollama" &&
-                sameEndpoint &&
-                configured.thinkingLevelMap === undefined &&
-                model.thinkingLevelMap
-                ? [{ ...configured, thinkingLevelMap: model.thinkingLevelMap }]
+              if (!sameEndpoint) {
+                return [];
+              }
+              const thinkingLevelMap =
+                (configured.api ?? api) === "ollama" && configured.thinkingLevelMap === undefined
+                  ? model.thinkingLevelMap
+                  : undefined;
+              return thinkingLevelMap || model.parameterCount !== undefined
+                ? [
+                    {
+                      ...configured,
+                      ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
+                      ...(model.parameterCount !== undefined
+                        ? { parameterCount: model.parameterCount }
+                        : {}),
+                    },
+                  ]
                 : [];
             }
             return [

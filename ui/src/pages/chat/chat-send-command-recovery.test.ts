@@ -41,6 +41,14 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
       expect(findChatSendPayload(host)).toMatchObject({
         message: "keep the correction available",
         queueMode: command === "steer" ? "steer" : "interrupt",
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: "JVBERi0xLjQK",
+          },
+        ],
       });
       expect(host.chatMessage).toBe(draft);
       expect(host.chatAttachments).toEqual([expect.objectContaining({ id: attachment.id })]);
@@ -53,8 +61,10 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
   it.each(["started", "in_flight", "ok"] as const)(
     "retires the submitted draft after a successful %s acknowledgment",
     async (status) => {
+      const attachment = createStagedAttachment(`${command}-${status}`);
       const host = makeChatHost({
         chatMessage: draft,
+        chatAttachments: [attachment],
         chatRunId: "active-run",
         requestHandlers: { "chat.send": { runId: "command-run", status } },
       });
@@ -62,6 +72,18 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
       await handleSendChat(host);
 
       expect(host.chatMessage).toBe("");
+      expect(findChatSendPayload(host)).toMatchObject({
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "brief.pdf",
+            content: "JVBERi0xLjQK",
+          },
+        ],
+      });
+      expect(host.chatAttachments).toEqual([]);
+      expect(getChatAttachmentDataUrl(attachment)).toBeNull();
       expect(host.chatComposerFallbackByScope).toEqual({});
       expect(host.chatError).toBeFalsy();
       expect(host.chatRunId).toBe(
@@ -120,4 +142,22 @@ describe.each(["steer", "redirect"] as const)("handleSendChat /%s recovery", (co
     expect(fallback.message).toBe(draft);
     expect(getChatAttachmentDataUrl(fallback.attachments[0]!)).toBe(attachmentDataUrl);
   });
+
+  if (command === "redirect") {
+    it("does not send captured files into a conversation selected during the route wait", async () => {
+      const attachment = createStagedAttachment("redirect-route");
+      const host = makeChatHost({
+        chatMessage: draft,
+        chatAttachments: [attachment],
+        requestHandlers: { "chat.send": { status: "ok" } },
+      });
+      const send = handleSendChat(host);
+      host.sessionKey = "agent:main:other";
+      await send;
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toEqual([]);
+      expect(host.chatMessage).toBe(draft);
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    });
+  }
 });

@@ -1,14 +1,17 @@
 // Tests /steer target capture, prepared-path continuation, and visible fallback.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  ReplyBackendQueueMessageOptions,
+  ReplyOperation,
+} from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
-import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { createMockFollowupRun } from "./test-helpers.js";
 
@@ -27,7 +30,7 @@ function buildParams(commandBody: string) {
   return buildCommandTestParams(commandBody, baseCfg);
 }
 
-function beginActiveOperation(
+async function beginActiveOperation(
   sessionKey: string,
   sessionId = "session-active",
   authorityRun = createMockFollowupRun({ run: { sessionId, sessionKey } }),
@@ -37,8 +40,8 @@ function beginActiveOperation(
     provider: authorityRun.run.provider,
     model: authorityRun.run.model,
   };
-  operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(authorityRun));
-  const toolAuthorityFingerprint = operation.bindToolAuthorityRoute(authorityRoute);
+  await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(authorityRun));
+  const toolAuthorityFingerprint = await operation.bindToolAuthorityRouteAsync(authorityRoute);
   operation.setPhase("running");
   operation.attachBackend({
     kind: "embedded",
@@ -102,7 +105,7 @@ describe("handleSteerCommand", () => {
     const message = "stop the deploy\nand revert the migration first";
     const params = buildParams(`/steer ${message}`);
     params.opts = { toolsAllow: ["read"] };
-    const { toolAuthorityFingerprint } = beginActiveOperation(
+    const { toolAuthorityFingerprint } = await beginActiveOperation(
       "agent:main:main",
       "session-active",
       createCommandAuthorityRun(params),
@@ -121,7 +124,7 @@ describe("handleSteerCommand", () => {
   });
 
   it("prefers the native command target over the slash-command source", async () => {
-    beginActiveOperation("agent:main:discord:direct:target", "session-target");
+    await beginActiveOperation("agent:main:discord:direct:target", "session-target");
     const params = buildParams("/steer check the target");
     params.ctx.CommandSource = "native";
     params.ctx.CommandTargetSessionKey = "agent:main:discord:direct:target";
@@ -135,7 +138,7 @@ describe("handleSteerCommand", () => {
   });
 
   it("maps a text slash source lane to its active direct conversation", async () => {
-    beginActiveOperation("agent:main:telegram:direct:123", "session-direct-active");
+    await beginActiveOperation("agent:main:telegram:direct:123", "session-direct-active");
     const params = buildParams("/steer use the active direct lane");
     params.sessionKey = "agent:main:telegram:slash:123";
 

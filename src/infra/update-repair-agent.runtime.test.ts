@@ -12,7 +12,6 @@ import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth
 import { createAuthProfileStoreRuntime } from "../agents/auth-profiles/store.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
-import { captureRuntimeConfigAsyncReader } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getBoundLegacyPluginSdkResourceHost,
@@ -106,7 +105,12 @@ describe("post-failure repair execution", () => {
           });
         }
         const agentDir = state.statePath("agents", "owner", "agent");
-        const auth = createAuthProfileStoreRuntime(createExternalAuthRuntime(() => []));
+        const auth = createAuthProfileStoreRuntime(
+          createExternalAuthRuntime(
+            () => [],
+            async (_params, run) => run(),
+          ),
+        );
         const profileId = "fixture:subscription";
         auth.saveAuthProfileStore({
           version: 1,
@@ -396,10 +400,9 @@ describe("repair rehearsal environment", () => {
       database.exec("PRAGMA user_version = 999999");
       database.close();
       await expect(
-        withUpdateRepairEnvironment({ ...state, installRoot: state.workspaceDir }, async () => {
-          await captureRuntimeConfigAsyncReader()();
-          return prepareUpdateRepairInference(new AbortController().signal, 1_000);
-        }),
+        withUpdateRepairEnvironment({ ...state, installRoot: state.workspaceDir }, () =>
+          prepareUpdateRepairInference(new AbortController().signal, 1_000),
+        ),
       ).rejects.toThrow(/newer schema version 999999/u);
     });
   });

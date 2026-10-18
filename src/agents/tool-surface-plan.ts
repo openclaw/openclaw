@@ -6,6 +6,7 @@ import {
   isCodeModeEngagedForModel,
   resolveCodeModeConfig,
 } from "./code-mode.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import { normalizeToolPolicyName, readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { resolveAgentToolSearchRuntimeConfig } from "./tool-search-runtime-config.js";
@@ -21,7 +22,7 @@ export type AgentToolSurfacePlanParams = {
   agentId?: string;
   sessionKey?: string;
   forceDirectMessageTool: boolean;
-  model?: { compat?: unknown; toolSearchMode?: "tools" | false };
+  model?: { api?: string; compat?: unknown; toolSearchMode?: "tools" | false };
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
@@ -104,12 +105,14 @@ export function prepareAgentToolSurfacePresentation(
   return {
     codeMode: { ...plan.codeModeConfig, enabled: plan.codeModeControlsEnabled },
     toolSearch: { ...plan.toolSearchConfig, enabled: plan.toolSearchControlsEnabled },
+    toolSearchDirectoryLean: isLocalModelLeanEnabled(params),
     forceDirectMessageTool: params.forceDirectMessageTool,
   };
 }
 
 type CodeModeCatalogParams = Parameters<typeof applyCodeModeCatalog>[0];
 type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToolNames"> & {
+  model?: AgentToolSurfacePlanParams["model"];
   /** Required key (may be undefined for a config-less run): the tool-search
    * branches resolve their mode from this, so omitting it would silently
    * downgrade the run to schema defaults. */
@@ -122,6 +125,7 @@ export function applyAgentToolSurfaceCatalog({
   codeModeControlsEnabled,
   toolSearchConfig,
   toolSearchRuntimeConfig,
+  model,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // Reply delivery changes per turn; keep an authorized message tool visible
@@ -134,6 +138,12 @@ export function applyAgentToolSurfaceCatalog({
   return applyCatalog({
     ...catalogParams,
     config: codeModeControlsEnabled ? catalogParams.config : toolSearchRuntimeConfig,
-    directToolNames: ["message"],
+    directToolNames:
+      !codeModeControlsEnabled &&
+      catalogParams.config?.tools?.toolSearch === undefined &&
+      model?.api === "ollama" &&
+      model.toolSearchMode === "tools"
+        ? ["message", "web_search", "web_fetch", "memory_search", "memory_get"]
+        : ["message"],
   });
 }

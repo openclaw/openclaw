@@ -2,7 +2,10 @@ import type { WorkerSessionPlacementRecord, WorkerSessionTurnClaim } from "./pla
 import type { WorkerPlacementRedispatch } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerTurnAdmissionOptions } from "./worker-turn-admission.js";
-import type { WorkerTurnEnvironmentService } from "./worker-turn-failure.js";
+import type {
+  WorkerTurnEnvironmentService,
+  WorkerTurnPartialIdentity,
+} from "./worker-turn-failure.js";
 import type { WorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 export type WorkerTurnLauncherOptions = WorkerTurnAdmissionOptions & {
@@ -21,4 +24,5 @@ export type WorkerTurnLauncherOptions = WorkerTurnAdmissionOptions & {
   redispatchPlacement: WorkerPlacementRedispatch;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
+  persistAbandonedPartial?: (claim: WorkerTurnPartialIdentity) => Promise<void>;
 };

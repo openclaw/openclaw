@@ -28,6 +28,41 @@ function eventStream(...kinds: string[]) {
   );
 }
 
+function appHostEventStream(outcome: "complete" | "skipped" | "suite-only"): string {
+  const test = (kind: string, id: string) => ({
+    version: "6.3.0",
+    kind: "test",
+    payload: {
+      kind,
+      id,
+      name: "Fixture",
+      sourceLocation: { filePath: "fixture.swift", line: 1, column: 1 },
+      isParameterized: false,
+    },
+  });
+  const event = (kind: string, testID?: string) => ({
+    version: "6.3.0",
+    kind: "event",
+    payload: { kind, testID, instant: { absolute: 0, since1970: 0 }, messages: [] },
+  });
+  return (
+    [
+      test("suite", "fixture/suite"),
+      test("function", "fixture/function"),
+      event("runStarted"),
+      ...(outcome === "complete"
+        ? [event("testStarted", "fixture/function"), event("testEnded", "fixture/function")]
+        : outcome === "skipped"
+          ? [event("testSkipped", "fixture/function")]
+          : []),
+      event("testEnded", "fixture/suite"),
+      event("runEnded"),
+    ]
+      .map((record) => JSON.stringify(record))
+      .join("\n") + "\n"
+  );
+}
+
 function fixture(
   defaultExitCode = 0,
   waitForSignal: false | "swift" | "security" = false,
@@ -51,6 +86,10 @@ function fixture(
   fs.copyFileSync(
     path.join(repo, "scripts/lib/swift-toolchain.sh"),
     path.join(toolchain, "swift-toolchain.sh"),
+  );
+  fs.copyFileSync(
+    path.join(repo, "scripts/ci-collect-checks.sh"),
+    path.join(root, ".ci-harness/scripts/ci-collect-checks.sh"),
   );
   fs.symlinkSync(path.join(root, ".ci-harness"), path.join(workspace, ".ci-harness"));
   fs.symlinkSync(path.join(repo, "scripts"), path.join(workspace, "scripts"));
@@ -84,10 +123,11 @@ function awaitSignal(ownedKeychain) {
   setInterval(() => {}, 1000);
 }
 if (tool === 'security') {
-  assert.notEqual(env.HOME, ${JSON.stringify(home)});
-  for (const dir of [preferences, keychains]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
+  const ownedKeychains = env.HOME === ${JSON.stringify(home)}
+    ? path.join(path.dirname(env.TMPDIR), 'home/Library/Keychains') : keychains;
+  for (const dir of [preferences, ownedKeychains]) assert.equal(fs.statSync(dir).mode & 0o777, 0o700);
   const owned = args.at(-1);
-  assert.equal(path.dirname(owned), keychains);
+  assert.equal(path.dirname(owned), ownedKeychains);
   const operation = args[0];
   if (operation === 'delete-keychain' && env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
     const mode = env.OPENCLAW_PROFILE === 'default' ? 'default' : 'named';
@@ -246,6 +286,122 @@ if (tool === 'swift' && args[0] === 'test') {
 }
 
 describe.skipIf(process.platform === "win32")("native test launch ownership", () => {
+  it.each([
+    {
+      events: appHostEventStream("complete"),
+      inspection: "absent",
+      expected: 0,
+      hosts: 2,
+    },
+    { events: eventStream("runStarted", "runEnded"), inspection: "absent", expected: 1, hosts: 1 },
+    { events: appHostEventStream("skipped"), inspection: "absent", expected: 1, hosts: 1 },
+    { events: appHostEventStream("suite-only"), inspection: "absent", expected: 1, hosts: 1 },
+    {
+      events: appHostEventStream("complete"),
+      inspection: "unknown",
+      expected: 1,
+      hosts: 2,
+    },
+  ])(
+    "owns fresh app hosts and refuses incomplete proof ($inspection, $hosts hosts)",
+    ({ events, inspection, expected, hosts }) => {
+      const f = fixture(0, false, 0, "", "3", events);
+      const contents = path.join(f.root, "Fixture.app/Contents");
+      fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
+      const helper = fs
+        .readFileSync(path.join(f.root, "bin/swift"), "utf8")
+        .replace(
+          "if (tool === 'swift' && args[0] === 'test')",
+          "if (tool === 'OpenClawRecoveryTestHost')",
+        )
+        .replace(
+          "if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR)",
+          "if (false && env.OPENCLAW_TEST_MENU_CAPTURE_DIR)",
+        )
+        .replace(
+          "assert.ok(eventPath.startsWith(path.dirname(env.HOME) + path.sep));",
+          "assert.ok(eventPath.startsWith(path.dirname(env.TMPDIR) + path.sep));",
+        )
+        .replace("const eventReport = ", "let eventReport = ")
+        .replace(
+          "if (eventReport !== null)",
+          "eventReport = eventReport?.replaceAll('fixture/function', 'fixture/' + args[args.indexOf('--filter') + 1]); if (eventReport !== null)",
+        );
+      fs.writeFileSync(path.join(contents, "MacOS/OpenClawRecoveryTestHost"), helper, {
+        mode: 0o755,
+      });
+      const bundle = path.join(f.root, "compiled-tests");
+      fs.writeFileSync(bundle, "synthetic compiled test bundle");
+      fs.writeFileSync(
+        path.join(f.root, "bin/launchctl"),
+        `#!${process.execPath}
+if (process.argv[2] === 'print') {
+  console.error(${JSON.stringify(inspection === "absent" ? "Could not find service in domain" : "Inspection permission denied")});
+  process.exit(${inspection === "absent" ? 113 : 5});
+}
+`,
+        { mode: 0o755 },
+      );
+      const result = f.run(
+        `node '${path.join(repo, "scripts/test-macos-native.mts")}' app-host '${path.dirname(contents)}' '${bundle}' retry relaunch`,
+      );
+      expect(result.status, result.stderr).toBe(expected);
+      const calls = f.calls();
+      const invoked = calls.filter((call) => call.tool === "OpenClawRecoveryTestHost");
+      const home = invoked[0].env.HOME;
+      const ownedRoot = path.dirname(invoked[0].env.TMPDIR);
+      const state = invoked[0].env.OPENCLAW_STATE_DIR;
+      try {
+        expect(invoked).toHaveLength(hosts);
+        expect(home).toBe(fs.realpathSync(f.env.HOME));
+        const security = calls.filter((call) => call.tool === "security");
+        expect(
+          security.every((call) => call.env.HOME === home && call.env.CFFIXED_USER_HOME === home),
+        ).toBe(true);
+        const keychain = path.join(ownedRoot, "home/Library/Keychains/native-tests.keychain-db");
+        expect(security[0].args.at(-1)).toBe(keychain);
+        expect(
+          invoked.every(
+            (call) => call.settings.default === keychain && call.keychain?.locked === false,
+          ),
+        ).toBe(true);
+        expect(new Set(invoked.map((call) => call.env.HOME)).size).toBe(1);
+        expect(new Set(invoked.map((call) => call.env.OPENCLAW_PROFILE)).size).toBe(1);
+        expect(invoked[0].env.OPENCLAW_STATE_DIR).toBe(
+          path.join(home, `.openclaw-${invoked[0].env.OPENCLAW_PROFILE}`),
+        );
+        expect(invoked.map((call) => call.args[call.args.indexOf("--filter") + 1])).toEqual(
+          hosts === 2 ? ["retry", "relaunch"] : ["retry"],
+        );
+        const artifactLine = fs
+          .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
+          .split("\n")
+          .find((line) => line.startsWith("recovery-artifact-path="));
+        expect(artifactLine).toBeDefined();
+        const artifact = artifactLine!.slice("recovery-artifact-path=".length);
+        expect(fs.readdirSync(artifact).toSorted()).toEqual(
+          hosts === 2 ? ["phase-0-events.jsonl", "phase-1-events.jsonl"] : ["phase-0-events.jsonl"],
+        );
+        expect(fs.readFileSync(path.join(artifact, "phase-0-events.jsonl"), "utf8")).toContain(
+          "runEnded",
+        );
+        expect(fs.existsSync(home)).toBe(true);
+        expect(fs.existsSync(state)).toBe(inspection === "unknown");
+        expect(fs.existsSync(ownedRoot)).toBe(inspection === "unknown");
+        if (inspection === "unknown") {
+          expect(result.stderr).toContain("retirement is unverified");
+        }
+        if (hosts === 1) {
+          expect(result.stderr).toContain("Swift Testing did not finish its run");
+        }
+      } finally {
+        // Every executable was synthetic and joined; unknown inspection retained only fixture files.
+        fs.rmSync(state, { recursive: true, force: true });
+        fs.rmSync(ownedRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it.each(["scripts/test-macos-native.mts"])("routes %s through macOS CI", (changedPath) => {
     expect(detectChangedScope([changedPath])).toMatchObject({ runNode: true, runMacos: true });
   });
@@ -259,12 +415,12 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       const f = fixture(defaultCode, false, namedCode, "", logicalCpu, undefined, renderedCode);
       const result = f.run(swiftStep);
       expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(defaultCode || renderedCode || namedCode);
+      expect(result.status, result.stderr).toBe(defaultCode || renderedCode || namedCode ? 1 : 0);
       expect(result.stdout).toContain(
         `[macos-swift] Swift Testing parallelization width: ${expectedWidth}`,
       );
       const calls = f.calls().filter((call) => call.tool === "swift");
-      expect(calls).toHaveLength(defaultCode !== 0 ? 2 : renderedCode !== 0 ? 3 : 4);
+      expect(calls).toHaveLength(4);
       const [build, ...tests] = calls;
       const captures = fs
         .readFileSync(f.env.GITHUB_OUTPUT, "utf8")
@@ -408,7 +564,7 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
         });
       }
       expect(roots.size).toBe(tests.length);
-      expect(f.capturePath("default")).toBe(captures[defaultCode === 0 ? 1 : 0]);
+      expect(f.capturePath("default")).toBe(captures[1]);
       const captureUpload = workflow.jobs["macos-swift"].steps.find(
         (step: { name?: string }) => step.name === "Upload default-profile chat menu captures",
       );

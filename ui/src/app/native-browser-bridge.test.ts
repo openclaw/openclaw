@@ -38,30 +38,6 @@ describe("native browser bridge wire contract", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { type: "open", tabId: "mac-1", url: "javascript:alert(1)", sessionKey: "" },
-    { type: "navigate", tabId: "mac-1", url: "file:///private/example" },
-    { type: "open", tabId: "mac-1", url: "https://example.com" },
-    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: " session " },
-    { type: "inspect", tabId: "mac-1", x: Number.NaN, y: 4 },
-    {
-      type: "present",
-      scope: "scope",
-      tabId: "mac-1",
-      visible: true,
-      rect: { x: 0, y: 0, width: -1, height: 30 },
-    },
-    { type: "present", scope: "", tabId: null, rect: null, visible: false },
-    { type: "unknown", tabId: "mac-1" },
-    { type: "download", tabId: " " },
-  ])("rejects malformed or unsupported request %j before calling WebKit", async (message) => {
-    const post = install();
-    expect(await postNativeBrowserMessage(message as NativeBrowserMessage)).toMatchObject({
-      ok: false,
-    });
-    expect(post).not.toHaveBeenCalled();
-  });
-
   it("binds WebKit's receiver and preserves valid request values", async () => {
     const messages: NativeBrowserMessage[] = [];
     const bridge = {

@@ -13,6 +13,7 @@ import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { createSubagentRegistryMockState } from "./subagent-registry.mock-state.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -33,7 +34,11 @@ export function registerYieldFollowupAdoptionTests({
   bindWakeMutation: (entries: readonly SubagentRunRecord[]) => void;
   mocks: Pick<
     ReturnType<typeof createSubagentRegistryMockState>,
-    "callGateway" | "runSubagentAnnounceFlow" | "dispatchRecoveryAgent" | "entries"
+    | "callGateway"
+    | "runSubagentAnnounceFlow"
+    | "dispatchRecoveryAgent"
+    | "entries"
+    | "persistRegistryRows"
   >;
   findRequesterRun: (runId: string, requesterSessionKey?: string) => SubagentRunRecord | undefined;
   getLifecycleHandler: () => (event: LifecycleEvent) => void;
@@ -46,6 +51,7 @@ export function registerYieldFollowupAdoptionTests({
       ["lifecycle", "wait"].map((first) => ({ ending, first })),
     ),
   )("settles $ending once with $first arriving first", async ({ ending, first }) => {
+    mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
     const runId = "run-observation-order";
     const childSessionKey = "agent:main:subagent:child";
     const waitResult = createDeferred<Record<string, unknown>>();
@@ -130,6 +136,7 @@ export function registerYieldFollowupAdoptionTests({
   it.each([true, false])(
     "accepts late yield only without a kill owner (killed=%s)",
     async (killed) => {
+      mocks.persistRegistryRows.mockImplementation(saveSubagentRegistryChangesToSqlite);
       mockGatewayMethods(mocks.callGateway, { "agent.wait": { status: "pending" } });
       const runId = "run-late-yield";
       const childSessionKey = "agent:main:subagent:late-yield";
@@ -230,6 +237,10 @@ export function registerYieldFollowupAdoptionTests({
     const arrangeYieldingChild = async () => {
       mockGatewayMethods(mocks.callGateway, {
         "agent.wait": createDeferred<Record<string, unknown>>().promise,
+      });
+      mocks.entries[ORIGINAL_REQUESTER] = createSessionEntry({
+        sessionId: "sess-yield-requester",
+        lifecycleRevision: "revision-yield-requester",
       });
       mocks.entries[CHILD_SESSION_KEY] = createSessionEntry({
         sessionId: "sess-yield-followup",

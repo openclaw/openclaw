@@ -69,6 +69,7 @@ async function scanJsonlRange(params: {
   filePath: string;
   startOffset: number;
   endOffset: number;
+  checkProgress?: () => void;
   onRecord: (record: Record<string, unknown>) => void | Promise<void>;
 }): Promise<number> {
   if (params.endOffset <= params.startOffset) {
@@ -86,6 +87,7 @@ async function scanJsonlRange(params: {
   let processedOffset = params.startOffset;
   try {
     for await (const chunk of stream) {
+      params.checkProgress?.();
       const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       let lineStart = 0;
       for (let newline = bytes.indexOf(10); newline >= 0; newline = bytes.indexOf(10, lineStart)) {
@@ -146,6 +148,7 @@ type RollupScanInput = {
     afterSeq: number,
     throughSeq: number,
   ) => Promise<Array<{ seq: number; event: unknown }>>;
+  checkProgress?: () => void;
 };
 
 async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostRollupEntry> {
@@ -170,6 +173,7 @@ async function scanJsonlUsageRollup(params: RollupScanInput): Promise<UsageCostR
     filePath: params.file.filePath,
     startOffset,
     endOffset: params.file.size,
+    checkProgress: params.checkProgress,
     onRecord: (record) => {
       pendingRecords.push(record);
       if (pendingRecords.length === 128) {
@@ -277,7 +281,9 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
     let after = startSeq;
     const records: UsageRecord[] = [];
     while (after < endSeq) {
+      params.checkProgress?.();
       const page = await params.readRows(scope, after, endSeq);
+      params.checkProgress?.();
       if (page.length === 0) {
         throw new Error(`SQLite transcript changed while scanning: ${params.file.filePath}`);
       }
@@ -342,9 +348,10 @@ async function scanSqliteUsageRollup(params: RollupScanInput): Promise<UsageCost
   });
 }
 
-export function scanUsageCostRollupInWorker(
+export async function scanUsageCostRollupInWorker(
   params: RollupScanInput,
 ): Promise<UsageCostRollupEntry> {
+  params.checkProgress?.();
   return params.file.kind === "sqlite"
     ? scanSqliteUsageRollup(params)
     : scanJsonlUsageRollup(params);

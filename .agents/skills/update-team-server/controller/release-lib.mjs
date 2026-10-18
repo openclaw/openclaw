@@ -33,6 +33,7 @@ import {
   writeSync,
   watch,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { backup, DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -175,7 +176,7 @@ function cpuDegradedOption(requiredArgs) {
   reject("invalid performance waiver argument");
 }
 
-function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
+function snapshotCpuWaived(snapshot, allowCpuDegraded, label, deploymentAcceptance = false) {
   if (
     !snapshot ||
     typeof snapshot !== "object" ||
@@ -223,9 +224,44 @@ function snapshotCpuWaived(snapshot, allowCpuDegraded, label) {
       reject(`Gateway ${label} event-loop metric ${field} is malformed`);
   }
   if (!degraded) return false;
+  // Native CPU/utilization warnings describe load, not lost admission. Deployment
+  // can progress with bounded delay; profiling still requires an undegraded sample.
+  if (deploymentAcceptance && !reasons.includes("event_loop_delay") &&
+      Number.isFinite(eventLoop.delayP99Ms) && eventLoop.delayP99Ms < 1000 &&
+      Number.isFinite(eventLoop.delayMaxMs) && eventLoop.delayMaxMs < 1000) {
+    return false;
+  }
   // Native reasons own threshold policy. Never rewrite evidence or infer reasons from metrics.
   if (!allowCpuDegraded) reject(`Gateway ${label} snapshot is degraded`);
   return true;
+}
+
+function gatewayStartupPending(startup, startupCode, readiness, readinessCode) {
+  if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
+    reject("Gateway startupz proof is malformed");
+  }
+  if (readiness.agentDatabases !== undefined && !Array.isArray(readiness.agentDatabases)) {
+    reject("Gateway agent admission is malformed");
+  }
+  if (readiness.stateDatabase !== undefined || readiness.agentDatabases?.some(
+    value => value?.code !== "agent-database-inspection-pending")) {
+    reject("Gateway database admission failed");
+  }
+  const agentId = operatorProfile().modelAgent;
+  const refusal = readiness.agentDatabases?.find(value => value?.agentId === agentId);
+  if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
+    if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
+      reject("Gateway startupz recovery reason is malformed");
+    }
+    // Other agents may still inspect in the background after the marker's agent
+    // and critical initial startup are admitted by native readyz.
+    return startup.pendingReason !== "agent-database-inspection" ||
+      readinessCode !== "200" || readiness.ready !== true || Boolean(refusal);
+  }
+  if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
+    reject("Gateway startupz is not started");
+  }
+  return Boolean(refusal);
 }
 
 const appServerPolicyFields = ["mode", "approvalPolicy", "approvalsReviewer", "sandbox", "defaultWorkspaceDir"];
@@ -446,6 +482,15 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
   }
   auditTree(root, owner, sealed);
   const uiDigest = createHash("sha256").update(html).digest("hex");
+  const buildCacheInputsPath = join(root, "dist", "build-cache-inputs.json");
+  const buildCacheInputs = existsSync(buildCacheInputsPath) ? jsonFile(buildCacheInputsPath) : undefined;
+  if (buildCacheInputs && (buildCacheInputs.version !== 1 ||
+      !buildCacheInputs.steps || typeof buildCacheInputs.steps !== "object" ||
+      Array.isArray(buildCacheInputs.steps) ||
+      Object.entries(buildCacheInputs.steps).some(([label, hash]) =>
+        !label || typeof hash !== "string" || !/^[a-f0-9]{64}$/.test(hash)))) {
+    reject("release build cache input hashes are invalid");
+  }
   if (requireManifest) {
     const manifest = jsonFile(join(root, "deployment.json"));
     if (
@@ -455,7 +500,8 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
       manifest.controlUiSha256 !== uiDigest ||
       manifest.origin !== "https://github.com/openclaw/openclaw.git" ||
       manifest.schemaVersions?.state !== schemas.state ||
-      manifest.schemaVersions?.agent !== schemas.agent
+      manifest.schemaVersions?.agent !== schemas.agent ||
+      !isDeepStrictEqual(manifest.buildCacheInputs, buildCacheInputs)
     ) {
       reject("deployment manifest does not match the exact sealed candidate");
     }
@@ -465,6 +511,7 @@ function validateRelease(root, expected, owner, sealed, requireManifest = true) 
     buildId: build.buildId,
     controlUiSha256: uiDigest,
     schemaVersions: schemas,
+    ...(buildCacheInputs ? { buildCacheInputs } : {}),
   };
 }
 
@@ -498,21 +545,32 @@ function syncPath(pathname) {
 }
 
 function releaseFootprint(root) {
-  const footprint = { bytes: 0, entries: 0 };
-  const pending = [root];
-  const device = lstatSync(root).dev;
-  while (pending.length) {
-    const pathname = pending.pop(), entry = lstatSync(pathname);
-    if (entry.dev !== device) reject("release capacity inventory crosses filesystems");
-    footprint.bytes += Math.max(entry.size, entry.blocks * 512);
-    footprint.entries++;
-    if (entry.isDirectory()) {
-      for (const name of readdirSync(pathname)) pending.push(join(pathname, name));
-    } else if (!entry.isFile() && !entry.isSymbolicLink()) {
-      reject("release capacity inventory contains an unsupported entry");
-    }
+  // Keep the large metadata walk outside V8: its optimized lstatSync loop has crashed.
+  // Count every hardlink and sparse file's copy cost, rather than du's shared blocks.
+  const result = spawnSync("python3", ["-c", `
+import os, stat, sys
+pending = [sys.argv[1]]
+device = os.lstat(pending[0]).st_dev
+size = entries = 0
+while pending:
+    path = pending.pop()
+    entry = os.lstat(path)
+    if entry.st_dev != device:
+        sys.exit("release capacity inventory crosses filesystems")
+    size += max(entry.st_size, entry.st_blocks * 512)
+    entries += 1
+    if stat.S_ISDIR(entry.st_mode):
+        with os.scandir(path) as children:
+            pending.extend(child.path for child in children)
+    elif not (stat.S_ISREG(entry.st_mode) or stat.S_ISLNK(entry.st_mode)):
+        sys.exit("release capacity inventory contains an unsupported entry")
+print(size, entries)
+`, root], { encoding: "utf8" });
+  if (result.status !== 0) {
+    reject(`cannot measure release capacity: ${result.error?.message ?? result.stderr.trim()}`);
   }
-  return footprint;
+  const [bytes, entries] = result.stdout.trim().split(/\s+/).map(value => integer(value, "release footprint"));
+  return { bytes, entries };
 }
 
 function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runtimeHome) {
@@ -528,7 +586,7 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
   if (phase === "fetch") demands.push([mirror, footprint]);
   if (phase !== "activate") {
     demands.push([join(servingRoot, "staging"), phase === "fetch" ? empty : footprint]);
-    // Budget all planned copy costs conservatively, even though cache cleanup precedes staging.
+    // Budget full copy costs conservatively, including growth of the retained package store.
     // A shared filesystem owes their sum, not three independent free-space checks.
     const buildDemand = phase === "build" ? footprint : empty;
     demands.push([join(buildHome, "work"), buildDemand], [join(buildHome, "cache"), buildDemand]);
@@ -560,22 +618,59 @@ function releaseCapacity(phase, reference, mirror, buildHome, servingRoot, runti
   });
 }
 
-function sealTree(root) {
-  for (const entry of readdirSync(root, { withFileTypes: true })) {
-    const pathname = join(root, entry.name);
+async function sealTree(root) {
+  const pending = [root];
+  const files = [], directories = [];
+  let bytes = 0;
+  while (pending.length) {
+    const pathname = pending.pop();
     const metadata = lstatSync(pathname);
-    if (metadata.isSymbolicLink()) continue;
-    if (metadata.isDirectory()) {
-      sealTree(pathname);
+    if (metadata.isSymbolicLink()) {
       continue;
     }
-    if (!metadata.isFile()) reject(`cannot seal unsupported release entry: ${pathname}`);
-    chmodSync(pathname, (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
-    syncPath(pathname);
+    if (metadata.isDirectory()) {
+      directories.push(pathname);
+      for (const name of readdirSync(pathname)) {
+        pending.push(join(pathname, name));
+      }
+    } else if (!metadata.isFile()) {
+      reject(`cannot seal unsupported release entry: ${pathname}`);
+    } else {
+      files.push(pathname);
+      bytes += metadata.size;
+    }
+    chmodSync(pathname, metadata.isDirectory() || (metadata.mode & 0o111) !== 0 ? 0o555 : 0o444);
   }
-  // Publishing a directory name cannot make its unsynced descendants durable.
-  chmodSync(root, 0o555);
-  syncPath(root);
+  // Budget our tree at 100 entries/s and 8 MiB/s, never the filesystem's dirty data.
+  const budgetMs = 120_000 + (files.length + directories.length) * 10 + bytes / 8192;
+  const timeout = setTimeout(() => {
+    process.stderr.write("openclaw-team-release: sealed release durability deadline exceeded\n");
+    process.exit(124);
+  }, budgetMs);
+  const persist = async (paths) => {
+    let next = 0;
+    const results = await Promise.allSettled(Array.from({ length: Math.min(8, paths.length) }, async () => {
+      while (next < paths.length) {
+        const descriptor = await open(paths[next++], constants.O_RDONLY);
+        try {
+          await descriptor.sync();
+        } finally {
+          await descriptor.close();
+        }
+      }
+    }));
+    const failure = results.find(result => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
+  };
+  try {
+    await persist(files);
+    // Persist symlinks and directory entries without following links outside the tree.
+    await persist(directories);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function makeDirectoriesOwnerWritable(root) {
@@ -774,7 +869,8 @@ function runtimeOperation(action, root, values) {
     const version = target.kind === "bun" ? result.bun : result.node;
     const match = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(version ?? "");
     if (!match || !/^3\.\d+\.\d+$/.test(result.sqlite ?? "") ||
-        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 && Number(match[2]) < 4) :
+        (target.kind === "bun" ? Number(match[1]) < 1 || (Number(match[1]) === 1 &&
+          (Number(match[2]) < 4 || (Number(match[2]) === 4 && Number(match[3]) < 3))) :
           result.bun !== undefined || Number(match[1]) < 24 || (Number(match[1]) === 24 && Number(match[2]) < 15))) reject("Gateway runtime capability probe failed");
     return "RUNTIME_PROBED";
   }
@@ -2291,6 +2387,11 @@ function policy(pathname) {
   if (typeof model !== "string" || !model.includes("/") || model.trim() !== model) {
     reject("configured deployment model is invalid");
   }
+  const fallbacks = typeof modelValue === "object" ? modelValue?.fallbacks ?? [] : [];
+  if (!Array.isArray(fallbacks) || fallbacks.some(value =>
+    typeof value !== "string" || !value.includes("/") || value.trim() !== value)) {
+    reject("configured deployment model fallbacks are invalid");
+  }
   return {
     mode: config.tools.exec.mode,
     appServer: server,
@@ -2298,6 +2399,7 @@ function policy(pathname) {
     updateAuto: config.update.auto.enabled,
     clickclackCommandMenu: config.channels?.clickclack?.commandMenu,
     model,
+    fallbacks,
   };
 }
 
@@ -3972,14 +4074,14 @@ async function startupProfileCommand(command, input) {
     assert.equal(record.operation, input.operation);
     if (command === "strict-observation") {
       assert.equal(record.arm?.state, "pending");
-      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness");
-      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels");
+      const readinessWaived = snapshotCpuWaived(input.readiness, true, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(input.channels, true, "channels", true);
       assert(input.readiness.ready === true && Array.isArray(input.readiness.failing) &&
         input.readiness.failing.length === 0 && Number.isFinite(input.readiness.uptimeMs) && input.readiness.uptimeMs >= 0);
       verifyChannelAccounts(input.channels);
       assert.equal(input.convergenceState, readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY");
       assert.equal(input.channelState, channelsWaived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK");
-      if (readinessWaived || channelsWaived) return { operation: record.operation, outcome: "ineligible-load" };
+      if (input.readiness.eventLoop.degraded || input.channels.eventLoop.degraded) return { operation: record.operation, outcome: "ineligible-load" };
       registeredArm(directory, record);
       record.arm = { state: "strict-observed", readinessSha256: digest(JSON.stringify(input.readiness)),
         channelsSha256: digest(JSON.stringify(input.channels)) };
@@ -4313,6 +4415,7 @@ try {
         buildId: release.buildId,
         controlUiSha256: release.controlUiSha256,
         schemaVersions: release.schemaVersions,
+        ...(release.buildCacheInputs ? { buildCacheInputs: release.buildCacheInputs } : {}),
         createdAt: new Date().toISOString(),
       });
       result = JSON.stringify(release);
@@ -4474,9 +4577,45 @@ try {
     case "channels": {
       const allowCpuDegraded = cpuDegradedOption(1);
       const payload = jsonArgument(args[0]);
-      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels");
+      const waived = snapshotCpuWaived(payload, allowCpuDegraded, "channels", true);
       verifyChannelAccounts(payload);
       result = waived ? "CHANNELS_CPU_DEGRADED_OPERATOR_WAIVED" : "CHANNELS_OK";
+      break;
+    }
+    case "marker-readiness": {
+      const [rawStartup, startupCode, rawReadiness, readinessCode] = args;
+      if (args.length !== 4) {
+        reject("invalid marker readiness arguments");
+      }
+      const startup = JSON.parse(rawStartup), readiness = JSON.parse(rawReadiness);
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
+        result = "RECOVERING";
+        break;
+      }
+      if (!Array.isArray(readiness.failing) ||
+          readiness.failing.some(value => typeof value !== "string" || !value) ||
+          !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
+        reject("Gateway marker readyz is malformed");
+      }
+      // Convergence is a snapshot, not a promise that channel readiness stays
+      // green. Wait for native readiness again within the same startup deadline.
+      if (readinessCode === "503" && readiness.ready === false && readiness.failing.length) {
+        result = "RECOVERING";
+        break;
+      }
+      if (readinessCode !== "200" || readiness.ready !== true || readiness.failing.length) {
+        reject("Gateway marker readyz is inconsistent");
+      }
+      // CPU/utilization alone can reflect useful startup work. Native delay evidence
+      // and a bounded system.info response determine whether dispatch may proceed.
+      if (readiness.eventLoop === undefined) {
+        result = "RECOVERING";
+        break;
+      }
+      const delayPending = snapshotCpuWaived(readiness, true, "marker readiness", true);
+      const loop = readiness.eventLoop;
+      result = delayPending || loop.delayP99Ms === undefined || loop.delayMaxMs === undefined
+        ? "RECOVERING" : "READY";
       break;
     }
     case "probes": {
@@ -4497,21 +4636,12 @@ try {
       if (healthCode !== "200" || health.ok !== true || health.status !== "live") {
         reject("Gateway healthz proof is malformed or unhealthy");
       }
-      if (!Number.isFinite(startup.uptimeMs) || startup.uptimeMs < 0) {
-        reject("Gateway startupz proof is malformed");
-      }
-      if (startupCode === "503" && startup.ok === false && startup.status === "starting") {
-        if (typeof startup.pendingReason !== "string" || !startup.pendingReason) {
-          reject("Gateway startupz recovery reason is malformed");
-        }
+      if (gatewayStartupPending(startup, startupCode, readiness, readinessCode)) {
         result = "RECOVERING";
         break;
       }
-      if (startupCode !== "200" || startup.ok !== true || startup.status !== "started") {
-        reject("Gateway startupz is not started");
-      }
-      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness");
-      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels");
+      const readinessWaived = snapshotCpuWaived(readiness, allowCpuDegraded, "readiness", true);
+      const channelsWaived = snapshotCpuWaived(channels, allowCpuDegraded, "channels", true);
       if (!Array.isArray(readiness.failing) || !Number.isFinite(readiness.uptimeMs) || readiness.uptimeMs < 0) {
         reject("Gateway readiness identity is malformed");
       }
@@ -4542,6 +4672,7 @@ try {
       result = readinessWaived || channelsWaived ? "READY_CPU_DEGRADED_OPERATOR_WAIVED" : "READY";
       break;
     }
+    case "suspension-poll-failure":
     case "suspension-prepare-failure": {
       if (args.length !== 2 || args[0] !== "@stdin") reject("invalid suspension failure diagnostic arguments");
       const exit = integer(args[1], "suspension failure exit");
@@ -4558,6 +4689,21 @@ try {
       let payload;
       if (length < bytes.length) {
         try { payload = JSON.parse(bytes.toString("utf8", 0, length)); } catch {}
+      }
+      if (command === "suspension-poll-failure") {
+        // Protocol/authentication refusals remain fatal even when the subprocess
+        // deadline fired. Only transport uncertainty permits another read.
+        const error = payload?.ok === false ? payload.error : undefined;
+        const transport = error?.type === "gateway_transport_error" &&
+          typeof error.message === "string" &&
+          typeof payload.gateway?.url === "string" && typeof payload.gateway?.urlSource === "string" &&
+          (error.code === undefined || Number.isSafeInteger(error.code)) &&
+          (error.reason === undefined || typeof error.reason === "string") &&
+          (error.timeoutMs === undefined || (Number.isSafeInteger(error.timeoutMs) && error.timeoutMs > 0));
+        const transient = (exit === 1 || exit === 124) && transport && (error.kind === "timeout" ||
+          (error.kind === "closed" && [undefined, 1006, 1012].includes(error.code)));
+        result = transient || (exit === 124 && length === 0) ? "retry" : "fatal";
+        break;
       }
       result = "unclassified";
       if (exit === 124) result = "timeout-exit";
@@ -4631,15 +4777,12 @@ try {
     }
     case "suspension-prepare": {
       const response = jsonArgument(args[0]);
-      const expectedId = args[1];
-      const priorExpiry = args[2];
       if (!suspensionContract.validateGatewaySuspendPrepareResult(response))
         reject("Gateway suspension prepare result is malformed");
       if (response?.status === "busy") {
         const custody = suspensionWriteCustody(response);
         suspensionRetryDelay(response.retryAfterMs);
         const blockers = suspensionBlockers(response, "Gateway suspension busy result", custody);
-        if (expectedId !== undefined) reject("owned Gateway suspension renewal became busy");
         result = `BUSY - 0 ${response.activeCount} ${response.retryAfterMs} 0 ${blockers} ${custody}`;
         break;
       }
@@ -4654,15 +4797,6 @@ try {
         response.expiresAtMs <= Date.now() + 5_000
       ) {
         reject("terminal-preserving drain lease is expired or has insufficient headroom");
-      }
-      if (expectedId !== undefined && response.suspensionId !== expectedId) {
-        reject("renewed Gateway suspension identity changed");
-      }
-      if (
-        priorExpiry !== undefined &&
-        response.expiresAtMs <= integer(priorExpiry, "prior suspension expiry")
-      ) {
-        reject("renewed Gateway suspension expiry did not advance");
       }
       const blockers = suspensionBlockers(response, "Gateway suspension prepare result", custody);
       const retryAfterMs = draining ? suspensionRetryDelay(response.retryAfterMs) : 0;
@@ -4948,7 +5082,7 @@ try {
       syncPath(args[0]);
       break;
     case "seal-tree":
-      sealTree(args[0]);
+      await sealTree(args[0]);
       break;
     case "list-releases": {
       const root = args[0];

@@ -7,7 +7,7 @@ import { i18n } from "../../i18n/index.ts";
 import type { ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
-import { ChatGoal, clearGoalElapsedTimers } from "./components/chat-composer-goal.tsx";
+import { ChatGoal } from "./components/chat-composer-goal.tsx";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
 
 const goal: SessionGoal = {
@@ -47,7 +47,6 @@ describe("goal elapsed presentation", () => {
   });
 
   afterEach(() => {
-    clearGoalElapsedTimers();
     resetChatComposerState();
     document.body.replaceChildren();
     vi.useRealTimers();

@@ -17,7 +17,8 @@ const nativePlistHost = vi.hoisted(() => process.platform === "darwin");
 const loadedSystemdUnits = vi.hoisted(() =>
   vi.fn<typeof import("./systemd-loaded-unit-inventory.js").listLoadedSystemdUnits>(),
 );
-vi.mock("./systemd-loaded-unit-inventory.js", () => ({
+vi.mock("./systemd-loaded-unit-inventory.js", async (original) => ({
+  ...(await original<typeof import("./systemd-loaded-unit-inventory.js")>()),
   listLoadedSystemdUnits: loadedSystemdUnits,
 }));
 vi.mock("../process/exec.js", async (importOriginal) => {
@@ -214,6 +215,9 @@ describe("managed Gateway inventory projections", () => {
       ["named-node", 'node run --display-name "Home Gateway"'],
       ["exact-node", "node run --display-name gateway"],
       ["profile-node", "--profile gateway node run"],
+      ["install", "gateway install --runtime bun"],
+      ["profile-install", "--profile rescue gateway --profile rescue install"],
+      ["status", "gateway status --json"],
     ]) {
       await write(
         path.join(userDir, `${name}.service`),
@@ -296,6 +300,85 @@ describe("managed Gateway inventory projections", () => {
       expect(service).not.toHaveProperty("managedGateway");
     }
   });
+
+  it.each<{
+    args: string[];
+    gateway: boolean;
+    executable?: string;
+    executionPath?: string;
+    additionalCommands?: string[][];
+    name?: string;
+  }>([
+    { args: ["gateway", "install", "--runtime", "bun"], gateway: false },
+    { args: ["gateway", "run"], gateway: true },
+    { args: ["gateway", "--port", "18888"], gateway: true },
+    { args: ["gateway", "--token", "install"], gateway: true },
+    { args: ["gateway", "--unknown", "install"], gateway: true },
+    {
+      executable: "/opt/openclaw/bin/custom-service",
+      args: ["gateway", "install"],
+      gateway: true,
+    },
+    {
+      executable: "/usr/bin/node",
+      args: ["/opt/openclaw/custom-service.js", "gateway", "install"],
+      gateway: true,
+    },
+    { executable: "/usr/bin/openclaw-gateway", args: ["gateway", "install"], gateway: true },
+    {
+      executable: "/usr/bin/node",
+      args: ["--eval", "import('/opt/openclaw/dist/entry.js')", "gateway"],
+      gateway: true,
+    },
+    {
+      args: ["gateway", "install"],
+      additionalCommands: [["/usr/bin/openclaw", "gateway", "run"]],
+      gateway: true,
+    },
+    { args: ["gateway", "install"], additionalCommands: [["/opt/custom-service"]], gateway: true },
+    {
+      args: ["gateway", "install"],
+      additionalCommands: [["/usr/bin/openclaw", "gateway", "status"]],
+      gateway: false,
+    },
+    { args: ["gateway", "install"], name: "openclaw-gateway.service", gateway: true },
+    { args: ["gateway", "install"], executionPath: "/opt/custom-service", gateway: true },
+  ])(
+    "uses captured arguments to classify loaded services: $args",
+    async ({
+      args,
+      gateway,
+      executable = "/usr/bin/openclaw",
+      executionPath = executable,
+      additionalCommands = [],
+      name = "custom-maintenance.service",
+    }) => {
+      Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
+      const home = tempDirs.make("managed-systemd-command-", os.tmpdir());
+      isolateNativeRoots(home);
+      const unitPath = `/run/systemd/transient/${name}`;
+      loadedSystemdUnits.mockImplementation(async (scope) =>
+        scope === "system"
+          ? [
+              {
+                name,
+                fragmentPath: unitPath,
+                commands: [
+                  { path: executionPath, programArguments: [executable, ...args] },
+                  ...additionalCommands.map((argv) => ({ path: argv[0]!, programArguments: argv })),
+                ],
+              },
+            ]
+          : [],
+      );
+      const result = await listManagedOpenClawGatewayServices(
+        { HOME: home },
+        { requireComplete: true },
+      );
+      expect(result.errors).toEqual([]);
+      expect(result.services.map((service) => service.label)).toEqual(gateway ? [name] : []);
+    },
+  );
 
   it("keeps discovered native selectors independent of display details", async () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
@@ -607,6 +690,7 @@ describe("complete inventory admission", () => {
   it.each([
     ["linux", ".config/systemd/user/custom-worker.service", false],
     ["linux", ".config/systemd/user/openclaw-gateway.service", true],
+    ["linux", ".config/systemd/user/clawdbot-gateway.service.bak", true],
   ] as const)(
     "handles unreadable paths in complete %s inventories: %s",
     async (platform, relative, required) => {

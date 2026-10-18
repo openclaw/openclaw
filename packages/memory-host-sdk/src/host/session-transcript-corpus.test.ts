@@ -2,8 +2,12 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
+import { deserialize } from "node:v8";
+import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clearConfigCache,
+  clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi } from "vitest";
@@ -18,6 +22,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../../../src/state/openclaw-agent-db.js";
 import { tableExists } from "../../../../src/state/openclaw-state-db-schema-helpers.js";
+import { openOpenClawStateDatabase } from "../../../../src/state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../../../src/test-utils/openclaw-test-state.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -40,6 +45,72 @@ function pauseDirectoryDiscovery(sessionsDir: string) {
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
+  it("reuses writable admission without entry reads while observing committed corpus changes", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:corpus-admission";
+      const scope = { sessionKey, storePath: path.join(state.sessionsDir(), "sessions.json") };
+      await upsertSessionEntryCore(scope, { sessionId: "corpus-admission", updatedAt: 1 });
+
+      const commands: string[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- call preserves the intercepted worker receiver.
+      const nativePost = Worker.prototype.postMessage;
+      using _ = vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
+        this: Worker,
+        request,
+        transferList,
+      ) {
+        if (
+          isRecord(request) &&
+          request.type === "execute" &&
+          request.input instanceof Uint8Array
+        ) {
+          const command: unknown = deserialize(request.input);
+          if (isRecord(command) && typeof command.type === "string") {
+            commands.push(command.type);
+          }
+        }
+        nativePost.call(this, request, transferList);
+      });
+      const options = { includeContentRevision: false };
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
+        expect.objectContaining({ sessionKey, sessionKind: "interactive" }),
+      ]);
+
+      await upsertSessionEntryCore(scope, { heartbeatIsolatedBaseSessionKey: "agent:main:main" });
+      await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).resolves.toEqual([
+        expect.objectContaining({ sessionKey, sessionKind: "heartbeat" }),
+      ]);
+      expect(commands).toContain("session.entry.patch.commit");
+      expect(commands.filter((command) => command === "session.entry.read")).toEqual([]);
+    });
+  });
+
+  it("discovers the caller's configured store without a global runtime snapshot", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("memory-session-corpus", "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey: "agent:main:chat:owned", storePath },
+        { sessionId: "owned", updatedAt: 1 },
+      );
+      clearRuntimeConfigSnapshot();
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
+        includeContentRevision: false,
+        readOnly: true,
+      });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        sessionId: "owned",
+        sessionKey: "agent:main:chat:owned",
+        storePath,
+        transcriptSource: "sqlite",
+      });
+    });
+  });
+
   it.each([
     { includeContentRevision: true, archiveTablePresent: true, readOnly: false },
     { includeContentRevision: false, archiveTablePresent: true, readOnly: false },
@@ -230,6 +301,34 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       await expect(listSessionTranscriptCorpusEntriesForAgent("main", options)).rejects.toThrow(
         "openclaw doctor --fix",
       );
+    });
+  });
+
+  it("reads worker content revisions without claiming an agent database lease", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:revision-corpus";
+      const storePath = path.join(state.sessionsDir(), "sessions.json");
+      await upsertSessionEntryCore(
+        { sessionKey, storePath },
+        { sessionId: "revision-corpus", updatedAt: 10 },
+      );
+      const { path: agentPath } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const leases = openOpenClawStateDatabase({ env: state.env }).db.prepare(
+        "SELECT lease_id FROM agent_database_leases WHERE path = ?",
+      );
+      const admitted = new Set(leases.all(agentPath).map((row) => row.lease_id));
+
+      const entries = await listSessionTranscriptCorpusEntriesForAgent("main", {
+        config: { session: { store: storePath } },
+        includeContentRevision: true,
+      });
+
+      expect(entries).toEqual([
+        expect.objectContaining({ sessionKey, contentRevision: expect.stringMatching(/^sqlite:/) }),
+      ]);
+      // Pooled history Workers outlive the request; a writable open would leave their lease.
+      expect(leases.all(agentPath).filter((row) => !admitted.has(row.lease_id))).toEqual([]);
     });
   });
 

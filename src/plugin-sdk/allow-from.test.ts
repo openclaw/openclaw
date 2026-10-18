@@ -100,16 +100,30 @@ describe("resolveBasicAllowFromEntries", () => {
 
 describe("mapAllowlistResolutionInputs", () => {
   it("maps inputs sequentially and preserves order", async () => {
+    const firstStarted = Promise.withResolvers<void>();
+    const firstResolution = Promise.withResolvers<void>();
     const visited: string[] = [];
-    const result = await mapAllowlistResolutionInputs({
+    const result = mapAllowlistResolutionInputs({
       inputs: ["one", "two", "three"],
       mapInput: async (input) => {
         visited.push(input);
+        if (input === "one") {
+          firstStarted.resolve();
+          await firstResolution.promise;
+        }
         return input.toUpperCase();
       },
     });
 
+    try {
+      await Promise.race([firstStarted.promise, result]);
+      expect(visited).toEqual(["one"]);
+    } finally {
+      firstResolution.resolve();
+      await result;
+    }
+
     expect(visited).toEqual(["one", "two", "three"]);
-    expect(result).toEqual(["ONE", "TWO", "THREE"]);
+    expect(await result).toEqual(["ONE", "TWO", "THREE"]);
   });
 });

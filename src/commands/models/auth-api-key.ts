@@ -4,13 +4,13 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   resolveAuthProfileOrder,
-  resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "../../agents/auth-profiles.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStore,
+  prepareCandidateAuthProfileCredentialRead,
 } from "../../agents/auth-profiles/candidate-stores.js";
 import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
@@ -28,6 +28,7 @@ import { resolvePathViaExistingAncestorSync } from "../../infra/boundary-path.js
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
+import { AuthProfileCredentialPublicationPendingError } from "../../state/user-model-account-authority.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -90,7 +91,7 @@ export async function saveModelProviderApiKey(params: {
   const connectionId = params.profileId ? undefined : configuredKey(config);
   const connectionBinding =
     connectionId === undefined ? undefined : configuredBinding(config, connectionId);
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const replacementId = !connectionId
     ? resolveAuthProfileOrder({ cfg: config, store, provider }).find((id) => {
         const credential = store.profiles[id];
@@ -117,7 +118,10 @@ export async function saveModelProviderApiKey(params: {
   const agentDir = connectionId
     ? undefined
     : store.profiles[profileId]
-      ? resolvePersistedAuthProfileOwnerAgentDir({ agentDir: params.agentDir, profileId })
+      ? await resolvePersistedAuthProfileOwnerAgentDirAsync({
+          agentDir: params.agentDir,
+          profileId,
+        })
       : params.agentDir;
   const localCandidates = connectionId
     ? (await listCandidateAuthProfileStores({ cfg: config })).filter(
@@ -126,12 +130,13 @@ export async function saveModelProviderApiKey(params: {
           resolvePathViaExistingAncestorSync(resolveSharedAuthStorePath()),
       )
     : [];
+  const readLocalCredentials = await Promise.all(
+    localCandidates.map((candidate) =>
+      prepareCandidateAuthProfileCredentialRead(candidate, profileId),
+    ),
+  );
   const validateSharedBinding = () => {
-    if (
-      localCandidates.some(
-        (candidate) => loadCandidateAuthProfileStore(candidate)?.profiles[profileId],
-      )
-    ) {
+    if (readLocalCredentials.some((reader) => reader.readCurrentCredential())) {
       throw new Error(
         "An agent already overrides this shared key. Remove that agent's override before replacing the shared key.",
       );
@@ -139,59 +144,76 @@ export async function saveModelProviderApiKey(params: {
   };
   const validateReplacement = (existing: AuthProfileCredential | undefined) => {
     params.assertCurrent?.();
-    validateCurrentCredential(existing);
     validateSharedBinding();
+    validateCurrentCredential(existing);
   };
-  validateReplacement(store.profiles[profileId]);
-  await upsertAuthProfileWithLockOrThrow({
-    profileId,
-    credential: { type: "api_key", provider, key },
-    agentDir,
-    preserveApiKeyMetadata: true,
-    resetFailureState: true,
-    validateCurrentCredential: validateReplacement,
-    assertCurrent: params.assertCurrent,
+  const withCurrentCredentials = async <T>(operation: () => T | Promise<T>): Promise<T> => {
+    for (;;) {
+      try {
+        return await operation();
+      } catch (error) {
+        // Only a direct pre-effect refusal is retryable; cleanup failures remain failures.
+        if (!(error instanceof AuthProfileCredentialPublicationPendingError)) {
+          throw error;
+        }
+        await error.waitUntilCurrent();
+        params.assertCurrent?.();
+      }
+    }
+  };
+  await withCurrentCredentials(async () => {
+    validateReplacement(store.profiles[profileId]);
+    await upsertAuthProfileWithLockOrThrow({
+      profileId,
+      credential: { type: "api_key", provider, key },
+      agentDir,
+      preserveApiKeyMetadata: true,
+      resetFailureState: true,
+      validateCurrentCredential: validateReplacement,
+      assertCurrent: params.assertCurrent,
+    });
   });
   const application = createRuntimeConfigWriteApplication(
     captureGatewayRootWorkAdmissionContinuationScope()?.run,
   );
   let configChanged = false;
   await updateConfig(
-    (current) => {
-      params.assertCurrent?.();
-      const id = params.profileId ? undefined : configuredKey(current);
-      if (
-        !params.profileId &&
-        (id !== connectionId ||
-          (id !== undefined &&
-            !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
-      ) {
-        throw new Error(
-          "The provider connection changed during the key update. Reopen the connection and save the key again",
-        );
-      }
-      validateSharedBinding();
-      let next = applyAuthProfileConfig(current, {
-        ...current.auth?.profiles?.[profileId],
-        profileId,
-        provider,
-        mode: "api_key",
-      });
-      if (id && next.models?.providers?.[id]) {
-        next = {
-          ...next,
-          models: {
-            ...next.models,
-            providers: {
-              ...next.models.providers,
-              [id]: { ...next.models.providers[id], apiKey: profileId },
+    (current) =>
+      withCurrentCredentials(() => {
+        validateSharedBinding();
+        params.assertCurrent?.();
+        const id = params.profileId ? undefined : configuredKey(current);
+        if (
+          !params.profileId &&
+          (id !== connectionId ||
+            (id !== undefined &&
+              !isDeepStrictEqual(configuredBinding(current, id), connectionBinding)))
+        ) {
+          throw new Error(
+            "The provider connection changed during the key update. Reopen the connection and save the key again",
+          );
+        }
+        let next = applyAuthProfileConfig(current, {
+          ...current.auth?.profiles?.[profileId],
+          profileId,
+          provider,
+          mode: "api_key",
+        });
+        if (id && next.models?.providers?.[id]) {
+          next = {
+            ...next,
+            models: {
+              ...next.models,
+              providers: {
+                ...next.models.providers,
+                [id]: { ...next.models.providers[id], apiKey: profileId },
+              },
             },
-          },
-        };
-      }
-      configChanged = !isDeepStrictEqual(current, next);
-      return next;
-    },
+          };
+        }
+        configChanged = !isDeepStrictEqual(current, next);
+        return next;
+      }),
     undefined,
     params.assertCurrent,
     attachRuntimeConfigWriteApplication({ assertCurrent: params.assertCurrent }, application),

@@ -103,6 +103,8 @@ FAILURE_MESSAGE=""
 FAILURE_SIGNAL=""
 gateway_pid=""
 plugin_registry_pid=""
+formerly_bundled_doctor_pid=""
+candidate_selector_registry=0
 missing_plugin_registry_pid=""
 clawhub_fixture_pid=""
 mock_openai_pid=""
@@ -501,6 +503,12 @@ watchos_reconnect_restarted_candidate() {
 }
 
 cleanup() {
+  if [ -n "$formerly_bundled_doctor_pid" ]; then
+    # Signal the responsive managed owner, then join before removing its dependencies.
+    kill -TERM "$formerly_bundled_doctor_pid" 2>/dev/null || true
+    wait "$formerly_bundled_doctor_pid" || true
+    formerly_bundled_doctor_pid=""
+  fi
   stop_gateway
   openclaw_e2e_stop_process "${plugin_registry_pid:-}"
   openclaw_e2e_stop_process "${missing_plugin_registry_pid:-}"
@@ -801,6 +809,9 @@ NODE
       registry_args+=("@openclaw/codex" "$baseline_plugin_version" "$native_assignment_tarball")
     fi
     registry_args+=("openclaw" "$candidate_version" "$CANDIDATE_SPEC")
+  elif [ "$stage" = "candidate" ] && extended_stable_selector_update "$candidate_version"; then
+    prepare_candidate_tarball || return "$?"
+    registry_args+=("openclaw" "$candidate_version" "$candidate_tarball")
   fi
 
   if configured_plugin_installs_enabled; then
@@ -829,7 +840,17 @@ NODE
     fi
   fi
 
-  if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Extended-stable updaters resolve the candidate through their own selector.
+  local selector_registry=0
+  if [ "$stage" = "candidate" ] && is_extended_stable_release_version "$candidate_version" &&
+    { [ "$SCENARIO" = "legacy-operator-state" ] || extended_stable_selector_update "$candidate_version"; }; then
+    selector_registry=1
+    if [ "$SCENARIO" != "legacy-operator-state" ] && [ -z "${OPENCLAW_NPM_REGISTRY_DIST_TAGS+x}" ]; then
+      registry_dist_tags="beta=$candidate_version"
+    fi
+    registry_dist_tags+="${registry_dist_tags:+,}extended-stable=$candidate_version"
+  fi
+  if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$selector_registry" = "1" ]; then
     export OPENCLAW_NPM_REGISTRY_DIST_TAGS="$registry_dist_tags"
   fi
   openclaw_prepublish_plugin_registry_start \
@@ -839,7 +860,8 @@ NODE
     "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256:-}" \
     "$fixture_root" \
     plugin_registry_pid \
-    ${registry_args[@]+"${registry_args[@]}"}
+    ${registry_args[@]+"${registry_args[@]}"} || return "$?"
+  candidate_selector_registry="$selector_registry"
 }
 
 seed_legacy_runtime_deps_symlink() {
@@ -1069,11 +1091,37 @@ assert_schema_outcome() {
     "$ARTIFACT_ROOT/schema-after.json"
 }
 
+start_formerly_bundled_doctor() {
+  echo "==> upgrade-survivor:formerly-bundled-doctor" >&3
+  json_event formerly-bundled-doctor started
+  node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
+    --managed "$candidate_version" >"$ARTIFACT_ROOT/formerly-bundled-doctor.log" 2>&1 &
+  formerly_bundled_doctor_pid="$!"
+}
+
+join_formerly_bundled_doctor() {
+  local previous_phase="$CURRENT_PHASE" doctor_status=0
+  CURRENT_PHASE="formerly-bundled-doctor"
+  wait "$formerly_bundled_doctor_pid" || doctor_status=$?
+  formerly_bundled_doctor_pid=""
+  cat "$ARTIFACT_ROOT/formerly-bundled-doctor.log" >&3
+  [ "$doctor_status" -eq 0 ] || return "$doctor_status"
+  json_event formerly-bundled-doctor passed
+  CURRENT_PHASE="$previous_phase"
+}
+
 assert_legacy_operator_update_noop() {
   # An explicit tarball requests a refresh; the registry's exact candidate
   # version exercises the operator's already-current path without a reinstall.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update \
-    --tag "$candidate_version" --yes --no-restart --json \
+  local update_args=(update --yes --no-restart --json)
+  local update_env=(env)
+  if is_extended_stable_release_version "$candidate_version"; then
+    # Retain the inferred monthly channel and opt into its loopback selector.
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
+  else
+    update_args+=(--tag "$candidate_version")
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" \
     >"$ARTIFACT_ROOT/update-noop.json" 2>"$ARTIFACT_ROOT/update-noop.err"
   node --input-type=module - "$ARTIFACT_ROOT/update-noop.json" <<'NODE'
 import assert from "node:assert/strict";
@@ -1435,6 +1483,27 @@ candidate_requires_stable_channel() {
     ! is_extended_stable_release_version "$1"
 }
 
+# Shipped extended-stable updaters refuse explicit targets, so an update between
+# extended-stable releases resolves the candidate through the real selector.
+extended_stable_selector_update() {
+  is_extended_stable_release_version "$baseline_version" &&
+    is_extended_stable_release_version "$1"
+}
+
+ensure_candidate_selector_registry() {
+  [ "$candidate_selector_registry" = "1" ] && return 0
+  if [ -n "$plugin_registry_pid" ]; then
+    echo "candidate registry does not serve the extended-stable selector" >&2
+    return 1
+  fi
+  prepare_candidate_tarball || return "$?"
+  OPENCLAW_NPM_REGISTRY_DIST_TAGS="extended-stable=$candidate_version" \
+    openclaw_prepublish_plugin_registry_start "" "" "$candidate_version" "" \
+    "$ARTIFACT_ROOT/candidate-selector-registry" plugin_registry_pid \
+    openclaw "$candidate_version" "$candidate_tarball" || return "$?"
+  candidate_selector_registry=1
+}
+
 update_candidate() {
   local after_repair="${1:-0}"
   local expected_version="${3:-$candidate_version}"
@@ -1456,7 +1525,13 @@ update_candidate() {
   if [ -z "$update_spec" ]; then
     update_spec="$(candidate_update_spec)"
   fi
-  echo "Updating baseline $baseline_spec to target $CANDIDATE_KIND:$update_spec ($expected_version)"
+  local selector_update=0
+  if [ "$after_repair" != "1" ] && [ -z "${2:-}" ] && extended_stable_selector_update "$expected_version"; then
+    selector_update=1
+    echo "Updating baseline $baseline_spec to extended-stable selector $expected_version"
+  else
+    echo "Updating baseline $baseline_spec to target $CANDIDATE_KIND:$update_spec ($expected_version)"
+  fi
   local update_start=""
   local update_end=""
   local previous_service_pid="" previous_systemctl_lines=0 verify_restart=0
@@ -1481,6 +1556,13 @@ update_candidate() {
     -u OPENCLAW_GATEWAY_PASSWORD
     -u OPENCLAW_ALLOW_ROOT
   )
+  if [ "$selector_update" = "1" ]; then
+    ensure_candidate_selector_registry || return "$?"
+    # Keep the inferred extended-stable channel; the bare package name admits
+    # the loopback registry to the old updater's selector lookup.
+    update_args=(update --yes --json)
+    update_env+=(OPENCLAW_UPDATE_PACKAGE_SPEC=openclaw)
+  fi
   # Historical updaters can restart before reporting denied capabilities.
   # Prove migrations first; only the current updater performs the auth restart.
   if [ "$verify_restart" != "1" ]; then
@@ -2287,6 +2369,8 @@ if [ "$SCENARIO" = "cron-owner-doctor" ]; then
   phase assert-cron-owner-idempotence node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs assert-idempotent
   phase prepare-cron-owner-runtime node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs prepare-runtime
   OPENCLAW_SKIP_CRON=0 phase cron-owner-candidate-gateway-start start_gateway
+  # /readyz can precede optional-agent admission; continuity reads require settled startup.
+  phase cron-owner-candidate-startup probe_gateway_endpoint /startupz started "$ARTIFACT_ROOT/cron-owner-startup.json"
   phase cron-owner-candidate-gateway-probes check_gateway_probes
   phase run-cron-owner-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
     node scripts/e2e/lib/upgrade-survivor/cron-owner-doctor.mjs run-runtime
@@ -2718,6 +2802,9 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
   if [ "$native_assignment_enabled" = "1" ]; then
     phase verify-native-assignment-recovery node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs live "$candidate_version"
   fi
+  # This proof owns separate state and a private registry; the candidate no-op
+  # and service checks only share its immutable installed package and archives.
+  start_formerly_bundled_doctor
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # The restart shim has no native service cgroup. After proving the published
     # managed restart, exercise candidate no-op convergence with a foreground Gateway.
@@ -2733,8 +2820,7 @@ if [ "$SCENARIO" = "legacy-operator-state" ]; then
     phase legacy-operator-noop-service-status check_gateway_status
   fi
   phase legacy-operator-doctor-clean assert_legacy_operator_doctor_clean
-  phase formerly-bundled-doctor node scripts/e2e/lib/upgrade-survivor/formerly-bundled-plugin-doctor.mjs \
-    "$candidate_version"
+  join_formerly_bundled_doctor
 fi
 if [ "$SCENARIO" = "watchos-direct-node" ]; then
   phase watchos-candidate-reconnect watchos_reconnect_candidate

@@ -32,7 +32,7 @@ scenario:
       requiredProviderMode: mock-openai
       channelId: qa-failed-terminal
       promptSnippet: Failed tool terminal recovery QA check
-      retryNeedle: The previous assistant turn completed its tool calls but did not produce a user-visible answer.
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
       expectedMarker: QA-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK"
 

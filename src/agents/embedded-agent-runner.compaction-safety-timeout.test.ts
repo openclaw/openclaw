@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { CompactResult, ContextEngine } from "../context-engine/types.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -30,6 +31,61 @@ afterEach(() => {
 });
 
 describe("compaction safety timeout", () => {
+  it.each([
+    { acceptedHostParams: ["onProgress"], reporting: true },
+    { acceptedHostParams: [], reporting: false },
+    { acceptedHostParams: undefined, reporting: false },
+  ])("keeps progress opt-in for $acceptedHostParams", async ({ acceptedHostParams, reporting }) => {
+    const completion = createDeferred<CompactResult>();
+    let receivedParams: Parameters<CompactFn>[0] | undefined;
+    const engine = makeEngine((params) => {
+      receivedParams = params;
+      return completion.promise;
+    });
+    engine.info.acceptedHostParams = acceptedHostParams;
+    const pending = compactContextEngineWithSafetyTimeout(engine, baseParams, 30);
+    if (reporting) {
+      expect(receivedParams?.onProgress).toBeTypeOf("function");
+    } else {
+      expect(receivedParams).not.toHaveProperty("onProgress");
+    }
+    const assertion = reporting
+      ? expect(pending).resolves.toBe(result)
+      : expect(pending).rejects.toThrow("Compaction timed out");
+
+    await vi.advanceTimersByTimeAsync(20);
+    receivedParams?.onProgress?.();
+    await vi.advanceTimersByTimeAsync(20);
+    receivedParams?.onProgress?.();
+    await vi.advanceTimersByTimeAsync(20);
+    completion.resolve(result);
+    await assertion;
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("bounds reporting plugins at the existing overall ceiling", async () => {
+    let progress: (() => void) | undefined;
+    let signal: AbortSignal | undefined;
+    const engine = makeEngine((params) => {
+      progress = params.onProgress;
+      signal = params.abortSignal;
+      return createDeferred<CompactResult>().promise;
+    });
+    engine.info.acceptedHostParams = ["onProgress"];
+    const pending = compactContextEngineWithSafetyTimeout(engine, baseParams, 30);
+    const assertion = expect(pending).rejects.toThrow("Compaction timed out");
+    for (let elapsed = 0; elapsed < 280; elapsed += 20) {
+      await vi.advanceTimersByTimeAsync(20);
+      progress?.();
+    }
+    expect(signal?.aborted).toBe(false);
+    await vi.advanceTimersByTimeAsync(20);
+    await assertion;
+    expect(signal?.aborted).toBe(true);
+    progress?.();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("retains the default timeout when cancellation cleanup throws", async () => {
     const onCancel = vi.fn(() => {
       throw new Error("abortCompaction failed");

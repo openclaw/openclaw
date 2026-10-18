@@ -1,30 +1,81 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
+import { createComponent, createSignal, flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import { renderSessionMenuItem, renderCloudProfileMenuItems } from "./cloud-target.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { CloudProfileMenuItems, SessionMenuItem } from "./cloud-target-view.tsx";
+import { requestPlaceCatalog, type CloudProfileMenuItemsOptions } from "./cloud-target.ts";
 import {
   projectDevicePlacements,
   resolveAutomaticDevicePlacementDisabledReason,
 } from "./device-placement.ts";
 
+function mountSessionItem(
+  item: Parameters<typeof SessionMenuItem>[0]["item"],
+  submitting: boolean,
+  container: HTMLElement,
+) {
+  return mountSolid(() => createComponent(SessionMenuItem, { item, submitting }), { container });
+}
+
+function mountCloudProfiles(initial: CloudProfileMenuItemsOptions, container: HTMLElement) {
+  const [params, setParams] = createSignal(initial);
+  const mounted = mountSolid(
+    () =>
+      createComponent(CloudProfileMenuItems, {
+        get params() {
+          return params();
+        },
+      }),
+    { container },
+  );
+  return {
+    ...mounted,
+    update: (next: CloudProfileMenuItemsOptions) => {
+      setParams(next);
+      flush();
+    },
+  };
+}
+
 describe("cloud target menu", () => {
+  it("orders Gateway catalogs while retaining placement facts and omitting unsupported kinds", async () => {
+    const machine = { id: "small", label: "Small", cpu: 2, memoryGb: 4 };
+    const profile = { id: "zeta", providerId: "crabbox", machines: [machine] };
+    const environment = { id: "node:zeta", type: "node", status: "available" };
+    const request = vi.fn().mockResolvedValue({
+      profiles: [profile, { id: "alpha", providerId: "crabbox" }],
+      environments: [
+        environment,
+        { id: "node:alpha", type: "node", status: "available" },
+        { id: "future", type: "future", status: "available" },
+      ],
+    });
+    const catalog = await requestPlaceCatalog({ request }, "openclaw");
+    expect(request).toHaveBeenCalledExactlyOnceWith("environments.list", { runtimeId: "openclaw" });
+    expect(catalog.profiles.map((entry) => entry.id)).toEqual(["alpha", "zeta"]);
+    expect(catalog.environments.map((entry) => entry.id)).toEqual(["node:alpha", "node:zeta"]);
+    expect(catalog.profiles[1]).toEqual({
+      id: "zeta",
+      providerId: "crabbox",
+      machines: [{ id: "small", label: "Small", cpu: 2, memoryGb: 4 }],
+    });
+  });
+
   it("renders saved-pairing remediation commands without redeeming a new join URL", () => {
     const container = document.createElement("div");
-    render(
-      renderSessionMenuItem(
-        {
-          value: "device:disabled",
-          label: "Device",
-          compact: true,
-          disabled: true,
-          checked: false,
-          title: "Hosting disabled",
-          remediation: "enable-session-hosting",
-          onSelect: vi.fn(),
-        },
-        false,
-      ),
+    mountSessionItem(
+      {
+        value: "device:disabled",
+        label: "Device",
+        compact: true,
+        disabled: true,
+        checked: false,
+        title: "Hosting disabled",
+        remediation: "enable-session-hosting",
+        onSelect: vi.fn(),
+      },
+      false,
       container,
     );
     const card = container.querySelector('[slot="content"]');
@@ -48,19 +99,17 @@ describe("cloud target menu", () => {
     ];
     const devices = projectDevicePlacements(environments);
     const container = document.createElement("div");
-    render(
-      renderSessionMenuItem(
-        {
-          value: "auto",
-          label: "Auto",
-          compact: true,
-          disabled: true,
-          checked: false,
-          title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
-          onSelect: vi.fn(),
-        },
-        false,
-      ),
+    mountSessionItem(
+      {
+        value: "auto",
+        label: "Auto",
+        compact: true,
+        disabled: true,
+        checked: false,
+        title: resolveAutomaticDevicePlacementDisabledReason(environments, devices),
+        onSelect: vi.fn(),
+      },
+      false,
       container,
     );
     expect(container.querySelector('[slot="content"]')?.textContent?.trim()).toBe(
@@ -93,7 +142,7 @@ describe("cloud target menu", () => {
       onSelect,
       onSelectOs,
     };
-    render(renderCloudProfileMenuItems(params), container);
+    const { update } = mountCloudProfiles(params, container);
     const suggested = container.querySelector<HTMLButtonElement>('[data-value="os:linux"]')!;
     expect(suggested.dataset.suggested).toBe("true");
     expect(suggested.getAttribute("aria-pressed")).toBe("true");
@@ -103,7 +152,7 @@ describe("cloud target menu", () => {
     suggested.click();
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("aws", true);
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("linux");
-    render(renderCloudProfileMenuItems({ ...params, selectedId: "aws" }), container);
+    update({ ...params, selectedId: "aws" });
     expect(
       container.querySelector('[data-value="os:linux"]')?.getAttribute("data-suggested"),
     ).toBeNull();
@@ -122,15 +171,15 @@ describe("cloud target menu", () => {
     { machine: { id: "custom", label: "Custom" }, expected: "Custom" },
   ])("renders a single machine as fixed provider configuration", ({ machine, expected }) => {
     const container = document.createElement("div");
-    render(
-      renderCloudProfileMenuItems({
+    mountCloudProfiles(
+      {
         profiles: [{ id: "aws", providerId: "aws", machines: [machine] }],
         selectedId: "aws",
         compact: true,
         selectedMachine: machine.id,
         submitting: false,
         onSelect: vi.fn(),
-      }),
+      },
       container,
     );
     const machineLabel = container.querySelector(`[data-value="machine:${machine.id}"]`);
@@ -167,19 +216,19 @@ describe("cloud target menu", () => {
       onSelectOs,
       onSelect: vi.fn(),
     };
-    render(renderCloudProfileMenuItems(params), container);
+    const { update } = mountCloudProfiles(params, container);
     container.querySelector<HTMLButtonElement>('[data-value="machine:large"]')!.click();
     container.querySelector<HTMLButtonElement>('[data-value="os:macos"]')!.click();
     expect(onSelectMachine).toHaveBeenCalledExactlyOnceWith("large");
     expect(onSelectOs).toHaveBeenCalledExactlyOnceWith("macos");
-    render(renderCloudProfileMenuItems({ ...params, submitting: true }), container);
+    update({ ...params, submitting: true });
     expect([...container.querySelectorAll("button")].every((button) => button.disabled)).toBe(true);
   });
 
   it("omits unavailable OS choices even when they are the current selection", () => {
     const container = document.createElement("div");
-    render(
-      renderCloudProfileMenuItems({
+    mountCloudProfiles(
+      {
         profiles: [
           {
             id: "aws",
@@ -195,7 +244,7 @@ describe("cloud target menu", () => {
         selectedOs: "windows",
         submitting: false,
         onSelect: vi.fn(),
-      }),
+      },
       container,
     );
     const fixedOs = container.querySelector('[data-value="os:linux"]');
@@ -210,15 +259,15 @@ describe("cloud target menu", () => {
 
   it("disables cloud profiles with the runtime preflight reason", () => {
     const container = document.createElement("div");
-    render(
-      renderCloudProfileMenuItems({
+    mountCloudProfiles(
+      {
         profiles: [{ id: "aws", providerId: "crabbox" }],
         selectedId: "",
         submitting: false,
         disabled: true,
         disabledReason: "The acpx runtime does not support cloud workers.",
         onSelect: vi.fn(),
-      }),
+      },
       container,
     );
 
@@ -231,8 +280,8 @@ describe("cloud target menu", () => {
     const reason =
       "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.";
     const container = document.createElement("div");
-    render(
-      renderCloudProfileMenuItems({
+    mountCloudProfiles(
+      {
         profiles: [
           { id: "aws", providerId: "crabbox" },
           { id: "ssh", providerId: "static-ssh" },
@@ -241,7 +290,7 @@ describe("cloud target menu", () => {
         submitting: false,
         profileDisabledReason: (profile) => (profile.id === "aws" ? reason : undefined),
         onSelect: vi.fn(),
-      }),
+      },
       container,
     );
 

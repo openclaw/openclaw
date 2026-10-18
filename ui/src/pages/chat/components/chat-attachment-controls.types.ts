@@ -26,6 +26,5 @@ export type ChatAttachmentControlsProps = {
   onPendingReadsChange?: (delta: 1 | -1) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
-  onRequestUpdate?: () => void;
   readSignal?: AbortSignal;
 };

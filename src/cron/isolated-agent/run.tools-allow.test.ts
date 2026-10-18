@@ -9,6 +9,7 @@ import type { CronStoredJob } from "../types.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
+  callGatewayMock,
   hasUsableWebSearchProviderMock,
   loadModelCatalogMock,
   loadRunCronIsolatedAgentTurn,
@@ -245,8 +246,12 @@ describe("runCronIsolatedAgentTurn toolsAllow", () => {
       model: "gpt-5.4",
       attempts: [],
     });
-    const result = await runCronIsolatedAgentTurn(makeParams(["web_search"]));
+    const result = await runCronIsolatedAgentTurn(
+      makeParams(["web_search"], {}, { deleteAfterRun: true }),
+    );
     expect(result.status).toBe("error");
+    expect(result.error).toBe("cron isolated agent run aborted");
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
     expect(result.diagnostics?.entries.map((entry) => entry.message)).toEqual([
       "web_search tool requested in toolsAllow but no web search provider is selected. Configure one with: openclaw configure --section web, or set tools.web.search.provider.",
       "cron isolated agent run aborted",

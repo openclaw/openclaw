@@ -16,7 +16,9 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 });
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
-import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { formatBillingErrorMessage } from "../../failover/user-copy.js";
+import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -30,22 +32,18 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
     { text: "NO_REPLY", mutatingAction: false },
     { text: "NO_REPLY", mutatingAction: true },
     { text: "NO_REPLY", mutatingAction: undefined },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: false },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: true },
-    { text: '{"action":"NO_REPLY"}', mutatingAction: undefined },
   ])(
-    "respects authored conversational silence: $text, mutatingAction=$mutatingAction",
+    "suppresses authored silence: $text, mutatingAction=$mutatingAction",
     ({ text, mutatingAction }) => {
-      expect(
-        buildPayloads({
-          assistantTexts: [text],
-          lastToolError: {
-            toolName: "codex_apps.slack.slack_read_thread",
-            error: "429 RATE_LIMITED",
-            mutatingAction,
-          },
-        }),
-      ).toHaveLength(0);
+      const payloads = buildPayloads({
+        assistantTexts: [text],
+        lastToolError: {
+          toolName: "codex_apps.slack.slack_read_thread",
+          error: "429 RATE_LIMITED",
+          mutatingAction,
+        },
+      });
+      expect(payloads).toHaveLength(0);
     },
   );
 
@@ -173,18 +171,25 @@ describe("buildEmbeddedRunPayloads", () => {
   });
 
   it.each(["worker", "main"])("keeps global tool-error replies owned by %s", (agentId) => {
+    const config: OpenClawConfig = {
+      agents: {
+        entries: {
+          main: { sandbox: { mode: "off" } },
+          worker: { sandbox: { mode: "all" } },
+        },
+      },
+      tools: { sandbox: { tools: { deny: ["browser"] } } },
+    };
     const payloads = buildPayloads({
       agentId,
       sessionKey: "global",
-      config: {
-        agents: {
-          entries: {
-            main: { sandbox: { mode: "off" } },
-            worker: { sandbox: { mode: "all" } },
-          },
-        },
-        tools: { sandbox: { tools: { deny: ["browser"] } } },
-      },
+      config,
+      sandboxRuntime: resolvePreparedSandboxRuntimeStatus({
+        cfg: config,
+        agentId,
+        sessionKey: "global",
+        preparedSessionEntry: null,
+      }),
       lastAssistant: makeAssistant({ errorMessage: "unknown tool: browser", content: [] }),
     });
     expect(payloads).toEqual([
@@ -347,9 +352,16 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "SECRET_PROGRESS_FAILURE");
   });
 
-  it.each([true, undefined])(
-    "keeps terminal errors suppressed after a completed message-tool reply (final=%s)",
-    (sourceReplyFinal) => {
+  it.each(
+    [true, undefined].flatMap((sourceReplyFinal) =>
+      ([undefined, "delivered"] as const).map((sourceReplyDeliveryState) => ({
+        sourceReplyFinal,
+        sourceReplyDeliveryState,
+      })),
+    ),
+  )(
+    "keeps terminal errors suppressed after a completed message-tool reply (final=$sourceReplyFinal, canonical=$sourceReplyDeliveryState)",
+    ({ sourceReplyFinal, sourceReplyDeliveryState }) => {
       const payloads = buildPayloads({
         lastAssistant: makeAssistant({
           stopReason: "error",
@@ -358,6 +370,7 @@ describe("buildEmbeddedRunPayloads", () => {
         }),
         didSendViaMessagingTool: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState,
         messagingToolSentTargets: [
           {
             tool: "message",
@@ -370,6 +383,54 @@ describe("buildEmbeddedRunPayloads", () => {
       });
 
       expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each(
+    (["pending", "delivered"] as const).flatMap((earlierDelivery) =>
+      (["pending", "missing"] as const).map((currentDelivery) => ({
+        earlierDelivery,
+        currentDelivery,
+      })),
+    ),
+  )(
+    "scopes error recovery to current custody ($earlierDelivery then $currentDelivery)",
+    ({ earlierDelivery, currentDelivery }) => {
+      const earlier = makeAgentAssistantMessage({
+        content: [{ type: "text", text: "Do not repeat the completed answer." }],
+      });
+      const payloads = buildPayloads({
+        sourceReplyDeliveryMode: "automatic",
+        sourceReplyDeliveryState: currentDelivery,
+        didDeliverSourceReplyViaMessageTool: false,
+        assistantTexts: ["Do not repeat the completed answer."],
+        answerSegments: [
+          {
+            textEnd: 1,
+            messageEnd: 1,
+            finalMessageStart: 1,
+            lastAssistant: earlier,
+            sourceReplyDeliveryState: earlierDelivery,
+          },
+        ],
+        messagingToolSourceReplyPayloads:
+          earlierDelivery === "delivered"
+            ? [{ text: "Completed answer.", sourceReplyFinal: true }]
+            : [],
+        lastAssistant: makeAssistant({
+          stopReason: "error",
+          content: [],
+          errorMessage: "Current input failed.",
+        }),
+      });
+      expect(payloads).toEqual([
+        ...(earlierDelivery === "delivered"
+          ? [expect.objectContaining({ text: "Completed answer." })]
+          : []),
+        ...(currentDelivery === "missing"
+          ? [expect.objectContaining({ text: REDACTED_TEST_MODEL_FAILURE_TEXT, isError: true })]
+          : []),
+      ]);
     },
   );
 

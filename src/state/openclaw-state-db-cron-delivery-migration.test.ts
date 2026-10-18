@@ -7,6 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
@@ -33,9 +34,9 @@ function legacyReceiptDatabase() {
   legacy.exec(`
     ALTER TABLE cron_run_receipts DROP COLUMN delivery_attempt_state;
     INSERT INTO cron_run_receipts (
-      receipt_id, store_key, job_id, config_revision, agent_id, status,
+      cursor_id, receipt_id, store_key, job_id, config_revision, agent_id, status,
       owner_pid, owner_start_time, started_at_ms
-    ) VALUES ('legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
+    ) VALUES (1, 'legacy-receipt', '/fixture/cron', 'legacy-job', 'revision', 'main', 'running', 123, 1, 2);
     PRAGMA user_version = 19;
     UPDATE schema_meta SET schema_version = 19;
   `);
@@ -58,12 +59,25 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
         expect(db.prepare("SELECT receipt_id FROM cron_run_receipts").get()).toEqual({
           receipt_id: "legacy-receipt",
         });
+        expect(readStateSchemaContentVersion(db)).toBe(19);
         const writer = openOpenClawStateDatabase(options);
         expect(readStateSchemaContentVersion(writer.db)).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
         const observation = observeSqliteReadSql(StatementSync.prototype);
         try {
           expect(readStateSchemaContentVersion(db)).toBe(19);
-          expect(observation.queries).toEqual([]);
+          // Managed reads qualify the retained catalog once after sibling DDL.
+          const qualificationQueries =
+            kind === "managed transaction"
+              ? [
+                  "PRAGMA schema_version",
+                  "PRAGMA user_version",
+                  "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'view', 'index', 'trigger')",
+                  'select "value_json" from "config_machine_state" where "state_key" = ?',
+                ]
+              : [];
+          expect(observation.queries).toEqual(qualificationQueries);
+          expect(readStateSchemaContentVersion(db)).toBe(19);
+          expect(observation.queries).toEqual(qualificationQueries);
         } finally {
           observation.restore();
         }
@@ -74,7 +88,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       if (kind === "managed transaction") {
         runSqliteDeferredTransactionSync(db, migrateWhileReading);
       } else {
-        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(requireNativeSqliteDatabase(db), migrateWhileReading);
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -109,7 +123,8 @@ it.each(["runtime open", "doctor repair"] as const)(
       if (entry === "runtime open") {
         expect(integrityChecks).toHaveLength(1);
       } else {
-        expect(integrityChecks.length).toBeGreaterThan(0);
+        expect(integrityChecks).toEqual([]);
+        expect(migration.queries).toContain("PRAGMA quick_check;");
       }
     } finally {
       migration.restore();
@@ -128,6 +143,8 @@ it.each(["runtime open", "doctor repair"] as const)(
     // Reuse remains valid while a sibling is live; final close requires readmission.
     const survivingReader = openOpenClawStateReadOnlyLocation(database.path, database.path);
     closeOpenClawStateDatabaseForTest();
+    // Final close retires admission; the cold reopen precedes the warm-borrow observation.
+    openOpenClawStateDatabase(options);
     const observation = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(

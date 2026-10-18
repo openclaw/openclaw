@@ -86,6 +86,57 @@ describe("buildTelegramMessageContext media carriers", () => {
     expect(context?.ctxPayload.media?.map((fact) => fact.kind)).toEqual(["image"]);
   });
 
+  it.each([
+    { fileName: "chart.jpg", kind: "image", contentType: "image/jpeg" },
+    { fileName: "report.pdf", kind: "document", contentType: "application/pdf" },
+  ] as const)(
+    "preserves hydrated $contentType reply media and Telegram's selected quote",
+    async ({ fileName, kind, contentType }) => {
+      const mediaPath = `/tmp/openclaw/media/inbound/${fileName}`;
+      const context = await buildTelegramMessageContextForTest({
+        message: {
+          chat: { id: 42, type: "private", first_name: "Ada" },
+          text: "What does it show?",
+          reply_to_message: {
+            message_id: 10,
+            date: 1_699_999_999,
+            chat: { id: 42, type: "private", first_name: "Ada" },
+            from: { id: 7, is_bot: true, first_name: "Bot" },
+            caption: "Weekly chart",
+            document: {
+              file_id: "doc-1",
+              file_unique_id: "doc-u1",
+              file_name: fileName,
+              mime_type: contentType,
+            },
+          },
+          quote: { text: "Weekly", position: 0 },
+        },
+        replyChain: [
+          {
+            messageId: "10",
+            sender: "self",
+            senderId: "7",
+            body: "Weekly chart",
+            mediaPath,
+            mediaKind: kind,
+            mediaType: contentType,
+          },
+        ],
+      });
+
+      expect(context?.ctxPayload.media).toEqual([
+        expect.objectContaining({ path: mediaPath, kind, contentType }),
+      ]);
+      expect(context?.ctxPayload.ReplyToBody).toBe("Weekly");
+      expect(context?.ctxPayload.ReplyChain?.[0]).toMatchObject({
+        sender: "self",
+        body: "Weekly",
+        isQuote: true,
+      });
+    },
+  );
+
   it("keeps mixed aggregate media out of command text and preserves voice modality", async () => {
     const context = await buildTelegramMessageContextForTest({
       message: {

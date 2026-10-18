@@ -20,7 +20,7 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugin-in-process-dispatch.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
-import { loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntryAsync } from "./session-entry-load.test-support.js";
 
 /** Real registered runs share a child session but retain independent completion sources. */
 export async function createRegisteredCompletionPair(context: GatewayRequestContext) {
@@ -53,13 +53,13 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
     agentId: "main",
     sessionKey: requesterSessionKey,
     sessionId: requesterSessionId,
-    storePath: loadSessionEntry(requesterSessionKey, { agentId: "main" }).storePath,
+    storePath: (await loadSessionEntryAsync(requesterSessionKey, { agentId: "main" })).storePath,
   };
   const childScope = {
     agentId: "main",
     sessionKey: childSessionKey,
     sessionId: childSessionId,
-    storePath: loadSessionEntry(childSessionKey, { agentId: "main" }).storePath,
+    storePath: (await loadSessionEntryAsync(childSessionKey, { agentId: "main" })).storePath,
   };
   const createRun = async (index: 0 | 1) => {
     const runId = `completion-pair-${id}-${index}`;
@@ -111,9 +111,12 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
       if (entry?.execution.status === "terminal") {
         run.terminal.resolve();
       }
+      // A durable retry settles this attempt while retaining the delivery obligation.
       if (
         typeof entry?.cleanupCompletedAt === "number" ||
-        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined)
+        (entry?.cleanupHandled === false && entry.delivery?.nextAttemptAt !== undefined) ||
+        entry?.delivery?.status === "suspended" ||
+        entry?.delivery?.status === "failed"
       ) {
         run.settled.resolve();
       }

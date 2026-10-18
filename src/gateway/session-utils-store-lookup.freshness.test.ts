@@ -16,42 +16,76 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admi
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  resolveGatewaySessionStoreTargetWithStore,
+  resolveGatewaySessionStoreTargetWithStoreAsync,
   withGatewaySessionStoreTarget,
 } from "./session-utils-store-lookup.js";
 import { withQualifiedGatewaySessionStoreTarget } from "./session-utils-store-retained.js";
 import { withQualifiedGatewaySessionEntry } from "./session-utils-store.js";
 
+const sessionEntry = { sessionId: "same-session", updatedAt: 1 };
+const memberIds = (rows: readonly { identityId: string }[] | undefined) =>
+  rows?.map(({ identityId }) => identityId).toSorted();
+type Consume = Parameters<typeof withQualifiedGatewaySessionStoreTarget>[0]["consume"];
+type WorkerRead = typeof sessionEntryReaders.withSessionEntriesFromStoresInWorker;
+
+function interceptRead(wrap: (read: WorkerRead) => WorkerRead) {
+  const original = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
+  return vi
+    .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
+    .mockImplementation(wrap(original));
+}
+
+function makeSession(env: NodeJS.ProcessEnv) {
+  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+  setRuntimeConfigSnapshot(cfg);
+  const key = "agent:main:freshness";
+  const scope = { agentId: "main", sessionKey: key, env };
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  return {
+    lookup: { cfg, key, env },
+    scope,
+    database,
+    commit: (write: () => void) =>
+      runOpenClawAgentWriteAdmission({ agentId: "main", path: database.path, env }, write),
+    write: (label: string, updatedAt: number) =>
+      writeSessionEntry(database, key, { ...sessionEntry, label, updatedAt }),
+    member: (identityId: string, addedAt = 1) =>
+      addSessionMember(scope, { identityId, addedBy: "owner", addedAt }),
+  };
+}
+
+async function withSession(run: (fixture: ReturnType<typeof makeSession>) => Promise<void>) {
+  await withOpenClawTestState({ scenario: "minimal" }, ({ env }) => run(makeSession(env)));
+}
+
+async function qualify(lookup: ReturnType<typeof makeSession>["lookup"]) {
+  const { key, env } = lookup;
+  const selected = await resolveGatewaySessionStoreTargetWithStoreAsync({
+    ...lookup,
+    exactRead: true,
+  });
+  const qualified = await prepareQualifiedSessionEntryTarget(
+    { ...selected, requestedKey: key, storeKey: key, readSource: selected.capturedReadSource },
+    selected.capturedReadSources,
+    env,
+  );
+  return { target: qualified, logicalStorePath: selected.storePath, env };
+}
+
 it("reads current qualified facts and recovers lifecycle timestamps only when requested", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:qualified-lifecycle";
+  await withSession(async ({ lookup, scope, member }) => {
     const sessionId = "qualified-lifecycle";
-    const scope = { agentId: "main", sessionKey: key, env };
     const entry = { sessionId, updatedAt: 2_000, lastInteractionAt: 1_500 };
     await replaceSessionEntry(scope, { ...entry, label: "before" });
     await replaceTranscriptEvents({ ...scope, sessionId }, [
       { type: "session", id: sessionId, version: 3, timestamp: "1970-01-01T00:00:01.000Z" },
     ]);
-    addSessionMember(scope, { identityId: "first-member", addedBy: "owner", addedAt: 1 });
-    const selected = resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true });
-    const qualified = prepareQualifiedSessionEntryTarget(
-      {
-        ...selected,
-        requestedKey: key,
-        storeKey: key,
-        readSource: selected.capturedReadSource,
-      },
-      selected.capturedReadSources,
-      env,
-    );
+    member("first-member");
+    const selected = await qualify(lookup);
     const read = (includeLifecycle = false) =>
       withQualifiedGatewaySessionEntry({
-        cfg,
-        target: qualified.target,
-        logicalStorePath: selected.storePath,
-        env,
+        ...selected,
+        cfg: lookup.cfg,
         includeMembership: true,
         includeLifecycle,
         assertConfigCurrent() {},
@@ -59,194 +93,106 @@ it("reads current qualified facts and recovers lifecycle timestamps only when re
           assertCurrent();
           return {
             label: current.entry?.label,
-            members: members
-              .get(key)
-              ?.map((member) => member.identityId)
-              .toSorted(),
+            members: memberIds(members.get(lookup.key)),
             timestamps: current.lifecycleTimestamps,
           };
         },
       });
-    try {
-      await expect(read()).resolves.toEqual({
-        label: "before",
-        members: ["first-member"],
-        timestamps: {},
-      });
-      await replaceSessionEntry(scope, { ...entry, label: "after" });
-      addSessionMember(scope, { identityId: "second-member", addedBy: "owner", addedAt: 2 });
-      await expect(read()).resolves.toEqual({
-        label: "after",
-        members: ["first-member", "second-member"],
-        timestamps: {},
-      });
-      await expect(read(true)).resolves.toEqual({
-        label: "after",
-        members: ["first-member", "second-member"],
-        timestamps: { sessionStartedAt: 1_000, lastInteractionAt: 1_500 },
-      });
-    } finally {
-      qualified.release();
-    }
+    const before = { label: "before", members: ["first-member"], timestamps: {} };
+    await expect(read()).resolves.toEqual(before);
+    await replaceSessionEntry(scope, { ...entry, label: "after" });
+    member("second-member", 2);
+    const after = { ...before, label: "after", members: ["first-member", "second-member"] };
+    await expect(read()).resolves.toEqual(after);
+    await expect(read(true)).resolves.toEqual({
+      ...after,
+      timestamps: { sessionStartedAt: 1_000, lastInteractionAt: 1_500 },
+    });
   });
 });
 
 it.for(["membership", "explicit", "qualified"] as const)(
   "consumes facts committed before its %s-ordered snapshot",
   async (ordering) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const key = "agent:main:sharing-before-snapshot";
-      const scope = { agentId: "main", sessionKey: key, env };
-      await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
-      const selected =
-        ordering === "qualified"
-          ? resolveGatewaySessionStoreTargetWithStore({ cfg, key, env, exactRead: true })
-          : undefined;
-      const qualified = selected
-        ? prepareQualifiedSessionEntryTarget(
-            {
-              ...selected,
-              requestedKey: key,
-              storeKey: key,
-              readSource: selected.capturedReadSource,
-            },
-            selected.capturedReadSources,
-            env,
-          )
-        : undefined;
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    await withSession(async ({ lookup, scope, commit, write, member }) => {
+      const { key } = lookup;
+      await replaceSessionEntry(scope, sessionEntry);
+      const selected = ordering === "qualified" ? await qualify(lookup) : undefined;
       const committedValues: string[] = [];
       const pendingValues = ["first-value", "second-value"];
-      const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      const read = vi
-        .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-        .mockImplementation(async (inputs, consume, options) => {
-          const value = pendingValues.shift();
-          if (value) {
-            // Real writes win the FIFO before the reader starts its snapshot.
-            await runOpenClawAgentWriteAdmission(
-              { agentId: "main", path: database.path, env },
-              () => {
-                if (ordering !== "explicit") {
-                  addSessionMember(scope, { identityId: value, addedBy: "owner", addedAt: 1 });
-                } else {
-                  writeSessionEntry(database, key, {
-                    sessionId: "same-session",
-                    updatedAt: 2,
-                    label: value,
-                  });
-                }
-                committedValues.push(value);
-              },
-            );
-          }
-          return readEntries(inputs, consume, options);
-        });
+      const ordered = ordering === "explicit";
+      using _ = interceptRead((readEntries) => async (inputs, consume, options) => {
+        const value = pendingValues.shift();
+        if (value) {
+          // Real writes win the FIFO before the reader starts its snapshot.
+          await commit(() => {
+            if (!ordered) {
+              member(value);
+            } else {
+              write(value, 2);
+            }
+            committedValues.push(value);
+          });
+        }
+        return readEntries(inputs, consume, options);
+      });
       let consumptions = 0;
-      try {
-        const consume: Parameters<
-          typeof withQualifiedGatewaySessionStoreTarget<{ members?: string[]; label?: string }>
-        >[0]["consume"] = (target, membership, assertCurrent) => {
-          consumptions += 1;
-          assertCurrent();
-          expect(target.store[key]?.sessionId).toBe("same-session");
-          return ordering !== "explicit"
-            ? {
-                members: membership
-                  .get(key)
-                  ?.map((member) => member.identityId)
-                  .toSorted(),
-              }
-            : { label: target.store[key]?.label };
-        };
-        const result =
-          qualified && selected
-            ? await withQualifiedGatewaySessionStoreTarget({
-                target: qualified.target,
-                logicalStorePath: selected.storePath,
-                env,
-                includeMembership: true,
-                consume,
-              })
-            : await withGatewaySessionStoreTarget(
-                {
-                  cfg,
-                  key,
-                  env,
-                  includeMembership: ordering === "membership",
-                  ordered: ordering === "explicit",
-                },
-                consume,
-              );
-        expect(result).toEqual(
-          ordering !== "explicit"
-            ? { members: committedValues.toSorted() }
-            : { label: committedValues.at(-1) },
-        );
-        expect(committedValues).toContain("first-value");
-        expect(consumptions).toBe(1);
-      } finally {
-        read.mockRestore();
-        qualified?.release();
-      }
+      const consume: Consume = (target, membership, assertCurrent) => {
+        consumptions += 1;
+        assertCurrent();
+        expect(target.store[key]?.sessionId).toBe("same-session");
+        return ordered ? target.store[key]?.label : memberIds(membership.get(key));
+      };
+      const result = selected
+        ? await withQualifiedGatewaySessionStoreTarget({
+            ...selected,
+            includeMembership: true,
+            consume,
+          })
+        : await withGatewaySessionStoreTarget(
+            { ...lookup, includeMembership: !ordered, ordered },
+            consume,
+          );
+      expect(result).toEqual(ordered ? committedValues.at(-1) : committedValues.toSorted());
+      expect(committedValues).toContain("first-value");
+      expect(consumptions).toBe(1);
     });
   },
 );
 
 it("consumes a fresh metadata snapshot before the next queued writer", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const key = "agent:main:concurrent-metadata";
-    const scope = { agentId: "main", sessionKey: key, env };
-    replaceSessionEntrySync(scope, {
-      sessionId: "same-session",
-      updatedAt: 1,
-      label: "initial",
-    });
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  await withSession(async ({ lookup, scope, database, commit, write }) => {
+    replaceSessionEntrySync(scope, { ...sessionEntry, label: "initial" });
     const events: string[] = [];
     const writes: Promise<void>[] = [];
-    const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-    const read = vi
-      .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-      .mockImplementation(async (inputs, consume, options) => {
-        await Promise.all(writes);
-        // Writer results settle before their FIFO drain releases the idle lane.
-        await SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.drainPromise;
-        return readEntries(
-          inputs,
-          (prepared) => {
-            const revision = writes.length + 1;
-            const label = `write-${revision}`;
-            // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
-            const write = runOpenClawAgentWriteAdmission(
-              { agentId: "main", path: database.path, env },
-              () => {
-                writeSessionEntry(database, key, {
-                  sessionId: "same-session",
-                  updatedAt: revision + 1,
-                  label,
-                });
-                events.push(label);
-              },
-            );
-            writes.push(write);
-            void write.catch(() => {});
-            return consume(prepared);
-          },
-          options,
-        );
-      });
+    const read = interceptRead((readEntries) => async (inputs, consume, options) => {
+      await Promise.all(writes);
+      // Writer results settle before their FIFO drain releases the idle lane.
+      await SQLITE_SESSION_WRITER_QUEUES.get(database.path)?.drainPromise;
+      return readEntries(
+        inputs,
+        (prepared) => {
+          const revision = writes.length + 1;
+          const label = `write-${revision}`;
+          // Commit after snapshot capture, or queue behind a reader that owns the FIFO.
+          const pending = commit(() => {
+            write(label, revision + 1);
+            events.push(label);
+          });
+          writes.push(pending);
+          void pending.catch(() => {});
+          return consume(prepared);
+        },
+        options,
+      );
+    });
     try {
       const label = await withGatewaySessionStoreTarget(
-        { cfg, key, env },
+        lookup,
         (target, _membership, assertCurrent) => {
           assertCurrent();
           events.push("consume");
-          return target.store[key]?.label;
+          return target.store[lookup.key]?.label;
         },
       );
       await Promise.all(writes);
@@ -263,71 +209,51 @@ it("consumes a fresh metadata snapshot before the next queued writer", async () 
 it.each(["during", "repeated", "consume"] as const)(
   "consumes an ordered sharing snapshot with a native write %s admission",
   async (timing) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const key = "agent:main:sharing-before-snapshot";
-      const scope = { agentId: "main", sessionKey: key, env };
-      await replaceSessionEntry(scope, { sessionId: "same-session", updatedAt: 1 });
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    await withSession(async ({ lookup, scope, database, member }) => {
+      const { key } = lookup;
+      await replaceSessionEntry(scope, sessionEntry);
       const committedMembers: string[] = [];
       const pendingMembers =
         timing === "repeated" ? ["first-member", "second-member"] : ["first-member"];
       let reads = 0;
-      const readEntries = sessionEntryReaders.withSessionEntriesFromStoresInWorker;
-      const read = vi
-        .spyOn(sessionEntryReaders, "withSessionEntriesFromStoresInWorker")
-        .mockImplementation(async (inputs, consume, options) => {
-          reads += 1;
-          const write = () => {
-            const identityId = pendingMembers.shift();
-            if (identityId) {
-              addSessionMember(scope, { identityId, addedBy: "owner", addedAt: 1 });
-              committedMembers.push(identityId);
-            }
-          };
-          return readEntries(inputs, consume, {
-            ...options,
-            onReadAdmitted() {
-              options?.onReadAdmitted?.();
-              if (timing === "during" || timing === "repeated") {
-                write();
+      using _ = interceptRead((readEntries) => async (inputs, consume, options) => {
+        reads += 1;
+        return readEntries(inputs, consume, {
+          ...options,
+          onReadAdmitted() {
+            options?.onReadAdmitted?.();
+            if (timing === "during" || timing === "repeated") {
+              const identityId = pendingMembers.shift();
+              if (identityId) {
+                member(identityId);
+                committedMembers.push(identityId);
               }
-            },
-          });
-        });
-      let consumptions = 0;
-      try {
-        const reading = withGatewaySessionStoreTarget(
-          { cfg, key, env, includeMembership: true },
-          (target, membership, assertCurrent) => {
-            consumptions += 1;
-            if (timing === "consume") {
-              database.db
-                .prepare(
-                  "UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?",
-                )
-                .run(key);
             }
-            assertCurrent();
-            expect(target.store[key]?.sessionId).toBe("same-session");
-            return membership
-              .get(key)
-              ?.map((member) => member.identityId)
-              .toSorted();
           },
-        );
-        if (timing === "repeated" || timing === "consume") {
-          await expect(reading).rejects.toThrow("Session entry changed during read");
-          expect(reads).toBe(timing === "repeated" ? 2 : 1);
-          expect(consumptions).toBe(timing === "consume" ? 1 : 0);
-        } else {
-          expect(await reading).toEqual(committedMembers.toSorted());
-          expect(reads).toBe(2);
-          expect(consumptions).toBe(1);
-        }
-      } finally {
-        read.mockRestore();
+        });
+      });
+      let consumptions = 0;
+      const reading = withGatewaySessionStoreTarget(
+        { ...lookup, includeMembership: true },
+        (target, membership, assertCurrent) => {
+          consumptions += 1;
+          if (timing === "consume") {
+            database.db
+              .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+              .run(key);
+          }
+          assertCurrent();
+          expect(target.store[key]?.sessionId).toBe("same-session");
+          return memberIds(membership.get(key));
+        },
+      );
+      if (timing === "repeated" || timing === "consume") {
+        await expect(reading).rejects.toThrow("Session entry changed during read");
+        expect(reads).toBe(timing === "repeated" ? 2 : 1);
+        expect(consumptions).toBe(timing === "consume" ? 1 : 0);
+      } else {
+        expect(await reading).toEqual(committedMembers.toSorted());
+        expect({ reads, consumptions }).toEqual({ reads: 2, consumptions: 1 });
       }
     });
   },

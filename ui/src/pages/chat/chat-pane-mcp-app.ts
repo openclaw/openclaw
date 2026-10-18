@@ -1,3 +1,4 @@
+import { onCleanup } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { MCP_APP_OPEN_EVENT, type McpAppOpenDetail } from "../../components/mcp-app-launch.ts";
 import {
@@ -18,6 +19,7 @@ import { t } from "../../i18n/index.ts";
 import { registerMcpAppEnglish } from "../../i18n/locales/en-mcp-app.ts";
 import { publishMcpAppContext } from "../../lib/mcp-app-context.ts";
 import { mcpAppMessageInput, sendMcpAppNewConversation } from "../../lib/mcp-app-message.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { uploadsEnabled } from "../../lib/uploads.ts";
 import {
   releaseChatAttachmentPayloads,
@@ -54,7 +56,6 @@ type ChatPaneMcpAppState = Pick<
   | "chatAttachments"
   | "uploadConfig"
   | "hello"
-  | "requestUpdate"
   | "handleSendChat"
   | "handleOpenSidebar"
 >;
@@ -66,58 +67,34 @@ export type ChatPaneMcpAppOwner = {
   presented: boolean;
   agentId?: string;
   launch?: McpAppOpenDetail;
+  replaceAttachments: (attachments: ChatPaneMcpAppState["chatAttachments"]) => void;
   /** Captures this state; the workspace owner still owns file admission and rendering. */
   openFile: (path: string) => void;
 };
 
-export class ChatPaneMcpAppController {
-  private openedLaunch?: McpAppOpenDetail;
-
-  constructor(
-    private readonly options: {
-      element: HTMLElement;
-      current: () => ChatPaneMcpAppOwner | null;
-    },
-  ) {}
-
-  subscribe(): () => void {
-    // Listening on the containing pane keeps split-view prompts with their iframe.
-    const element = this.options.element;
-    const listen = <K extends keyof HTMLElementEventMap>(
-      name: K,
-      listener: (event: HTMLElementEventMap[K]) => void,
-    ) => {
-      element.addEventListener(name, listener);
-      return () => element.removeEventListener(name, listener);
-    };
-    const cleanups = [
-      listen(MCP_APP_RESOURCE_MENTION_EVENT, (event) => this.receiveResourceMention(event)),
-      listen(MCP_APP_MESSAGE_EVENT, (event) => this.receiveMessage(event)),
-      listen(MCP_APP_FILE_OPEN_EVENT, (event) => this.receiveFile(event)),
-      listen(MCP_APP_CONTEXT_EVENT, (event) => this.receiveContext(event)),
-      listen(MCP_APP_OPEN_EVENT, (event) => this.receiveOpen(event)),
-      listen(WIDGET_PROMPT_EVENT, (event) => this.receiveWidgetPrompt(event)),
-    ];
-    return () => cleanups.forEach((cleanup) => cleanup());
-  }
-
-  syncLaunch(): void {
-    const owner = this.options.current();
+/** Create inside the mounted pane's Solid owner. */
+export function createChatPaneMcpApps(options: {
+  element: HTMLElement;
+  current: () => ChatPaneMcpAppOwner | null;
+}): () => void {
+  let openedLaunch: McpAppOpenDetail | undefined;
+  function syncLaunch(): void {
+    const owner = options.current();
     const launch = owner?.launch;
     if (
       !owner ||
       !launch ||
-      this.openedLaunch === launch ||
+      openedLaunch === launch ||
       launch.owner !== owner.context.gateway.snapshot.client ||
       launch.sessionKey !== owner.state.sessionKey
     ) {
       return;
     }
-    this.openedLaunch = launch;
-    this.openLaunch(owner, launch);
+    openedLaunch = launch;
+    openLaunch(owner, launch);
   }
 
-  private openLaunch(owner: ChatPaneMcpAppOwner, launch: McpAppOpenDetail, fileSuffix = ""): void {
+  function openLaunch(owner: ChatPaneMcpAppOwner, launch: McpAppOpenDetail, fileSuffix = ""): void {
     owner.state.handleOpenSidebar({
       kind: "mcp-app",
       title: launch.entrypoint.title,
@@ -129,24 +106,24 @@ export class ChatPaneMcpAppController {
     });
   }
 
-  private presentedEventOwner(event: CustomEvent<{ sessionKey: string }>) {
+  function presentedEventOwner(event: CustomEvent<{ sessionKey: string }>) {
     if (!(event instanceof CustomEvent) || event.defaultPrevented) {
       return null;
     }
-    const owner = this.options.current();
+    const owner = options.current();
     return owner?.presented && event.detail.sessionKey === owner.state.sessionKey ? owner : null;
   }
 
-  private receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
+  function receiveWidgetPrompt(event: CustomEvent<WidgetPromptEventDetail>): void {
     const detail = event.detail;
     const text = typeof detail?.text === "string" ? detail.text.trim() : "";
     if (text) {
-      void this.options.current()?.state.handleSendChat(text);
+      void options.current()?.state.handleSendChat(text);
     }
   }
 
-  private receiveResourceMention(event: CustomEvent<McpAppResourceMentionDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveResourceMention(event: CustomEvent<McpAppResourceMentionDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner || !uploadsEnabled(owner.state.uploadConfig)) {
       return;
     }
@@ -177,12 +154,11 @@ export class ChatPaneMcpAppController {
       dataUrl: encodeTextAsDataUrl(text),
       file,
     });
-    state.chatAttachments = [...state.chatAttachments, attachment];
-    state.requestUpdate();
+    owner.replaceAttachments([...state.chatAttachments, attachment]);
   }
 
-  private receiveMessage(event: CustomEvent<McpAppMessageEventDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveMessage(event: CustomEvent<McpAppMessageEventDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner) {
       return;
     }
@@ -215,8 +191,8 @@ export class ChatPaneMcpAppController {
     })().then(detail.respond, () => detail.respond(false));
   }
 
-  private receiveFile(event: CustomEvent<McpAppFileOpenEventDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveFile(event: CustomEvent<McpAppFileOpenEventDetail>): void {
+    const owner = presentedEventOwner(event);
     if (!owner) {
       return;
     }
@@ -226,12 +202,12 @@ export class ChatPaneMcpAppController {
     detail.respond(true);
   }
 
-  private receiveContext(event: CustomEvent<McpAppContextEventDetail>): void {
+  function receiveContext(event: CustomEvent<McpAppContextEventDetail>): void {
     if (!(event instanceof CustomEvent)) {
       return;
     }
     const detail = event.detail;
-    const owner = this.options.current();
+    const owner = options.current();
     const client = owner?.context.gateway.snapshot.client;
     if (!owner || !client || detail.sessionKey !== owner.state.sessionKey) {
       return;
@@ -252,13 +228,26 @@ export class ChatPaneMcpAppController {
     });
   }
 
-  private receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
-    const owner = this.presentedEventOwner(event);
+  function receiveOpen(event: CustomEvent<McpAppOpenDetail>): void {
+    const owner = presentedEventOwner(event);
     const detail = event.detail;
     if (!owner || detail.owner !== owner.context.gateway.snapshot.client) {
       return;
     }
     event.preventDefault();
-    this.openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
+    openLaunch(owner, detail, `:${detail.filePath ?? ""}`);
   }
+
+  // Pane-local listeners keep split-view prompts with their iframe.
+  const element = options.element;
+  const stopEvents = [
+    listen(element, MCP_APP_RESOURCE_MENTION_EVENT, { handleEvent: receiveResourceMention }),
+    listen(element, MCP_APP_MESSAGE_EVENT, { handleEvent: receiveMessage }),
+    listen(element, MCP_APP_FILE_OPEN_EVENT, { handleEvent: receiveFile }),
+    listen(element, MCP_APP_CONTEXT_EVENT, { handleEvent: receiveContext }),
+    listen(element, MCP_APP_OPEN_EVENT, { handleEvent: receiveOpen }),
+    listen(element, WIDGET_PROMPT_EVENT, { handleEvent: receiveWidgetPrompt }),
+  ];
+  onCleanup(() => stopEvents.forEach((stop) => stop()));
+  return syncLaunch;
 }

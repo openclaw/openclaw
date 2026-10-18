@@ -3,6 +3,7 @@ import {
   type TalkVoiceSelection,
   type TalkVoiceSetResult,
 } from "../../packages/gateway-protocol/src/schema/talk-voice.js";
+import { wrapCurrentPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 export type RealtimeVoiceSelectionInfo = Omit<TalkVoiceSelection, "voiceSessionId" | "sessionKey">;
@@ -40,6 +41,7 @@ const runs = resolveGlobalMap<string, VoiceSelectionRun>(
 export function registerRealtimeVoiceSelection(
   owner: VoiceSelectionOwner,
 ): RealtimeVoiceSelectionHandle {
+  const registeredOwner = wrapCurrentPluginInstance(owner);
   let active = true;
   let changing = false;
   const callAbort = new AbortController();
@@ -48,14 +50,14 @@ export function registerRealtimeVoiceSelection(
     if (!active) {
       throw new Error("Voice call is no longer active");
     }
-    owner.assertCurrent();
+    registeredOwner.assertCurrent();
   };
   const boundOwner: VoiceSelectionOwner = {
-    ...owner,
+    ...registeredOwner,
     assertCurrent,
     read: () => {
       assertCurrent();
-      const selection = owner.read();
+      const selection = registeredOwner.read();
       return { ...selection, voices: [...selection.voices] };
     },
     changeVoice: async (query, request) => {
@@ -73,7 +75,7 @@ export function registerRealtimeVoiceSelection(
       if (changing) {
         throw new Error("A voice change is already in progress for this call");
       }
-      const selection = owner.read();
+      const selection = registeredOwner.read();
       if (!selection.canChange) {
         throw new Error("This call cannot change voices");
       }
@@ -88,9 +90,9 @@ export function registerRealtimeVoiceSelection(
       }
       changing = true;
       try {
-        await owner.changeVoice(voice, { assertCurrent: assertRequestCurrent, signal });
+        await registeredOwner.changeVoice(voice, { assertCurrent: assertRequestCurrent, signal });
         assertRequestCurrent();
-        if (owner.read().voice !== voice) {
+        if (registeredOwner.read().voice !== voice) {
           throw new Error("The replacement call did not apply the requested voice");
         }
       } finally {

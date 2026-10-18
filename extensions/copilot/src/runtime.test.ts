@@ -1,5 +1,4 @@
-// Copilot tests cover runtime plugin behavior.
-import { normalize, resolve, sep } from "node:path";
+import { resolve } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -7,85 +6,56 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotClientPool } from "./runtime.js";
 
-interface FakeClient {
-  readonly id: number;
-  readonly copilotHome: string;
-  readonly start: ReturnType<typeof vi.fn>;
-  readonly stop: ReturnType<typeof vi.fn>;
-  readonly createSession: ReturnType<typeof vi.fn>;
-  readonly disconnect: ReturnType<typeof vi.fn>;
-}
+type FakeClient = ReturnType<typeof makeClient>;
 
 interface FakeFactoryOptions {
-  readonly create?: (
-    opts: CopilotClientOptions,
-    id: number,
-  ) => CopilotClient | Promise<CopilotClient>;
   readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
-}
-
-function normalizeHomeForTest(copilotHome: string): string {
-  let normalizedHome = resolve(copilotHome);
-  normalizedHome = normalize(normalizedHome);
-  if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
-    normalizedHome = normalizedHome.slice(0, -1);
-  }
-  if (process.platform === "win32") {
-    normalizedHome = normalizedHome.toLowerCase();
-  }
-  return normalizedHome;
 }
 
 function makeKey(overrides: Partial<PoolKey> = {}): PoolKey {
   return {
-    agentId: overrides.agentId ?? "agent-1",
-    copilotHome: overrides.copilotHome ?? "copilot-home",
-    authMode: overrides.authMode ?? "useLoggedInUser",
-    authProfileId: overrides.authProfileId,
-    authProfileVersion: overrides.authProfileVersion,
+    agentId: "agent-1",
+    copilotHome: "copilot-home",
+    authMode: "useLoggedInUser",
+    ...overrides,
   };
 }
 
 function makeOptions(overrides: Partial<ClientCreateOptions> = {}): ClientCreateOptions {
   return {
-    copilotHome: overrides.copilotHome ?? "copilot-home",
-    useLoggedInUser: overrides.useLoggedInUser ?? true,
-    gitHubToken: overrides.gitHubToken,
+    copilotHome: "copilot-home",
+    useLoggedInUser: true,
+    ...overrides,
   };
 }
 
-function makeFake(options: FakeFactoryOptions = {}) {
+function makeClient(id: number, stop = vi.fn(async (): Promise<Error[]> => [])) {
+  return { id, stop };
+}
+
+function setup(idleTtlMs?: number, options: FakeFactoryOptions = {}) {
   const stops: number[] = [];
   const ctorCalls: CopilotClientOptions[] = [];
-  const instances: FakeClient[] = [];
   let nextId = 0;
 
   const fake = async (clientOptions: CopilotClientOptions) => {
     ctorCalls.push(clientOptions);
     const id = ++nextId;
-    if (options.create) {
-      return options.create(clientOptions, id);
-    }
-
-    const client: FakeClient = {
+    const client: FakeClient = makeClient(
       id,
-      copilotHome: clientOptions.baseDirectory ?? "",
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => {
+      vi.fn(async () => {
         stops.push(id);
-        if (options.stop) {
-          return options.stop(client);
-        }
-        return [];
+        return options.stop ? options.stop(client) : [];
       }),
-      createSession: vi.fn(async () => ({})),
-      disconnect: vi.fn(),
-    };
-    instances.push(client);
+    );
     return client as unknown as CopilotClient;
   };
 
-  return { fake, stops, ctorCalls, instances };
+  const sdk = { fake, stops, ctorCalls };
+  const pool = createCopilotClientPool({ idleTtlMs, sdkFactory: fake });
+  const acquire = (key: Partial<PoolKey> = {}, clientOptions: Partial<ClientCreateOptions> = {}) =>
+    pool.acquire(makeKey(key), makeOptions(clientOptions));
+  return { sdk, pool, acquire };
 }
 
 afterEach(() => {
@@ -95,12 +65,9 @@ afterEach(() => {
 
 describe("createCopilotClientPool", () => {
   it("keeps hardened empty-mode clients separate from normal clients", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-    const key = makeKey();
-
-    const normal = await pool.acquire(key, makeOptions());
-    const isolated = await pool.acquire(key, { ...makeOptions(), mode: "empty" });
+    const { sdk, acquire } = setup();
+    const normal = await acquire();
+    const isolated = await acquire({}, { mode: "empty" });
 
     expect(normal.client).not.toBe(isolated.client);
     expect(normal.key.clientMode).toBeUndefined();
@@ -108,63 +75,28 @@ describe("createCopilotClientPool", () => {
     expect(sdk.ctorCalls.map((options) => options.mode)).toEqual([undefined, "empty"]);
   });
 
-  it("different agentId same copilotHome creates distinct clients", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-    const options = makeOptions();
-
-    const first = await pool.acquire(makeKey({ agentId: "agent-a" }), options);
-    const second = await pool.acquire(makeKey({ agentId: "agent-b" }), options);
-
-    expect(first.client).not.toBe(second.client);
-    expect(sdk.ctorCalls.length).toBe(2);
-  });
-
-  it("different authProfileVersion creates distinct clients", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-    const options = makeOptions({ gitHubToken: "token-a", useLoggedInUser: false });
-
-    const first = await pool.acquire(
-      makeKey({ authMode: "gitHubToken", authProfileId: "profile", authProfileVersion: "v1" }),
-      options,
-    );
-    const second = await pool.acquire(
-      makeKey({ authMode: "gitHubToken", authProfileId: "profile", authProfileVersion: "v2" }),
-      options,
-    );
-
-    expect(first.client).not.toBe(second.client);
-    expect(sdk.ctorCalls.length).toBe(2);
-  });
-
-  it("release decrements; non-zero refcount keeps client alive", async () => {
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 100, sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
-    const second = await pool.acquire(key, options);
-    await pool.release(first);
-
-    expect(first.client).toBe(second.client);
-    expect(sdk.stops).toEqual([]);
-    expect(pool.size()).toBe(1);
-  });
+  it.each(["agentId", "authProfileVersion"] as const)(
+    "different %s creates distinct clients",
+    async (field) => {
+      const { sdk, acquire } = setup();
+      const key: Partial<PoolKey> =
+        field === "agentId" ? {} : { authMode: "gitHubToken", authProfileId: "profile" };
+      const options = field === "agentId" ? {} : { gitHubToken: "token-a", useLoggedInUser: false };
+      const first = await acquire({ ...key, [field]: "v1" }, options);
+      const second = await acquire({ ...key, [field]: "v2" }, options);
+      expect(first.client).not.toBe(second.client);
+      expect(sdk.ctorCalls.length).toBe(2);
+    },
+  );
 
   it("acquire during idle window cancels teardown and reuses", async () => {
     vi.useFakeTimers();
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 50, sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
+    const { sdk, pool, acquire } = setup(50);
+    const first = await acquire();
     await pool.release(first);
     await vi.advanceTimersByTimeAsync(25);
 
-    const second = await pool.acquire(key, options);
+    const second = await acquire();
 
     expect(second.client).toBe(first.client);
     expect(sdk.ctorCalls.length).toBe(1);
@@ -181,19 +113,15 @@ describe("createCopilotClientPool", () => {
   it("acquire during stopping awaits stop(), then creates fresh client", async () => {
     vi.useFakeTimers();
     const stopDeferred = createDeferred<Error[]>();
-    const sdk = makeFake({
+    const { sdk, pool, acquire } = setup(10, {
       stop: async () => stopDeferred.promise,
     });
-    const pool = createCopilotClientPool({ idleTtlMs: 10, sdkFactory: sdk.fake });
-    const key = makeKey();
-    const options = makeOptions();
-
-    const first = await pool.acquire(key, options);
+    const first = await acquire();
     await pool.release(first);
     await vi.advanceTimersByTimeAsync(10);
 
     let settled = false;
-    const secondPromise = pool.acquire(key, options).then((value) => {
+    const secondPromise = acquire().then((value) => {
       settled = true;
       return value;
     });
@@ -211,6 +139,7 @@ describe("createCopilotClientPool", () => {
   });
 
   it("concurrent acquire dedupes", async () => {
+    vi.useFakeTimers();
     const clientDeferred = createDeferred<CopilotClient>();
     const sdkFactory = vi.fn(async () => clientDeferred.promise);
     const pool = createCopilotClientPool({ sdkFactory });
@@ -223,19 +152,20 @@ describe("createCopilotClientPool", () => {
 
     expect(sdkFactory.mock.calls.length).toBe(1);
 
-    const client = {
-      id: 1,
-      copilotHome: "copilot-home",
-      start: vi.fn(async () => undefined),
-      stop: vi.fn(async () => []),
-      createSession: vi.fn(async () => ({})),
-      disconnect: vi.fn(),
-    } as unknown as CopilotClient;
+    const stop = vi.fn(async () => []);
+    const client = makeClient(1, stop) as unknown as CopilotClient;
     clientDeferred.resolve(client);
     const [first, second] = await Promise.all([firstPromise, secondPromise]);
 
     expect(first.client).toBe(second.client);
     expect(sdkFactory.mock.calls.length).toBe(1);
+    await pool.release(first);
+    await vi.runAllTimersAsync();
+    expect(stop).not.toHaveBeenCalled();
+
+    await pool.release(second);
+    await vi.runAllTimersAsync();
+    expect(stop).toHaveBeenCalledOnce();
   });
 
   it("synchronous constructor failure is not cached", async () => {
@@ -245,18 +175,9 @@ describe("createCopilotClientPool", () => {
       if (attempt === 1) {
         throw new Error(`constructor failed for ${String(clientOptions.baseDirectory)}`);
       }
-      return {
-        id: attempt,
-        copilotHome: clientOptions.baseDirectory,
-        start: vi.fn(async () => undefined),
-        stop: vi.fn(async () => []),
-        createSession: vi.fn(async () => ({})),
-        disconnect: vi.fn(),
-      } as unknown as CopilotClient;
+      return makeClient(attempt) as unknown as CopilotClient;
     };
-    const pool = createCopilotClientPool({
-      sdkFactory: createClient,
-    });
+    const pool = createCopilotClientPool({ sdkFactory: createClient });
 
     await expect(pool.acquire(makeKey(), makeOptions())).rejects.toThrow("constructor failed for");
     expect(pool.size()).toBe(0);
@@ -269,9 +190,8 @@ describe("createCopilotClientPool", () => {
 
   it("double release is a no-op", async () => {
     vi.useFakeTimers();
-    const sdk = makeFake();
-    const pool = createCopilotClientPool({ idleTtlMs: 100, sdkFactory: sdk.fake });
-    const handle = await pool.acquire(makeKey(), makeOptions());
+    const { sdk, pool, acquire } = setup(100);
+    const handle = await acquire();
 
     await pool.release(handle);
     await pool.release(handle);
@@ -284,23 +204,13 @@ describe("createCopilotClientPool", () => {
   });
 
   it("dispose stops all clients exactly once, aggregates errors, clears the map", async () => {
-    const sdk = makeFake({
+    const { sdk, pool, acquire } = setup(1000, {
       stop: (client) => [new Error(`stop-${client.id}-a`), new Error(`stop-${client.id}-b`)],
     });
-    const pool = createCopilotClientPool({ idleTtlMs: 1000, sdkFactory: sdk.fake });
 
-    const first = await pool.acquire(
-      makeKey({ agentId: "agent-a", copilotHome: "home-a" }),
-      makeOptions({ copilotHome: "home-a" }),
-    );
-    const second = await pool.acquire(
-      makeKey({ agentId: "agent-b", copilotHome: "home-b" }),
-      makeOptions({ copilotHome: "home-b" }),
-    );
-    await pool.acquire(
-      makeKey({ agentId: "agent-c", copilotHome: "home-c" }),
-      makeOptions({ copilotHome: "home-c" }),
-    );
+    const first = await acquire({ agentId: "agent-a" }, { copilotHome: "home-a" });
+    const second = await acquire({ agentId: "agent-b" }, { copilotHome: "home-b" });
+    await acquire({ agentId: "agent-c" }, { copilotHome: "home-c" });
     await pool.release(second);
 
     const errors = await pool.dispose();
@@ -323,32 +233,17 @@ describe("createCopilotClientPool", () => {
   });
 
   it("dispose during in-flight acquire", async () => {
-    const clientDeferred = createDeferred<void>();
-    const stopped: number[] = [];
-    const sdkFactory = async () => {
-      const client = {
-        id: 1,
-        copilotHome: "copilot-home",
-        start: vi.fn(async () => undefined),
-        stop: vi.fn(async () => {
-          stopped.push(1);
-          return [];
-        }),
-        createSession: vi.fn(async () => ({})),
-        disconnect: vi.fn(),
-      } as unknown as CopilotClient;
-      await clientDeferred.promise;
-      return client;
-    };
-    const pool = createCopilotClientPool({ sdkFactory });
+    const clientDeferred = createDeferred<CopilotClient>();
+    const client = makeClient(1);
+    const pool = createCopilotClientPool({ sdkFactory: async () => clientDeferred.promise });
 
     const acquirePromise = pool.acquire(makeKey(), makeOptions());
     const disposePromise = pool.dispose();
-    clientDeferred.resolve();
+    clientDeferred.resolve(client as unknown as CopilotClient);
 
     await expect(acquirePromise).rejects.toThrow("[copilot-pool] pool disposed");
     expect(await disposePromise).toEqual([]);
-    expect(stopped).toEqual([1]);
+    expect(client.stop).toHaveBeenCalledOnce();
     await expect(pool.acquire(makeKey(), makeOptions())).rejects.toThrow(
       "[copilot-pool] pool disposed",
     );
@@ -356,12 +251,11 @@ describe("createCopilotClientPool", () => {
 
   it("concurrent dispose waits for the in-flight shutdown and does not duplicate errors", async () => {
     const stopDeferred = createDeferred<Error[]>();
-    const sdk = makeFake({
+    const { sdk, pool, acquire } = setup(undefined, {
       stop: async () => stopDeferred.promise,
     });
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
 
-    await pool.acquire(makeKey(), makeOptions());
+    await acquire();
 
     const firstDisposePromise = pool.dispose();
     const secondDisposePromise = pool.dispose();
@@ -378,14 +272,12 @@ describe("createCopilotClientPool", () => {
   });
 
   it("normalizes non-Error stop failures during dispose", async () => {
-    const sdk = makeFake({
+    const { pool, acquire } = setup(undefined, {
       stop: () => {
         throw toLintErrorObject("stop-string", "Non-Error thrown");
       },
     });
-    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
-
-    await pool.acquire(makeKey(), makeOptions());
+    await acquire();
 
     const errors = await pool.dispose();
 
@@ -397,24 +289,19 @@ describe("createCopilotClientPool", () => {
     Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 
     try {
-      const sdk = makeFake();
-      const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+      const { sdk, acquire } = setup();
       const firstHome = "C:/Users/Tester/CopilotHome/";
       const secondHome = "c:/users/tester/copilothome";
 
-      const first = await pool.acquire(
-        makeKey({ copilotHome: firstHome }),
-        makeOptions({ copilotHome: firstHome }),
-      );
-      const second = await pool.acquire(
-        makeKey({ copilotHome: secondHome }),
-        makeOptions({ copilotHome: secondHome }),
-      );
+      const first = await acquire({ copilotHome: firstHome }, { copilotHome: firstHome });
+      const second = await acquire({ copilotHome: secondHome }, { copilotHome: secondHome });
 
-      const normalizedHome = normalizeHomeForTest(firstHome);
+      const normalizedHome = resolve(firstHome).toLowerCase();
       expect(first.client).toBe(second.client);
-      expect(first.key.copilotHome).toBe(normalizedHome);
-      expect(second.key.copilotHome).toBe(normalizedHome);
+      expect([first.key.copilotHome, second.key.copilotHome]).toEqual([
+        normalizedHome,
+        normalizedHome,
+      ]);
       expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
     } finally {
       Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });

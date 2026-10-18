@@ -14,6 +14,7 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
+import { prepareAuthProfileProvider } from "../agents/auth-profiles/store-runtime.js";
 import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
@@ -144,18 +145,27 @@ export async function prepareSessionsPatchEntry(
     "model" in params.patch ||
     "agentRuntime" in params.patch ||
     "contextWindow" in params.patch;
+  const sessionAgentId = normalizeAgentId(
+    params.agentId ??
+      parseAgentSessionKey(params.storeKey)?.agentId ??
+      resolveDefaultAgentId(params.cfg),
+  );
   const acpMeta = needsRuntimeMetadata
     ? await readAcpSessionMetaForEntryAsync({
         sessionKey: params.storeKey,
-        agentId: normalizeAgentId(
-          params.agentId ??
-            parseAgentSessionKey(params.storeKey)?.agentId ??
-            resolveDefaultAgentId(params.cfg),
-        ),
+        agentId: sessionAgentId,
         entry: params.existingEntry,
       })
     : undefined;
-  const projection = projectSessionPatchSteps(params, acpMeta);
+  const pinnedProfile =
+    "model" in params.patch && params.existingEntry?.authProfileOverride?.trim();
+  const recordedProvider = pinnedProfile
+    ? await prepareAuthProfileProvider({
+        agentDir: resolveAgentDir(params.cfg, sessionAgentId),
+        profileId: pinnedProfile,
+      })
+    : undefined;
+  const projection = projectSessionPatchSteps(params, acpMeta, recordedProvider);
   const first = projection.next();
   if (first.done) {
     return { kind: "complete", result: first.value };
@@ -191,6 +201,7 @@ export async function projectSessionsPatchEntry(
 function* projectSessionPatchSteps(
   params: SessionPatchProjectionParams,
   acpMeta: SessionAcpMeta | undefined,
+  recordedProvider: { provider: string | undefined } | undefined,
 ): Generator<void, SessionPatchProjectionResult, ModelCatalogSnapshot | undefined> {
   const { cfg, storeKey, patch, creation } = params;
   const now = Date.now();
@@ -259,6 +270,7 @@ function* projectSessionPatchSteps(
       model,
       catalog: selected ? [selected] : catalog,
       agentRuntime,
+      configuredReasoning: logical?.configuredReasoning ?? logical?.reasoning,
     });
   }
 
@@ -563,7 +575,7 @@ function* projectSessionPatchSteps(
         typeof patch.agentRuntime === "string" &&
         splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
       ) {
-        return invalid("agentRuntime requires an explicit canonical provider/model selection");
+        return invalid("agentRuntime requires an explicit provider/model selection using full IDs");
       }
       const runtime = resolveModelRuntimeDirective({
         cfg,
@@ -578,7 +590,7 @@ function* projectSessionPatchSteps(
         typeof patch.agentRuntime === "string" &&
         (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime)
       ) {
-        return invalid("Use a canonical agentRuntime id, or null to follow configured routing");
+        return invalid("Use a full agentRuntime ID, or null to follow configured routing");
       }
       applyModelRuntimeDirective(next, runtime);
       if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
@@ -633,6 +645,7 @@ function* projectSessionPatchSteps(
         selection,
         explicitDefaultSelection: selection.isDefault,
         profileOverride: selection.profile,
+        recordedProvider,
         ...(params.providerAuthMetadataSnapshot
           ? { metadataSnapshot: params.providerAuthMetadataSnapshot }
           : {}),

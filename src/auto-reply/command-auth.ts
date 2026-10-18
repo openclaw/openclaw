@@ -18,6 +18,7 @@ import {
   resolveUpdateChannelOperatorAdminIdentityAuthority,
   type ResolvedChannelOperatorIdentity,
 } from "../gateway/channel-operator-authority.js";
+import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
@@ -90,7 +91,7 @@ function resolveExplicitProviderFromContext(
     return { providerId: undefined, hadResolutionError: false };
   }
   const direct =
-    normalizeAnyChannelId(explicitMessageChannel ?? undefined) ??
+    normalizeAnyChannelId(explicitMessageChannel) ??
     (explicitMessageChannel as ChannelId | undefined) ??
     normalizeAnyChannelId(ctx.Provider) ??
     normalizeAnyChannelId(ctx.Surface) ??
@@ -107,7 +108,7 @@ function resolveExplicitProviderFromContext(
       return { providerId: undefined, hadResolutionError: false };
     }
     const normalized =
-      normalizeAnyChannelId(normalizedCandidateChannel ?? undefined) ??
+      normalizeAnyChannelId(normalizedCandidateChannel) ??
       (normalizedCandidateChannel as ChannelId | undefined) ??
       normalizeAnyChannelId(candidate);
     if (normalized) {
@@ -533,9 +534,15 @@ function resolveCommandAuthorizationState(
   };
 }
 
+/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlists. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {
+  warnPluginSdkDeprecation({
+    family: "command-authorization-sync",
+    method: "resolveCommandAuthorization",
+    replacement: "resolveCommandAuthorizationAsync",
+  });
   return resolveCommandAuthorizationState(params).authorization;
 }
 

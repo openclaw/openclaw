@@ -1,0 +1,263 @@
+import fs from "node:fs";
+import { createServer } from "node:http";
+import { createOpenAICompletionsTransportStreamFn } from "@openclaw/ai/transports";
+import { describe, expect, it } from "vitest";
+import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import "../agents/ai-transport-runtime-host.js";
+import {
+  clearEmbeddedSessionForkSnapshot,
+  wrapStreamFnWithSessionFork,
+} from "../agents/embedded-agent-runner/session-fork.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
+import { attachModelProviderRequestTransport } from "../agents/provider-request-config.js";
+import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Model } from "../llm/types.js";
+import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import {
+  createColdPluginFixture,
+  createColdPluginHermeticEnv,
+} from "../plugins/test-helpers/cold-plugin-fixtures.js";
+import { resetCommandQueueStateForTest } from "../process/command-queue.test-support.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { reserveTestPortListener } from "../test-utils/port-claims.js";
+import {
+  disposeSessionReadContexts,
+  identifiedClient,
+  initializeSessionReadContext,
+  requestContext,
+} from "./server-methods/sessions-read-cache.test-support.js";
+import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+
+const PLUGIN_ID = "test-session-fork-transport";
+const SESSION_ID = "fork-transport-parent";
+const SESSION_KEY = "agent:research:fork-transport-parent";
+const API_KEY = "synthetic-fork-transport-key";
+
+type RecordedRequest = {
+  url: string | undefined;
+  authorization: string | undefined;
+  body: unknown;
+};
+
+describe("plugin session fork visibility transport", () => {
+  it("sends no request for another operator's session but lets its owner reach the provider", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const providerDir = state.path("provider");
+      fs.mkdirSync(providerDir);
+      const fixture = createColdPluginFixture({
+        rootDir: providerDir,
+        pluginId: "isolated-fork-fixture",
+        providerId: "isolated-fork-provider",
+      });
+      fs.writeFileSync(
+        fixture.runtimeSource,
+        `module.exports = { id: ${JSON.stringify(fixture.pluginId)}, register(api) {
+          api.registerProvider({
+            id: ${JSON.stringify(fixture.providerId)}, label: "Isolated fork transport", auth: [],
+          });
+        } };`,
+      );
+      const requests: RecordedRequest[] = [];
+      const { claim, listener, releaseListener } = await reserveTestPortListener({
+        offsets: [0],
+        createListener: () =>
+          createServer((request, response) => {
+            const recorded: RecordedRequest = {
+              url: request.url,
+              authorization: request.headers.authorization,
+              body: undefined,
+            };
+            requests.push(recorded);
+            let body = "";
+            request.setEncoding("utf8");
+            request.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            request.on("end", () => {
+              recorded.body = JSON.parse(body);
+              writeOpenAiResponsesSse(response, [
+                {
+                  id: "fork-transport-response",
+                  object: "chat.completion.chunk",
+                  model: "fork-model",
+                  choices: [{ index: 0, delta: { content: "fork-ok" }, finish_reason: "stop" }],
+                },
+              ]);
+            });
+          }),
+      });
+      const lifetime = new AbortController();
+      try {
+        await withEnvAsync(
+          {
+            ...createColdPluginHermeticEnv(state.root, {
+              bundledPluginsDir: state.path("bundled-plugins"),
+            }),
+            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+            HTTP_PROXY: undefined,
+            HTTPS_PROXY: undefined,
+            http_proxy: undefined,
+            https_proxy: undefined,
+            ALL_PROXY: undefined,
+            all_proxy: undefined,
+            NO_PROXY: "127.0.0.1,localhost,::1",
+          },
+          async () => {
+            const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
+            const model: Model<"openai-completions"> = {
+              provider: fixture.providerId,
+              id: "fork-model",
+              name: "Fork model",
+              api: "openai-completions",
+              baseUrl,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 1024,
+            };
+            const config: OpenClawConfig = {
+              agents: {
+                defaults: {
+                  workspace: state.workspaceDir,
+                  models: {
+                    [`${fixture.providerId}/fork-model`]: { agentRuntime: { id: "openclaw" } },
+                  },
+                },
+                entries: { research: { model: `${fixture.providerId}/fork-model` } },
+              },
+              models: {
+                providers: {
+                  [fixture.providerId]: {
+                    api: "openai-completions",
+                    apiKey: API_KEY,
+                    baseUrl,
+                    request: { allowPrivateNetwork: true },
+                    models: [model],
+                  },
+                },
+              },
+              plugins: {
+                load: { paths: [fixture.rootDir] },
+                slots: { memory: "none" },
+                entries: {
+                  [fixture.pluginId]: { enabled: true },
+                  [PLUGIN_ID]: { hooks: { allowConversationAccess: true } },
+                },
+              },
+              gateway: {
+                roles: {
+                  default: "limited",
+                  definitions: {
+                    limited: {
+                      agents: ["research"],
+                      scopes: ["operator.read", "operator.write"],
+                      sessions: { others: "none" },
+                    },
+                  },
+                },
+              },
+            };
+            await state.writeConfig(config);
+            setRuntimeConfigSnapshot(config);
+            const owner = ensureProfileForEmail("fork-owner@example.test");
+            const stranger = ensureProfileForEmail("fork-stranger@example.test");
+            await upsertSessionEntryCore(
+              { agentId: "research", sessionKey: SESSION_KEY },
+              {
+                sessionId: SESSION_ID,
+                updatedAt: 1,
+                visibility: "shared",
+                createdActor: { type: "human", source: "profile", id: owner.id },
+              },
+            );
+            const context = requestContext(config);
+            await initializeSessionReadContext(context);
+            const runtime = createGatewaySubagentRuntime(() => context, {}, lifetime.signal);
+            try {
+              // Prepare the parent's replay through the same capture and HTTP transport as a turn.
+              const parent = wrapStreamFnWithSessionFork(
+                createOpenAICompletionsTransportStreamFn(),
+                { agentId: "research", sessionId: SESSION_ID, runId: "parent" },
+              );
+              const parentStream = await parent(
+                attachModelProviderRequestTransport(model, { allowPrivateNetwork: true }),
+                {
+                  systemPrompt: "Stable parent instructions",
+                  messages: [{ role: "user", content: "Parent question", timestamp: 1 }],
+                },
+                { apiKey: API_KEY },
+              );
+              expect((await parentStream.result()).stopReason).toBe("stop");
+              expect(requests).toHaveLength(1);
+              requests.length = 0;
+
+              await expect(
+                withPluginRuntimeGatewayRequestScope(
+                  {
+                    pluginId: PLUGIN_ID,
+                    client: identifiedClient(stranger.id),
+                    isWebchatConnect: () => false,
+                  },
+                  () =>
+                    runtime.forkSession({ sessionKey: SESSION_KEY, message: "Review the parent" }),
+                ),
+              ).rejects.toThrow(`Session "${SESSION_KEY}" was not found`);
+              expect(requests).toHaveLength(0);
+
+              await expect(
+                withPluginRuntimeGatewayRequestScope(
+                  {
+                    pluginId: PLUGIN_ID,
+                    client: identifiedClient(owner.id),
+                    isWebchatConnect: () => false,
+                  },
+                  () =>
+                    runtime.forkSession({ sessionKey: SESSION_KEY, message: "Review the parent" }),
+                ),
+              ).resolves.toMatchObject({ text: "fork-ok" });
+              expect(requests).toHaveLength(1);
+              expect(requests[0]).toMatchObject({
+                url: "/v1/chat/completions",
+                authorization: `Bearer ${API_KEY}`,
+                body: {
+                  model: "fork-model",
+                  messages: [
+                    { role: "system", content: "Stable parent instructions" },
+                    { role: "user", content: "Parent question" },
+                    { role: "user", content: "Review the parent" },
+                  ],
+                },
+              });
+            } finally {
+              lifetime.abort();
+              clearEmbeddedSessionForkSnapshot(SESSION_ID);
+              await disposeSessionReadContexts();
+              await resetPreparedModelRuntimeSnapshotsForTest();
+              await closeProviderTransportDispatcherPool();
+              resetCommandQueueStateForTest();
+              resetConfigRuntimeState();
+              clearPluginMetadataLifecycleCaches();
+              resetPluginLoaderTestStateForTest();
+            }
+          },
+        );
+      } finally {
+        lifetime.abort();
+        listener.closeAllConnections();
+        try {
+          await releaseListener();
+        } finally {
+          await claim.release();
+        }
+      }
+    });
+  });
+});

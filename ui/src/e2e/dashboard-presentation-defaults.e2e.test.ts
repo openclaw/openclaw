@@ -21,7 +21,7 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 const suite = createControlUiE2eSuite({ name: "shared dashboard presentation defaults" });
 const key = "agent:main:dashboard:9a1b2c3d-1234-4567-8901-234567890abc";
 const sessionId = "dashboard-presentation-session";
-const defaultAction = 'wa-dropdown-item[value="dashboard-default"]';
+const defaultAction = '[data-value="dashboard-default"]';
 const defaultStatus = '[data-menu-status="dashboard-default"]';
 
 function row(presentation: "split" | "expanded") {
@@ -351,7 +351,13 @@ suite.define(() => {
       await page.screenshot({ path: path.join(suite.artifactDir, "05-compact-default-menu.png") });
       await selectChatLayoutAction(page, "Use current view as default");
       await gateway.waitForRequest("sessions.patch", { match: { boardPresentation: "expanded" } });
-      await page.getByText("Dashboard default saved for future opens.", { exact: true }).waitFor();
+      const savedMessage = page.getByText("Dashboard default saved for future opens.", {
+        exact: true,
+      });
+      await savedMessage.waitFor();
+      const savedToast = page.getByRole("status").filter({ has: savedMessage });
+      await savedToast.getByRole("button", { name: "Dismiss", exact: true }).click();
+      await savedToast.waitFor({ state: "hidden" });
       await expect.poll(() => page.locator(defaultAction).count()).toBe(0);
       const savedMenu = await openLayoutMenu(page);
       await savedMenu.locator(defaultStatus).waitFor({ state: "visible" });

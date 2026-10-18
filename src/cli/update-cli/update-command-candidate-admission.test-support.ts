@@ -271,6 +271,8 @@ export function registerCandidateAdmissionTests(f: CandidateAdmissionFixture) {
         new Error("Installed plugin catalog is stale."),
       );
 
+      // Freeze only activation time; SQLite workers share real wall-clock deadlines.
+      vi.spyOn(performance, "now").mockReturnValue(performance.now());
       await invokeUpdateCli({ admission: "auto", yes: true, restart: false, json: true, timeout });
 
       expect(packageInstallCommandCall()?.[1].timeoutMs).toBe(

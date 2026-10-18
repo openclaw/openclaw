@@ -94,3 +94,12 @@ export function resetProfileAppearancePrefs(): void {
   state.identity = null;
   clearBackgroundPreferenceIdentity();
 }
+
+export function seedProfileAppearancePrefs(
+  scope: string,
+  profileId: string,
+  prefs: ServerUiPrefs,
+): void {
+  rememberProfileAppearanceIdentity(scope, profileId);
+  state.appearance = { scope, profileId, prefs };
+}

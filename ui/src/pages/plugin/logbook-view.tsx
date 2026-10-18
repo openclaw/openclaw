@@ -10,26 +10,13 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
-import {
-  askLogbook,
-  configureLogbookPolling,
-  getLogbookState,
-  loadLogbook,
-  loadLogbookFramePreview,
-  loadLogbookStandup,
-  localDayKey,
-  runLogbookAnalysisNow,
-  setLogbookCapturePaused,
-  shiftDay,
-} from "./logbook-controller.ts";
-import type { LogbookCardPayload, LogbookStatusPayload } from "./logbook-types.ts";
+import { createLogbook, localDayKey, shiftDay, type LogbookModel } from "./logbook-state.ts";
+import type { LogbookCardPayload, LogbookStatusPayload, LogbookUiState } from "./logbook-types.ts";
 
 export type LogbookProps = {
-  host: object;
   client: GatewayBrowserClient | null;
   connected: boolean;
 };
-type LogbookControllerState = ReturnType<typeof getLogbookState>;
 
 /** Stable category hue so colors stay consistent across renders and days. */
 function categoryHue(category: string): number {
@@ -40,28 +27,32 @@ function categoryHue(category: string): number {
   return Math.abs(hash) % 360;
 }
 
-function StatusChips(props: { status: LogbookStatusPayload }) {
-  const chip = (content: JSX.Element, kind = "", title?: string) => (
-    <span class={["logbook__chip", kind && `logbook__chip--${kind}`]} title={title}>
-      {content}
+function StatusChip(props: { children: JSX.Element; kind?: string; title?: string }) {
+  return (
+    <span
+      class={["logbook__chip", props.kind && `logbook__chip--${props.kind}`]}
+      title={props.title}
+    >
+      {props.children}
     </span>
   );
+}
+
+function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) {
+  return <button class="btn btn--small" type="button" {...props} />;
+}
+
+function StatusChips(props: { status: LogbookStatusPayload }) {
   return (
     <div class="logbook__chips">
-      <span
-        class={[
-          "logbook__chip",
-          {
-            "logbook__chip--ok":
-              props.status.captureEnabled &&
-              !props.status.capturePaused &&
-              !props.status.lastCaptureError,
-            "logbook__chip--warn":
-              !props.status.captureEnabled ||
-              props.status.capturePaused ||
-              Boolean(props.status.lastCaptureError),
-          },
-        ]}
+      <StatusChip
+        kind={
+          props.status.captureEnabled &&
+          !props.status.capturePaused &&
+          !props.status.lastCaptureError
+            ? "ok"
+            : "warn"
+        }
       >
         <span class="logbook__chip-dot" />
         {props.status.capturePaused
@@ -71,72 +62,65 @@ function StatusChips(props: { status: LogbookStatusPayload }) {
                 seconds: String(props.status.captureIntervalSeconds),
               })
             : t("logbook.status.disabled")}
-      </span>
+      </StatusChip>
       <Show when={props.status.nodeName || props.status.nodeId}>
-        {chip(
-          <>
-            <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
-          </>,
-          "",
-          t("logbook.status.nodeHelp"),
-        )}
+        <StatusChip title={t("logbook.status.nodeHelp")}>
+          <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
+        </StatusChip>
       </Show>
       <Show when={props.status.pendingFrames > 0}>
-        {chip(
-          t("logbook.status.pending", { count: String(props.status.pendingFrames) }),
-          "",
-          t("logbook.status.pendingHelp"),
-        )}
+        <StatusChip title={t("logbook.status.pendingHelp")}>
+          {t("logbook.status.pending", { count: String(props.status.pendingFrames) })}
+        </StatusChip>
       </Show>
-      <Show when={props.status.analysisRunning}>{chip(t("logbook.status.analyzing"), "busy")}</Show>
+      <Show when={props.status.analysisRunning}>
+        <StatusChip kind="busy">{t("logbook.status.analyzing")}</StatusChip>
+      </Show>
       <Show when={props.status.lastCaptureError}>
-        {chip(
-          t("logbook.status.captureError"),
-          "error",
-          formatUiExternalText(props.status.lastCaptureError),
-        )}
+        <StatusChip kind="error" title={formatUiExternalText(props.status.lastCaptureError)}>
+          {t("logbook.status.captureError")}
+        </StatusChip>
       </Show>
       <Show when={props.status.lastBatch?.status === "error"}>
-        {chip(
-          t("logbook.status.batchError"),
-          "error",
-          formatUiExternalText(props.status.lastBatch?.error),
-        )}
+        <StatusChip kind="error" title={formatUiExternalText(props.status.lastBatch?.error)}>
+          {t("logbook.status.batchError")}
+        </StatusChip>
       </Show>
       <Show when={props.status.visionModelSource === "missing"}>
-        {chip(t("logbook.status.modelMissing"), "warn", t("logbook.status.modelMissingHelp"))}
+        <StatusChip kind="warn" title={t("logbook.status.modelMissingHelp")}>
+          {t("logbook.status.modelMissing")}
+        </StatusChip>
       </Show>
     </div>
   );
 }
 
 function LogbookCard(props: {
-  state: () => LogbookControllerState;
-  client: GatewayBrowserClient | null;
+  model: LogbookModel;
   card: LogbookCardPayload;
   timeZone: string;
   formatClock: (ms: number, timeZone: string) => string;
 }) {
-  const expanded = () => props.state().expandedCardIds.has(props.card.id);
+  const [expanded, setExpanded] = createSignal(false);
   // Pruned keyframes remain absent rather than retrying on every render.
   const keyframeId = () =>
     props.card.keyframeId !== undefined &&
-    !props.state().framePreviewFailed.has(props.card.keyframeId)
+    !props.model.state.framePreviewFailed.has(props.card.keyframeId)
       ? props.card.keyframeId
       : undefined;
   const preview = () =>
-    keyframeId() !== undefined ? props.state().framePreviews.get(keyframeId()!) : undefined;
+    keyframeId() !== undefined ? props.model.state.framePreviews.get(keyframeId()!) : undefined;
+  // Load the expanded card's missing keyframe through the Gateway-backed preview cache.
   createEffect(
     () => ({
       expanded: expanded(),
       id: keyframeId(),
       preview: preview(),
-      state: props.state(),
-      client: props.client,
+      model: props.model,
     }),
     (current) => {
       if (current.expanded && current.id !== undefined && !current.preview) {
-        void loadLogbookFramePreview(current.state, current.client, current.id);
+        void current.model.loadFrame(current.id);
       }
     },
   );
@@ -145,20 +129,7 @@ function LogbookCard(props: {
       class={["logbook-card", { "logbook-card--expanded": expanded() }]}
       style={{ "--logbook-hue": categoryHue(props.card.category) }}
     >
-      <button
-        class="logbook-card__header"
-        type="button"
-        onClick={() => {
-          const next = new Set(props.state().expandedCardIds);
-          if (expanded()) {
-            next.delete(props.card.id);
-          } else {
-            next.add(props.card.id);
-          }
-          props.state().expandedCardIds = next;
-          props.state().requestUpdate?.();
-        }}
-      >
+      <button class="logbook-card__header" type="button" onClick={() => setExpanded(!expanded())}>
         <span class="logbook-card__time">
           {props.formatClock(props.card.startMs, props.timeZone)}
           <span class="logbook-card__time-sep">–</span>
@@ -217,7 +188,7 @@ function LogbookCard(props: {
   );
 }
 
-function Stats(props: { state: () => LogbookControllerState }) {
+function Stats(props: { state: () => LogbookUiState }) {
   const stats = () => props.state().timeline?.stats;
   const focusPct = () =>
     Math.round(
@@ -275,31 +246,24 @@ function Stats(props: { state: () => LogbookControllerState }) {
   );
 }
 
-function Standup(props: {
-  state: () => LogbookControllerState;
-  client: GatewayBrowserClient | null;
-}) {
+function Standup(props: { model: LogbookModel }) {
   return (
     <section class="card logbook-side__card">
       <div class="logbook-side__card-header">
         <div class="card-title">{t("logbook.standup.title")}</div>
-        <button
-          class="btn btn--small"
-          type="button"
-          disabled={props.state().standupLoading}
-          onClick={() =>
-            void loadLogbookStandup(props.state(), props.client, props.state().standup !== null)
-          }
+        <ActionButton
+          disabled={props.model.state.standupLoading}
+          onClick={() => void props.model.standup(props.model.state.standup !== null)}
         >
-          {props.state().standupLoading
+          {props.model.state.standupLoading
             ? t("common.loading")
-            : props.state().standup
+            : props.model.state.standup
               ? t("logbook.standup.refresh")
               : t("logbook.standup.generate")}
-        </button>
+        </ActionButton>
       </div>
       <Show
-        when={props.state().standup}
+        when={props.model.state.standup}
         fallback={<div class="card-sub">{t("logbook.standup.empty")}</div>}
       >
         {(standup) => (
@@ -314,7 +278,8 @@ function Standup(props: {
   );
 }
 
-function Ask(props: { state: () => LogbookControllerState; client: GatewayBrowserClient | null }) {
+function Ask(props: { model: LogbookModel }) {
+  const [question, setQuestion] = createSignal("");
   return (
     <section class="card logbook-side__card">
       <div class="card-title">{t("logbook.ask.title")}</div>
@@ -322,24 +287,24 @@ function Ask(props: { state: () => LogbookControllerState; client: GatewayBrowse
         class="logbook-ask__form"
         onSubmit={(event) => {
           event.preventDefault();
-          void askLogbook(props.state(), props.client);
+          void props.model.ask(question());
         }}
       >
         <input
           class="logbook-ask__input"
           type="text"
-          value={props.state().askQuestion}
+          value={question()}
           placeholder={t("logbook.ask.placeholder")}
           onInput={(event) => {
-            props.state().askQuestion = event.currentTarget.value;
+            setQuestion(event.currentTarget.value);
           }}
         />
-        <button class="btn btn--small" type="submit" disabled={props.state().askLoading}>
-          {props.state().askLoading ? t("common.loading") : t("logbook.ask.submit")}
-        </button>
+        <ActionButton type="submit" disabled={props.model.state.askLoading}>
+          {props.model.state.askLoading ? t("common.loading") : t("logbook.ask.submit")}
+        </ActionButton>
       </form>
-      <Show when={props.state().askAnswer}>
-        <p class="logbook-ask__answer">{props.state().askAnswer}</p>
+      <Show when={props.model.state.askAnswer}>
+        <p class="logbook-ask__answer">{props.model.state.askAnswer}</p>
       </Show>
     </section>
   );
@@ -351,97 +316,56 @@ export function Logbook(props: LogbookProps) {
     locale.locale();
     return formatTimeMs(ms, { hour: "2-digit", minute: "2-digit", timeZone }, "");
   };
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const state = () => {
-    revision();
-    return getLogbookState(props.host);
-  };
+  const model = createLogbook();
+  const state = () => model.state;
+  // A client change retires logbook requests and starts loading the newly connected Gateway.
   createEffect(
-    () => ({ host: props.host, client: props.client, connected: props.connected }),
-    (current) => {
-      const currentState = getLogbookState(current.host);
-      currentState.requestUpdate = () => setRevision((value) => value + 1);
-      configureLogbookPolling(currentState, current.connected ? current.client : null);
-      if (
-        current.connected &&
-        !currentState.timeline &&
-        !currentState.loading &&
-        !currentState.error
-      ) {
-        void loadLogbook(currentState, current.client);
-      }
-      return () => {
-        currentState.requestUpdate = null;
-        configureLogbookPolling(currentState, null);
-      };
-    },
+    () => (props.connected ? props.client : null),
+    (client) => void (model.connect(client) && model.load()),
   );
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
-  const button = (content: JSX.Element, onClick: () => void, disabled = false, label?: string) => (
-    <button
-      class="btn btn--small"
-      type="button"
-      aria-label={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {content}
-    </button>
-  );
   return (
     <section class="logbook">
       <header class="logbook__header">
         <div class="logbook__daynav">
-          {button(
-            "‹",
-            () => void loadLogbook(state(), props.client, { day: shiftDay(state().day, -1) }),
-            false,
-            t("logbook.nav.previousDay"),
-          )}
+          <ActionButton
+            onClick={() => void model.load({ day: shiftDay(state().day, -1) })}
+            aria-label={t("logbook.nav.previousDay")}
+          >
+            ‹
+          </ActionButton>
           <span class="logbook__day">{state().day}</span>
-          {button(
-            "›",
-            () => void loadLogbook(state(), props.client, { day: shiftDay(state().day, 1) }),
-            isToday(),
-            t("logbook.nav.nextDay"),
-          )}
+          <ActionButton
+            onClick={() => void model.load({ day: shiftDay(state().day, 1) })}
+            disabled={isToday()}
+            aria-label={t("logbook.nav.nextDay")}
+          >
+            ›
+          </ActionButton>
           <Show when={!isToday()}>
-            {button(
-              t("logbook.nav.today"),
-              () => void loadLogbook(state(), props.client, { today: true }),
-            )}
+            <ActionButton onClick={() => void model.load({ today: true })}>
+              {t("logbook.nav.today")}
+            </ActionButton>
           </Show>
         </div>
         <Show when={state().status}>{(status) => <StatusChips status={status()} />}</Show>
         <div class="logbook__actions">
           <Show when={state().status}>
             {(status) => (
-              <button
-                class="btn btn--small"
-                type="button"
+              <ActionButton
                 disabled={state().actionPending || !status().captureEnabled}
-                onClick={() =>
-                  void setLogbookCapturePaused(
-                    state(),
-                    props.client,
-                    !state().status?.capturePaused,
-                  )
-                }
+                onClick={() => void model.setCapturePaused(!state().status?.capturePaused)}
               >
                 {t(status().capturePaused ? "logbook.actions.resume" : "logbook.actions.pause")}
-              </button>
+              </ActionButton>
             )}
           </Show>
-          {button(
-            t("logbook.actions.analyzeNow"),
-            () => void runLogbookAnalysisNow(state(), props.client),
-            state().actionPending,
-          )}
-          {button(
-            <Icon name="refresh" />,
-            () => void loadLogbook(state(), props.client),
-            state().loading,
-          )}
+          <ActionButton onClick={() => void model.analyze()} disabled={state().actionPending}>
+            {t("logbook.actions.analyzeNow")}
+          </ActionButton>
+          <ActionButton onClick={() => void model.load()} disabled={state().loading}>
+            <Icon name="refresh" />
+          </ActionButton>
         </div>
       </header>
       <Show when={state().error}>
@@ -466,8 +390,7 @@ export function Logbook(props: LogbookProps) {
             <For each={state().timeline?.cards ?? []} keyed={(card) => card.id}>
               {(card) => (
                 <LogbookCard
-                  state={state}
-                  client={props.client}
+                  model={model}
                   card={card()}
                   timeZone={state().status!.timeZone}
                   formatClock={formatClock}
@@ -478,8 +401,8 @@ export function Logbook(props: LogbookProps) {
         </div>
         <aside class="logbook__side">
           <Stats state={state} />
-          <Standup state={state} client={props.client} />
-          <Ask state={state} client={props.client} />
+          <Standup model={model} />
+          <Ask model={model} />
         </aside>
       </div>
     </section>

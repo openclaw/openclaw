@@ -179,22 +179,15 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
       if (!existing) {
         try {
-          await store.registerIfAbsent(MSTEAMS_DELEGATED_TOKEN_KEY, token);
+          if (!(await store.registerIfAbsent(MSTEAMS_DELEGATED_TOKEN_KEY, token))) {
+            throw new Error("Canonical state appeared during offline import.");
+          }
         } catch (error) {
           warnings.push(
             `Failed importing ${MSTEAMS_PLUGIN_ID} delegated OAuth token: ${String(error)}; left legacy source in place`,
           );
           return { changes, warnings };
         }
-      }
-      const persisted = normalizeMSTeamsDelegatedTokens(
-        await store.lookup(MSTEAMS_DELEGATED_TOKEN_KEY),
-      );
-      if (!persisted || JSON.stringify(persisted) !== JSON.stringify(token)) {
-        warnings.push(
-          `Failed verifying ${MSTEAMS_PLUGIN_ID} delegated OAuth token in plugin state; left legacy source in place`,
-        );
-        return { changes, warnings };
       }
       changes.push(`Migrated ${MSTEAMS_PLUGIN_ID} delegated OAuth token -> plugin state`);
       await archiveLegacyStateSource({

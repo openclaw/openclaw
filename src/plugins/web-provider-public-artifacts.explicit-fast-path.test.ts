@@ -1,6 +1,12 @@
 // Verifies explicit web-provider artifact fast paths avoid runtime loading.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const warn = vi.hoisted(() => vi.fn());
+vi.mock("../logging/subsystem.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
+  createSubsystemLogger: () => ({ warn, info: vi.fn(), error: vi.fn(), debug: vi.fn() }),
+}));
+
 const { loadPluginManifestRegistryMock } = vi.hoisted(() => ({
   loadPluginManifestRegistryMock: vi.fn(() => {
     throw new Error("manifest registry should stay off the explicit bundled fast path");
@@ -133,6 +139,7 @@ function expectSingleProvider<T>(providers: T[] | null | undefined): T {
 
 describe("web provider public artifacts explicit fast path", () => {
   beforeEach(() => {
+    warn.mockClear();
     loadPluginManifestRegistryMock.mockClear();
     loadBundledPluginPublicArtifactModuleFromCandidatesSyncMock.mockClear();
     loadBundledPluginPublicArtifactModuleSyncMock.mockClear();
@@ -146,6 +153,10 @@ describe("web provider public artifacts explicit fast path", () => {
     );
 
     expect(provider.pluginId).toBe("mockplugin");
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/web providers.*mockplugin/),
+      { error: expect.objectContaining({ message: "fuzzplugin web provider factory failed" }) },
+    );
     expect(provider.id).toBe("mockplugin");
     expect(provider.createTool({ config: {} as never })).toBeNull();
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
@@ -161,6 +172,7 @@ describe("web provider public artifacts explicit fast path", () => {
         onlyPluginIds: ["fuzzplugin"],
       }),
     ).toThrow("Unable to initialize web providers for plugin fuzzplugin");
+    expect(warn).not.toHaveBeenCalled();
 
     expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
       dirName: "fuzzplugin",

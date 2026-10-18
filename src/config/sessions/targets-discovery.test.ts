@@ -7,11 +7,11 @@ import * as sessionDirs from "../../agents/session-dirs.js";
 import type { OpenClawConfig } from "../config.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { replaceSessionEntry } from "./session-accessor.js";
+import { resolveExistingAgentSessionStoreTargetsSync } from "./targets-discovery.native.js";
 import {
   resolveAgentSessionStoreTargetsSync,
   resolveAllAgentSessionStoreCandidateTargetsSync,
   resolveAllAgentSessionStoreTargetsSync,
-  resolveExistingAgentSessionStoreTargetsSync,
 } from "./targets.js";
 import {
   countMatching,

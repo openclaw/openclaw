@@ -43,6 +43,11 @@ describe("azure speech tts", () => {
     expect(inferAzureSpeechFileExtension("ogg-24khz-16bit-mono-opus")).toBe(".ogg");
     expect(inferAzureSpeechFileExtension("riff-24khz-16bit-mono-pcm")).toBe(".wav");
     expect(inferAzureSpeechFileExtension("raw-8khz-8bit-mono-mulaw")).toBe(".pcm");
+    expect(inferAzureSpeechFileExtension("webm-24khz-16bit-mono-opus")).toBe(".webm");
+    expect(inferAzureSpeechFileExtension("amr-wb-16000hz")).toBe(".amr");
+    expect(inferAzureSpeechFileExtension("RIFF-24KHZ-16BIT-MONO-PCM")).toBe(".wav");
+    expect(inferAzureSpeechFileExtension("ogg-mp3")).toBe(".mp3");
+    expect(inferAzureSpeechFileExtension("unknown")).toBe(".audio");
     expect(isAzureSpeechVoiceCompatible("ogg-24khz-16bit-mono-opus")).toBe(true);
     expect(isAzureSpeechVoiceCompatible("webm-24khz-16bit-mono-opus")).toBe(false);
   });

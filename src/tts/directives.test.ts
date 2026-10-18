@@ -1,6 +1,7 @@
 // TTS directive tests cover parsing and applying speech directives.
 import { describe, expect, it } from "vitest";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
+import { createSpeechDirectiveParser } from "./directive-parser.js";
 import { createTtsDirectiveTextStreamCleaner, parseTtsDirectives } from "./directives.js";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -59,6 +60,34 @@ const fullPolicy: SpeechModelOverridePolicy = {
 };
 
 describe("parseTtsDirectives provider-aware routing", () => {
+  it("accumulates provider patches without asking the provider to copy prior overrides", () => {
+    const provider = makeProvider(
+      "example",
+      10,
+      createSpeechDirectiveParser({
+        voice: ["allowVoice", ["voice"]],
+        speed: [
+          "allowVoiceSettings",
+          ["speed"],
+          {
+            number: { range: { min: 0.5, max: 2 }, warning: () => "invalid speed" },
+          },
+        ],
+      }),
+    );
+    const result = parseTtsDirectives(
+      "[[tts:provider=example voice=speaker speed=1.25]]",
+      fullPolicy,
+      {
+        providers: [provider],
+      },
+    );
+    expect(result.overrides.providerOverrides?.example).toStrictEqual({
+      voice: "speaker",
+      speed: 1.25,
+    });
+    expect(result.warnings).toStrictEqual([]);
+  });
   it("does not resolve providers when text has no directives", () => {
     const failProvider = {
       get id() {
@@ -196,7 +225,7 @@ describe("parseTtsDirectives provider-aware routing", () => {
 
   const ttsExample =
     "[[tts:text]]hidden example[[/tts:text]] [[tts]]visible example[[/tts]] " +
-    "[[tts:provider=elevenlabs speed=1.2]] [[tts]] [[/tts:text]]";
+    "[[tts:provider=elevenlabs speed=1.2]] [[tts:Here is your answer]] [[tts]] [[/tts:text]]";
 
   it.each([
     {
@@ -240,6 +269,41 @@ describe("createTtsDirectiveTextStreamCleaner", () => {
 
     expect(cleaner.push("Shown [[tts:text]]hid")).toBe("Shown ");
     expect(cleaner.push("den[[/tts:text]] visible")).toBe(" visible");
+    expect(cleaner.flush()).toBe("");
+  });
+
+  it.each([
+    [["Some [[tts:hello there]] note"], "Some hello there note"],
+    [["Go [[tts:", "answered aloud]] back"], "Go answered aloud back"],
+    [["Done. [[tts:first line\nsecond line]] more"], "Done. first line\nsecond line more"],
+    [["Go [[tts:\nhello]] now"], "Go hello now"],
+    [["[[tts]]read", " this[[/tts]] now"], "read this now"],
+    [["See [[note"], "See [[note"],
+    [
+      ["[[tts:text]]Press the ` key.[[/tts:text]] Visible. [[tts:text]]Audio only.[[/tts:text]]"],
+      " Visible. ",
+    ],
+    [
+      [
+        "[[tts:text]]Press the ` key.[[/tts:text]]",
+        " Visible. [[tts:text]]Audio only.[[/tts:text]]",
+      ],
+      " Visible. ",
+    ],
+  ] as const)("preserves visible reply text across chunks: %j", (chunks, expected) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("") + cleaner.flush()).toBe(expected);
+  });
+
+  it.each([
+    ["```\n", "[[tts:literal", " speech]]\n", "```\n"],
+    ["Use `", "[[tts:literal", " speech]]", "` here."],
+    ["~~~\n~~~ [[note]]\n[[tts:Literal speech]]\n~~~"],
+    ["~~~\n~~~ [[tts:voice=alloy]]\n[[tts:Literal speech]]\n~~~"],
+  ])("preserves code literals across chunks: %j", (...chunks) => {
+    const cleaner = createTtsDirectiveTextStreamCleaner();
+    expect(chunks.map((chunk) => cleaner.push(chunk)).join("")).toBe(chunks.join(""));
+    expect(cleaner.push("\n[[tts:Visible speech]]")).toBe("\nVisible speech");
     expect(cleaner.flush()).toBe("");
   });
 });

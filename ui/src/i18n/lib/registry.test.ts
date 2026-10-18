@@ -22,7 +22,9 @@ describe("resolveNavigatorLocale", () => {
     ["ja-JP", "ja-JP"],
     ["he-IL", "he"],
     ["he", "he"],
-    ["sv-SE", "en"],
+    ["sv-SE", "sv"],
+    ["sv-FI", "sv"],
+    ["nb-NO", "en"],
     ["", "en"],
   ] as const)("maps browser language %s to %s", (browserLanguage, expectedLocale) => {
     expect(resolveNavigatorLocale(browserLanguage)).toBe(expectedLocale);

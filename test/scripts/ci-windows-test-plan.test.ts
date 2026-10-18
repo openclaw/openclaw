@@ -4,7 +4,7 @@ import { isPrExemptRuntimeTestFile } from "../../scripts/lib/ci-proof-test-inven
 import { createWindowsTestShards } from "../../scripts/lib/ci-windows-test-plan.mts";
 import { resolveVitestPretestBuildMode } from "../../scripts/lib/vitest-build-prerequisites.mts";
 
-const command = "node --import ./scripts/tsx.mjs scripts/test-projects.mts";
+const command = "node scripts/test-projects.mts";
 
 function packageScripts(files: string[]) {
   const middle = Math.ceil(files.length / 2);
@@ -28,8 +28,9 @@ describe("Windows CI whole-file placement", () => {
     expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
       inventory.toSorted(compareFiles),
     );
-    // The Windows long-path identity regression (#162332) rounds every shard to 428s; retain the approved tiny budget bump.
-    expect(shards.every((shard) => shard.predicted_seconds < 429)).toBe(true);
+    // The managed-handoff regression adds one unmeasured 3s fallback envelope to the
+    // previous 428s maximum; 431s bounds placement, not measured runtime or a timeout.
+    expect(shards.every((shard) => shard.predicted_seconds < 432)).toBe(true);
     expect(
       shards.filter(
         (shard) =>
@@ -88,6 +89,15 @@ describe("Windows CI whole-file placement", () => {
 
   it.each([
     { "test:windows:ci:1": `${command} src/first.test.ts` },
+    {
+      ...packageScripts(["src/first.test.ts", "src/second.test.ts"]),
+      "test:windows:ci:1":
+        "node --import ./scripts/tsx.mjs scripts/test-projects.mts src/first.test.ts",
+    },
+    {
+      ...packageScripts(["src/first.test.ts", "src/second.test.ts"]),
+      "test:windows:ci:1": `echo ignored && ${command} src/first.test.ts`,
+    },
     packageScripts(["src/repeated.test.ts", "src/repeated.test.ts"]),
     packageScripts(["src/first.test.ts", "src/*.test.ts"]),
     packageScripts(["src/first.test.ts", "src/second.test.ts --testNamePattern=partial"]),

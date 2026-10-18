@@ -13,7 +13,7 @@ import { sharingPolicyClient, rolePolicyConfig } from "./session-sharing.test-ut
 afterEach(() => vi.restoreAllMocks());
 
 it("refreshes retained sharing facts on profile changes and clears them when identity detaches", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const source = ensureProfileForEmail("source@example.test");
     const target = ensureProfileForEmail("target@example.test");
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
@@ -58,7 +58,7 @@ it("refreshes retained sharing facts on profile changes and clears them when ide
 });
 
 it("uses fresh prepared caller, alias, role, and membership facts without querying SQLite", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
     const owner = ensureProfileForEmail("owner@example.test");
     const oldOwner = ensureProfileForEmail("old-owner@example.test");
     const target = {

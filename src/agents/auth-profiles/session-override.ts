@@ -23,6 +23,7 @@ import {
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
+  readAuthProfileUsageStats,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 import { resolveProviderModelAuthPolicy } from "../model-auth-policy.js";
@@ -31,7 +32,6 @@ import { splitTrailingAuthProfile } from "../model-ref-profile.js";
 import { resolveModelRouteIntent } from "../model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
@@ -251,7 +251,7 @@ function isProfileGloballyInCooldown(store: AuthProfileStore, profileId: string)
   if (!isProfileInCooldown(store, profileId)) {
     return false;
   }
-  const usage = store.usageStats?.[profileId];
+  const usage = readAuthProfileUsageStats(store, profileId);
   if (!usage) {
     return true;
   }
@@ -590,7 +590,6 @@ export async function resolveSessionAuthSelection(params: {
   modelId: string;
   agentId: string;
   configuredProfileId?: string;
-  harnessRuntime?: string;
   agentDir: string;
   reader?: SessionEntryCohortReader;
   sessionEntry?: SessionEntry;
@@ -607,16 +606,10 @@ export async function resolveSessionAuthSelection(params: {
     provider: params.provider,
     modelId,
   });
-  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
-    provider: params.provider,
-    harnessRuntime: params.harnessRuntime,
-    config: params.cfg,
-  });
   const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
     ...params,
     cfg,
     modelId,
-    acceptedProviderIds,
   });
   const rotatedSource = rotatedProfileId
     ? params.sessionEntry?.authProfileOverride?.trim() === rotatedProfileId
@@ -657,7 +650,7 @@ export async function resolveSessionAuthSelection(params: {
     profileId === configuredProfileId &&
     !isProfileForProvider({
       cfg,
-      providers: uniqueProviders(params.provider, acceptedProviderIds),
+      providers: uniqueProviders(params.provider),
       profileId,
       store: authStore,
     })

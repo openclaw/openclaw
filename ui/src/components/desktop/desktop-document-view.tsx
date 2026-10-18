@@ -2,25 +2,25 @@ import type { JSX } from "@solidjs/web";
 import { registerDesktopEnglish } from "../../i18n/locales/en-desktop.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { Icon } from "../solid/icon.tsx";
+import type { DesktopMobileKeyboard } from "./desktop-mobile-keyboard.ts";
 import {
   DesktopLoading,
   DesktopPanelContent,
   DesktopSizing,
+  DesktopSurface,
   type DesktopSizingOptions,
 } from "./desktop-panel-view.tsx";
 
 registerEnglishCatalog(registerDesktopEnglish);
 
 type DesktopDocumentViewOptions = Omit<Parameters<typeof DesktopPanelContent>[0], "connection"> & {
+  surfaceRef: (element: HTMLElement | undefined) => void;
   controlling: boolean;
   sizing: DesktopSizingOptions;
-  keyboardInputValue: string;
+  keyboard: DesktopMobileKeyboard;
   pictureInPictureControl: JSX.Element;
   audioControl?: JSX.Element;
   onControlToggle: () => void;
-  onKeyboardFocus: (event: MouseEvent) => void;
-  onKeyboardEvent: (event: KeyboardEvent) => void;
-  onKeyboardInput: (event: InputEvent) => void;
   onClose: () => void;
 };
 
@@ -32,11 +32,12 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
         connection={() => (
           <div class="desktop-stage">
             {/* noVNC owns this island; controls remain Solid-owned siblings. */}
-            <div class="desktop-surface" />
+            <DesktopSurface bind={props.surfaceRef} />
             {props.state === "connecting" && (
               <DesktopLoading label={t("desktop.connecting")} overlay />
             )}
             <textarea
+              ref={props.keyboard.inputRef}
               class="desktop-keyboard-input"
               inputmode="text"
               autocomplete="off"
@@ -45,10 +46,9 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
               tabindex={-1}
               aria-label={t("desktop.keyboardInput")}
               disabled={props.state !== "connected" || !props.controlling}
-              value={props.keyboardInputValue}
-              onKeyDown={props.onKeyboardEvent}
-              onKeyUp={props.onKeyboardEvent}
-              onInput={props.onKeyboardInput}
+              onKeyDown={(event) => props.keyboard.handleKeyboardEvent(event)}
+              onKeyUp={(event) => props.keyboard.handleKeyboardEvent(event)}
+              onInput={(event) => props.keyboard.handleInput(event)}
             />
             <nav class="desktop-touch-toolbar" aria-label={t("desktop.touchControls")}>
               {props.audioControl}
@@ -75,7 +75,7 @@ export function DesktopDocumentView(props: DesktopDocumentViewOptions) {
                 type="button"
                 aria-label={t("desktop.keyboard")}
                 disabled={props.state !== "connected" || !props.controlling}
-                onClick={props.onKeyboardFocus}
+                onClick={(event) => props.keyboard.focus(event)}
               >
                 <span class="desktop-touch-action__icon" aria-hidden="true">
                   <svg

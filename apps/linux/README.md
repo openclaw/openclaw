@@ -2,6 +2,10 @@
 
 The desktop app is a Tauri v2 shell for Linux and Windows, supporting local and remote OpenClaw Gateways. It discovers nearby Gateways over Bonjour, installs the CLI when local setup needs it, delegates local Gateway service management to `openclaw gateway`, opens the selected Gateway's Control UI, and stays available in the system tray.
 
+On Windows, the native [Windows Hub](https://docs.openclaw.ai/platforms/windows#recommended-windows-hub)
+is the recommended desktop app. This cross-platform Tauri app is the backup,
+with a local Windows Gateway through bundled Bun or a remote Gateway connection.
+
 On macOS, the Tauri build is named **OpenClaw-Tauri** so it can be installed alongside the native **OpenClaw** app. It retains its separate bundle identity when updated.
 
 Dashboard widgets and browser panels load inside the app. Browser tabs belong to their conversation and support back, forward, reload, stop, snapshots, element inspection, and saving the current page or asset. Opening the same address in a conversation reuses its tab; other conversations keep their own tabs. Popups opened by a browser tab stay in that conversation.
@@ -53,10 +57,16 @@ requirement.
 See [Desktop compatibility](https://docs.openclaw.ai/platforms/linux#desktop-compatibility)
 for package updates, desktop limitations, and native-app distinctions.
 
-New Session uses `Cmd+Shift+O` on macOS and `Ctrl+Shift+O` on Linux and Windows
-only while its dashboard is focused. Quick Chat keeps the separate global
+New Session uses `Cmd+N` on macOS and `Ctrl+N` on Linux and Windows
+only while its dashboard is focused. Web browsers keep `Cmd+Shift+O` or
+`Ctrl+Shift+O`. Quick Chat keeps the separate global
 `Cmd+Shift+Space` or `Ctrl+Shift+Space` shortcut, including when another app is
 in front.
+
+New Quick Chat shortcut assignments cannot use either New Session chord. An
+existing saved `Cmd+N` or `Ctrl+N` Quick Chat binding keeps its behavior after
+upgrading; change it in Quick Chat's shortcut settings to use that chord for
+New Session instead.
 
 ## Chrome setup bridge
 
@@ -81,6 +91,19 @@ profiles, or URLs. Platform bootstrap support comes from the CLI result rather
 than the app platform: a Windows app build alone does not establish that native
 host bootstrap is supported or verified.
 
+## Native setup actions
+
+Before the Control UI boots, the selected main dashboard receives
+`window.__OPENCLAW_NATIVE_SETUP__`. Its `currentGateway` follows the native
+Gateway selection, labeling the local Gateway **This computer** and remote
+Gateways by their saved name. `openGateways` opens Manage Gateways;
+`reviewPermissions` and `openAiSetup` open `settings/device/permissions` and
+`settings/model-setup`, preserving the Gateway base path.
+
+The capability uses the existing native device-settings transport and its
+document token, origin/path, and generation checks. Reading tabs receive no
+access. Failed actions show the dashboard's native notice.
+
 ## Omarchy
 
 The optional Omarchy 4 bar plugin provides agents, sessions, and quick prompts.
@@ -90,18 +113,24 @@ for installation, app handoff, shortcuts, and troubleshooting.
 
 ## Windows
 
-Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
+For the recommended native app, use [Windows Hub](https://docs.openclaw.ai/platforms/windows#recommended-windows-hub).
+The Tauri backup's Windows x64 NSIS installers ship beside Linux bundles in regular OpenClaw
 releases. The Windows updater uses the `windows-stable` channel and verifies
 Tauri updater signatures. Installer Authenticode signing is opt-in through the
 release workflow's Foundation Azure signing job; no credentials are needed for
 non-publishing builds.
 
-Local setup seeds the private Windows Bun runtime, installs the CLI with its
-package manager, and delegates service installation and health checks to
-`openclaw gateway`. System Node.js and npm are not required. The managed launcher
-is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions execute Bun directly,
-without interpreting arguments in a command shell. Stable and Beta use published
-packages; Windows source development uses `OPENCLAW_DESKTOP_CLI`.
+Local setup seeds the private Windows Bun runtime and delegates service
+installation and health checks to `openclaw gateway`. Non-release builds install
+the core CLI and Codex staged from the same source commit; release builds install
+the matching published CLI with Bun. System Node.js and npm are not required.
+Release jobs pass `RELEASE_TAG` and its verified `RELEASE_SHA`, so shallow checkouts
+without tag refs still omit the source package. Staging rejects a release identity
+that disagrees with the package version or source commit. Local builds without an
+explicit release identity continue to use exact tag refs.
+The managed launcher is `%USERPROFILE%\.openclaw\bin\openclaw.cmd`; app actions
+execute Bun directly, without interpreting arguments in a command shell.
+`OPENCLAW_DESKTOP_CLI` can select an existing development CLI.
 
 Production runtime admission requires a matching Windows entry in the pinned
 OpenClaw Bun release with `authenticodeSigned: true` and `testOnly: false`.
@@ -279,10 +308,17 @@ The driver owns its temporary HOME and Secret Service. It verifies that ordinary
 window selection leaves the Primary configuration unchanged. The Linux App
 workflow runs this scenario and retains its screenshots and results.
 
-Use `--gateway-onboarding` in place of `--gateway-switch` to exercise local
-installation with a synthetic installer, leave Model Setup, and verify native
-window controls and Gateway actions under a non-root Gateway path. This scenario
-uses the same isolated fixtures and also runs in the Linux App workflow.
+Use `--gateway-onboarding` in place of `--gateway-switch` to exercise automatic
+local installation with a synthetic installer and the shared Control UI setup
+card with synthetic provider results. Build that card fixture first:
+
+```bash
+node scripts/run-node-package-bin.mts vite build --config apps/linux/tests/fixtures/vite.onboarding.config.ts
+```
+
+The scenario clicks the card's native actions and verifies window controls and
+Gateway authority under a non-root path. It uses the same isolated fixtures and
+also runs in the Linux App workflow.
 Stage the verified runtime with `node apps/linux/scripts/stage-runtime.mjs`
 before `cargo build --locked`. The driver copies the compiled app's runtime
 resources into its private Cargo layout and exercises the real Bun launcher
@@ -290,13 +326,28 @@ against a synthetic CLI/service, including explicit runtime activation.
 
 ## First-run setup
 
-The welcome screen explains what OpenClaw can do and asks where your assistant
-should live:
+On Linux and Windows, a fresh install with no saved OpenClaw configuration or
+Gateway profiles starts local setup automatically. It uses the same CLI installer,
+bundled runtime, and Gateway service owners as **On this computer**, then opens
+the Control UI's custodian onboarding. Release builds select their matching stable
+version; development builds use their staged source package. Nearby Gateways are
+never joined automatically.
+
+The custodian prepares available AI access and explains what was selected. Its
+**Use a different Gateway**, **Review permissions**, and **Open AI setup** actions
+open Manage Gateways, this computer's permissions, and Model Setup respectively.
+Existing configurations and saved remote connections keep their current startup
+behavior. If automatic setup fails, the app shows the error alongside the existing
+local and remote choices so you can retry or connect elsewhere. Windows uses
+the bundled Windows runtime and CLI-owned service setup.
+
+The manual setup screen explains what OpenClaw can do and asks where your
+assistant should live:
 
 - **On this computer** installs the CLI when needed and runs fresh Linux and Windows
   installations on the bundled OpenClaw Bun fork, then starts the Gateway through
-  the platform's service owner. Release builds install their matching stable version; development builds ask for a release channel
-  and preselect Development.
+  the platform's service owner. Release builds install their matching stable
+  version; development builds use the staged source package.
 - **On another computer** connects to an existing Gateway without installing or
   starting a local Gateway service. Select a nearby discovered Gateway, enter a
   Gateway URL directly, or choose **SSH tunnel** and enter `user@gateway-host`.
@@ -368,7 +419,7 @@ Gateway windows alone. **Connection Settings** continues to edit the Primary
 connection. Saved Tauri connections are separate from the native macOS app's
 saved connections and browser sign-in sessions.
 
-After connecting, Model Setup discovers AI access available to the selected
+After connecting through manual setup, Model Setup discovers AI access available to the selected
 Gateway and shows it as a choice. Discovery never imports or copies an account,
 and the companion never selects, tests, installs, or saves a provider until you
 click its action. The list includes supported installed providers and official
@@ -384,7 +435,7 @@ Gateway, run `openclaw onboard --auth-choice custom-api-key` on the Gateway host
 message; custom-provider secrets must be entered on their owning host. The
 desktop companion does not copy remote provider secrets to this computer.
 
-On a fresh install, setup also asks whether existing native Claude and Codex
+During manual setup, Model Setup also asks whether existing native Claude and Codex
 conversations should appear in OpenClaw. This is discovery only, not an import
 or copy. The option starts unchecked; declining disables both native session
 catalogs. Existing installations keep their current catalog behavior during an
@@ -435,6 +486,13 @@ app update provides a newer Bun, choose **Use bundled runtime…** again to swit
 The CLI owns service installation on both Linux and Windows; macOS Tauri keeps
 its existing behavior, separate from the native macOS app.
 Switching an existing Gateway's runtime leaves its CLI launcher unchanged.
+After successful activation and Gateway health checks, the app records the
+previous selection in its existing managed launcher marker and collects obsolete
+runtime seeds. It keeps the current and previous selections, the launcher's
+runtime and package, paths referenced by the installed service or its runtime pin,
+and seeds containing live executables. Failed activations never collect seeds.
+Unreadable references or process inventories defer collection, as do independent
+CLI launchers without a managed marker for the rollback selection.
 
 ## Updates
 
@@ -530,8 +588,8 @@ admitted fork release as the native macOS app and CI. Build-time downloads
 verify the release checksums, committed hashes, executable architecture, and fork
 revision. The app copies verified resource bytes to an immutable directory under
 `~/.openclaw/tools/desktop-runtime`; services never reference a temporary AppImage
-mount. Immutable runtime directories are retained, including every directory
-referenced by an existing service. On Linux, Node remains installation/build tooling.
+mount. Healthy runtime activations reclaim unused immutable directories under the
+retention policy above. On Linux, Node remains installation/build tooling.
 Fresh local setup also selects bundled Bun for the app-installed CLI launcher.
 
 Linux resources carry a fixed `OPENCLAW-BUN-RUNTIME-V1` header so linuxdeploy
@@ -542,9 +600,22 @@ AppImage's existing compatibility floor.
 
 macOS Tauri keeps its existing runtime behavior; its native macOS sibling owns
 the Mac's bundled runtime. Windows stages its signed fork payload from the same
-pin and installs the CLI through Bun; unsigned dry-run builds are not eligible. See
-[Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
+pin; release builds install the CLI through Bun. Unsigned dry-run builds are not
+eligible. See [Bun compatibility](https://docs.openclaw.ai/install/bun-compatibility) for runtime
 admission and the shared pin's repin gates.
+
+Non-release Linux and Windows builds also stage the same source commit's core
+package and official Codex plugin, including the target's Codex executable.
+Fresh local setup copies this prepared package into the verified, immutable
+runtime directory and creates the managed CLI launcher without contacting npm.
+This first copy can take several minutes on a fresh computer. Setup waits for
+the newly installed Gateway to become healthy before opening its dashboard.
+The shared desktop release-tag check leaves release builds on their existing
+installer path. The staged build identity makes plugin install, update, and
+Doctor prefer the bundled Codex copy through the same source-plugin owner as
+the native macOS app. The desktop app owns updates to this core package: rebuild
+or update the desktop app to refresh it. Previous runtime directories remain
+available to existing services.
 
 ## Icons
 
@@ -602,12 +673,15 @@ The `Linux App` workflow checks affected pull requests with Rust formatting,
 ABI scanner's unit tests. It also runs the native Linux inline browser smoke
 under Xvfb, including pointer input, snapshots, dashboard replacement, and native
 save/cancel, and uploads the synthetic screenshots and JSON results as the
-`linux-inline-browser` proof artifact. Bundles, the full graphical first-run
-scenarios, and AppImage runtime checks remain manual dispatch checks.
+`linux-inline-browser` proof artifact. Automatic local onboarding and failed
+Gateway startup use the debug candidate compiled with the synthetic CLI. The
+failure scenario must run before packaging replaces those runtime resources with
+the real core package. Bundles, packaged first-run choices, and AppImage runtime
+checks remain manual dispatch checks.
 
 Manually dispatch `Linux App` on the branch to validate packaging before a
 release. It retains all pull-request checks, builds the `.deb` and AppImage,
-runs both native first-run cases and the packaged AppImage runtime smoke, and
+runs packaged first-run choices and the packaged AppImage runtime smoke, and
 uploads the bundles as the `openclaw-linux-companion` workflow artifact. This
 validation does not publish a release.
 

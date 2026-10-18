@@ -52,6 +52,7 @@ export async function createDoctorMaintenanceState(options: {
   let liveAuthorityReadsAdmitted = false;
   const capture = createUpdateDoctorDatabaseWriteCapture(params.databaseGenerations, {
     env: selectedEnv,
+    pluginOwners: params.databasePluginOwners,
     root: params.root ?? undefined,
     signal: options.signal,
     assertCurrent: () => owner!.assertCurrent(options.assertCurrent),
@@ -146,6 +147,7 @@ export async function createDoctorMaintenanceState(options: {
       resourcesParent = getOpenClawDatabaseMaintenanceScope();
       resources = createOpenClawDatabaseMaintenanceScope({
         schemaMaintenance: true,
+        sqliteIntegrityCheck: params.options.fullIntegrityCheck ? "full" : "quick",
         assertDatabaseAccess: acquired.assertDatabaseAccess,
         assertOwnerCurrent: (access) => {
           acquired.assertCurrent(() => {
@@ -198,15 +200,14 @@ export async function createDoctorMaintenanceState(options: {
     get resources() {
       return resources;
     },
-    get hasOpenResources() {
-      return Boolean(resources || inspections);
-    },
     get receipt() {
       return owner ? undefined : capture?.receipt;
     },
     run<T>(operation: () => T): T {
       // Cancellation stops read-only inspections; admitted writers retain their resource scope.
-      return resources!.run(() => inspections!.run(operation));
+      return resources!.run(() =>
+        inspections!.run(() => (capture ? capture.run(operation) : operation())),
+      );
     },
     async acquire() {
       if (resources) {
@@ -224,6 +225,7 @@ export async function createDoctorMaintenanceState(options: {
           ...params,
           assertCurrent: options.assertCurrent,
           deadlineMs: options.deadline(),
+          signal: options.signal,
         },
       );
       await enterResources(acquired);
@@ -298,6 +300,8 @@ export async function createDoctorMaintenanceState(options: {
           return repairDoctorSqliteNoCow({
             paths,
             stateDir,
+            env: selectedEnv,
+            log: (message) => params.runtime.log(sanitizeDoctorNote(message)),
             assertCurrent: () => assertOwnerCurrent(databasePath),
           });
         });
@@ -408,7 +412,7 @@ export async function createDoctorMaintenanceState(options: {
       } catch (error) {
         // Uncertain command cleanup or a still-open scope can keep writing: retain
         // process ownership and publish no receipt.
-        if (hasCommandProcessCleanupError(error) || state.hasOpenResources) {
+        if (hasCommandProcessCleanupError(error) || resources || inspections) {
           throw error;
         }
         failures.push(error);

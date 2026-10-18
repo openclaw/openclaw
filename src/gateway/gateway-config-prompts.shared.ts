@@ -27,7 +27,7 @@ export const TAILSCALE_EXPOSURE_OPTIONS = [
 
 export const TAILSCALE_MISSING_BIN_NOTE_LINES = [
   "Tailscale binary not found in PATH or /Applications.",
-  "Ensure Tailscale is installed from:",
+  "Install Tailscale from:",
   "  https://tailscale.com/download/mac",
   "",
   "You can continue setup, but serve/funnel will fail at runtime.",

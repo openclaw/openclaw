@@ -7,7 +7,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   getOwnedSessionTranscriptWriterFence,
   withOwnedSessionTranscriptWrites,
@@ -814,6 +817,49 @@ describe("sessions_send gating", () => {
     expect(requireGatewayRequest(1).method).toBe("sessions.resolve");
   });
 
+  it("allows thread session targets when tools.sessions.allowThreadTargets is set", async () => {
+    setActivePluginRegistry(createSessionConversationTestRegistry());
+    setRuntimeConfigSnapshot({
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: false },
+        sessions: { visibility: "all", allowThreadTargets: true },
+      },
+    });
+    const threadSessionKey = "agent:main:telegram:group:-100123:topic:42";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: threadSessionKey },
+      { sessionId: threadSessionKey, updatedAt: 1 },
+    );
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "sessions.resolve") {
+        return { key: threadSessionKey };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-thread-opt-in", acceptedAt: 123 };
+      }
+      return {};
+    });
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-thread-opt-in", {
+      label: "topic",
+      message: "hi",
+      timeoutSeconds: 0,
+    });
+
+    expect(tool.description).not.toContain("Thread chats rejected");
+    expect(requireDetails(result)).toMatchObject({ status: "accepted" });
+    expect(
+      callGatewayMock.mock.calls.some(
+        ([request]) =>
+          (request as { method?: string; params?: { sessionKey?: string } }).method === "agent" &&
+          (request as { params?: { sessionKey?: string } }).params?.sessionKey === threadSessionKey,
+      ),
+    ).toBe(true);
+  });
+
   it("does not disclose a resolved thread session key from a sessionId target", async () => {
     setActivePluginRegistry(createSessionConversationTestRegistry());
     setRuntimeConfigSnapshot({
@@ -930,7 +976,7 @@ describe("sessions_send gating", () => {
   });
 
   it.each([true, false])(
-    "uses source delivery without reading history (visible text: %s)",
+    "uses source delivery without resending (visible text: %s)",
     async (hasText) => {
       const { runSessionsSendA2AFlow } = await import("./sessions-send-tool.a2a.js");
       vi.mocked(runSessionsSendA2AFlow).mockClear();
@@ -959,6 +1005,27 @@ describe("sessions_send gating", () => {
           return { runId: "run-source-reply", acceptedAt: 123 };
         }
         if (request.method === "agent.wait") {
+          if (hasText) {
+            await persistSessionTranscriptTurn(
+              { agentId: "main", sessionKey: targetSessionKey, sessionId: targetSessionKey },
+              {
+                runId: "run-source-reply",
+                expectedSessionId: targetSessionKey,
+                touchSessionEntry: false,
+                updateMode: "none",
+                messages: [
+                  {
+                    message: {
+                      role: "assistant",
+                      phase: "final_answer",
+                      stopReason: "stop",
+                      content: [{ type: "text", text: "Already delivered to the source" }],
+                    },
+                  },
+                ],
+              },
+            );
+          }
           return {
             runId: "run-source-reply",
             status: "ok",
@@ -967,7 +1034,7 @@ describe("sessions_send gating", () => {
               : { disposition: "empty" },
             terminalReceipt: {
               runId: "run-source-reply",
-              sessionId: "target-session",
+              sessionId: targetSessionKey,
               turnId: "target-turn",
               requested: { provider: "provider", model: "model" },
               effective: { provider: "provider", model: "model", responseModel: "model" },

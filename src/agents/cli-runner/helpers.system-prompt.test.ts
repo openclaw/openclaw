@@ -238,6 +238,22 @@ describe("buildCliAgentSystemPrompt", () => {
     expect(prompt).not.toContain("### message tool");
   });
 
+  it.each(["mattermost", "slack"])("preserves %s channel-owned button guidance", (channel) => {
+    const prompt = buildCliAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      tools: [createStubTool("message")],
+      modelDisplay: "test/model",
+      runtimeChannel: channel,
+      runtimeCapabilities: ["inlineButtons"],
+      customInlineButtonHint: true,
+      messageToolHints: ["- Use the channel's supported button shape."],
+    });
+
+    expect(prompt).toContain("- Use the channel's supported button shape.");
+    expect(prompt).not.toContain('"action":{"type":"callback"');
+    expect(prompt).not.toContain("Inline buttons OFF");
+  });
+
   it("requires an explicit message target when the CLI turn policy requires one", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

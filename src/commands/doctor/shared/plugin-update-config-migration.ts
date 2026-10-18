@@ -100,6 +100,7 @@ export async function preparePluginUpdateConfigMigration(params: {
     let activationWarning: string | undefined;
     return {
       config,
+      deferredPluginMigrations: pending,
       changed: selectedPending.length > 0 || !isDeepStrictEqual(config, params.config),
       get activationWarning() {
         return activationWarning;

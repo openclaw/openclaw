@@ -1,8 +1,9 @@
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
+import { finished } from "node:stream/promises";
 import { setImmediate as checkpoint } from "node:timers/promises";
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   afterAll,
@@ -67,7 +68,11 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { makeTempDir, observeCatalogEntry: observeEntry } = usePreparedCatalogWorkerFixtures({
+const {
+  makeTempDir,
+  observeCatalogEntry: observeEntry,
+  observeWorkers,
+} = usePreparedCatalogWorkerFixtures({
   observeCatalogWork: true,
 });
 
@@ -85,28 +90,6 @@ function observeCatalogEntry(marker: string, agentDir: string) {
   return observeEntry(receipts, { marker, agentDir });
 }
 
-function observeWorkers() {
-  const spawned: Worker[] = [];
-  let peakWorkers = 0;
-  const workerChannel = channel("worker_threads");
-  const recordWorker = (message: unknown) => {
-    if (isRecord(message) && message.worker instanceof Worker) {
-      spawned.push(message.worker);
-      peakWorkers = Math.max(
-        peakWorkers,
-        spawned.filter((worker) => worker.threadId !== -1).length,
-      );
-    }
-  };
-  return {
-    spawned,
-    get peakWorkers() {
-      return peakWorkers;
-    },
-    subscribe: () => workerChannel.subscribe(recordWorker),
-    close: () => workerChannel.unsubscribe(recordWorker),
-  };
-}
 const workerFailureWarnings = () =>
   runtimeWarnings.filter((message) => message.startsWith("model catalog worker failed"));
 
@@ -115,7 +98,17 @@ describe("Gateway catalog worker pool", () => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-worker-empty-codex-"));
   });
   it("republishes failed catalog borrowers before replacing their source worker", async () => {
-    const observed = observeWorkers();
+    let firstWorkerStderr = "";
+    let firstWorkerStderrFinished: Promise<void> | undefined;
+    const observed = observeWorkers((worker) => {
+      if (firstWorkerStderrFinished) {
+        return;
+      }
+      worker.stderr.on("data", (chunk: Buffer) => {
+        firstWorkerStderr += chunk.toString();
+      });
+      firstWorkerStderrFinished = finished(worker.stderr);
+    });
     try {
       const fixture = await createFleetFixture(observed.subscribe);
       await Promise.all(fixture.snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
@@ -128,6 +121,10 @@ describe("Gateway catalog worker pool", () => {
         pendingTasks: 0,
       });
       await observed.spawned[0]!.terminate();
+      await firstWorkerStderrFinished;
+      expect(firstWorkerStderr).not.toContain(
+        "loadAuthProfileStoreWithoutExternalProfiles is deprecated",
+      );
       expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
         workers: 0,
         workerFailures: workerFailures + 1,

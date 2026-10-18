@@ -1,6 +1,8 @@
 /** Classifies prepared error facts without resolving provider runtime. */
-import { matchesContextOverflowMessage } from "@openclaw/ai/internal/runtime";
-import { inspectTlsCertificateError } from "@openclaw/ai/internal/shared";
+import {
+  inspectTlsCertificateError,
+  matchesContextOverflowMessage,
+} from "@openclaw/ai/internal/shared";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -116,9 +118,7 @@ const GENERAL_MESSAGE_CLASSIFIERS: ReadonlyArray<
 ];
 function isTransportHtmlErrorStatus(status: number | undefined): boolean {
   return (
-    status === 408 ||
-    status === 499 ||
-    (typeof status === "number" && status >= 500 && status < 600)
+    status === 408 || status === 499 || (status !== undefined && status >= 500 && status < 600)
   );
 }
 function classifyFailoverClassificationFromMessage(
@@ -232,8 +232,7 @@ export function classifyFailoverSignalCore(
     return null;
   }
   const inferredStatus = inferSignalStatus(signal);
-  const explicitStatus =
-    typeof signal.status === "number" && Number.isFinite(signal.status) ? signal.status : undefined;
+  const explicitStatus = Number.isFinite(signal.status) ? signal.status : undefined;
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider, signal.errorType)
     : null;
@@ -256,7 +255,7 @@ export function classifyFailoverSignalCore(
   // context-shaped, and otherwise-unclassified signals still consult the
   // provider once; its result remains authoritative over the prepared tables.
   const hasProviderHookSignal = Boolean(
-    signal.message || signal.code || signal.errorType || typeof inferredStatus === "number",
+    signal.message || signal.code || signal.errorType || inferredStatus !== undefined,
   );
   const hasStructuredDescriptor =
     providerHookStatus !== undefined || signal.code !== undefined || signal.errorType !== undefined;

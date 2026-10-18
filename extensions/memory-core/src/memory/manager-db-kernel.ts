@@ -10,11 +10,13 @@ import {
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_FTS_TABLE,
   rebuildMemoryChunkFts,
+  stageMemoryIndexSchemaExtension,
 } from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import {
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
@@ -62,7 +64,9 @@ function replaceMemoryVectorTable(db: DatabaseSync): void {
     // rebuild before that table can be queried again.
     try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
-    } catch {}
+    } catch {
+      // Without sqlite-vec, retaining the unused virtual table is intentional.
+    }
     return;
   }
   db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
@@ -103,11 +107,17 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
               `(expected revision ${params.expectedRevision}, found ${liveRevision}); retry the full reindex.`,
           );
         }
-        const publishesPathFts = tableExists(
-          params.targetDb,
-          MEMORY_REINDEX_SCHEMA,
-          MEMORY_INDEX_PATHS_FTS_TABLE,
+        const ftsSchemas = new Map(
+          [MEMORY_INDEX_FTS_TABLE, MEMORY_INDEX_PATHS_FTS_TABLE].map((table) => [
+            table,
+            readTableSql(params.targetDb, MEMORY_REINDEX_SCHEMA, table),
+          ]),
         );
+        stageMemoryIndexSchemaExtension(params.targetDb, {
+          ftsAvailable: Boolean(
+            ftsSchemas.get(MEMORY_INDEX_FTS_TABLE) && ftsSchemas.get(MEMORY_INDEX_PATHS_FTS_TABLE),
+          ),
+        });
         // Bulk source replacement must not fire one FTS5 scan per old row.
         // Restore the schema-owned triggers only after the derived table is replaced.
         dropMemoryPathFtsTriggers(params.targetDb);
@@ -141,8 +151,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
             .join("\n"),
         );
 
-        for (const table of [MEMORY_INDEX_FTS_TABLE, MEMORY_INDEX_PATHS_FTS_TABLE]) {
-          const createSql = readTableSql(params.targetDb, MEMORY_REINDEX_SCHEMA, table);
+        for (const [table, createSql] of ftsSchemas) {
           params.targetDb.exec(`DROP TABLE IF EXISTS main.${table}`);
           if (!createSql) {
             continue;
@@ -159,13 +168,14 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
             );
           }
         }
-        if (publishesPathFts) {
+        if (ftsSchemas.get(MEMORY_INDEX_PATHS_FTS_TABLE)) {
           ensureMemoryPathFtsTriggers(params.targetDb);
         }
         replaceMemoryVectorTable(params.targetDb);
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }
+        advanceMemoryIndexRevision(params.targetDb);
       },
       { withCommit: params.withCommit },
     );

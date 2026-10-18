@@ -46,18 +46,21 @@ export type AgentToolWithMeta<TParameters extends TSchema, TResult> = AgentTool<
   finalizeBeforeToolCallParams?: (params: unknown, preparedParams: unknown) => unknown;
 };
 
-type ErasedAgentToolExecute = {
+type ErasedAgentToolExecute<TDetails> = {
   execute(
     this: void,
     toolCallId: string,
     params: unknown,
     signal?: AbortSignal,
-    onUpdate?: AgentToolUpdateCallback,
-  ): Promise<AgentToolResult<unknown>>;
+    onUpdate?: AgentToolUpdateCallback<TDetails>,
+  ): Promise<AgentToolResult<TDetails>>;
 };
 
-export type AnyAgentTool = Omit<AgentToolWithMeta<TSchema, unknown>, "execute"> &
-  ErasedAgentToolExecute;
+export type AnyAgentTool<TDetails = unknown> = Omit<
+  AgentToolWithMeta<TSchema, TDetails>,
+  "execute"
+> &
+  ErasedAgentToolExecute<TDetails>;
 
 type StringParamOptions = {
   required?: boolean;

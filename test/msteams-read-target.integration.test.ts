@@ -8,9 +8,8 @@ import { createMessageTool } from "../src/agents/tools/message-tool-execution.js
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
 import { createDefaultDeps } from "../src/cli/deps.js";
-import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
-import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
-import { registerMessageSearchCommand } from "../src/cli/program/message/register.permissions-search.js";
+import * as messageCliHelpers from "../src/cli/program/message/helpers.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
@@ -75,6 +74,8 @@ vi.mock("../extensions/msteams/runtime-api.js", async (original) => {
 const token = "synthetic-graph-token";
 const requesterId = "22222222-2222-2222-2222-222222222222";
 const memberId = "33333333-3333-3333-3333-333333333333";
+const messageSender = { user: { id: memberId, displayName: "Member" } };
+const messageCreatedAt = "2026-10-13T12:00:00Z";
 const current = {
   teamId: "11111111-1111-1111-1111-111111111111",
   channelId: "19:current@thread.tacv2",
@@ -241,7 +242,20 @@ async function createFixture(
         value: Array.from({ length: searchMatches }, (_, index) => ({
           id: index === 0 ? destination.messageId : `${destination.messageId}-${index}`,
           body: { content: destination.text, contentType: "text" },
+          from: messageSender,
+          createdDateTime: messageCreatedAt,
         })),
+      };
+    } else if (
+      destination &&
+      path ===
+        `/v1.0/teams/${destination.teamId}/channels/${destination.channelId}/messages/${destination.messageId}`
+    ) {
+      body = {
+        id: destination.messageId,
+        body: { content: destination.text, contentType: "text" },
+        from: messageSender,
+        createdDateTime: messageCreatedAt,
       };
     } else {
       response.statusCode = 404;
@@ -400,24 +414,39 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
 }
 
 describe("Teams message CLI", () => {
-  async function runCli(
-    register: typeof registerMessageDiscordAdminCommands,
-    args: string[],
-    action: Action,
-  ) {
+  async function runCli(args: string[], action: Action | "read", json = true) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const command = new Command().name("message").exitOverride();
-    register(command, {
-      ...createMessageCliHelpers("msteams"),
+    const command = new Command().name("openclaw").exitOverride();
+    const helpers = messageCliHelpers.createMessageCliHelpers("msteams");
+    const createHelpers = vi.spyOn(messageCliHelpers, "createMessageCliHelpers").mockReturnValue({
+      ...helpers,
       runMessageAction: async (name, opts) => {
         await messageCommand({ ...opts, action: name }, createDefaultDeps(), runtime);
       },
     });
+    try {
+      registerMessageCommands(command, {
+        programVersion: "test",
+        messageChannelOptions: "msteams",
+        agentChannelOptions: "last|msteams",
+      });
+    } finally {
+      createHelpers.mockRestore();
+    }
 
-    await command.parseAsync([...args, "--channel", "msteams", "--json"], { from: "user" });
+    await command.parseAsync(
+      ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])],
+      {
+        from: "user",
+      },
+    );
 
-    expect(runtime.log).toHaveBeenCalledTimes(1);
     expect(runtime.error).not.toHaveBeenCalled();
+    if (!json) {
+      expect(runtime.log).toHaveBeenCalled();
+      return runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
+    }
+    expect(runtime.log).toHaveBeenCalledTimes(1);
     const result = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
     expect(result).toMatchObject({
       action,
@@ -428,10 +457,51 @@ describe("Teams message CLI", () => {
     return result.payload;
   }
 
+  it("renders Graph read and search messages while preserving JSON results", async () => {
+    await createFixture("none");
+    const readArgs = ["read", "--target", otherTarget, "--message-id", other.messageId];
+    const searchArgs = ["search", "--channel-id", otherTarget, "--query", "planning"];
+    const outputs = [
+      await runCli(readArgs, "read", false),
+      await runCli(searchArgs, "search", false),
+    ];
+    for (const output of outputs) {
+      expect.soft(output).toContain(other.text);
+      expect.soft(output).toContain(other.messageId);
+      expect.soft(output).toContain("Member");
+      expect.soft(output).toContain(messageCreatedAt);
+    }
+    const message = {
+      id: other.messageId,
+      text: other.text,
+      from: messageSender,
+      createdAt: messageCreatedAt,
+    };
+    await expect(runCli(readArgs, "read")).resolves.toEqual({
+      ok: true,
+      channel: "msteams",
+      action: "read",
+      message,
+    });
+    await expect(runCli(searchArgs, "search")).resolves.toEqual({
+      ok: true,
+      channel: "msteams",
+      action: "search",
+      messages: [message],
+      truncated: false,
+    });
+    const emptyOutput = await runCli(
+      ["search", "--channel-id", otherTarget, "--query", "unmatched"],
+      "search",
+      false,
+    );
+    expect.soft(emptyOutput).toContain("No results.");
+    expect(emptyOutput).not.toContain(other.text);
+  });
+
   it("reads a selected channel member without current conversation context", async () => {
     const fixture = await createFixture("none");
     const payload = await runCli(
-      registerMessageDiscordAdminCommands,
       ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
       "member-info",
     );
@@ -447,7 +517,6 @@ describe("Teams message CLI", () => {
     async ({ limit, count, truncated }) => {
       const fixture = await createFixture("none", "bundled", limit);
       const payload = await runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", String(limit)],
         "search",
       );
@@ -462,7 +531,6 @@ describe("Teams message CLI", () => {
     const fixture = await createFixture("none");
     await expect(
       runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "abc"],
         "search",
       ),

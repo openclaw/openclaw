@@ -252,6 +252,8 @@ async function maybeRunGatewayCleanup(
       config: cfg,
       expectUrl: url,
       method: "sessions.cleanup",
+      // Maintenance can outlive passive reads; keep the connection's startup deadline.
+      timeoutMs: null,
       params: {
         agent: opts.agent,
         allAgents: opts.allAgents,

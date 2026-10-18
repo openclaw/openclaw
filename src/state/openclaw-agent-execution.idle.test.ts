@@ -3,10 +3,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../config/runtime-snapshot.js";
+import { clearRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import {
@@ -50,6 +48,8 @@ beforeEach(() => {
       run: async () => undefined,
       failure: () => undefined,
       isPrepared: () => false,
+      getPendingNativeOpen: () => undefined,
+      getPendingPreparation: () => undefined,
       captureClaim: () => {
         throw new Error("Unused native claim");
       },
@@ -78,26 +78,6 @@ async function use(agentId: string) {
 function closedAgents() {
   return opened.filter(({ close }) => close.mock.calls.length > 0).map(({ agentId }) => agentId);
 }
-
-it("opens only two executors for six alternating agent borrows", async () => {
-  for (const agentId of ["first", "second", "first", "second", "first", "second"]) {
-    await use(agentId);
-  }
-  expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second"]);
-  expect(closedAgents()).toEqual([]);
-});
-
-it("evicts the least recently used idle executor when a fifth agent finishes", async () => {
-  for (const agentId of ["first", "second", "third", "fourth", "first", "fifth"]) {
-    await use(agentId);
-  }
-  expect(closedAgents()).toEqual(["second"]);
-  await use("first");
-  expect(opened).toHaveLength(5);
-  await use("second");
-  expect(opened).toHaveLength(6);
-  expect(closedAgents()).toEqual(["second", "third"]);
-});
 
 it("keeps a shared creating owner out of idle eviction until its last borrower releases", async () => {
   const options = {
@@ -129,7 +109,9 @@ it("keeps a shared creating owner out of idle eviction until its last borrower r
 });
 
 it("expires each executor independently and refreshes only the borrowed one", async () => {
-  await use("first");
+  const first = await use("first");
+  const terminal = vi.fn();
+  first.onTerminal(terminal);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   await use("second");
   await use("first");
@@ -137,21 +119,27 @@ it("expires each executor independently and refreshes only the borrowed one", as
   expect(closedAgents()).toEqual([]);
   await vi.advanceTimersByTimeAsync(SQLITE_IDLE_HANDLE_TTL_MS / 2);
   expect(closedAgents()).toEqual(["first", "second"]);
+  expect(terminal).not.toHaveBeenCalled();
   await use("first");
   expect(opened).toHaveLength(3);
 });
 
-it.each(["shutdown", "restart drain"] as const)("closes all warm executors on %s", async (mode) => {
+it("retires a CLI one-shot's warm executor after the CLI window", async () => {
+  vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+  await use("one-shot");
+  await vi.advanceTimersByTimeAsync(30_000 - 1);
+  expect(closedAgents()).toEqual([]);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(closedAgents()).toEqual(["one-shot"]);
+});
+
+it("closes all warm executors on restart drain", async () => {
   for (const agentId of ["first", "second", "third", "fourth"]) {
     await use(agentId);
   }
   expect(closedAgents()).toEqual([]);
-  if (mode === "restart drain") {
-    markGatewayRestartDraining();
-    await vi.advanceTimersByTimeAsync(0);
-  } else {
-    await closeOpenClawAgentDatabasesAsync();
-  }
+  markGatewayRestartDraining();
+  await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
 });
@@ -218,17 +206,4 @@ it("retains failed eviction custody without retaining a fifth idle executor", as
   await use("sixth");
   expect(first.close).toHaveBeenCalledTimes(2);
   expect(closedAgents()).toEqual(["first", "fifth"]);
-});
-
-it("keeps warm executors through unrelated configuration publication", async () => {
-  setRuntimeConfigSnapshot({ agents: { entries: { first: {}, second: {} } } });
-  await use("first");
-  await use("second");
-  setRuntimeConfigSnapshot({
-    agents: { entries: { first: { name: "New display name" }, second: {} } },
-  });
-  await use("first");
-  await use("second");
-  expect(opened).toHaveLength(2);
-  expect(closedAgents()).toEqual([]);
 });

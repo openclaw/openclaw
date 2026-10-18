@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { createAsyncLock, sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
+import {
+  createAsyncLock,
+  readFileHandleBounded,
+  sanitizeUntrustedFileName,
+} from "@openclaw/fs-safe/advanced";
 import { fileStore } from "@openclaw/fs-safe/store";
 import {
   basenameFromAnyPath,
@@ -181,14 +185,24 @@ async function retryAfterRecreatingDir<T>(
 
 async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
   const dir = resolveMediaScopedDir(PLAYBACK_TRANSCODE_SUBDIR, "prunePlaybackTranscodeCacheToSize");
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(dir, { withFileTypes: true }).catch((error: unknown) => {
+    if (!findErrorWithCode(error, "ENOENT")) {
+      throw error;
+    }
+    return [];
+  });
   const files = (
     await Promise.all(
       entries.map(async (entry) => {
         if (!entry.isFile() || entry.name.startsWith(".")) {
           return null;
         }
-        const stat = await fs.lstat(path.join(dir, entry.name)).catch(() => null);
+        const stat = await fs.lstat(path.join(dir, entry.name)).catch((error: unknown) => {
+          if (!findErrorWithCode(error, "ENOENT")) {
+            throw error;
+          }
+          return null;
+        });
         return stat?.isFile() ? { name: entry.name, size: stat.size, mtimeMs: stat.mtimeMs } : null;
       }),
     )
@@ -205,13 +219,14 @@ async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
       PLAYBACK_TRANSCODE_SUBDIR,
       "prunePlaybackTranscodeCacheToSize",
     );
-    const removed = await openMediaStore()
+    await openMediaStore()
       .remove(relativePath)
-      .then(() => true)
-      .catch(() => false);
-    if (removed) {
-      totalBytes -= file.size;
-    }
+      .catch((error: unknown) => {
+        if (!findErrorWithCode(error, "ENOENT") && !findErrorWithCode(error, "not-found")) {
+          throw error;
+        }
+      });
+    totalBytes -= file.size;
   }
 }
 
@@ -728,13 +743,7 @@ export async function readMediaBuffer(
       `readMediaBuffer: media ID ${JSON.stringify(id)} is ${opened.stat.size} bytes; maximum is ${maxBytes} bytes`,
     );
   }
-  const buffer = await opened.handle.readFile();
-  if (buffer.byteLength > maxBytes) {
-    throw new FsSafeError(
-      "too-large",
-      `readMediaBuffer: media ID ${JSON.stringify(id)} read ${buffer.byteLength} bytes; maximum is ${maxBytes} bytes`,
-    );
-  }
+  const buffer = await readFileHandleBounded(opened.handle, maxBytes);
   return { id, path: opened.realPath, buffer, size: buffer.byteLength };
 }
 

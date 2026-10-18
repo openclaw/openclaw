@@ -45,26 +45,16 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("Claw project CLI", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
     mocks.payloads.length = 0;
   });
 
-  it("prints model, delegation targets, and notices in an offline package preview", async () => {
+  it("previews a Claw with ordinary sessions_spawn authority", async () => {
     mocks.runtime.log.mockClear();
     await runClawsDevCommand("src/claws/fixtures/delegating-agent", {
       workspace: join(tempDirs.make("openclaw-claw-delegation-preview-"), "workspace"),
     });
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      'Model: {"primary":"acme/primary","fallbacks":["acme/fallback"]}',
-    );
-    expect(mocks.runtime.log).toHaveBeenCalledWith("Delegation: researcher, writer; mode: prefer");
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining('Notice: Model "acme/primary" is not in the local model catalog'),
-    );
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'Notice: Delegation target "researcher" is not in the local agent roster',
-      ),
+    expect(mocks.runtime.log).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^Model:|^Delegation:/),
     );
     expect(mocks.runtime.log).toHaveBeenCalledWith("Blocked actions: 0");
   });

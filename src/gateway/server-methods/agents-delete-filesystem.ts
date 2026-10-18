@@ -26,19 +26,21 @@ export function cleanupFailure(pathname: string, error: unknown): AgentDeletePat
   return { failed: { path: pathname, reason: reason || "unknown error" } };
 }
 
-function cleanupPathIdentity(stat: { dev?: number | bigint; ino?: number | bigint } | undefined) {
-  if (
-    (typeof stat?.dev !== "number" && typeof stat?.dev !== "bigint") ||
-    (typeof stat.ino !== "number" && typeof stat.ino !== "bigint")
-  ) {
-    return null;
+function cleanupPathIdentity(stat: { dev: bigint; ino: bigint } | undefined) {
+  return stat ? { dev: stat.dev.toString(), ino: stat.ino.toString() } : null;
+}
+
+function cleanupPathIdentityMatches(observed: string, persisted: string | number): boolean {
+  if (typeof persisted !== "number") {
+    return observed === persisted;
   }
-  const dev = Number(stat.dev);
-  const ino = Number(stat.ino);
-  if (!Number.isSafeInteger(dev) || !Number.isSafeInteger(ino)) {
-    throw new Error("cleanup path identity exceeds the safe integer range");
-  }
-  return { dev, ino };
+  // Legacy numeric Stats were unsigned and retain their same-double replacement limit.
+  // Node's BigInt Stats can expose those IDs as signed int64 values.
+  const exact = BigInt(observed);
+  return (
+    Number.isInteger(persisted) &&
+    Number(exact < 0n ? BigInt.asUintN(64, exact) : exact) === persisted
+  );
 }
 
 export async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) {
@@ -60,7 +62,10 @@ export async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) 
   if (stat.isFile && stat.nlink > 1) {
     throw new AgentCleanupIdentityMismatchError("hardlinked cleanup replacement preserved");
   }
-  const identity = cleanupPathIdentity(stat);
+  if (!stat.exactIdentity) {
+    throw new AgentCleanupIdentityMismatchError("cleanup path exact identity is unavailable");
+  }
+  const identity = cleanupPathIdentity(stat.exactIdentity);
   if (cleanupPath.preparedIdentity === null) {
     // The journal fence blocks legitimate claims on prepared-absent paths, so a
     // file that appeared here is leaked deleted-agent state (recreated WAL
@@ -69,11 +74,13 @@ export async function statAgentCleanupPath(cleanupPath: AgentDeleteCleanupPath) 
     cleanupPath.preparedIdentity = identity;
   } else if (
     identity === null ||
-    identity.dev !== cleanupPath.preparedIdentity.dev ||
-    identity.ino !== cleanupPath.preparedIdentity.ino
+    !cleanupPathIdentityMatches(identity.dev, cleanupPath.preparedIdentity.dev) ||
+    !cleanupPathIdentityMatches(identity.ino, cleanupPath.preparedIdentity.ino)
   ) {
     throw new AgentCleanupIdentityMismatchError("cleanup path identity changed before deletion");
   }
+  // The next journal update carries the observed exact identity, never rounded numeric text.
+  cleanupPath.preparedIdentity = identity;
 }
 
 export async function removeAgentPath(
@@ -133,7 +140,7 @@ export type AgentDeleteCleanupPath = {
   trashPath: string;
   trashCoversDescendants: boolean;
   kind: "target" | "symlink";
-  preparedIdentity: { dev: number; ino: number } | null;
+  preparedIdentity: { dev: string | number; ino: string | number } | null;
   done: boolean;
   note?: string;
   preparationError?: unknown;
@@ -188,7 +195,10 @@ export async function prepareAgentDeleteCleanupPaths(
       preparedIdentity:
         persistedPath.dev === null || persistedPath.ino === null
           ? null
-          : { dev: persistedPath.dev, ino: persistedPath.ino },
+          : {
+              dev: persistedPath.dev,
+              ino: persistedPath.ino,
+            },
       done: persistedPath.done,
       note: persistedPath.note,
       sourcePaths: persistedPath.sourcePaths.map((sourcePath) => path.resolve(sourcePath)),
@@ -205,9 +215,9 @@ export async function prepareAgentDeleteCleanupPaths(
     } catch (error) {
       preparationError = error;
     }
-    let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
+    let sourceStat: import("node:fs").BigIntStats | undefined;
     try {
-      sourceStat = await fs.lstat(pathname);
+      sourceStat = await fs.lstat(pathname, { bigint: true });
     } catch (error) {
       if (!isMissingPathError(error)) {
         preparationError ??= error;
@@ -216,7 +226,7 @@ export async function prepareAgentDeleteCleanupPaths(
     let targetStat = sourceStat;
     if (resolvedPath !== sourcePath) {
       try {
-        targetStat = await fs.lstat(resolvedPath);
+        targetStat = await fs.lstat(resolvedPath, { bigint: true });
       } catch (error) {
         if (!isMissingPathError(error)) {
           preparationError ??= error;

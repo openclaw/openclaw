@@ -94,7 +94,7 @@ export function resolveDiscordModelPickerPreferenceScope(params: {
 }): DiscordModelPickerPreferenceScope {
   return {
     accountId: params.accountId,
-    guildId: params.interaction.guild?.id ?? undefined,
+    guildId: params.interaction.guild?.id,
     userId: params.userId,
   };
 }
@@ -112,26 +112,12 @@ export async function resolveDiscordModelPickerRoute(params: {
   threadBindings: ThreadBindingManager;
 }) {
   const { interaction, cfg, accountId } = params;
-  const { isDirectMessage, isGroupDm, isThreadChannel, rawChannelId, threadParentId } =
-    await resolveDiscordNativeInteractionChannelContext(interaction, "unknown");
-  const memberRoleIds = Array.isArray(interaction.rawData.member?.roles)
-    ? interaction.rawData.member.roles.slice()
-    : [];
-
-  const threadBinding = isThreadChannel
-    ? params.threadBindings.getByThreadId(rawChannelId)
-    : undefined;
   return resolveDiscordNativeInteractionRouteState({
     cfg,
     accountId,
-    guildId: interaction.guild?.id ?? undefined,
-    memberRoleIds,
-    isDirectMessage,
-    isGroupDm,
-    directUserId: interaction.user?.id ?? rawChannelId,
-    conversationId: rawChannelId,
-    parentConversationId: threadParentId,
-    threadBinding,
+    interaction,
+    channelContext: await resolveDiscordNativeInteractionChannelContext(interaction, "unknown"),
+    threadBindings: params.threadBindings,
   }).effectiveRoute;
 }
 

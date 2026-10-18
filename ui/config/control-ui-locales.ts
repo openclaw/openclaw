@@ -143,7 +143,8 @@ export function controlUiLocaleModulesPlugin(): Plugin {
         for (const watchFile of sourceCatalogResult.watchFiles) {
           this.addWatchFile(watchFile);
         }
-        // Source PRs omit generated memory until the post-merge refresh runs.
+        // Vite turns watched files into imports during dev transforms. A source-only
+        // locale has no memory file yet, so importing that path would fail.
         if (existsSync(memoryPath)) {
           this.addWatchFile(memoryPath);
         }

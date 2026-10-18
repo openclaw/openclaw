@@ -118,7 +118,6 @@ export function createSubagentRegistryMockState() {
     emitSessionIdentityMutation: vi.fn((mutation: SessionIdentityMutation) =>
       notifyListeners(sessionIdentityMutationListeners, mutation),
     ),
-    clearSubagentRunsReadCacheForTest: vi.fn(),
     persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
     restoreSubagentRunsFromDisk: vi.fn<typeof restoreSubagentRunsFromDisk>(async () => 0),
     getSubagentRunsSnapshotForRead: vi.fn(
@@ -223,7 +222,7 @@ export function createSubagentRegistryMockState() {
       } catch (error) {
         read = { ok: false, error };
       }
-      const result = await consume(read, { kind: "native", assertCurrent });
+      const result = await consume(read, { kind: "file", assertCurrent });
       assertCurrent();
       return result;
     },

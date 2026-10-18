@@ -1,4 +1,3 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
 import type { TranscriptSessionDescriptor, TranscriptSourceLocator } from "./provider-types.js";
 import type {
   queryTranscriptReadEntries,
@@ -111,5 +110,3 @@ export type TranscriptReadOperations = {
     output: TranscriptReadResult<TranscriptReadRequests[Key]["output"]>;
   };
 };
-
-export type TranscriptReadCommand = SqliteWorkerCommand<TranscriptReadOperations>;

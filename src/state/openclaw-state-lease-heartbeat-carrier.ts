@@ -4,11 +4,13 @@ import {
   type Transferable,
   type Worker,
 } from "node:worker_threads";
+import { recordWorkerMessage } from "../infra/worker-message-metrics.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type {
-  LeaseHeartbeatReply,
-  LeaseHeartbeatWorkerData,
+import {
+  LEASE_CONTENTION_RETRY_MS,
+  type LeaseHeartbeatReply,
+  type LeaseHeartbeatWorkerData,
 } from "./openclaw-state-lease-heartbeat-shared.js";
 
 type CarrierReply = LeaseHeartbeatReply | { closed: true } | { startupError: string } | null;
@@ -93,6 +95,14 @@ export function acquireLeaseHeartbeatCarrier(params: {
         carriers.delete(params.key);
       }
       owned.stopping = (async () => {
+        // Closed members admit no new SQLite work. Join the in-flight operation:
+        // terminating inside a native write can strand its connection's write lock.
+        const progress = new BigInt64Array(owned.renewalProgress);
+        let observed = Atomics.load(progress, 0);
+        while (observed % 2n === 1n && owned.exitCode === undefined) {
+          await Atomics.waitAsync(progress, 0, observed, LEASE_CONTENTION_RETRY_MS).value;
+          observed = Atomics.load(progress, 0);
+        }
         return owned.exitCode ?? owned.worker.terminate();
       })();
       void owned.stopping.catch(() => {
@@ -116,6 +126,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     }
   };
   const receive = (reply: CarrierReply) => {
+    if (ports) {
+      recordWorkerMessage("lifecycle", "from_worker");
+    }
     if (reply && "closed" in reply) {
       closed();
     } else if (reply && "startupError" in reply && member.stopping) {
@@ -158,6 +171,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
     },
     postMessage(value: unknown, transferList: Transferable[]) {
       member.channel.postMessage(value, transferList);
+      if (ports) {
+        recordWorkerMessage("lifecycle", "to_worker");
+      }
     },
     service() {
       // Synchronous lease verification must also service a sibling's admission.
@@ -172,6 +188,9 @@ export function acquireLeaseHeartbeatCarrier(params: {
       }
       if (owned.members.has(member)) {
         member.channel.postMessage({ close: true }, []);
+        if (ports) {
+          recordWorkerMessage("lifecycle", "to_worker");
+        }
       }
       return member.closed.promise;
     },

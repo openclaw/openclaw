@@ -8,6 +8,7 @@ import type {
   SkillsLibraryUploadParams,
   SkillsLibraryUploadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { runQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   createSkillLibraryWireInstance,
@@ -128,9 +129,13 @@ describe("skill library real Gateway identity boundary", () => {
             "users.list",
             {},
           );
-          expect(profiles.profiles).toHaveLength(2);
+          expect(profiles.profiles).toHaveLength(3);
           expect(profiles.profiles.map((profile) => profile.id)).toEqual(
-            expect.arrayContaining([aliceList.profileId, bobList.profileId]),
+            expect.arrayContaining([
+              GATEWAY_OWNER_PROFILE_ID,
+              aliceList.profileId,
+              bobList.profileId,
+            ]),
           );
 
           const original = skillLibraryProofBundle();

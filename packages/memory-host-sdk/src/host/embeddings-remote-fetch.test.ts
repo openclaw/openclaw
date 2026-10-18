@@ -32,6 +32,7 @@ function respond(body: string, status = 200, headers?: Record<string, string>): 
         status,
         headers: { "content-length": String(responseBytes), ...headers },
       }),
+      params.init?.headers,
     ),
   );
   return responseBytes;
@@ -104,6 +105,22 @@ describe("fetchRemoteEmbeddingVectors", () => {
         url: REQUEST.url,
         signal: controller.signal,
         init: { method: "POST", headers: REQUEST.headers, body: JSON.stringify(body) },
+      }),
+    );
+  });
+
+  it("promotes the Azure version header before sending embeddings", async () => {
+    respondJson({ data: [{ embedding: [0.1] }] });
+    await fetchRemoteEmbeddingVectors({
+      ...REQUEST,
+      url: "https://example.openai.azure.com/embeddings",
+      headers: { "api-version": "2024-10-21" },
+      body: { input: ["one"] },
+    });
+    expect(remoteHttpMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://example.openai.azure.com/embeddings?api-version=2024-10-21",
+        init: expect.objectContaining({ headers: {} }),
       }),
     );
   });

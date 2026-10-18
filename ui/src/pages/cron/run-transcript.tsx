@@ -1,95 +1,88 @@
 import type { CronHistoryResult } from "@openclaw/gateway-protocol";
-import { createMemo, flush } from "solid-js";
+import { flush } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { attachHistoryActivity } from "../chat/chat-history-request.ts";
 import { mergeChatTranscriptPages } from "../chat/chat-transcript-pages.ts";
-import { renderChatHistoryBoundary } from "../chat/components/chat-history-boundary.ts";
-import { renderChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
+import { ChatHistoryBoundary } from "../chat/components/chat-history-boundary.tsx";
+import { ChatTranscriptFeed } from "../chat/components/chat-transcript-feed.ts";
 
 type Scope = { client: GatewayBrowserClient; isCurrent: () => boolean };
 
 /** The run log owns transcript identity; never resolve a client-selected session alias. */
-export class CronRunTranscript {
-  private attempt = 0;
-  entry: CronRunLogEntry | null = null;
-  private trigger: HTMLButtonElement | null = null;
-  private scope: Scope | null = null;
-  messages: unknown[] = [];
-  nextCursor: string | undefined;
-  private readonly cursors = new Set<string>();
-  loading = false;
-  error: string | null = null;
-  failedCursor: string | undefined;
-
-  constructor(
-    private readonly host: HTMLElement,
-    private readonly notify: () => void,
-    private readonly capture: () => Scope | null,
-  ) {}
-
-  close(restoreFocus = false) {
-    const trigger = this.trigger;
-    this.trigger = null;
-    this.attempt++;
-    this.entry = null;
-    this.scope = null;
-    this.messages = [];
-    this.nextCursor = undefined;
-    this.cursors.clear();
-    this.loading = false;
-    this.error = null;
-    this.failedCursor = undefined;
-    this.notify();
-    if (restoreFocus && trigger?.isConnected) {
-      trigger.focus();
+export function createCronRunTranscript(notify: () => void, capture: () => Scope | null) {
+  let attempt = 0;
+  let trigger: HTMLButtonElement | null = null;
+  let scope: Scope | null = null;
+  let region: HTMLElement | undefined;
+  const cursors = new Set<string>();
+  const state: {
+    entry: CronRunLogEntry | null;
+    messages: unknown[];
+    nextCursor?: string;
+    loading: boolean;
+    error: string | null;
+    failedCursor?: string;
+  } = { entry: null, messages: [], loading: false, error: null };
+  function close(restoreFocus = false) {
+    const previousTrigger = trigger;
+    trigger = null;
+    attempt++;
+    state.entry = null;
+    scope = null;
+    state.messages = [];
+    state.nextCursor = undefined;
+    cursors.clear();
+    state.loading = false;
+    state.error = null;
+    state.failedCursor = undefined;
+    notify();
+    if (restoreFocus && previousTrigger?.isConnected) {
+      previousTrigger.focus();
     }
   }
 
-  async open(entry: CronRunLogEntry, trigger: HTMLButtonElement) {
-    this.close();
-    const scope = this.capture();
-    if (!scope) {
+  async function open(entry: CronRunLogEntry, button: HTMLButtonElement) {
+    close();
+    const captured = capture();
+    if (!captured) {
       return;
     }
-    this.entry = entry;
-    this.trigger = trigger;
-    this.scope = scope;
-    await this.load();
-    if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
+    state.entry = entry;
+    trigger = button;
+    scope = captured;
+    await load();
+    if (state.entry !== entry || scope !== captured || !captured.isCurrent()) {
       return;
     }
     flush();
-    if (this.entry !== entry || this.scope !== scope || !scope.isCurrent()) {
+    if (state.entry !== entry || scope !== captured || !captured.isCurrent()) {
       return;
     }
-    const region = this.host.querySelector<HTMLElement>("[data-cron-run-transcript]");
     region?.focus({ preventScroll: true });
     region?.scrollIntoView({ block: "start", behavior: "instant" });
   }
 
-  async load(cursor?: string) {
-    const { entry, scope, attempt } = this;
-    if (!entry || !scope || this.loading || !scope.isCurrent()) {
+  async function load(cursor?: string) {
+    const { entry } = state;
+    const captured = scope;
+    const request = attempt;
+    if (!entry || !captured || state.loading || !captured.isCurrent()) {
       return;
     }
-    const current = () => this.attempt === attempt && this.host.isConnected && scope.isCurrent();
-    this.loading = true;
-    this.error = null;
-    this.failedCursor = cursor;
-    this.notify();
+    const current = () => attempt === request && captured.isCurrent();
+    state.loading = true;
+    state.error = null;
+    state.failedCursor = cursor;
+    notify();
     try {
-      if (
-        !entry.jobId ||
-        (!entry.runId && (typeof entry.runAtMs !== "number" || !Number.isFinite(entry.runAtMs)))
-      ) {
+      if (!entry.runId && entry.runAtMs === undefined) {
         throw new Error(t("cron.runEntry.transcriptMissingMetadata"));
       }
-      const result = await scope.client.request<CronHistoryResult>("cron.history", {
+      const result = await captured.client.request<CronHistoryResult>("cron.history", {
         id: entry.jobId,
         ...(entry.runId ? { runId: entry.runId } : { runAtMs: entry.runAtMs }),
         limit: 100,
@@ -98,57 +91,51 @@ export class CronRunTranscript {
       if (!current()) {
         return;
       }
-      if (!Array.isArray(result.messages)) {
-        throw new Error(t("cron.runEntry.transcriptUnavailable"));
-      }
       const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
       if (cursor) {
-        this.cursors.add(cursor);
+        cursors.add(cursor);
       }
-      this.messages = cursor
-        ? mergeChatTranscriptPages(messages, this.messages).messages
+      state.messages = cursor
+        ? mergeChatTranscriptPages(messages, state.messages).messages
         : messages;
-      this.nextCursor =
-        result.nextCursor && !this.cursors.has(result.nextCursor) ? result.nextCursor : undefined;
-      this.failedCursor = undefined;
+      state.nextCursor =
+        result.nextCursor && !cursors.has(result.nextCursor) ? result.nextCursor : undefined;
+      state.failedCursor = undefined;
     } catch (error) {
       if (!current()) {
         return;
       }
-      this.error = formatUiError(error, t("cron.runEntry.transcriptUnavailable"));
+      state.error = formatUiError(error, t("cron.runEntry.transcriptUnavailable"));
     }
     if (current()) {
-      this.loading = false;
-      this.notify();
+      state.loading = false;
+      notify();
     }
   }
+  return Object.assign(state, {
+    close,
+    open,
+    load,
+    ref: (element: HTMLElement) => {
+      region = element;
+    },
+  });
 }
 
 export function CronRunTranscriptView(props: {
-  controller: CronRunTranscript;
+  transcript: ReturnType<typeof createCronRunTranscript>;
   revision: () => number;
 }) {
   const state = () => {
     props.revision();
-    return props.controller;
+    return props.transcript;
   };
-  const transcript = createMemo(() => {
-    const current = state();
-    return [
-      current.nextCursor
-        ? renderChatHistoryBoundary({
-            hasMore: true,
-            loading: current.loading,
-            onShowEarlier: () => void props.controller.load(props.controller.nextCursor),
-          })
-        : undefined,
-      renderChatTranscriptFeed(current.messages),
-    ];
-  });
+
   return (
     <>
       {state().entry ? (
         <section
+          ref={(element) => props.transcript.ref(element)}
           class="card"
           role="region"
           tabindex="-1"
@@ -157,7 +144,7 @@ export function CronRunTranscriptView(props: {
         >
           <div class="row">
             <h2>{t("cron.runEntry.transcript")}</h2>
-            <button class="btn btn--sm" onClick={() => props.controller.close(true)}>
+            <button class="btn btn--sm" onClick={() => props.transcript.close(true)}>
               {t("common.close")}
             </button>
           </div>
@@ -167,7 +154,7 @@ export function CronRunTranscriptView(props: {
               <button
                 class="btn btn--sm"
                 disabled={state().loading}
-                onClick={() => void props.controller.load(props.controller.failedCursor)}
+                onClick={() => void props.transcript.load(props.transcript.failedCursor)}
               >
                 {t("common.retry")}
               </button>
@@ -177,7 +164,14 @@ export function CronRunTranscriptView(props: {
           {!state().loading && !state().error && state().messages.length === 0 ? (
             <p>{t("cron.runEntry.transcriptEmpty")}</p>
           ) : null}
-          <LitContent render={() => transcript()} />
+          {state().nextCursor ? (
+            <ChatHistoryBoundary
+              hasMore={true}
+              loading={state().loading}
+              onShowEarlier={() => void props.transcript.load(props.transcript.nextCursor)}
+            />
+          ) : undefined}
+          <ChatTranscriptFeed messages={state().messages} />
         </section>
       ) : null}
     </>

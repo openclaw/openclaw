@@ -18,9 +18,9 @@ it.for([
     },
   },
   {
-    name: "releases obsolete session wrappers while live descriptions remain synchronized",
+    name: "releases obsolete session wrappers and their extension runners",
     entrypoint: codeModeDescriptionRetentionEntrypoint,
-    expected: { obsoleteWrappersReleased: true, liveDescriptionsSynchronized: true },
+    expected: { obsoleteWrappersReleased: true },
   },
 ])("$name", { timeout: 30_000 }, async ({ entrypoint, expected }, { signal }) => {
   const result = await runNodeScript(

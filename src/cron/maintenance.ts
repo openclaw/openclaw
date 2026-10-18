@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
+import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isGatewayRestartDrainError,
@@ -11,8 +12,11 @@ import {
   sessionChangeScopeAffectsStoredRows,
 } from "../sessions/session-row-changes.js";
 import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
+import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runSessionRegistryMaintenance } from "./session-registry-maintenance.js";
+import { subscribeCronRunHistoryChanges } from "./store/run-history-changes.js";
 import { maintainCronRunHistory } from "./store/run-history.js";
 
 const log = createSubsystemLogger("cron/maintenance");
@@ -21,15 +25,21 @@ let scheduledSweep: Promise<void> | undefined;
 let nextHistorySweepAtMs = Infinity;
 let nextRegistrySweepAtMs = Infinity;
 let unsubscribeSessionChanges: (() => void) | undefined;
+let unsubscribeHistoryChanges: (() => void) | undefined;
+let unsubscribeDatabaseLifecycle: (() => void) | undefined;
 
 function scheduleSweep() {
   if (!scope || scope.signal.aborted || scheduledSweep) {
     return;
   }
+  const atMs = Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs);
+  if (!Number.isFinite(atMs)) {
+    return;
+  }
   const { signal } = scope;
   scope.schedule({
     id: "cron-maintenance",
-    atMs: Math.min(nextHistorySweepAtMs, nextRegistrySweepAtMs),
+    atMs,
     run: () =>
       (scheduledSweep ??= sweep(signal).finally(() => {
         scheduledSweep = undefined;
@@ -53,9 +63,15 @@ async function sweep(signal: AbortSignal) {
         const assertCurrent = context.admission.assertCurrent;
         const now = scope?.now() ?? Date.now();
         if (nextHistorySweepAtMs <= now) {
-          nextHistorySweepAtMs = now + 60_000;
-          await maintainCronRunHistory(context, assertCurrent);
-          assertCurrent();
+          nextHistorySweepAtMs = Infinity;
+          try {
+            const result = await maintainCronRunHistory(context, assertCurrent);
+            assertCurrent();
+            nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, result.nextSweepAtMs ?? Infinity);
+          } catch (error) {
+            nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, now + 60_000);
+            throw error;
+          }
         }
         if (nextRegistrySweepAtMs <= now) {
           // Receipts arriving during the sweep can schedule another pass independently.
@@ -101,6 +117,22 @@ export function startCronMaintenance(scheduler: GatewayScheduler) {
   }
   scope = scheduler.scope();
   nextHistorySweepAtMs = nextRegistrySweepAtMs = scope.now() + 5_000;
+  const invalidateHistory = () => {
+    if (scope) {
+      nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, scope.now() + 60_000);
+      scheduleSweep();
+    }
+  };
+  unsubscribeHistoryChanges = subscribeCronRunHistoryChanges((databasePath) => {
+    if (normalizeDatabasePath(databasePath) === resolveOpenClawStateSqlitePath()) {
+      invalidateHistory();
+    }
+  });
+  unsubscribeDatabaseLifecycle = registerOpenClawStateDatabaseLifecycleListener((event) => {
+    if (event.kind !== "opened") {
+      invalidateHistory();
+    }
+  });
   unsubscribeSessionChanges = sessionChanges.subscribeFacts((change) => {
     const registryChanged =
       "all" in change
@@ -120,5 +152,9 @@ export function startCronMaintenance(scheduler: GatewayScheduler) {
 export async function stopCronMaintenance(): Promise<void> {
   unsubscribeSessionChanges?.();
   unsubscribeSessionChanges = undefined;
+  unsubscribeHistoryChanges?.();
+  unsubscribeHistoryChanges = undefined;
+  unsubscribeDatabaseLifecycle?.();
+  unsubscribeDatabaseLifecycle = undefined;
   await Promise.all([scope?.stop(), scheduledSweep]);
 }

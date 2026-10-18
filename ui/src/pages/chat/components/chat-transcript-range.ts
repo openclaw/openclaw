@@ -40,6 +40,22 @@ export function previewTranscriptRowKeys(
   return new Set(preview.getVirtualIndexes().flatMap((index) => nextKeys[index] ?? []));
 }
 
+export function leavingTranscriptMcpAppRows(
+  root: ParentNode | null,
+  readRenderedKeys: () => ReadonlySet<string>,
+): HTMLElement[] {
+  const appRows = new Set(
+    [...(root?.querySelectorAll<HTMLElement>("mcp-app-view") ?? [])].flatMap(
+      (app) => app.closest<HTMLElement>(".chat-virtual-row") ?? [],
+    ),
+  );
+  if (appRows.size === 0) {
+    return [];
+  }
+  const renderedKeys = readRenderedKeys();
+  return [...appRows].filter((row) => !renderedKeys.has(row.dataset.virtualRowKey ?? ""));
+}
+
 export function focusedTranscriptRowKey(
   scrollElement: HTMLElement | null,
   target: EventTarget | null,

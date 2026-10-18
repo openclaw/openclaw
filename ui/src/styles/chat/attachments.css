@@ -18,10 +18,45 @@ openclaw-chat-svg-attachment {
   position: absolute;
   inset: 15px;
   background-color: var(--chat-file-icon-accent);
-  -webkit-mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
   mask: var(--chat-file-icon-overlay) center / 14px 14px no-repeat;
 }
 
 .chat-attachment-file-icon--unavailable {
   opacity: 0.42;
+}
+
+.chat-attachment-thumb.chat-attachment-thumb--preparation {
+  width: 240px;
+  height: auto;
+  min-height: 64px;
+}
+
+.chat-attachment-preparation {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 9px 14px;
+}
+
+.chat-attachment-preparation .chat-attachment-file__meta {
+  white-space: normal;
+}
+
+.chat-attachment-compress {
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chat-attachment-thumb--preparation .chat-attachment-remove {
+  opacity: 1;
+  transform: none;
 }

@@ -1,7 +1,9 @@
 import { createDeferredCore } from "../../../src/shared/deferred.js";
 import type { RouteId } from "../app-routes.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../pages/chat/chat-history-events.ts";
 import type { ApplicationContext } from "./context.ts";
+import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
 type RouteTransitionOptions = {
   document: Document;
@@ -22,24 +24,21 @@ const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
   easing: "cubic-bezier(0.16, 1, 0.3, 1)",
 };
 
+// Route transitions observe Chat's nodes across page lifetimes; they do not render those nodes.
 function waitForChatRouteReady(document: Document) {
   if (document.querySelector(".agent-chat__composer-combobox")) {
     return { cancel: () => undefined, ready: Promise.resolve() };
   }
   const { promise: ready, resolve } = createDeferredCore();
-  const handleReady = () => resolve();
-  document.addEventListener(CHAT_ROUTE_READY_EVENT, handleReady, { once: true });
   return {
-    cancel: () => document.removeEventListener(CHAT_ROUTE_READY_EVENT, handleReady),
+    cancel: listen(document, CHAT_ROUTE_READY_EVENT, () => resolve(), { once: true }),
     ready,
   };
 }
 
 async function navigateAndAnimate(options: RouteTransitionOptions) {
   const { document, navigate, prefersReducedMotion, router, signal, to } = options;
-  const outlet = document.querySelector<HTMLElement & { updateComplete?: Promise<unknown> }>(
-    "openclaw-router-outlet",
-  );
+  const outlet = document.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
   const chatReady = waitForChatRouteReady(document);
   let canceled = false;
   let animation: Animation | undefined;
@@ -53,7 +52,7 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     resolveCanceled();
   };
   let stop = () => {};
-  signal?.addEventListener("abort", cancel, { once: true });
+  const stopAbort = signal && listen(signal, "abort", cancel, { once: true });
   try {
     if (signal?.aborted) {
       return;
@@ -73,7 +72,7 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     await Promise.race([
       (async () => {
         await navigation;
-        await outlet?.updateComplete;
+        await outlet?.settlePresentation();
         await chatReady.ready;
       })(),
       cancellation,
@@ -85,7 +84,7 @@ async function navigateAndAnimate(options: RouteTransitionOptions) {
     await Promise.race([animation?.finished.catch(() => undefined), cancellation]);
   } finally {
     stop();
-    signal?.removeEventListener("abort", cancel);
+    stopAbort?.();
     chatReady.cancel();
   }
 }

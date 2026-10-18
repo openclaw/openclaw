@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -8,6 +7,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type {
   TranscriptSessionDescriptor,
@@ -31,12 +31,12 @@ type MeetingTranscriptUtteranceRow = Selectable<
   OpenClawStateKyselyDatabase["meeting_transcript_utterances"]
 >;
 
-export function meetingTranscriptDb(db: DatabaseSync) {
+export function meetingTranscriptDb(db: EngineConnection) {
   return getNodeSqliteKysely<MeetingTranscriptsDatabase>(db);
 }
 
 export function meetingTranscriptSessionQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ) {
   return meetingTranscriptDb(database)
@@ -60,8 +60,15 @@ export function transcriptSummaryInputRevisionFromRow(
   });
 }
 
+/** Descriptor custody tolerates accepted speech, but not changed metadata. */
+export function transcriptSessionInputRevisionFromRow(
+  row: Pick<MeetingTranscriptSessionRow, "title" | "source_json" | "metadata_json" | "stopped_at">,
+): string {
+  return transcriptSummaryInputRevisionFromRow({ ...row, next_utterance_seq: 0 });
+}
+
 export function readTranscriptSummaryInputRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ): string | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -79,7 +86,7 @@ export function readTranscriptSummaryInputRevision(
 }
 
 export function readStoredTranscriptSummaryRevision(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ): string | undefined {
   const row = executeSqliteQueryTakeFirstSync(
@@ -93,7 +100,7 @@ export function readStoredTranscriptSummaryRevision(
   return row ? sha256Hex(JSON.stringify(row)) : undefined;
 }
 
-export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
+export function readTranscriptSummaryKeys(database: EngineConnection): Set<string> {
   const rows = executeSqliteQuerySync(
     database,
     meetingTranscriptDb(database)
@@ -104,7 +111,7 @@ export function readTranscriptSummaryKeys(database: DatabaseSync): Set<string> {
 }
 
 export function readRecentStoppedTranscriptSession(
-  database: DatabaseSync,
+  database: EngineConnection,
   source: TranscriptSourceLocator,
   stoppedAfter: string,
   stoppedBefore: string,
@@ -144,7 +151,7 @@ export function readRecentStoppedTranscriptSession(
 }
 
 export function meetingTranscriptUtteranceQuery(
-  database: DatabaseSync,
+  database: EngineConnection,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ) {
   return meetingTranscriptDb(database)
@@ -154,7 +161,7 @@ export function meetingTranscriptUtteranceQuery(
 }
 
 export function appendMeetingTranscriptUtterance(params: {
-  database: DatabaseSync;
+  database: EngineConnection;
   metadataJson: string | null;
   now: number;
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;

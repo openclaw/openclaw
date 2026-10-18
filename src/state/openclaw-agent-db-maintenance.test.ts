@@ -1,16 +1,21 @@
 import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { StatementSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import * as sqlite from "../infra/node-sqlite.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
+  claimOpenClawAgentDatabaseLease,
   prepareOpenClawAgentDatabaseWorkerLease,
   releaseOpenClawAgentDatabaseLease,
   runWithAgentDatabaseMaintenanceAuthority,
@@ -25,6 +30,7 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { runExistingOpenClawStateWriteTransaction } from "./openclaw-state-db-existing-write.js";
 import * as stateReads from "./openclaw-state-db-readonly.js";
 import {
@@ -33,6 +39,7 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
@@ -148,7 +155,10 @@ describe("asynchronous agent database maintenance admission", () => {
             }
           },
           { env: f.env },
-          { schemaSql: "", operationLabel: "maintenance authority regression" },
+          {
+            schemaSql: extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "schema_meta"),
+            operationLabel: "maintenance authority regression",
+          },
         );
       },
     );
@@ -479,3 +489,63 @@ describe("asynchronous agent database maintenance admission", () => {
     },
   );
 });
+
+it.each(["quick", "full", "unspecified", "no-scope"] as const)(
+  "preserves %s integrity coverage when draining a real maintenance lease",
+  async (mode) => {
+    const { env, options, state } = fixture();
+    const leaseId = claimOpenClawAgentDatabaseLease({
+      agentId: options.agentId,
+      path: options.pathname,
+      env,
+    });
+    await withOpenClawStateLease(
+      {
+        ...AGENT_DATABASE_MAINTENANCE_LEASE,
+        database: { scope: "shared", options: { env } },
+        leaseMs: 30_000,
+        waitMs: 0,
+      },
+      (authority) =>
+        runWithAgentDatabaseMaintenanceAuthority(authority, state.path, async () => {
+          const scope =
+            mode === "no-scope"
+              ? undefined
+              : createOpenClawDatabaseMaintenanceScope({
+                  sqliteIntegrityCheck: mode === "unspecified" ? undefined : mode,
+                  assertDatabaseAccess: (pathname) => expect(pathname).toBe(state.path),
+                });
+          const release = () => releaseOpenClawAgentDatabaseLease(leaseId, { env }, "read-only");
+          scope?.own({}, "agent-resources", release);
+          // Exercise cleanup without borrowing the fixture's earlier FULL admission.
+          revokeSqliteDatabaseAdmissionsForPath(state.path);
+          const reads = observeSqliteReadSql(StatementSync.prototype);
+          try {
+            if (scope) {
+              await scope.close();
+            } else {
+              release();
+            }
+            if (mode === "quick") {
+              expect(reads.queries).toContain("PRAGMA quick_check;");
+              for (const table of ["schema_meta", "state_leases", "agent_database_leases"]) {
+                expect(reads.queries).toContain(`PRAGMA integrity_check('${table}');`);
+              }
+              expect(reads.queries).not.toContain("PRAGMA integrity_check;");
+            } else {
+              expect(reads.queries).not.toContain("PRAGMA quick_check;");
+              expect(
+                reads.queries.filter((query) => query === "PRAGMA integrity_check;"),
+              ).toHaveLength(1);
+            }
+            expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual(
+              [],
+            );
+          } finally {
+            reads.restore();
+            await scope?.close();
+          }
+        }),
+    );
+  },
+);

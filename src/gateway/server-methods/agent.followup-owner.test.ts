@@ -7,7 +7,6 @@ import {
   makeContext,
   prime,
 } from "./agent.test-harness.js";
-// Provider/session fixtures are isolated; RPC admission, authority, and plugin effects are real.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -54,9 +53,11 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createPluginToolFactoryContext } from "../../plugins/tool-factory-context.js";
 import { bindPluginToolCallbacks } from "../../plugins/tool-factory-runtime.js";
+// Provider/session fixtures are isolated; RPC admission, authority, and plugin effects are real.
+import { requestRpcSourceCancellation } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { abortChatRunById } from "../chat-abort.js";
 import { createContext as createInProcessContext } from "../server-plugin-in-process-dispatch.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 
@@ -325,7 +326,13 @@ describe("Gateway followup owner final effect", () => {
           await admission.finish();
           entered.resolve();
         }
-        return { payloads: [{ text: "owner proof settled" }], meta: { durationMs: 1 } };
+        return {
+          payloads: [{ text: "owner proof settled" }],
+          meta: {
+            durationMs: 1,
+            terminalReply: { disposition: "visible", text: "owner proof settled" },
+          },
+        };
       });
       const delayedDispatch =
         outcome === "observer error before dispatch" || outcome === "cancel before dispatch";
@@ -337,7 +344,11 @@ describe("Gateway followup owner final effect", () => {
           completion,
           runId: "owner-proof-child",
           skip: false,
-          reply: { status: "ok", replyText: "ready" },
+          reply: {
+            status: "ok",
+            replyText: "ready",
+            terminalReply: { disposition: "visible", text: "ready" },
+          },
           notifyRequesterOnWaitFailure: true,
           targetSessionKey: CHILD,
           targetAgentId: "main",
@@ -363,13 +374,11 @@ describe("Gateway followup owner final effect", () => {
           expect(authorityReleased).toBe(false);
           expect(effectStarted).toBe(false);
           if (outcome === "cancel before dispatch") {
-            expect(
-              abortChatRunById(context, {
-                runId: parentRunId,
-                sessionKey: SESSION,
-                stopReason: "rpc",
-              }).aborted,
-            ).toBe(true);
+            const parentSource = rpcSourceTesting.get(parentRunId);
+            if (!parentSource) {
+              throw new Error("Expected accepted parent RPC source");
+            }
+            expect(requestRpcSourceCancellation(parentSource)).toBe(true);
           } else {
             completion.close(new Error("simulated observer loss before execution"));
             expect(authorityReleased).toBe(false);

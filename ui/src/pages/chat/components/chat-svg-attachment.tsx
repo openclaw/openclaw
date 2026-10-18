@@ -1,6 +1,6 @@
-import { Show, createEffect, createMemo, createSignal, onCleanup, runWithOwner } from "solid-js";
+import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { isCrossOriginHttpSource } from "./chat-attachment-href.ts";
 import { observeChatAttachmentViewport } from "./chat-attachment-viewport.ts";
@@ -35,7 +35,6 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
     const [renderSource, setRenderSource] = createSignal<SvgRenderSource>();
     const [failed, setFailed] = createSignal(false);
     let source: SvgRenderSource | undefined;
-    let loadVersion = 0;
     let abortController: AbortController | undefined;
 
     const retireSource = () => {
@@ -45,16 +44,13 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           URL.revokeObjectURL(source.url);
         }
         source = undefined;
-        setRenderSource(undefined);
       }
     };
-    const releaseSource = () =>
-      runWithOwner(null, () => {
-        loadVersion += 1;
-        abortController?.abort();
-        abortController = undefined;
-        retireSource();
-      });
+    const releaseSource = () => {
+      abortController?.abort();
+      abortController = undefined;
+      retireSource();
+    };
     const showFallback = () => {
       setFailed(true);
       host.onMediaLoaded?.();
@@ -63,92 +59,86 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
     const loadKey = createMemo(() => [props.src, props.sourceIdentity, props.sizeBytes] as const, {
       equals: (previous, next) => previous.every((value, index) => Object.is(value, next[index])),
     });
-    createEffect(loadKey, ([src, identity, sizeBytes]) =>
-      runWithOwner(null, () => {
-        releaseSource();
-        setFailed(false);
-        const version = loadVersion;
-        const current = () =>
-          host.isConnected &&
-          version === loadVersion &&
-          src === host.src &&
-          identity === host.sourceIdentity &&
-          sizeBytes === host.sizeBytes;
-        const loadSource = async () => {
-          if (!current()) {
-            return;
-          }
-          // The served Control UI CSP does not admit arbitrary remote image origins.
-          if (
-            (sizeBytes !== undefined && sizeBytes > SVG_PREVIEW_MAX_BYTES) ||
-            isCrossOriginHttpSource(src)
-          ) {
-            showFallback();
-            return;
-          }
-          const controller = new AbortController();
-          abortController = controller;
-          let timeout: ReturnType<typeof setTimeout> | undefined;
-          try {
-            const response = await Promise.race([
-              fetch(src, {
-                credentials: "same-origin",
-                headers: { Accept: "image/svg+xml" },
-                method: "GET",
-                signal: controller.signal,
-              }),
-              new Promise<never>((_resolve, reject) => {
-                timeout = setTimeout(() => {
-                  controller.abort();
-                  reject(new DOMException("SVG attachment fetch timed out", "TimeoutError"));
-                }, SVG_PREVIEW_FETCH_TIMEOUT_MS);
-              }),
-            ]);
-            if (!response.ok) {
-              await response.body?.cancel().catch(() => undefined);
-              throw new Error("SVG attachment is unavailable");
-            }
-            const bytes = await readResponseBytesWithinLimit(response, SVG_PREVIEW_MAX_BYTES);
-            if (!bytes) {
-              throw new Error("SVG attachment exceeds the preview budget");
-            }
-            const url = URL.createObjectURL(new Blob([bytes], { type: "image/svg+xml" }));
-            if (!current()) {
-              URL.revokeObjectURL(url);
-              return;
-            }
-            source = { url, retainCount: 0, retired: false };
-            setRenderSource(source);
-          } catch {
-            if (current()) {
-              showFallback();
-            }
-          } finally {
-            clearTimeout(timeout);
-            if (abortController === controller) {
-              abortController = undefined;
-            }
-          }
-        };
-        let stopObserving: (() => void) | undefined;
-        if (src.trim()) {
-          // The exported Solid component attaches its host after this nested render settles.
-          queueMicrotask(() => {
-            if (current()) {
-              stopObserving = observeChatAttachmentViewport(
-                host.parentElement ?? host,
-                () => void loadSource(),
-              );
-            }
-          });
+    createEffect(loadKey, ([src, identity, sizeBytes]) => {
+      setRenderSource(undefined);
+      setFailed(false);
+      let active = true;
+      const current = () =>
+        host.isConnected &&
+        active &&
+        src === host.src &&
+        identity === host.sourceIdentity &&
+        sizeBytes === host.sizeBytes;
+      const loadSource = async () => {
+        if (!current()) {
+          return;
         }
-        return () => {
-          stopObserving?.();
-          releaseSource();
-        };
-      }),
-    );
-    onCleanup(releaseSource);
+        // The served Control UI CSP does not admit arbitrary remote image origins.
+        if (
+          (sizeBytes !== undefined && sizeBytes > SVG_PREVIEW_MAX_BYTES) ||
+          isCrossOriginHttpSource(src)
+        ) {
+          showFallback();
+          return;
+        }
+        const controller = new AbortController();
+        abortController = controller;
+        const timeout = setTimeout(
+          () =>
+            controller.abort(new DOMException("SVG attachment fetch timed out", "TimeoutError")),
+          SVG_PREVIEW_FETCH_TIMEOUT_MS,
+        );
+        try {
+          const response = await fetch(src, {
+            credentials: "same-origin",
+            headers: { Accept: "image/svg+xml" },
+            method: "GET",
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            await response.body?.cancel().catch(() => undefined);
+            throw new Error("SVG attachment is unavailable");
+          }
+          const bytes = await readResponseBytesWithinLimit(response, SVG_PREVIEW_MAX_BYTES);
+          if (!bytes) {
+            throw new Error("SVG attachment exceeds the preview budget");
+          }
+          const url = URL.createObjectURL(new Blob([bytes], { type: "image/svg+xml" }));
+          if (!current()) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          source = { url, retainCount: 0, retired: false };
+          setRenderSource(source);
+        } catch {
+          if (current()) {
+            showFallback();
+          }
+        } finally {
+          clearTimeout(timeout);
+          if (abortController === controller) {
+            abortController = undefined;
+          }
+        }
+      };
+      let stopObserving: (() => void) | undefined;
+      if (src.trim()) {
+        // The exported Solid component attaches its host after this nested render settles.
+        queueMicrotask(() => {
+          if (current()) {
+            stopObserving = observeChatAttachmentViewport(
+              host.parentElement ?? host,
+              () => void loadSource(),
+            );
+          }
+        });
+      }
+      return () => {
+        active = false;
+        stopObserving?.();
+        releaseSource();
+      };
+    });
 
     const handleOpen = () => {
       if (!source || !host.onOpen) {
@@ -167,12 +157,7 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
           URL.revokeObjectURL(opened.url);
         }
       };
-      try {
-        host.onOpen(opened.url, release);
-      } catch (error) {
-        release();
-        throw error;
-      }
+      host.onOpen(opened.url, release);
     };
 
     return (
@@ -205,6 +190,7 @@ export const ChatSvgAttachment = defineSolidBridge<SvgAttachmentProps>(
                 onError={() => {
                   if (source === image) {
                     retireSource();
+                    setRenderSource(undefined);
                     showFallback();
                   }
                 }}

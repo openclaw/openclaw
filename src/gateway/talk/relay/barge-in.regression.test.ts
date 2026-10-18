@@ -40,7 +40,6 @@ async function captureBridgeRequest(params: {
   const session = createTalkRealtimeRelaySession({
     context: {
       broadcastToConnIds: vi.fn(),
-      chatAbortControllers: new Map(),
     } as never,
     connId: "conn-1",
     cfg,
@@ -50,7 +49,7 @@ async function captureBridgeRequest(params: {
     capabilities,
     instructions: "be brief",
     tools: [],
-    sessionTarget: prepareTalkSessionTarget(cfg, "agent:main:main"),
+    sessionTarget: await prepareTalkSessionTarget(cfg, "agent:main:main"),
     forceAgentConsultOnFinalTranscript: params.forceAgentConsultOnFinalTranscript,
   });
   return { request, relaySessionId: session.relaySessionId };

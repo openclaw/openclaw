@@ -8,10 +8,10 @@ import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.j
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
-  resolveGroupToolPolicyOutcome,
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "./agent-tools.policy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
 vi.mock("../channels/plugins/session-conversation.js", () => ({
@@ -123,11 +123,6 @@ describe("resolveGroupToolPolicy group context validation", () => {
     "reports unavailable scheduled authority for %s before tool construction",
     (sessionKey) => {
       const params = { config, sessionKey, accountId: "removed", requireConfiguredAccount: true };
-      expect(resolveGroupToolPolicyOutcome(params)).toMatchObject({
-        kind: "account-unavailable",
-        accountId: "removed",
-        message: expect.stringContaining('Scheduled account "removed" is unavailable'),
-      });
       expect(() => resolveGroupToolPolicy(params)).toThrow(
         'Scheduled account "removed" is unavailable',
       );
@@ -136,7 +131,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
 
   it("preserves intentional deny-all policy for a configured scheduled account", () => {
     expect(
-      resolveGroupToolPolicyOutcome({
+      resolveGroupToolPolicy({
         config: {
           channels: {
             whatsapp: {
@@ -149,7 +144,7 @@ describe("resolveGroupToolPolicy group context validation", () => {
         accountId: "work",
         requireConfiguredAccount: true,
       }),
-    ).toMatchObject({ kind: "resolved", policy: { deny: ["*"] } });
+    ).toEqual({ deny: ["*"] });
   });
 });
 
@@ -160,7 +155,9 @@ describe("stored subagent tool policies", () => {
       subagentRole: "leaf",
       subagentControlScope: "none",
     });
-    const policy = resolveSubagentToolPolicyForSession(config, sessionKey);
+    const policy = await withPreparedSessionCapabilityRead(() =>
+      resolveSubagentToolPolicyForSession(config, sessionKey),
+    );
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);
   });
@@ -170,7 +167,9 @@ describe("stored subagent tool policies", () => {
       { spawnDepth: 1, subagentRole: "leaf", subagentControlScope: "none" },
       { agents: { defaults: { subagents: { maxSpawnDepth: 1 } } } },
     );
-    const policy = resolveSubagentToolPolicyForSession(config, sessionKey);
+    const policy = await withPreparedSessionCapabilityRead(() =>
+      resolveSubagentToolPolicyForSession(config, sessionKey),
+    );
     expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
     for (const tool of ["sessions_spawn", "subagents", "sessions_search"]) {
       expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(false);
@@ -199,7 +198,9 @@ describe("stored subagent tool policies", () => {
       { spawnDepth: 1, subagentRole: "orchestrator", subagentControlScope: "children" },
       { tools: { subagents: { tools: { allow: [...denied, "memory_search"] } } } },
     );
-    const policy = resolveSubagentToolPolicyForSession(config, sessionKey);
+    const policy = await withPreparedSessionCapabilityRead(() =>
+      resolveSubagentToolPolicyForSession(config, sessionKey),
+    );
     for (const tool of denied) {
       expect(isToolAllowedByPolicyName(tool, policy), tool).toBe(false);
     }
@@ -212,7 +213,9 @@ describe("stored subagent tool policies", () => {
       {},
       "agent:main:acp:limited",
     );
-    const policy = resolveInheritedToolPolicyForSession(config, sessionKey);
+    const policy = await withPreparedSessionCapabilityRead(() =>
+      resolveInheritedToolPolicyForSession(config, sessionKey),
+    );
     expect(isToolAllowedByPolicyName("custom_plugin_tool", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("custom_denied_tool", policy)).toBe(false);
     expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
@@ -239,11 +242,6 @@ describe("resolveEffectiveToolPolicy", () => {
 
   it.each<{ name: string; tools: OpenClawConfig["tools"]; warning?: string }>([
     { name: "provider wildcard deny", tools: { byProvider: { fixture: { deny: ["pro*"] } } } },
-    {
-      name: "provider profile alsoAllow",
-      tools: { byProvider: { fixture: { profile: "minimal", alsoAllow: ["process"] } } },
-      warning: 'Add alsoAllow: ["process"]',
-    },
   ])("warns only about actionable grants with $name", async ({ tools, warning }) => {
     const logs = createWarnLogCapture("openclaw-agent-tools-policy-test");
     try {

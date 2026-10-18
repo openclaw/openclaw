@@ -1,5 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
+import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import {
   buildDailyCsv,
   buildQuerySuggestions,
@@ -43,19 +45,38 @@ it("limits suggestions before matching while preserving raw option spelling", ()
   const options = buildUsageFilterOptions(sessions);
   expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
   for (const key of ["agent", "channel", "provider", "model"]) {
-    expect(buildQuerySuggestions(`${key}:OPEN`, options).map((entry) => entry.value)).toEqual([
-      `${key}:OpenAI`,
-      `${key}:openai`,
-    ]);
-    expect(buildQuerySuggestions(`${key}:seventh`, options)).toEqual([]);
+    expect(
+      buildQuerySuggestions(`${key}:OPEN`, extractQueryTerms(`${key}:OPEN`), options).map(
+        (entry) => entry.value,
+      ),
+    ).toEqual([`${key}:OpenAI`, `${key}:openai`]);
+    expect(
+      buildQuerySuggestions(`${key}:seventh`, extractQueryTerms(`${key}:seventh`), options),
+    ).toEqual([]);
   }
-  expect(buildQuerySuggestions("constructor:", options)).toEqual([]);
-  expect(buildQuerySuggestions("has:err", options)).toEqual([
+  expect(buildQuerySuggestions("constructor:", extractQueryTerms("constructor:"), options)).toEqual(
+    [],
+  );
+  expect(buildQuerySuggestions("has:err", extractQueryTerms("has:err"), options)).toEqual([
     { label: "has:errors", value: "has:errors" },
   ]);
 });
 
 describe("usage query CSV export", () => {
+  it("leaves unavailable numeric cells blank rather than exporting zero or a completed subtotal", () => {
+    const usage = {
+      ...createEmptyCostUsageTotals(),
+      input: 50,
+      totalTokens: 50,
+      totalCost: 0.01,
+      usageReport: { state: "unavailable" as const },
+    };
+    const daily = buildDailyCsv([{ date: "2026-10-11", ...usage }]);
+    expect(daily.split("\n")[1]).toBe("2026-10-11,,,,,,,,,,");
+    const sessions = buildSessionsCsv([{ key: "interrupted", usage }]);
+    expect(sessions.split("\n")[1]?.split(",").slice(-6)).toEqual(Array(6).fill(""));
+  });
+
   it("keeps daily headers aligned with numeric cells", () => {
     expect(
       buildDailyCsv([

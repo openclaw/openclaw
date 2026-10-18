@@ -1,9 +1,9 @@
-import type { DatabaseSync } from "node:sqlite";
 import type {
   SkillsLibraryListParams,
   SkillsLibraryListResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { selectHasMultipleSessionSharingIdentities } from "../../state/user-profile-identity.read.js";
 import { SkillLibraryError } from "../skill-library-error.js";
@@ -34,7 +34,7 @@ export function hydrateSkillLibraryWorkerAuthority(
 }
 
 export function resolveSkillLibraryPresentationInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   actor = resolveSkillLibraryActor(db, authority),
 ): Pick<
@@ -57,7 +57,7 @@ export function resolveSkillLibraryPresentationInDatabase(
 }
 
 export function listSkillLibraryInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   params: SkillsLibraryListParams = {},
 ): SkillsLibraryListResult {
@@ -74,7 +74,7 @@ export function listSkillLibraryInDatabase(
 }
 
 export function readSkillLibraryMetadataInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   authority: SkillLibraryAuthority,
   skillId: string,
   revision?: string,
@@ -122,7 +122,10 @@ export function readSkillLibraryMetadataInDatabase(
   };
 }
 
-export function publishSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryPublishInput) {
+export function publishSkillLibraryInDatabase(
+  db: EngineConnection,
+  input: SkillLibraryPublishInput,
+) {
   const { params, skillId, bundle, uploadId } = input;
   const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
   const actor = requireSkillLibraryProfile(db, authority);
@@ -202,7 +205,7 @@ export function publishSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibr
   return skillLibraryReceipt(requireSkillLibraryEntry(db, skillId, authority));
 }
 
-export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibraryMutateInput) {
+export function mutateSkillLibraryInDatabase(db: EngineConnection, input: SkillLibraryMutateInput) {
   const { params } = input;
   const authority = hydrateSkillLibraryWorkerAuthority(input.authority);
   if (!tableExists(db, "skill_library_entries")) {
@@ -211,6 +214,7 @@ export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibra
   const current = requireSkillLibraryEntry(db, params.skillId, authority, true);
   const actor = requireSkillLibraryProfile(db, authority);
   assertSkillLibraryRevision(current, params.expectedRevision);
+  const updated = { ...current, updatedAt: Date.now() };
   const changes: {
     shared?: number;
     owner_profile_id?: null;
@@ -227,7 +231,8 @@ export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibra
           "Team-owned skills cannot become personal through unshare.",
         );
       }
-      changes.shared = Number(params.action === "share");
+      updated.shared = params.action === "share";
+      changes.shared = Number(updated.shared);
       break;
     case "transfer":
       if (!resolveSkillLibraryActor(db, authority).admin) {
@@ -239,32 +244,42 @@ export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibra
       assertSkillLibraryNameAvailable(db, null, current.slug, current.skillId);
       changes.owner_profile_id = null;
       changes.shared = 1;
+      updated.ownerProfileId = null;
+      updated.ownerLabel = "Team";
+      updated.shared = true;
+      updated.canEdit = authority.namespace !== "personal";
       break;
     case "enable":
     case "disable":
-      changes.enabled = Number(params.action === "enable");
+      updated.enabled = params.action === "enable";
+      changes.enabled = Number(updated.enabled);
       break;
     case "remove":
       changes.removed = 1;
+      updated.removed = true;
       break;
-    case "rollback":
-      if (
-        !params.revision ||
-        !selectSkillLibraryRevisionMetadata(db, current.skillId, params.revision)
-      ) {
+    case "rollback": {
+      const revision = params.revision;
+      const metadata = revision
+        ? selectSkillLibraryRevisionMetadata(db, current.skillId, revision)
+        : undefined;
+      if (!revision || !metadata) {
         throw new SkillLibraryError(
           "NOT_FOUND",
           "Choose a published revision from this skill's history.",
         );
       }
-      changes.current_revision = params.revision;
+      changes.current_revision = revision;
+      updated.revision = revision;
+      updated.description = metadata.description;
       break;
+    }
   }
   executeSqliteQuerySync(
     db,
     skillLibraryDb(db)
       .updateTable("skill_library_entries")
-      .set({ ...changes, updated_at: Date.now() })
+      .set({ ...changes, updated_at: updated.updatedAt })
       .where("skill_id", "=", current.skillId),
   );
   recordSkillLibraryEvent(
@@ -274,8 +289,5 @@ export function mutateSkillLibraryInDatabase(db: DatabaseSync, input: SkillLibra
     params.action,
     actor,
   );
-  return skillLibraryReceipt(
-    requireSkillLibraryEntry(db, current.skillId, authority),
-    params.action === "remove" ? "removed" : "published",
-  );
+  return skillLibraryReceipt(updated, params.action === "remove" ? "removed" : "published");
 }

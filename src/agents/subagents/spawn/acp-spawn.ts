@@ -57,6 +57,7 @@ import {
   resolveSpawnMode,
   type PreparedSpawnThreadBinding,
 } from "../../spawn-plan.js";
+import type { SpawnRequesterConversationSource } from "../../spawn-requester-origin.js";
 import { resolveSpawnedWorkspaceInheritance } from "../../spawned-context.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
 import { prepareSubagentSessionListReadCache } from "../registry/subagent-registry-state.js";
@@ -104,6 +105,8 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "./subagent-capabilities.js";
+import { getSubagentDepthFromSessionStoreInWorker } from "./subagent-depth.js";
+import { withPreparedSessionCapabilityRead } from "./subagent-session-store.js";
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -129,7 +132,7 @@ type SpawnAcpParams = {
   attachments?: AcpTurnAttachment[];
 };
 
-type SpawnAcpContext = {
+type SpawnAcpContext = SpawnRequesterConversationSource & {
   onSpawnEffectsStart?: () => void;
   assertActive?: SessionSourceAssertion;
   agentSessionKey?: string;
@@ -141,10 +144,6 @@ type SpawnAcpContext = {
   requesterAgentIdOverride?: string;
   agentChannel?: string;
   agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
   currentMessageId?: string | number;
   /** Group chat ID for channels that distinguish group vs. topic (e.g. Telegram). */
   agentGroupId?: string;
@@ -200,7 +199,7 @@ export async function spawnAcpDirect(
     sessionKey: requesterInternalKey,
     agentId: ctx.requesterAgentIdOverride,
   });
-  const runtimePolicyError = resolveAcpSpawnRuntimePolicyError({
+  const runtimePolicyError = await resolveAcpSpawnRuntimePolicyError({
     cfg,
     requesterAgentId,
     requesterSessionKey: ctx.agentSessionKey,
@@ -299,15 +298,19 @@ export async function spawnAcpDirect(
   const requesterEntry = requesterTarget.store[requesterTarget.canonicalKey];
   const completionRequesterSessionId = requesterEntry?.sessionId;
   const completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
-  const hasSubagentEnvelope = isSubagentEnvelopeSession(requesterInternalKey, {
+  const hasSubagentEnvelope = await withPreparedSessionCapabilityRead(() =>
+    isSubagentEnvelopeSession(requesterInternalKey, { cfg, store: subagentStore }),
+  );
+  const callerDepth = await getSubagentDepthFromSessionStoreInWorker(requesterInternalKey, {
     cfg,
-    store: subagentStore,
+    agentId: requesterAgentId,
   });
   await prepareSubagentSessionListReadCache();
   ctx.assertActive?.();
   const resolveAdmission = (pendingChildren = 0, pendingChildSessionKeys?: ReadonlySet<string>) =>
     resolveSpawnAdmission({
       cfg,
+      callerDepth,
       inheritedToolPolicySource: ctx.inheritedToolPolicySource,
       enabled: hasSubagentEnvelope || senderRestricted,
       requesterSessionKey: requesterInternalKey,
@@ -471,7 +474,6 @@ export async function spawnAcpDirect(
         parentEntry,
         expectedParentSessionId: ctx.expectedParentSessionId,
         senderIsOwner: ctx.senderIsOwner,
-        readParentEntry,
       });
       const creationStamp = buildSessionCreationStamp({
         via: "spawn",
@@ -488,7 +490,6 @@ export async function spawnAcpDirect(
             subagentControlScope: admission.childSessionPatch.subagentControlScope,
           }
         : {};
-      await parentLineage.assertParentUnchanged();
       ctx.assertActive?.();
       childCreationEntry =
         (await upsertSessionEntryCore(
@@ -517,7 +518,7 @@ export async function spawnAcpDirect(
               : {}),
             ...(params.label ? { label: params.label } : {}),
             // Same trust rules as native spawn: stamped last, from trusted host facts only.
-            ...parentLineage.receipt,
+            ...parentLineage,
           },
           sessionEntryCommitGuardOptions(ctx.assertActive),
         )) ?? undefined;

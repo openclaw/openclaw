@@ -37,7 +37,7 @@ If a reply says OpenClaw could not connect to the AI service, check the provider
 
 If a reply says OpenClaw could not read the conversation's history, ask the Gateway operator to try `openclaw doctor --fix` on the host and profile that own the session. This notice also appears for unmentioned group turns when silent replies are allowed.
 
-Doctor can restore a missing header when the stored transcript entries are already canonical. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
+Doctor can restore a missing header when the stored transcript entries already use the supported format. It does not repair every malformed or unsupported history. If the error persists, preserve the state and contact support with the Gateway logs; the history may need migration or recovery from a backup. Repeated `/new` or `/compact` commands do not repair a transcript that cannot be loaded.
 
 See [Doctor's session repairs](/gateway/doctor/state-and-sessions) and [running Doctor](/gateway/doctor/running).
 
@@ -64,6 +64,12 @@ Common signatures:
 - `drop guild message (mention required` → group message ignored until mention.
 - `pairing request` → sender needs approval.
 - `blocked` / `allowlist` → sender/channel was filtered by policy.
+
+A `Session delivery: entry <id> was dead-lettered and moved to failed` warning means a queued session delivery finished terminal cleanup and will not be replayed. Use the queue entry ID to correlate earlier logs, then check the conversation before retrying: an interrupted delivery may already have produced side effects. Batch recovery includes the finalized entry in its failure count.
+
+For saved `sessions_send` updates, `Session delivery endpoint was replaced` means the source or destination no longer matches the session identity and lifecycle generation that accepted the update, or was archived. Recovery records a notice in the destination conversation before cancelling automatic delivery. The saved input remains retained, but subsequent boots do not retry it. Resend the update if it is still needed; recovery never redirects it across a reset or replacement. Permission and temporary storage failures remain eligible for later recovery.
+
+Recovery warnings include the input ID, age in milliseconds, and a hashed session key. Replacement warnings also identify the source or target endpoint and its previous and current session IDs and lifecycle generations. Use these fields to correlate repeated inputs without logging message content or raw session keys. If the notice cannot be saved, the input remains eligible for recovery.
 
 Related:
 

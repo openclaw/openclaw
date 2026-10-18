@@ -5,18 +5,31 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  claimSessionControllerTask,
+  releaseSessionControllerClaim,
+  type SessionControllerMailboxClaim,
+} from "../../sessions/session-controller.mailbox.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { registerQueuedChatTurn, type QueuedChatTurnMap } from "../chat-queued-turns.js";
 import { agentHandlers } from "../server-methods/agent.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
 import type { DedupeEntry } from "../server-shared.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { replayAgentTurnIfCached } from "./agent-dedupe.js";
+import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
+import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
 function waitThroughGateway(
   params: { runId: string; timeoutMs: number },
@@ -27,19 +40,31 @@ function waitThroughGateway(
     agentHandlers["agent.wait"],
     'agentHandlers["agent.wait"] test invariant',
   );
-  const promise = Promise.resolve(
-    handler({
-      params,
-      respond,
-      context: {
-        dedupe: new Map(),
-        chatAbortControllers: activeKind
-          ? new Map([[params.runId, { kind: activeKind }]])
-          : new Map(),
-        chatQueuedTurns: new Map(),
-      },
-    } as unknown as Parameters<typeof handler>[0]),
-  );
+  const source = activeKind
+    ? createTestRpcSource(
+        {
+          kind: activeKind === "agent" ? "agent" : "chat-send",
+          sessionKey: "agent:main:wait",
+          sessionId: "wait-session",
+        },
+        params.runId,
+      )
+    : undefined;
+  const claim = source ? claimSessionControllerTask(source.input, () => {}) : undefined;
+  rpcSourceTesting.reset(source ? [[params.runId, source]] : []);
+  const promise = (async () => {
+    try {
+      return await handler({
+        params,
+        respond,
+        context: { dedupe: new Map() },
+      } as unknown as Parameters<typeof handler>[0]);
+    } finally {
+      if (claim !== undefined) {
+        releaseSessionControllerClaim(await claim);
+      }
+    }
+  })();
   return { promise, respond };
 }
 
@@ -73,30 +98,67 @@ function terminalReceipt(runId: string) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
 describe("agent.wait gateway dedupe observations", () => {
-  it.each([
-    { status: "ok", registration: "active" },
-    { status: "error", registration: "retired" },
-    { status: "timeout", registration: "sessionless" },
-  ] as const)(
+  it("keeps whitespace-distinct protocol run IDs separate", async () => {
+    const plain = "exact-rpc-id";
+    const spaced = " exact-rpc-id ";
+    const dedupe = new Map<string, DedupeEntry>();
+    completeRun(dedupe, plain);
+    const source = createRpcSourceForTest(
+      { kind: "agent" },
+      {
+        runId: spaced,
+        sessionKey: "agent:main:exact-rpc",
+        sessionId: "exact-session",
+        phase: "waiting",
+      },
+    );
+    rpcSourceTesting.reset([[spaced, source]]);
+    const service = createAgentTurnService({
+      context: { dedupe } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
+      isWebchatConnect: () => false,
+    });
+    expect((await service.waitForTurn({ runId: spaced, timeoutMs: 0 })).result).toMatchObject({
+      runId: spaced,
+      status: "pending",
+      timeoutPhase: "queue",
+    });
+    expect((await service.waitForTurn({ runId: plain, timeoutMs: 0 })).result).toMatchObject({
+      runId: plain,
+      status: "ok",
+    });
+  });
+
+  it.each(
+    (["ok", "error", "timeout"] as const).flatMap((status) =>
+      (["active", "retired", "sessionless"] as const).map((registration) => ({
+        status,
+        registration,
+      })),
+    ),
+  )(
     "waits for replayable $status after execution ends ($registration)",
     async ({ status, registration }) => {
       vi.useFakeTimers();
       const runId = `publication-${status}-${registration}`;
       const key = `agent:${runId}`;
       const context = createGatewayRequestContext(makeContextParams());
+      let claim: SessionControllerMailboxClaim | undefined;
       if (registration !== "sessionless") {
-        context.chatAbortControllers.set(runId, {
-          kind: "agent",
-          controller: new AbortController(),
-          sessionKey: "agent:main:publication",
-          sessionId: "publication-session",
-          startedAtMs: Date.now(),
-          expiresAtMs: Number.MAX_SAFE_INTEGER,
-        });
+        const source = createTestRpcSource(
+          {
+            kind: "agent",
+            sessionKey: "agent:main:publication",
+            sessionId: "publication-session",
+          },
+          runId,
+        );
+        rpcSourceTesting.set(runId, source);
+        claim = await claimSessionControllerTask(source.input, () => {});
       }
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
@@ -148,7 +210,7 @@ describe("agent.wait gateway dedupe observations", () => {
           data: { phase: "end", executionSettled: true, ...terminal },
         });
         if (registration === "retired") {
-          context.chatAbortControllers.delete(runId);
+          rpcSourceTesting.delete(runId);
         }
         await vi.advanceTimersByTimeAsync(0);
         expect(waiting.respond).not.toHaveBeenCalled();
@@ -157,7 +219,7 @@ describe("agent.wait gateway dedupe observations", () => {
         expect(duringPublication.respond).toHaveBeenCalledWith(true, { runId, status: "timeout" });
         expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
         publish();
-        context.chatAbortControllers.delete(runId);
+        rpcSourceTesting.delete(runId);
         await waiting.promise;
         expect(waiting.respond).toHaveBeenCalledWith(
           true,
@@ -173,7 +235,10 @@ describe("agent.wait gateway dedupe observations", () => {
       } finally {
         publish();
         await waiting.promise;
-        context.chatAbortControllers.clear();
+        rpcSourceTesting.clear();
+        if (claim) {
+          releaseSessionControllerClaim(claim);
+        }
       }
     },
   );
@@ -264,6 +329,8 @@ describe("agent.wait gateway dedupe observations", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
+      ensureUserProfilesSchema({});
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
       const owner = roleClient("none", "queued-owner");
       const other = roleClient("none", "queued-other");
       const session = {
@@ -286,10 +353,11 @@ describe("agent.wait gateway dedupe observations", () => {
         },
       );
       const runId = "queued-visible-wait";
-      const chatQueuedTurns: QueuedChatTurnMap = new Map();
-      const controller = new AbortController();
+      rpcSourceTesting.clear();
+      const source = createRpcSourceForTest({}, { ...session, runId, phase: "waiting" });
+      const controller = testRpcSourceController(source);
       const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
-      const context = createGatewayRequestContext(makeContextParams({ chatQueuedTurns }));
+      const context = createGatewayRequestContext(makeContextParams());
       context.getRuntimeConfig = () => cfg;
       const invoke = async (client: typeof owner) => {
         const respond = vi.fn();
@@ -306,9 +374,7 @@ describe("agent.wait gateway dedupe observations", () => {
       try {
         vi.useFakeTimers();
         vi.setSystemTime(2_000_000);
-        expect(registerQueuedChatTurn({ chatQueuedTurns, runId, controller, ...session })).toBe(
-          true,
-        );
+        rpcSourceTesting.set(runId, source);
         setGatewayDedupeEntry({
           dedupe: new Map(),
           key: `chat:${runId}`,
@@ -342,6 +408,8 @@ describe("agent.wait gateway dedupe observations", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         const cfg = rolePolicyConfig();
         setRuntimeConfigSnapshot(cfg);
+        ensureUserProfilesSchema({});
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const owner = roleClient("none", "timeout-owner");
         const session = {
           sessionKey: "agent:main:timeout-rotation",
@@ -366,6 +434,13 @@ describe("agent.wait gateway dedupe observations", () => {
         context.getRuntimeConfig = () => cfg;
         const respond = vi.fn();
         const handler = expectDefined(agentHandlers["agent.wait"], "registered wait handler");
+        const started = createDeferredCore();
+        const wait = agentJobs.waitForAgentJob;
+        vi.spyOn(agentJobs, "waitForAgentJob").mockImplementationOnce((params) => {
+          const pending = wait(params);
+          started.resolve();
+          return pending;
+        });
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         const waiting = handler({
           req: { type: "req", id: runId, method: "agent.wait" },
@@ -376,6 +451,7 @@ describe("agent.wait gateway dedupe observations", () => {
           context,
         });
         try {
+          await started.promise;
           expect(respond).not.toHaveBeenCalled();
           await upsertSessionEntryCore(target, { sessionId: "successor-session" });
           if (transition === "replacement") {
@@ -402,44 +478,6 @@ describe("agent.wait gateway dedupe observations", () => {
       });
     },
   );
-
-  it("retains chat input identity when terminal writers replace admission metadata", async () => {
-    const runId = "run-chat-request-identity";
-    const key = `chat:${runId}`;
-    const dedupe = new Map<string, DedupeEntry>([
-      [
-        key,
-        {
-          ts: 100,
-          ok: true,
-          requestIdentity: "submitted-mention-selection",
-        },
-      ],
-    ]);
-    setGatewayDedupeEntry({
-      dedupe,
-      key,
-      entry: { ts: 200, ok: true, payload: { runId, status: "ok", endedAt: 200 } },
-    });
-    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
-    setGatewayDedupeEntry({
-      dedupe,
-      key,
-      entry: {
-        ts: 300,
-        ok: false,
-        requestIdentity: "stale-writer-selection",
-        payload: { runId, status: "error", endedAt: 300 },
-      },
-    });
-    expect(dedupe.get(key)?.requestIdentity).toBe("submitted-mention-selection");
-    const waiter = waitThroughGateway({ runId, timeoutMs: 0 }, "chat");
-    await waiter.promise;
-    expect(waiter.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ runId, status: "error", endedAt: 300 }),
-    );
-  });
 
   it.each([
     ["agent", "timeout"],
@@ -482,24 +520,23 @@ describe("agent.wait gateway dedupe observations", () => {
       session: original,
       entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok" } },
     });
-    const chatQueuedTurns: QueuedChatTurnMap = new Map();
+    rpcSourceTesting.clear();
     const service = createAgentTurnService({
       context: {
         dedupe: new Map(),
-        chatAbortControllers: new Map(),
-        chatQueuedTurns,
-      } as Parameters<typeof createAgentTurnService>[0]["context"],
+      } as unknown as Parameters<typeof createAgentTurnService>[0]["context"],
       isWebchatConnect: () => false,
     });
     const selected = service.waitForTurn({ runId, timeoutMs: 0 });
-    const controller = new AbortController();
     const queued = {
       sessionKey: "agent:main:queued",
       sessionId: "queued-session",
       agentId: "main",
     };
+    const source = createRpcSourceForTest({}, { ...queued, runId, phase: "waiting" });
+    const controller = testRpcSourceController(source);
     try {
-      expect(registerQueuedChatTurn({ chatQueuedTurns, runId, controller, ...queued })).toBe(true);
+      rpcSourceTesting.set(runId, source);
       await expect(selected).resolves.toEqual({
         session: { ...queued, lifecycleGeneration },
         result: { runId, status: "pending", timeoutPhase: "queue", providerStarted: false },
@@ -515,6 +552,8 @@ describe("agent.wait gateway dedupe observations", () => {
     const runId = "queued-after-wait";
     const context = createGatewayRequestContext(makeContextParams());
     const otherContext = createGatewayRequestContext(makeContextParams());
+    context.resolveGatewayContext = () => context;
+    otherContext.resolveGatewayContext = () => otherContext;
     const service = createAgentTurnService({ context, isWebchatConnect: () => false });
     const otherService = createAgentTurnService({
       context: otherContext,
@@ -528,7 +567,7 @@ describe("agent.wait gateway dedupe observations", () => {
       terminalObserved,
     );
     const otherWait = otherService.waitForTurn({ runId, timeoutMs: 30_000 }).then(otherObserved);
-    const controller = new AbortController();
+    let queuedSource: RpcSourceRef | undefined;
     const session = {
       sessionKey: "agent:main:queued-after-wait",
       sessionId: "queued-after-wait-session",
@@ -536,14 +575,16 @@ describe("agent.wait gateway dedupe observations", () => {
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
     };
     try {
-      expect(
-        registerQueuedChatTurn({
-          chatQueuedTurns: context.chatQueuedTurns,
+      queuedSource = createRpcSourceForTest(
+        { kind: "chat-send" },
+        {
           runId,
-          controller,
           ...session,
-        }),
-      ).toBe(true);
+          phase: "waiting",
+        },
+      );
+      bindGatewayContextResolver(queuedSource.input, context.resolveGatewayContext);
+      rpcSourceTesting.set(runId, queuedSource);
       setGatewayDedupeEntry({
         dedupe: context.dedupe,
         key: `chat:${runId}`,
@@ -558,7 +599,9 @@ describe("agent.wait gateway dedupe observations", () => {
       expect(terminalObserved).not.toHaveBeenCalled();
       expect(otherObserved).not.toHaveBeenCalled();
     } finally {
-      controller.abort();
+      if (queuedSource) {
+        testRpcSourceController(queuedSource).abort();
+      }
       completeRun(context.dedupe, runId, "chat");
       await Promise.all([queuedWait, terminalWait, otherWait]);
     }
@@ -642,11 +685,21 @@ describe("agent.wait gateway dedupe observations", () => {
   ] as const)(
     "keeps $activeKind observation interruption nonterminal (timeout=$timeoutMs, reset=$reset)",
     async ({ activeKind, timeoutMs, reset }) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const runId = `run-public-timeout-${activeKind ?? "untracked"}-${timeoutMs}`;
       const dedupe = new Map<string, DedupeEntry>();
+      const started = createDeferredCore();
+      const wait = agentJobs.waitForAgentJob;
+      vi.spyOn(agentJobs, "waitForAgentJob").mockImplementationOnce((params) => {
+        const pending = wait(params);
+        started.resolve();
+        return pending;
+      });
       const timedOut = waitThroughGateway({ runId, timeoutMs }, activeKind);
+      await started.promise;
       if (reset) {
+        // Native worker shutdown joins its exit through setImmediate.
+        vi.useRealTimers();
         await drainGlobalSingletonLifecycleState("restart");
       } else {
         await vi.advanceTimersByTimeAsync(timeoutMs);

@@ -30,6 +30,7 @@
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],
       "@openclaw/ai/event-stream": ["./packages/ai/src/utils/event-stream.ts"],
       "@openclaw/ai/providers": ["./packages/ai/src/providers.ts"],
+      "@openclaw/ai/provider-types": ["./packages/ai/src/provider-types.ts"],
       "@openclaw/ai/transports": ["./packages/ai/src/transports.ts"],
       "@openclaw/ai/types": ["./packages/ai/src/types.ts"],
       "@openclaw/ai/validation": ["./packages/ai/src/validation.ts"],
@@ -106,6 +107,7 @@
         "./packages/gateway-protocol/src/frame-guards.ts"
       ],
       "@openclaw/gateway-protocol/schema": ["./packages/gateway-protocol/src/schema.ts"],
+      "@openclaw/gateway-protocol/session-row-deltas": ["./packages/gateway-protocol/src/session-row-deltas.ts"],
       "@openclaw/gateway-protocol/restart-unavailable": [
         "./packages/gateway-protocol/src/restart-unavailable.ts"
       ],
@@ -216,6 +218,9 @@
       ],
       "@openclaw/normalization-core/result": [
         "./packages/normalization-core/src/result.ts"
+      ],
+      "@openclaw/normalization-core/session-key-comparison": [
+        "./packages/normalization-core/src/session-key-comparison.ts"
       ],
       "@openclaw/normalization-core/stable-node-path": [
         "./packages/normalization-core/src/stable-node-path.ts"

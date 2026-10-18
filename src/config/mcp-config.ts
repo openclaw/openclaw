@@ -1,5 +1,4 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
-import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import {
   readSourceConfigSnapshot,
@@ -29,12 +28,11 @@ type ConfigMcpSuccess = {
   config: OpenClawConfig;
   mcpServers: ConfigMcpServers;
 };
-type ConfigMcpReadSuccess = ConfigMcpSuccess & {
-  runtimeConfig: Awaited<ReturnType<typeof readSourceConfigSnapshot>>["runtimeConfig"];
-  sourceConfigBeforeMigrations?: Awaited<
-    ReturnType<typeof readSourceConfigSnapshot>
-  >["sourceConfigBeforeMigrations"];
-};
+type ConfigMcpReadSuccess = ConfigMcpSuccess &
+  Pick<
+    Awaited<ReturnType<typeof readSourceConfigSnapshot>>,
+    "authoredConfig" | "runtimeConfig" | "sourceConfigBeforeMigrations"
+  >;
 type ConfigMcpFailure = { ok: false; path: string; error: string };
 type ConfigMcpReadResult =
   | (ConfigMcpReadSuccess & { ok: true; baseHash?: string })
@@ -120,10 +118,9 @@ function resolveConfiguredMcpServers(
     path: snapshot.path,
     config: structuredClone(sourceConfig),
     mcpServers: normalizeConfiguredMcpServers(sourceConfig.mcp?.servers),
+    authoredConfig: snapshot.authoredConfig,
     runtimeConfig: snapshot.runtimeConfig,
-    ...(snapshot.sourceConfigBeforeMigrations
-      ? { sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations }
-      : {}),
+    sourceConfigBeforeMigrations: snapshot.sourceConfigBeforeMigrations,
     baseHash: snapshot.hash,
   };
 }
@@ -138,7 +135,6 @@ async function commitConfiguredMcpServers(params: {
   servers: ConfigMcpServers;
   errorLabel: string;
   success?: { removed?: boolean; updated?: boolean };
-  independentlyOwnedName?: string;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
   mutation?: { name: string; onCommitted?: McpConfigMutationHook };
@@ -187,9 +183,6 @@ async function commitConfiguredMcpServers(params: {
       ...(nextServer ? { next: nextServer } : {}),
     });
   }
-  if (params.independentlyOwnedName) {
-    await markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
-  }
   return {
     ok: true,
     path: params.loaded.path,
@@ -205,7 +198,7 @@ type McpServerMutationRequest =
       "server"
     >)
   | ({ kind: "unset" } & Parameters<typeof unsetConfiguredMcpServer>[0])
-  | ({ kind: "update" } & Parameters<typeof updateConfiguredMcpServerConfig>[0]);
+  | ({ kind: "update"; errorLabel: string } & Parameters<typeof updateConfiguredMcpServer>[0]);
 
 async function mutateConfiguredMcpServer(
   params: McpServerMutationRequest,
@@ -290,73 +283,65 @@ async function mutateConfiguredMcpServer(
     servers,
     errorLabel: params.kind === "update" ? params.errorLabel : params.kind,
     success: params.kind === "set" ? undefined : { [successKey]: true },
-    independentlyOwnedName:
-      params.kind === "unset" || params.recordIndependentOwner === false ? undefined : name,
     assertCurrent: params.kind === "update" ? undefined : params.assertCurrent,
     assertCurrentAsync: params.kind === "unset" ? params.assertCurrentAsync : undefined,
     mutation: { name, onCommitted },
   });
 }
 
-async function updateConfiguredMcpServerConfig(params: {
-  name: string;
-  update: (server: Record<string, unknown>) => Record<string, unknown>;
-  errorLabel: string;
-  recordIndependentOwner?: boolean;
-  onCommitted?: McpConfigMutationHook;
-}): Promise<ConfigMcpWriteResult> {
-  return mutateConfiguredMcpServer({ ...params, kind: "update" }, params.onCommitted);
-}
-
 async function updateConfiguredMcpServerTools(
   params: {
     name: string;
     tools: McpServerToolFilterConfig | null;
-    recordIndependentOwner?: boolean;
+    skipLifecycleLease?: boolean;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
-  return updateConfiguredMcpServerConfig({
-    name: params.name,
-    recordIndependentOwner: params.recordIndependentOwner,
-    errorLabel: "tool selection update",
-    onCommitted,
-    update: (server) => {
-      if (params.tools === null) {
-        delete server.toolFilter;
-      } else {
-        const include = normalizeToolSelectionList(params.tools.include);
-        const exclude = normalizeToolSelectionList(params.tools.exclude);
-        if (include || exclude) {
-          server.toolFilter = {
-            ...(isRecord(server.toolFilter) ? server.toolFilter : {}),
-            ...(include ? { include } : {}),
-            ...(exclude ? { exclude } : {}),
-          };
-        } else {
+  return mutateConfiguredMcpServer(
+    {
+      kind: "update",
+      name: params.name,
+      errorLabel: "tool selection update",
+      update: (server) => {
+        if (params.tools === null) {
           delete server.toolFilter;
+        } else {
+          const include = normalizeToolSelectionList(params.tools.include);
+          const exclude = normalizeToolSelectionList(params.tools.exclude);
+          if (include || exclude) {
+            server.toolFilter = {
+              ...(isRecord(server.toolFilter) ? server.toolFilter : {}),
+              ...(include ? { include } : {}),
+              ...(exclude ? { exclude } : {}),
+            };
+          } else {
+            delete server.toolFilter;
+          }
         }
-      }
-      return server;
+        return server;
+      },
     },
-  });
+    onCommitted,
+  );
 }
 
 async function updateConfiguredMcpServer(
   params: {
     name: string;
     update: (server: Record<string, unknown>) => Record<string, unknown>;
-    recordIndependentOwner?: boolean;
+    skipLifecycleLease?: boolean;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
-  return updateConfiguredMcpServerConfig({
-    name: params.name,
-    recordIndependentOwner: params.recordIndependentOwner,
-    errorLabel: "configure",
+  return mutateConfiguredMcpServer(
+    {
+      kind: "update",
+      name: params.name,
+      errorLabel: "configure",
+      update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
+    },
     onCommitted,
-    update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
-  });
+  );
 }
 
 async function setConfiguredMcpServer(
@@ -364,7 +349,7 @@ async function setConfiguredMcpServer(
     name: string;
     server: unknown;
     createOnly?: boolean;
-    recordIndependentOwner?: boolean;
+    skipLifecycleLease?: boolean;
     expectedServer?: Record<string, unknown>;
     assertCurrent?: () => void;
   },

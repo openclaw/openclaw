@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
-import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
+import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
@@ -19,6 +19,7 @@ import {
 } from "./loader.test-fixtures.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 
 const emptyObjectSchema = {
   type: "object",
@@ -415,7 +416,8 @@ module.exports = { id: "source-fixture", register(api) {
                   }
 
                   setRuntimeConfigSnapshot(candidate, structuredClone(source));
-                  expect(loadOpenClawPlugins({ ...options, config: candidate }) === registry).toBe(
+                  expect(getRuntimeConfigSnapshot()).toBe(runtime);
+                  expect(loadOpenClawPlugins({ ...options, config: runtime }) === registry).toBe(
                     true,
                   );
                 }
@@ -429,6 +431,8 @@ module.exports = { id: "source-fixture", register(api) {
               expect({ runtime, source }).toEqual(before);
             } finally {
               resetPluginLoaderTestStateForTest();
+              const { failures } = await waitForPluginCacheRetirement();
+              expect(failures, "Plugin cache retirement failed during cleanup").toEqual([]);
             }
           },
         );

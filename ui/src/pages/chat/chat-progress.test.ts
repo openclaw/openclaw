@@ -148,7 +148,7 @@ describe("resolveTurnRecap", () => {
   let host: { turnRecapWatch: TurnRecapWatch | null };
   const runId = "watched-run";
   const doneRow = { lastRunId: runId, status: "done" as const, runtimeMs: 14_000 };
-  const usage = (outputTokens: number, owner = runId) =>
+  const usage = (outputTokens: number | null, owner = runId) =>
     new Map([[owner, { outputTokens, seq: 1 }]]);
   const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
     resolveTurnRecap(host, { sessionKey: SESSION, ...params });
@@ -186,6 +186,11 @@ describe("resolveTurnRecap", () => {
       runId,
       runtimeMs: 14_000,
       outputTokens: 680,
+    });
+    expect(resolve({ row: doneRow, usageByRun: usage(null) })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: null,
     });
   });
 
@@ -264,6 +269,20 @@ describe("resolveTurnRecap", () => {
         usageByRun: usage(900, "foreign-run"),
       }),
     ).toBeNull();
+  });
+
+  it("retains a resumed request when the first identified event hides the working indicator", () => {
+    resolve({ indicator: { request: { askedAt: 1_000, runIds: ["handoff-run"] } } });
+    expect(resolve({ activeRunId: runId })).toBeNull();
+    const usageByRun = new Map([
+      ["handoff-run", { outputTokens: 4_100, seq: 1 }],
+      [runId, { outputTokens: 256, seq: 2 }],
+    ]);
+    expect(resolve({ row: { ...doneRow, endedAt: 78_000 }, usageByRun })).toEqual({
+      runId,
+      runtimeMs: 77_000,
+      outputTokens: 4_356,
+    });
   });
 
   it("never invents a watch from history or an unidentified queued indicator", () => {
