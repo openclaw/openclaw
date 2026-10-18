@@ -14,6 +14,7 @@ import {
 
 type ScanEmptyAllowlistPolicyWarningsParams = Partial<ChannelDoctorEmptyAllowlistPolicyHooks> & {
   doctorFixCommand: string;
+  env?: NodeJS.ProcessEnv;
 };
 
 function isActiveAccount(value: unknown): value is DoctorAccountRecord {
@@ -72,6 +73,7 @@ export async function scanEmptyAllowlistPolicyWarnings(
       channelName,
       cfg,
       Object.keys(accounts ?? {}),
+      { env: params.env },
     );
     const configuredAccountIds = new Set(accountIds?.configured);
     const hasImplicitActiveAccount =
