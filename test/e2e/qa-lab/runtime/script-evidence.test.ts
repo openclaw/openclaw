@@ -3,43 +3,46 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  type QaProviderMode,
-  validateQaEvidenceSummaryJson,
-} from "../../../../extensions/qa-lab/test-api.js";
+import { validateQaEvidenceSummaryJson } from "../../../../extensions/qa-lab/test-api.js";
 import { createQaScriptEvidenceWriter } from "./script-evidence.js";
 
 const tempRoots: string[] = [];
+const writerDefaults = {
+  logFileName: "producer.log",
+  primaryModel: "mock-openai/gpt-5.6-luna",
+  providerMode: "mock-openai" as const,
+  target: {
+    id: "script-evidence-test",
+    title: "Script evidence test",
+    sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
+  },
+};
+const readJson = async (file: string): Promise<unknown> =>
+  JSON.parse(await fs.readFile(file, "utf8"));
+const readEvidence = async (base: string) =>
+  validateQaEvidenceSummaryJson(await readJson(path.join(base, "qa-evidence.json")));
 
 async function makeWriter(
-  params: {
-    maxDetailsBytes?: number;
-    maxLogBytes?: number;
-    primaryModel?: string;
-    providerId?: string;
-    providerMode?: QaProviderMode;
-  } = {},
+  params: Partial<
+    Pick<
+      Parameters<typeof createQaScriptEvidenceWriter>[0],
+      "maxDetailsBytes" | "maxLogBytes" | "primaryModel" | "providerId" | "providerMode"
+    >
+  > = {},
 ) {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-script-evidence-"));
   tempRoots.push(repoRoot);
+  const artifactBase = path.join(repoRoot, ".artifacts", "qa-e2e", "script");
   return {
-    artifactBase: path.join(repoRoot, ".artifacts", "qa-e2e", "script"),
+    artifactBase,
     repoRoot,
     writer: createQaScriptEvidenceWriter({
-      artifactBase: path.join(repoRoot, ".artifacts", "qa-e2e", "script"),
+      ...writerDefaults,
+      artifactBase,
       coverageBinding: "none",
-      logFileName: "producer.log",
-      maxDetailsBytes: params.maxDetailsBytes,
-      maxLogBytes: params.maxLogBytes ?? 64,
-      primaryModel: params.primaryModel ?? "mock-openai/gpt-5.6-luna",
-      providerMode: params.providerMode ?? "mock-openai",
-      providerId: params.providerId,
+      maxLogBytes: 64,
       repoRoot,
-      target: {
-        id: "script-evidence-test",
-        title: "Script evidence test",
-        sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-      },
+      ...params,
     }),
   };
 }
@@ -73,9 +76,7 @@ describe("QA script evidence writer", () => {
         durationMs: 1,
         status: "blocked",
       });
-      const diskEvidence = validateQaEvidenceSummaryJson(
-        JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
-      );
+      const diskEvidence = await readEvidence(artifactBase);
 
       expect(diskEvidence).toEqual(evidence);
       expect(diskEvidence.entries[0]?.result).toMatchObject({
@@ -119,28 +120,18 @@ describe("QA script evidence writer", () => {
         timing: { wallMs: 25 },
       },
     });
-    const diskEvidence = validateQaEvidenceSummaryJson(
-      JSON.parse(await fs.readFile(path.join(artifactBase, "qa-evidence.json"), "utf8")),
-    );
-    expect(diskEvidence).toEqual(evidence);
-    expect(
-      JSON.parse(await fs.readFile(path.join(artifactBase, "latest-run.json"), "utf8")),
-    ).toEqual({ qaEvidence: "qa-evidence.json" });
+    expect(await readEvidence(artifactBase)).toEqual(evidence);
+    expect(await readJson(path.join(artifactBase, "latest-run.json"))).toEqual({
+      qaEvidence: "qa-evidence.json",
+    });
   });
 
   it("rejects uncataloged targets unless coverage binding is disabled", () => {
     expect(() =>
       createQaScriptEvidenceWriter({
+        ...writerDefaults,
         artifactBase: path.join(os.tmpdir(), "openclaw-script-evidence-unknown"),
-        logFileName: "producer.log",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        providerMode: "mock-openai",
         repoRoot: process.cwd(),
-        target: {
-          id: "script-evidence-test",
-          sourcePath: "test/e2e/qa-lab/runtime/script-evidence.test.ts",
-          title: "Script evidence test",
-        },
       }),
     ).toThrow("unknown qa scenario: script-evidence-test");
   });
@@ -161,10 +152,10 @@ describe("QA script evidence writer", () => {
 
     const log = await fs.readFile(path.join(artifactBase, "producer.log"), "utf8");
     const reason = evidence.entries[0]?.result.failure?.reason ?? "";
-    expect(log).toContain("done");
-    expect(reason).toContain("done");
-    expect(Buffer.byteLength(log, "utf8")).toBeLessThanOrEqual(9);
-    expect(Buffer.byteLength(reason, "utf8")).toBeLessThanOrEqual(9);
+    for (const text of [log, reason]) {
+      expect(text).toContain("done");
+      expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(9);
+    }
   });
 
   it("applies built-in and configured redaction before bounding logs and details", async () => {

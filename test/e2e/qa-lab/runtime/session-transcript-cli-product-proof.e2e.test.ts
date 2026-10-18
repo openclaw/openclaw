@@ -26,8 +26,6 @@ const TRANSCRIPT_ID = "qa-cli-transcript";
 const TRANSCRIPT_STARTED_AT = "2026-08-03T12:00:00.000Z";
 const TRANSCRIPT_TEXT = "Action item: preserve the CLI transcript artifact.";
 
-type CommandResult = Awaited<ReturnType<OpenClawTestInstance["cli"]>>;
-
 type SessionsJson = {
   count: number;
   sessions: Array<{ key: string; sessionId?: string }>;
@@ -71,17 +69,14 @@ afterEach(async () => {
   instance = undefined;
 });
 
-function parseCommandJson<T>(
-  label: string,
-  result: CommandResult,
-  parse: (value: unknown) => T = (value) => value as T,
-): T {
+async function cliJson<T>(...args: string[]): Promise<T> {
+  const result = await instance!.cli([...args, "--json"]);
   if (result.code !== 0) {
     throw new Error(
-      `${label} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+      `${args.join(" ")} failed with exit ${String(result.code)}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
     );
   }
-  return parse(JSON.parse(result.stdout) as unknown);
+  return JSON.parse(result.stdout) as T;
 }
 
 async function seedTranscript(stateDir: string, env: NodeJS.ProcessEnv) {
@@ -133,10 +128,7 @@ describe("session and transcript child CLI product proof", () => {
       await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
 
-      const sessionsBefore = parseCommandJson<SessionsJson>(
-        "sessions --json",
-        await instance.cli(["sessions", "--json"]),
-      );
+      const sessionsBefore = await cliJson<SessionsJson>("sessions");
       expect(sessionsBefore.sessions).toContainEqual(
         expect.objectContaining({
           key: SESSION_KEY,
@@ -145,18 +137,16 @@ describe("session and transcript child CLI product proof", () => {
       );
 
       await instance.startGateway();
-      expect(instance.child).toBeDefined();
-      expect(instance.child?.exitCode).toBeNull();
-      expect(instance.child?.signalCode).toBeNull();
-      expect(instance.child?.killed).toBe(false);
-      const cleanup = parseCommandJson<CleanupJson>(
-        "sessions cleanup",
-        await instance.cli(["sessions", "cleanup", "--enforce", "--fix-missing", "--json"]),
+      const expectGatewayRunning = () =>
+        expect(instance!.child).toMatchObject({ exitCode: null, signalCode: null, killed: false });
+      expectGatewayRunning();
+      const cleanup = await cliJson<CleanupJson>(
+        "sessions",
+        "cleanup",
+        "--enforce",
+        "--fix-missing",
       );
-      expect(instance.child).toBeDefined();
-      expect(instance.child?.exitCode).toBeNull();
-      expect(instance.child?.signalCode).toBeNull();
-      expect(instance.child?.killed).toBe(false);
+      expectGatewayRunning();
       expect(cleanup).toMatchObject({
         agentId: "main",
         applied: true,
@@ -165,16 +155,10 @@ describe("session and transcript child CLI product proof", () => {
       });
       expect(cleanup.afterCount).toBe(cleanup.beforeCount - 1);
 
-      const sessionsAfter = parseCommandJson<SessionsJson>(
-        "sessions --json after cleanup",
-        await instance.cli(["sessions", "--json"]),
-      );
+      const sessionsAfter = await cliJson<SessionsJson>("sessions");
       expect(sessionsAfter.sessions.map(({ key }) => key)).not.toContain(SESSION_KEY);
 
-      const transcriptList = parseCommandJson<TranscriptListJson>(
-        "transcripts list",
-        await instance.cli(["transcripts", "list", "--json"]),
-      );
+      const transcriptList = await cliJson<TranscriptListJson>("transcripts", "list");
       expect(transcriptList).toContainEqual(
         expect.objectContaining({
           sessionId: TRANSCRIPT_ID,
@@ -183,9 +167,10 @@ describe("session and transcript child CLI product proof", () => {
         }),
       );
 
-      const transcriptShow = parseCommandJson<TranscriptShowJson>(
-        "transcripts show",
-        await instance.cli(["transcripts", "show", TRANSCRIPT_ID, "--json"]),
+      const transcriptShow = await cliJson<TranscriptShowJson>(
+        "transcripts",
+        "show",
+        TRANSCRIPT_ID,
       );
       expect(transcriptShow).toMatchObject({
         selector: "2026-08-03/qa-cli-transcript",
@@ -193,9 +178,11 @@ describe("session and transcript child CLI product proof", () => {
       });
       expect(transcriptShow.summary).toContain(TRANSCRIPT_TEXT);
 
-      const transcriptPath = parseCommandJson<TranscriptPathJson>(
-        "transcripts path",
-        await instance.cli(["transcripts", "path", TRANSCRIPT_ID, "--transcript", "--json"]),
+      const transcriptPath = await cliJson<TranscriptPathJson>(
+        "transcripts",
+        "path",
+        TRANSCRIPT_ID,
+        "--transcript",
       );
       expect(transcriptPath).toMatchObject({
         exists: true,

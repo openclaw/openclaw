@@ -13,8 +13,6 @@ import type {
   SkillsLibraryReadResult,
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
-import { prepareSkillBundle, readSkillBundleTree } from "../../../../src/skills/library/bundle.js";
-import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
 import { MODEL_REF, PROOF_TIMEOUT_MS, waitFor } from "./cloud-worker-midturn-loss-fixture.js";
 import {
@@ -180,144 +178,20 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
           const localKey = await createSession("local");
           const remoteKey = await createSession("worker");
           console.info("[skill-library-wire] shared managed sessions created");
-          const turnHomes = new Map<string, string>();
-          const failureContext = async (key: string, marker: string) => {
-            const diagnostics: Record<string, unknown> = { providerErrors: provider!.errors };
-            if (
-              provider!.errors.length > 0 ||
-              instance.logs().includes("Selected skill revision is unavailable")
-            ) {
-              const observe = async (name: string, read: () => Promise<unknown>) => {
-                try {
-                  diagnostics[name] = await read();
-                } catch (error) {
-                  diagnostics[name] = { error: String(error) };
-                }
-              };
-              diagnostics.events = events;
-              diagnostics.selectionFailures = instance
-                .logs()
-                .split("\n")
-                .filter((line) => line.includes("Selected skill revision is unavailable"));
-              diagnostics.failedTurn = { key, marker, originalPin: saved.entry };
-              await Promise.all([
-                observe("selectedRevisions", async () => {
-                  const library = await alice.request<SkillsLibraryListResult>(
-                    "skills.library.list",
-                    { sessionKey: key },
-                  );
-                  return { selections: library.session?.selections, entries: library.entries };
-                }),
-                observe("placement", async () => {
-                  const described = await admin.request<{ session: { placement?: unknown } }>(
-                    "sessions.describe",
-                    { key },
-                  );
-                  return described.session.placement;
-                }),
-                observe("gatewayRevisions", async () => {
-                  const read = await alice.request<SkillsLibraryReadResult>("skills.library.read", {
-                    skillId: saved.entry.skillId,
-                  });
-                  return { entry: read.entry, revisions: read.revisions };
-                }),
-                observe("freshDatabaseRows", async () => {
-                  // Compare the Gateway's pooled read with a fresh native connection to fixture-only state.
-                  const { stdout } = await execFileAsync(process.execPath, [
-                    "--input-type=module",
-                    "-e",
-                    `
-                      import { realpathSync, statSync } from "node:fs";
-                      import { DatabaseSync } from "node:sqlite";
-                      const [file, skillId, revision] = process.argv.slice(-3);
-                      const files = () => ["", "-wal", "-shm"].map(suffix => {
-                        try {
-                          const { dev, ino, size, mtimeMs } = statSync(file + suffix);
-                          return { suffix, dev, ino, size, mtimeMs };
-                        } catch (error) {
-                          return { suffix, error: String(error) };
-                        }
-                      });
-                      const before = files();
-                      const db = new DatabaseSync(file, { readOnly: true });
-                      try {
-                        db.exec("BEGIN");
-                        const result = {
-                          at: new Date().toISOString(),
-                          runtime: { node: process.versions.node, bun: process.versions.bun },
-                          file: realpathSync(file),
-                          before,
-                          sqlite: db.prepare("SELECT sqlite_version() AS version").get(),
-                          entry: db.prepare("SELECT skill_id, owner_profile_id, current_revision, removed FROM skill_library_entries WHERE skill_id = ?").get(skillId) ?? null,
-                          revision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
-                          tableRevision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions NOT INDEXED WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
-                          events: db.prepare("SELECT revision, action, created_at FROM skill_library_events WHERE skill_id = ? ORDER BY created_at DESC LIMIT 6").all(skillId),
-                          after: files(),
-                        };
-                        console.log(JSON.stringify(result));
-                      } finally {
-                        if (db.isTransaction) db.exec("ROLLBACK");
-                        db.close();
-                      }
-                    `,
-                    resolveOpenClawStateSqlitePath(instance.env),
-                    saved.entry.skillId,
-                    saved.entry.revision,
-                  ]);
-                  return JSON.parse(stdout) as unknown;
-                }),
-                observe("gatewayRevisionDirectories", () =>
-                  fs.readdir(
-                    path.join(instance.stateDir, "skill-library", saved.entry.skillId, "revisions"),
-                  ),
-                ),
-                observe("nodeLog", async () =>
-                  node
-                    ? (await fs.readFile(node.logFile, "utf8")).slice(-16_000)
-                    : "node not started",
-                ),
-                observe("observedMaterializations", async () => {
-                  // Only inspect paths the model actually received; expected pins are not proof of worker-held bytes.
-                  const locations = new Map<string, string[]>();
-                  for (const [turn, { catalogs }] of provider!.observations) {
-                    for (const { name, location } of catalogs.flat()) {
-                      if (name === saved.entry.name) {
-                        const absolute = location.startsWith("~/")
-                          ? path.join(turnHomes.get(turn)!, location.slice(2))
-                          : location;
-                        locations.set(absolute, [
-                          ...new Set([...(locations.get(absolute) ?? []), turn]),
-                        ]);
-                      }
-                    }
-                  }
-                  return Promise.all(
-                    [...locations].map(async ([location, turns]) => {
-                      try {
-                        return {
-                          location,
-                          turns,
-                          revision: prepareSkillBundle(
-                            await readSkillBundleTree(path.dirname(location)),
-                          ).revision,
-                        };
-                      } catch (error) {
-                        return { location, turns, error: String(error) };
-                      }
-                    }),
-                  );
-                }),
-              ]);
-              diagnostics.failedTurnCatalogs =
-                provider!.observations.get(marker)?.catalogs ??
-                "No provider request observed for this turn; no worker resource path available";
-            }
-            return JSON.stringify(diagnostics, null, 2);
-          };
-          const waitMessage = async (result: { status: string }, key: string, marker: string) =>
-            `agent.wait ${marker}: ${JSON.stringify(result)}${
-              result.status === "ok" ? "" : `\n${await failureContext(key, marker)}`
-            }\n${instance.logs()}`;
+          const waitMessage = (result: { status: string }, key: string, marker: string) =>
+            JSON.stringify(
+              {
+                result,
+                key,
+                marker,
+                events,
+                providerErrors: provider!.errors,
+                observations: [...provider!.observations],
+                gatewayLogs: instance.logs(),
+              },
+              null,
+              2,
+            );
           const startTurn = async (
             client: SkillLibraryWireClient,
             key: string,
@@ -334,7 +208,6 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
                 idempotencyKey: runId,
               }),
             ).resolves.toMatchObject({ runId, status: "started" });
-            turnHomes.set(marker, key === remoteKey ? node!.homeDir : instance.homeDir);
             record("turn started", { key, marker, runId });
             return runId;
           };

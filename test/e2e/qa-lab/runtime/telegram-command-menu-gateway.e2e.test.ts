@@ -10,6 +10,11 @@ import {
   writeJson,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  readTelegramRequest,
+  settleTelegramCleanup as settleCleanup,
+  succeedTelegram as succeed,
+} from "./telegram-gateway.test-support.js";
 type BotCommand = { command: string; description: string };
 type Body = { commands?: BotCommand[]; language_code?: string; scope?: { type?: string } };
 const LOCALIZED_PLUGIN_ID = "telegram-menu-localization-e2e";
@@ -32,50 +37,25 @@ function customCommands(prefix: string, count: number, description = "Configured
   }));
 }
 const names = (commands: BotCommand[]) => commands.map(({ command }) => command);
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
-  let text = "";
-  for await (const chunk of req) {
-    text += chunk;
-  }
-  return text ? (JSON.parse(text) as Record<string, unknown>) : {};
-}
-const succeed = (res: ServerResponse, result: unknown = true) =>
-  writeJson(res, 200, { ok: true, result });
 const LIMIT = { ok: false, error_code: 400, description: "Bad Request: BOT_COMMANDS_TOO_MUCH" };
 async function writeLocalizedCommandPlugin(params: { repoRoot: string; workspace: string }) {
   const pluginDir = path.join(params.workspace, "plugins", LOCALIZED_PLUGIN_ID);
   await fs.mkdir(pluginDir, { recursive: true });
-  await fs.writeFile(
-    path.join(pluginDir, "package.json"),
-    `${JSON.stringify(
-      {
-        name: `@openclaw/${LOCALIZED_PLUGIN_ID}`,
-        version: "0.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.js"] },
-      },
-      null,
-      2,
-    )}\n`,
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: LOCALIZED_PLUGIN_ID,
-        name: "Telegram Menu Localization E2E",
-        description: "Provides localized command-menu fixtures for Gateway proof.",
-        activation: { onStartup: true },
-        configSchema: {
-          type: "object",
-          additionalProperties: false,
-          properties: {},
-        },
-      },
-      null,
-      2,
-    )}\n`,
-  );
+  const writePluginJson = (name: string, value: unknown) =>
+    fs.writeFile(path.join(pluginDir, name), `${JSON.stringify(value, null, 2)}\n`);
+  await writePluginJson("package.json", {
+    name: `@openclaw/${LOCALIZED_PLUGIN_ID}`,
+    version: "0.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  await writePluginJson("openclaw.plugin.json", {
+    id: LOCALIZED_PLUGIN_ID,
+    name: "Telegram Menu Localization E2E",
+    description: "Provides localized command-menu fixtures for Gateway proof.",
+    activation: { onStartup: true },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   const pluginEntryUrl = pathToFileURL(
     path.join(params.repoRoot, "dist", "plugin-sdk", "plugin-entry.js"),
   ).href;
@@ -102,15 +82,6 @@ async function writeLocalizedCommandPlugin(params: { repoRoot: string; workspace
   );
   return pluginDir;
 }
-async function settleCleanup(...cleanups: Array<() => Promise<void>>) {
-  const failures: unknown[] = [];
-  for (const cleanup of cleanups) {
-    await cleanup().catch((error: unknown) => failures.push(error));
-  }
-  if (failures.length > 0) {
-    throw new AggregateError(failures, "Telegram command-menu gateway cleanup failed");
-  }
-}
 test("registers pressure-prioritized Telegram menus through a real Gateway", async () => {
   const calls: Array<{ token: string; body: Body }> = [];
   const polled = new Set<string>();
@@ -122,7 +93,8 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
       succeed(res, { id: Number(token.split(":")[0]), is_bot: true, first_name: "QA" });
       return;
     }
-    const body = await readJson(req);
+    const raw = await readTelegramRequest(req);
+    const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     if (method === "getUpdates") {
       if (!polled.has(token)) {
         polled.add(token);

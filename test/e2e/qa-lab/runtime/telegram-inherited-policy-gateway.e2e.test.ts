@@ -12,6 +12,11 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
+import {
+  createTelegramUpdateQueue,
+  readTelegramRequest,
+  succeedTelegram as succeed,
+} from "./telegram-gateway.test-support.js";
 
 type TelegramCall = { method: string; body: Record<string, unknown> };
 const BOT_ID = 424242;
@@ -24,24 +29,11 @@ const REPLY_MARKER = "QA-INHERITED-POLICY-ADMITTED";
 const REJECTION = `Blocked telegram group message from ${FORBIDDEN_SENDER} (groupPolicy: allowlist)`;
 const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 
-function succeed(res: ServerResponse, result: unknown = true) {
-  writeJson(res, 200, { ok: true, result });
-}
-
-async function readBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  let raw = "";
-  for await (const chunk of req) {
-    raw += chunk;
-  }
-  return raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-}
-
 test.each(["allowlist", "open"] as const)(
   "enforces inherited root %s before Telegram dispatch and delivers admitted messages",
   async (groupPolicy) => {
     const telegramCalls: TelegramCall[] = [];
-    const pendingUpdates: unknown[] = [];
-    const pendingPolls = new Set<ServerResponse>();
+    const updates = createTelegramUpdateQueue();
     const bot = { id: BOT_ID, is_bot: true, first_name: "QA Policy", username: "qa_policy_bot" };
     const chat = { id: CHAT_ID, type: "supergroup", title: "QA Policy Room", is_forum: false };
     let updateId = 0;
@@ -56,31 +48,20 @@ test.each(["allowlist", "open"] as const)(
           text: `Reply exactly: ${marker}`,
         },
       };
-      const poll = pendingPolls.values().next().value;
-      if (poll) {
-        pendingPolls.delete(poll);
-        succeed(poll, [update]);
-      } else {
-        pendingUpdates.push(update);
-      }
+      updates.enqueue(update);
     };
     const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const [, token = "", method = ""] = pathname.match(/^\/bot([^/]+)\/([^/]+)$/) ?? [];
-      const body = await readBody(req);
+      const raw = await readTelegramRequest(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
       telegramCalls.push({ method, body });
       if (token !== BOT_TOKEN) {
         writeJson(res, 401, { ok: false, error_code: 401, description: "Unexpected bot token" });
       } else if (method === "getMe") {
         succeed(res, bot);
       } else if (method === "getUpdates") {
-        const update = pendingUpdates.shift();
-        if (update) {
-          succeed(res, [update]);
-        } else {
-          pendingPolls.add(res);
-          res.on("close", () => pendingPolls.delete(res));
-        }
+        updates.poll(res);
       } else if (method === "getChat") {
         succeed(res, chat);
       } else if (method === "sendMessage") {
@@ -187,7 +168,9 @@ test.each(["allowlist", "open"] as const)(
             });
             evidence.gatewayPort = new URL(gateway.baseUrl).port;
             expect(evidence.gatewayPort).not.toBe("18789");
-            await expect.poll(() => pendingPolls.size, { timeout: 30_000 }).toBeGreaterThan(0);
+            await expect
+              .poll(() => updates.pendingPolls.size, { timeout: 30_000 })
+              .toBeGreaterThan(0);
             // Synchronize on the actual denial before checking that no downstream work happened.
             if (groupPolicy === "allowlist") {
               sendInbound(FORBIDDEN_SENDER, REJECTED_MARKER);

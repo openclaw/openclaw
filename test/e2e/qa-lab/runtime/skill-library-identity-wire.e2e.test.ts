@@ -43,6 +43,15 @@ async function expectLibraryError(operation: Promise<unknown>, code: string, ext
   });
 }
 
+function revisionParams(entry: SkillsLibraryReceipt["entry"]) {
+  return { skillId: entry.skillId, expectedRevision: entry.revision };
+}
+
+function expectBundle(read: SkillsLibraryReadResult, bundle: SkillsLibrarySaveParams) {
+  expect(read.content).toBe(bundle.content);
+  expect(decodedSkillLibraryFiles(read.files)).toEqual(decodedSkillLibraryFiles(bundle.files!));
+}
+
 describe("skill library real Gateway identity boundary", () => {
   it(
     "keeps solo defaults, isolates authenticated libraries, and publishes complete optimistic revisions",
@@ -188,15 +197,13 @@ describe("skill library real Gateway identity boundary", () => {
             await expectLibraryError(
               reader.request("skills.library.save", {
                 ...original,
-                skillId: privateEntry.skillId,
-                expectedRevision: privateEntry.revision,
+                ...revisionParams(privateEntry),
               }),
               "NOT_FOUND",
             );
             await expectLibraryError(
               reader.request("skills.library.mutate", {
-                skillId: privateEntry.skillId,
-                expectedRevision: privateEntry.revision,
+                ...revisionParams(privateEntry),
                 action: "remove",
               }),
               "NOT_FOUND",
@@ -204,15 +211,11 @@ describe("skill library real Gateway identity boundary", () => {
           }
 
           const initial = await read(alice, created.entry.skillId);
-          expect(initial.content).toBe(original.content);
-          expect(decodedSkillLibraryFiles(initial.files)).toEqual(
-            decodedSkillLibraryFiles(original.files!),
-          );
+          expectBundle(initial, original);
           const edited = skillLibraryProofBundle("alice-reference-v2\n");
           const updated = await alice.request<SkillsLibraryReceipt>("skills.library.save", {
             ...edited,
-            skillId: created.entry.skillId,
-            expectedRevision: created.entry.revision,
+            ...revisionParams(created.entry),
           });
           expect(updated.state).toBe("published");
           expect(updated.entry.revision).not.toBe(created.entry.revision);
@@ -220,26 +223,19 @@ describe("skill library real Gateway identity boundary", () => {
           await expectLibraryError(
             alice.request("skills.library.save", {
               ...original,
-              skillId: created.entry.skillId,
-              expectedRevision: created.entry.revision,
+              ...revisionParams(created.entry),
               content: original.content + "Stale destructive edit.\n",
             }),
             "CONFLICT",
             { currentRevision: updated.entry.revision },
           );
           const current = await read(alice, created.entry.skillId);
-          expect(current.content).toBe(original.content);
-          expect(decodedSkillLibraryFiles(current.files)).toEqual(
-            decodedSkillLibraryFiles(edited.files!),
-          );
+          expectBundle(current, edited);
           expect(current.revisions.map((item) => item.revision).toSorted()).toEqual(
             [created.entry.revision, updated.entry.revision].toSorted(),
           );
           const old = await read(alice, created.entry.skillId, created.entry.revision);
-          expect(old.content).toBe(original.content);
-          expect(decodedSkillLibraryFiles(old.files)).toEqual(
-            decodedSkillLibraryFiles(original.files!),
-          );
+          expectBundle(old, original);
           const unchanged = await alice.request<SkillsLibraryReceipt>("skills.library.save", {
             ...edited,
             skillId: created.entry.skillId,
@@ -310,10 +306,7 @@ describe("skill library real Gateway identity boundary", () => {
           });
           const teamRead = await read(bob, created.entry.skillId);
           expect(teamRead.entry.canEdit).toBe(false);
-          expect(teamRead.content).toBe(original.content);
-          expect(decodedSkillLibraryFiles(teamRead.files)).toEqual(
-            decodedSkillLibraryFiles(edited.files!),
-          );
+          expectBundle(teamRead, edited);
           await expectLibraryError(
             alice.request("skills.library.mutate", {
               skillId: created.entry.skillId,
