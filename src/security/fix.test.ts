@@ -34,6 +34,20 @@ describe("security fix", () => {
     OPENCLAW_CONFIG_PATH: configPath,
   });
 
+  const runFix = (stateDir: string, configPath: string, channelPlugins?: ChannelPlugin[]) =>
+    fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins,
+    });
+
+  const writePublicFile = async (filePath: string, content = "{}\n") => {
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, content, "utf-8");
+    await fs.chmod(filePath, 0o644);
+  };
+
   const runConfigFixScenario = async (params: {
     prefix: string;
     cfg: OpenClawConfig;
@@ -42,12 +56,7 @@ describe("security fix", () => {
     const stateDir = await createStateDir(params.prefix);
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(configPath, `${JSON.stringify(params.cfg, null, 2)}\n`, "utf-8");
-    const res = await fixSecurityFootguns({
-      env: createFixEnv(stateDir, configPath),
-      stateDir,
-      configPath,
-      channelPlugins: params.channelPlugins,
-    });
+    const res = await runFix(stateDir, configPath, params.channelPlugins);
     const cfg = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;
     return { res, cfg };
   };
@@ -116,32 +125,13 @@ describe("security fix", () => {
     },
   });
 
-  const expectWhatsAppAccountGroupPolicy = (
-    channels: Record<string, Record<string, unknown>>,
-    accountId: string,
-    expectedPolicy = "allowlist",
-  ) => {
-    const whatsapp = expectDefined(channels.whatsapp, "channels.whatsapp test invariant");
-    const accounts = whatsapp.accounts as Record<string, Record<string, unknown>>;
-    const account = accounts[accountId];
-    if (!account) {
-      throw new Error(`Expected WhatsApp account ${accountId}`);
-    }
-    expect(account.groupPolicy).toBe(expectedPolicy);
-    return accounts;
-  };
-
   const fixWhatsAppConfigScenario = async (params: {
     whatsapp: Record<string, unknown>;
     allowFromStore: string[];
   }) => {
     const fixed = await runConfigFixScenario({
       prefix: "whatsapp-config",
-      cfg: {
-        channels: {
-          whatsapp: params.whatsapp,
-        },
-      } satisfies OpenClawConfig,
+      cfg: { channels: { whatsapp: params.whatsapp } },
       channelPlugins: [createWhatsAppConfigFixTestPlugin(params.allowFromStore)],
     });
     return {
@@ -184,26 +174,13 @@ describe("security fix", () => {
       "channels.whatsapp.groupAllowFrom=pairing-store",
     ]);
 
-    const channels = fixed.cfg.channels as Record<string, Record<string, unknown>>;
-    expect(expectDefined(channels.telegram, "channels.telegram test invariant").groupPolicy).toBe(
-      "allowlist",
-    );
-    expect(expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupPolicy).toBe(
-      "allowlist",
-    );
-    expect(expectDefined(channels.discord, "channels.discord test invariant").groupPolicy).toBe(
-      "allowlist",
-    );
-    expect(expectDefined(channels.signal, "channels.signal test invariant").groupPolicy).toBe(
-      "allowlist",
-    );
-    expect(expectDefined(channels.imessage, "channels.imessage test invariant").groupPolicy).toBe(
-      "allowlist",
-    );
-
-    expect(
-      expectDefined(channels.whatsapp, "channels.whatsapp test invariant").groupAllowFrom,
-    ).toEqual(["+15551234567"]);
+    expect(fixed.cfg.channels).toMatchObject({
+      telegram: { groupPolicy: "allowlist" },
+      whatsapp: { groupPolicy: "allowlist", groupAllowFrom: ["+15551234567"] },
+      discord: { groupPolicy: "allowlist" },
+      signal: { groupPolicy: "allowlist" },
+      imessage: { groupPolicy: "allowlist" },
+    });
   });
 
   it("applies allowlist per-account and seeds WhatsApp groupAllowFrom from store", async () => {
@@ -216,10 +193,11 @@ describe("security fix", () => {
       allowFromStore: ["+15550001111"],
     });
     expect(res.ok).toBe(true);
-    const accounts = expectWhatsAppAccountGroupPolicy(channels, "a1");
-    expect(expectDefined(accounts.a1, "accounts.a1 test invariant").groupAllowFrom).toEqual([
-      "+15550001111",
-    ]);
+    expect(channels).toMatchObject({
+      whatsapp: {
+        accounts: { a1: { groupPolicy: "allowlist", groupAllowFrom: ["+15550001111"] } },
+      },
+    });
   });
 
   it("does not seed WhatsApp accounts that were already allowlisted", async () => {
@@ -250,21 +228,15 @@ describe("security fix", () => {
   it("collects permission targets for credentials + agent auth/sessions + include files", async () => {
     const stateDir = await createStateDir("includes");
 
-    const includesDir = path.join(stateDir, "includes");
-    await fs.mkdir(includesDir, { recursive: true });
-    const includePath = path.join(includesDir, "extra.json5");
-    await fs.writeFile(includePath, "{}\n", "utf-8");
-    await fs.chmod(includePath, 0o644);
+    const includePath = path.join(stateDir, "includes", "extra.json5");
+    await writePublicFile(includePath);
 
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(configPath, `{ "$include": "./includes/extra.json5" }\n`, "utf-8");
-    await fs.chmod(configPath, 0o644);
+    await writePublicFile(configPath, `{ "$include": "./includes/extra.json5" }\n`);
 
     const credsDir = path.join(stateDir, "credentials");
-    await fs.mkdir(credsDir, { recursive: true });
     const credentialPath = path.join(credsDir, "oauth.json");
-    await fs.writeFile(credentialPath, "{}\n", "utf-8");
-    await fs.chmod(credentialPath, 0o644);
+    await writePublicFile(credentialPath);
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const authDatabasePath = path.join(agentDir, "openclaw-agent.sqlite");
@@ -274,15 +246,9 @@ describe("security fix", () => {
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionsStorePath = path.join(sessionsDir, "sessions.json");
     const transcriptPath = path.join(sessionsDir, "sess-main.jsonl");
-    await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
-    await fs.chmod(transcriptPath, 0o644);
+    await writePublicFile(transcriptPath, '{"type":"session"}\n');
 
-    const result = await fixSecurityFootguns({
-      env: createFixEnv(stateDir, configPath),
-      stateDir,
-      configPath,
-      channelPlugins: [],
-    });
+    const result = await runFix(stateDir, configPath, []);
     const canonicalIncludePath = await fs.realpath(includePath);
 
     expect(result.actions.map((action) => action.path)).toEqual([
@@ -309,16 +275,9 @@ describe("security fix", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { ops: {} } } }), "utf-8");
     const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
-    await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
-    await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");
-    await fs.chmod(legacyAuthPath, 0o644);
+    await writePublicFile(legacyAuthPath);
 
-    const result = await fixSecurityFootguns({
-      env: createFixEnv(stateDir, configPath),
-      stateDir,
-      configPath,
-      channelPlugins: [],
-    });
+    const result = await runFix(stateDir, configPath, []);
 
     expect(result.actions).toContainEqual(
       expect.objectContaining({ kind: "chmod", ok: true, path: legacyAuthPath, mode: 0o600 }),
@@ -333,21 +292,15 @@ describe("security fix", () => {
       const configPath = path.join(stateDir, "openclaw.json");
       const safeIncludePath = path.join(stateDir, "safe.json5");
       const escapedIncludePath = path.join(fixtureRoot, "escaped.json5");
-      await fs.writeFile(safeIncludePath, "{}\n", "utf-8");
-      await fs.writeFile(escapedIncludePath, "{}\n", "utf-8");
-      await fs.chmod(safeIncludePath, 0o644);
-      await fs.chmod(escapedIncludePath, 0o644);
+      await writePublicFile(safeIncludePath);
+      await writePublicFile(escapedIncludePath);
       await fs.writeFile(
         configPath,
         '{ "$include": ["./safe.json5", "../escaped.json5"] }\n',
         "utf-8",
       );
 
-      const result = await fixSecurityFootguns({
-        env: createFixEnv(stateDir, configPath),
-        stateDir,
-        configPath,
-      });
+      const result = await runFix(stateDir, configPath);
 
       expect(result.actions.some((action) => action.path === escapedIncludePath)).toBe(false);
       expectPerms((await fs.stat(safeIncludePath)).mode & 0o777, 0o600);
@@ -362,9 +315,7 @@ describe("security fix", () => {
       const configPath = path.join(stateDir, "openclaw.json");
       const sharedDir = path.join(fixtureRoot, "shared-includes");
       const sharedIncludePath = path.join(sharedDir, "shared.json5");
-      await fs.mkdir(sharedDir, { recursive: true });
-      await fs.writeFile(sharedIncludePath, "{}\n", "utf-8");
-      await fs.chmod(sharedIncludePath, 0o644);
+      await writePublicFile(sharedIncludePath);
       const canonicalSharedIncludePath = await fs.realpath(sharedIncludePath);
       await fs.writeFile(
         configPath,
@@ -381,15 +332,13 @@ describe("security fix", () => {
         configPath,
       });
 
-      expect(result.actions).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            kind: "chmod",
-            ok: true,
-            path: canonicalSharedIncludePath,
-            mode: 0o600,
-          }),
-        ]),
+      expect(result.actions).toContainEqual(
+        expect.objectContaining({
+          kind: "chmod",
+          ok: true,
+          path: canonicalSharedIncludePath,
+          mode: 0o600,
+        }),
       );
       expectPerms((await fs.stat(sharedIncludePath)).mode & 0o777, 0o600);
     },
