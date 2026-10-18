@@ -7,24 +7,34 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelProviderCard } from "./data.ts";
 import { ProviderProfiles, type ProviderProfilesViewProps } from "./profiles-view.tsx";
+import { card as viewCard } from "./view.test-support.tsx";
 
-function card(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
-  return {
-    id: "openai",
-    displayName: "OpenAI",
-    profiles: [],
-    profileProviderIds: {},
-    profileOrders: {},
-    profileOrderStoredProviders: [],
-    profileOrderExplicitProviders: [],
-    profileOrderLocks: {},
-    credentialProviderIds: ["openai"],
-    logoutTargets: [],
-    hasConfigApiKey: false,
-    modelCount: 1,
-    availableModelCount: 1,
+function makeProfile(
+  profileId: string,
+  extra: Partial<ModelProviderCard["profiles"][number]> = {},
+): ModelProviderCard["profiles"][number] {
+  return { profileId, type: "oauth", status: "ok", ...extra };
+}
+function card(overrides: Partial<ModelProviderCard> = {}) {
+  return viewCard({ apiKey: undefined, ...overrides });
+}
+function pairedCard(
+  owner = "openai",
+  prefix = "openai",
+  overrides: Partial<ModelProviderCard> = {},
+) {
+  const ids = ["one", "two"].map((name) => `${prefix}:${name}`);
+  return card({
+    profiles: ids.map((id) => makeProfile(id)),
+    profileProviderIds: Object.fromEntries(ids.map((id) => [id, owner])),
+    profileOrders: { [owner]: ids },
     ...overrides,
-  };
+  });
+}
+const gripSelector = ".model-providers__profile-grip";
+const rowSelector = ".model-providers__profile";
+function rowFor(container: ParentNode, id: string) {
+  return container.querySelector<HTMLElement>(`[data-profile-id="${id}"]`)!;
 }
 
 function props(overrides: Partial<ProviderProfilesViewProps> = {}): ProviderProfilesViewProps {
@@ -105,11 +115,11 @@ function pointer(target: Element, type: string, coordinates = { x: 20, y: 75 }) 
 function pointerFixture(viewProps: ProviderProfilesViewProps) {
   const providerCard = reorderCard();
   const container = mount(providerCard, viewProps);
-  const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
-  const target = container.querySelector<HTMLElement>('[data-profile-id="account:three"]')!;
+  const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
+  const target = rowFor(container, "account:three");
   // Different row heights occur when account metadata wraps on narrow screens.
   let top = 0;
-  const rows = [...container.querySelectorAll<HTMLElement>(".model-providers__profile")];
+  const rows = [...container.querySelectorAll<HTMLElement>(rowSelector)];
   for (const [index, row] of rows.entries()) {
     const height = [80, 120, 100, 100][index]!;
     const bounds = new DOMRect(0, top, 100, height);
@@ -121,7 +131,7 @@ function pointerFixture(viewProps: ProviderProfilesViewProps) {
   }
   const hitTest = vi.fn((): Element | null => target);
   Object.defineProperty(document, "elementFromPoint", { configurable: true, value: hitTest });
-  const row = grip.closest<HTMLElement>(".model-providers__profile")!;
+  const row = grip.closest<HTMLElement>(rowSelector)!;
   return { container, grip, row, rows, target, hitTest, providerCard };
 }
 
@@ -140,35 +150,14 @@ describe("renderProviderProfiles", () => {
     const onProfileOrderChange = vi.fn();
     const providerCard = card({
       profiles: [
-        {
-          profileId: "openai:configured",
-          type: "oauth",
-          status: "ok",
-          source: "config",
-          email: "configured@example.com",
-        },
-        {
-          profileId: "openai:codex",
-          type: "oauth",
-          status: "ok",
+        makeProfile("openai:configured", { source: "config", email: "configured@example.com" }),
+        makeProfile("openai:codex", {
           source: "external",
           displayName: "Codex import",
           email: "codex@example.com",
-        },
-        {
-          profileId: "openai:saved",
-          type: "oauth",
-          status: "ok",
-          source: "saved",
-          email: "saved@example.com",
-        },
-        {
-          profileId: "openai:inherited",
-          type: "oauth",
-          status: "ok",
-          source: "inherited",
-          email: "inherited@example.com",
-        },
+        }),
+        makeProfile("openai:saved", { source: "saved", email: "saved@example.com" }),
+        makeProfile("openai:inherited", { source: "inherited", email: "inherited@example.com" }),
       ],
       profileProviderIds: {
         "openai:configured": "openai-config",
@@ -185,15 +174,10 @@ describe("renderProviderProfiles", () => {
 
     mount(providerCard, props({ onProfileOrderChange }));
 
-    expect(document.querySelectorAll(".model-providers__profile-grip")).toHaveLength(2);
-    expect(
-      document.querySelector(
-        '[data-profile-id="openai:configured"] .model-providers__profile-grip',
-      ),
-    ).toBeNull();
-    expect(
-      document.querySelector('[data-profile-id="openai:codex"] .model-providers__profile-grip'),
-    ).toBeNull();
+    expect(document.querySelectorAll(gripSelector)).toHaveLength(2);
+    for (const id of ["openai:configured", "openai:codex"]) {
+      expect(rowFor(document, id).querySelector(gripSelector)).toBeNull();
+    }
     expect(document.querySelector(".model-providers__profile-logout")).toBeNull();
     expect(document.body.textContent).toContain("Provider config");
     expect(document.body.textContent).toContain("Codex import");
@@ -208,16 +192,7 @@ describe("renderProviderProfiles", () => {
 
   it("points auth-config priority locks to auth.order", () => {
     const container = mount(
-      card({
-        profiles: [
-          { profileId: "openai:one", type: "oauth", status: "ok" },
-          { profileId: "openai:two", type: "oauth", status: "ok" },
-        ],
-        profileProviderIds: {
-          "openai:one": "openai",
-          "openai:two": "openai",
-        },
-        profileOrders: { openai: ["openai:one", "openai:two"] },
+      pairedCard("openai", "openai", {
         profileOrderLocks: { openai: "auth-config" },
       }),
       props(),
@@ -225,21 +200,14 @@ describe("renderProviderProfiles", () => {
 
     expect(container.textContent).toContain("Priority is managed by auth.order");
     expect(container.textContent).not.toContain("provider configuration");
-    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
+    expect(container.querySelectorAll(gripSelector)).toHaveLength(0);
   });
 
   it("keeps an environment API-key source visible beside account profiles", () => {
     const result = mount(
       card({
         apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-        profiles: [
-          {
-            profileId: "openai:oauth",
-            type: "oauth",
-            status: "ok",
-            source: "saved",
-          },
-        ],
+        profiles: [makeProfile("openai:oauth", { source: "saved" })],
         profileOrders: { openai: ["openai:oauth"] },
       }),
       props(),
@@ -250,21 +218,13 @@ describe("renderProviderProfiles", () => {
 
   it("disables reordering when a same-length stored order contains a stale profile", () => {
     const onProfileOrderChange = vi.fn();
-    const providerCard = card({
-      profiles: [
-        { profileId: "openai:one", type: "oauth", status: "ok" },
-        { profileId: "openai:two", type: "oauth", status: "ok" },
-      ],
-      profileProviderIds: {
-        "openai:one": "openai",
-        "openai:two": "openai",
-      },
+    const providerCard = pairedCard("openai", "openai", {
       profileOrders: { openai: ["openai:removed", "openai:one"] },
       profileOrderStoredProviders: ["openai"],
     });
 
     const container = mount(providerCard, props({ onProfileOrderChange }));
-    const grips = container.querySelectorAll<HTMLButtonElement>(".model-providers__profile-grip");
+    const grips = container.querySelectorAll<HTMLButtonElement>(gripSelector);
     expect(grips).toHaveLength(2);
     expect([...grips].every((grip) => grip.disabled)).toBe(true);
     expect(container.textContent).toContain("Clear custom order");
@@ -276,16 +236,8 @@ describe("renderProviderProfiles", () => {
   it("identifies managed priority when a shared order spans provider routes", () => {
     const onProfileOrderChange = vi.fn();
     const container = mount(
-      card({
+      pairedCard("shared-owner", "shared", {
         id: "route-one",
-        profiles: [
-          { profileId: "shared:one", type: "oauth", status: "ok" },
-          { profileId: "shared:two", type: "oauth", status: "ok" },
-        ],
-        profileProviderIds: {
-          "shared:one": "shared-owner",
-          "shared:two": "shared-owner",
-        },
         profileOrders: {
           "shared-owner": ["shared:one", "shared:two", "shared:three"],
         },
@@ -293,7 +245,7 @@ describe("renderProviderProfiles", () => {
       props({ onProfileOrderChange }),
     );
 
-    expect(container.querySelectorAll(".model-providers__profile-grip")).toHaveLength(0);
+    expect(container.querySelectorAll(gripSelector)).toHaveLength(0);
     expect(container.textContent).toContain(
       "Priority is inherited or managed across provider routes",
     );
@@ -325,7 +277,7 @@ describe("renderProviderProfiles", () => {
       } else if (ending === "outside-section" || ending === "other-owner") {
         const rejectedTarget =
           ending === "other-owner"
-            ? container.querySelector('[data-profile-id="account:other"]')
+            ? rowFor(container, "account:other")
             : document.createElement("div");
         if (ending === "outside-section" && rejectedTarget instanceof HTMLElement) {
           rejectedTarget.className = "model-providers__profile";
@@ -413,9 +365,9 @@ describe("renderProviderProfiles", () => {
     );
     let viewProps = props({ onProfileOrderChange });
     const container = mount(providerCard, viewProps);
-    const grip = container.querySelector<HTMLButtonElement>(".model-providers__profile-grip")!;
+    const grip = container.querySelector<HTMLButtonElement>(gripSelector)!;
     grip.focus();
-    const details = grip.closest(".model-providers__profile")!.querySelector("details")!;
+    const details = grip.closest(rowSelector)!.querySelector("details")!;
     details.open = true;
     expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(0);
     expect(grip.getAttribute("aria-keyshortcuts")).toBe("ArrowUp ArrowDown");
@@ -427,12 +379,12 @@ describe("renderProviderProfiles", () => {
       grip.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
       await waitForSolid(() => {
         expect(
-          [...container.querySelectorAll<HTMLElement>(".model-providers__profile")].map(
+          [...container.querySelectorAll<HTMLElement>(rowSelector)].map(
             (row) => row.dataset.profileId,
           ),
         ).toEqual(order);
         expect(document.activeElement).toBe(grip);
-        expect(grip.closest(".model-providers__profile")!.querySelector("details")).toBe(details);
+        expect(grip.closest(rowSelector)!.querySelector("details")).toBe(details);
         expect(details.open).toBe(true);
         expect(container.querySelectorAll(".model-providers__profile-position")).toHaveLength(3);
       });

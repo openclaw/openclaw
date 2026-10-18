@@ -7,6 +7,25 @@ import { requestProviderUsage } from "../../lib/provider-usage-request.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { loadModelProviderCost, loadModelProvidersData } from "./load.ts";
 
+const emptyAuth = { ts: 1, providers: [] };
+function mockModelRequests(
+  catalog: (params?: unknown) => unknown,
+  auth: () => unknown = () => emptyAuth,
+) {
+  return vi.fn(async (method: string, params?: unknown) => {
+    if (method === "models.authStatus") {
+      return auth();
+    }
+    if (method === "models.list") {
+      return catalog(params);
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+}
+function cachedModels(client: GatewayBrowserClient, agentId = "main", allowStale = false) {
+  return peekModelCatalog(client, { agentId }, { allowStale })?.models;
+}
+
 describe("loadModelProvidersData", () => {
   it("reads the refreshed catalog after failed auth publication", async () => {
     const auth = createDeferred();
@@ -18,7 +37,7 @@ describe("loadModelProvidersData", () => {
         } finally {
           authPending = false;
         }
-        return { ts: 1, providers: [] };
+        return emptyAuth;
       }
       if (method === "models.list") {
         if (authPending) {
@@ -33,7 +52,7 @@ describe("loadModelProvidersData", () => {
     auth.reject(new Error("Authentication status unavailable"));
     const result = await loading;
 
-    expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([
+    expect(cachedModels(client, "writer")).toEqual([
       { id: "published", name: "Published", provider: "ollama" },
     ]);
     expect(result.catalogError).toBeNull();
@@ -46,7 +65,7 @@ describe("loadModelProvidersData", () => {
     const client = createTestGatewayClient(async (method, params) => {
       if (method === "models.authStatus") {
         await auth.promise;
-        return { ts: 1, providers: [] };
+        return emptyAuth;
       }
       if (method === "models.list") {
         modelRequests.push(params);
@@ -82,7 +101,7 @@ describe("loadModelProvidersData", () => {
     const result = await loadModelProvidersData(client, { agentId: "main", refresh: true });
 
     expect(result.providerOutcomes).toEqual([{ provider: "ollama", status: "unavailable" }]);
-    expect(peekModelCatalog(client, { agentId: "main" }, { allowStale: true })?.models).toEqual([
+    expect(cachedModels(client, "main", true)).toEqual([
       { provider: "ollama", id: "retained", name: "Retained model", available: true },
     ]);
     expect(result.catalogError).toBe("More models could not be discovered.");
@@ -91,23 +110,15 @@ describe("loadModelProvidersData", () => {
   });
 
   it("surfaces an initial catalog failure without discarding provider data", async () => {
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      switch (method) {
-        case "models.authStatus":
-          return {
-            ts: 1,
-            providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
-          };
-        case "models.list":
-          throw new Error("configured catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
-        case "usage.status":
-          return { updatedAt: 1, providers: [] };
-        case "sessions.usage":
-          return { aggregates: { byProvider: [] } };
-        default:
-          return {};
-      }
-    });
+    const request = mockModelRequests(
+      () => {
+        throw new Error("configured catalog unavailable: OPENAI_API_KEY=sk-1234567890abcdef");
+      },
+      () => ({
+        ts: 1,
+        providers: [{ provider: "openai", displayName: "OpenAI", status: "ok", profiles: [] }],
+      }),
+    );
     const client = { request } as unknown as GatewayBrowserClient;
 
     const result = await loadModelProvidersData(client, { agentId: "main" });
@@ -125,16 +136,10 @@ describe("loadModelProvidersData", () => {
       code: "PREPARED_MODEL_AUTH_UNAVAILABLE",
       message: "Model authentication status is unavailable. Refresh Models after setup finishes.",
     };
-    const request = vi.fn(async (method: string) => {
-      switch (method) {
-        case "models.authStatus":
-          return { ts: 1, providers: [], unavailable };
-        case "models.list":
-          return { models: [{ id: "configured", name: "Configured", provider: "test-provider" }] };
-        default:
-          throw new Error(`Unexpected request: ${method}`);
-      }
-    });
+    const request = mockModelRequests(
+      () => ({ models: [{ id: "configured", name: "Configured", provider: "test-provider" }] }),
+      () => ({ ts: 1, providers: [], unavailable }),
+    );
 
     const client = createTestGatewayClient(request);
     const result = await loadModelProvidersData(client, {
@@ -143,38 +148,30 @@ describe("loadModelProvidersData", () => {
 
     expect(result.error).toBe(unavailable.message);
     expect(result.authStatus).toMatchObject({ unavailable });
-    expect(peekModelCatalog(client, { agentId: "main" })?.models).toEqual([
+    expect(cachedModels(client)).toEqual([
       { id: "configured", name: "Configured", provider: "test-provider" },
     ]);
   });
 
   it("retries a missing auth-status response without discarding other provider data", async () => {
     let malformed = true;
-    const request = vi.fn(async (method: string) => {
-      switch (method) {
-        case "models.authStatus":
-          return malformed ? undefined : { ts: 2, providers: [] };
-        case "models.list":
-          return { models: [] };
-        case "usage.status":
-          return { updatedAt: 1, providers: [] };
-        case "sessions.usage":
-          return { aggregates: { byProvider: [] } };
-        default:
-          return {};
-      }
-    });
+    const request = mockModelRequests(
+      () => ({ models: [] }),
+      () => (malformed ? undefined : { ts: 2, providers: [] }),
+    );
     const client = { request } as unknown as GatewayBrowserClient;
 
     const result = await loadModelProvidersData(client, { agentId: "main" });
 
+    expect(cachedModels(client)).toEqual([]);
     expect(result.authStatus).toEqual({ ts: 0, providers: [] });
-    expect(peekModelCatalog(client, { agentId: "main" })?.models).toEqual([]);
-    expect(result.providerOutcomes).toEqual([]);
-    expect(result.catalogError).toBeNull();
-    expect(result.providerUsage).toBeNull();
-    expect(result.costByProvider).toBeNull();
-    expect(result.error).toBeNull();
+    expect(result).toMatchObject({
+      providerOutcomes: [],
+      catalogError: null,
+      providerUsage: null,
+      costByProvider: null,
+      error: null,
+    });
     malformed = false;
     expect((await loadModelProvidersData(client, { agentId: "main" })).authStatus).toEqual({
       ts: 2,
@@ -225,25 +222,15 @@ describe("loadModelProvidersData", () => {
   });
 
   it("surfaces an explicit catalog refresh failure while retaining published configured models", async () => {
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      switch (method) {
-        case "models.authStatus":
-          return { ts: 1, providers: [], providerCapabilities: [] };
-        case "models.list":
-          if ((params as { refresh?: boolean } | undefined)?.refresh === true) {
-            throw new Error("catalog refresh failed: OPENAI_API_KEY=sk-1234567890abcdef");
-          }
-          return {
-            models: [{ id: "cached", name: "Cached", provider: "openai" }],
-          };
-        case "usage.status":
-          return { updatedAt: 1, providers: [] };
-        case "sessions.usage":
-          return { aggregates: { byProvider: [] } };
-        default:
-          return {};
-      }
-    });
+    const request = mockModelRequests(
+      (params) => {
+        if ((params as { refresh?: boolean } | undefined)?.refresh === true) {
+          throw new Error("catalog refresh failed: OPENAI_API_KEY=sk-1234567890abcdef");
+        }
+        return { models: [{ id: "cached", name: "Cached", provider: "openai" }] };
+      },
+      () => ({ ...emptyAuth, providerCapabilities: [] }),
+    );
     const client = { request } as unknown as GatewayBrowserClient;
     await loadModelProvidersData(client, { agentId: "writer" });
     request.mockClear();
@@ -251,7 +238,7 @@ describe("loadModelProvidersData", () => {
     const result = await loadModelProvidersData(client, { refresh: true, agentId: "writer" });
 
     expect(result.catalogError).toBe("catalog refresh failed: OPENAI_API_KEY=sk-123...cdef");
-    expect(peekModelCatalog(client, { agentId: "writer" })?.models).toEqual([
+    expect(cachedModels(client, "writer")).toEqual([
       { id: "cached", name: "Cached", provider: "openai" },
     ]);
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
