@@ -1838,7 +1838,6 @@
 ["src/agents/bootstrap-files.personal.test.ts","../plugins/memory-runtime.js","a00399ed09043afa19549d173c7dccf33af3a2f85306745732caf36174580f6e",1]
 ["src/agents/bootstrap-files.remote.test.ts","../plugins/memory-runtime.js","8c0538970a03432a04966620a21395fb6b2b815339c5bb97c555a277a83127d5",1]
 ["src/agents/bootstrap-files.test.ts","../plugins/memory-runtime.js","8c0538970a03432a04966620a21395fb6b2b815339c5bb97c555a277a83127d5",1]
-["src/agents/btw.mocks.test-support.ts","../logging/diagnostic.js","a54c26891cc483dfc2c32bf71ed8454a96d43467e4ec607d25f980207d3b6a2c",1]
 ["src/agents/btw.mocks.test-support.ts","../plugins/provider-policy-surface.js","f6bbd621edcf584ec5bc6b5768f0d261682bfeacc5f90c28fa8c3f7566d63ac4",1]
 ["src/agents/btw.mocks.test-support.ts","../plugins/provider-runtime.js","b0d6550000e3d3880ee0a62904fecab85d0f37c38a05357f4b6446a10f951d5d",1]
 ["src/agents/btw.mocks.test-support.ts","../plugins/providers.js","43a2d17642f79147dcbbfeaab99198a2268524e7c6e7f8782760abb0a2fc612a",1]
