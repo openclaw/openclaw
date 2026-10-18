@@ -11,6 +11,13 @@ import {
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue as modelPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import {
+  catalogModel,
+  configSnapshot,
+  pageOptions,
+  recordShot,
+  text,
+} from "./model-provider-fixtures.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -53,12 +60,7 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
 
   it("explains the utility model with accessible pointer, keyboard, and narrow-layout behavior", async () => {
     for (const colorScheme of ["light", "dark"] as const) {
-      const context = await browser.newContext({
-        colorScheme,
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await browser.newContext(pageOptions(1280, 900, { colorScheme }));
       const page = await context.newPage();
       const config = {
         agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -66,23 +68,11 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
       };
       await installMockGateway(page, {
         models: [
-          { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
-          {
-            id: "gpt-5.6-luna",
-            name: "GPT-5.6 Luna",
-            provider: "openai",
-            available: true,
-          },
+          catalogModel("openai", "gpt-5.5", "GPT-5.5"),
+          catalogModel("openai", "gpt-5.6-luna", "GPT-5.6 Luna"),
         ],
         methodResponses: {
-          "config.get": {
-            config,
-            sourceConfig: config,
-            hash: `utility-help-${colorScheme}`,
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "config.get": configSnapshot(config, `utility-help-${colorScheme}`),
           "models.authStatus": { ts: NOW, providers: [] },
           "usage.status": { updatedAt: NOW, providers: [] },
           "sessions.usage": { aggregates: { byProvider: [] } },
@@ -143,23 +133,21 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
           .not.toBe(defaultColor);
         const helpHoverColor = await helpButton.evaluate((node) => getComputedStyle(node).color);
         await expect.poll(tooltipIsOpen).toBe(true);
-        await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
+        await text(tooltip).toContain("short background tasks");
         const helpButtonBox = await helpButton.boundingBox();
         expect(helpButtonBox).not.toBeNull();
         expect(helpButtonBox?.width).toBeLessThanOrEqual(16);
         expect(helpButtonBox?.height).toBeLessThanOrEqual(16);
-        if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(utilityHelpArtifactDir, `${colorScheme}-hover-tooltip-full.png`),
-          });
-        }
+        await recordShot(page, {
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(utilityHelpArtifactDir, `${colorScheme}-hover-tooltip-full.png`),
+        });
 
         await helpButton.click();
         await expect.poll(tooltipIsOpen).toBe(true);
-        await expect.poll(() => tooltip.textContent()).toContain("short background tasks");
-        await expect.poll(() => tooltip.textContent()).toContain("primary model provider");
+        await text(tooltip).toContain("short background tasks");
+        await text(tooltip).toContain("primary model provider");
         if (recordVisuals) {
           const labelBox = await utilityLabel.boundingBox();
           const tooltipBox = await tooltipBody.boundingBox();
@@ -235,13 +223,13 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
             helpHoverColor,
           );
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
-          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.text);
+          await text(behaviorTooltip).toContain(help.text);
           await behaviorButton.click();
           await expect.poll(behaviorTooltipIsOpen).toBe(true);
           await expect
             .poll(() => group.locator('input[type="radio"]:checked').inputValue())
             .toBe("");
-          await expect.poll(() => behaviorTooltip.textContent()).toContain(help.defaultText);
+          await text(behaviorTooltip).toContain(help.defaultText);
           await page.locator(".page-title", { hasText: "Models" }).first().click();
         }
 
@@ -261,13 +249,11 @@ describeControlUiE2e("Control UI Models help mocked Gateway E2E", () => {
         expect(mobileTooltipBox.x).toBeGreaterThanOrEqual(0);
         expect(mobileTooltipBox.x + mobileTooltipBox.width).toBeLessThanOrEqual(390);
 
-        if (recordVisuals) {
-          await page.screenshot({
-            animations: "disabled",
-            fullPage: true,
-            path: path.join(utilityHelpArtifactDir, `${colorScheme}-mobile-open.png`),
-          });
-        }
+        await recordShot(page, {
+          animations: "disabled",
+          fullPage: true,
+          path: path.join(utilityHelpArtifactDir, `${colorScheme}-mobile-open.png`),
+        });
       } finally {
         await context.close();
       }

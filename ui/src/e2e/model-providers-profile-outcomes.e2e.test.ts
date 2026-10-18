@@ -6,6 +6,14 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  authProfile,
+  catalogModel,
+  configSnapshot,
+  pageOptions,
+  recordShot,
+  trimmedText,
+} from "./model-provider-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI model provider profile outcomes" });
 const NOW = Date.now();
@@ -27,125 +35,98 @@ suite.define(() => {
       },
     });
     const xai = health.providers[0]!;
-    await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { height: 1000, width: 1280 } },
-      async ({ page }) => {
-        await installMockGateway(page, {
-          methodResponses: {
-            "config.get": {
-              config: {},
-              sourceConfig: {},
-              hash: "accounts",
-              raw: "{}",
-              valid: true,
-              issues: [],
-            },
-            "models.authStatus": {
-              ts: NOW,
-              providers: [
-                {
-                  ...xai,
-                  displayName: "xAI",
-                  profiles: xai.profiles.map((profile) =>
-                    Object.assign({}, profile, { source: "saved" }),
-                  ),
-                },
-                {
-                  provider: "minimax",
-                  displayName: "MiniMax",
-                  status: "ok",
-                  profiles: [
-                    {
-                      profileId: "minimax:opaque-account",
-                      type: "oauth",
-                      status: "ok",
-                      source: "saved",
-                      displayName: "Work account",
-                    },
-                  ],
-                },
-              ],
-            },
-            "models.list": {
-              models: [{ id: "test-model", name: "Test model", provider: "xai", available: true }],
-              providerOutcomes: [
-                { provider: "xai", status: "ready" },
-                { provider: "minimax", status: "unavailable" },
-              ],
-            },
-            "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+    await suite.withPage(pageOptions(1280, 1000), async ({ page }) => {
+      await installMockGateway(page, {
+        methodResponses: {
+          "config.get": configSnapshot({}, "accounts"),
+          "models.authStatus": {
+            ts: NOW,
+            providers: [
+              {
+                ...xai,
+                displayName: "xAI",
+                profiles: xai.profiles.map((profile) =>
+                  Object.assign({}, profile, { source: "saved" }),
+                ),
+              },
+              {
+                provider: "minimax",
+                displayName: "MiniMax",
+                status: "ok",
+                profiles: [
+                  authProfile("minimax:opaque-account", "oauth", "ok", {
+                    source: "saved",
+                    displayName: "Work account",
+                  }),
+                ],
+              },
+            ],
           },
-        });
-        await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        const xaiCard = page.locator('[data-provider-id="xai"]');
-        const minimaxCard = page.locator('[data-provider-id="minimax"]');
-        await xaiCard.waitFor();
-        await minimaxCard.waitFor();
-        await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
-        await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
-        await expect
-          .poll(async () =>
-            (
-              await xaiCard.locator(".model-providers__head .settings-status").textContent()
-            )?.trim(),
-          )
-          .toBe("Ready");
-        expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
-          "Account 1",
-        );
-        expect(await xaiCard.locator(".model-providers__profile-status").textContent()).toContain(
-          "Signed in",
-        );
-        expect(
-          await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
-        ).toContain("Models unavailable");
-        expect(
-          await minimaxCard.locator(".model-providers__profile-copy strong").textContent(),
-        ).toBe("Work account");
-        const details = xaiCard.locator("details");
-        expect(await details.locator("summary").textContent()).toBe("Details");
-        expect(await details.getAttribute("open")).toBeNull();
-        await details.locator("summary").click();
-        expect(await details.textContent()).toContain("xai:opaque-account");
-      },
-    );
+          "models.list": {
+            models: [catalogModel("xai", "test-model", "Test model")],
+            providerOutcomes: [
+              { provider: "xai", status: "ready" },
+              { provider: "minimax", status: "unavailable" },
+            ],
+          },
+          "usage.status": { updatedAt: NOW, providers: [] },
+          "sessions.usage": { aggregates: { byProvider: [] } },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      const xaiCard = page.locator('[data-provider-id="xai"]');
+      const minimaxCard = page.locator('[data-provider-id="minimax"]');
+      await xaiCard.waitFor();
+      await minimaxCard.waitFor();
+      await xaiCard.screenshot({ path: path.join(suite.artifactDir, "account-status.png") });
+      await minimaxCard.screenshot({ path: path.join(suite.artifactDir, "catalog-status.png") });
+      await trimmedText(xaiCard.locator(".model-providers__head .settings-status")).toBe("Ready");
+      expect(await xaiCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
+        "Account 1",
+      );
+      expect(await xaiCard.locator(".model-providers__profile-status").textContent()).toContain(
+        "Signed in",
+      );
+      expect(
+        await minimaxCard.locator(".model-providers__head .settings-status").textContent(),
+      ).toContain("Models unavailable");
+      expect(await minimaxCard.locator(".model-providers__profile-copy strong").textContent()).toBe(
+        "Work account",
+      );
+      const details = xaiCard.locator("details");
+      expect(await details.locator("summary").textContent()).toBe("Details");
+      expect(await details.getAttribute("open")).toBeNull();
+      await details.locator("summary").click();
+      expect(await details.textContent()).toContain("xai:opaque-account");
+    });
   });
 
   it("lifts an account, makes room during dragging, and saves its dropped priority", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
-      {
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1280 },
-        ...(recordVisuals
+      pageOptions(
+        1280,
+        1000,
+        recordVisuals
           ? { recordVideo: { dir: suite.artifactDir, size: { height: 1000, width: 1280 } } }
-          : {}),
-      },
+          : {},
+      ),
       async ({ page }) => {
         const provider = {
           provider: "openai",
           displayName: "OpenAI",
           status: "ok",
           profiles: [
-            { profileId: "openai:alex", type: "oauth", status: "ok", email: "alex@example.com" },
-            { profileId: "openai:blair", type: "oauth", status: "ok", email: "blair@example.com" },
+            authProfile("openai:alex", "oauth", "ok", { email: "alex@example.com" }),
+            authProfile("openai:blair", "oauth", "ok", { email: "blair@example.com" }),
           ],
           profileOrder: ["openai:alex", "openai:blair"],
         };
         const gateway = await installMockGateway(page, {
           featureMethods: [...defaultControlUiFeatureMethods, "models.authOrderSet"],
-          models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true }],
+          models: [catalogModel("openai", "gpt-5.5", "GPT-5.5")],
           methodResponses: {
-            "config.get": {
-              config: {},
-              sourceConfig: {},
-              hash: "roster",
-              raw: "{}",
-              valid: true,
-              issues: [],
-            },
+            "config.get": configSnapshot({}, "roster"),
             "models.authStatus": { ts: NOW, providers: [provider] },
             "usage.status": { updatedAt: NOW, providers: [] },
             "sessions.usage": { aggregates: { byProvider: [] } },
@@ -173,9 +154,7 @@ suite.define(() => {
         await expect.poll(async () => (await alex.boundingBox())?.y).toBeGreaterThan(first.y);
         await expect.poll(async () => (await blair.boundingBox())?.y).toBeLessThan(second.y);
         expect(await gateway.getRequests("models.authOrderSet")).toHaveLength(0);
-        if (recordVisuals) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "account-lifted.png") });
-        }
+        await recordShot(page, { path: path.join(suite.artifactDir, "account-lifted.png") });
         await page.mouse.up();
         const request = await gateway.waitForRequest("models.authOrderSet");
         const profileIds = ["openai:blair", "openai:alex"];
@@ -193,11 +172,9 @@ suite.define(() => {
         await gateway.resolveDeferred("models.authOrderSet", { provider: "openai", profileIds });
         await card.getByRole("button", { name: "Clear custom order", exact: true }).waitFor();
         await expect.poll(visibleOrder).toEqual(profileIds);
-        if (recordVisuals) {
-          await page.screenshot({
-            path: path.join(suite.artifactDir, "account-priority-saved.png"),
-          });
-        }
+        await recordShot(page, {
+          path: path.join(suite.artifactDir, "account-priority-saved.png"),
+        });
       },
     );
   });
@@ -222,153 +199,127 @@ suite.define(() => {
       available: false,
     },
   ])("$name", async ({ providerOutcomes, status, available }) => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 1000, width: 1440 },
-      },
-      async ({ page }) => {
-        const config = {
-          auth: {
-            profiles: {
-              "openai:rejected": { provider: "openai" },
-              "openai:ready": { provider: "openai" },
-            },
+    await suite.withPage(pageOptions(1440, 1000, { colorScheme: "dark" }), async ({ page }) => {
+      const config = {
+        auth: {
+          profiles: {
+            "openai:rejected": { provider: "openai" },
+            "openai:ready": { provider: "openai" },
           },
-        };
-        const readyModel = {
-          id: "gpt-ready",
-          name: "GPT Ready",
-          provider: "openai",
-          available,
-        };
-        const gateway = await installMockGateway(page, {
-          featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
-          methodResponses: {
-            "agents.list": {
-              defaultId: "main",
-              mainKey: "main",
-              scope: "agent",
-              agents: [
-                { id: "main", identity: { name: "Main" }, name: "Main" },
-                { id: "writer", identity: { name: "Writer" }, name: "Writer" },
-              ],
-            },
-            "config.get": {
-              config,
-              sourceConfig: config,
-              hash: "multi-profile-model-provider",
-              issues: [],
-              raw: JSON.stringify(config),
-              valid: true,
-            },
-            "models.list": {
-              cases: [
-                {
-                  match: { view: "configured", agentId: "writer", refresh: true },
-                  response: {
-                    models: [readyModel],
-                    refreshFailed: providerOutcomes.some((outcome) => outcome.status !== "ready"),
-                    providerOutcomes,
-                  },
-                },
-                {
-                  match: { view: "configured", agentId: "writer" },
-                  response: { models: [readyModel] },
-                },
-                { match: { view: "configured" }, response: { models: [] } },
-              ],
-            },
-            "models.authStatus": {
-              cases: [
-                {
-                  match: { agentId: "writer" },
-                  response: {
-                    ts: NOW,
-                    providers: [
-                      {
-                        provider: "openai",
-                        displayName: "OpenAI",
-                        status: "ok",
-                        apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
-                        profiles: [
-                          { profileId: "openai:rejected", type: "oauth", status: "ok" },
-                          { profileId: "openai:ready", type: "oauth", status: "ok" },
-                        ],
-                      },
-                    ],
-                  },
-                },
-                { response: { ts: NOW, providers: [] } },
-              ],
-            },
-            "usage.status": { updatedAt: NOW, providers: [] },
-            "sessions.usage": { aggregates: { byProvider: [] } },
+        },
+      };
+      const readyModel = catalogModel("openai", "gpt-ready", "GPT Ready", available);
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "models.probe"],
+        methodResponses: {
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "agent",
+            agents: [
+              { id: "main", identity: { name: "Main" }, name: "Main" },
+              { id: "writer", identity: { name: "Writer" }, name: "Writer" },
+            ],
           },
+          "config.get": configSnapshot(config, "multi-profile-model-provider"),
+          "models.list": {
+            cases: [
+              {
+                match: { view: "configured", agentId: "writer", refresh: true },
+                response: {
+                  models: [readyModel],
+                  refreshFailed: providerOutcomes.some((outcome) => outcome.status !== "ready"),
+                  providerOutcomes,
+                },
+              },
+              {
+                match: { view: "configured", agentId: "writer" },
+                response: { models: [readyModel] },
+              },
+              { match: { view: "configured" }, response: { models: [] } },
+            ],
+          },
+          "models.authStatus": {
+            cases: [
+              {
+                match: { agentId: "writer" },
+                response: {
+                  ts: NOW,
+                  providers: [
+                    {
+                      provider: "openai",
+                      displayName: "OpenAI",
+                      status: "ok",
+                      apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
+                      profiles: [
+                        authProfile("openai:rejected", "oauth", "ok"),
+                        authProfile("openai:ready", "oauth", "ok"),
+                      ],
+                    },
+                  ],
+                },
+              },
+              { response: { ts: NOW, providers: [] } },
+            ],
+          },
+          "usage.status": { updatedAt: NOW, providers: [] },
+          "sessions.usage": { aggregates: { byProvider: [] } },
+        },
+      });
+
+      const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
+      expect(response?.status()).toBe(200);
+      await gateway.waitForRequest("agents.list");
+      const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
+      await pageScope.locator(".agent-select__trigger").click();
+      await pageScope
+        .locator(".agent-select__option[data-agent-option]")
+        .filter({ hasText: "Writer" })
+        .click();
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("models.list")).some((request) => {
+            const params = request.params as Record<string, unknown> | undefined;
+            return (
+              params?.view === "configured" &&
+              params.agentId === "writer" &&
+              params.refresh !== true
+            );
+          }),
+        )
+        .toBe(true);
+
+      const openaiCard = page.locator('[data-provider-id="openai"]');
+      await openaiCard.waitFor();
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await expect
+        .poll(async () => {
+          const request = (await gateway.getRequests("models.list")).find((candidate) => {
+            const params = candidate.params as Record<string, unknown> | undefined;
+            return (
+              params?.view === "configured" &&
+              params.agentId === "writer" &&
+              params.refresh === true
+            );
+          });
+          return request?.params;
+        })
+        .toEqual({
+          view: "configured",
+          agentId: "writer",
+          refresh: true,
         });
-
-        const response = await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        expect(response?.status()).toBe(200);
-        await gateway.waitForRequest("agents.list");
-        const pageScope = page.locator(".settings-sidebar__agent openclaw-agent-select");
-        await pageScope.locator(".agent-select__trigger").click();
-        await pageScope
-          .locator(".agent-select__option[data-agent-option]")
-          .filter({ hasText: "Writer" })
-          .click();
-        await expect
-          .poll(async () =>
-            (await gateway.getRequests("models.list")).some((request) => {
-              const params = request.params as Record<string, unknown> | undefined;
-              return (
-                params?.view === "configured" &&
-                params.agentId === "writer" &&
-                params.refresh !== true
-              );
-            }),
-          )
-          .toBe(true);
-
-        const openaiCard = page.locator('[data-provider-id="openai"]');
-        await openaiCard.waitFor();
-        await page.getByRole("button", { name: "Refresh", exact: true }).click();
-        await expect
-          .poll(async () => {
-            const request = (await gateway.getRequests("models.list")).find((candidate) => {
-              const params = candidate.params as Record<string, unknown> | undefined;
-              return (
-                params?.view === "configured" &&
-                params.agentId === "writer" &&
-                params.refresh === true
-              );
-            });
-            return request?.params;
-          })
-          .toEqual({
-            view: "configured",
-            agentId: "writer",
-            refresh: true,
-          });
-        await expect
-          .poll(async () =>
-            (
-              await openaiCard.locator(".model-providers__head .settings-status").textContent()
-            )?.trim(),
-          )
-          .toBe(status);
-        if (!available) {
-          await openaiCard.screenshot({
-            path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
-          });
-        }
-        expect(
-          await openaiCard
-            .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
-            .textContent(),
-        ).toContain(available ? "Signed in" : "Credentials configured");
-      },
-    );
+      await trimmedText(openaiCard.locator(".model-providers__head .settings-status")).toBe(status);
+      if (!available) {
+        await openaiCard.screenshot({
+          path: path.join(suite.artifactDir, "provider-auth-rejected.png"),
+        });
+      }
+      expect(
+        await openaiCard
+          .locator('[data-profile-id="openai:ready"] .model-providers__profile-status')
+          .textContent(),
+      ).toContain(available ? "Signed in" : "Credentials configured");
+    });
   });
 });
