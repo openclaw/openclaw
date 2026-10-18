@@ -121,9 +121,9 @@ describe("cloud project lifecycle command transport", () => {
       { executable: "/bin/sh", args: ["-c", "compile && generate"] },
       { executable: "serve", args: ["--foreground"] },
     ]);
-    for (const invocation of invocations) {
-      expect(invocation.cwd).toBe("/worker/project");
-      expect(invocation.env).toEqual({
+    for (const { cwd, env } of invocations) {
+      expect(cwd).toBe("/worker/project");
+      expect(env).toEqual({
         PATH: "/worker/bin",
         HOME: "/worker/home",
         MODE: "development",
@@ -139,8 +139,7 @@ describe("cloud project lifecycle command transport", () => {
     const provider = vi.fn(
       async (command: Parameters<NonNullable<WorkerProvider["runSetupCommand"]>>[1]) => {
         command.assertCurrent();
-        expect(command.workspaceDir).toBe("/worker/project");
-        expect(command.homeDir).toBe("/worker/home");
+        expect(command).toMatchObject(boundWorkspace);
         return tunnel.runWorkspaceCommand({
           argv: [
             "node",
