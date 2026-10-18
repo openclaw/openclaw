@@ -7,10 +7,12 @@ type PresenceProps = Pick<
   "staticUsers" | "personActivity"
 >;
 
-export function PaneSubagentStop(props: { onAbort: () => void }) {
+export function PaneSubagentStop(props: { onAbort: () => void; notice?: boolean }) {
   return (
     <button
-      class="chat-subagent-detail__stop"
+      class={
+        props.notice ? "btn btn--sm agent-chat__disabled-banner-stop" : "chat-subagent-detail__stop"
+      }
       type="button"
       aria-label={t("chat.runControls.stopGenerating")}
       onClick={() => props.onAbort()}

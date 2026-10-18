@@ -11,6 +11,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import "../../../styles/chat/composer-context-strip.css";
 import { ChatActivityPills } from "./chat-activity-pills.tsx";
 import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
@@ -157,6 +158,9 @@ export function renderChatComposerView(
                 )}
               </button>
             )}
+          </Show>
+          <Show when={banner().stop}>
+            {(stop) => <PaneSubagentStop onAbort={stop().onAbort} notice />}
           </Show>
           {banner().kind === "composer-replacement" &&
           banner().presentation !== "compact" &&

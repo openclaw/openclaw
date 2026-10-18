@@ -2919,6 +2919,21 @@ openclaw-chat-ci-details {
   min-width: 0;
 }
 
+/* Keep the desktop Subagents Stop appearance at the notice's button size. */
+.agent-chat__disabled-banner .agent-chat__disabled-banner-stop.btn {
+  border-color: transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+
+.agent-chat__disabled-banner-stop.btn svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
+}
+
 .agent-chat__disabled-banner-icon--eye {
   color: var(--muted);
 }
