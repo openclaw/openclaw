@@ -35,6 +35,7 @@ export type ChatDetailSlotProps = {
 
 export type SidebarPanelDefinitionParams = {
   panePresentation?: PresentationValue;
+  detailPresented?: PresentationValue;
   state: ChatPageHost;
   paneId: string;
   panePresentationId: string;

@@ -3,11 +3,18 @@ import type { MarkdownFileLinkTarget } from "../../../components/markdown-file-l
 import type { MarkdownGitHubContext } from "../../../components/markdown-render-options.ts";
 import type { SessionLinkTarget } from "../../../components/markdown-session-links.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { createSessionWorkspaceProps } from "./chat-session-workspace.ts";
 import type {
+  MobileFileBack,
+  ImageSidebarContent,
   AttachmentSidebarRuntime,
+  AttachmentSidebarContent,
   FileSidebarNavigation,
+  FileSidebarContent,
   ChatDetailPanelContent,
+  FileReaderInteraction,
+  FileReaderDraftState,
 } from "./chat-sidebar-content-types.ts";
 
 type SessionWorkspaceView = ReturnType<typeof createSessionWorkspaceProps>;
@@ -45,6 +52,20 @@ export type FileReaderWorkspace = {
 };
 
 export type ChatDetailPanelProps = {
+  panelPresentation?: "desktop" | "mobile";
+  panelActive?: boolean;
+  /** Supplied by the native shell; a narrow desktop panel is still desktop. */
+  filePresentation?: "desktop" | "mobile";
+  fileBack?: MobileFileBack | null;
+  filePresented?: boolean;
+  fileWorkspace?: FileReaderWorkspace | null;
+  onFileInteraction?:
+    | ((
+        file: FileSidebarContent | ImageSidebarContent | AttachmentSidebarContent,
+        interaction: FileReaderInteraction,
+      ) => void)
+    | null;
+  onFileDraftChange?: ((draft: FileReaderDraftState | null) => void) | null;
   content: ChatDetailPanelContent | null;
   fileNavigation: FileSidebarNavigation | null;
   execNode: string | null;
@@ -60,3 +81,23 @@ export type ChatDetailPanelProps = {
   onRevealInWorkspace: ((path: string) => void) | null;
   onOpenImage: ((item: ImageLightboxItem) => void) | null;
 };
+
+export type ChatDetailPanel = SolidBridgeElement<ChatDetailPanelProps>;
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-detail-panel": ChatDetailPanel;
+  }
+}
+
+declare module "@solidjs/web" {
+  namespace JSX {
+    interface IntrinsicElements {
+      "openclaw-chat-detail-panel": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-detail-panel"]
+      > & {
+        [Key in keyof ChatDetailPanelProps as `prop:${Key}`]?: ChatDetailPanelProps[Key];
+      };
+    }
+  }
+}

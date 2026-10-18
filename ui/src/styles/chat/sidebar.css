@@ -643,6 +643,7 @@ openclaw-session-discussion {
   overflow: hidden;
 }
 
+.sidebar-file-view__canvas[hidden],
 .file-view[hidden],
 .chat-html-preview[hidden],
 .sidebar-attachment-preview__text[hidden] {
@@ -820,6 +821,179 @@ openclaw-chat-html-preview {
   display: flex;
   flex: 0 0 auto;
   gap: 4px;
+}
+
+.sidebar-content:has(> .sidebar-file-view--desktop),
+.sidebar-content:has(> .sidebar-svg-file) {
+  padding: 0;
+}
+
+/* Desktop readers retain their own composition at narrow panel widths. */
+.sidebar-file-view--desktop {
+  position: relative;
+  container: desktop-file / inline-size;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.sidebar-svg-file,
+.sidebar-svg-file__view {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+.sidebar-svg-file__view[hidden] {
+  display: none;
+}
+
+.sidebar-image-view__canvas {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  padding: 16px;
+  overflow: auto;
+}
+.sidebar-image-view__image {
+  display: block;
+  flex: none;
+  align-self: center;
+  max-width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+button.sidebar-image-view__image {
+  cursor: zoom-in;
+}
+.sidebar-image-view__image img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+.sidebar-image-view__tools {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  right: 8px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated);
+}
+
+.sidebar-file-view--desktop .sidebar-file-view__path {
+  font-family: var(--font-body);
+  font-size: 13px;
+}
+
+.sidebar-file-view__edit-actions .btn {
+  height: var(--session-rail-target);
+  padding: 0 6px;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  font-size: var(--control-ui-text-sm);
+}
+
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled) {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.sidebar-file-view__edit-actions .btn:last-child:not(:disabled):hover {
+  background: var(--primary-hover);
+}
+
+.sidebar-file-view__compact-action {
+  display: none;
+}
+
+.sidebar-file-view__menu .oc-menu-item__icon > svg {
+  width: var(--session-rail-icon, var(--rail-header-action-glyph-size));
+  height: var(--session-rail-icon, var(--rail-header-action-glyph-size));
+}
+
+.sidebar-file-view__canvas {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.sidebar-file-view__floating-copy {
+  position: absolute;
+  z-index: 3;
+  top: 10px;
+  right: 16px;
+}
+
+.sidebar-file-view__floating-copy .sidebar-file-view__action {
+  width: 28px;
+  height: 28px;
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--bg-elevated) 50%, transparent);
+  box-shadow: none;
+}
+
+.sidebar-file-view__markdown {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 24px 28px 40px;
+  background: transparent;
+}
+
+.sidebar-file-view--desktop .cm-editor {
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.sidebar-file-view--desktop .cm-content {
+  padding: 14px 0 40px;
+}
+
+.sidebar-file-view--desktop .cm-line {
+  padding-right: 18px;
+}
+
+.sidebar-file-view--desktop .cm-gutters {
+  border: 0;
+  background: color-mix(in srgb, var(--bg-elevated) 48%, var(--panel));
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-file-view--desktop.sidebar-file-view--editing .file-view {
+  background-color: color-mix(in srgb, var(--text) 2.6%, var(--panel));
+  background-image: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--accent-subtle) 45%, transparent),
+    transparent
+  );
+  background-position: bottom;
+  background-size: 100% 180px;
+  background-repeat: no-repeat;
+}
+
+@container desktop-file (max-width: 560px) {
+  .sidebar-file-view--desktop .sidebar-file-view__reading-controls.session-panel-rail__group,
+  .sidebar-file-view--desktop .sidebar-file-view__wide-action {
+    display: none;
+  }
+
+  .sidebar-file-view__compact-action {
+    display: inline-flex;
+  }
 }
 
 .sidebar-file-view__footer {
@@ -1782,4 +1956,103 @@ openclaw-chat-files-panel,
 .session-diff__code-placeholder:hover {
   color: var(--text);
   background: var(--bg-hover);
+}
+
+/* Reader chrome keeps the native document mount stable across rail/folder modes. */
+.sidebar-file-view__workspace-body,
+.sidebar-file-view__document {
+  display: flex;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.sidebar-file-view__document {
+  flex-direction: column;
+}
+.sidebar-file-view__document[hidden] {
+  display: none;
+}
+.sidebar-file-view__workspace-body {
+  container-type: inline-size;
+}
+.sidebar-file-view__path-field > .workspace-breadcrumb {
+  flex: 1;
+  min-width: 0;
+}
+.sidebar-file-view--mobile {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.sidebar-panel-host--mobile-reader > .sidebar-panel > .sidebar-content {
+  padding: 0;
+}
+.sidebar-file-view--mobile .cm-scroller {
+  padding-bottom: 72px;
+}
+.sidebar-file-view--mobile .sidebar-file-view__markdown {
+  padding: 20px 16px 88px;
+}
+
+.sidebar-file-view__markdown-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.sidebar-file-view__markdown-scroll > .sidebar-file-view__markdown {
+  overflow: visible;
+}
+
+.sidebar-panel-host--mobile-reader > .sidebar-panel > .sidebar-file-mobile__body {
+  overflow: hidden;
+}
+/* Give intrinsic-ratio SVGs a definite containing width in the desktop reader. */
+.sidebar-panel-host--fill:not(.sidebar-panel-host--mobile-reader)
+  .chat-tool-card__preview[data-kind="image"]
+  .chat-tool-card__preview-image-button {
+  width: 100%;
+}
+.sidebar-panel-host--mobile-reader .chat-tool-card__preview[data-kind="image"] {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+.sidebar-panel-host--mobile-reader
+  .chat-tool-card__preview[data-kind="image"]
+  > .chat-tool-card__preview-panel {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+.sidebar-panel-host--mobile-reader .sidebar-attachment-preview {
+  position: static;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-panel-host--mobile-reader
+  :is(.sidebar-attachment-preview__text, .sidebar-attachment-preview__markdown) {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* Files publishes preview/pin through the native hosted-tab class. */
+.tabstrip-tab.is-preview .tabstrip-tab__label {
+  font-style: italic;
+}
+
+.session-panel-rail .sidebar-file-view__action[data-accent="false"] > svg {
+  color: var(--muted);
+}
+.session-panel-rail .sidebar-file-view__action[data-accent="true"] > svg {
+  color: var(--accent);
+}
+
+.sidebar-file-mobile__fallback-download {
+  padding: 0 16px 16px;
 }

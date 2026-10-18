@@ -84,6 +84,8 @@ export type TranscriptAttachments = {
   omittedMedia: boolean;
 };
 
+export type MobileFileBack = { label: string; onBack: () => void };
+
 type SidebarFullMessageRequest = {
   sessionKey: string;
   agentId?: string;
@@ -128,7 +130,7 @@ export type FilePreviewSource = {
   download: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
 };
 
-type ImageSidebarContent = {
+export type ImageSidebarContent = {
   file?: FilePreviewSource;
   kind: "image";
   title: string;
@@ -163,7 +165,7 @@ export type AttachmentSidebarRuntime = {
   resolveArtifactDownload?: ArtifactDownloadResolver;
 };
 
-type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
+export type AttachmentSidebarContent = Omit<AttachmentSidebarSource, "src"> & {
   kind: "attachment";
   file?: FilePreviewSource;
   attachmentKind?: "audio" | "video" | "document" | "image";
@@ -213,7 +215,9 @@ export type FileReaderViewRequest = {
   view: FileReaderView;
 };
 
-export type FileSidebarNavigation = { line: number };
+export type FileSidebarNavigation =
+  | { line: number; view?: FileReaderViewRequest }
+  | { line?: number; view: FileReaderViewRequest };
 
 export type SessionFileSource = { sessionKey: string; agentId?: string; path: string };
 
@@ -227,7 +231,7 @@ export type FileSidebarContent = {
   absolutePath?: string;
   name: string;
   content: string;
-  download?: (signal: AbortSignal) => Promise<SessionFileDownload | null>;
+  download?: (signal: AbortSignal) => Promise<FileReaderDownload | null>;
   sessionFileSource?: SessionFileSource;
   /** Stable per-session identity used to retain an unsaved in-memory draft. */
   draftKey?: string;
@@ -237,7 +241,7 @@ export type FileSidebarContent = {
   mimeType?: string;
   language?: string;
   line?: number | null;
-  /** New identity for an explicit line request; ordinary tab selection retains it. */
+  /** Explicit line/view request; ordinary tab selection retains its identity. */
   navigation?: FileSidebarNavigation;
   rawText?: string | null;
   edit?: FileSidebarEdit;
