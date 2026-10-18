@@ -94,6 +94,30 @@ function legacyEntry(id: string, text: string) {
   };
 }
 
+function preparingEntry(id: string, text: string): LegacyQueuedDeliveryPreparation {
+  return {
+    ...legacyEntry(id, text),
+    legacyPreparationState: "modifiers_started",
+    retainOnFailure: true,
+    deliveryCompletion: { kind: "conversation", agentId: "main", operationId: id },
+  };
+}
+
+const migrated = { moved: 1, skipped: 0, remaining: 0 };
+const preparedPayload = (payload: { text: string; mediaUrl?: string }, accepted = false) => ({
+  preparedBatch: {
+    entries: [expect.objectContaining({ ...(accepted ? { status: "accepted" } : {}), payload })],
+  },
+});
+const sentReconciliation = (...ids: string[]) => ({
+  status: "sent",
+  messageId: ids[0],
+  receipt: createMessageReceiptFromOutboundResults({
+    results: ids.map((messageId) => ({ channel: "matrix", messageId })),
+    kind: "text",
+  }),
+});
+
 function readQueueEntryJson(queueName: string, id: string, stateDir: string): string | undefined {
   const { db } = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -121,6 +145,16 @@ describe("outbound prepared queue migration", () => {
   const entryStatus = (queue: string, id: string) =>
     getDeliveryQueueEntryStatus(queue, id, tmpDir());
   const readJson = (queue: string, id: string) => readQueueEntryJson(queue, id, tmpDir());
+  const enqueueTexts = (...texts: string[]) =>
+    enqueueDelivery(
+      {
+        channel: "matrix",
+        to: "!room:example",
+        queuePolicy: "required",
+        payloads: texts.map((text) => ({ text })),
+      },
+      tmpDir(),
+    );
   const recoverMatrix = (
     matrix: NonNullable<Parameters<typeof deliverOutboundPayloadsInternal>[0]["deps"]>["matrix"],
   ) => recover((params) => deliverOutboundPayloadsInternal({ ...params, deps: { matrix } }));
@@ -175,7 +209,7 @@ describe("outbound prepared queue migration", () => {
     } satisfies LegacyQueuedDelivery;
     seed(LEGACY_QUEUE, source);
 
-    await expect(migrate()).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(migrate()).resolves.toEqual(migrated);
     expect(hookMocks.runMessageSending).toHaveBeenCalledTimes(1);
     expect(entryStatus(LEGACY_QUEUE, id)).toBe("completed");
     expect(readJson(LEGACY_QUEUE, id)).not.toContain("secret");
@@ -209,22 +243,17 @@ describe("outbound prepared queue migration", () => {
 
   it("claims a legacy row before invoking modifiers", async () => {
     const id = "claimed-legacy-delivery";
-    const source = legacyEntry(id, "first");
-    seed(LEGACY_QUEUE, source);
+    seed(LEGACY_QUEUE, legacyEntry(id, "first"));
     const hook = createDeferredCore<{ content: string }>();
     hookMocks.runMessageSending.mockImplementationOnce(() => hook.promise);
     const migration = migrate();
     await vi.waitFor(() => expect(hookMocks.runMessageSending).toHaveBeenCalledOnce());
     const overlappingMigration = migrate();
     let overlappingSettled = false;
-    void overlappingMigration.then(
-      () => {
-        overlappingSettled = true;
-      },
-      () => {
-        overlappingSettled = true;
-      },
-    );
+    const settled = () => {
+      overlappingSettled = true;
+    };
+    void overlappingMigration.then(settled, settled);
     await Promise.resolve();
     expect(overlappingSettled).toBe(false);
     expect(readEntry(LEGACY_QUEUE, id)).toBeNull();
@@ -235,33 +264,18 @@ describe("outbound prepared queue migration", () => {
     });
     hook.resolve({ content: "first-prepared" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
-    await expect(overlappingMigration).resolves.toEqual({
-      moved: 1,
-      skipped: 0,
-      remaining: 0,
-    });
+    await expect(migration).resolves.toEqual(migrated);
+    await expect(overlappingMigration).resolves.toEqual(migrated);
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(readEntry(PREPARATION_QUEUE, id)).toBeNull();
-    expect(readEntry(PREPARED_QUEUE, id)).toMatchObject({
-      preparedBatch: {
-        entries: [expect.objectContaining({ payload: { text: "first-prepared" } })],
-      },
-    });
+    expect(readEntry(PREPARED_QUEUE, id)).toMatchObject(
+      preparedPayload({ text: "first-prepared" }),
+    );
   });
 
   it("dead-letters interrupted modifier preparation without invoking hooks again", async () => {
     const id = "interrupted-legacy-preparation";
-    const interrupted = {
-      ...legacyEntry(id, "must not be reconsidered"),
-      legacyPreparationState: "modifiers_started",
-      retainOnFailure: true,
-      deliveryCompletion: {
-        kind: "conversation",
-        agentId: "main",
-        operationId: "interrupted-operation",
-      },
-    } satisfies LegacyQueuedDeliveryPreparation;
+    const interrupted = preparingEntry(id, "must not be reconsidered");
     seed(PREPARATION_QUEUE, interrupted);
 
     await expect(migrate()).resolves.toEqual({ moved: 0, skipped: 1, remaining: 0 });
@@ -291,16 +305,9 @@ describe("outbound prepared queue migration", () => {
   it("does not dead-letter an actively leased modifier preparation", async () => {
     const id = "active-legacy-preparation";
     const active = {
-      ...legacyEntry(id, "active raw input"),
-      legacyPreparationState: "modifiers_started",
-      retainOnFailure: true,
+      ...preparingEntry(id, "active raw input"),
       legacyPreparationOwnerId: "other-process",
       legacyPreparationLeaseExpiresAt: Date.now() + 60_000,
-      deliveryCompletion: {
-        kind: "conversation",
-        agentId: "main",
-        operationId: "active-operation",
-      },
     } satisfies LegacyQueuedDeliveryPreparation;
     seed(PREPARATION_QUEUE, active);
 
@@ -329,13 +336,11 @@ describe("outbound prepared queue migration", () => {
     hookMocks.hasHooks.mockImplementation(
       (name?: string) => name === "message_sending" || name === "message_sent",
     );
-    await expect(migrate()).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(migrate()).resolves.toEqual(migrated);
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
-    expect(readEntry(PREPARED_QUEUE, id)).toMatchObject({
-      preparedBatch: {
-        entries: [expect.objectContaining({ payload: { text: "retry after setup-prepared" } })],
-      },
-    });
+    expect(readEntry(PREPARED_QUEUE, id)).toMatchObject(
+      preparedPayload({ text: "retry after setup-prepared" }),
+    );
   });
 
   it("checkpoints prepared policy before retrying failed media staging", async () => {
@@ -345,31 +350,23 @@ describe("outbound prepared queue migration", () => {
       "delivery-queue-media",
       "00000000-0000-4000-8000-000000000091.png",
     );
-    const sourceEntry = {
+    seed(LEGACY_QUEUE, {
       ...legacyEntry(id, "caption"),
       payloads: [{ text: "caption", mediaUrl: source }],
-    };
+    });
     const warnings: string[] = [];
     const log = {
       info: vi.fn(),
       warn: (message: string) => warnings.push(message),
       error: vi.fn(),
     };
-    seed(LEGACY_QUEUE, sourceEntry);
 
     await expect(migrate(log)).resolves.toEqual({ moved: 0, skipped: 1, remaining: 1 });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(readEntry(LEGACY_QUEUE, id)).toBeNull();
-    expect(readEntry(MIGRATION_QUEUE, id)).toMatchObject({
-      preparedBatch: {
-        entries: [
-          expect.objectContaining({
-            status: "accepted",
-            payload: { text: "caption-prepared", mediaUrl: source },
-          }),
-        ],
-      },
-    });
+    expect(readEntry(MIGRATION_QUEUE, id)).toMatchObject(
+      preparedPayload({ text: "caption-prepared", mediaUrl: source }, true),
+    );
 
     await fs.mkdir(path.dirname(source), { recursive: true });
     await fs.writeFile(
@@ -382,23 +379,16 @@ describe("outbound prepared queue migration", () => {
     warnings.length = 0;
     const secondMigration = await migrate(log);
     expect({ secondMigration, warnings }).toEqual({
-      secondMigration: { moved: 1, skipped: 0, remaining: 0 },
+      secondMigration: migrated,
       warnings: [],
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(readEntry(MIGRATION_QUEUE, id)).toBeNull();
     expect(readEntry(PREPARED_QUEUE, id)).toMatchObject({
       preparedBatch: {
-        entries: [
-          expect.objectContaining({
-            status: "accepted",
-            payload: expect.objectContaining({ text: "caption-prepared" }),
-          }),
-        ],
+        entries: [{ status: "accepted", payload: { text: "caption-prepared" } }],
       },
-      renderedBatchPlan: {
-        items: [expect.objectContaining({ mediaUrls: [source] })],
-      },
+      renderedBatchPlan: { items: [{ mediaUrls: [source] }] },
     });
   });
 
@@ -414,7 +404,7 @@ describe("outbound prepared queue migration", () => {
     expect(hookMocks.runMessageSending).not.toHaveBeenCalled();
     reconciliation.resolve({ status: "not_sent" });
 
-    await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(migration).resolves.toEqual(migrated);
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     const queued = readEntry(PREPARED_QUEUE, id) as QueuedDelivery;
     expect(queued.legacyUnknownSendReconciliation).toBeUndefined();
@@ -432,20 +422,12 @@ describe("outbound prepared queue migration", () => {
   it("settles a reconciled-sent legacy row without rerunning modifiers or provider I/O", async () => {
     const id = "legacy-already-sent";
     seedUnknown(id, "unknown_after_send", "attempt-sent", 200);
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [{ channel: "matrix", messageId: "mx-existing" }],
-      kind: "text",
-    });
-    const reconcileUnknownSend = vi.fn().mockResolvedValue({
-      status: "sent",
-      messageId: "mx-existing",
-      receipt,
-    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue(sentReconciliation("mx-existing"));
     installReconciler(reconcileUnknownSend);
 
-    await expect(migrate()).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
-    const migrated = readEntry(PREPARED_QUEUE, id) as QueuedDelivery;
-    expect(migrated.preparedBatch).toMatchObject({ sourcePayloadCount: 1, entries: [] });
+    await expect(migrate()).resolves.toEqual(migrated);
+    const queued = readEntry(PREPARED_QUEUE, id) as QueuedDelivery;
+    expect(queued.preparedBatch).toMatchObject({ sourcePayloadCount: 1, entries: [] });
     expect(readJson(PREPARED_QUEUE, id)).not.toContain("pre-policy");
 
     const sendMatrix = vi.fn();
@@ -459,32 +441,11 @@ describe("outbound prepared queue migration", () => {
   });
 
   it("emits one terminal observer event for every payload in a reconciled batch", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "matrix",
-        to: "!room:example",
-        queuePolicy: "required",
-        payloads: [{ text: "first prepared" }, { text: "second prepared" }],
-      },
-      tmpDir(),
-    );
+    const id = await enqueueTexts("first prepared", "second prepared");
     await reserveDeliveryAttempt(id, 1, tmpDir());
     await markDeliveryPlatformSendAttemptStarted(id, tmpDir());
     await markDeliveryPlatformOutcomeUnknown(id, tmpDir());
-    const receipt = createMessageReceiptFromOutboundResults({
-      results: [
-        { channel: "matrix", messageId: "mx-first" },
-        { channel: "matrix", messageId: "mx-second" },
-      ],
-      kind: "text",
-    });
-    installReconciler(
-      vi.fn().mockResolvedValue({
-        status: "sent",
-        messageId: "mx-first",
-        receipt,
-      }),
-    );
+    installReconciler(vi.fn().mockResolvedValue(sentReconciliation("mx-first", "mx-second")));
 
     await recover(vi.fn());
 
@@ -501,30 +462,11 @@ describe("outbound prepared queue migration", () => {
   });
 
   it("fills the unattempted observer suffix when recovery dead-letters a batch", async () => {
-    await enqueueDelivery(
-      {
-        channel: "matrix",
-        to: "!room:example",
-        queuePolicy: "required",
-        payloads: [{ text: "sent" }, { text: "failed" }, { text: "unattempted" }],
-      },
-      tmpDir(),
-    );
+    await enqueueTexts("sent", "failed", "unattempted");
     const deliver = vi.fn(async (params: Parameters<typeof deliverOutboundPayloadsInternal>[0]) => {
+      params.onMessageSentEvent?.({ success: true, content: "sent", messageId: "mx-sent" }, 0);
       params.onMessageSentEvent?.(
-        {
-          success: true,
-          content: "sent",
-          messageId: "mx-sent",
-        },
-        0,
-      );
-      params.onMessageSentEvent?.(
-        {
-          success: false,
-          content: "failed",
-          error: "chat not found",
-        },
+        { success: false, content: "failed", error: "chat not found" },
         1,
       );
       throw new Error("chat not found");
@@ -546,7 +488,7 @@ describe("outbound prepared queue migration", () => {
     installReconciler(reconcileUnknownSend);
     const sendMatrix = vi.fn();
 
-    await expect(migrate()).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
+    await expect(migrate()).resolves.toEqual(migrated);
     await recoverMatrix(sendMatrix);
 
     expect(reconcileUnknownSend).toHaveBeenCalledOnce();

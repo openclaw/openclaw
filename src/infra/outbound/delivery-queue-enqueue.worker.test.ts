@@ -75,8 +75,7 @@ describe("outbound enqueue worker", () => {
     });
     input.payloads[0]!.text = "after";
     channelData.nested.value = "after";
-    const otherState = path.join(stateDir, "other-state");
-    vi.stubEnv("OPENCLAW_STATE_DIR", otherState);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(stateDir, "other-state"));
     try {
       await Promise.race([
         reply.posted,
@@ -85,8 +84,7 @@ describe("outbound enqueue worker", () => {
         }),
       ]);
       await setImmediate();
-      expect(settled).toBe(false);
-      expect(enqueued).not.toHaveBeenCalled();
+      expect([settled, enqueued.mock.calls]).toEqual([false, []]);
       db.exec("COMMIT");
       expect(await reply.held).toBe("created");
       expect(enqueued).toHaveBeenCalledExactlyOnceWith(stateDir);
@@ -109,8 +107,7 @@ describe("outbound enqueue worker", () => {
           },
         ],
       });
-      expect(JSON.stringify(stored)).not.toContain("callable");
-      expect(JSON.stringify(stored)).not.toContain("absent");
+      expect(JSON.stringify(stored)).not.toMatch(/callable|absent/);
       expect(reply.attempts()).toBe(1);
     } finally {
       if (db.isTransaction) {
@@ -178,25 +175,21 @@ describe("outbound enqueue worker", () => {
       preparationLeaseExpiresAt: Date.now() + 60_000,
     };
     seed(PREPARATION_QUEUE, preparation);
-    await expect(
-      enqueuePreparedDeliveryOnce(
-        payload,
-        id,
-        { ...preparation, preparationOwnerId: "stale" },
-        stateDir,
-        stage,
-      ),
-    ).rejects.toThrow("preparation");
+    const publish = (owner = preparation, mediaStage = stage) =>
+      enqueuePreparedDeliveryOnce(payload, id, owner, stateDir, mediaStage);
+    await expect(publish({ ...preparation, preparationOwnerId: "stale" })).rejects.toThrow(
+      "preparation",
+    );
     expect(status(MEDIA_STAGE_QUEUE, stage)).toBe("pending");
-    await expect(
-      enqueuePreparedDeliveryOnce(payload, id, preparation, stateDir, "absent"),
-    ).rejects.toThrow("media stage expired");
-    const pending = enqueuePreparedDeliveryOnce(payload, id, preparation, stateDir, stage);
+    await expect(publish(preparation, "absent")).rejects.toThrow("media stage expired");
+    const pending = publish();
     preparation.preparationOwnerId = "changed-after-capture";
     expect(await pending).toEqual({ id, created: true });
     expect(enqueued).toHaveBeenLastCalledWith(stateDir);
-    expect(status(PREPARATION_QUEUE, id)).toBeUndefined();
-    expect(status(MEDIA_STAGE_QUEUE, stage)).toBeUndefined();
+    expect([status(PREPARATION_QUEUE, id), status(MEDIA_STAGE_QUEUE, stage)]).toEqual([
+      undefined,
+      undefined,
+    ]);
     expect(readQueuedEntry(stateDir, id).to).toBe(payload.to);
   });
 });

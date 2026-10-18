@@ -13,8 +13,8 @@ import {
 import { stateWorkerRegistry } from "../../state/openclaw-state-worker-registry.js";
 import type { WorkerWriteOperationContext } from "../../state/worker-operation-registry.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
-import { deriveDeliveryQueueRetentionColumns } from "../delivery-queue-retention-columns.js";
 import { captureDeliveryQueueStateContext } from "../delivery-queue-sqlite.js";
+import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
 import type { SqliteWorkerRequest } from "../sqlite-worker-contract.js";
 import { ackDelivery } from "./delivery-queue-ack.js";
 import { startDeliveryProducerLease } from "./delivery-queue-lease.js";
@@ -81,14 +81,7 @@ describe("outbound producer claim worker", () => {
   }
 
   it("refreshes the attempt timestamp immediately before provider I/O", async () => {
-    const id = await enqueueDelivery(
-      {
-        channel: "forum",
-        to: "123",
-        payloads: [{ text: "test" }],
-      },
-      fixtures.tmpDir(),
-    );
+    const id = await enqueueDelivery(payload("test"), fixtures.tmpDir());
 
     await stateWorkerRegistry.prepare("deliveryQueue.mutateOutbound");
     vi.useFakeTimers();
@@ -214,19 +207,7 @@ describe("outbound producer claim worker", () => {
       await setImmediate();
       expect(settled).toBe(false);
       const expired = { ...entry, availableAt: Date.now() - 1 };
-      const entryJson = JSON.stringify(expired);
-      db.prepare(
-        `UPDATE delivery_queue_entries SET entry_json = ?,
-          retention_id_prefix = @retention_id_prefix,
-          retention_max_age_ms = @retention_max_age_ms,
-          retention_max_entries = @retention_max_entries
-          WHERE queue_name = ? AND id = ?`,
-      ).run(
-        deriveDeliveryQueueRetentionColumns(id, entryJson),
-        entryJson,
-        OUTBOUND_DELIVERY_QUEUE_NAME,
-        id,
-      );
+      seedDeliveryQueueEntry({ queueName: OUTBOUND_DELIVERY_QUEUE_NAME, entry: expired, stateDir });
       db.exec("COMMIT");
       await expect(renewal).resolves.toBeUndefined();
       expect(await loadPendingDelivery(id, stateDir)).toEqual(expired);

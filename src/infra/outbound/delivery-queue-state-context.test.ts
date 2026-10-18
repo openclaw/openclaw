@@ -74,6 +74,7 @@ describe("captured delivery queue state", () => {
     await withAmbientState(otherState, async () => {
       const id = "captured-intent";
       const claim = createInitialDeliveryProducerClaim();
+      const { producerClaimId: claimId } = claim;
       const preparation = await withStableDeliveryPreparation(
         {
           id,
@@ -100,38 +101,22 @@ describe("captured delivery queue state", () => {
         context,
       );
       expect(preparation).toEqual({ status: "claimed", value: { id, created: true } });
-      expect(
-        await renewDeliveryPlatformSendLease(id, undefined, claim.producerClaimId, context),
-      ).toBeGreaterThan(Date.now());
-      expect(
-        await reserveDeliveryAttempt(id, 2, undefined, claim.producerClaimId, context),
-      ).toEqual({ status: "reserved", attemptCount: 1 });
-      await markDeliveryPlatformSendDispatched(
-        id,
-        undefined,
-        undefined,
-        claim.producerClaimId,
-        context,
+      expect(await renewDeliveryPlatformSendLease(id, undefined, claimId, context)).toBeGreaterThan(
+        Date.now(),
       );
-      await failDeliveryAfterPlatformSend(
-        id,
-        "synthetic failure",
-        undefined,
-        claim.producerClaimId,
-        context,
-      );
+      expect(await reserveDeliveryAttempt(id, 2, undefined, claimId, context)).toEqual({
+        status: "reserved",
+        attemptCount: 1,
+      });
+      await markDeliveryPlatformSendDispatched(id, undefined, undefined, claimId, context);
+      await failDeliveryAfterPlatformSend(id, "synthetic failure", undefined, claimId, context);
       expect(await loadPendingDelivery(id, undefined, context)).toMatchObject({
         retryCount: 1,
         lastError: "synthetic failure",
         recoveryState: "unknown_after_send",
-        platformSendAttemptId: claim.producerClaimId,
+        platformSendAttemptId: claimId,
       });
-      await ackDelivery(
-        id,
-        undefined,
-        { expectedPlatformSendAttemptId: claim.producerClaimId },
-        context,
-      );
+      await ackDelivery(id, undefined, { expectedPlatformSendAttemptId: claimId }, context);
       const mainSql = observeMainThreadSql();
       try {
         expect(await findDeliveryIntentOwners([id, "missing", id], undefined, context)).toEqual([
@@ -187,15 +172,15 @@ describe("captured delivery queue state", () => {
           const custom = vi.fn(send);
           const internal = vi.fn(
             async (params: Parameters<DeliverFn>[0], captured: DeliveryQueueStateContext) => {
+              const { stateDir, supervisorMode, workerContext } = context;
               expect(captured).toMatchObject({
-                stateDir: context.stateDir,
-                supervisorMode: context.supervisorMode,
+                stateDir,
+                supervisorMode,
                 workerContext: {
-                  admission: { databasePath: context.workerContext.admission.databasePath },
+                  admission: { databasePath: workerContext.admission.databasePath },
                   environment: {
-                    OPENCLAW_STATE_DIR: context.workerContext.environment.OPENCLAW_STATE_DIR,
-                    OPENCLAW_SUPERVISOR_MODE:
-                      context.workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
+                    OPENCLAW_STATE_DIR: workerContext.environment.OPENCLAW_STATE_DIR,
+                    OPENCLAW_SUPERVISOR_MODE: workerContext.environment.OPENCLAW_SUPERVISOR_MODE,
                   },
                 },
               });
@@ -207,13 +192,11 @@ describe("captured delivery queue state", () => {
             route === "internal" ? internal : undefined,
           );
           expect(summary).toMatchObject({ recovered: 1, failed: 0 });
+          expect([custom.mock.calls.length, internal.mock.calls.length]).toEqual(
+            route === "custom" ? [1, 0] : [0, 1],
+          );
           if (route === "custom") {
-            expect(custom).toHaveBeenCalledOnce();
             expect(custom.mock.calls[0]).toHaveLength(1);
-            expect(internal).not.toHaveBeenCalled();
-          } else {
-            expect(internal).toHaveBeenCalledOnce();
-            expect(custom).not.toHaveBeenCalled();
           }
           expect(await loadPendingDelivery(id, undefined, context)).toBeNull();
           await expect(fs.stat(otherState)).rejects.toMatchObject({ code: "ENOENT" });
@@ -240,8 +223,7 @@ describe("captured delivery queue state", () => {
     const claim = createInitialDeliveryProducerClaim();
     const id = await enqueueDelivery(
       {
-        channel: "matrix",
-        to: "!synthetic:example",
+        ...payload,
         payloads: [{ mediaUrl: artifact }],
         initialProducerClaim: claim,
       },
