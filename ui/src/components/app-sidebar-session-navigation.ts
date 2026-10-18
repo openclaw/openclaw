@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { serializeSidebarEntry } from "../app-navigation.ts";
+import type { ApplicationContext } from "../app/context.ts";
 import { createQuestionPromptState } from "../app/question-prompt.ts";
 import type { PresencePayload } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
@@ -131,20 +132,40 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
     });
   }
 
-  readRosterCollapsedAgentIds: (() => ReadonlySet<string> | null) | null = null;
+  private admittedRoster:
+    | { context: ApplicationContext; collapsedAgentIds: ReadonlySet<string> }
+    | undefined;
   private readonly rosterSourceMemo = new SidebarProjectionMemo<
     NonNullable<SidebarProjectionHost["rosterSessionSource"]>
   >();
 
   get rosterSessionSource() {
     const context = this.context;
-    const collapsedAgentIds = this.readRosterCollapsedAgentIds?.();
-    if (!context || !collapsedAgentIds) {
+    if (!context || this.sidebarAgentsMode !== "roster") {
       return null;
     }
     // Cache release and row projection read the same owner before the child renders.
     const { result, cards } = rosterActivityStore(context).snapshot;
     const agentIds = cards.map((card) => card.id);
+    if (this.admittedRoster?.context !== context) {
+      this.admittedRoster = undefined;
+    }
+    // Parked queries retain the card selection last presented by this owner.
+    if (this.navigationVisible && this.navigationView === "sessions" && !this.contextualSidebar) {
+      const visibleIds = (this.sidebarSnapshot?.cards ?? cards).map((card) => card.id);
+      const previous = this.admittedRoster?.collapsedAgentIds;
+      if (
+        !previous ||
+        previous.size !== visibleIds.length ||
+        visibleIds.some((id) => !previous.has(id))
+      ) {
+        this.admittedRoster = { context, collapsedAgentIds: new Set(visibleIds) };
+      }
+    }
+    const collapsedAgentIds = this.admittedRoster?.collapsedAgentIds;
+    if (!collapsedAgentIds) {
+      return null;
+    }
     return this.rosterSourceMemo.read(
       () => [context, result, collapsedAgentIds, ...agentIds],
       () => ({ result, agentIds, collapsedAgentIds }),
@@ -325,6 +346,9 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   protected override willUpdate() {
+    if (this.sidebarAgentsMode !== "roster") {
+      this.admittedRoster = undefined;
+    }
     if (this.emptyGroups.reconcile() && this.sidebarMenus.sessionSortMenuPosition) {
       // Menu state writes belong after the preparation memo commits.
       void this.updateComplete.then(

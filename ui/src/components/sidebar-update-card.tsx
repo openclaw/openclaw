@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, flush, onCleanup } from "solid-js";
+import { Show, createMemo, createSignal, flush, onCleanup } from "solid-js";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import {
@@ -21,6 +21,7 @@ import {
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createInterval } from "../lib/reactive/timers.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-update-card.css";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
@@ -63,37 +64,25 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   host.style.display = "contents";
   const [holdingCampaignId, setHoldingCampaignId] = createSignal<string | null>(null);
   const [nativeUpdateAvailable, setNativeUpdateAvailable] = createSignal(hasNativeUpdateBridge());
+  const refreshScope = createMemo(() => ({ required: props.refreshRequired }));
   const [refreshState, setRefreshState] = createSignal(() => {
     // Re-entering recovery starts with a fresh retry surface.
-    void props.refreshRequired;
+    refreshScope();
     return { inFlight: false, failed: false };
   });
   const [checkingTarget, setCheckingTarget] = createSignal(false);
   const [targetCheckFailed, setTargetCheckFailed] = createSignal(false);
   const [expanded, setExpanded] = createSignal(false);
   const [now, setNow] = createSignal(Date.now());
-  let refreshAttempt = 0;
-  let refreshPending = false;
+  let refreshPending: ReturnType<typeof refreshScope> | undefined;
   let targetCheckPending = false;
   const updateNativeAvailability = () => setNativeUpdateAvailable(hasNativeUpdateBridge());
   onCleanup(listen(window, NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT, updateNativeAvailability));
-  createEffect(
-    () => props.refreshRequired,
-    (required) => {
-      if (!required) {
-        refreshAttempt++;
-        refreshPending = false;
-      }
-    },
-  );
-  createEffect(
-    () => props.updateSchedule?.campaign?.state,
-    (state) => {
-      if (state !== "countdown" && state !== "waiting-for-idle") {
-        return undefined;
-      }
-      const timer = setInterval(() => setNow(Date.now()), 1000);
-      return () => clearInterval(timer);
+  createInterval(
+    () => setNow(Date.now()),
+    () => {
+      const state = props.updateSchedule?.campaign?.state;
+      return state === "countdown" || state === "waiting-for-idle" ? 1000 : undefined;
     },
   );
   const visibleStatusBanner = () =>
@@ -201,23 +190,23 @@ function SidebarUpdateCardContent(props: SidebarUpdateCardProps, host: HTMLEleme
   };
 
   const refreshControlUi = async () => {
-    if (refreshPending) {
+    const scope = refreshScope();
+    if (refreshPending === scope) {
       return;
     }
-    refreshPending = true;
+    refreshPending = scope;
     setRefreshState({ inFlight: true, failed: false });
-    const attempt = ++refreshAttempt;
     let reloading = false;
     try {
       reloading = await props.onRefresh();
     } catch {
       // The current document remains the recovery surface when its probe fails.
     }
-    if (attempt !== refreshAttempt || !props.refreshRequired) {
+    if (scope !== refreshScope() || !props.refreshRequired) {
       return;
     }
     if (!reloading) {
-      refreshPending = false;
+      refreshPending = undefined;
       setRefreshState({ inFlight: false, failed: true });
     }
   };

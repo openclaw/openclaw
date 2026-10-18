@@ -1,15 +1,8 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  createUniqueId,
-  For,
-  Show,
-  useContext,
-} from "solid-js";
+import { createMemo, createSignal, createUniqueId, For, Show, useContext } from "solid-js";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { i18nRevision, t } from "../lib/reactive/i18n.ts";
+import { createInterval } from "../lib/reactive/timers.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { ProgressCardMarkdown } from "./session-progress-card-view.tsx";
 import {
@@ -49,16 +42,14 @@ type CardProps = SessionProgressCardProps & { card: ProgressCard };
 function CardActivity(props: { view: ReturnType<typeof cardPresentation>; composer?: boolean }) {
   const presented = useContext(ContentPresentation);
   const [revision, setRevision] = createSignal(0);
-  createEffect(createMemo(presented), (active): void | (() => void) => {
-    if (active) {
-      setRevision((value) => value + 1);
-      const timer = setInterval(() => setRevision((value) => value + 1), 30_000);
-      return () => clearInterval(timer);
-    }
-  });
+  createInterval(
+    () => setRevision((value) => value + 1),
+    () => (presented() ? 30_000 : undefined),
+  );
   const timestamp = () => props.view().activityTimestamp;
   const label = createMemo(() => {
     revision();
+    presented();
     return t(props.view().activityKey, { time: formatRelativeTimestamp(timestamp()) });
   });
   const count = createMemo(() => {
@@ -191,7 +182,6 @@ function CardAction(props: { card: ProgressCard; onAction?: (card: ProgressCard)
 
 function CardMenu(props: CardProps) {
   const id = createUniqueId();
-  let menu: MenuHandle | undefined;
   const pending = () => props.refreshAction?.state === "pending";
   const retry = () =>
     props.refreshAction?.state === "failed" || props.refreshAction?.state === "timeout";
@@ -238,14 +228,6 @@ function CardMenu(props: CardProps) {
     ],
     { lazy: true },
   );
-  createEffect(
-    () => props.menuOptions?.disabled,
-    (disabled) => {
-      if (disabled) {
-        menu?.close();
-      }
-    },
-  );
   return (
     <Show
       when={
@@ -285,10 +267,8 @@ function CardMenu(props: CardProps) {
           }}
           items={items()}
           disabled={props.menuOptions?.disabled}
-          ref={(value) => {
-            menu = value;
-            props.menuRef?.(value);
-          }}
+          open={props.menuOptions?.disabled ? false : undefined}
+          ref={(value) => props.menuRef?.(value)}
           onSelect={(item, event) => {
             if (props.menuOptions?.disabled) {
               return;
@@ -349,6 +329,12 @@ function ComposerCard(props: CardProps) {
     >
       <summary
         ref={disclosure.summary}
+        onWheel={disclosure.onWheel}
+        onPointerDown={disclosure.onPointerDown}
+        onPointerMove={disclosure.onPointerMove}
+        onPointerUp={disclosure.onPointerEnd}
+        onPointerCancel={disclosure.onPointerEnd}
+        onLostPointerCapture={disclosure.onPointerEnd}
         class="session-progress-card__summary"
         aria-label={`${view().stepLabel}. ${view().outcomeLabel ?? view().countLabel}`}
       >
