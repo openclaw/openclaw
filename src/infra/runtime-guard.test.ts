@@ -52,7 +52,7 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
-// Runtime admission must not load the worker's agent graph before the guard runs.
+// mock-isolation: keep the worker's process-local agent/exec state out of admission tests.
 vi.mock("../worker/worker.runtime.js", () => ({
   createWorkerRuntimeEnvironment: vi.fn(),
   loadWorkerTurnRuntime: vi.fn(),
