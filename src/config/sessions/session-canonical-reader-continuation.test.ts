@@ -25,6 +25,11 @@ import { seedCanonicalSessionValidation } from "./session-canonical-validation.j
 const healthy = "agent:main:healthy";
 const damaged = "agent:main:damaged";
 type FixtureDatabase = ReturnType<typeof openOpenClawAgentDatabase>;
+type FixtureReader = Extract<
+  ReturnType<typeof openOpenClawAgentDatabaseReadOnly>,
+  { found: true }
+>["database"];
+type Held = ReturnType<typeof capture>;
 
 function capture(database: FixtureDatabase) {
   const continuation = captureCanonicalSessionReaderContinuation(database);
@@ -38,11 +43,16 @@ function corrupt(database: FixtureDatabase) {
   // Keep the held reader receipt while seeding the unvalidated-row fixture.
   runSqliteImmediateTransactionSync(database.db, () => seedCanonicalSessionValidation(database));
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-    .run("{", damaged);
-  database.db
-    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = '{', entry_valid = 1 WHERE session_key = ?")
     .run(damaged);
+}
+
+function readHealthy(reader: FixtureReader, receipt: Held["receipt"], during?: () => void) {
+  return readWithCanonicalSessionReaderContinuation(reader, receipt, () => {
+    const result = readExactSessionEntryRowValidated(reader, healthy);
+    during?.();
+    return result;
+  });
 }
 
 function replaceDatabasePath(pathname: string): () => void {
@@ -67,10 +77,7 @@ function replaceDatabasePath(pathname: string): () => void {
 async function withReaders(
   run: (fixture: {
     database: FixtureDatabase;
-    reader: Extract<
-      ReturnType<typeof openOpenClawAgentDatabaseReadOnly>,
-      { found: true }
-    >["database"];
+    reader: FixtureReader;
     options: { agentId: string; env: NodeJS.ProcessEnv };
   }) => void,
 ) {
@@ -88,10 +95,11 @@ async function withReaders(
     if (!opened.found) {
       throw new Error("Expected the seeded read-only database");
     }
+    const reader = opened.database;
     try {
-      run({ database, reader: opened.database, options });
+      run({ database, reader, options });
     } finally {
-      opened.database.close();
+      reader.close();
     }
   });
 }
@@ -131,8 +139,7 @@ it.each(["release", "readiness", "post-commit release"])(
       corrupt(database);
       try {
         expect(() =>
-          readWithCanonicalSessionReaderContinuation(reader, structuredClone(held.receipt), () => {
-            const result = readExactSessionEntryRowValidated(reader, healthy);
+          readHealthy(reader, structuredClone(held.receipt), () => {
             if (change === "release") {
               held.release();
             } else if (change === "readiness") {
@@ -140,7 +147,6 @@ it.each(["release", "readiness", "post-commit release"])(
             } else {
               expect(deferSqlitePostCommitPublication(reader.db, held.release)).toBe(true);
             }
-            return result;
           }),
         ).toThrow("no longer current");
       } finally {
@@ -236,22 +242,16 @@ it.runIf(process.platform !== "win32").each(["before host publication", "before 
       corrupt(database);
       try {
         if (when === "before host publication") {
-          expect(
-            readWithCanonicalSessionReaderContinuation(reader, held.receipt, () =>
-              readExactSessionEntryRowValidated(reader, healthy),
-            )?.entry.sessionId,
-          ).toBe("healthy");
+          expect(readHealthy(reader, held.receipt)?.entry.sessionId).toBe("healthy");
           restore = replaceDatabasePath(database.path);
           expect(database.db.isOpen).toBe(true);
           expect(() => held.assertCurrent()).toThrow("no longer current");
           expect(captureCanonicalSessionReaderContinuation(database)).toBeUndefined();
         } else {
           expect(() =>
-            readWithCanonicalSessionReaderContinuation(reader, held.receipt, () => {
-              const result = readExactSessionEntryRowValidated(reader, healthy);
+            readHealthy(reader, held.receipt, () => {
               restore = replaceDatabasePath(database.path);
               expect(reader.db.isOpen).toBe(true);
-              return result;
             }),
           ).toThrow("no longer current");
         }

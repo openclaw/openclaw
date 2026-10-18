@@ -4,6 +4,7 @@ import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { withSqliteDatabaseWriteScope } from "../../infra/sqlite-database-admission.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
+import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
@@ -13,6 +14,7 @@ import type {
 } from "./session-actor-contract.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
 import { readPendingInput } from "./session-pending-input-operations.kernel.js";
+import type { PendingInputMutation } from "./session-pending-input-operations.types.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 import type { SessionEntry } from "./types.js";
 
@@ -23,8 +25,88 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
 
-function seedEntry(f: Fixture, overrides: Partial<SessionEntry>) {
-  f.writeEntry({ ...f.nativeEntry()!, ...overrides });
+type Events = readonly TranscriptEvent[];
+
+function seedEntry(f: Fixture, overrides: Partial<SessionEntry>, events: Events = []) {
+  runSqliteImmediateTransactionSync(f.database.db, () => {
+    writeSessionEntry(f.database, f.target.sessionKey, { ...f.nativeEntry()!, ...overrides });
+    if (events.length) {
+      appendTranscriptEventsInTransaction(f.database, f.scope, events);
+    }
+  });
+}
+
+function userEvent(id: string, content: string, message = {}, parentId: string | null = null) {
+  return {
+    type: "message",
+    id,
+    parentId,
+    timestamp: "2026-01-01T00:00:01Z",
+    message: { role: "user", content, idempotencyKey: id, ...message },
+  };
+}
+
+function seedConversation(
+  f: Fixture,
+  entry: Partial<SessionEntry>,
+  event: ReturnType<typeof userEvent>,
+) {
+  seedEntry(f, entry, [
+    {
+      type: "session",
+      id: f.scope.sessionId,
+      version: 3,
+      timestamp: "2026-01-01T00:00:00Z",
+      cwd: "/synthetic",
+    },
+    event,
+  ]);
+}
+
+function pendingInput(
+  f: Fixture,
+  key: string,
+  content: string,
+  overrides: Partial<Extract<PendingInputMutation, { kind: "stage" }>>,
+) {
+  const pending = {
+    kind: "stage" as const,
+    sessionKey: f.target.sessionKey,
+    sessionId: f.scope.sessionId,
+    inputId: key,
+    idempotencyKey: key,
+    runId: "recovery-run",
+    requestHash: key,
+    lifecycleGeneration: "recovery-generation",
+    trackCompletion: true,
+    messageJson: JSON.stringify({ role: "user", content, idempotencyKey: key }),
+    ...overrides,
+  };
+  const expected = readPendingInput(f.database, pending);
+  if (expected.kind !== "stage") {
+    throw new Error("Expected pending-input preparation");
+  }
+  return { ...pending, expected };
+}
+
+function recoveryClaim(
+  f: Fixture,
+  overrides: Partial<HarnessCompletionRecovery> = {},
+): HarnessCompletionRecovery {
+  return {
+    taskId: "task",
+    taskStatus: "succeeded",
+    taskRunId: "task-run",
+    sourceRunId: "source",
+    requesterSessionKey: f.target.sessionKey,
+    requesterAgentId: "main",
+    sessionId: f.scope.sessionId,
+    ...overrides,
+  };
+}
+
+function expectRollback(outcome: ReturnType<Fixture["mutate"]>, message: string) {
+  expect(outcome).toMatchObject({ kind: "rolled-back", error: { message } });
 }
 
 function commandInput(snapshot: SessionActorHotState, commandId: string, phaseId: string) {
@@ -133,10 +215,7 @@ it("installs native commits before reply, retains known commits after reply fail
         throw new Error("live run revoked before commit");
       }
     };
-    expect(f.mutate(patch(current, 20))).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "live run revoked before commit" },
-    });
+    expectRollback(f.mutate(patch(current, 20)), "live run revoked before commit");
     expect(f.receipt()).toBeUndefined();
     expect(f.nativeEntry()?.updatedAt).toBe(10);
     delete f.hooks.admit;
@@ -208,10 +287,7 @@ it("invalidates resident facts on native writes and keeps missing, replaced, and
 
       const missing = f.read({ ...f.target, sessionKey: "agent:main:absent" });
       expect(missing.entry).toBeUndefined();
-      expect(f.mutate(patch(missing, 40))).toMatchObject({
-        kind: "rolled-back",
-        error: { message: "Session actor requires an existing session" },
-      });
+      expectRollback(f.mutate(patch(missing, 40)), "Session actor requires an existing session");
       expect(f.read(missing.target).entry).toBeUndefined();
       if (f.target.database.kind !== "file") {
         throw new Error("Expected durable target");
@@ -277,22 +353,17 @@ it("adopts a run only under the exact lifecycle and current transaction and comm
       activeWriterRunId: "current-run",
       restartRecoveryBeforeAgentReplyState: "pending",
     });
-    expect(
+    expectRollback(
       f.mutate({ ...command, input: { ...command.input, expected: adopted.version } }),
-    ).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Session actor lifecycle changed before its durable phase" },
-    });
+      "Session actor lifecycle changed before its durable phase",
+    );
     const live = f.read();
     f.hooks.admit = (stage) => {
       if (stage === "transaction") {
         throw new Error("placement expired at effect boundary");
       }
     };
-    expect(f.mutate(patch(live, 50))).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "placement expired at effect boundary" },
-    });
+    expectRollback(f.mutate(patch(live, 50)), "placement expired at effect boundary");
     delete f.hooks.admit;
     expect(f.nativeEntry()).toMatchObject({
       activeWriterRunId: "current-run",
@@ -353,29 +424,23 @@ it.each([
           : { type: "session.actor.adoptRun", input: { ...input, sessionId } };
       await f.prepare(command);
       const transactions = f.hooks.transactions;
-      const committed = f.mutate(command);
-      expect(committed).toMatchObject({
-        kind: "committed",
-        receipt: {
-          transcript: {
-            appendedMessages: [
-              {
-                appended: true,
-                messageId: "accepted-message",
-                message: { content: "accepted bytes" },
-              },
-            ],
-          },
-          postimage: {
-            entry: { sessionId, ...lifecycle },
-            pendingInputs: [],
-          },
+      const committed = expectCommitted(f.mutate(command));
+      expect(committed.receipt).toMatchObject({
+        transcript: {
+          appendedMessages: [
+            {
+              appended: true,
+              messageId: "accepted-message",
+              message: { content: "accepted bytes" },
+            },
+          ],
+        },
+        postimage: {
+          entry: { sessionId, ...lifecycle },
+          pendingInputs: [],
         },
       });
       expect(f.hooks.transactions - transactions).toBe(1);
-      if (committed.kind !== "committed") {
-        throw new Error("Expected input custody commit");
-      }
       expect(
         readTranscriptEventRows(f.database, sessionId).map((row) => JSON.parse(row.eventJson)),
       ).toEqual([
@@ -418,10 +483,7 @@ it.each([
       },
     };
     await f.prepare(command);
-    expect(f.mutate(command)).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Session actor transcript lifecycle changed before append" },
-    });
+    expectRollback(f.mutate(command), "Session actor transcript lifecycle changed before append");
     expect(f.receipt()).toBeUndefined();
     expect(f.nativeEntry()).toEqual(before.entry);
     expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toEqual(events);
@@ -431,26 +493,11 @@ it.each([
 it("stages queued custody without rewriting the active session lifecycle", () =>
   withActor(async (f) => {
     const before = f.read();
-    const pending = {
-      kind: "stage" as const,
-      sessionKey: f.target.sessionKey,
-      sessionId: f.scope.sessionId,
-      idempotencyKey: "queued-input",
-      inputId: "queued-input",
+    const pending = pendingInput(f, "queued-input", "queued", {
       runId: "queued-run",
       requestHash: "queued-request",
       lifecycleGeneration: "queued-generation",
-      trackCompletion: true,
-      messageJson: JSON.stringify({
-        role: "user",
-        content: "queued",
-        idempotencyKey: "queued-input",
-      }),
-    };
-    const expected = readPendingInput(f.database, pending);
-    if (expected.kind !== "stage") {
-      throw new Error("Expected queued input snapshot");
-    }
+    });
     const writes = trackSqliteStatementExecutions(f.database.db, ["entry"], (sql) =>
       /^\s*(?:insert|update|delete)\b.*\bsession_nodes\b/isu.test(sql) ? "entry" : null,
     );
@@ -462,7 +509,7 @@ it("stages queued custody without rewriting the active session lifecycle", () =>
             ...commandInput(before, "stage-only", "input"),
             expectedState: buildRestartRecoveryExpectedState(before.entry!),
             lifecycle: {},
-            pending: { ...pending, expected },
+            pending,
           },
         }),
       ).toMatchObject({
@@ -481,30 +528,15 @@ it.each(["assistant append", "empty append", "bookkeeping"] as const)(
   "commits terminal custody and guarded accounting atomically with %s",
   (mode) =>
     withActor(async (f) => {
-      runSqliteImmediateTransactionSync(f.database.db, () => {
-        writeSessionEntry(f.database, f.target.sessionKey, {
-          ...f.nativeEntry()!,
+      seedConversation(
+        f,
+        {
           activeWriterRunId: "terminal-run",
           modelProvider: "openai",
           model: "fixture-before",
-        });
-        appendTranscriptEventsInTransaction(f.database, f.scope, [
-          {
-            type: "session",
-            id: f.scope.sessionId,
-            version: 3,
-            timestamp: "2026-01-01T00:00:00Z",
-            cwd: "/synthetic",
-          },
-          {
-            type: "message",
-            id: "turn-input",
-            parentId: null,
-            timestamp: "2026-01-01T00:00:01Z",
-            message: { role: "user", content: "question", idempotencyKey: "turn-input" },
-          },
-        ]);
-      });
+        },
+        userEvent("turn-input", "question"),
+      );
       const initial = f.read();
       const originalEvents = readTranscriptEventRows(f.database, f.scope.sessionId);
       const pending: SessionActorPendingFinalDelivery = {
@@ -714,14 +746,12 @@ it("keeps restart receipt custody across retries and settles only the exact prov
     ).toMatchObject({ kind: "committed", value: { disposition: "delivery-ambiguous" } });
     expect(settle("confirmed", "unrelated-tool")).toMatchObject({ kind: "rolled-back" });
     expect(f.nativeEntry()?.restartRecoveryDeliveryReceiptState).toBe("terminal-pending");
-    expect(settle("confirmed")).toMatchObject({
-      kind: "committed",
-      value: { disposition: "recorded" },
-    });
-    expect(settle("confirmed")).toMatchObject({
-      kind: "committed",
-      value: { disposition: "recorded" },
-    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      expect(settle("confirmed")).toMatchObject({
+        kind: "committed",
+        value: { disposition: "recorded" },
+      });
+    }
     expect(settle("not-sent")).toMatchObject({
       kind: "committed",
       value: { disposition: "stale" },
@@ -750,15 +780,7 @@ it("keeps restart receipt custody across retries and settles only the exact prov
 
 it("publishes actual pending-final state and evidence only after live commit authority", () =>
   withActor((f) => {
-    const claim: HarnessCompletionRecovery = {
-      taskId: "task",
-      taskStatus: "succeeded",
-      taskRunId: "task-run",
-      sourceRunId: "source",
-      requesterSessionKey: f.target.sessionKey,
-      requesterAgentId: "main",
-      sessionId: f.scope.sessionId,
-    };
+    const claim = recoveryClaim(f);
     seedEntry(f, {
       abortedLastRun: true,
       mainRestartRecovery: { cycleId: "cycle", revision: 2, chargedAttempts: 0 },
@@ -834,63 +856,31 @@ it("publishes actual pending-final state and evidence only after live commit aut
 
 it("checks recovery provenance in the actor transaction and refuses a later unrelated input", () =>
   withActor(async (f) => {
-    const claim: HarnessCompletionRecovery = {
-      taskId: "task",
-      taskStatus: "succeeded",
-      taskRunId: "task-run",
+    const claim = recoveryClaim(f, {
       sourceRunId: "source-run",
-      requesterSessionKey: f.target.sessionKey,
-      requesterAgentId: "main",
-      sessionId: f.scope.sessionId,
       lifecycleRevision: "recovery-generation",
-    };
-    runSqliteImmediateTransactionSync(f.database.db, () => {
-      writeSessionEntry(f.database, f.target.sessionKey, {
-        ...f.nativeEntry()!,
+    });
+    seedConversation(
+      f,
+      {
         activeWriterRunId: "recovery-run",
         restartRecoveryDeliveryRunId: "recovery-run",
         lifecycleRevision: claim.lifecycleRevision,
-      });
-      appendTranscriptEventsInTransaction(f.database, f.scope, [
-        {
-          type: "session",
-          id: f.scope.sessionId,
-          version: 3,
-          timestamp: "2026-01-01T00:00:00Z",
-          cwd: "/synthetic",
+      },
+      userEvent("completion-source", "task completed", {
+        idempotencyKey: "source-run:user",
+        __openclaw: { runId: "source-run" },
+        provenance: {
+          kind: "inter_session",
+          sourceChannel: "internal",
+          sourceTool: "agent_harness_completion",
+          sourceSessionKey: "task-run",
         },
-        {
-          type: "message",
-          id: "completion-source",
-          parentId: null,
-          timestamp: "2026-01-01T00:00:01Z",
-          message: {
-            role: "user",
-            content: "task completed",
-            idempotencyKey: "source-run:user",
-            __openclaw: { runId: "source-run" },
-            provenance: {
-              kind: "inter_session",
-              sourceChannel: "internal",
-              sourceTool: "agent_harness_completion",
-              sourceSessionKey: "task-run",
-            },
-          },
-        },
-      ]);
-    });
+      }),
+    );
     const makeCommand = (key: string): Mutation => {
       const current = f.read();
-      const expected = readPendingInput(f.database, {
-        kind: "stage",
-        sessionKey: f.target.sessionKey,
-        sessionId: f.scope.sessionId,
-        idempotencyKey: key,
-        trackCompletion: true,
-      });
-      if (expected.kind !== "stage") {
-        throw new Error("Expected pending-input preparation");
-      }
+      const pending = pendingInput(f, key, "resume", {});
       return {
         type: "session.actor.acceptInput",
         input: {
@@ -898,26 +888,14 @@ it("checks recovery provenance in the actor transaction and refuses a later unre
           expectedState: buildRestartRecoveryExpectedState(current.entry!),
           lifecycle: { restartRecoveryBeforeAgentReplyState: "admitted" },
           recovery: { expectedRunId: "recovery-run", sources: [], harnessCompletion: claim },
-          pending: {
-            kind: "stage",
-            sessionKey: f.target.sessionKey,
-            sessionId: f.scope.sessionId,
-            idempotencyKey: key,
-            inputId: key,
-            runId: "recovery-run",
-            requestHash: key,
-            lifecycleGeneration: "recovery-generation",
-            trackCompletion: true,
-            expected,
-            messageJson: JSON.stringify({ role: "user", content: "resume", idempotencyKey: key }),
-          },
+          pending,
         },
       };
     };
     const command = makeCommand("accepted-recovery");
     await f.prepare(command);
-    const exec = vi.spyOn(f.database.db, "exec");
-    try {
+    {
+      using exec = vi.spyOn(f.database.db, "exec");
       expect(f.mutate(command)).toMatchObject({
         kind: "committed",
         receipt: {
@@ -926,27 +904,23 @@ it("checks recovery provenance in the actor transaction and refuses a later unre
         },
       });
       expect(exec.mock.calls.filter(([sql]) => /^SAVEPOINT\b/iu.test(sql))).toEqual([]);
-    } finally {
-      exec.mockRestore();
     }
-    runSqliteImmediateTransactionSync(f.database.db, () => {
+    runSqliteImmediateTransactionSync(f.database.db, () =>
       appendTranscriptEventsInTransaction(f.database, f.scope, [
         {
-          type: "message",
-          id: "later-human",
-          parentId: "completion-source",
+          ...userEvent(
+            "later-human",
+            "a different request",
+            { idempotencyKey: "unrelated-input" },
+            "completion-source",
+          ),
           timestamp: "2026-01-01T00:00:02Z",
-          message: {
-            role: "user",
-            content: "a different request",
-            idempotencyKey: "unrelated-input",
-          },
         },
-      ]);
-    });
-    expect(f.mutate(makeCommand("refused-recovery"))).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Session actor recovery input no longer matches its source" },
-    });
+      ]),
+    );
+    expectRollback(
+      f.mutate(makeCommand("refused-recovery")),
+      "Session actor recovery input no longer matches its source",
+    );
     expect(f.read().pendingInputs.map((row) => row.input_id)).toEqual(["accepted-recovery"]);
   }));

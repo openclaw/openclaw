@@ -159,8 +159,9 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     );
     admission.service();
   });
-  const execute = (command: Command) =>
-    withSqliteWorkerOperationAdmission({ port: port1 }, () => actor.execute(command));
+  const withAdmission = <T>(run: () => T): T =>
+    withSqliteWorkerOperationAdmission({ port: port1 }, run);
+  const execute = (command: Command) => withAdmission(() => actor.execute(command));
   return {
     target,
     scope: { ...seed.scope, path: database.path },
@@ -212,23 +213,15 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
         databasePath: database.path,
         admit: (stage) => hooks.admit?.(stage),
       });
-      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
+      return withAdmission(() =>
         backend.execute({ type: "participant", input: { scope: seed.scope, params } }),
       );
     },
-    patchEntry(input: Parameters<typeof commitSessionEntryPatch>[0]) {
-      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-        commitSessionEntryPatch(input, context),
-      );
-    },
-    commitLifecycle(input: Parameters<typeof commitSessionLifecycleProjection>[0]) {
-      return withSqliteWorkerOperationAdmission({ port: port1 }, () =>
-        commitSessionLifecycleProjection(input, context),
-      );
-    },
-    receipt(): unknown {
-      return receipts.shift();
-    },
+    patchEntry: (input: Parameters<typeof commitSessionEntryPatch>[0]) =>
+      withAdmission(() => commitSessionEntryPatch(input, context)),
+    commitLifecycle: (input: Parameters<typeof commitSessionLifecycleProjection>[0]) =>
+      withAdmission(() => commitSessionLifecycleProjection(input, context)),
+    receipt: (): unknown => receipts.shift(),
     prepare: (command: Command) => actor.prepare(command),
     prepareTurn: (input: Parameters<typeof actor.prepareTurn>[0]) => actor.prepareTurn(input),
     writeEntry(entry: Parameters<typeof writeSessionEntry>[2], sessionKey = target.sessionKey) {

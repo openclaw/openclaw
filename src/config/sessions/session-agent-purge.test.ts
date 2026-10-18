@@ -121,9 +121,13 @@ it("purges only entry-referenced generations off the host and retains history an
     expect(f.transcript("shared")).toEqual([{ type: "proof", data: "shared" }]);
   }));
 
-it.each(["changed entry", "added owned key", "added survivor reference"] as const)(
+it.each([
+  ["changed entry", "ops", "agent:ops:chat", "concurrent"],
+  ["added owned key", "ops", "agent:ops:concurrent", "concurrent"],
+  ["added survivor reference", "main", "agent:main:concurrent", "current"],
+] as const)(
   "revalidates a foreign commit with %s after planning",
-  (change) =>
+  (change, agentId, sessionKey, sessionId) =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture(state.statePath("shared.sqlite"));
       await state.writeConfig(f.cfg);
@@ -134,13 +138,7 @@ it.each(["changed entry", "added owned key", "added survivor reference"] as cons
           const result = await materialize(...args);
           if (!changed) {
             changed = true;
-            if (change === "changed entry") {
-              f.write("ops", f.scope.sessionKey, "concurrent");
-            } else if (change === "added owned key") {
-              f.write("ops", "agent:ops:concurrent", "concurrent");
-            } else {
-              f.write("main", "agent:main:concurrent", "current");
-            }
+            f.write(agentId, sessionKey, sessionId);
           }
           return result;
         },
