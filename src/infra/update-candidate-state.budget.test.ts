@@ -462,7 +462,7 @@ it.each(["stdout", "stderr"] as const)(
   },
 );
 
-it.each([false, true])(
+it.for([false, true])(
   "reports a real inspection output limit through the public report (warnings=%s)",
   async (warnings, { signal }) => {
     const root = await fs.realpath(tempDirs.make("inspection-output-limit-"));
