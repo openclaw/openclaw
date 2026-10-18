@@ -35,7 +35,6 @@ export {
   NON_OPENAI_CONTRACT_PROVIDER_ID,
   OPENAI_CONTRACT_PROVIDER_ID,
   openAiPluginPersonalityConfig,
-  sharedGpt5PersonalityConfig,
 } from "./test-helpers/agents/prompt-overlay-runtime-contract.js";
 export {
   createNativeOpenAICodexResponsesModel,
