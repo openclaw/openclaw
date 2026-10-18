@@ -18,8 +18,27 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
-function setNarrativeTestEnv(stateDir: string): void {
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+function writeBackfill(
+  workspaceDir: string,
+  body = "The archive remembered a durable fact.",
+  entry: Partial<Parameters<typeof writeBackfillDiaryEntries>[0]["entries"][number]> = {},
+) {
+  return writeBackfillDiaryEntries({
+    workspaceDir,
+    entries: [{ isoDay: "2026-04-05", bodyLines: [body], ...entry }],
+    timezone: "UTC",
+  });
+}
+
+function diary(...blocks: string[]) {
+  return [
+    "# Dream Diary",
+    "",
+    "<!-- openclaw:dreaming:diary:start -->",
+    ...blocks.map((block) => `---\n\n${block}\n`),
+    "<!-- openclaw:dreaming:diary:end -->",
+    "",
+  ].join("\n");
 }
 
 afterEach(() => {
@@ -30,7 +49,7 @@ afterEach(() => {
 describe("dream diary file behavior", () => {
   it("does not restore deleted diary content from an update already in progress", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-forget-update-");
-    setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     const claim = "A private cobalt archive phrase.";
     await fs.writeFile(dreamsPath, `# Diary\n\n## Session ID: forgotten\n${claim}\n`);
@@ -66,16 +85,8 @@ describe("dream diary file behavior", () => {
 
   it("writes, reads, deduplicates, and removes backfill entries", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-narrative-backfill-");
-    const written = await writeBackfillDiaryEntries({
-      workspaceDir,
-      entries: [
-        {
-          isoDay: "2026-04-05",
-          bodyLines: ["The archive remembered a durable fact."],
-          sourcePath: "memory/2026-04-05.md",
-        },
-      ],
-      timezone: "UTC",
+    const written = await writeBackfill(workspaceDir, undefined, {
+      sourcePath: "memory/2026-04-05.md",
     });
     expect(written.written).toBe(1);
 
@@ -101,18 +112,9 @@ describe("dream diary file behavior", () => {
     await fs.writeFile(targetPath, "outside\n", "utf8");
     await fs.symlink(targetPath, path.join(workspaceDir, "DREAMS.md"));
 
-    await expect(
-      writeBackfillDiaryEntries({
-        workspaceDir,
-        entries: [
-          {
-            isoDay: "2026-04-05",
-            bodyLines: ["The archive remembered a durable fact."],
-          },
-        ],
-        timezone: "UTC",
-      }),
-    ).rejects.toThrow("Refusing to write symlinked DREAMS.md");
+    await expect(writeBackfill(workspaceDir)).rejects.toThrow(
+      "Refusing to write symlinked DREAMS.md",
+    );
     await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("outside\n");
   });
 
@@ -120,16 +122,7 @@ describe("dream diary file behavior", () => {
     const workspaceDir = await createTempWorkspace("dreaming-narrative-utf16-");
     const prefix = "a".repeat(359);
     const body = `${prefix}${suffix}`;
-    await writeBackfillDiaryEntries({
-      workspaceDir,
-      entries: [
-        {
-          isoDay: "2026-04-05",
-          bodyLines: [body],
-        },
-      ],
-      timezone: "UTC",
-    });
+    await writeBackfill(workspaceDir, body);
 
     const recentDiaryEntries = await readRecentDreamDiaryEntries({ workspaceDir, limit: 1 });
     expect(recentDiaryEntries).toEqual([`${prefix}...`]);
@@ -150,19 +143,7 @@ describe("dream diary file behavior", () => {
     const targetPath = path.join(symlinkWorkspace, "target-dreams.md");
     await fs.writeFile(
       targetPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 5, 2026*",
-        "",
-        "Symlink target diary text must not enter the prompt.",
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
+      diary("*April 5, 2026*\n\nSymlink target diary text must not enter the prompt."),
       "utf8",
     );
     await fs.symlink(targetPath, path.join(symlinkWorkspace, "DREAMS.md"));
@@ -209,16 +190,7 @@ describe("dream diary file behavior", () => {
     await fs.writeFile(dreamsPath, "# Existing\n", { encoding: "utf8", mode: 0o600 });
     await fs.chmod(dreamsPath, 0o600);
 
-    await writeBackfillDiaryEntries({
-      workspaceDir,
-      entries: [
-        {
-          isoDay: "2026-04-05",
-          bodyLines: ["The archive remembered a durable fact."],
-        },
-      ],
-      timezone: "UTC",
-    });
+    await writeBackfill(workspaceDir);
 
     if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
       expect((await fs.stat(dreamsPath)).mode & 0o777).toBe(0o600);
@@ -230,39 +202,19 @@ describe("dream diary file behavior", () => {
     const dreamsPath = path.join(workspaceDir, "DREAMS.md");
     await fs.writeFile(
       dreamsPath,
-      [
-        "# Dream Diary",
-        "",
-        "<!-- openclaw:dreaming:diary:start -->",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "---",
-        "",
-        "*April 11, 2026, 8:00 AM*",
-        "",
-        "The server room smelled like rain.",
-        "",
-        "<!-- openclaw:dreaming:diary:end -->",
-        "",
-      ].join("\n"),
+      diary(
+        ...Array.from(
+          { length: 2 },
+          () => "*April 11, 2026, 8:00 AM*\n\nThe server room smelled like rain.",
+        ),
+      ),
       "utf8",
     );
 
     await Promise.all([
       dedupeDreamDiaryEntries({ workspaceDir }),
-      writeBackfillDiaryEntries({
-        workspaceDir,
-        entries: [
-          {
-            isoDay: "2026-04-11",
-            bodyLines: ["A fresh signal arrived after the cleanup started."],
-          },
-        ],
-        timezone: "UTC",
+      writeBackfill(workspaceDir, "A fresh signal arrived after the cleanup started.", {
+        isoDay: "2026-04-11",
       }),
     ]);
 

@@ -12,6 +12,13 @@ function resolveStoredDreaming(config: OpenClawConfig): Record<string, unknown> 
   return asNullableRecord(pluginConfig?.dreaming) ?? {};
 }
 
+function dreamingConfig(
+  dreaming: Record<string, unknown>,
+  config: OpenClawConfig = {},
+): OpenClawConfig {
+  return { ...config, plugins: { entries: { "memory-core": { config: { dreaming } } } } };
+}
+
 function createHarness(initialConfig: OpenClawConfig = {}) {
   let runtimeConfig: OpenClawConfig = initialConfig;
 
@@ -34,12 +41,6 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
           result: undefined,
         };
       }),
-      replaceConfigFile: vi.fn(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => {
-        runtimeConfig = nextConfig;
-      }),
-      writeConfigFile: vi.fn(async (nextConfig: OpenClawConfig) => {
-        runtimeConfig = nextConfig;
-      }),
     },
   } as unknown as OpenClawPluginApi["runtime"];
 
@@ -54,34 +55,22 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
   };
 }
 
-function createCommandContext(
-  args?: string,
-  config: OpenClawConfig = {},
-  overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
-): PluginCommandContext {
-  return {
-    channel: "webchat",
-    isAuthorizedSender: true,
-    commandBody: args ? `/dreaming ${args}` : "/dreaming",
-    args,
-    config,
-    gatewayClientScopes: overrides?.gatewayClientScopes,
-    senderIsOwner: overrides?.senderIsOwner,
-    requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
-    detachConversationBinding: async () => ({ removed: false }),
-    getCurrentConversationBinding: async () => null,
-  };
-}
-
 async function runDreamingCommand(
   harness: ReturnType<typeof createHarness>,
   args?: string,
   overrides?: Partial<Pick<PluginCommandContext, "gatewayClientScopes" | "senderIsOwner">>,
 ) {
-  return await handleDreamingCommand(
-    harness.api,
-    createCommandContext(args, harness.getRuntimeConfig(), overrides),
-  );
+  return await handleDreamingCommand(harness.api, {
+    channel: "webchat",
+    isAuthorizedSender: true,
+    commandBody: args ? `/dreaming ${args}` : "/dreaming",
+    args,
+    config: harness.getRuntimeConfig(),
+    ...overrides,
+    requestConversationBinding: async () => ({ status: "error", message: "unsupported" }),
+    detachConversationBinding: async () => ({ removed: false }),
+    getCurrentConversationBinding: async () => null,
+  });
 }
 
 describe("memory-core /dreaming command", () => {
@@ -109,24 +98,12 @@ describe("memory-core /dreaming command", () => {
   });
 
   it("allows owner external channel callers to persist global enablement", async () => {
-    const harness = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                phases: {
-                  deep: {
-                    minScore: 0.9,
-                  },
-                },
-                frequency: "0 */6 * * *",
-              },
-            },
-          },
-        },
-      },
-    });
+    const harness = createHarness(
+      dreamingConfig({
+        phases: { deep: { minScore: 0.9 } },
+        frequency: "0 */6 * * *",
+      }),
+    );
 
     const result = await runDreamingCommand(harness, "off", {
       senderIsOwner: true,
@@ -165,24 +142,12 @@ describe("memory-core /dreaming command", () => {
   });
 
   it("returns status without mutating config", async () => {
-    const harness = createHarness({
-      plugins: {
-        entries: {
-          "memory-core": {
-            config: {
-              dreaming: {
-                frequency: "15 */8 * * *",
-              },
-            },
-          },
-        },
-      },
-      agents: {
-        defaults: {
-          userTimezone: "America/Los_Angeles",
-        },
-      },
-    });
+    const harness = createHarness(
+      dreamingConfig(
+        { frequency: "15 */8 * * *" },
+        { agents: { defaults: { userTimezone: "America/Los_Angeles" } } },
+      ),
+    );
 
     const result = await runDreamingCommand(harness, "status");
 

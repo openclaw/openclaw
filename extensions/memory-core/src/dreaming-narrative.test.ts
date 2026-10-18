@@ -12,12 +12,27 @@ import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term
 import { createDreamingCompletion, createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-function setNarrativeTestEnv(stateDir: string): void {
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-}
 function createLogger() {
   return { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
+async function narrativeHarness(prefix: string, text?: string) {
+  const workspaceDir = await createTempWorkspace(prefix);
+  const subagent = createDreamingCompletion(text);
+  const logger = createLogger();
+  const run = (overrides: Partial<Parameters<typeof runDreamNarrative>[0]> = {}) =>
+    runDreamNarrative({
+      workspaceDir,
+      subagent,
+      logger,
+      agentId: "main",
+      timeoutMs: 180_000,
+      data: { phase: "light", snippets: ["A private raw staging fragment."] },
+      ...overrides,
+    });
+  const readDiary = () => fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+  return { workspaceDir, subagent, logger, run, readDiary };
+}
+
 function expectLogIncludes(source: ReturnType<typeof vi.fn>, text: string) {
   expect(source.mock.calls.some((call) => String(call[0]).includes(text))).toBe(true);
 }
@@ -27,20 +42,18 @@ afterEach(() => {
 });
 
 describe("runDreamNarrative", () => {
-  it.each([
-    new Error("Completion failed", { cause: new Error("unknown model: ollama/missing-model") }),
-  ])("retries an unavailable configured model with the default (%s)", async (error) => {
-    const workspaceDir = await createTempWorkspace("dreaming-model-retry-");
-    const subagent = createDreamingCompletion("The default model carried the diary home.");
+  it("retries an unavailable configured model with the default", async () => {
+    const error = new Error("Completion failed", {
+      cause: new Error("unknown model: ollama/missing-model"),
+    });
+    const { subagent, run, readDiary } = await narrativeHarness(
+      "dreaming-model-retry-",
+      "The default model carried the diary home.",
+    );
     subagent.complete.mockRejectedValueOnce(error);
-    await runDreamNarrative({
-      agentId: "main",
-      timeoutMs: 180_000,
-      subagent,
-      workspaceDir,
+    await run({
       data: { phase: "rem", snippets: ["A configured endpoint was absent."] },
       model: "ollama/missing-model",
-      logger: createLogger(),
     });
 
     expect(subagent.complete).toHaveBeenCalledTimes(2);
@@ -50,14 +63,11 @@ describe("runDreamNarrative", () => {
     });
     expect(subagent.complete.mock.calls[1]?.[0]).not.toHaveProperty("model");
     expect(subagent.complete.mock.calls[1]?.[0]).toHaveProperty("timeoutMs", 180_000);
-    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "The default model carried the diary home.",
-    );
+    expect(await readDiary()).toContain("The default model carried the diary home.");
   });
 
   it("does not retry unauthorized model selection even when its cause names an unavailable model", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-model-denied-");
-    const subagent = createDreamingCompletion();
+    const { subagent, logger, run, readDiary } = await narrativeHarness("dreaming-model-denied-");
     subagent.complete.mockRejectedValue(
       Object.assign(
         new Error("model override is not authorized", {
@@ -66,53 +76,35 @@ describe("runDreamNarrative", () => {
         { code: "LLM_COMPLETION_NOT_AUTHORIZED" },
       ),
     );
-    const logger = createLogger();
-    await runDreamNarrative({
-      agentId: "main",
-      timeoutMs: 180_000,
-      subagent,
-      workspaceDir,
-      data: { phase: "light", snippets: ["A private raw staging fragment."] },
+    await run({
       model: "ollama/missing-model",
-      logger,
     });
 
     expect(subagent.complete).toHaveBeenCalledOnce();
     expectLogIncludes(logger.warn, "not authorized");
-    const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+    const diary = await readDiary();
     expect(diary).not.toContain("A private raw staging fragment.");
     expect(diary).toContain("A memory trace surfaced");
   });
 
   it("writes only a generic trace after empty completion", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-fallback-");
-    const subagent = createDreamingCompletion("   \n  ");
-    const outcome = await runDreamNarrative({
-      agentId: "main",
-      timeoutMs: 180_000,
-      subagent,
-      workspaceDir,
+    const { run, readDiary } = await narrativeHarness("dreaming-fallback-", "   \n  ");
+    const outcome = await run({
       data: { phase: "deep", snippets: ["A private raw staging fragment."] },
-      logger: createLogger(),
     });
 
     expect(outcome).toMatchObject({ status: "degraded" });
-    const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+    const diary = await readDiary();
     expect(diary).toContain("A memory trace surfaced, but details were unavailable in this run.");
     expect(diary).not.toContain("A private raw staging fragment.");
   });
 
-  it.each([undefined])("skips empty data for owner %s", async (agentId) => {
-    const workspaceDir = await createTempWorkspace("dreaming-empty-");
-    const subagent = createDreamingCompletion();
+  it("skips empty data without an owner", async () => {
+    const { workspaceDir, subagent, run } = await narrativeHarness("dreaming-empty-");
     await expect(
-      runDreamNarrative({
-        agentId,
-        timeoutMs: 180_000,
-        subagent,
-        workspaceDir,
+      run({
+        agentId: undefined,
         data: { phase: "light", snippets: [] },
-        logger: createLogger(),
       }),
     ).resolves.toEqual({ status: "skipped" });
     expect(subagent.complete).not.toHaveBeenCalled();
@@ -122,44 +114,31 @@ describe("runDreamNarrative", () => {
   });
 
   it("keeps ownerless sweeps alive with a local trace", async () => {
-    const workspaceDir = await createTempWorkspace("dreaming-ownerless-");
-    const subagent = createDreamingCompletion();
-    await runDreamNarrative({
-      subagent,
-      timeoutMs: 180_000,
-      workspaceDir,
+    const { subagent, run, readDiary } = await narrativeHarness("dreaming-ownerless-");
+    await run({
+      agentId: undefined,
       data: { phase: "light", snippets: ["An ownerless memory fragment."] },
-      logger: createLogger(),
     });
     expect(subagent.complete).not.toHaveBeenCalled();
-    expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8")).toContain(
-      "A memory trace surfaced",
-    );
+    expect(await readDiary()).toContain("A memory trace surfaced");
   });
 
   it.for([false, true])(
     "detaches publication without an unhandled failure (reject=%s)",
     async (reject, { signal }) => {
-      const workspaceDir = await createTempWorkspace("dreaming-detached-");
+      const { subagent, logger, run, readDiary } = await narrativeHarness("dreaming-detached-");
       const completion = createDeferred<{ text: string }>();
-      const subagent = createDreamingCompletion();
       subagent.complete.mockReturnValue(completion.promise);
       const published = createDeferred<void>();
-      const logger = createLogger();
       // Both success and fallback log completion only after the diary write settles.
       logger.info.mockImplementation(() => published.resolve());
       const unhandled = vi.fn();
       process.on("unhandledRejection", unhandled);
       try {
         await expect(
-          runDreamNarrative({
-            agentId: "main",
-            timeoutMs: 180_000,
-            subagent,
-            workspaceDir,
+          run({
             data: { phase: "rem", snippets: ["A detached fragment."] },
-            logger,
-            runInBackground: (run) => run(),
+            runInBackground: (job) => job(),
           }),
         ).resolves.toEqual({ status: "pending" });
         expect(subagent.complete).toHaveBeenCalledOnce();
@@ -169,7 +148,7 @@ describe("runDreamNarrative", () => {
           completion.resolve({ text: "A detached memory found its page." });
         }
         await withinTest(published.promise, signal);
-        const diary = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf8");
+        const diary = await readDiary();
         expect(diary).toContain(
           reject ? "A memory trace surfaced" : "A detached memory found its page.",
         );
@@ -191,7 +170,7 @@ describe("runDreamNarrative deletion boundary", () => {
     "validates $source before publishing generated quotes after $mutation",
     async ({ source, mutation }) => {
       const workspaceDir = await createTempWorkspace("dreaming-forget-generated-");
-      setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(workspaceDir, ".state"));
       const nowMs = Date.now();
       const claim = "The private cobalt archive opens every midnight.";
       const retainedClaim = "A public archive is open throughout the afternoon.";
@@ -210,25 +189,16 @@ describe("runDreamNarrative deletion boundary", () => {
         query: "archive opening time",
         signalType: "daily",
         nowMs,
-        results: [
-          {
-            path: sourcePath,
-            startLine: 1,
-            endLine: 1,
-            score: 0.9,
-            snippet: claim,
-            source: "memory",
-            sessionOrigin: { agentId: "main", sessionId: "forgotten-narrative-source" },
-          },
-          {
-            path: sourcePath,
-            startLine: 2,
-            endLine: 2,
-            score: 0.9,
-            snippet: retainedClaim,
-            source: "memory",
-          },
-        ],
+        results: [claim, retainedClaim].map((snippet, index) => ({
+          path: sourcePath,
+          startLine: index + 1,
+          endLine: index + 1,
+          score: 0.9,
+          snippet,
+          source: "memory",
+          sessionOrigin:
+            index === 0 ? { agentId: "main", sessionId: "forgotten-narrative-source" } : undefined,
+        })),
       });
       const entries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
         (entry) => entry.snippet === (source === "prior diary" ? retainedClaim : claim),
@@ -257,7 +227,7 @@ describe("runDreamNarrative deletion boundary", () => {
           ? { recentDiaryEntries: await readRecentDreamDiaryEntries({ workspaceDir }) }
           : {}),
       };
-      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const logger = createLogger();
       const operation = runDreamNarrative({
         agentId: "main",
         timeoutMs: 180_000,

@@ -1,10 +1,24 @@
 // Memory Core tests cover project isolation across consolidation passes.
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
+import { consolidationCandidate } from "./dreaming-consolidation.test-support.js";
 import type { PromotionCandidate } from "./short-term-promotion.js";
 import { consolidateMemoryForTests as consolidateMemory } from "./test-helpers.js";
 
 const logger = { info: vi.fn(), warn: vi.fn() };
+const planDefaults = {
+  nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
+  maxPriorEntryLossFraction: 0.25,
+};
+const consolidationDefaults = { ...planDefaults, logger };
+const addDecisions = (prompt: ConsolidationPrompt) => ({
+  operations: prompt.candidates.map((item) => ({
+    candidateKey: item.key,
+    action: "added" as const,
+    priorEntries: [],
+  })),
+});
 
 type ConsolidationPrompt = {
   currentMemory: string;
@@ -12,39 +26,7 @@ type ConsolidationPrompt = {
 };
 
 function projectCandidate(key: string, snippet: string, projectKey?: string): PromotionCandidate {
-  return {
-    key,
-    path: "memory/2026-07-01.md",
-    startLine: 1,
-    endLine: 1,
-    source: "memory",
-    snippet,
-    recallCount: 3,
-    signalCount: 3,
-    avgScore: 0.9,
-    maxScore: 0.9,
-    uniqueQueries: 2,
-    firstRecalledAt: "2026-07-01T10:00:00.000Z",
-    lastRecalledAt: "2026-07-01T10:00:00.000Z",
-    ageDays: 0,
-    score: 0.9,
-    recallDays: ["2026-07-01", "2026-07-02"],
-    conceptTags: ["preference"],
-    components: {
-      frequency: 1,
-      relevance: 0.9,
-      diversity: 0.5,
-      recency: 1,
-      consolidation: 0.5,
-      conceptual: 0.2,
-    },
-    ...(projectKey ? { projectKey } : {}),
-    provenance: {
-      originClass: "agent",
-      sessionKind: "interactive",
-      observedAt: Date.parse("2026-07-01T10:00:00.000Z"),
-    },
-  };
+  return consolidationCandidate("agent", { key, snippet, ...(projectKey ? { projectKey } : {}) });
 }
 
 function createPromptResponder(
@@ -71,26 +53,14 @@ describe("memory consolidation project groups", () => {
       projectCandidate("global", "Use metric units globally."),
       projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
     ];
-    const subagent = createPromptResponder((prompt) => ({
-      operations: prompt.candidates.map((item) => ({
-        candidateKey: item.key,
-        action: "added",
-        priorEntries: [],
-      })),
-    }));
+    const subagent = createPromptResponder(addDecisions);
 
     const plan = await consolidateMemory({
       subagent,
       existingMemory,
       candidates,
-      maxPriorEntryLossFraction: 0.25,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-      logger,
+      ...consolidationDefaults,
     });
-    expect(plan).not.toBeNull();
-    if (!plan) {
-      return;
-    }
 
     const promptedGroups = subagent.complete.mock.calls.map(([options]) => {
       const prompt = JSON.parse((options as { message: string }).message) as ConsolidationPrompt;
@@ -100,9 +70,8 @@ describe("memory consolidation project groups", () => {
 
     const result = applyMemoryConsolidationPlan({
       existingMemory,
-      plan,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-      maxPriorEntryLossFraction: 0.25,
+      plan: expectDefined(plan, "consolidation plan"),
+      ...planDefaults,
     });
     expect(result?.content).toContain(
       "Alpha deployment uses green. Source: memory/2026-07-01.md#L1-L1 <!-- trigger: preference --> <!-- importance: 9 --> <!-- project: github.com/acme/alpha -->",
@@ -144,9 +113,7 @@ describe("memory consolidation project groups", () => {
         subagent,
         existingMemory,
         candidates,
-        maxPriorEntryLossFraction: 0.25,
-        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-        logger,
+        ...consolidationDefaults,
       }),
     ).resolves.toBeNull();
     expect(subagent.complete).toHaveBeenCalledTimes(3);
@@ -161,34 +128,21 @@ describe("memory consolidation project groups", () => {
       projectCandidate("global", "Use metric units globally."),
       projectCandidate("alpha", "Alpha deployment uses green.", "github.com/acme/alpha"),
     ];
-    const createBudgetSubagent = () =>
-      createPromptResponder((prompt) => ({
-        operations: prompt.candidates.map((item) => ({
-          candidateKey: item.key,
-          action: "added",
-          priorEntries: [],
-        })),
-      }));
+    const createBudgetSubagent = () => createPromptResponder(addDecisions);
 
     const fullPlan = await consolidateMemory({
       subagent: createBudgetSubagent(),
       existingMemory,
       candidates,
-      maxPriorEntryLossFraction: 0.25,
-      nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-      logger,
+      ...consolidationDefaults,
     });
-    expect(fullPlan).not.toBeNull();
-    if (!fullPlan) {
-      return;
-    }
+
     const perGroupBudget = Math.max(
-      ...fullPlan.operations.map((operation) => {
+      ...expectDefined(fullPlan, "full consolidation plan").operations.map((operation) => {
         const result = applyMemoryConsolidationPlan({
           existingMemory,
           plan: { operations: [operation] },
-          nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-          maxPriorEntryLossFraction: 0.25,
+          ...planDefaults,
         });
         expect(result).not.toBeNull();
         return result!.content.length;
@@ -200,10 +154,8 @@ describe("memory consolidation project groups", () => {
         subagent: createBudgetSubagent(),
         existingMemory,
         candidates,
-        maxPriorEntryLossFraction: 0.25,
+        ...consolidationDefaults,
         memoryFileMaxChars: perGroupBudget,
-        nowMs: Date.parse("2026-07-02T10:00:00.000Z"),
-        logger,
       }),
     ).resolves.toBeNull();
     expect(logger.warn).toHaveBeenCalledWith(
