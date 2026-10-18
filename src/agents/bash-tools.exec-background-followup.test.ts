@@ -160,13 +160,13 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
       ? `agent:main:cron:nightly:run:${scenario.replaceAll(" ", "-")}`
       : "agent:main:main";
     const sessionId = sessionKey.replaceAll(":", "-");
-    await seedOrigin(sessionKey);
     const exact = { agentId: "main", sessionKey };
     const base = { agentId: "main", sessionKey: "agent:main:cron:nightly" };
     const removed = createDeferredCore();
     let unsubscribe = () => {};
     if (scenario === "queued cron") {
-      await replaceSessionEntry(base, expectDefined(loadSessionEntry(exact), "cron base entry"));
+      // Cron persists the base before the exact run claims the shared transcript window.
+      await replaceSessionEntry(base, { sessionId, updatedAt: Date.now() });
       unsubscribe = sessionChanges.subscribeFacts((change) => {
         if (
           "sessionKey" in change &&
@@ -177,6 +177,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         }
       });
     }
+    await seedOrigin(sessionKey);
     const claim = claimAgentRunContext(
       "cron-run-followup",
       { sessionKey, sessionId, agentId: "main" },
