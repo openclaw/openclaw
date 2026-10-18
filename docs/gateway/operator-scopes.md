@@ -86,6 +86,10 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+Session readers can review changes with `sessions.diff` for conversations they can
+currently read, including their own private sessions. Existing sharing and agent
+access rules still apply; no general Gateway read grant is needed.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within a visible session's workspace. Reads
 outside that root also require the session's file tools to allow Gateway-host

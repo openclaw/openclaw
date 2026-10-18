@@ -8,10 +8,11 @@ import {
   type SessionsDiffResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
+import { sessionFileWorkspaceMatches } from "./session-file-read-authority.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
@@ -141,12 +142,14 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const read =
-      requestedAgent.agentId && isIncognitoSessionKey(params.sessionKey)
-        ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
-            requireMaterialized: true,
-          })
-        : undefined;
+    const read = requestedAgent.agentId
+      ? await retainSessionScopedRead(options, params.sessionKey, requestedAgent.agentId, {
+          requireMaterialized: true,
+          entryMatches: (previous, current) =>
+            !hasSessionReadAccessChanged(previous, current) &&
+            sessionFileWorkspaceMatches(previous, current),
+        })
+      : undefined;
     try {
       const result = await loadSessionDiff(
         {
