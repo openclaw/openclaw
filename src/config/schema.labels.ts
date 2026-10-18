@@ -5,6 +5,7 @@ import { APPROVAL_FIELD_LABELS } from "./schema.labels.approvals.js";
 import { BROWSER_FIELD_LABELS } from "./schema.labels.browser.js";
 import { ENVIRONMENT_FIELD_LABELS } from "./schema.labels.environment.js";
 import { GITHUB_TOOL_FIELD_LABELS } from "./schema.labels.github.js";
+import { SECURITY_FIELD_LABELS } from "./schema.labels.security.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
@@ -20,11 +21,7 @@ export const FIELD_LABELS: Record<string, string> = {
   ...META_FIELD_LABELS,
   ...BROWSER_FIELD_LABELS,
   ...ENVIRONMENT_FIELD_LABELS,
-  secrets: "Secrets",
-  "secrets.egressProxy": "Secret Egress Proxy",
-  "secrets.egressProxy.enabled": "Secret Egress Proxy Enabled",
-  "secrets.egressProxy.allowedHosts": "Secret Egress Proxy Allowed Hosts",
-  "secrets.egressProxy.bypassHosts": "Secret Egress Proxy Bypass Hosts",
+  ...SECURITY_FIELD_LABELS,
   wizard: "Setup Preferences",
   "wizard.accessMode": "Setup Discovery Access",
   "wizard.appRecommendations": "Setup App Recommendations",
