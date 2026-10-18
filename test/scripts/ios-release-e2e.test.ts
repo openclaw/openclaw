@@ -24,7 +24,7 @@ import { createNativeDependencies } from "../../scripts/lib/ios-release-e2e-nati
 import { ensureGatewaySupportsRequiredFeatures } from "../../src/gateway/call-required-features.js";
 import { GatewayTransportError } from "../../src/gateway/transport-error.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
+import { evaluateWorkflow, requiredWorkflowStep } from "./ci-workflow.test-support.js";
 
 const nativeMocks = vi.hoisted(() => ({
   command: vi.fn(),
@@ -47,6 +47,52 @@ function rpcTimeout(timeoutMs: number, requestDispatched?: boolean) {
     ...(requestDispatched === undefined ? {} : { requestDispatched }),
   });
 }
+function commandFailure(code: "ETIMEDOUT" | "ABORT_ERR", processTreeState?: "live" | "unknown") {
+  return Object.assign(new Error("private command failure"), {
+    code,
+    ...(processTreeState ? { processTreeState } : {}),
+  });
+}
+
+function runtimeFixture(
+  version = "26.5",
+  options: {
+    available?: boolean;
+    os?: string;
+    arch?: string;
+    device?: string;
+  } = {},
+) {
+  return {
+    isAvailable: options.available ?? true,
+    version,
+    identifier: `com.apple.CoreSimulator.SimRuntime.${options.os ?? "iOS"}-${version.replaceAll(".", "-")}`,
+    supportedArchitectures: [options.arch ?? "arm64"],
+    supportedDeviceTypes:
+      options.device === "none"
+        ? []
+        : [
+            {
+              identifier: `com.apple.CoreSimulator.SimDeviceType.${options.device ?? "iPhone-17-Pro"}`,
+            },
+          ],
+  };
+}
+
+const userInput = (text: string) => ({ role: "user", content: [{ type: "input_text", text }] });
+const setupPlans: Record<
+  string,
+  readonly [number, "success" | "timeout" | "failure" | "cancel", boolean?]
+> = {
+  "setup-code-rpc-timeout": [60_000, "timeout"],
+  "setup-code-fast-success": [1_000, "success"],
+  "setup-code-slow-success": [35_000, "success"],
+  "setup-code-join-success": [11_000, "success"],
+  "setup-code-join-observer-failure-success": [11_000, "success"],
+  "setup-code-join-failure": [11_000, "failure"],
+  "setup-code-join-cancel": [11_000, "cancel"],
+  "setup-code-auth-timeout": [60_000, "timeout", false],
+};
 vi.mock("../../scripts/lib/managed-child-process.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../scripts/lib/managed-child-process.mjs")>()),
   runManagedCommand: nativeMocks.command,
@@ -68,11 +114,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   vi.unstubAllEnvs();
-  nativeMocks.command.mockReset();
-  nativeMocks.build.mockReset();
-  nativeMocks.install.mockReset();
-  nativeMocks.gateway.mockReset();
-  nativeMocks.rpc.mockReset();
+  Object.values(nativeMocks).forEach((mock) => mock.mockReset());
 });
 
 function result(
@@ -95,6 +137,10 @@ function result(
   };
   return { testNodes: [{ nodeType: "Test Plan", children: [bundle] }] };
 }
+
+const childRuns = (nodeType: string, ...results: string[]) => ({
+  children: results.map((runResult) => ({ nodeType, result: runResult })),
+});
 
 function expectFailedTrial(
   report: Awaited<ReturnType<typeof runTrials>>,
@@ -121,13 +167,25 @@ const rpcEvidence = (responseReceived: boolean) =>
     }),
   });
 
+type Diagnostic = Trial["diagnostics"][number];
+function preparationFailure(
+  operation: Diagnostic["operation"],
+  code: Diagnostic["code"],
+  error = "preparation-failed",
+  extra: Partial<Diagnostic> = {},
+) {
+  return {
+    status: "failed",
+    tests: [],
+    errors: [error],
+    diagnostics: [{ operation, code, ...extra }],
+  };
+}
+
 describe("iOS release test identity", () => {
   it("accepts XCTest class/method identity under its exact UI bundle", () => {
     for (const test of IOS_RELEASE_TESTS) {
-      requireExactTestResult(
-        result(test, { children: [{ nodeType: "Test Case Run", result: "Passed" }] }),
-        test,
-      );
+      requireExactTestResult(result(test, childRuns("Test Case Run", "Passed")), test);
     }
   });
 
@@ -135,28 +193,9 @@ describe("iOS release test identity", () => {
     ["basename", result(undefined, { nodeIdentifier: IOS_RELEASE_TESTS[0].split("/").at(-1) })],
     ["skipped", result(undefined, { result: "Skipped" })],
     ["failed", result(undefined, { result: "Failed" })],
-    [
-      "failed child",
-      result(undefined, { children: [{ nodeType: "Test Case Run", result: "Failed" }] }),
-    ],
-    [
-      "retry to green",
-      result(undefined, {
-        children: [
-          { nodeType: "Repetition", result: "Passed" },
-          { nodeType: "Repetition", result: "Passed" },
-        ],
-      }),
-    ],
-    [
-      "multiple runs",
-      result(undefined, {
-        children: [
-          { nodeType: "Test Case Run", result: "Passed" },
-          { nodeType: "Test Case Run", result: "Passed" },
-        ],
-      }),
-    ],
+    ["failed child", result(undefined, childRuns("Test Case Run", "Failed"))],
+    ["retry to green", result(undefined, childRuns("Repetition", "Passed", "Passed"))],
+    ["multiple runs", result(undefined, childRuns("Test Case Run", "Passed", "Passed"))],
     ["wrong target", result(undefined, {}, { name: "OtherUITests" })],
     ["unit bundle", result(undefined, {}, { nodeType: "Unit test bundle" })],
     ["missing tests", { testNodes: [] }],
@@ -187,9 +226,7 @@ it("writes a failure proof when the real CLI rejects an impossible target", () =
     ],
     { encoding: "utf8", timeout: 15_000 },
   );
-  expect(child.error).toBeUndefined();
-  expect(child.signal).toBeNull();
-  expect(child.status, child.stderr).toBe(1);
+  expect([child.error, child.signal, child.status], child.stderr).toEqual([undefined, null, 1]);
   const proof = JSON.parse(readFileSync(output, "utf8"));
   expect(proof).toMatchObject({
     targetSha,
@@ -198,8 +235,7 @@ it("writes a failure proof when the real CLI rejects an impossible target", () =
     trials: [],
     errors: ["gate-setup-failed"],
   });
-  expect(proof.gatewayInstallMs).toBeUndefined();
-  expect(proof.nativeBuildMs).toBeUndefined();
+  expect([proof.gatewayInstallMs, proof.nativeBuildMs]).toEqual([undefined, undefined]);
 });
 
 describe("sampled simulator-tree footprint", () => {
@@ -238,10 +274,7 @@ describe("sampled simulator-tree footprint", () => {
     ];
     expect(summarizeMeasurements([], 0, 1000).complete).toBe(false);
     expect(summarizeMeasurements(samples, 1, 1000).complete).toBe(false);
-    expect(summarizeMeasurements(samples, 0, 5000)).toMatchObject({
-      complete: false,
-      gapCount: 1,
-    });
+    expect(summarizeMeasurements(samples, 0, 5000)).toMatchObject({ complete: false, gapCount: 1 });
     expect(
       summarizeMeasurements(
         samples.map((row) => Object.assign({}, row, { atMs: row.atMs + 4000 })),
@@ -533,10 +566,7 @@ describe("release qualification workflow authority", () => {
       `GATEWAY_SELECTION_DIR=${root}/ios-release-gateway-selection\n`,
     );
     const proof = JSON.parse(readFileSync(path.join(root, "ios-release-e2e-proof.json"), "utf8"));
-    expect(proof).toMatchObject({
-      status: "failed",
-      trials: [],
-    });
+    expect(proof).toMatchObject({ status: "failed", trials: [] });
   });
   it("isolates App Store qualification from the release checkout before accessing signing assets", () => {
     const releaseJob = release.jobs.release;
@@ -554,27 +584,21 @@ describe("release qualification workflow authority", () => {
     expect(
       steps.some((step: { run?: string }) => step.run?.includes("scripts/ios-release-e2e.ts")),
     ).toBe(false);
-    const signing = steps.findIndex(
-      (step: { name: string }) => step.name === "Create apps-signing read token",
-    );
-    const upload = steps.findIndex(
-      (step: { name: string }) => step.name === "Prepare and upload iOS release",
-    );
+    const signingStep = requiredWorkflowStep(steps, "Create apps-signing read token");
+    const uploadStep = requiredWorkflowStep(steps, "Prepare and upload iOS release");
+    const signing = steps.indexOf(signingStep);
+    const upload = steps.indexOf(uploadStep);
     expect(signing).toBeGreaterThan(-1);
     expect(upload).toBeGreaterThan(signing);
     for (const step of [steps[signing], steps[upload]]) {
       expect(step.if).toBeUndefined();
       expect(step["continue-on-error"]).toBeUndefined();
     }
-    const recovery = steps.find(
-      (step: { name: string }) => step.name === "Retain release plan and notes",
-    );
+    const recovery = requiredWorkflowStep(steps, "Retain release plan and notes");
     for (const outcome of ["skipped", "success", "failure", "cancelled"] as const) {
       expect(
-        evaluateWorkflowExpression(`\${{ ${recovery.if} }}`, {
+        evaluateWorkflow(`\${{ ${recovery.if} }}`, {
           eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           failed: true,
           steps: { [steps[upload].id]: { outputs: {}, outcome } },
         }),
@@ -600,9 +624,7 @@ describe("release qualification workflow authority", () => {
     expect(verify.run).toContain("test -f scripts/ios-release-e2e.ts");
     expect(verify.if).toBeUndefined();
     expect(workflow.jobs.qualify.env.OPENCLAW_CI_SIMSLIM_BINARY).toBeUndefined();
-    const upload = steps.find(
-      (step: { name: string }) => step.name === "Upload sanitized proof only",
-    );
+    const upload = requiredWorkflowStep(steps, "Upload sanitized proof only");
     expect(upload.if).toBe("always()");
     expect(upload.with.path).toBe("${{ runner.temp }}/ios-release-e2e-proof.json");
     expect(upload.with.name).toBe(
@@ -618,10 +640,8 @@ describe("release qualification workflow authority", () => {
     (tier, target, selected) => {
       const job = ci.jobs["ios-release-e2e"];
       expect(
-        evaluateWorkflowExpression(job.if, {
+        evaluateWorkflow(job.if, {
           eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
           sha: "a".repeat(40),
           preflightOutputs: {
             validation_tier: tier,
@@ -634,9 +654,7 @@ describe("release qualification workflow authority", () => {
       ).toBe(selected);
       expect(job.with.target_sha).toBe("${{ needs.preflight.outputs.checkout_revision }}");
       expect(ci.jobs["ci-gate"].needs).toContain("ios-release-e2e");
-      const gate = ci.jobs["ci-gate"].steps.find(
-        (step: { name: string }) => step.name === "Verify selected CI lanes",
-      );
+      const gate = requiredWorkflowStep(ci.jobs["ci-gate"].steps, "Verify selected CI lanes");
       expect(gate.env.JOB_RESULTS).toContain(
         `ios-release-e2e=\${{ needs.ios-release-e2e.result }}|${job.if}`,
       );
@@ -711,12 +729,7 @@ describe("native command adapter", () => {
     vi.stubEnv("OPENCLAW_CI_SIMSLIM_BINARY", "");
     const instances: { cleanup: ReturnType<typeof vi.fn> }[] = [];
     const lifecycle: string[] = [];
-    const clockedSetup =
-      scenario === "setup-code-rpc-timeout" ||
-      scenario === "setup-code-auth-timeout" ||
-      scenario === "setup-code-fast-success" ||
-      scenario === "setup-code-slow-success" ||
-      scenario.startsWith("setup-code-join-");
+    const setupPlan = setupPlans[scenario];
     let setupBegan: () => void = () => {};
     const setupStarted = new Promise<void>((resolve) => {
       setupBegan = resolve;
@@ -742,11 +755,7 @@ describe("native command adapter", () => {
         );
       }
       installedGatewayPath = path.join(options.installDir, "node_modules/openclaw");
-      return {
-        cwd: installedGatewayPath,
-        entrypoint: ["openclaw.mjs"],
-        identity: gatewayIdentity,
-      };
+      return { cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"], identity: gatewayIdentity };
     });
     const preflightCleanup = vi.fn(async () => {
       lifecycle.push("gateway-preflight-cleanup");
@@ -785,7 +794,7 @@ describe("native command adapter", () => {
       if (options.method === "diagnostics.lanes") {
         expect(lifecycle).not.toContain("gateway-cleanup");
         diagnosticCalls++;
-        if (clockedSetup && diagnosticCalls === 1) {
+        if (setupPlan && diagnosticCalls === 1) {
           lifecycle.push("setup-observer-start");
           await new Promise<void>((resolve) => {
             setTimeout(resolve, 3_000);
@@ -803,9 +812,7 @@ describe("native command adapter", () => {
         };
       }
       if (options.configPath === "/private/preflight/config.json") {
-        expect(options).toMatchObject({
-          method: "device.pair.setupStatus",
-        });
+        expect(options).toMatchObject({ method: "device.pair.setupStatus" });
         lifecycle.push("gateway-preflight-rpc");
         expect(nativeMocks.build).not.toHaveBeenCalled();
         ensureGatewaySupportsRequiredFeatures({
@@ -828,7 +835,7 @@ describe("native command adapter", () => {
           ],
         };
       }
-      if (clockedSetup && options.method === "device.pair.setupCode") {
+      if (setupPlan && options.method === "device.pair.setupCode") {
         lifecycle.push("setup-code");
         return await new Promise((resolve, reject) => {
           const timers: ReturnType<typeof setTimeout>[] = [];
@@ -842,31 +849,24 @@ describe("native command adapter", () => {
               resolve({ setupCode: `synthetic-code-${instances.length}` });
             }
           };
-          const cancel = () =>
-            finish(Object.assign(new Error("private cancellation"), { code: "ABORT_ERR" }));
+          const cancel = () => finish(commandFailure("ABORT_ERR"));
           options.signal.addEventListener("abort", cancel, { once: true });
-          if (scenario !== "setup-code-auth-timeout") {
+          if (setupPlan[2] !== false) {
             timers.push(setTimeout(() => options.onHelloOk?.(), 25));
             timers.push(setTimeout(() => options.assertDispatchCurrent?.(), 50));
           }
           timers.push(setTimeout(() => finish(rpcTimeout(options.timeoutMs)), options.timeoutMs));
-          if (scenario === "setup-code-fast-success" || scenario === "setup-code-slow-success") {
-            timers.push(
-              setTimeout(() => finish(), scenario === "setup-code-fast-success" ? 1_000 : 35_000),
-            );
-          } else if (scenario.startsWith("setup-code-join-")) {
+          if (setupPlan[1] !== "timeout") {
             timers.push(
               setTimeout(() => {
-                if (scenario === "setup-code-join-cancel") {
+                if (setupPlan[1] === "cancel") {
                   abort.abort();
                 } else {
                   finish(
-                    scenario === "setup-code-join-failure"
-                      ? new Error("private setup failure")
-                      : undefined,
+                    setupPlan[1] === "failure" ? new Error("private setup failure") : undefined,
                   );
                 }
-              }, 11_000),
+              }, setupPlan[0]),
             );
           }
           setupBegan();
@@ -879,10 +879,7 @@ describe("native command adapter", () => {
         lifecycle.push("setup-status");
         if (scenario === "status-unjoined-gateway-exit") {
           exitGateway(17);
-          throw Object.assign(new Error("private status cleanup failure"), {
-            code: "ETIMEDOUT",
-            processTreeState: "unknown",
-          });
+          throw commandFailure("ETIMEDOUT", "unknown");
         }
         if (scenario === "setup-status-timeout") {
           throw rpcTimeout(30_000, true);
@@ -904,10 +901,7 @@ describe("native command adapter", () => {
       return { setupCode: `synthetic-code-${instances.length}` };
     });
     nativeMocks.gateway.mockImplementation(async (options) => {
-      expect(options).toMatchObject({
-        cwd: installedGatewayPath,
-        entrypoint: ["openclaw.mjs"],
-      });
+      expect(options).toMatchObject({ cwd: installedGatewayPath, entrypoint: ["openclaw.mjs"] });
       if (options.name === "ios-release-e2e-preflight") {
         lifecycle.push("gateway-preflight-create");
         return {
@@ -967,7 +961,7 @@ describe("native command adapter", () => {
           const onAbort = () => {
             joinedMocks++;
             lifecycle.push("mock-cleanup");
-            reject(Object.assign(new Error("stopped"), { code: "ABORT_ERR" }));
+            reject(commandFailure("ABORT_ERR"));
           };
           exitMock = () => {
             options.signal.removeEventListener("abort", onAbort);
@@ -1001,48 +995,24 @@ describe("native command adapter", () => {
       } else if (args.includes("--show-sdk-build-version")) {
         stdout.write("27.0\n");
       } else if (args.includes("runtimes")) {
-        const runtime = {
-          isAvailable: scenario !== "unavailable-runtime",
-          version: "26.5",
-          identifier:
-            scenario === "non-ios-runtime"
-              ? "com.apple.CoreSimulator.SimRuntime.watchOS-26-5"
-              : "com.apple.CoreSimulator.SimRuntime.iOS-26-5",
-          supportedArchitectures:
-            scenario === "unsupported-runtime-architecture" ? ["x86_64"] : ["arm64"],
-          supportedDeviceTypes: [
-            {
-              identifier:
-                scenario === "unsupported-runtime-device"
-                  ? "com.apple.CoreSimulator.SimDeviceType.iPhone-16-Pro"
-                  : "com.apple.CoreSimulator.SimDeviceType.iPhone-17-Pro",
-            },
-          ],
-        };
+        const runtime = runtimeFixture("26.5", {
+          available: scenario !== "unavailable-runtime",
+          os: scenario === "non-ios-runtime" ? "watchOS" : "iOS",
+          arch: scenario === "unsupported-runtime-architecture" ? "x86_64" : "arm64",
+          device: scenario === "unsupported-runtime-device" ? "iPhone-16-Pro" : "iPhone-17-Pro",
+        });
         stdout.write(
           JSON.stringify({
             runtimes:
               scenario === "newest-compatible-runtime"
                 ? [
-                    {
-                      ...runtime,
-                      version: "26.9",
-                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-9",
-                    },
-                    { ...runtime, version: "28.0", isAvailable: false },
-                    {
-                      ...runtime,
-                      version: "29.0",
-                      identifier: "com.apple.CoreSimulator.SimRuntime.watchOS-29-0",
-                    },
-                    { ...runtime, version: "30.0", supportedDeviceTypes: [] },
-                    { ...runtime, version: "31.0", supportedArchitectures: ["x86_64"] },
+                    runtimeFixture("26.9"),
+                    runtimeFixture("28.0", { available: false }),
+                    runtimeFixture("29.0", { os: "watchOS" }),
+                    runtimeFixture("30.0", { device: "none" }),
+                    runtimeFixture("31.0", { arch: "x86_64" }),
                     runtime,
-                    {
-                      ...runtime,
-                      version: "26.10",
-                      identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-10",
-                    },
+                    runtimeFixture("26.10"),
                   ]
                 : [runtime],
           }),
@@ -1064,7 +1034,7 @@ describe("native command adapter", () => {
         lifecycle.push("boot-wait");
         await Promise.resolve();
         if (scenario === "boot-timeout") {
-          throw Object.assign(new Error("private simulator boot timeout"), { code: "ETIMEDOUT" });
+          throw commandFailure("ETIMEDOUT");
         }
         if (scenario === "gateway-exit-during-boot" || scenario === "cancel-during-boot") {
           if (scenario === "gateway-exit-during-boot") {
@@ -1073,9 +1043,7 @@ describe("native command adapter", () => {
             abort.abort();
           }
           expect(options.signal.aborted).toBe(true);
-          throw Object.assign(new Error("private simulator boot interrupted"), {
-            code: "ABORT_ERR",
-          });
+          throw commandFailure("ABORT_ERR");
         }
         simulatorReady = true;
         lifecycle.push("boot-ready");
@@ -1091,10 +1059,7 @@ describe("native command adapter", () => {
           "app-container",
         );
         if (scenario === "build-unjoined") {
-          throw Object.assign(new Error("private build termination failure"), {
-            code: "ETIMEDOUT",
-            processTreeState: "live",
-          });
+          throw commandFailure("ETIMEDOUT", "live");
         }
         if (scenario === "build-exit") {
           stderr.write("BUILD FAILED: private setup code and private path\n");
@@ -1156,33 +1121,19 @@ describe("native command adapter", () => {
                   input: [
                     { role: "user", content: `Reply exactly with ${marker} and no other text.` },
                     { role: "assistant", content: marker },
-                    {
-                      role: "user",
-                      content: [
-                        {
-                          type: "input_text",
-                          text:
-                            "[Sun 2026-09-27 21:02 CDT] " +
-                            "Conversation info: ⟦openclaw:ctx⟧\n```json\n" +
-                            JSON.stringify({ sender: { id: "fixture-owner", name: marker } }) +
-                            "\n```\n\n" +
-                            (missing
-                              ? "No requested marker here."
-                              : `Reply exactly with ${marker} and no other text.`),
-                        },
-                      ],
-                    },
-                    {
-                      role: "user",
-                      content: [
-                        {
-                          type: "input_text",
-                          text:
-                            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
-                            "OPENCLAW_E2E_FIRST\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-                        },
-                      ],
-                    },
+                    userInput(
+                      "[Sun 2026-09-27 21:02 CDT] " +
+                        "Conversation info: ⟦openclaw:ctx⟧\n```json\n" +
+                        JSON.stringify({ sender: { id: "fixture-owner", name: marker } }) +
+                        "\n```\n\n" +
+                        (missing
+                          ? "No requested marker here."
+                          : `Reply exactly with ${marker} and no other text.`),
+                    ),
+                    userInput(
+                      "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\n" +
+                        "OPENCLAW_E2E_FIRST\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+                    ),
                   ],
                   metadata: { title: marker },
                 };
@@ -1197,9 +1148,7 @@ describe("native command adapter", () => {
         if (scenario === "gateway-exit") {
           exitGateway(17);
           expect(options.signal.aborted).toBe(true);
-          throw Object.assign(new Error("private native command interrupted"), {
-            code: "ABORT_ERR",
-          });
+          throw commandFailure("ABORT_ERR");
         }
         if (scenario === "fixture-exit") {
           exitMock?.();
@@ -1221,7 +1170,7 @@ describe("native command adapter", () => {
           );
           await Promise.resolve();
           nativeCommandActive = false;
-          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+          throw commandFailure("ETIMEDOUT");
         }
         if (scenario === "test-timeout-output") {
           stdout.write(
@@ -1231,13 +1180,10 @@ describe("native command adapter", () => {
               "/private/Other.swift:42: error: private details\n" +
               "Test Case '-[OpenClawUITests.OpenClawSnapshotUITests testLiveGatewayPairChatAndRelaunch]' failed (39.615 seconds).\n",
           );
-          throw Object.assign(new Error("private timeout diagnostics"), { code: "ETIMEDOUT" });
+          throw commandFailure("ETIMEDOUT");
         }
         if (scenario === "test-unjoined") {
-          throw Object.assign(new Error("private test termination failure"), {
-            code: "ETIMEDOUT",
-            processTreeState: "unknown",
-          });
+          throw commandFailure("ETIMEDOUT", "unknown");
         }
         if (scenario === "test-exit") {
           stdout.write(
@@ -1307,74 +1253,72 @@ describe("native command adapter", () => {
         }
       },
     });
-    if (scenario.startsWith("dirty-")) {
-      await expect(admission).rejects.toMatchObject({
-        diagnostic: { operation: "source-status", code: "dirty-source" },
-      });
-      expect(nativeMocks.command.mock.calls).toHaveLength(2);
-      expect(readdirSync(temp)).toEqual([]);
-      return;
-    }
-    if (
+    const dirtySource = scenario.startsWith("dirty-");
+    const invalidRuntime = [
+      "unavailable-runtime",
+      "unsupported-runtime-device",
+      "unsupported-runtime-architecture",
+      "non-ios-runtime",
+      "invalid-xcode-output",
+    ].includes(scenario);
+    const failedBuild = scenario.startsWith("build-");
+    const failedInstall = scenario.startsWith("gateway-install-");
+    const failedPreflight = scenario.startsWith("gateway-preflight-");
+    const admissionFailures: [boolean, Partial<Diagnostic>][] = [
+      [dirtySource, { operation: "source-status", code: "dirty-source" }],
       [
-        "unavailable-runtime",
-        "unsupported-runtime-device",
-        "unsupported-runtime-architecture",
-        "non-ios-runtime",
-        "invalid-xcode-output",
-      ].includes(scenario)
-    ) {
-      await expect(admission).rejects.toMatchObject({
-        diagnostic:
-          scenario === "invalid-xcode-output"
-            ? { operation: "xcode-version", code: "failed" }
-            : { operation: "simulator-runtime", code: "not-found" },
-      });
-      expect(commandsWith("build-for-testing")).toHaveLength(0);
-      expect(readdirSync(temp)).toEqual([]);
-      return;
-    }
-    if (scenario.startsWith("build-")) {
-      await expect(admission).rejects.toMatchObject({
-        diagnostic:
-          scenario === "build-unjoined"
-            ? { operation: "native-build", code: "timeout", errorCode: "ETIMEDOUT" }
-            : { operation: "native-build", code: "exit", exitCode: 65, context: ["build-failed"] },
-      });
-      expect(readdirSync(temp)).toHaveLength(scenario === "build-unjoined" ? 1 : 0);
-      expect(proof.resourcesPreserved).toBe(scenario === "build-unjoined" ? true : undefined);
-      return;
-    }
-    if (scenario.startsWith("gateway-install-")) {
-      await expect(admission).rejects.toMatchObject({
-        diagnostic: {
+        invalidRuntime,
+        scenario === "invalid-xcode-output"
+          ? { operation: "xcode-version", code: "failed" }
+          : { operation: "simulator-runtime", code: "not-found" },
+      ],
+      [
+        failedBuild,
+        scenario === "build-unjoined"
+          ? { operation: "native-build", code: "timeout", errorCode: "ETIMEDOUT" }
+          : { operation: "native-build", code: "exit", exitCode: 65, context: ["build-failed"] },
+      ],
+      [
+        failedInstall,
+        {
           operation: "gateway-install",
           code: scenario === "gateway-install-unjoined" ? "timeout" : "failed",
         },
-      });
-      expect(nativeMocks.gateway).not.toHaveBeenCalled();
-      expect(nativeMocks.build).not.toHaveBeenCalled();
-      expect(readdirSync(temp)).toHaveLength(scenario === "gateway-install-unjoined" ? 1 : 0);
-      expect(proof.resourcesPreserved).toBe(
-        scenario === "gateway-install-unjoined" ? true : undefined,
-      );
-      return;
-    }
-    if (scenario.startsWith("gateway-preflight-")) {
-      await expect(admission).rejects.toMatchObject({
-        diagnostic:
-          scenario === "gateway-preflight-cleanup-failure"
-            ? { operation: "cleanup", code: "cleanup-unconfirmed" }
-            : { operation: "gateway-preflight", code: "failed" },
-      });
-      expect(nativeMocks.build).not.toHaveBeenCalled();
-      expect(preflightCleanup).toHaveBeenCalledOnce();
-      expect(instances).toEqual([]);
-      expect(created).toBe(0);
-      expect(lifecycle).not.toContain("mock-start");
-      expect(readdirSync(temp)).toHaveLength(
-        scenario === "gateway-preflight-cleanup-failure" ? 1 : 0,
-      );
+      ],
+      [
+        failedPreflight,
+        scenario === "gateway-preflight-cleanup-failure"
+          ? { operation: "cleanup", code: "cleanup-unconfirmed" }
+          : { operation: "gateway-preflight", code: "failed" },
+      ],
+    ];
+    const rejected = admissionFailures.find(([matches]) => matches);
+    if (rejected) {
+      await expect(admission).rejects.toMatchObject({ diagnostic: rejected[1] });
+      const unjoined = scenario.endsWith("-unjoined");
+      const preserved = unjoined || scenario === "gateway-preflight-cleanup-failure";
+      expect(readdirSync(temp)).toHaveLength(preserved ? 1 : 0);
+      if (dirtySource) {
+        expect(nativeMocks.command.mock.calls).toHaveLength(2);
+      }
+      if (invalidRuntime) {
+        expect(commandsWith("build-for-testing")).toHaveLength(0);
+      }
+      if (failedInstall || failedPreflight) {
+        expect(nativeMocks.build).not.toHaveBeenCalled();
+      }
+      if (failedBuild || failedInstall) {
+        expect(proof.resourcesPreserved).toBe(unjoined ? true : undefined);
+      }
+      if (failedInstall) {
+        expect(nativeMocks.gateway).not.toHaveBeenCalled();
+      }
+      if (failedPreflight) {
+        expect(preflightCleanup).toHaveBeenCalledOnce();
+        expect(instances).toEqual([]);
+        expect(created).toBe(0);
+        expect(lifecycle).not.toContain("mock-start");
+      }
       return;
     }
     const native = await admission;
@@ -1438,7 +1382,7 @@ describe("native command adapter", () => {
         expect(proof.fixtures).toEqual([expect.objectContaining({ cleanupConfirmed: true })]);
         return;
       }
-      if (clockedSetup) {
+      if (setupPlan) {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       }
       let diagnosticsBeforeThreshold = 0;
@@ -1446,7 +1390,7 @@ describe("native command adapter", () => {
       let settledAtThirtySeconds = false;
       let joinedObserverBeforeContinuing = false;
       const reportPending = runTrials("stock", native.dependencies);
-      if (clockedSetup) {
+      if (setupPlan) {
         await setupStarted;
         if (scenario === "setup-code-fast-success") {
           await vi.advanceTimersByTimeAsync(1_000);
@@ -1473,7 +1417,7 @@ describe("native command adapter", () => {
         }
       }
       const report = await reportPending;
-      if (clockedSetup) {
+      if (setupPlan) {
         if (scenario !== "setup-code-fast-success") {
           expect(diagnosticsBeforeThreshold).toBe(0);
           expect(diagnosticsAtThreshold).toBe(1);
@@ -1483,16 +1427,9 @@ describe("native command adapter", () => {
             expect(settledAtThirtySeconds).toBe(false);
           }
         }
-        const success = scenario.endsWith("success");
-        const duration =
-          scenario === "setup-code-fast-success"
-            ? 1_000
-            : scenario === "setup-code-slow-success"
-              ? 35_000
-              : scenario.startsWith("setup-code-join-")
-                ? 11_000
-                : 60_000;
-        const authenticated = scenario !== "setup-code-auth-timeout";
+        const [duration, outcome, auth] = setupPlan;
+        const success = outcome === "success";
+        const authenticated = auth !== false;
         expect(proof.fixtures).toEqual([
           expect.objectContaining({
             setupRpc: {
@@ -1630,17 +1567,42 @@ describe("native command adapter", () => {
         expect(JSON.stringify(report)).not.toContain("private");
         return;
       }
-      if (scenario === "boot-timeout" || scenario === "gateway-start-failure") {
-        expectFailedTrial(
-          report,
-          [scenario === "boot-timeout" ? "preparation-timeout" : "preparation-failed"],
-          [
-            {
-              operation: scenario === "boot-timeout" ? "simulator-ready" : "gateway-start",
-              code: scenario === "boot-timeout" ? "timeout" : "failed",
-            },
+      const gatewayExit = preparationFailure("gateway-start", "exit", "preparation-failed", {
+        exitCode: 17,
+      });
+      const preparationFailures: Record<string, ReturnType<typeof preparationFailure>> = {
+        "boot-timeout": preparationFailure("simulator-ready", "timeout", "preparation-timeout"),
+        "gateway-start-failure": preparationFailure("gateway-start", "failed"),
+        "setup-status-timeout": preparationFailure(
+          "setup-status",
+          "timeout",
+          "preparation-timeout",
+          {
+            context: [
+              "rpc-authenticated:true",
+              "rpc-dispatch-entered:true",
+              "rpc-request-dispatched:true",
+            ],
+          },
+        ),
+        "setup-status-failure": preparationFailure("setup-status", "failed", "preparation-failed", {
+          context: [],
+        }),
+        "status-unjoined-gateway-exit": {
+          ...gatewayExit,
+          errors: ["preparation-failed", "cleanup-failed"],
+          diagnostics: [
+            ...gatewayExit.diagnostics,
+            { operation: "cleanup", code: "cleanup-unconfirmed" },
           ],
-        );
+        },
+        "gateway-exit-during-create": gatewayExit,
+        "gateway-exit-during-boot": gatewayExit,
+        "cancel-during-boot": preparationFailure("simulator-ready", "cancelled", "cancelled"),
+      };
+      const preparation = preparationFailures[scenario];
+      if (preparation) {
+        expect(report.trials).toMatchObject([preparation]);
         expect(lifecycle).not.toContain("live-test");
         expect(lifecycle).not.toContain("setup-code");
         expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
@@ -1648,82 +1610,26 @@ describe("native command adapter", () => {
         if (scenario === "boot-timeout") {
           expect(lifecycle).toContain("setup-status-ready");
           expect(lifecycle.at(-1)).toBe("simulator-delete");
-        } else {
+        } else if (scenario === "gateway-start-failure") {
           expect(created).toBe(0);
           expect(fixtureRpcCalls()).toHaveLength(0);
         }
-        return;
-      }
-      if (scenario.startsWith("setup-status-")) {
-        expectFailedTrial(
-          report,
-          [scenario === "setup-status-timeout" ? "preparation-timeout" : "preparation-failed"],
-          [
-            {
-              operation: "setup-status",
-              code: scenario === "setup-status-timeout" ? "timeout" : "failed",
-              context:
-                scenario === "setup-status-timeout"
-                  ? [
-                      "rpc-authenticated:true",
-                      "rpc-dispatch-entered:true",
-                      "rpc-request-dispatched:true",
-                    ]
-                  : [],
-            },
-          ],
-        );
-        expect(fixtureRpcCalls()).toHaveLength(1);
-        expect(created).toBe(0);
-        expect(lifecycle).not.toContain("setup-code");
-        expect(lifecycle).not.toContain("live-test");
-        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
-        expect(joinedMocks).toBe(1);
-        expect(proof.fixtures).toEqual(
-          fixtureEvidence({
-            cleanupConfirmed: true,
-            setupStatusRpc: rpcEvidence(false),
-          }),
-        );
-        return;
-      }
-      if (scenario === "status-unjoined-gateway-exit") {
-        expect(report.complete).toBe(false);
-        expectFailedTrial(
-          report,
-          ["preparation-failed", "cleanup-failed"],
-          [
-            { operation: "gateway-start", code: "exit", exitCode: 17 },
-            { operation: "cleanup", code: "cleanup-unconfirmed" },
-          ],
-        );
-        expect(proof.resourcesPreserved).toBe(true);
-        expect(fixtureRpcCalls()).toHaveLength(1);
-        expect(created).toBe(0);
-        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
-        expect(joinedMocks).toBe(1);
-        return;
-      }
-      if (
-        scenario === "gateway-exit-during-create" ||
-        scenario === "gateway-exit-during-boot" ||
-        scenario === "cancel-during-boot"
-      ) {
-        expectFailedTrial(
-          report,
-          [scenario === "cancel-during-boot" ? "cancelled" : "preparation-failed"],
-          [
-            scenario === "cancel-during-boot"
-              ? { operation: "simulator-ready", code: "cancelled" }
-              : { operation: "gateway-start", code: "exit", exitCode: 17 },
-          ],
-        );
-        expect(lifecycle).not.toContain("setup-code");
-        expect(lifecycle).not.toContain("live-test");
-        expect(instances[0]?.cleanup).toHaveBeenCalledOnce();
-        expect(joinedMocks).toBe(1);
-        expect(lifecycle.at(-1)).toBe("simulator-delete");
-        expect(gatewayChild.listenerCount("exit")).toBe(0);
+        if (scenario.startsWith("setup-status-") || scenario === "status-unjoined-gateway-exit") {
+          expect(fixtureRpcCalls()).toHaveLength(1);
+          expect(created).toBe(0);
+          if (scenario === "status-unjoined-gateway-exit") {
+            expect(report.complete).toBe(false);
+            expect(proof.resourcesPreserved).toBe(true);
+          } else {
+            expect(proof.fixtures).toEqual(
+              fixtureEvidence({ cleanupConfirmed: true, setupStatusRpc: rpcEvidence(false) }),
+            );
+          }
+        }
+        if (scenario.includes("during-")) {
+          expect(lifecycle.at(-1)).toBe("simulator-delete");
+          expect(gatewayChild.listenerCount("exit")).toBe(0);
+        }
         return;
       }
       if (
