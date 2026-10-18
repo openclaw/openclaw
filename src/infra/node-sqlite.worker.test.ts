@@ -1,13 +1,13 @@
-import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { storageProcessTestEntrypoints } from "./storage-process-runtime.test-support.js";
 
 it("admits the loaded SQLite library once before sibling workers open databases", async ({
   signal,
 }) => {
-  const preload = fileURLToPath(new URL("../../scripts/tsx.mjs", import.meta.url));
-  const sqliteUrl = new URL("./node-sqlite.ts", import.meta.url).href;
-  const runtimeUrl = new URL("./sqlite-runtime-initialize.ts", import.meta.url).href;
+  const sqliteUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.nodeSqlite);
+  const runtimeUrl = resolveRuntimeWorkerUrl(storageProcessTestEntrypoints.sqliteRuntimeInitialize);
   const workerSource = `
     const { parentPort } = require("node:worker_threads");
     const { DatabaseSync } = require("node:sqlite");
@@ -17,7 +17,7 @@ it("admits the loaded SQLite library once before sibling workers open databases"
       if (sql.includes("sqlite_version()")) probes++;
       return prepare.call(this, sql);
     };
-    import(${JSON.stringify(sqliteUrl)}).then(({ openNodeSqliteDatabase }) => {
+    import(${JSON.stringify(sqliteUrl.href)}).then(({ openNodeSqliteDatabase }) => {
       const db = openNodeSqliteDatabase(":memory:");
       const row = db.prepare("SELECT 42 AS value").get();
       db.close();
@@ -25,9 +25,8 @@ it("admits the loaded SQLite library once before sibling workers open databases"
     });
   `;
   const result = await runNodeScript(
-    [
-      "--import",
-      preload,
+    (workerArgv) => [
+      ...workerArgv(runtimeUrl).slice(0, -1),
       "--input-type=module",
       "-e",
       `
@@ -40,10 +39,10 @@ it("admits the loaded SQLite library once before sibling workers open databases"
           if (sql.includes("sqlite_version()")) probes++;
           return prepare.call(this, sql);
         };
-        const { initializeSqliteRuntime } = await import(${JSON.stringify(runtimeUrl)});
+        const { initializeSqliteRuntime } = await import(${JSON.stringify(runtimeUrl.href)});
         await initializeSqliteRuntime();
         const workers = [0, 1].map(() => new Worker(${JSON.stringify(workerSource)}, {
-          eval: true, execArgv: ["--import", ${JSON.stringify(preload)}],
+          eval: true, execArgv: ${JSON.stringify(workerArgv(sqliteUrl).slice(0, -1))},
         }));
         const rows = await Promise.all(workers.map(async (worker) => {
           const exited = once(worker, "exit");
