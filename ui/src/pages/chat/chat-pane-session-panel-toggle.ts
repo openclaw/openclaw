@@ -28,7 +28,7 @@ import { resolveChatAgentId } from "./chat-state-route.ts";
 import { closeSlot, openSlot, setSidebarDock } from "./sidebar-layout.ts";
 
 interface ActivePanelOwner {
-  renderRoot: ParentNode;
+  sidebarRegion: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null;
   state: ChatPageHost;
   linkReaders: readonly ControlUiLinkReaderDescriptor[];
   pluginPanels: readonly `${string}/${string}`[];
@@ -155,17 +155,8 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
     }
     if (slot === "terminal") {
       const intent = terminalToggleIntent(event, resolveChatAgentId(owner.state));
-      const embeddedTerminal = owner.renderRoot.querySelector<
-        HTMLElementTagNameMap["openclaw-terminal-panel"]
-      >("openclaw-terminal-panel[embedded]");
-      const terminalConstructor = customElements.get("openclaw-terminal-panel");
-      const embeddedTerminalMounted =
-        embeddedTerminal !== null &&
-        terminalConstructor !== undefined &&
-        embeddedTerminal instanceof terminalConstructor;
-      if (embeddedTerminalMounted) {
-        embeddedTerminal.activateTerminalHost();
-      }
+      // A new pane can hold the tag before its lazy sidebar bridge upgrades it.
+      const embeddedTerminalMounted = owner.sidebarRegion?.activateTerminalHost?.() ?? false;
       if (intent) {
         void terminalIntentQueue.queue(intent, {
           deferUntilHostChange: !embeddedTerminalMounted,
@@ -206,17 +197,8 @@ export function createChatPaneSessionPanelToggles(options: SessionPanelToggleOpt
         if (!isCurrent()) {
           return;
         }
-        const region = owner.renderRoot.querySelector<
-          HTMLElementTagNameMap["openclaw-chat-sidebar-region"]
-        >("openclaw-chat-sidebar-region");
-        await region?.updateComplete;
-        if (!isCurrent()) {
-          return;
-        }
-        // The region's sibling outlet can connect a panel before its owner has committed.
-        const recipient =
-          owner.renderRoot.querySelector<HTMLElementTagNameMap[PanelTagName]>(tagName);
-        await recipient?.updateComplete;
+        const region = options.current()?.sidebarRegion;
+        await region?.awaitPanelCommit(slot);
         if (!isCurrent()) {
           return;
         }

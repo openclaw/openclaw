@@ -72,6 +72,25 @@ describe("shared toast", () => {
     expect(appHost.textContent).toContain("Follow-up session notice");
   });
 
+  it("does not resurrect a modal toast when document content is removed", async () => {
+    const host = await mountHost();
+    const modal = document.createElement("openclaw-modal-dialog");
+    document.body.append(modal);
+    await modal.updateComplete;
+    const onDismiss = vi.fn();
+    showToast({ message: "Saved", onDismiss });
+    await settleHost(host);
+    expect(host.parentElement).toBe(modal.getOverlayContainer());
+
+    document.body.replaceChildren();
+    await vi.dynamicImportSettled();
+    flush();
+
+    expect(host.isConnected).toBe(false);
+    expect(document.body.childElementCount).toBe(0);
+    expect(onDismiss).toHaveBeenCalledExactlyOnceWith("disconnected");
+  });
+
   it("presents toasts in the outer modal after a nested modal closes", async () => {
     const appHost = await mountHost();
     const outer = document.createElement("openclaw-modal-dialog");
