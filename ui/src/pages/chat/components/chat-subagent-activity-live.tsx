@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onSettled, untrack } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createSidebarNarration } from "../../../components/app-sidebar-session-narration.ts";
@@ -7,6 +7,7 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { pickFreshestObserverDigest } from "../../../lib/observer-digest.ts";
 import { isSessionObserverDigest } from "../../../lib/protocol-validators.generated/activity.js";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
+import { projectOwner } from "../../../lib/reactive/projection.ts";
 import {
   areUiSessionKeysEquivalent,
   normalizeAgentId,
@@ -43,9 +44,19 @@ function matchesRun(
 /** Reuse bounded narration subscriptions; inline progress never reads child history. */
 function SubagentActivityLive(props: SubagentActivityProps) {
   const context = useOptionalApplication();
-  const digests = new Map<string, SessionObserverDigest>();
+  // The cache retains only digests belonging to the currently displayed runs.
+  const [digests, setDigests] = createSignal<Map<string, SessionObserverDigest>>(
+    (previous = new Map()) => {
+      const rows = props.rows;
+      return new Map(
+        [...previous].filter(([key, digest]) =>
+          rows.some((row) => row.key === key && matchesRun(row, digest)),
+        ),
+      );
+    },
+  );
   const narration = createSidebarNarration();
-  const [revision, setRevision] = createSignal(0);
+  const narrationView = projectOwner(narration, (owner) => owner.read());
   const syncNarration = (rows: readonly ChatSubagentActivityRow[], enabled: boolean) => {
     if (!context) {
       return;
@@ -72,14 +83,7 @@ function SubagentActivityLive(props: SubagentActivityProps) {
       rows: props.limit === undefined ? props.rows : props.rows.slice(0, props.limit),
       enabled: !props.compact && props.presented !== false,
     }),
-    ({ rows, enabled }) => {
-      syncNarration(rows, enabled);
-      for (const [key, digest] of digests) {
-        if (!rows.some((row) => row.key === key && matchesRun(row, digest))) {
-          digests.delete(key);
-        }
-      }
-    },
+    ({ rows, enabled }) => syncNarration(rows, enabled),
   );
   onSettled(() => {
     if (!context) {
@@ -87,27 +91,21 @@ function SubagentActivityLive(props: SubagentActivityProps) {
     }
     const gateway = context.gateway;
     let connection = gateway.snapshot.hello;
-    const changed = () => setRevision((value) => value + 1);
-    const unsubscribeNarration = narration.subscribe(changed);
     // Clear prior-connection digests before the next observer frame can be accepted.
     const unsubscribe = gateway.subscribe(() => {
-      // Events read the current presentation without creating reactive dependencies.
-      untrack(() =>
-        syncNarration(
-          props.limit === undefined ? props.rows : props.rows.slice(0, props.limit),
-          !props.compact && props.presented !== false,
-        ),
+      syncNarration(
+        props.limit === undefined ? props.rows : props.rows.slice(0, props.limit),
+        !props.compact && props.presented !== false,
       );
       if (connection !== gateway.snapshot.hello) {
         connection = gateway.snapshot.hello;
-        digests.clear();
-        changed();
+        setDigests(new Map());
       }
     });
     function onSessionObserver(event: GatewayEventFrame) {
       if (event.event !== "session.observer") {
         const payload = asOptionalRecord(event.payload);
-        if (payload && untrack(() => props.rows).some((row) => matchesRun(row, payload))) {
+        if (payload && props.rows.some((row) => matchesRun(row, payload))) {
           narration.handleEvent(event);
         }
         return;
@@ -120,27 +118,28 @@ function SubagentActivityLive(props: SubagentActivityProps) {
         return;
       }
       const digest = event.payload;
-      const row = untrack(() => props.rows).find((candidate) => matchesRun(candidate, digest));
-      if (!row || pickFreshestObserverDigest(digests.get(row.key), digest) !== digest) {
+      const row = props.rows.find((candidate) => matchesRun(candidate, digest));
+      if (!row) {
         return;
       }
-      digests.set(row.key, digest);
-      changed();
+      setDigests((previous) =>
+        pickFreshestObserverDigest(previous.get(row.key), digest) === digest
+          ? new Map(previous).set(row.key, digest)
+          : previous,
+      );
     }
     const unsubscribeEvents = gateway.subscribeEvents(onSessionObserver);
     return () => {
       unsubscribe();
       unsubscribeEvents();
-      unsubscribeNarration();
       narration.disconnect();
-      digests.clear();
     };
   });
   const rows = () => {
-    revision();
-    const liveNarration = narration.read();
+    const liveDigests = digests();
+    const liveNarration = narrationView.read();
     return props.rows.map((row) => {
-      const live = digests.get(row.key);
+      const live = liveDigests.get(row.key);
       const stored = row.session.observerDigest;
       const digest = pickFreshestObserverDigest(
         live && matchesRun(row, live) ? live : undefined,

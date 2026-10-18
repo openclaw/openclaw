@@ -3,7 +3,7 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
-  validateSessionsListParams,
+  validateSessionsSubscribeParams,
   validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -24,22 +24,28 @@ import { assertValidParams, defineValidatedGatewayHandler } from "./validation.j
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
   "sessions.subscribe": async (options) => {
     const { client, context, params, respond } = options;
-    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+    if (
+      !assertValidParams(params, validateSessionsSubscribeParams, "sessions.subscribe", respond)
+    ) {
       return;
     }
+    const { includeMessageBodies, ...listParams } = params;
     const connId = client?.connId?.trim();
-    if (connId) {
+    if (client && connId) {
+      if (includeMessageBodies !== undefined) {
+        client.includeSessionMessageBodies = includeMessageBodies;
+      }
       // Subscribe before projecting the snapshot so mutations during the read
       // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    if (!connId || Object.keys(params).length === 0) {
+    if (!connId || Object.keys(listParams).length === 0) {
       respond(true, { subscribed: Boolean(connId) }, undefined);
       return;
     }
     await sessionsListHandler({
       ...options,
-      params,
+      params: listParams,
       respond: (ok, payload, error, meta) => {
         respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
       },

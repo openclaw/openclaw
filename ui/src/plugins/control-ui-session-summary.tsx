@@ -1,16 +1,7 @@
 import { createSessionProjection, reduceSessionProjection } from "@openclaw/gateway-client/browser";
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  For,
-  Show,
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  untrack,
-} from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../components/markdown.ts";
@@ -56,9 +47,7 @@ type SummaryScope = {
   session: BoardGetParams;
 };
 
-function SessionHistory(props: PluginSessionSummaryProps & { scope: SummaryScope }) {
-  // The keyed parent replaces this entire history lifetime when its scope changes.
-  const scope = untrack(() => props.scope);
+function SessionHistory(props: PluginSessionSummaryProps, scope: SummaryScope) {
   const [history, setHistory] = createSignal<ChatHistoryResult | null>(null);
   const [error, setError] = createSignal(false);
   let alive = true;
@@ -382,7 +371,7 @@ function PluginSessionSummaryContent(props: PluginSessionSummaryProps) {
         keyed
         fallback={<p role="status">{t("pluginUi.sessionHistoryUnavailable")}</p>}
       >
-        {(current) => <SessionHistory {...props} scope={current} />}
+        {(current) => SessionHistory(props, current)}
       </Show>
     </Show>
   );
