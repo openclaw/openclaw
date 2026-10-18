@@ -19,11 +19,7 @@ function channelPlugin(id: string, targetPrefixes: string[], aliases?: string[])
 function register(plugins: ChannelPlugin[]) {
   setActivePluginRegistry(
     createTestRegistry(
-      plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        plugin,
-        source: `test:${plugin.id}`,
-      })),
+      plugins.map((plugin) => ({ pluginId: plugin.id, plugin, source: `test:${plugin.id}` })),
     ),
   );
 }
@@ -113,12 +109,7 @@ describe("resolveFailureDestination", () => {
     expect(
       failure(
         { channel: "last" },
-        {
-          channel: "slack",
-          to: "slack:cron-alerts",
-          accountId: "slack-bot",
-          mode: "announce",
-        },
+        { channel: "slack", to: "slack:cron-alerts", accountId: "slack-bot", mode: "announce" },
       ),
     ).toEqual(announce("last"));
   });
@@ -133,32 +124,21 @@ describe("resolveFailureDestination", () => {
     expect(failure({ mode: "webhook" })).toBeNull();
   });
 
-  it("returns null when failure destination matches primary delivery target", () => {
-    const route = { mode: "announce", channel: "telegram", to: "111", accountId: "bot-a" } as const;
-    expect(failure(route, undefined, route)).toBeNull();
-  });
-
-  it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
-    expect(
-      failure({ mode: "announce", to: "telegram:123" }, undefined, {
-        mode: "announce",
-        channel: "last",
-        to: "telegram:123",
-      }),
-    ).toBeNull();
-  });
-
-  it("returns null when webhook failure destination matches the primary webhook target", () => {
-    const route = { mode: "webhook", to: "https://example.invalid/cron" } as const;
-    expect(
-      resolveFailureDestination(
-        makeCronJob({
-          sessionTarget: "main",
-          payload: { kind: "systemEvent", text: "tick" },
-          delivery: { ...route, failureDestination: route },
-        }),
-      ),
-    ).toBeNull();
+  it.each([
+    [
+      { mode: "announce", channel: "telegram", to: "111", accountId: "bot-a" },
+      { mode: "announce", channel: "telegram", to: "111", accountId: "bot-a" },
+    ],
+    [
+      { mode: "announce", channel: "last", to: "telegram:123" },
+      { mode: "announce", to: "telegram:123" },
+    ],
+    [
+      { mode: "webhook", to: "https://example.invalid/cron" },
+      { mode: "webhook", to: "https://example.invalid/cron" },
+    ],
+  ] as const)("deduplicates primary %j against failure route %j", (primary, route) => {
+    expect(failure(route, undefined, primary)).toBeNull();
   });
 
   it("does not reuse inherited announce recipient when switching failure destination to webhook", () => {

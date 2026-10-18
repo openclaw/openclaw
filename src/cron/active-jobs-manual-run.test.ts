@@ -1,6 +1,6 @@
 // Exercise the manual producer's native mark/clear pair (7d1575b5df, #60310).
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
@@ -21,9 +21,7 @@ const { logger, makeStorePath } = setupCronServiceSuite({
   baseTimeIso: "2025-12-13T17:00:00.000Z",
 });
 
-type IsolatedRunResult = Awaited<
-  ReturnType<NonNullable<ConstructorParameters<typeof CronService>[0]["runIsolatedAgentJob"]>>
->;
+type IsolatedRunResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>;
 
 function createManualIsolatedJob(id: string, timeoutSeconds?: number): CronJob {
   const now = Date.parse("2025-12-13T17:00:00.000Z");
@@ -38,9 +36,7 @@ function createManualIsolatedJob(id: string, timeoutSeconds?: number): CronJob {
     wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: "hi", ...(timeoutSeconds ? { timeoutSeconds } : {}) },
     delivery: { mode: "none" },
-    state: {
-      nextRunAtMs: now + 3_600_000,
-    },
+    state: { nextRunAtMs: now + 3_600_000 },
   };
 }
 
@@ -51,10 +47,7 @@ async function createManualRunHarness(
   > = {},
 ) {
   const store = await makeStorePath();
-  await writeCronStoreSnapshot({
-    storePath: store.storePath,
-    jobs,
-  });
+  await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
 
   const entered = createDeferred();
   const release = createDeferred<IsolatedRunResult>();
@@ -109,92 +102,71 @@ function expectReplacementSurvives(jobId: string, advanceGeneration = false) {
   expect(isCronJobActive(jobId)).toBe(false);
 }
 
-describe("cron activeJobIds — manual-run mark/clear", () => {
-  beforeEach(() => {
-    resetCronActiveJobs();
-  });
+beforeEach(resetCronActiveJobs);
+afterEach(() => vi.useRealTimers());
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+it.each([false, true])("clears a manual run's active marker (throws=%s)", (fails) =>
+  expectManualRunClears("manual-isolated", fails),
+);
 
-  it("marks the job active during a manual run and clears it on success", async () => {
-    await expectManualRunClears("manual-isolated-ok");
-  });
+it.each([false, true])("preserves a replacement marker (restart=%s)", (restart) => {
+  expectReplacementSurvives("manual-reuse", restart);
+});
 
-  it("does not let old restart-lifecycle finalizers clear new active markers", () => {
-    expectReplacementSurvives("manual-generation-reuse", true);
-  });
+it("retires preserved main-session markers at the lifecycle cutoff", () => {
+  const marker = markCronJobActive("manual-main-cutoff", { preserveAcrossGenerationAdvance: true });
 
-  it("does not let same-generation finalizers clear replacement active markers", () => {
-    expectReplacementSurvives("manual-token-reuse");
-  });
+  advanceCronActiveJobGeneration();
 
-  it("retires preserved main-session markers at the lifecycle cutoff", () => {
-    const marker = markCronJobActive("manual-main-cutoff", {
-      preserveAcrossGenerationAdvance: true,
-    });
+  expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
 
-    advanceCronActiveJobGeneration();
+  resetCronActiveJobs();
 
-    expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
+  expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
+  expect(isCronJobActive("manual-main-cutoff")).toBe(false);
+});
 
-    resetCronActiveJobs();
+it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
+  vi.useFakeTimers();
+  vi.setSystemTime(Date.parse("2025-12-13T17:00:00.000Z"));
 
-    expect(isCronActiveJobMarkerCurrent(marker)).toBe(false);
-    expect(isCronJobActive("manual-main-cutoff")).toBe(false);
-  });
-
-  it("clears the active marker even when the inner agent run throws", async () => {
-    await expectManualRunClears("manual-isolated-throw", true);
-  });
-
-  it("sends one setup-timeout notification when concurrent manual runs both stall before runner start", async () => {
-    vi.useFakeTimers();
-    const now = Date.parse("2025-12-13T17:00:00.000Z");
-    vi.setSystemTime(now);
-
-    const jobIds = ["manual-setup-timeout-first", "manual-setup-timeout-second"] as const;
-    const bothStarted = createDeferred();
-    const onIsolatedAgentSetupTimeout = vi.fn();
-    let startedCount = 0;
-    const { cron, store } = await createManualRunHarness(
-      jobIds.map((id) => createManualIsolatedJob(id, 120)),
-      {
-        onIsolatedAgentSetupTimeout,
-        runIsolatedAgentJob: async ({ abortSignal }) => {
-          startedCount += 1;
-          if (startedCount === 2) {
-            bothStarted.resolve();
-          }
-          abortSignal?.addEventListener("abort", () => undefined, { once: true });
-          return await new Promise<never>(() => {});
-        },
+  const jobIds = ["manual-setup-timeout-first", "manual-setup-timeout-second"] as const;
+  const bothStarted = createDeferred();
+  const onIsolatedAgentSetupTimeout = vi.fn();
+  let startedCount = 0;
+  const { cron, store } = await createManualRunHarness(
+    jobIds.map((id) => createManualIsolatedJob(id, 120)),
+    {
+      onIsolatedAgentSetupTimeout,
+      runIsolatedAgentJob: async ({ abortSignal }) => {
+        startedCount += 1;
+        if (startedCount === 2) {
+          bothStarted.resolve();
+        }
+        abortSignal?.addEventListener("abort", () => undefined, { once: true });
+        return await new Promise<never>(() => {});
       },
-    );
+    },
+  );
 
-    try {
-      await cron.start();
+  try {
+    await cron.start();
 
-      const firstRun = cron.run(jobIds[0], "force");
-      const secondRun = cron.run(jobIds[1], "force");
-      await bothStarted.promise;
+    const firstRun = cron.run(jobIds[0], "force");
+    const secondRun = cron.run(jobIds[1], "force");
+    await bothStarted.promise;
 
-      await vi.advanceTimersByTimeAsync(60_100);
-      await Promise.all([firstRun, secondRun]);
+    await vi.advanceTimersByTimeAsync(60_100);
+    await Promise.all([firstRun, secondRun]);
 
-      expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledTimes(1);
-      expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledWith({
-        job: expect.objectContaining({
-          id: expect.stringMatching(/^manual-setup-timeout-/),
-        }),
-        error: expect.stringContaining("setup timed out before runner start"),
-        timeoutMs: 60_000,
-      });
-      expect(jobIds.map(isCronJobActive)).toEqual([false, false]);
-    } finally {
-      cron.stop();
-      await store.cleanup();
-    }
-  });
+    expect(onIsolatedAgentSetupTimeout).toHaveBeenCalledExactlyOnceWith({
+      job: expect.objectContaining({ id: expect.stringMatching(/^manual-setup-timeout-/) }),
+      error: expect.stringContaining("setup timed out before runner start"),
+      timeoutMs: 60_000,
+    });
+    expect(jobIds.map(isCronJobActive)).toEqual([false, false]);
+  } finally {
+    cron.stop();
+    await store.cleanup();
+  }
 });
