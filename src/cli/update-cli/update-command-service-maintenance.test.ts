@@ -24,15 +24,13 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import {
-  collectServiceInspectionFailureFacts,
-  createUpdateCommandFailureResult,
-} from "./update-command-result.js";
+import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
 import {
+  collectServiceInspectionFailureFacts,
   assertGatewayServiceAdmissionUnchanged,
   GatewayServiceUpdateOwnershipError,
   inspectManagedGatewayServiceBeforeUpdate,
@@ -323,7 +321,7 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         throw new Error("Expected service inspection refusal");
       }
       const detail = reason
-        ? formatServiceInspectionReason(reason)
+        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
         : "Gateway service inspection is unavailable";
       expect(failure.message).toContain(detail);
       expect(failure.message).not.toContain("identity changed");
@@ -359,6 +357,9 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         failure: { cause: failure },
       });
       expect(result.reason).toBe("managed-service-preflight");
+      expect(result.failedStep.stderrTail).toContain(
+        "installation and Gateway were left unchanged",
+      );
       expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
 
       const verdict = await inspectManagedGatewayServiceBeforeUpdate({
@@ -366,9 +367,7 @@ it.each(["systemd-user-bus-unavailable", undefined] as const)(
         state: await readGatewayServiceState(service),
       });
       expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
-        reason
-          ? detail
-          : "Gateway service ownership could not be verified because inspection is unavailable.",
+        reason ? detail : "Gateway service inspection is unavailable",
       );
       if (reason) {
         expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({

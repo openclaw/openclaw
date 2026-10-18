@@ -394,7 +394,7 @@ async function stopManagedServiceBeforeMutableUpdate(
           ? `${err.message} ${GATEWAY_SERVICE_INSPECTION_WARNING}`
           : err instanceof ServiceInspectionError ||
               err instanceof GatewayServiceUpdateOwnershipError
-            ? `${GATEWAY_SERVICE_INSPECTION_WARNING} ${err.message}`
+            ? `${err.message}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`
             : GATEWAY_SERVICE_INSPECTION_WARNING,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
     });

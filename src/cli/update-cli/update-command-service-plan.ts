@@ -65,26 +65,32 @@ export class GatewayServiceUpdateOwnershipError extends Error {
     inspectionReason?: ServiceInspectionReason,
     code?: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   ) {
-    super(
-      typeof message === "string"
-        ? inspectionReason
-          ? formatServiceInspectionReason(inspectionReason)
-          : message
-        : message.message,
-      { cause },
-    );
+    super(typeof message === "string" ? message : message.message, { cause });
     this.name = "GatewayServiceUpdateOwnershipError";
     this.failureFacts =
       typeof message !== "string"
         ? message.failureFacts
-        : [
-            createUpdateFailureFact({
-              check: "managed-service",
-              code: inspectionReason ?? code ?? "service-ownership-unverified",
-              message: this.message,
-            }),
-          ];
+        : serviceFailureFacts(message, inspectionReason ?? code ?? "service-ownership-unverified");
   }
+}
+
+function serviceFailureFacts(message: string, code: string): UpdateFailureFact[] {
+  return message
+    .split("\n")
+    .filter((line, index) => index === 0 || line !== GATEWAY_SERVICE_INSPECTION_WARNING)
+    .slice(0, 5)
+    .map((line) => createUpdateFailureFact({ check: "managed-service", code, message: line }));
+}
+
+export function collectServiceInspectionFailureFacts(
+  verdict: ManagedGatewayUpdateVerdict | undefined,
+): UpdateFailureFact[] | undefined {
+  return verdict?.kind === "unavailable"
+    ? serviceFailureFacts(
+        verdict.message,
+        verdict.inspectionReason ?? "service-inspection-unavailable",
+      )
+    : undefined;
 }
 
 export function assertGatewayServiceAdmissionUnchanged(
@@ -95,7 +101,7 @@ export function assertGatewayServiceAdmissionUnchanged(
   if (expectedVerdict && expectedVerdict.kind !== serviceUpdateVerdict.kind) {
     throw new GatewayServiceUpdateOwnershipError(
       serviceUpdateVerdict.kind === "unavailable"
-        ? "Gateway service ownership could not be verified because inspection is unavailable. Run `openclaw gateway status --deep` and retry."
+        ? `Gateway service inspection is unavailable. Run \`systemctl --user status openclaw-gateway\` and \`openclaw gateway status --deep\` before retrying.\n${serviceUpdateVerdict.message}`
         : "Gateway service ownership changed after database admission; run `openclaw gateway status --deep` and retry.",
       undefined,
       serviceUpdateVerdict.kind === "unavailable"
@@ -157,7 +163,7 @@ export const GATEWAY_SERVICE_INSPECTION_WARNING =
 
 function serviceInspectionWarningMessage(state: GatewayServiceState): string {
   if (state.inspectionReason) {
-    return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
+    return `${state.runtime?.inspectionFailure?.detail ?? formatServiceInspectionReason(state.inspectionReason)}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`;
   }
   if (process.platform === "freebsd") {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
@@ -175,7 +181,9 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} Processes remain in the systemd service cgroup (${tasksCurrent} tasks). Have their owner stop them before state maintenance.`;
   }
   const detail = runtime?.inspectionFailure?.detail;
-  return GATEWAY_SERVICE_INSPECTION_WARNING + (detail ? ` ${detail}` : "");
+  return detail && (process.platform !== "linux" || /^(?:systemctl|busctl) --/.test(detail))
+    ? `${detail}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`
+    : GATEWAY_SERVICE_INSPECTION_WARNING;
 }
 
 export function observedSystemdManagerUid(state: GatewayServiceState): number | undefined {
