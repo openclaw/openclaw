@@ -144,6 +144,22 @@ export function classifyGatewayOwnerProcessNamespace(
   }
 }
 
+/**
+ * Whether the recorded owner is a local process of this host and platform, where a
+ * local PID probe is authoritative. A foreign namespace cannot supply that evidence,
+ * so its heartbeat verdict stands on its own.
+ */
+export function gatewayLockOwnerIsLocalProcessNamespace(value: unknown): boolean {
+  const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
+  const current = readGatewayLockProcessNamespace();
+  return (
+    owner !== undefined &&
+    current !== null &&
+    owner.platform === current.platform &&
+    owner.host === current.host
+  );
+}
+
 const LockPayloadSchema = z.object({
   pid: z.number(),
   ownerId: z.string().min(1).optional(),

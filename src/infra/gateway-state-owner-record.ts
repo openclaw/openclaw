@@ -11,6 +11,7 @@ import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-
 import {
   classifyGatewayLockProcessNamespace,
   GatewayLockNamespaceError,
+  gatewayLockOwnerIsLocalProcessNamespace,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
   type LockPayload,
@@ -24,11 +25,17 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
   }
+  const staleByProcess = isLockOwnerDefinitelyStale({
+    payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
+  });
+  if (staleByProcess) {
+    return true;
+  }
+  // A live owner with its recorded start identity blocks reclamation. Two valid but
+  // different boot identities on this host (Windows) must not revoke it; only a
+  // foreign namespace keeps its heartbeat verdict (#174895).
   return (
-    namespace === "dead" ||
-    isLockOwnerDefinitelyStale({
-      payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
-    })
+    namespace === "dead" && !gatewayLockOwnerIsLocalProcessNamespace(payload?.processNamespace)
   );
 }
 
