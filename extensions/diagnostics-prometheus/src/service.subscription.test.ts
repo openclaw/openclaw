@@ -65,6 +65,13 @@ it("exports codec bytes separately and cumulative raw frame-size buckets", () =>
     metrics.record({
       type: "gateway.ws.event",
       event: "chat",
+      count: 0,
+      bytes: 0,
+      frameBytes: { "512": 0 },
+    });
+    metrics.record({
+      type: "gateway.ws.event",
+      event: "chat",
       count: 1,
       bytes: 70_000,
       wireBytes: 700,

@@ -55,7 +55,7 @@ export function createPrometheusMetricStore() {
   };
 
   const counter = (name: string, help: string, labels: LabelSet, amount = 1) => {
-    if (!Number.isFinite(amount) || amount < 0) {
+    if (!Number.isFinite(amount) || amount <= 0) {
       return;
     }
     const key = metricKey(name, labels);
