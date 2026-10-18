@@ -4,19 +4,19 @@ import type { OpenShellSandboxBackend } from "./backend.types.js";
 import { resolveOpenShellPluginConfig } from "./config.js";
 import { createOpenShellBackendSandboxConfig } from "./openshell.test-support.js";
 
-export const cliMocks = vi.hoisted(() => ({
+export const cliMocks = {
   runOpenShellCli: vi.fn(),
   createOpenShellSshSession: vi.fn(),
-}));
+};
 
-export const sandboxMocks = vi.hoisted(() => ({
+export const sandboxMocks = {
   runSshSandboxCommand: vi.fn(),
   disposeSshSandboxSession: vi.fn(),
   prepareSshSandboxExec: vi.fn(),
   cleanupPreparedExec: vi.fn(),
   remoteRoot: "",
   remoteAgentRoot: "",
-}));
+};
 
 export let createOpenShellSandboxBackendManager: typeof import("./backend.js").createOpenShellSandboxBackendManager;
 export let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
