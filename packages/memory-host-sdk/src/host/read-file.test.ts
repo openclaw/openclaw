@@ -37,18 +37,10 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 it.each([
-  { name: "omitted agent limits", contextLimits: undefined, maxChars: 2000 },
-  {
-    name: "partial agent limits",
-    contextLimits: { postCompactionMaxChars: 1800 },
-    maxChars: 2000,
-  },
-  {
-    name: "an explicit agent override",
-    contextLimits: { memoryGetMaxChars: 1000 },
-    maxChars: 1000,
-  },
-])("applies the memory excerpt budget with $name", async ({ contextLimits, maxChars }) => {
+  ["omitted agent limits", undefined, 2000],
+  ["partial agent limits", { postCompactionMaxChars: 1800 }, 2000],
+  ["an explicit agent override", { memoryGetMaxChars: 1000 }, 1000],
+] as const)("applies the memory excerpt budget with %s", async (_name, contextLimits, maxChars) => {
   const content = "cedar memory ".repeat(600);
   const { workspaceDir } = await fixture({ "workspace/MEMORY.md": content });
   const result = await readAgentMemoryFile({

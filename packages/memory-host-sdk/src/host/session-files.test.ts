@@ -1,4 +1,3 @@
-// Memory Host SDK tests cover session files behavior.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -73,21 +72,27 @@ afterEach(async () => {
   fsSync.rmSync(tmpDir, { recursive: true, force: true });
 });
 
-function requireSessionEntry(entry: SessionFileEntry | null): SessionFileEntry {
+async function buildEntry(
+  filePath: string,
+  options?: Parameters<typeof buildSessionEntry>[1],
+): Promise<SessionFileEntry> {
+  const entry = await buildSessionEntry(filePath, options);
   if (!entry) {
     throw new Error("expected session entry");
   }
   return entry;
 }
 
-async function upsertTestSessionEntries(
-  storePath: string,
-  entries: Record<string, Parameters<typeof upsertSessionEntryCore>[1]>,
-): Promise<void> {
-  fsSync.mkdirSync(path.dirname(storePath), { recursive: true });
-  for (const [sessionKey, entry] of Object.entries(entries)) {
-    await upsertSessionEntryCore({ sessionKey, storePath }, entry);
-  }
+function writeRecords(name: string, records: unknown[]) {
+  const filePath = path.join(tmpDir, name);
+  fsSync.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
+  return filePath;
+}
+function writeMessages(name: string, messages: unknown[]) {
+  return writeRecords(
+    name,
+    messages.map((message) => ({ type: "message", message })),
+  );
 }
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
@@ -119,39 +124,25 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const sessionId = "sqlite-live";
     const sourceText = `API_TOKEN = computeToken() sk-${"a".repeat(48)}`;
     const updatedAt = Date.parse("2026-06-25T12:00:00.000Z");
+    const identity = { agentId: "main", sessionId, sessionKey, storePath };
     fsSync.mkdirSync(sessionsDir, { recursive: true });
 
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
       { sessionId, updatedAt },
     );
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [
-          {
-            message: {
-              role: "user",
-              content: sourceText,
-              timestamp: updatedAt,
-            },
-          },
-        ],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
+    await persistSessionTranscriptTurn(identity, {
+      messages: [{ message: makeUserMessage(sourceText, updatedAt) }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
     const archivePath = path.join(
       sessionsDir,
       `${sessionId}.jsonl.deleted.2026-06-25T12-01-00.000Z`,
     );
-    fsSync.writeFileSync(
-      archivePath,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Archived JSONL transcript text" },
-      }),
-    );
+    writeMessages(path.relative(tmpDir, archivePath), [
+      { role: "user", content: "Archived JSONL transcript text" },
+    ]);
 
     expect(fsSync.existsSync(path.join(sessionsDir, `${sessionId}.jsonl`))).toBe(false);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
@@ -183,21 +174,13 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     let liveEntry: SessionFileEntry;
     let liveState: Awaited<ReturnType<typeof statSessionEntry>>;
     try {
-      liveEntry = requireSessionEntry(
-        await buildSessionEntry(sessionKey, {
-          agentId: "main",
-          sessionId,
-          sessionKey,
-          storePath,
-          updatedAtMs: updatedAt,
-          onTranscriptMessage: (message) => messages.push(message),
-        }),
-      );
+      liveEntry = await buildEntry(sessionKey, {
+        ...identity,
+        updatedAtMs: updatedAt,
+        onTranscriptMessage: (message) => messages.push(message),
+      });
       liveState = await statSessionEntry(sessionKey, {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
+        ...identity,
         updatedAtMs: updatedAt,
       });
       expect(sql.queries).toEqual([]);
@@ -205,7 +188,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       sql.restore();
     }
     expect(messages).toEqual([expect.objectContaining({ role: "user", content: sourceText })]);
-    const archiveEntry = requireSessionEntry(await buildSessionEntry(archivePath));
+    const archiveEntry = await buildEntry(archivePath);
 
     expect(liveEntry.path).toBe("sessions/main/sqlite-live.jsonl");
     expect(liveEntry.content).toBe(`User: ${sourceText}`);
@@ -220,19 +203,13 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       "sessions/main/sqlite-live.jsonl.deleted.2026-06-25T12-01-00.000Z",
     );
     expect(archiveEntry.content).toBe("User: Archived JSONL transcript text");
-    await persistSessionTranscriptTurn(
-      { agentId: "main", sessionId, sessionKey, storePath },
-      {
-        messages: [{ message: makeUserMessage("A newer transcript message", updatedAt + 1) }],
-        touchSessionEntry: true,
-        updateMode: "none",
-      },
-    );
+    await persistSessionTranscriptTurn(identity, {
+      messages: [{ message: makeUserMessage("A newer transcript message", updatedAt + 1) }],
+      touchSessionEntry: true,
+      updateMode: "none",
+    });
     const updatedState = await statSessionEntry(sessionKey, {
-      agentId: "main",
-      sessionId,
-      sessionKey,
-      storePath,
+      ...identity,
     });
     expect(updatedState?.size).toBeGreaterThan(liveEntry.size);
   });
@@ -276,13 +253,14 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
     await captureRuntimeConfigAsyncReader()();
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:chat:custom": {
+    await upsertSessionEntryCore(
+      { sessionKey: "agent:main:chat:custom", storePath },
+      {
         sessionFile: "custom-thread.jsonl",
         sessionId: "custom-thread",
         updatedAt: 1,
       },
-    });
+    );
 
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual(
       expect.objectContaining({
@@ -317,54 +295,28 @@ describe("buildSessionEntry", () => {
         __openclaw: { senderIsOwner: true },
       },
     }));
-    const filePath = path.join(tmpDir, "hash-contract.jsonl");
-    fsSync.writeFileSync(filePath, records.map((record) => JSON.stringify(record)).join("\n"));
-    const entry = requireSessionEntry(
-      await buildSessionEntry(filePath, {
-        generatedByCronRun: false,
-        generatedByDreamingNarrative: false,
-        sessionKind: "interactive",
-      }),
-    );
+    const filePath = writeRecords("hash-contract.jsonl", records);
+    const entry = await buildEntry(filePath, {
+      generatedByCronRun: false,
+      generatedByDreamingNarrative: false,
+      sessionKind: "interactive",
+    });
     expect(entry.lineMap).toEqual([1, 1, 2, 2, 3, 3, 4, 4]);
     expect(entry.hash).toBe("c0c681f57b6caea32f1a6baee132322c0dbc6f93e75656725fe3ef7158f195ae");
   });
 
   it("indexes usage-counted reset/deleted archives but still skips bak and checkpoint artifacts", async () => {
-    const resetPath = path.join(tmpDir, "ordinary.jsonl.reset.2026-02-16T22-26-33.000Z");
-    const deletedPath = path.join(tmpDir, "ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z");
-    const bakPath = path.join(tmpDir, "ordinary.jsonl.bak.2026-02-16T22-28-33.000Z");
-    const checkpointPath = path.join(
-      tmpDir,
-      "ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl",
-    );
-    const content = JSON.stringify({
-      type: "message",
-      message: { role: "user", content: "Archived hello" },
-    });
-    fsSync.writeFileSync(resetPath, content);
-    fsSync.writeFileSync(deletedPath, content);
-    fsSync.writeFileSync(bakPath, content);
-    fsSync.writeFileSync(checkpointPath, content);
-
-    const resetEntry = requireSessionEntry(await buildSessionEntry(resetPath));
-    const deletedEntry = requireSessionEntry(await buildSessionEntry(deletedPath));
-    const bakEntry = requireSessionEntry(await buildSessionEntry(bakPath));
-    const checkpointEntry = requireSessionEntry(await buildSessionEntry(checkpointPath));
-
-    // Usage-counted archives (reset, deleted) must surface real content so
-    // post-reset memory_search can recover prior session history.
-    expect(resetEntry.content).toBe("User: Archived hello");
-    expect(resetEntry.lineMap).toStrictEqual([1]);
-    expect(deletedEntry.content).toBe("User: Archived hello");
-    expect(deletedEntry.lineMap).toStrictEqual([1]);
-
-    // .bak and compaction checkpoints remain opaque pre-archive / snapshot
-    // artifacts and stay empty so they do not get double-indexed.
-    expect(bakEntry.content).toBe("");
-    expect(bakEntry.lineMap).toStrictEqual([]);
-    expect(checkpointEntry.content).toBe("");
-    expect(checkpointEntry.lineMap).toStrictEqual([]);
+    for (const [name, expectedContent, expectedLines] of [
+      ["ordinary.jsonl.reset.2026-02-16T22-26-33.000Z", "User: Archived hello", [1]],
+      ["ordinary.jsonl.deleted.2026-02-16T22-27-33.000Z", "User: Archived hello", [1]],
+      ["ordinary.jsonl.bak.2026-02-16T22-28-33.000Z", "", []],
+      ["ordinary.checkpoint.11111111-1111-4111-8111-111111111111.jsonl", "", []],
+    ] as const) {
+      const filePath = writeMessages(name, [{ role: "user", content: "Archived hello" }]);
+      const entry = await buildEntry(filePath);
+      expect(entry.content).toBe(expectedContent);
+      expect(entry.lineMap).toStrictEqual(expectedLines);
+    }
   });
 
   it("does not wipe earlier or later archive messages after a user-authored cron prompt (#98241)", async () => {
@@ -380,11 +332,8 @@ describe("buildSessionEntry", () => {
       },
       { role: "assistant", content: "Noted. Acme Robotics, budget 5000 USD." },
     ];
-    fsSync.writeFileSync(
-      archivePath,
-      messages.map((message) => JSON.stringify({ type: "message", message })).join("\n"),
-    );
-    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+    writeMessages(path.relative(tmpDir, archivePath), messages);
+    const entry = await buildEntry(archivePath);
     expect(entry.generatedByCronRun).toBeFalsy();
     expect(entry.content).toBe(
       [
@@ -400,19 +349,15 @@ describe("buildSessionEntry", () => {
 
   it("keeps cron-run reset archives opaque when session metadata preserves the cron key", async () => {
     const archivePath = path.join(tmpDir, "cron-run.jsonl.reset.2026-02-16T22-26-33.000Z");
-    const jsonlLines = [
-      JSON.stringify({
-        type: "session-meta",
-        data: { sessionKey: "agent:main:cron:job-1:run:run-1" },
-      }),
-      JSON.stringify({
+    writeRecords(path.relative(tmpDir, archivePath), [
+      { type: "session-meta", data: { sessionKey: "agent:main:cron:job-1:run:run-1" } },
+      {
         type: "message",
         message: { role: "assistant", content: "Internal cron output that must stay out." },
-      }),
-    ];
-    fsSync.writeFileSync(archivePath, jsonlLines.join("\n"));
+      },
+    ]);
 
-    const entry = requireSessionEntry(await buildSessionEntry(archivePath));
+    const entry = await buildEntry(archivePath);
 
     expect(entry.content).toBe("");
     expect(entry.lineMap).toStrictEqual([]);
@@ -436,51 +381,41 @@ describe("buildSessionEntry", () => {
     );
     fsSync.writeFileSync(filePath, encoded.bytes);
 
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    const entry = await buildEntry(filePath);
     expect(entry.content).toBe("User: First\nAssistant: Second");
     expect(entry.lineMap).toStrictEqual([3, 5]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: {
-          role: "user",
-          content: [
-            { type: "text", text: markInboundContextLabel("Conversation info:") },
-            { type: "text", text: "```json" },
-            { type: "text", text: '{"message_id":"msg-100","chat_id":"-100123"}' },
-            { type: "text", text: "```" },
-            { type: "text", text: "" },
-            { type: "text", text: markInboundContextLabel("Sender:") },
-            { type: "text", text: "```json" },
-            { type: "text", text: '{"label":"Chris","id":"42"}' },
-            { type: "text", text: "```" },
-            { type: "text", text: "" },
-            { type: "text", text: "Actual user text" },
-          ],
-        },
-      }),
-    ];
-    const filePath = path.join(tmpDir, "enveloped-session-array.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+    const filePath = writeMessages("enveloped-session-array.jsonl", [
+      {
+        role: "user",
+        content: [
+          markInboundContextLabel("Conversation info:"),
+          "```json",
+          '{"message_id":"msg-100","chat_id":"-100123"}',
+          "```",
+          "",
+          markInboundContextLabel("Sender:"),
+          "```json",
+          '{"label":"Chris","id":"42"}',
+          "```",
+          "",
+          "Actual user text",
+        ].map((text) => ({ type: "text", text })),
+      },
+    ]);
 
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    const entry = await buildEntry(filePath);
     expect(entry.content).toBe("User: Actual user text");
   });
 
   it("drops Date-invalid numeric message timestamps", async () => {
-    const jsonlLines = [
-      JSON.stringify({
-        type: "message",
-        message: makeUserMessage("Hello", 8_640_000_000_000_001),
-      }),
-    ];
-    const filePath = path.join(tmpDir, "invalid-timestamp-session.jsonl");
-    fsSync.writeFileSync(filePath, jsonlLines.join("\n"));
+    const filePath = writeMessages("invalid-timestamp-session.jsonl", [
+      makeUserMessage("Hello", 8_640_000_000_000_001),
+    ]);
 
-    const entry = requireSessionEntry(await buildSessionEntry(filePath));
+    const entry = await buildEntry(filePath);
     expect(entry.messageTimestampsMs).toStrictEqual([0]);
   });
 });
