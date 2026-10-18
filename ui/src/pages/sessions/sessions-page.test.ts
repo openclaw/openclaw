@@ -151,13 +151,11 @@ describe("sessions page lifecycle", () => {
   it.each([false, true])(
     "reports owner assignment failure only in its current page (retired: %s)",
     async (retired) => {
-      const row = {
-        key: "agent:main:assignment",
+      const row = sessionRow("assignment", {
         sessionId: "assignment-session",
-        kind: "direct",
         label: "Assignment fixture",
-        updatedAt: 1,
-      } satisfies GatewaySessionRow;
+      });
+      const failure = "Assignment unavailable. Try again.";
       const assignment = createDeferred<unknown>();
       const request = vi.fn(async (method: string) => {
         if (method === "sessions.assignOwner") {
@@ -199,15 +197,13 @@ describe("sessions page lifecycle", () => {
       if (retired) {
         mutableGateway.emit({ phase: "reconnecting", client: null });
       }
-      assignment.reject(new Error("Assignment unavailable. Try again."));
+      assignment.reject(new Error(failure));
       await assignOwner.mock.results[0]!.value;
       if (retired) {
         await page.updateComplete;
-        expect(page.textContent).not.toContain("Assignment unavailable. Try again.");
+        expect(page.textContent).not.toContain(failure);
       } else {
-        await vi.waitFor(() =>
-          expect(page.textContent).toContain("Assignment unavailable. Try again."),
-        );
+        await vi.waitFor(() => expect(page.textContent).toContain(failure));
         expect(page.textContent).toContain("Assignment fixture");
       }
     },

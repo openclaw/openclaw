@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../../packages/gateway-protocol/src/index.js";
+import type { SessionsSearchParams } from "../../../../packages/gateway-protocol/src/schema/sessions-search.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
@@ -52,7 +53,12 @@ async function mount(
   context.agentSelection.state.scopeId = allAgents ? null : "main";
   const page = await createRenderedPage(context, sessionsResult([metadata], 1));
   const find = (part: string) => page.querySelector(`.sessions-transcript-search__${part}`);
-  return { page, managed, find };
+  const search = async (query: string) => {
+    page.updateTranscriptSearchQuery(query);
+    await page.runTranscriptSearch();
+    await page.updateComplete;
+  };
+  return { page, managed, find, search };
 }
 const scope = {
   agentId: "main",
@@ -61,6 +67,10 @@ const scope = {
   includeUnknown: false,
   configuredAgentsOnly: true,
 };
+const searchCall = (query: string, searchScope: SessionsSearchParams["scope"] = scope) =>
+  ["sessions.search", { query, limit: 25, scope: searchScope }] as const;
+const emptySearch = () =>
+  vi.fn<GatewayBrowserClient["request"]>().mockResolvedValue({ results: [], sessions: [] });
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
@@ -108,14 +118,10 @@ describe("Sessions transcript search", () => {
   });
 
   it("skips empty queries but submits search without method advertisement", async () => {
-    const request = vi
-      .fn<GatewayBrowserClient["request"]>()
-      .mockResolvedValue({ results: [], sessions: [] });
-    const { page, find } = await mount(request);
+    const request = emptySearch();
+    const { page, find, search } = await mount(request);
     const submit = () => page.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    page.updateTranscriptSearchQuery("   ");
-    await page.runTranscriptSearch();
-    await page.updateComplete;
+    await search("   ");
     expect(request).not.toHaveBeenCalled();
     expect(find("status")).toBeNull();
     expect(submit().disabled).toBe(false);
@@ -123,11 +129,7 @@ describe("Sessions transcript search", () => {
     await vi.waitFor(() => expect(submit().disabled).toBe(false));
     find("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     await vi.waitFor(() => expect(find("empty")).not.toBeNull());
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.search", {
-      query: "not advertised",
-      limit: 25,
-      scope,
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(...searchCall("not advertised"));
   });
 
   it.each(["same", "clear", "replace"])(
@@ -178,48 +180,36 @@ describe("Sessions transcript search", () => {
       .fn<GatewayBrowserClient["request"]>()
       .mockResolvedValue({ results: [], sessions: [] })
       .mockRejectedValueOnce(new Error("search unavailable"));
-    const { page, find, managed } = await mount(request);
-    page.updateTranscriptSearchQuery("needle");
-    await page.runTranscriptSearch();
-    await page.updateComplete;
+    const { find, managed, search } = await mount(request);
+    await search("needle");
     expect(find("notice")?.textContent).toContain("search unavailable");
     expect(request).toHaveBeenCalledOnce();
     find("notice button")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(find("empty")).not.toBeNull());
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenLastCalledWith("sessions.search", {
-      query: "needle",
-      limit: 25,
-      scope,
-    });
+    expect(request).toHaveBeenLastCalledWith(...searchCall("needle"));
     expect(managed.sessions.list).not.toHaveBeenCalled();
     expect(find("notice")).toBeNull();
   });
 
   it("searches changed membership without waiting for the metadata list", async () => {
     const refresh = createDeferred();
-    const request = vi
-      .fn<GatewayBrowserClient["request"]>()
-      .mockResolvedValue({ results: [], sessions: [] });
-    const { page, managed, find } = await mount(request);
+    const request = emptySearch();
+    const { page, managed, find, search } = await mount(request);
     managed.refreshList.mockReturnValueOnce(refresh.promise);
     const unknown = page.querySelector<HTMLInputElement>('input[name="includeUnknown"]')!;
     unknown.checked = true;
     unknown.dispatchEvent(new Event("change", { bubbles: true }));
     await page.updateComplete;
     expect(page.refreshing).toBe(true);
-    page.updateTranscriptSearchQuery("needle");
-    await page.runTranscriptSearch();
-    await page.updateComplete;
+    await search("needle");
     expect(managed.refreshList).toHaveBeenCalledWith(
       expect.objectContaining({ includeUnknown: true }),
     );
     expect(managed.sessions.list).not.toHaveBeenCalled();
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.search", {
-      query: "needle",
-      limit: 25,
-      scope: { ...scope, includeUnknown: true },
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      ...searchCall("needle", { ...scope, includeUnknown: true }),
+    );
     expect(find("empty")).not.toBeNull();
     refresh.resolve();
     await vi.waitFor(() => expect(page.refreshing).toBe(false));
@@ -291,10 +281,8 @@ describe("Sessions transcript search", () => {
     await page.runTranscriptSearch();
     await page.updateComplete;
     expect(find("empty")).not.toBeNull();
-    expect(request).toHaveBeenLastCalledWith("sessions.search", {
-      query: "release notes",
-      limit: 25,
-      scope: { ...scope, archived: true },
-    });
+    expect(request).toHaveBeenLastCalledWith(
+      ...searchCall("release notes", { ...scope, archived: true }),
+    );
   });
 });

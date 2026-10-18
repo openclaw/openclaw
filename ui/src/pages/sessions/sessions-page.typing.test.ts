@@ -19,6 +19,14 @@ function result(key: string): SessionsListResult {
   return sessionsResult([{ key, kind: "direct", updatedAt: 1 }], 1);
 }
 
+function editInput(input: HTMLInputElement, value: string, event = "input") {
+  input.value = value;
+  input.dispatchEvent(new Event(event, { bubbles: true }));
+}
+
+const searchInput = (page: ParentNode) =>
+  page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+
 async function mountTypingPage(initialResult = result("agent:main:initial")) {
   const pending: Array<ReturnType<typeof createDeferred<SessionsListResult>>> = [];
   const requests: unknown[] = [];
@@ -51,11 +59,9 @@ async function mountTypingPage(initialResult = result("agent:main:initial")) {
     return () => undefined;
   };
   const page = await createRenderedPage(context, initialResult);
-  const input = () =>
-    page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
+  const input = () => searchInput(page);
   const edit = async (value: string) => {
-    input().value = value;
-    input().dispatchEvent(new Event("input", { bubbles: true }));
+    editInput(input(), value);
     await page.updateComplete;
   };
   return {
@@ -117,9 +123,7 @@ describe("sessions page managed roster", () => {
       deepLink,
     );
     const search = async (value: string) => {
-      const input = page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
-      input.value = value;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      editInput(searchInput(page), value);
       await page.updateComplete;
     };
     try {
@@ -177,9 +181,7 @@ describe("sessions page managed roster", () => {
     const sessions = createTestSessionCapability(gateway);
     const page = await createRenderedPage(createContext(gateway, sessions), pageResult(0));
     try {
-      const input = page.querySelector<HTMLInputElement>(".sessions-filter-popover__search input")!;
-      input.value = "server-only metadata";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      editInput(searchInput(page), "server-only metadata");
       await vi.advanceTimersByTimeAsync(200);
       expect(request).toHaveBeenCalledWith(
         "sessions.list",
@@ -221,8 +223,7 @@ describe("Sessions page typing ownership", () => {
       try {
         page.querySelector<HTMLButtonElement>(".sessions-filter-popover__trigger")!.click();
         const limit = page.querySelector<HTMLInputElement>(".session-filter-input--limit")!;
-        limit.value = "25";
-        limit.dispatchEvent(new Event("input", { bubbles: true }));
+        editInput(limit, "25");
         await vi.advanceTimersByTimeAsync(0);
         pending.at(-1)!.resolve(result("agent:main:limited"));
         await vi.advanceTimersByTimeAsync(0);
@@ -402,8 +403,7 @@ describe("Sessions page typing ownership", () => {
       await page.updateComplete;
       const label = page.querySelector<HTMLInputElement>(".session-overrides-grid input")!;
       expect(label.disabled).toBe(false);
-      label.value = "After rename";
-      label.dispatchEvent(new Event("change", { bubbles: true }));
+      editInput(label, "After rename", "change");
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledWith(
         "sessions.patch",
@@ -417,12 +417,9 @@ describe("Sessions page typing ownership", () => {
       expect(mutationRefreshes).toBe(1);
       expect(pageRequests).toBe(2);
       expect(page.loading).toBe(true);
-      const search = page.querySelector<HTMLInputElement>(
-        ".sessions-filter-popover__search input",
-      )!;
+      const search = searchInput(page);
       for (const value of ["n", "ne", "new"]) {
-        search.value = value;
-        search.dispatchEvent(new Event("input", { bubbles: true }));
+        editInput(search, value);
         await page.updateComplete;
         await vi.advanceTimersByTimeAsync(40);
       }
@@ -633,25 +630,24 @@ describe("Sessions page details", () => {
         "active",
         entry === "deep-link" ? row.key : null,
       );
-      const listReads = request.mock.calls.filter(([method]) => method === "sessions.list").length;
-      if (entry === "interactive") {
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.describe"),
-        ).toHaveLength(0);
+      const calls = (method: string) => request.mock.calls.filter(([name]) => name === method);
+      const panel = () => page.querySelector(".session-details-panel");
+      const select = () => panel()?.querySelector<HTMLSelectElement>("select");
+      const toggle = async () => {
         page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
         await page.updateComplete;
+      };
+      const listReads = calls("sessions.list").length;
+      if (entry === "interactive") {
+        expect(calls("sessions.describe")).toHaveLength(0);
+        await toggle();
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(request.mock.calls.filter(([method]) => method === "sessions.describe")).toHaveLength(
-        1,
-      );
-      expect(page.querySelector<HTMLSelectElement>(".session-details-panel select")?.disabled).toBe(
-        true,
-      );
+      expect(calls("sessions.describe")).toHaveLength(1);
+      expect(select()?.disabled).toBe(true);
       const held = page.result;
       if (closeBeforeReply) {
-        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-        await page.updateComplete;
+        await toggle();
       }
 
       const full: GatewaySessionRow = {
@@ -667,32 +663,24 @@ describe("Sessions page details", () => {
       descriptor.resolve({ session: full });
       await vi.advanceTimersByTimeAsync(0);
       await page.updateComplete;
-      expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
-        listReads,
-      );
+      expect(calls("sessions.list")).toHaveLength(listReads);
       if (closeBeforeReply) {
-        expect(page.querySelector(".session-details-panel")).toBeNull();
+        expect(panel()).toBeNull();
         expect(page.result).toBe(held);
         return;
       }
-      const thinking = page.querySelector<HTMLSelectElement>(".session-details-panel select")!;
+      const thinking = select()!;
       expect(thinking.disabled).toBe(false);
       expect([...thinking.options].map((option) => option.textContent?.trim())).toEqual([
         "Inherited: High",
         "Off",
         "High",
       ]);
-      expect(page.querySelector(".session-details-panel")?.textContent).toContain(
-        "claude-cli (fallback none)",
-      );
+      expect(panel()?.textContent).toContain("claude-cli (fallback none)");
       if (entry === "interactive") {
-        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-        await page.updateComplete;
-        page.querySelector<HTMLButtonElement>(".session-details-toggle")!.click();
-        await page.updateComplete;
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.describe"),
-        ).toHaveLength(1);
+        await toggle();
+        await toggle();
+        expect(calls("sessions.describe")).toHaveLength(1);
         description = Promise.resolve({
           session: { ...full, updatedAt: 2, thinkingDefault: "off" },
         });
@@ -703,14 +691,8 @@ describe("Sessions page details", () => {
         });
         await vi.advanceTimersByTimeAsync(0);
         await page.updateComplete;
-        expect(
-          request.mock.calls.filter(([method]) => method === "sessions.describe"),
-        ).toHaveLength(2);
-        expect(
-          page
-            .querySelector<HTMLSelectElement>(".session-details-panel select")
-            ?.options[0]?.textContent?.trim(),
-        ).toBe("Inherited: Off");
+        expect(calls("sessions.describe")).toHaveLength(2);
+        expect(select()?.options[0]?.textContent?.trim()).toBe("Inherited: Off");
       }
     },
   );
