@@ -275,6 +275,7 @@ describe("install runtime enforcement", () => {
             probeNodeRuntime: () =>
               probePackageCliNodeRuntime({
                 cwd,
+                bunVersion: "1.4.3",
                 env: { OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher },
                 pathEnv: [
                   ...prefix,
