@@ -17,12 +17,21 @@ export type CodexAppServerProcessIdentity = Pick<PosixProcess, "pid" | "pgid" | 
 const MAX_CONTAINED_PROCESSES = 512;
 const MAX_PROCESS_CONTAINMENT_MS = 2_000;
 const MAX_PROCESS_QUIESCE_PASSES = 16;
-const heldStoppedRoots = new Map<PosixProcess, ContainableTransport>();
+const heldStoppedRoots = new Map<
+  PosixProcess,
+  { child: ContainableTransport; stoppedDescendants: ReadonlyMap<string, PosixProcess> }
+>();
 
-// A stopped root never observes its owner exiting: it is reparented and stays
-// stopped forever. Kill held roots when the owner exits mid-containment.
-function killHeldStoppedRootsOnExit(): void {
-  for (const [root, child] of heldStoppedRoots) {
+// A stopped process never observes its owner exiting: it is reparented and stays
+// stopped forever. Release held processes when the owner exits mid-containment.
+function releaseHeldProcessesOnExit(): void {
+  for (const [root, { child, stoppedDescendants }] of heldStoppedRoots) {
+    // Same release as the failure unwind: a stopped, unkilled descendant cannot be
+    // reaped, and a resumed native server exits on stdin EOF. The root kill below
+    // reaches only its own group, or the root alone when it shares the owner's.
+    for (const descendant of stoppedDescendants.values()) {
+      signalProcess(descendant.pid, "SIGCONT");
+    }
     // An unreaped direct child still owns its PID.
     if (child.exitCode == null && child.signalCode == null) {
       signalProcess(root.pgid === root.pid ? -root.pid : root.pid, "SIGKILL");
@@ -30,14 +39,18 @@ function killHeldStoppedRootsOnExit(): void {
   }
 }
 
-function holdStoppedRoot(root: PosixProcess, child: ContainableTransport): () => void {
+function holdStoppedRoot(
+  root: PosixProcess,
+  child: ContainableTransport,
+  stoppedDescendants: ReadonlyMap<string, PosixProcess>,
+): () => void {
   if (heldStoppedRoots.size === 0) {
-    process.on("exit", killHeldStoppedRootsOnExit);
+    process.on("exit", releaseHeldProcessesOnExit);
   }
-  heldStoppedRoots.set(root, child);
+  heldStoppedRoots.set(root, { child, stoppedDescendants });
   return () => {
     if (heldStoppedRoots.delete(root) && heldStoppedRoots.size === 0) {
-      process.off("exit", killHeldStoppedRootsOnExit);
+      process.off("exit", releaseHeldProcessesOnExit);
     }
   };
 }
@@ -146,7 +159,7 @@ export async function terminateCodexAppServerDescendants(
   // Hold before the awaited SIGSTOP; process.exit can land in any await below.
   // Orphans lack an unreaped handle, so their durable registration keeps cleanup.
   // An owner SIGKILL runs no exit handler; that remains the accepted gap.
-  const release = expected ? undefined : holdStoppedRoot(root, child);
+  const release = expected ? undefined : holdStoppedRoot(root, child, stoppedDescendants);
   if (!(await signalSameProcess(root, "SIGSTOP", deadline, "root"))) {
     release?.();
     return undefined;
@@ -169,13 +182,15 @@ export async function terminateCodexAppServerDescendants(
       if (performance.now() >= deadline) {
         return undefined;
       }
-      if (!isDeadProcessState(descendant.state)) {
-        if (
-          !(await signalSameProcess(descendant, "SIGKILL", deadline)) ||
-          performance.now() >= deadline
-        ) {
-          return undefined;
-        }
+      const killed =
+        isDeadProcessState(descendant.state) ||
+        (await signalSameProcess(descendant, "SIGKILL", deadline));
+      if (killed) {
+        // Dead or killed PIDs can be reaped and reused; never release them later.
+        stoppedDescendants.delete(identityKey(descendant));
+      }
+      if (!killed || performance.now() >= deadline) {
+        return undefined;
       }
     }
     // SIGKILL can remain pending for an uninterruptible process. Keep the root

@@ -27,14 +27,14 @@ async function ownedProcesses(marker: string): Promise<string[]> {
 }
 
 describe.skipIf(process.platform === "win32")("Codex transport owner exit", () => {
-  it.for(["root-stopped", "native-killed"])(
-    "does not strand its stopped launcher when the owner exits after %s",
+  it.for(["native-killed", "hosted-native-stopped"])(
+    "does not strand stopped Codex processes when the owner exits at %s",
     async (exitAt, context) => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "codex-owner-exit-"));
       const marker = path.join(root, "launcher");
       const owner = spawn(nodeExecPath, ["--import", "tsx", fixture, marker, exitAt], {
         env: { HOME: root, PATH: process.env.PATH, TMPDIR: root, NODE_ENV: "test" },
-        stdio: ["ignore", "pipe", "pipe", "ipc"],
+        stdio: ["ignore", "pipe", "pipe"],
       });
       let output = "";
       owner.stdout?.on("data", (chunk: Buffer) => (output += chunk.toString()));
@@ -52,21 +52,9 @@ describe.skipIf(process.platform === "win32")("Codex transport owner exit", () =
         await closed;
         await fs.rm(root, { recursive: true, force: true });
       });
-      for await (const [message] of onMessages(owner)) {
-        if (message.native) {
-          break;
-        }
-      }
-      owner.send("close");
       expect(await closed, output).toEqual([0, null]);
       expect(output).toMatch(/\bT/);
       await expect.poll(() => ownedProcesses(marker), { timeout: 2_000 }).toEqual([]);
     },
   );
 });
-
-async function* onMessages(owner: ReturnType<typeof spawn>) {
-  while (owner.exitCode === null && owner.signalCode === null) {
-    yield (await once(owner, "message")) as [{ root: number; native?: number }];
-  }
-}
