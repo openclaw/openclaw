@@ -37,8 +37,6 @@ function installMediaAdapter(sendMedia: NonNullable<ChannelOutboundAdapter["send
   );
 }
 
-type RecoveredSend = { mediaUrl: string; fromSpool: boolean; bytes: string };
-
 describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
   const fixtures = installDeliveryQueueTmpDirHooks();
   let tmpDir: string;
@@ -109,12 +107,11 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
     await fs.rm(source, { force: true });
     await expect(fs.readFile(source)).rejects.toThrow();
 
-    const recovered: RecoveredSend[] = [];
+    const recovered: { mediaUrl: string; bytes: string }[] = [];
     installMediaAdapter(async (ctx) => {
       const mediaUrl = ctx.mediaUrl ?? "";
       recovered.push({
         mediaUrl,
-        fromSpool: path.dirname(mediaUrl) === spoolRoot,
         bytes: (await fs.readFile(mediaUrl)).toString("hex"),
       });
       return { channel: "matrix", messageId: "recovered" };
@@ -129,9 +126,7 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
       selectEntry: (e) => ({ match: e.channel === "matrix", bypassBackoff: true }),
     });
 
-    expect(recovered).toMatchObject([{ fromSpool: true, bytes: bytes.toString("hex") }]);
-    expect(recovered).toHaveLength(1);
-    expect(recovered[0]?.mediaUrl).not.toBe(source);
+    expect(recovered).toEqual([{ mediaUrl: spoolPaths[0], bytes: bytes.toString("hex") }]);
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(0);
   });
 

@@ -92,20 +92,14 @@ describe("outbound enqueue worker", () => {
       const id = await enqueue;
       const stored = readQueuedEntry(stateDir, id);
       expect(stored.enqueuedAt).toBeGreaterThanOrEqual(before);
+      const serializedData = {
+        date: "2026-09-01T00:00:00.000Z",
+        finite: null,
+        custom: { canonical: true },
+        nested: { value: "before" },
+      };
       expect(stored.preparedBatch).toMatchObject({
-        entries: [
-          {
-            payload: {
-              text: "before",
-              channelData: {
-                date: "2026-09-01T00:00:00.000Z",
-                finite: null,
-                custom: { canonical: true },
-                nested: { value: "before" },
-              },
-            },
-          },
-        ],
+        entries: [{ payload: { text: "before", channelData: serializedData } }],
       });
       expect(JSON.stringify(stored)).not.toMatch(/callable|absent/);
       expect(reply.attempts()).toBe(1);
