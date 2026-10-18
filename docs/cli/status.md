@@ -274,8 +274,10 @@ owner's `pluginReload` record: `phase` (`reloading`, `recovering`, or `failed`),
 `pluginIds`, and optional `deadlineAtMs` and `reason`. New agent runs wait during
 replacement. Ordinary drains have a shared 60-second budget;
 [`plugins reload --wait`](/cli/plugins/uninstall-and-update) extends it to ten
-minutes and can be cancelled with Ctrl+C. A failed replacement stays visible
-until a later reload of that plugin succeeds or the Gateway restarts.
+minutes and can be cancelled with Ctrl+C. A successful rollback, including after
+a drain timeout, clears the pending reload record. Unresolved activation or
+recovery failures stay visible until a later reload of the affected plugin
+succeeds or the Gateway restarts.
 
 ## Secrets
 
