@@ -19,7 +19,7 @@ import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-
 import { createFixture } from "./plugin-generation-artifact.admission.test-support.js";
 import { preparePluginGenerationArtifact } from "./plugin-generation-worker.js";
 import { preparePluginNativeAdmissions } from "./plugin-native-admission-state.js";
-import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import { withPluginSourceAdmissionPublisher } from "./plugin-source-admission-context.js";
 import { withPluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 
 const temp = useAutoCleanupTempDirTracker(afterEach);

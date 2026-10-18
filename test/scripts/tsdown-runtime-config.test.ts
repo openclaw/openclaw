@@ -294,6 +294,11 @@ describe("tsdown config", () => {
 
   it.each([
     {
+      label: "plugin preparation worker",
+      entry: "plugins/plugin-generation-preparation.worker",
+      source: "src/plugins/plugin-generation-preparation.worker.ts",
+    },
+    {
       label: "read-only snapshot child",
       entry: "infra/sqlite-readonly-location.worker",
       source: "src/infra/sqlite-readonly-location.worker.ts",
@@ -322,8 +327,15 @@ describe("tsdown config", () => {
     const child = requireStandaloneRuntimeGraph(entry);
     expect(entrySources(child)).toEqual({ [entry]: path.resolve(source) });
     expect(child.outputOptions).toMatchObject({
-      codeSplitting: entry === "infra/sqlite-readonly-location.worker",
+      codeSplitting:
+        entry === "infra/sqlite-readonly-location.worker" ||
+        entry === "plugins/plugin-generation-preparation.worker",
     });
+    if (entry === "plugins/plugin-generation-preparation.worker") {
+      expect(child.outputOptions?.chunkFileNames).toBe(
+        "plugins/plugin-preparation-[name]-[hash].mjs",
+      );
+    }
     expect(child.outExtensions?.().js).toBe(".js");
     expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
   });
