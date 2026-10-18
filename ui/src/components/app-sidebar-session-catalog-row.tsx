@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createEffect, Show, untrack } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import type {
   SessionCatalog,
   SessionCatalogHost,
@@ -18,6 +18,7 @@ import {
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
+  type CatalogBackingSessionDisplay,
   type CatalogRowControls,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
@@ -35,43 +36,6 @@ const CATALOG_CONTROLS = [
   ["menu", "[data-sidebar-session-menu]"],
   ["catalogMenu", "[data-catalog-session-menu]"],
 ] as const;
-function catalogRowRef(
-  identityKey: string,
-  sessionKey: string,
-  catalogKey: CatalogSessionKey,
-  menuOpen: boolean,
-  params: SessionCatalogGroupsParams,
-): ((element: Element | undefined, controls: CatalogRowControls) => void) | undefined {
-  const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-  const activeRow = active?.closest<HTMLElement>("[data-session-key]");
-  const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
-  const restoreFocus =
-    control !== undefined &&
-    (activeRow?.dataset.catalogSessionKey === identityKey ||
-      activeRow?.dataset.sessionKey === identityKey ||
-      activeRow?.dataset.sessionKey === sessionKey);
-  if (!menuOpen && !restoreFocus) {
-    return undefined;
-  }
-  return (element, controls) => {
-    if (!(element instanceof HTMLElement)) {
-      return;
-    }
-    if (menuOpen) {
-      params.onCatalogMenuTriggerRendered(catalogKey, controls.catalogMenu ?? controls.link);
-    }
-    if (restoreFocus && control) {
-      queueMicrotask(() => {
-        if (element.isConnected && document.activeElement === document.body) {
-          const target = controls[control];
-          (target && element.contains(target) ? target : controls.link)?.focus({
-            preventScroll: true,
-          });
-        }
-      });
-    }
-  };
-}
 export function renderCatalogSessionRow(
   readCatalog: () => SessionCatalog,
   readHost: () => SessionCatalogHost,
@@ -136,115 +100,144 @@ export function renderCatalogSessionRow(
       ? readLiveRowsByKeyValue.get(readSessionValue.sessionKey)
       : undefined;
   });
-  const rowRef = createMemo(() => {
-    // Adoption swaps the rendered row even when the catalog key is unchanged.
-    adoptedRow();
-    return catalogRowRef(identityKey(), key(), catalogKey(), menuOpen(), params);
-  });
+  const rowRef: NonNullable<CatalogBackingSessionDisplay["rowRef"]> = (
+    element,
+    controls,
+    previousFocus,
+  ) => {
+    const stop = params.onMountRow(key());
+    const active = previousFocus instanceof HTMLElement ? previousFocus : null;
+    const activeRow = active?.closest<HTMLElement>("[data-session-key]");
+    const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
+    const restoreFocus =
+      control !== undefined &&
+      (activeRow?.dataset.catalogSessionKey === identityKey() ||
+        activeRow?.dataset.sessionKey === identityKey() ||
+        activeRow?.dataset.sessionKey === key());
+    if (menuOpen()) {
+      params.onCatalogMenuTriggerRendered(catalogKey(), controls.catalogMenu ?? controls.link);
+    }
+    if (restoreFocus && control) {
+      queueMicrotask(() => {
+        if (element.isConnected && document.activeElement === document.body) {
+          const focusTarget = controls[control];
+          (focusTarget && element.contains(focusTarget) ? focusTarget : controls.link)?.focus({
+            preventScroll: true,
+          });
+        }
+      });
+    }
+    return stop;
+  };
   const color = createMemo(() => normalizeSessionColorValue(readSession().color ?? ""));
   const active = createMemo(() => key() === params.routeSessionKey);
   const running = () => readSession().status === "active" || readSession().status === "running";
   const canOpenTerminal = () => readSession().canOpenTerminal === true && params.terminalAvailable;
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(catalogMenu(), x, y, trigger);
-  const controls: CatalogRowControls = {};
-  const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
-    handleContextMenuEvent(
+  const CatalogRow = () => {
+    const controls: CatalogRowControls = {};
+    const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (
       event,
-      event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
-      (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+    ) =>
+      handleContextMenuEvent(
+        event,
+        event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
+        (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
+      );
+    const marqueeLabel = (
+      <Show when={JSON.stringify([label(), readSession().status, readSession().pullRequest])} keyed>
+        {(_identity) => <>{renderHoverMarquee(label(), "sidebar-recent-session__name")}</>}
+      </Show>
     );
-  const marqueeLabel = (
-    <Show when={JSON.stringify([label(), readSession().status, readSession().pullRequest])} keyed>
-      {(_identity) => <>{renderHoverMarquee(label(), "sidebar-recent-session__name")}</>}
-    </Show>
-  );
-  let element: HTMLDivElement | undefined;
-  // Ref retargeting deliberately samples the current host without render dependencies.
-  createEffect(rowRef, (callback) => untrack(() => callback?.(element, controls)));
-  const row = (
-    <div
-      ref={(node) => {
-        element = node;
-      }}
-      class={[
-        "sidebar-recent-session session-row-host sidebar-recent-session--single-line",
-        {
-          "sidebar-recent-session--colored": Boolean(color()),
-          "sidebar-recent-session--active": active(),
-          "sidebar-recent-session--catalog-project-child": projectChild,
-          "session-row-host--running": running(),
-        },
-      ]}
-      style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
-      data-session-key={key()}
-      data-catalog-session-key={identityKey()}
-      data-session-row-action-count="1"
-      role="listitem"
-      onContextMenu={openMenuFromEvent}
-      onKeyDown={openMenuFromEvent}
-    >
-      <a
-        ref={(node) => (controls.link = node)}
-        href={target().href}
-        class="sidebar-recent-session__link"
-        aria-current={active() ? "page" : undefined}
-        onClick={(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          if (params.catalogOpenTarget === "terminal" && canOpenTerminal()) {
-            params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
-          } else {
-            params.onNavigate?.(routeId, target().options);
-          }
+    let element: HTMLDivElement;
+    let previousFocus: Element | null;
+    onSettled(() => rowRef(element, controls, previousFocus));
+    return (
+      <div
+        ref={(node) => {
+          element = node;
+          previousFocus = document.activeElement;
         }}
+        class={[
+          "sidebar-recent-session session-row-host sidebar-recent-session--single-line",
+          {
+            "sidebar-recent-session--colored": Boolean(color()),
+            "sidebar-recent-session--active": active(),
+            "sidebar-recent-session--catalog-project-child": projectChild,
+            "session-row-host--running": running(),
+          },
+        ]}
+        style={color() ? `--session-color: var(--session-color-${color()})` : undefined}
+        data-session-key={key()}
+        data-catalog-session-key={identityKey()}
+        data-session-row-action-count="1"
+        role="listitem"
+        onContextMenu={openMenuFromEvent}
+        onKeyDown={openMenuFromEvent}
       >
-        <span class="sidebar-session-indicator">
-          {running() ? (
-            <SessionGlyph
-              content={undefined}
-              running={running()}
-              runVisibility={sessionRunVisibility}
-            />
-          ) : undefined}
-        </span>
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
-          <span class="sidebar-recent-session__details">
-            <span class="sidebar-recent-session__details-endcap">
-              {<SessionRowBadges pullRequest={readSession().pullRequest} />}
+        <a
+          ref={(node) => (controls.link = node)}
+          href={target().href}
+          class="sidebar-recent-session__link"
+          aria-current={active() ? "page" : undefined}
+          onClick={(event: MouseEvent) => {
+            if (!shouldHandleNavigationClick(event)) {
+              return;
+            }
+            event.preventDefault();
+            if (params.catalogOpenTarget === "terminal" && canOpenTerminal()) {
+              params.onOpenTerminal(catalogKey(), params.newSessionAgentId);
+            } else {
+              params.onNavigate?.(routeId, target().options);
+            }
+          }}
+        >
+          <span class="sidebar-session-indicator">
+            {running() ? (
+              <SessionGlyph
+                content={undefined}
+                running={running()}
+                runVisibility={sessionRunVisibility}
+              />
+            ) : undefined}
+          </span>
+          <span class="sidebar-recent-session__text">
+            <span class="sidebar-recent-session__title-row"> {marqueeLabel} </span>
+            <span class="sidebar-recent-session__details">
+              <span class="sidebar-recent-session__details-endcap">
+                {<SessionRowBadges pullRequest={readSession().pullRequest} />}
+              </span>
             </span>
           </span>
+        </a>
+        <span class="sidebar-recent-session__aside session-row-aside">
+          <span class="session-row-actions">
+            <button
+              ref={(node) => (controls.catalogMenu = node)}
+              class="session-action"
+              data-catalog-session-menu="true"
+              type="button"
+              title={t("chat.sidebar.openSessionMenu")}
+              aria-label={t("chat.sidebar.openSessionMenu")}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen() ? "true" : "false"}
+              onClick={(event) => {
+                event.stopPropagation();
+                const trigger = event.currentTarget;
+                const rect = trigger.getBoundingClientRect();
+                openMenu(rect.right, rect.bottom + 4, trigger);
+              }}
+            >
+              <Icon name="moreHorizontal" />
+            </button>
+          </span>
         </span>
-      </a>
-      <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-actions">
-          <button
-            ref={(node) => (controls.catalogMenu = node)}
-            class="session-action"
-            data-catalog-session-menu="true"
-            type="button"
-            title={t("chat.sidebar.openSessionMenu")}
-            aria-label={t("chat.sidebar.openSessionMenu")}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen() ? "true" : "false"}
-            onClick={(event) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget;
-              const rect = trigger.getBoundingClientRect();
-              openMenu(rect.right, rect.bottom + 4, trigger);
-            }}
-          >
-            <Icon name="moreHorizontal" />
-          </button>
-        </span>
-      </span>
-    </div>
-  );
+      </div>
+    );
+  };
   return (
-    <Show when={adoptedRow()} fallback={row}>
+    <Show when={adoptedRow()} fallback={<CatalogRow />}>
       {(liveRow) =>
         params.renderLiveRow(liveRow, {
           get catalogIdentityKey() {
@@ -253,9 +246,7 @@ export function renderCatalogSessionRow(
           get catalogMenu() {
             return catalogMenu();
           },
-          get rowRef() {
-            return rowRef();
-          },
+          rowRef,
           get pullRequest() {
             return readSession().pullRequest;
           },

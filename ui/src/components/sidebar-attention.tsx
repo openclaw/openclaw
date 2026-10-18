@@ -14,6 +14,7 @@ import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
+import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
 import type { SidebarAttentionPanelPosition } from "./sidebar-attention-panel.runtime.tsx";
 import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 import type { IssueTab } from "./sidebar-issues-tabs.ts";
@@ -34,7 +35,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const attention = projectSidebarAttention(context.sidebarAttention);
-  const mentions = context.sidebarAttention.activate(SidebarAttentionStoreOwner);
+  context.sidebarAttention.activate(SidebarAttentionStoreOwner);
   const [panelOpen, setPanelOpen] = createSignal(false);
   const [panelPosition, setPanelPosition] = createSignal<SidebarAttentionPanelPosition>({
     left: 8,
@@ -48,6 +49,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
   let panelTrigger: HTMLElement | null = null;
   let list: HTMLDivElement | null = null;
+  let panelFocus: SidebarAttentionFocus | null = null;
   let panelGeneration = 0;
   let disposed = false;
   const count = createMemo(() => sidebarInboxTabCounts(attention.read()).all);
@@ -176,20 +178,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (event.key !== "Tab" || !(event.currentTarget instanceof HTMLElement)) {
       return;
     }
-    const rows = Array.from(
-      event.currentTarget.querySelectorAll<HTMLElement>(
-        "summary, button, a[href], [tabindex]:not([tabindex='-1'])",
-      ),
-    ).filter((element) => {
-      const closedDetails = element.closest("details:not([open])");
-      const insideSummary =
-        element.tagName === "SUMMARY" || Boolean(element.parentElement?.closest("summary"));
-      return (
-        !element.hasAttribute("disabled") &&
-        !element.closest("[hidden]") &&
-        (!closedDetails || insideSummary)
-      );
-    });
+    const rows = panelFocus?.controls() ?? [];
     const first = rows[0];
     const last = rows.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -205,7 +194,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (!(target instanceof HTMLElement)) {
       return;
     }
-    const focusOrder = Array.from(host.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    const focusOrder = panelFocus?.rows() ?? [];
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
@@ -214,7 +203,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     if (disposed || generation !== panelGeneration || target.isConnected) {
       return;
     }
-    const remaining = Array.from(host.querySelectorAll<HTMLElement>("[data-issue-row-focus]"));
+    const remaining = panelFocus?.rows() ?? [];
     remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
   }
 
@@ -279,8 +268,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       <Show when={panelOpen() && panelRenderer()} keyed>
         {(Panel) => (
           <Panel
-            context={context}
-            mentions={mentions}
             entries={attention.read()}
             onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
             onClose={() => closePanel(true)}
@@ -293,6 +280,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             onOpen={(item) => void open(item)}
             onScroll={syncOverflowCue}
             listRef={(element) => (list = element)}
+            focusRef={(registry) => (panelFocus = registry)}
             onSelectTab={selectTab}
             overflowAbove={overflowAbove()}
             overflowBelow={overflowBelow()}

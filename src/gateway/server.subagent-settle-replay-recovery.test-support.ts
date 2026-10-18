@@ -257,8 +257,9 @@ export async function runPublicSettleRecoveryCase(
     }
     if (reply === "unconsumed revoked cohort") {
       for (const entry of [child, sibling]) {
-        entry.requesterSettleWake = undefined;
-        persistChild(entry);
+        const revoked = { ...entry, requesterSettleWake: undefined };
+        persistChild(revoked);
+        installChild(revoked);
       }
     }
     closeOpenClawAgentDatabasesForTest();

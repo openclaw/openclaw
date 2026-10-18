@@ -41,6 +41,7 @@ import type { LinkFaviconFetcher } from "../link-favicon-cache.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation.ts";
 import type { CompactionStatus, RunOutputUsage } from "../tool-stream-contract.ts";
 import type { AsyncQuestionDraft, AsyncQuestionPresentation } from "./chat-async-question.types.ts";
+import type { ChatCommentPinsHandle } from "./chat-comment-pins.tsx";
 import { resolveChatContextCopy, usesNativeContextMenu } from "./chat-context-copy.ts";
 import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import {
@@ -63,6 +64,7 @@ import { TranscriptSearchState } from "./chat-transcript-search-state.ts";
 registerChatMessageMetadataEnglish();
 
 export type ChatThreadState = {
+  commentPins?: ChatCommentPinsHandle;
   asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
   asyncQuestionSessions?: Map<
     string,

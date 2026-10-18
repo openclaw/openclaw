@@ -16,7 +16,7 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -130,7 +130,7 @@ export async function createFixture(
     prepareRead: async (connId, session) => {
       const client = connections.clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
