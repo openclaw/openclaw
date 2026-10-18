@@ -56,6 +56,7 @@ import {
 } from "./sidebar-snapshot-capture.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
@@ -462,6 +463,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
       const menus = this.sidebarMenus.render(this);
+      const statusVisible = () =>
+        this.gatewayStatus?.kind &&
+        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -530,16 +534,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 <SidebarCommunityInvite />
               </Show>
             </div>
-            <Show when={this.devGitBranch}>
+            <Show when={statusVisible() || this.devGitBranch}>
               <div class="sidebar-shell__footer">
-                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                      <Icon name="gitBranch" />
-                    </span>
-                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>
+                <Show when={statusVisible()}>
+                  <GatewayStatus {...this.gatewayStatus!} row />
+                </Show>
+                <Show when={this.devGitBranch}>
+                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                    <div class="sidebar-footer-branch">
+                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                        <Icon name="gitBranch" />
+                      </span>
+                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                    </div>
+                  </openclaw-tooltip>
+                </Show>
               </div>
             </Show>
           </div>

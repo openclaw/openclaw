@@ -179,6 +179,7 @@ describe("AppSidebar group mutation collapsed state", () => {
     await selectGroupMenuAction(sidebar, action);
     if (action === "rename-group") {
       await submitInputDialog("Beta");
+      await vi.dynamicImportSettled();
       await waitForFast(() =>
         expect(current.groupsRename).toHaveBeenCalledExactlyOnceWith("Alpha", "Beta"),
       );

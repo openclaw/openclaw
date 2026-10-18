@@ -7,6 +7,7 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
+import { assertCompactionPathAlias } from "../../config/sessions/compaction-pathalias.test-support.js";
 import { readPreparedSessionEntryChange } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
 import type { SessionEntryPublicationSource } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
@@ -127,6 +128,29 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
     );
   });
   beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", root));
+
+  it.each([undefined, "different store", "changed writer"] as const)(
+    "compacts through a symlinked state root (refusal=%s)",
+    async (refusal) => {
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+      await captureRuntimeConfigAsyncReader()();
+      const canonical = {
+        ...scopeFor("compaction"),
+        storePath: readOpenClawAgentDatabaseIdentity(database).canonicalPath,
+        sessionId: `alias-compaction-${refusal ?? "success"}`,
+        sessionKey: `agent:main:compaction-${refusal ?? "success"}`,
+        env: { OPENCLAW_STATE_DIR: root },
+      };
+      await assertCompactionPathAlias(
+        {
+          ...canonical,
+          storePath: database.path,
+        },
+        canonical,
+        refusal,
+      );
+    },
+  );
 
   it("reuses the actor through admitted PG path aliases without crossing database identities", async () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));

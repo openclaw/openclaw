@@ -3,6 +3,7 @@ import type { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readConversationDeliveryInDatabase } from "../config/sessions/conversation-delivery-store.kernel.js";
 import { deleteOrphanedTranscriptIndexRowsInTransaction } from "../config/sessions/session-transcript-index.js";
 import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { countFailedDeliveryQueueEntriesInDatabase } from "../infra/delivery-queue-sqlite.kernel.js";
@@ -306,6 +307,50 @@ describe("sqlite hot query plans", () => {
       ["ingress", "pending"],
       ["idx_channel_ingress_pending"],
     );
+  });
+
+  it("keeps the reply-target delivery lookup on the partial reply index", () => {
+    // A fresh store has no planner statistics, so the plan depends only on whether the partial index is usable.
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: createTempStateDir() },
+    });
+    const captured: Array<{ params: unknown[]; sql: string }> = [];
+    const prototype = requireNodeSqlite().StatementSync.prototype;
+    const observers = (["get", "all", "iterate"] as const).map((method) => {
+      const original = prototype[method];
+      return vi.spyOn(prototype, method).mockImplementation(
+        new Proxy(original, {
+          apply(target, receiver: StatementSync, params) {
+            if (/from "conversation_deliveries" /i.test(receiver.sourceSQL)) {
+              captured.push({ params, sql: receiver.sourceSQL });
+            }
+            return Reflect.apply(target, receiver, params);
+          },
+        }),
+      );
+    });
+    try {
+      expect(
+        readConversationDeliveryInDatabase(database, {
+          conversationRef: "conversation-1",
+          replyToId: "message-1",
+        }),
+      ).toBeUndefined();
+    } finally {
+      observers.forEach((observer) => observer.mockRestore());
+    }
+    const [lookup] = captured;
+    if (!lookup) {
+      throw new Error("reply-target lookup statement was not captured");
+    }
+    const plan = explainQueryPlan(
+      database.db,
+      lookup.sql,
+      lookup.params as (number | string | null)[],
+    );
+    expect(plan).toContain("idx_agent_conversation_deliveries_reply");
+    expect(plan).not.toContain("SCAN delivery");
   });
 
   it("uses per-agent cache indexes for session metadata and expiry scans", () => {

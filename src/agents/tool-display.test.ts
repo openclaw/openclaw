@@ -1,7 +1,3 @@
-/**
- * Regression coverage for compact tool display formatting.
- * Ensures tool names, actions, and details stay readable.
- */
 import { describe, expect, it } from "vitest";
 import {
   hasShellCompoundCommand,
@@ -17,20 +13,22 @@ import {
   resolveToolDisplay,
 } from "./tool-display.js";
 
-function detailFor(params: Parameters<typeof resolveToolDisplay>[0]) {
-  return formatToolDetail(resolveToolDisplay(params));
+function detailFor(name: string, args: unknown) {
+  return formatToolDetail(resolveToolDisplay({ name, args }));
 }
 
-describe("isShellToolDisplayName", () => {
-  it("matches shell tools whatever case the backend spells them in", () => {
-    // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
-    for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
-      expect(isShellToolDisplayName(name)).toBe(true);
-    }
-    for (const name of ["Read", "web_search", undefined, ""]) {
-      expect(isShellToolDisplayName(name)).toBe(false);
-    }
-  });
+function execDetail(command: string, detailMode?: "explain", workdir?: string, name = "exec") {
+  return formatToolDetail(resolveToolDisplay({ name, args: { command, workdir }, detailMode }));
+}
+
+it("matches shell tools whatever case the backend spells them in", () => {
+  // The Claude CLI sends "Bash"; embedded runs send "bash"/"exec".
+  for (const name of ["Bash", "bash", "BASH", "Exec", "exec", "shell"]) {
+    expect(isShellToolDisplayName(name)).toBe(true);
+  }
+  for (const name of ["Read", "web_search", undefined, ""]) {
+    expect(isShellToolDisplayName(name)).toBe(false);
+  }
 });
 
 describe("tool display details", () => {
@@ -62,17 +60,14 @@ describe("tool display details", () => {
   });
 
   it("puts the camera PTZ operation before its node and device", () => {
-    const detail = detailFor({
-      name: "nodes",
-      args: {
+    expect(
+      detailFor("nodes", {
         action: "camera_ptz",
         ptzOperation: "status",
         node: "Mac",
         deviceId: "camera-id",
-      },
-    });
-
-    expect(detail).toBe("ptz operation status, node Mac, device id camera-id");
+      }),
+    ).toBe("ptz operation status, node Mac, device id camera-id");
   });
 
   it("keeps same-line heredoc operators from attaching the body to later stages", () => {
@@ -88,13 +83,10 @@ describe("tool display details", () => {
   });
 
   it("keeps positive numbers and true booleans", () => {
-    const detail = detailFor({
-      name: "sessions_history",
-      args: {
-        sessionKey: "agent:main:main",
-        limit: 20,
-        includeTools: true,
-      },
+    const detail = detailFor("sessions_history", {
+      sessionKey: "agent:main:main",
+      limit: 20,
+      includeTools: true,
     });
 
     expect(detail).toContain("session agent:main:main");
@@ -102,57 +94,37 @@ describe("tool display details", () => {
     expect(detail).toContain("tools true");
   });
 
-  it("formats read/write/edit with intent-first file detail", () => {
-    const readDetail = detailFor({
-      name: "read",
-      args: { file_path: "/tmp/a.txt", offset: 2, limit: 2 },
-    });
-    const writeDetail = detailFor({
-      name: "write",
-      args: { file_path: "/tmp/a.txt", content: "abc" },
-    });
-    const editDetail = detailFor({
-      name: "edit",
-      args: { path: "/tmp/a.txt", newText: "abcd" },
-    });
-
-    expect(readDetail).toBe("lines 2-3 from /tmp/a.txt");
-    expect(writeDetail).toBe("to /tmp/a.txt (3 chars)");
-    expect(editDetail).toBe("in /tmp/a.txt (4 chars)");
+  it.each([
+    ["read", { file_path: "/tmp/a.txt", offset: 2, limit: 2 }, "lines 2-3 from /tmp/a.txt"],
+    ["write", { file_path: "/tmp/a.txt", content: "abc" }, "to /tmp/a.txt (3 chars)"],
+    ["edit", { path: "/tmp/a.txt", newText: "abcd" }, "in /tmp/a.txt (4 chars)"],
+  ] as const)("formats %s with intent-first file detail", (name, args, expected) => {
+    expect(detailFor(name, args)).toBe(expected);
   });
 
   it("formats web_search provider query shapes", () => {
-    expect(
-      detailFor({
-        name: "web_search",
-        args: { q: "Codex OAuth API key", max_results: 5 },
-      }),
-    ).toBe('for "Codex OAuth API key" (top 5)');
+    expect(detailFor("web_search", { q: "Codex OAuth API key", max_results: 5 })).toBe(
+      'for "Codex OAuth API key" (top 5)',
+    );
 
     expect(
-      detailFor({
-        name: "web_search",
-        args: {
-          search_query: [
-            { q: "latest Kimi model" },
-            { q: "latest Gemini model" },
-            { q: "latest Claude model" },
-            { q: "latest OpenAI model" },
-          ],
-        },
+      detailFor("web_search", {
+        search_query: [
+          { q: "latest Kimi model" },
+          { q: "latest Gemini model" },
+          { q: "latest Claude model" },
+          { q: "latest OpenAI model" },
+        ],
       }),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
   });
 
   it("formats Parallel's native objective + search_queries shape", () => {
     expect(
-      detailFor({
-        name: "web_search",
-        args: {
-          objective: "Find the OpenClaw repository on GitHub",
-          search_queries: ["openclaw github", "openclaw repository"],
-          count: 5,
-        },
+      detailFor("web_search", {
+        objective: "Find the OpenClaw repository on GitHub",
+        search_queries: ["openclaw github", "openclaw repository"],
+        count: 5,
       }),
     ).toBe(
       'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
@@ -160,90 +132,63 @@ describe("tool display details", () => {
   });
 
   it("summarizes exec commands with context", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command:
-          "set -euo pipefail\ngit -C /Users/adityasingh/.openclaw/workspace status --short | head -n 3",
-        workdir: "/Users/adityasingh/.openclaw/workspace",
-      },
-    });
+    const detail = execDetail(
+      "set -euo pipefail\ngit -C /Users/adityasingh/.openclaw/workspace status --short | head -n 3",
+      undefined,
+      "/Users/adityasingh/.openclaw/workspace",
+    );
 
     expect(detail).toContain("check git status -> show first 3 lines");
     expect(detail).toContain("(agent)");
   });
 
   it("summarizes bash commands with the same command explainer", () => {
-    const detail = detailFor({
-      name: "bash",
-      args: { command: "sed -n '1,80p' extensions/discord/src/draft-stream.ts" },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
+    expect(
+      execDetail(
+        "sed -n '1,80p' extensions/discord/src/draft-stream.ts",
+        "explain",
+        undefined,
+        "bash",
+      ),
+    ).toBe("print lines 1-80 from extensions/discord/src/draft-stream.ts");
   });
 
   it("keeps shell compound commands intact instead of inventing command stages", () => {
-    const loop = 'for d in $(find . -type d); do echo "$d"; ls "$d"; done';
-    const conditional = "echo start && if test -f package.json; then pnpm test; fi";
-    const subshell = "(echo one; echo two)";
-    const functionBody = "f() { echo one; echo two; }";
-    const functionKeyword = "function f { echo one; echo two; }";
-    const hyphenatedFunction = "function deploy-prod { echo one; echo two; }";
-    const namespacedFunction = "function log::info { echo one; echo two; }";
-    const selectLoop = 'select d in a b; do echo "$d"; break; done';
-    const doubleBracket = "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test";
-    const pipedSelect = "printf x | select d in a b; do break; done";
-    const pipedDoubleBracket = "printf x | [[ -n x ]]";
-    const backgroundSelect = "true & select d in a b; do break; done";
-    const stderrPipedSelect = "printf x |& select d in a b; do break; done";
-    const pipedFunction = "printf x | function deploy-prod { echo one; echo two; }";
-    const conditionalFunction = "function deploy-prod if true; then echo ok; fi";
-    const doubleBracketFunction = "function check [[ -n x ]]";
-    const arithmeticFunction = "function bump (( n++ )) && pnpm test";
-    const subshellFunction = "function sub() (echo one; echo two)";
-    const posixConditionalFunction = "plain() if true; then echo ok; fi";
-    const negatedDoubleBracket = "! [[ -f a && -f b ]] && pnpm test";
-    const timedNegatedDoubleBracket = "time -p ! [[ -n x ]]";
-    const negatedTimedDoubleBracket = "! time [[ -n x ]]";
-    const operatorTimedSubshell = "time(echo one; echo two)";
-    const operatorArithmeticFunction = "function bump(( n++ )) && pnpm test";
-
     for (const command of [
-      loop,
-      conditional,
-      subshell,
-      functionBody,
-      functionKeyword,
-      hyphenatedFunction,
-      namespacedFunction,
+      'for d in $(find . -type d); do echo "$d"; ls "$d"; done',
+      "echo start && if test -f package.json; then pnpm test; fi",
+      "(echo one; echo two)",
+      "f() { echo one; echo two; }",
+      "function f { echo one; echo two; }",
+      "function deploy-prod { echo one; echo two; }",
+      "function log::info { echo one; echo two; }",
       "deploy-prod() { echo one; echo two; }",
       "log::info() { echo one; echo two; }",
-      selectLoop,
+      'select d in a b; do echo "$d"; break; done',
       "coproc worker { echo one; echo two; }",
       "coproc (echo one; echo two)",
-      doubleBracket,
-      pipedSelect,
-      pipedDoubleBracket,
-      backgroundSelect,
-      stderrPipedSelect,
-      pipedFunction,
-      conditionalFunction,
-      doubleBracketFunction,
-      arithmeticFunction,
-      subshellFunction,
+      "[[ -f package.json && -f pnpm-lock.yaml ]] && pnpm test",
+      "printf x | select d in a b; do break; done",
+      "printf x | [[ -n x ]]",
+      "true & select d in a b; do break; done",
+      "printf x |& select d in a b; do break; done",
+      "printf x | function deploy-prod { echo one; echo two; }",
+      "function deploy-prod if true; then echo ok; fi",
+      "function check [[ -n x ]]",
+      "function bump (( n++ )) && pnpm test",
+      "function sub() (echo one; echo two)",
       "function worker (echo one; echo two)",
       "function worker(echo one; echo two)",
-      posixConditionalFunction,
-      negatedDoubleBracket,
-      timedNegatedDoubleBracket,
-      negatedTimedDoubleBracket,
-      operatorTimedSubshell,
-      operatorArithmeticFunction,
+      "plain() if true; then echo ok; fi",
+      "! [[ -f a && -f b ]] && pnpm test",
+      "time -p ! [[ -n x ]]",
+      "! time [[ -n x ]]",
+      "time(echo one; echo two)",
+      "function bump(( n++ )) && pnpm test",
       "time -- if true; then echo one; echo two; fi",
     ]) {
       expect(splitTopLevelStages(command)).toEqual([command]);
-      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(command);
+      expect(execDetail(command, "explain")).toBe(command);
     }
 
     for (const command of [
@@ -280,9 +225,7 @@ describe("tool display details", () => {
         quoted.slice(0, quoted.lastIndexOf(" && ")),
         "pnpm test",
       ]);
-      expect(detailFor({ name: "exec", args: { command: quoted }, detailMode: "explain" })).toBe(
-        "print text → run tests",
-      );
+      expect(execDetail(quoted, "explain")).toBe("print text → run tests");
     }
 
     for (const command of [
@@ -316,19 +259,15 @@ describe("tool display details", () => {
       ["rg 'search engine' src/agents", 'search "search engine" in src/agents'],
       ["rg 'search textual data' src/agents", 'search "search textual data" in src/agents'],
       ["rg 'research text in docs' src/agents", 'search "research text in docs" in src/agents'],
-    ]) {
-      expect(detailFor({ name: "exec", args: { command }, detailMode: "explain" })).toBe(expected);
+    ] as const) {
+      expect(execDetail(command, "explain")).toBe(expected);
     }
   });
 
   it("sanitizes recursive search patterns inside pipelines", () => {
-    expect(
-      detailFor({
-        name: "exec",
-        args: { command: `printf x | rg 'search "foo" in src' .` },
-        detailMode: "explain",
-      }),
-    ).toBe("print text -> search text in .");
+    expect(execDetail(`printf x | rg 'search "foo" in src' .`, "explain")).toBe(
+      "print text -> search text in .",
+    );
   });
 
   it.each<[name: string, command: string, expected: string]>([
@@ -344,117 +283,71 @@ describe("tool display details", () => {
       "cd /tmp && cd /app (in /app)",
     ],
   ])("%s", (_name, command, expected) => {
-    const detail = formatToolDetail(
-      resolveToolDisplay({
-        name: "exec",
-        args: { command },
-      }),
-    );
-
-    expect(detail).toBe(expected);
+    expect(execDetail(command)).toBe(expected);
   });
 
   it("uses compact workspace markers for common workspace paths", () => {
+    for (const [command, workdir, expected] of [
+      ["git fetch", "/Users/peter/mantis-workspace/openclaw", "fetch git changes (agent)"],
+      ["git status", "/Users/peter/Projects/openclaw", "check git status (repo)"],
+      [
+        "command -v discrawl",
+        "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
+        "command -v discrawl",
+      ],
+    ] as const) {
+      expect(execDetail(command, "explain", workdir, "bash")).toBe(expected);
+    }
+  });
+
+  it("omits bash and exec names from compact tool summaries", () => {
+    const summary = (params: Parameters<typeof resolveToolDisplay>[0]) =>
+      formatToolSummary(resolveToolDisplay(params));
     expect(
-      detailFor({
-        name: "bash",
+      summary({
+        name: "Bash",
         args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
         detailMode: "explain",
       }),
     ).toBe("fetch git changes (agent)");
 
-    expect(
-      detailFor({
-        name: "bash",
-        args: { command: "git status", workdir: "/Users/peter/Projects/openclaw" },
-        detailMode: "explain",
-      }),
-    ).toBe("check git status (repo)");
-
-    expect(
-      detailFor({
-        name: "bash",
-        args: {
-          command: "command -v discrawl",
-          workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
-        },
-        detailMode: "explain",
-      }),
-    ).toBe("command -v discrawl");
-  });
-
-  it("omits bash and exec names from compact tool summaries", () => {
-    expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "Bash",
-          args: { command: "git fetch", workdir: "/Users/peter/mantis-workspace/openclaw" },
-          detailMode: "explain",
-        }),
-      ),
-    ).toBe("fetch git changes (agent)");
-
-    expect(
-      formatToolSummary(
-        resolveToolDisplay({
-          name: "web_search",
-          args: { query: "OpenClaw docs" },
-        }),
-      ),
-    ).toBe('Web Search: for "OpenClaw docs"');
+    expect(summary({ name: "web_search", args: { query: "OpenClaw docs" } })).toBe(
+      'Web Search: for "OpenClaw docs"',
+    );
   });
 
   it("recognizes heredoc/inline script exec details", () => {
-    const pyDetail = detailFor({
-      name: "exec",
-      args: {
-        command: "python3 <<PY\nprint('x')\nPY",
-        workdir: "/Users/adityasingh/.openclaw/workspace",
-      },
-    });
-    const nodeCheckDetail = detailFor({
-      name: "exec",
-      args: {
-        command: "node --check /tmp/test.js",
-        workdir: "/Users/adityasingh/.openclaw/workspace",
-      },
-    });
-    const nodeShortCheckDetail = detailFor({
-      name: "exec",
-      args: {
-        command: "node -c /tmp/test.js",
-        workdir: "/Users/adityasingh/.openclaw/workspace",
-      },
-    });
-
-    expect(pyDetail).toContain("run python3 inline script (heredoc)");
-    expect(nodeCheckDetail).toContain("check js syntax for /tmp/test.js");
-    expect(nodeShortCheckDetail).toContain("check js syntax for /tmp/test.js");
+    for (const [command, expected] of [
+      ["python3 <<PY\nprint('x')\nPY", "run python3 inline script (heredoc)"],
+      ["node --check /tmp/test.js", "check js syntax for /tmp/test.js"],
+      ["node -c /tmp/test.js", "check js syntax for /tmp/test.js"],
+    ] as const) {
+      expect(execDetail(command, undefined, "/Users/adityasingh/.openclaw/workspace")).toContain(
+        expected,
+      );
+    }
   });
 
   it("matches shell-quoted heredoc terminators before keeping later stages", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command: ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join("\n"),
-      },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("run python3 inline script (heredoc) → run tests");
+    const command = ["python3 <<\\PY", "print('body && not a command')", "PY", "npm test"].join(
+      "\n",
+    );
+    expect(execDetail(command, "explain")).toBe("run python3 inline script (heredoc) → run tests");
   });
 
-  it("does not treat the overlapping end of a here-string as a heredoc", () => {
-    const command = ["cat <<<true", "npm test && npm build", "true", "pnpm test"].join("\n");
+  it.each(["cat <<<true", "echo $((flags << true ))", "((flags << true ))"])(
+    "does not treat %s as a heredoc",
+    (firstLine) => {
+      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
 
-    expect(splitTopLevelStages(command)).toEqual([
-      ["cat <<<true", "npm test"].join("\n"),
-      ["npm build", "true", "pnpm test"].join("\n"),
-    ]);
+      expect(splitTopLevelStages(command)).toEqual([
+        [firstLine, "npm test"].join("\n"),
+        ["npm build", "true", "pnpm test"].join("\n"),
+      ]);
 
-    const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
-    expect(detail).toContain("run build");
-  });
+      expect(execDetail(command, "explain")).toContain("run build");
+    },
+  );
 
   it("ignores heredoc-looking tokens inside shell comments", () => {
     const command = [
@@ -465,8 +358,7 @@ describe("tool display details", () => {
       "npm test && npm build",
     ].join("\n");
 
-    const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
-    expect(detail).toBe("show output → run tests → run build");
+    expect(execDetail(command, "explain")).toBe("show output → run tests → run build");
 
     expect(splitTopLevelStages("echo foo\\ #bar && npm test")).toEqual([
       "echo foo\\ #bar",
@@ -500,100 +392,54 @@ describe("tool display details", () => {
     expect(bodies).toEqual(["body\nSTOP", "body\nSTOP", "body\nSTOP"]);
   });
 
-  it("does not treat arithmetic bitshifts as heredocs", () => {
-    for (const firstLine of ["echo $((flags << true ))", "((flags << true ))"]) {
-      const command = [firstLine, "npm test && npm build", "true", "pnpm test"].join("\n");
-
-      expect(splitTopLevelStages(command)).toEqual([
-        [firstLine, "npm test"].join("\n"),
-        ["npm build", "true", "pnpm test"].join("\n"),
-      ]);
-
-      const detail = detailFor({ name: "exec", args: { command }, detailMode: "explain" });
-      expect(detail).toContain("run build");
-    }
-  });
-
   it("keeps heredoc body pipes out of top-level stage summaries", () => {
-    const detail = detailFor({
-      name: "exec",
-      args: {
-        command: [
-          "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
-          "\tBuenos dias equipo; se ajusta la orden A1251718:",
-          "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
-          "\tGracias.",
-          "\tEOF",
-          "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
-        ].join("\n"),
-      },
-      detailMode: "explain",
-    });
-
-    expect(detail).toBe("show output → run email_preview_new → run email_preview_new");
+    const command = [
+      "cat > .openclaw/tmp/farm-notices/ventura.txt <<-'EOF'",
+      "\tBuenos dias equipo; se ajusta la orden A1251718:",
+      "\tsc-carwhi(100) && sc-cardoc(100) || sc-carwhi(100)",
+      "\tGracias.",
+      "\tEOF",
+      "./scripts/email_preview_new --to farm@example.com && ./scripts/email_preview_new --to farm2@example.com",
+    ].join("\n");
+    expect(execDetail(command, "explain")).toBe(
+      "show output → run email_preview_new → run email_preview_new",
+    );
   });
 
   it("consumes same-line heredocs in declaration order before splitting later stages", () => {
-    const stages = splitTopLevelStages(
-      [
-        "cat <<'FIRST' <<-\"SECOND\"",
-        "first; body && body || body | body",
-        "FIRST",
-        "\tsecond; body && body || body | body",
-        "\tSECOND",
-        "printf done && npm test",
-      ].join("\n"),
-    );
-
-    expect(stages).toEqual([
-      [
-        "cat <<'FIRST' <<-\"SECOND\"",
-        "first; body && body || body | body",
-        "FIRST",
-        "\tsecond; body && body || body | body",
-        "\tSECOND",
-        "printf done",
-      ].join("\n"),
+    const body = [
+      "cat <<'FIRST' <<-\"SECOND\"",
+      "first; body && body || body | body",
+      "FIRST",
+      "\tsecond; body && body || body | body",
+      "\tSECOND",
+    ].join("\n");
+    expect(splitTopLevelStages(`${body}\nprintf done && npm test`)).toEqual([
+      `${body}\nprintf done`,
       "npm test",
     ]);
   });
 });
 
-describe("compactRawCommand middle truncation", () => {
-  it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
-    // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
-    // slice ends at index 59, but the 😀 emoji (U+1F600, a surrogate pair) occupies
-    // indices 58-59 — so a raw .slice(0, 59) would keep the high surrogate and drop
-    // its low half, leaving a lone surrogate that renders as the replacement char.
-    const emoji = String.fromCodePoint(0x1f600);
-    // Unknown binary so resolveExecDetail returns the compact raw form directly.
-    const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
-    const result = resolveExecDetail({ command: longCommand });
+it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
+  // Default head ends at index 59, inside the emoji at UTF-16 indices 58–59.
+  const emoji = String.fromCodePoint(0x1f600);
+  const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
+  const result = resolveExecDetail({ command: longCommand });
 
-    expect(result).toBeDefined();
-    // The whole emoji is dropped at the boundary rather than half of it.
-    expect(result).not.toContain(emoji);
-    // No dangling/lone surrogate code units remain in the rendered detail.
-    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
-    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-    // Start and end of the command are still preserved around the ellipsis.
-    expect(result).toContain("/opt/custom/bin/run");
-    expect(result).toContain("…");
-    expect(result).toMatch(/b{4}$/);
-  });
+  expect(result).toBeDefined();
+  expect(result).not.toContain(emoji);
+  expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  expect(result).toContain("/opt/custom/bin/run");
+  expect(result).toContain("…");
+  expect(result).toMatch(/b{4}$/);
 });
 
-describe("coerceDisplayValue middle truncation", () => {
-  it("preserves string details before compacting", () => {
-    const longValue =
-      "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " +
-      "x".repeat(200) +
-      " final-step";
-    const detail = detailFor({
-      name: "sessions_spawn",
-      args: { label: longValue },
-    });
+it("preserves string details before compacting", () => {
+  const longValue =
+    "Deploying with AWS key AKIDABCDEFGHIJKLMNOP1234567890 and " + "x".repeat(200) + " final-step";
+  const detail = detailFor("sessions_spawn", { label: longValue });
 
-    expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-  });
+  expect(detail).toContain("AKIDABCDEFGHIJKLMNOP1234567890");
 });

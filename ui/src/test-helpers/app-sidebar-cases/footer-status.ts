@@ -123,6 +123,9 @@ describe("AppSidebar gateway footer subtitle", () => {
     };
     setControlUiBuildInfo({ ...build, release: false });
     const { sidebar, q, label } = await mountFooter();
+    sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    await sidebar.updateComplete;
 
     expect(label()).toBe("Identity and app menu for Owner: git@e8cbc62 · 4h ago");
 
@@ -163,7 +166,7 @@ describe("AppSidebar gateway footer subtitle", () => {
     },
   );
 
-  it("shows one suspended subtitle without delivery counts", async () => {
+  it("shows nonhealthy state as the avatar dot and leaves announcing to the shell", async () => {
     const label = "Suspended";
     setNativeGatewayTestState(twoGateways);
     const { sidebar, q } = await mountFooter();
@@ -171,35 +174,40 @@ describe("AppSidebar gateway footer subtitle", () => {
     await sidebar.updateComplete;
 
     const footer = q(".sidebar-footer-bar");
-    expect(footer?.querySelectorAll(".gateway-status__label")).toHaveLength(1);
-    expect(footer?.querySelector(".gateway-status__label")?.textContent).toBe(label);
-    expect(footer?.querySelector("button [role=status]")).toBeNull();
-    expect(footer?.querySelector("[role=status]")?.textContent).toContain(label);
-    expect(footer?.querySelector("[role=status]")?.textContent).not.toContain("in outbox");
-    expect(footer?.textContent).not.toContain("Offline");
-    expect(footer?.querySelector(".gateway-status__outbox")).toBeNull();
+    const card = footer?.querySelector(".sidebar-identity-card");
+    // The shell owns the written label; the footer keeps the dot and accessible name.
+    expect(footer?.querySelector(".gateway-status__label")).toBeNull();
+    expect(card?.getAttribute("data-connection-status")).toBe("suspended");
+    expect(card?.querySelector(".sidebar-identity-card__status")).not.toBeNull();
+    expect(card?.getAttribute("aria-label")).toBe(`Identity and app menu for Owner: ${label}`);
+    expect(footer?.querySelector(":scope > [role=status]")).toBeNull();
     expect(footer?.querySelector(".sidebar-identity-card__name")?.textContent).toBe("Owner");
-    expect(footer?.querySelector(".sidebar-identity-card__gateway")).toBeNull();
-    expect(footer?.querySelector('[role="status"]')?.getAttribute("aria-live")).toBe("polite");
-    expect(footer?.querySelector("button button")).toBeNull();
+    expect(footer?.querySelector(".sidebar-identity-card__gateway")?.textContent).toContain(
+      "Local Gateway",
+    );
   });
 
-  it("keeps gateway identity after reconnect and redacts connection diagnostics", async () => {
+  it("returns to the healthy dot and gateway identity after reconnect", async () => {
     setNativeGatewayTestState(twoGateways);
     const { sidebar, q } = await mountFooter();
     sidebar.connectionStatus = "reconnecting";
-    sidebar.lastError = "connection refused?token=footer-secret";
     await sidebar.updateComplete;
-    expect(q(".gateway-status-tooltip")).toMatchObject({
-      content: "connection refused?[redacted-credential]",
-    });
+    const card = () => q(".sidebar-identity-card");
+    expect(card()?.getAttribute("data-connection-status")).toBe("reconnecting");
 
     sidebar.connectionStatus = null;
+    sidebar.connected = true;
+    sidebar.gatewayStatus = { kind: "connected" };
+    sidebar.connectionRecovery = true;
     await sidebar.updateComplete;
-    expect(q(".gateway-status__label")).toBeNull();
-    expect(q(".gateway-status__outbox")).toBeNull();
-    expect(q(".sidebar-identity-card__gateway")?.textContent).toContain("Local Gateway");
-    expect(q(".gateway-status-tooltip")).toBeNull();
+    expect(card()?.getAttribute("data-connection-status")).toBe("connected");
+    expect(card()?.getAttribute("aria-label")).toBe("Identity and app menu for Owner: Connected");
+
+    sidebar.connectionRecovery = false;
+    await sidebar.updateComplete;
+    expect(card()?.getAttribute("aria-label")).toBe(
+      "Identity and app menu for Owner: Local Gateway, primary",
+    );
     q(".sidebar-identity-card")?.click();
     await sidebar.updateComplete;
     expect(q(".sidebar-identity-menu__outbox")).toBeNull();

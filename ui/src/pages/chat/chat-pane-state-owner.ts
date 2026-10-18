@@ -11,6 +11,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { chatInputOwnerForContext, type ChatInputRegion } from "../../app/chat-input-owner.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createQuestionPromptState, listQuestionPrompts } from "../../app/question-prompt.ts";
+import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { SessionPanelToggleSlot } from "../../components/session-panel-toggle-buffer.ts";
 import type {
   BoardCommandEvent,
@@ -329,6 +330,7 @@ export abstract class ChatPaneStateOwner {
   narrow = false;
   mergedChrome = false;
   navDrawerOpen = false;
+  gatewayStatus: GatewayStatusProps | null = null;
   onboarding = false;
   onOpenSplitView?: () => void = undefined;
   onSplitDown?: (paneId: string) => void = undefined;

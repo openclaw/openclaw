@@ -1,9 +1,11 @@
 import { createSignal } from "@solidjs/signals";
+import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
 export class ShellPresentation {
+  mobileGatewayStatus: GatewayStatusProps | null = null;
   private readonly readRevision: () => number;
   private readonly writeRevision: (next: (revision: number) => number) => number;
   readonly shellRevision = () => this.readRevision();

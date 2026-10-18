@@ -122,7 +122,8 @@ ${source}
     env = { ...env, NODE_OPTIONS: `${env.NODE_OPTIONS ?? ""} --require ${preloadPath}`.trim() };
   };
   if (options?.finalizationWorkMs !== undefined) {
-    const terminalPath = path.join(root, "terminal-result.json");
+    // Terminal input lives with the staged helper, not the emulated install root.
+    const terminalPath = path.join(path.dirname(scriptPath), "terminal-result.json");
     // Model cold finalizer startup only in the helper; its native child and lease stay real.
     await installPreload(
       "finalization",

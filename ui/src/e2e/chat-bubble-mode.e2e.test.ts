@@ -136,8 +136,9 @@ suite.define(() => {
       await browserExpect(chat).toContainText("This conversation keeps its own view.");
       await browserExpect(chat).not.toHaveClass(/chat--bubbles/);
       await page.setViewportSize({ width: 390, height: 844 });
-      await browserExpect(menu).toHaveClass(/chat-header-session-menu--compact/);
+      // Closed menus reconcile their parked presentation on open.
       await changeBubbles(true);
+      await browserExpect(menu).toHaveClass(/chat-header-session-menu--compact/);
       await closeBubbleMenu();
       await browserExpect(chat).toHaveClass(/chat--bubbles/);
       await browserExpect.poll(storedBubbleSessions).toEqual([sessionKey, otherSessionKey]);

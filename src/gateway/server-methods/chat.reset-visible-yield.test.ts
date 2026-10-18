@@ -19,7 +19,6 @@ import {
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import * as agentJob from "../agent-turn/agent-job.js";
-import * as githubPublication from "../github-publication-discovery.js";
 import { waitForGatewayDispatch } from "../server-in-process-dispatch.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../test-openai-responses-model.js";
@@ -143,10 +142,6 @@ it.for(["reset", "complete"] as const)(
     const resumedCatalog = createDeferred<string[]>();
     const publicationCatalogs: string[][] = [];
     let childResponse: ServerResponse | undefined;
-    const publicationSpy = vi.spyOn(githubPublication, "readGitHubPublicationFact");
-    if (outcome === "complete") {
-      publicationSpy.mockReturnValue({ available: true });
-    }
     const requesterWaitFinished = createDeferred<WaitResult>();
     const resetAcknowledged = createDeferred<{ state?: string }>();
     const attachedChatRuns = new Set<string>();
@@ -514,7 +509,6 @@ it.for(["reset", "complete"] as const)(
       await Promise.allSettled(handlers);
       unsubscribe();
       waiterSpy.mockRestore();
-      publicationSpy.mockRestore();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       clearSessionStoreCacheForTest();

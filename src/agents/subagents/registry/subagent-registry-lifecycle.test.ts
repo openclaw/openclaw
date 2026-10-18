@@ -5238,6 +5238,9 @@ describe("requester settle wake trigger", () => {
       maybeWakeRequesterAfterAllChildrenSettled: settleWake,
     });
 
+    // Seed durable fixture storage before its maintenance timers can enter the fake clock.
+    await mutateLifecycleRun(entry, () => {});
+
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
