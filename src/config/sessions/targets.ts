@@ -3,12 +3,14 @@ import path from "node:path";
 import { listGatewayOwnedAgentIds } from "../../agents/agent-roster.js";
 import {
   resolveAgentDir,
+  resolveAgentEntry,
   resolveConfiguredAgentId,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveAgentSessionDirsFromAgentsDirSync } from "../../agents/session-dirs.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
+import { isReservedSystemAgentId } from "../../system-agent/agent-id.js";
 import {
   resolveSessionStoreCompatibilityAgentId,
   tryResolveLegacyCompatibilityAgentId,
@@ -379,6 +381,20 @@ export function resolveAgentSessionStoreTargets(
   return dedupeTargetsByStorePath(targets);
 }
 
+function resolveGatewayAgentDatabasePath(
+  cfg: OpenClawConfig,
+  agentId: string,
+  env: NodeJS.ProcessEnv,
+): string | undefined {
+  const pathname = path.join(resolveAgentDir(cfg, agentId, env), "openclaw-agent.sqlite");
+  // Reserved helpers are discovered stores, not missing configured databases to initialize.
+  return isReservedSystemAgentId(agentId) &&
+    !resolveAgentEntry(cfg, agentId) &&
+    !fsSync.lstatSync(pathname, { throwIfNoEntry: false })
+    ? undefined
+    : pathname;
+}
+
 /** Candidate files for version inspection only; this does not assign migration ownership. */
 export function resolveConfiguredAgentDatabaseCandidatePaths(
   cfg: OpenClawConfig,
@@ -393,9 +409,10 @@ export function resolveConfiguredAgentDatabaseCandidatePaths(
           agentId,
         ),
       ),
-      ...[...new Set([...sessionAgentIds, ...listGatewayOwnedAgentIds(cfg)])].map((agentId) =>
-        path.join(resolveAgentDir(cfg, agentId, params.env), "openclaw-agent.sqlite"),
-      ),
+      ...[...new Set([...sessionAgentIds, ...listGatewayOwnedAgentIds(cfg)])].flatMap((agentId) => {
+        const pathname = resolveGatewayAgentDatabasePath(cfg, agentId, params.env);
+        return pathname ? [pathname] : [];
+      }),
     ]),
   ];
 }
@@ -426,7 +443,10 @@ export function resolveConfiguredAgentDatabaseTargets(
   });
   for (const agentId of listGatewayOwnedAgentIds(cfg)) {
     if (requested === undefined || agentId === requested) {
-      add(agentId, path.join(resolveAgentDir(cfg, agentId, env), "openclaw-agent.sqlite"));
+      const pathname = resolveGatewayAgentDatabasePath(cfg, agentId, env);
+      if (pathname) {
+        add(agentId, pathname);
+      }
     }
   }
   return [...targets.values()];

@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -59,9 +60,15 @@ describe("session store target selection", () => {
         paths.map((pathname) => ({ agentId, path: pathname })),
       );
       for (const agentId of ["openclaw", "crestodian"]) {
+        expect(
+          resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [], agentId }),
+        ).toEqual([]);
+        const databasePath = path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite");
+        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+        fs.writeFileSync(databasePath, "synthetic file identity; no database reads");
         expected.push({
           agentId,
-          path: path.join(root, "agents", agentId, "agent", "openclaw-agent.sqlite"),
+          path: databasePath,
         });
       }
       const all = resolveConfiguredAgentDatabaseTargets(cfg, { env, registeredDatabases: [] });
