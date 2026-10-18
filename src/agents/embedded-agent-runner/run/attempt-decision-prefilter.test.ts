@@ -5,14 +5,24 @@ import {
 } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { AgentDefaultsBaseSchema } from "../../../config/zod-schema.agent-defaults-base.js";
-import type { evaluateDecisionV2InRegistry } from "../../../decisions/runtime.js";
+import type {
+  DecisionEvaluation,
+  evaluateDecisionV2InRegistry,
+} from "../../../decisions/runtime.js";
 import type { DecisionAnswerV2, DecisionOutcomeV2 } from "../../../decisions/types-v2.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { evaluateAttemptDecisionToolPrefilter } from "./attempt-decision-prefilter.js";
 
 const mocks = vi.hoisted(() => ({ evaluate: vi.fn<typeof evaluateDecisionV2InRegistry>() }));
 // mock-isolation: Test prefilter policy independently of registry/model preparation; runtime-v2 covers the real host.
-vi.mock("../../../decisions/runtime.js", () => ({ evaluateDecisionV2InRegistry: mocks.evaluate }));
+vi.mock("../../../decisions/runtime.js", () => ({
+  evaluateDecisionV2Operation: async (
+    ...args: Parameters<typeof evaluateDecisionV2InRegistry>
+  ) => ({
+    outcome: await mocks.evaluate(...args),
+  }),
+  completeDecisionEvaluation: (evaluation: DecisionEvaluation) => evaluation.outcome,
+}));
 vi.mock("../../../plugins/runtime/gateway-request-scope.js", () => ({
   getPluginRegistryForContext: () => null,
 }));
