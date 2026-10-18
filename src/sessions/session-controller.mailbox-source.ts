@@ -562,10 +562,12 @@ export function completeSessionControllerSourceLifecycle(
     return;
   }
   state.completed = true;
-  try {
-    run.run.reasoningVisibility?.close();
-  } catch (error) {
-    state.failure = error;
+  if (state.enqueued) {
+    try {
+      run.run.reasoningVisibility?.close();
+    } catch (error) {
+      state.failure = error;
+    }
   }
   state.stopHeartbeat?.();
   // Void callbacks run before the next cancellation effect; actual promises
