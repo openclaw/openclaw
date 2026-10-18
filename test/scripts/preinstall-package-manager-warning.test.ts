@@ -30,6 +30,7 @@ const probe = (options: Parameters<typeof probePackageCliNodeRuntime>[0]) =>
     cwd: "/work/openclaw",
     access: () => {},
     platform: "linux",
+    bunVersion: "1.4.3",
     ...options,
   });
 const enforce = (
@@ -181,6 +182,7 @@ describe("install runtime enforcement", () => {
           bunVersion: "1.4.3",
           probeNodeRuntime: () =>
             probe({
+              bunVersion: layout.bunVersion,
               execPath: "/opt/bun/bin/bun",
               realpath: (candidate) =>
                 (candidate === `/tmp/${shimDirectory}/node` && shimMatchesBun) ||
@@ -188,6 +190,7 @@ describe("install runtime enforcement", () => {
                   ? "/opt/bun/bin/bun"
                   : candidate,
               env: {
+                ...layout.env,
                 OPENCLAW_PACKAGE_BUN_LAUNCHER: launcher,
                 NODE_OPTIONS: "--require=fixture.cjs",
                 Node_Options: "--require=other-fixture.cjs",
@@ -294,6 +297,8 @@ describe("install runtime enforcement", () => {
   it.each(lifecyclePaths)("checks a duplicate inherited entry: $name", (layout) => {
     const candidates: string[] = [];
     const runtime = probe({
+      bunVersion: layout.bunVersion,
+      env: layout.env,
       pathEnv: [
         ...layout.prefix,
         "/work/openclaw/node_modules/.bin",
@@ -325,6 +330,8 @@ describe("install runtime enforcement", () => {
         stdout: JSON.stringify({ version: "24.14.1", bunVersion: null, execPath: command }),
       }));
       const runtime = probe({
+        bunVersion: "1.4.4",
+        env: { npm_config_local_prefix: "/work" },
         pathEnv: [
           "/work/openclaw/node_modules/.bin",
           ...inherited,
@@ -338,6 +345,33 @@ describe("install runtime enforcement", () => {
       expect(
         nodeVersionSatisfiesPackageEngine(runtime?.version ?? null, EXPECTED_NODE_ENGINE_RANGE),
       ).toBe(false);
+    },
+  );
+
+  it.each(["1.4.3", "1.4.4"])(
+    "preserves an inherited ancestor suffix in a prefix-only Bun %s lifecycle",
+    (bunVersion) => {
+      const run = vi.fn((command: string) => ({
+        status: 0,
+        stdout: JSON.stringify({
+          version: command === "/opt/node/bin/node" ? "24.16.0" : "24.14.1",
+          bunVersion: null,
+          execPath: command,
+        }),
+      }));
+      const runtime = probe({
+        bunVersion,
+        env: { npm_config_local_prefix: "/work/openclaw" },
+        pathEnv: [
+          ...lifecyclePrefix,
+          "/opt/node/bin",
+          "/work/node_modules/.bin",
+          "/node_modules/.bin",
+        ].join(":"),
+        run,
+      });
+      expect(run.mock.calls.map(([command]) => command)).toEqual(["/opt/node/bin/node"]);
+      expect(runtime?.version).toBe("24.16.0");
     },
   );
 

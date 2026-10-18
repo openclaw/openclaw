@@ -132,7 +132,7 @@ function isStableAbsolutePath(value, pathApi, platform) {
   return root !== "\\" && root !== "/";
 }
 
-function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform) {
+function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform, dependencyLifecycle) {
   const lifecyclePaths = [];
   let directory = pathApi.resolve(cwd);
   while (true) {
@@ -150,8 +150,16 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform) {
   const matches = (entry, expected) =>
     normalizePathForComparison(entry, pathApi, platform) ===
     normalizePathForComparison(expected, pathApi, platform);
-  for (let prefixLength = 1; prefixLength <= lifecyclePaths.length; prefixLength++) {
-    if (!matches(pathEntries[prefixLength - 1], lifecyclePaths[prefixLength - 1])) {
+  for (
+    let prefixLength = dependencyLifecycle ? 1 : lifecyclePaths.length;
+    prefixLength <= lifecyclePaths.length;
+    prefixLength++
+  ) {
+    if (
+      !lifecyclePaths
+        .slice(0, prefixLength)
+        .every((expected, index) => matches(pathEntries[index], expected))
+    ) {
       return null;
     }
     const suffixStart = pathEntries.length - (lifecyclePaths.length - prefixLength);
@@ -159,8 +167,7 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform) {
       .slice(prefixLength)
       .every((expected, index) => matches(pathEntries[suffixStart + index], expected));
     if (suffixMatches) {
-      // Prefer the shortest proven prefix: inherited entries can themselves
-      // match ancestor bins and must retain their place before later Node paths.
+      // Dependency lifecycles can include private-store bins before inherited PATH.
       return pathEntries.slice(prefixLength, suffixStart);
     }
   }
@@ -176,6 +183,7 @@ function stripBunLifecyclePaths(pathEntries, cwd, pathApi, platform) {
  *   platform?: NodeJS.Platform;
  *   cwd?: string;
  *   execPath?: string;
+ *   bunVersion?: string | null;
  *   access?: (path: string, mode: number) => void;
  *   realpath?: (path: string) => string;
  *   run?: PackageCliNodeProbeRun;
@@ -189,6 +197,7 @@ export function probePackageCliNodeRuntime(options = {}) {
     platform = process.platform,
     cwd = process.cwd(),
     execPath = process.execPath,
+    bunVersion = process.versions.bun ?? null,
     access = accessSync,
     realpath = realpathSync,
     run = spawnSync,
@@ -197,10 +206,29 @@ export function probePackageCliNodeRuntime(options = {}) {
   const delimiter = platform === "win32" ? ";" : ":";
   const executableName = platform === "win32" ? "node.exe" : "node";
   const seen = new Set();
-  // Bun places the ordered cwd-to-root bins around the inherited PATH. Dependency
-  // scripts can put ancestor bins last so they cannot shadow inherited tools.
-  // Strip only the complete chain at the edges; middle entries persist.
-  const pathEntries = stripBunLifecyclePaths(pathEnv.split(delimiter), cwd, pathApi, platform);
+  // Bun 1.4.4 moved dependency ancestor bins after inherited PATH. Root scripts
+  // and older Bun keep the full prefix. PATH alone cannot distinguish them when
+  // inherited entries also name ancestor bins; use the runtime and package root.
+  const reorderedLifecycle = isNodeVersionAtLeast(parseNodeReleaseVersion(bunVersion), {
+    major: 1,
+    minor: 4,
+    patch: 4,
+  });
+  const localPrefix = normalizeEnvValue(env.npm_config_local_prefix);
+  if (reorderedLifecycle && !isStableAbsolutePath(localPrefix, pathApi, platform)) {
+    return null;
+  }
+  const dependencyLifecycle =
+    reorderedLifecycle &&
+    normalizePathForComparison(localPrefix, pathApi, platform) !==
+      normalizePathForComparison(pathApi.resolve(cwd), pathApi, platform);
+  const pathEntries = stripBunLifecyclePaths(
+    pathEnv.split(delimiter),
+    cwd,
+    pathApi,
+    platform,
+    dependencyLifecycle,
+  );
   if (!pathEntries) {
     return null;
   }
