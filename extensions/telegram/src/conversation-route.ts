@@ -237,37 +237,26 @@ export function resolveTelegramConversationBaseSessionKey(
   );
 }
 
+/** Outbound DMs reuse inbound binding facts: only an unbound named account is a fallback. */
 export function resolveTelegramOutboundDirectBaseSessionKey(params: {
   cfg: OpenClawConfig;
-  agentId: string;
-  accountId: string;
+  route: Pick<TelegramResolvedRoute, "agentId" | "accountId" | "sessionKey">;
   chatId: string;
-  sessionKey: string;
 }): string {
-  // Mirror inbound routing: a named account with an explicit binding to this
-  // agent is not a fallback, so it must not be forced into per-account scope.
-  const inboundRoute = resolveAgentRoute({
+  const { agentId, matchedBy } = resolveAgentRoute({
     cfg: params.cfg,
     channel: "telegram",
     // Unbound destinations keep the caller's agent instead of requiring a fleet default.
-    defaultAgentId: params.agentId,
-    accountId: params.accountId,
+    defaultAgentId: params.route.agentId,
+    accountId: params.route.accountId,
     peer: { kind: "direct", id: params.chatId },
   });
+  const isOwnBinding = normalizeAgentId(agentId) === normalizeAgentId(params.route.agentId);
   return resolveTelegramConversationBaseSessionKey({
     cfg: params.cfg,
-    route: {
-      agentId: params.agentId,
-      accountId: params.accountId,
-      matchedBy:
-        normalizeAgentId(inboundRoute.agentId) === normalizeAgentId(params.agentId)
-          ? inboundRoute.matchedBy
-          : "default",
-      sessionKey: params.sessionKey,
-    },
+    route: { ...params.route, matchedBy: isOwnBinding ? matchedBy : "default" },
     chatId: params.chatId,
     isGroup: false,
-    senderId: params.chatId,
   });
 }
 

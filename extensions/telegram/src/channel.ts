@@ -441,10 +441,8 @@ function resolveTelegramOutboundSessionRoute(params: {
   }
   const inboundBaseSessionKey = resolveTelegramOutboundDirectBaseSessionKey({
     cfg: params.cfg,
-    agentId: params.agentId,
-    accountId,
+    route: { agentId: params.agentId, accountId, sessionKey: baseRoute.sessionKey },
     chatId,
-    sessionKey: baseRoute.sessionKey,
   });
   const directBaseRoute = {
     ...baseRoute,
