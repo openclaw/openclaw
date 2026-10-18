@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { selectStagedFreshnessChecks } from "../../scripts/pre-commit/check-staged-freshness.mts";
 
-const scripts = (paths: string[]) => selectStagedFreshnessChecks(paths).map(({ args }) => args[0]);
+const scripts = (paths: string[]) => selectStagedFreshnessChecks(paths).map(({ script }) => script);
 
 describe("selectStagedFreshnessChecks", () => {
   it.each([

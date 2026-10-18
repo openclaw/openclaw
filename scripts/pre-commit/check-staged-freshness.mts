@@ -1,86 +1,118 @@
 #!/usr/bin/env node
-// Runs the seconds-fast generated-artifact and docs checks that CI fails on,
-// selected from staged paths. Typecheck, lint and tests stay with hosted CI.
+// Runs the fast generated-artifact and docs checks CI fails on, selected from
+// staged paths. guard-staged-content.mjs runs this and redacts its output.
+// Typecheck, lint and tests stay with hosted CI.
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { hasConfigDocInput } from "../changed-lanes.mts";
+import { existsSync, readFileSync } from "node:fs";
+import path from "node:path";
+import {
+  hasAgentsInstructionInput,
+  hasConfigDocInput,
+  hasLineCapRatchetInput,
+  hasNativeI18nInput,
+  isDocsMarkdownLintPath,
+} from "../changed-lanes.mts";
 import { hasProtocolGenerationInput } from "../lib/ci-check-family-scope.mts";
 
-type FreshnessCheck = { name: string; args: string[]; fix: string };
-
-// CI check-docs lints these globs; config/markdownlint-cli2.jsonc still applies its ignores.
-const DOCS_MARKDOWN_PATH_RE = /^(?:docs\/.+\.mdx?|README\.md)$/u;
-const NATIVE_I18N_INPUT_PATH_RE =
-  /^(?:apps\/|scripts\/(?:native-app-i18n|native-i18n-(?:inventory|locales)|android-app-i18n|apple-app-i18n)\.ts$)/u;
-const AGENTS_MD_PATH_RE = /(?:^|\/)AGENTS\.md$/u;
-const LINE_CAP_INPUT_PATH_RE = /\.(?:ts|tsx|mts|mjs)$|^\.oxlintrc\.json$/u;
+type FreshnessCheck = {
+  name: string;
+  script: string;
+  args: string[];
+  fix: string;
+  /** Whether these paths feed the check; used for staged selection and unstaged skips. */
+  reads: (paths: string[]) => boolean;
+  /** The check reads the index itself, so unstaged edits cannot change its verdict. */
+  readsIndex?: true;
+};
 
 /** Selects freshness checks for staged paths; an empty list means the hook adds no work. */
 export function selectStagedFreshnessChecks(paths: string[]): FreshnessCheck[] {
-  const checks: FreshnessCheck[] = [];
-  const some = (pattern: RegExp) => paths.some((file) => pattern.test(file));
-  const docs = paths.filter((file) => DOCS_MARKDOWN_PATH_RE.test(file) && existsSync(file));
-  if (docs.length > 0) {
-    checks.push({
+  const docs = paths.filter((file) => isDocsMarkdownLintPath(file) && existsSync(file));
+  const checks: FreshnessCheck[] = [
+    {
       name: "docs markdown lint",
-      args: ["lint:docs", "--no-globs", ...docs],
+      script: "lint:docs",
+      args: ["--no-globs", ...docs],
       fix: "pnpm lint:docs:fix",
-    });
-  }
-  if (some(AGENTS_MD_PATH_RE)) {
-    checks.push({
+      reads: (changed) => changed.some((file) => docs.includes(file)),
+    },
+    {
       name: "AGENTS.md bootstrap size",
-      args: ["check:agents-md-size"],
+      script: "check:agents-md-size",
+      args: [],
       fix: "cut rules or move them to the owning scoped AGENTS.md",
-    });
-  }
-  if (hasProtocolGenerationInput(paths)) {
-    checks.push({
+      reads: hasAgentsInstructionInput,
+    },
+    {
       name: "protocol generated models",
-      args: ["protocol:check"],
+      script: "protocol:check",
+      args: [],
       fix: "pnpm protocol:gen:swift && pnpm protocol:gen:kotlin",
-    });
-  }
-  if (some(NATIVE_I18N_INPUT_PATH_RE)) {
-    checks.push({
+      reads: hasProtocolGenerationInput,
+    },
+    {
       name: "native app i18n inventory",
-      args: ["native:i18n:verify"],
+      script: "native:i18n:verify",
+      args: [],
       fix: "pnpm native:i18n:baseline",
-    });
-  }
-  if (hasConfigDocInput(paths)) {
-    checks.push({
+      reads: hasNativeI18nInput,
+    },
+    {
       name: "config docs baseline",
-      args: ["config:docs:check"],
+      script: "config:docs:check",
+      args: [],
       fix: "pnpm config:docs:gen",
-    });
-  }
-  if (some(LINE_CAP_INPUT_PATH_RE)) {
-    checks.push({
+      reads: hasConfigDocInput,
+    },
+    {
       name: "line-cap growth ratchet",
-      args: ["check:line-cap-ratchet", "--staged", "--base", "HEAD"],
+      script: "check:line-cap-ratchet",
+      args: ["--staged", "--base", "HEAD"],
       fix: "move new code or tests to a sibling file",
-    });
-  }
-  return checks;
+      reads: hasLineCapRatchetInput,
+      readsIndex: true,
+    },
+  ];
+  return checks.filter((check) => check.reads(paths));
 }
 
-function stagedPaths() {
-  const result = spawnSync(
-    "git",
-    ["diff", "--cached", "--name-only", "--no-renames", "--diff-filter=ACDMRT", "-z"],
-    { encoding: "utf8" },
-  );
+function gitPaths(args: string[]) {
+  const result = spawnSync("git", [...args, "-z"], { encoding: "utf8" });
   if (result.status !== 0) {
-    throw new Error("git could not list staged files");
+    throw new Error(`git ${args.join(" ")} failed`);
   }
   return result.stdout.split("\0").filter(Boolean);
 }
 
+function replayingCommits() {
+  const gitDir = spawnSync("git", ["rev-parse", "--git-dir"], { encoding: "utf8" }).stdout.trim();
+  // Same operation states as format-staged.sh; hosted CI checks the replayed result.
+  return [
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+    "sequencer",
+    "rebase-merge",
+    "rebase-apply",
+  ]
+    .map((name) => path.join(gitDir, name))
+    .some((file) => existsSync(file));
+}
+
+// pnpm startup dominates these checks, so plain `node ...` package scripts run directly.
+function resolveCommand(check: FreshnessCheck): [string, string[]] {
+  const script = JSON.parse(readFileSync("package.json", "utf8")).scripts?.[check.script];
+  if (typeof script === "string" && /^node(?: [\w./:=@-]+)+$/u.test(script)) {
+    return [process.execPath, [...script.split(" ").slice(1), ...check.args]];
+  }
+  return ["pnpm", ["-s", check.script, ...check.args]];
+}
+
 // Independent read-only checks run together so the hook costs the slowest one.
 async function run(check: FreshnessCheck) {
+  const [command, args] = resolveCommand(check);
   return await new Promise<{ check: FreshnessCheck; status: number; output: string }>((resolve) => {
-    const child = spawn("pnpm", ["-s", ...check.args], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
     child.stdout.on("data", (chunk) => (output += chunk));
     child.stderr.on("data", (chunk) => (output += chunk));
@@ -89,13 +121,30 @@ async function run(check: FreshnessCheck) {
   });
 }
 
-if (import.meta.main) {
-  const checks = selectStagedFreshnessChecks(stagedPaths());
-  const results = await Promise.all(checks.map(run));
-  for (const { check, status, output } of results) {
+if (import.meta.main && !replayingCommits()) {
+  const staged = gitPaths([
+    "diff",
+    "--cached",
+    "--name-only",
+    "--no-renames",
+    "--diff-filter=ACDMRT",
+  ]);
+  const selected = selectStagedFreshnessChecks(staged);
+  // Judge only the bytes being committed: unstaged edits to a check's inputs skip it.
+  const unstaged = selected.length ? gitPaths(["diff", "--name-only", "--no-renames"]) : [];
+  const checks = selected.filter((check) => {
+    if (!check.readsIndex && check.reads(unstaged)) {
+      process.stdout.write(
+        `[pre-commit] ${check.name} skipped: its inputs have unstaged changes.\n`,
+      );
+      return false;
+    }
+    return true;
+  });
+  for (const { check, status, output } of await Promise.all(checks.map(run))) {
     if (status !== 0) {
       process.stderr.write(
-        `${output.trimEnd()}\n[pre-commit] ${check.name} failed (pnpm ${check.args[0]}). Fix: ${check.fix}.\n`,
+        `${output.trimEnd()}\n[pre-commit] ${check.name} failed (pnpm ${check.script}). Fix: ${check.fix}.\n`,
       );
       process.exitCode = 1;
     }

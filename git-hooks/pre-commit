@@ -6,12 +6,4 @@ ROOT_DIR="$(git rev-parse --show-toplevel 2>/dev/null)" || {
   exit 1
 }
 cd "$ROOT_DIR"
-node scripts/pre-commit/guard-staged-content.mjs
-
-GIT_DIR="$(git rev-parse --git-dir)"
-if [[ -f "$GIT_DIR/MERGE_HEAD" || -f "$GIT_DIR/CHERRY_PICK_HEAD" || -f "$GIT_DIR/REVERT_HEAD" ||
-  -d "$GIT_DIR/sequencer" || -d "$GIT_DIR/rebase-merge" || -d "$GIT_DIR/rebase-apply" ]]; then
-  # Replayed commits were checked when first written; hosted CI checks the result.
-  exit 0
-fi
-exec node scripts/pre-commit/check-staged-freshness.mts
+exec node scripts/pre-commit/guard-staged-content.mjs
