@@ -6,7 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeGitCommand, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
-import { CommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  CommandProcessCleanupError,
+  recordCommandProcessFailure,
+} from "../../process/exec-result.js";
 import * as processExec from "../../process/exec.js";
 import {
   ensureProjectCheckoutCommit,
@@ -274,16 +277,23 @@ describe("shared repository missing-tip recovery", () => {
     expect(await git(clone, ["rev-parse", "refs/heads/retained"])).toBe(tip);
   });
 
-  it.each(["unavailable", "uncertain"] as const)(
+  it.each(["unavailable", "uncertain", "recorded uncertain"] as const)(
     "preserves local work when repair is %s",
     async (failure) => {
       const { clone, tip, linked } = await brokenClone();
       const logs = createWarnLogCapture("missing-tip-repair");
       const run = processExec.runCommandWithTimeout;
-      const uncertain = new CommandProcessCleanupError();
+      const uncertain =
+        failure === "recorded uncertain"
+          ? recordCommandProcessFailure(new Error("synthetic repair capture failure"), {
+              code: null,
+              termination: "signal",
+              cleanup: "uncertain",
+            })
+          : new CommandProcessCleanupError();
       vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
         if (argv.includes("fetch") && argv.includes("--stdin")) {
-          if (failure === "uncertain") {
+          if (failure !== "unavailable") {
             throw uncertain;
           }
           return {
@@ -301,6 +311,10 @@ describe("shared repository missing-tip recovery", () => {
         const operation = runGit(clone, ["fetch", "--no-auto-maintenance", "origin"], { env });
         if (failure === "uncertain") {
           await expect(operation).rejects.toBe(uncertain);
+        } else if (failure === "recorded uncertain") {
+          const error = await operation.catch((caught: unknown) => caught);
+          expect(error).toBeInstanceOf(CommandProcessCleanupError);
+          expect(error).toHaveProperty("cause", uncertain);
         } else {
           expect((await operation).code).toBe(128);
           expect(await logs.findText("Git repository repair failed")).toContain(
