@@ -48,10 +48,11 @@ also blocks package replacement, even if the process title no longer contains
 its installation path. The refusal leaves the installation unchanged and names
 the service inspection and stop commands to use before retrying.
 
-`openclaw update status` records an interrupted run as failed when all recorded
-drivers are confirmed dead, without waiting for the inactivity grace period.
-The result includes `openclaw update repair` as the next action. Live or
-unverifiable drivers and retained recovery continue to preserve their ownership.
+`openclaw update status` reports confirmed driver loss without changing the
+recorded run, and names `openclaw update repair` as the next action. Repair or the
+next update's admission can record the failed outcome without waiting for the
+inactivity grace period. Live or unverifiable drivers and retained recovery
+continue to preserve their ownership.
 
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity

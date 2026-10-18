@@ -14,7 +14,13 @@ import { triageTestRuntimeEntrypoints } from "../../infra/triage-runtime.test-su
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import type { UpdateDoctorLintFinding } from "../../infra/update-doctor-lint-schema.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import { readUpdateRunDriver } from "../../infra/update-run-driver.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunPhase,
+} from "../../infra/update-run-ledger.js";
 import {
   loadUpdateRecovery,
   UpdateRecoveryRequiredError,
@@ -156,6 +162,39 @@ it("keeps restored-generation completion with its helper across CLI unwind", () 
   completeUpdateCommandRun(result, run);
   expect(getUpdateRun(run.runId, { env })?.status).toBe("rolled-back");
 });
+
+it.each([false, true])(
+  "new update settles a dead driver only outside preview (dryRun=%s)",
+  async (dryRun) => {
+    const root = dirs.make("update-admission-driver-loss-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
+    vi.stubEnv(UPDATE_RUN_ID_ENV, undefined);
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("Test process identity is unavailable");
+    }
+    const previous = createUpdateRun({
+      trigger: "cli",
+      origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+    });
+    const recorded = recordUpdateRunPhase(previous.runId, "activating");
+
+    const next = await admitUpdateCommandRun({ opts: { dryRun }, root });
+
+    expect(getUpdateRun(previous.runId)).toEqual(
+      dryRun
+        ? recorded
+        : expect.objectContaining({
+            status: "failed",
+            phase: "finished",
+            reason: "abandoned",
+            finishedAtMs: expect.any(Number),
+          }),
+    );
+    expect(getUpdateRun(next.runId)).toMatchObject({ status: "running" });
+  },
+);
 
 function pendingRecovery() {
   const root = dirs.make("update-admission-recovery-");

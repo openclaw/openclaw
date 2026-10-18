@@ -43,6 +43,7 @@ import {
   finishUpdateRun,
   getUpdateRun,
   heartbeatUpdateRun,
+  reconcileAbandonedUpdateRunsAsync,
   recordUpdateRunPhase,
   recordUpdateRunDiagnostics,
   recordUpdateRunStep,
@@ -239,6 +240,11 @@ export async function admitUpdateCommandRun(params: {
     ledgerOptions,
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
+  if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
+    // Create the ledger before opening its reader; reconcile only earlier drivers.
+    await reconcileAbandonedUpdateRunsAsync({ excludeRunId: record.runId }, ledgerOptions);
+    params.assertCurrent?.();
+  }
   const requester = resolveManagedUpdateRequester(record.origin.requester);
   const requesterAuthority = requester?.authorizationSource?.startsWith("profile:")
     ? Object.freeze({

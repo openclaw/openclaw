@@ -40,6 +40,9 @@ export function readUpdateRunReconciliationCandidates(
   if (input.runIds) {
     query = query.where("run_id", "in", [...input.runIds]);
   }
+  if (input.excludeRunId) {
+    query = query.where("run_id", "!=", input.excludeRunId);
+  }
   return executeSqliteQuerySync(db, query.orderBy("run_id")).rows.map((row) =>
     inspectUpdateRunReconciliation(db, decodeRun(row), input),
   );

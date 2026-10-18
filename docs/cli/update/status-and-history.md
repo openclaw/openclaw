@@ -429,11 +429,12 @@ for the activation Doctor step. These phases record their start and completion;
 the recorded driver identity protects the running update while its last-activity
 timestamp stays unchanged.
 The Gateway checks for
-abandoned runs at startup and while following active updates. Status checks also
-reconcile runs whose recorded drivers are all confirmed dead, without waiting
-for the inactivity grace period. The run becomes `failed` with reason `abandoned`,
-a `reconcile:abandoned` step naming the rule, and `openclaw update repair` as its
-next action. A live, unreadable, or foreign-host driver, or retained recovery,
+abandoned runs at startup and while following active updates. Status reports
+confirmed driver loss without changing the recorded run, with `openclaw update
+repair` as the next action. Repair or the next update's admission can reconcile
+dead drivers without waiting for the inactivity grace period. The recorded run
+then becomes `failed` with reason `abandoned` and a `reconcile:abandoned` step
+naming the rule. A live, unreadable, or foreign-host driver, or retained recovery,
 prevents this reconciliation. Each helper or finalization child records its
 own identity and retains earlier drivers, because detached children can outlive
 their parent. If process identity recording is unavailable, the update continues

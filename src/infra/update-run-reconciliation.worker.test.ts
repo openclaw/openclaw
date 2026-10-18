@@ -69,7 +69,7 @@ async function expiredLegacyRun() {
 }
 
 describe("update run reconciliation workers", () => {
-  it("status terminalizes recent activation after its recorded driver exits", async () => {
+  it("status projects recent driver loss until explicit reconciliation", async () => {
     const state = tempDirs.make("update-driver-loss-");
     const options = { env: { OPENCLAW_STATE_DIR: state } };
     const driver = readUpdateRunDriver();
@@ -83,22 +83,24 @@ describe("update run reconciliation workers", () => {
       },
       options,
     );
-    recordUpdateRunPhase(run.runId, "activating", {}, options);
+    const recorded = recordUpdateRunPhase(run.runId, "activating", {}, options);
     await closeOpenClawStateDatabaseAsync();
     vi.stubEnv("OPENCLAW_STATE_DIR", state);
     try {
       expect(await readUpdateRunStatus()).toMatchObject({
-        lastRun: {
+        activeRun: { runId: run.runId, status: "running", phase: "activating" },
+        abandonedRun: {
           runId: run.runId,
-          status: "failed",
-          phase: "finished",
-          reason: "abandoned",
-          origin: { nextAction: "Run `openclaw update repair` before retrying the update." },
+          rule: "inactive-driver-dead",
+          nextAction: "Run `openclaw update repair` before retrying the update.",
         },
       });
+      expect(await getUpdateRunAsync(run.runId, options)).toEqual(recorded);
+      await reconcileAbandonedUpdateRunsAsync({ explicit: true }, options);
       expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
         status: "failed",
         phase: "finished",
+        finishedAtMs: expect.any(Number),
       });
     } finally {
       vi.unstubAllEnvs();
