@@ -117,7 +117,7 @@ non-root uid 1000 setup, `tini` entrypoint, health check, and `openclaw` symlink
 
 <Note>
 The repository Dockerfile digest-pins its Node and Bun base images. Keep those
-reviewed pins instead of changing them to floating `FROM node:24-bookworm`
+reviewed pins instead of changing them to floating `FROM node:24-trixie`
 references. For ARM-based VMs, choose `arm64` release assets for extra binaries;
 for reproducible builds, use versioned asset URLs and verify their checksums.
 </Note>

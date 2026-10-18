@@ -3503,7 +3503,7 @@ jobs:
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
         shell: bash
         run: |
-          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          if ! docker image inspect openclaw-sandbox:trixie-slim >/dev/null 2>&1; then
             scripts/sandbox-setup.sh
           fi
 
