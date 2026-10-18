@@ -43,7 +43,10 @@ import {
   assertOpenClawStateSchemaRepairAllowed,
   isExistingOpenClawStateSchema,
 } from "./openclaw-state-db-schema-policy.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  assertSupportedStateSchemaVersion,
+} from "./openclaw-state-db-schema-version.js";
 import { recoverOrphanTaskDeliveryRows } from "./openclaw-state-db-task-delivery-recovery.js";
 import { runManagedStateTransaction } from "./openclaw-state-db-transaction.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
@@ -189,6 +192,7 @@ function createExistingOpenClawStateWriter(
       )
       .digest("hex")}`,
     (value) => (typeof value === "number" ? value : undefined),
+    contract.integrityCheck === undefined ? "process" : undefined,
   );
   const ensureAdditiveSchema = contract.initializeAdditiveSchema
     ? createSqliteSchemaEnsurer(() => contract.schemaSql, {
@@ -214,6 +218,7 @@ function createExistingOpenClawStateWriter(
       const busyTimeoutMs =
         currentOptions.busyTimeoutMs ?? contract.busyTimeoutMs ?? OPENCLAW_SQLITE_BUSY_TIMEOUT_MS;
       setSqliteBusyTimeout(db, busyTimeoutMs);
+      admitStateSchemaFacts(db, pathname);
       return runManagedStateTransaction(
         db,
         () => {

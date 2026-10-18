@@ -149,6 +149,16 @@ it("initializes an additive subset without warm-table DDL", () => {
         database === writer && classifySqliteMutation(query, "batch").mainSchemaChange,
     ),
   ).toEqual([]);
+  const warmQueryCount = queries.length;
+  writeExisting(({ db }) => insert(db, 2, "reopened subset"), options, {
+    ...contract,
+    initializeAdditiveSchema: true,
+  });
+  expectNoQueries(
+    queries.slice(warmQueryCount).map(({ query }) => query),
+    new RegExp(`${schemaInventorySql.source}|\\bFROM schema_meta\\b`, "iu"),
+  );
+  expect(readValues(options.path)).toEqual(["warm subset", "reopened subset"]);
 });
 
 it("refuses invalid repair admission before acquiring maintenance", () => {
