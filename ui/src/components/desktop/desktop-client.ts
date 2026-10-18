@@ -175,11 +175,9 @@ export class DesktopClient {
         sizingMode === "match";
     };
     applySizing();
-    const lifecycle = new AbortController();
-    listen(
-      rfb,
-      "connect",
-      () => {
+    // noVNC's EventTargetMixin ignores listener options, including AbortSignal.
+    const stopRfb = [
+      listen(rfb, "connect", () => {
         if (retired || !options.isCurrent()) {
           disableInput();
           return;
@@ -187,35 +185,24 @@ export class DesktopClient {
         connected = true;
         options.onConnect?.();
         applySizing();
-      },
-      { signal: lifecycle.signal },
-    );
-    listen(
-      rfb,
-      "disconnect",
-      (event) => {
+      }),
+      listen(rfb, "disconnect", (event) => {
         // noVNC's terminal state is permanent; callbacks may synchronously retire this handle.
         retired = true;
         disableInput();
         stopInputTracking();
         stopSocketClose();
-        lifecycle.abort();
+        stopRfb.forEach((stop) => stop());
         // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
         const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
         options.onDisconnect?.({ ...closeDetail, clean });
-      },
-      { signal: lifecycle.signal },
-    );
-    listen(
-      rfb,
-      "securityfailure",
-      (event) => {
+      }),
+      listen(rfb, "securityfailure", (event) => {
         disableInput();
         const detail = (event as CustomEvent<DesktopSecurityFailureDetail>).detail ?? {};
         options.onSecurityFailure?.(detail);
-      },
-      { signal: lifecycle.signal },
-    );
+      }),
+    ];
     return {
       disconnect: () => {
         if (!retired) {
