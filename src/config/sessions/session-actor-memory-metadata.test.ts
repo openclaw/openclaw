@@ -84,7 +84,7 @@ async function fixture(initialText?: string) {
     await raw(header);
     await user("user-1", initialText);
   }
-  return { actor, storage, raw, acquire };
+  return { actor, storage, raw, user, acquire };
 }
 
 describe("memory actor metadata storage", () => {
@@ -185,7 +185,7 @@ describe("memory actor metadata storage", () => {
   });
 
   it("replaces only an exact suffix, preserves opaque custom data, and invalidates old cursors", async () => {
-    const { storage, raw } = await fixture("Keep");
+    const { storage, raw, user } = await fixture("Keep");
     await raw(
       JSON.stringify({
         type: "custom",
