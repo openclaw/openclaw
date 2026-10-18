@@ -1,0 +1,388 @@
+.session-automation-mobile {
+  min-width: 0;
+  padding: 12px 14px 24px;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.session-automation-mobile-heading {
+  display: grid;
+  height: 36px;
+  max-height: 36px;
+  gap: 0;
+  min-width: 0;
+}
+
+.session-automation-mobile-heading > span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 14px;
+}
+
+.session-automation-mobile-heading > strong {
+  overflow: hidden;
+  font-size: inherit;
+  line-height: 22px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-automation-mobile .hub-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 20px;
+  padding: 3px;
+  border: 0;
+  border-radius: 18px;
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.session-automation-mobile .hub-tab {
+  flex: 1;
+  min-height: 38px;
+  justify-content: center;
+  padding: 7px 20px;
+  border: 0;
+  border-radius: 16px;
+  font-weight: 400;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.session-automation-mobile .hub-tab[aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.session-automation-mobile .hub-tab:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: -2px;
+}
+
+.session-automation-mobile__section {
+  margin: 0 0 20px;
+}
+
+.session-automation-mobile__section > h3 {
+  margin: 0 12px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.session-automation-mobile__group {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 14px;
+  background: var(--mobile-list-surface, color-mix(in srgb, var(--popover) 95%, var(--text) 5%));
+}
+
+.session-automation-mobile__fact {
+  position: relative;
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 44px;
+  padding: 12px;
+  font-size: 13px;
+}
+
+.session-automation-mobile__run,
+.session-automation-mobile__list-row {
+  position: relative;
+}
+
+.session-automation-mobile__fact + .session-automation-mobile__fact::before,
+.session-automation-mobile__run + .session-automation-mobile__run::before,
+.session-automation-mobile__list-row + .session-automation-mobile__list-row::before {
+  position: absolute;
+  inset: 0 12px auto;
+  height: 1px;
+  background: var(--mobile-list-separator, var(--border-strong));
+  content: "";
+}
+
+.session-automation-mobile__fact > span:last-child {
+  min-width: 0;
+  color: var(--muted);
+  text-align: end;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__task {
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  font-size: 14px;
+  line-height: 21px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__note {
+  margin: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__editor,
+.session-automation-mobile__list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 12px;
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.session-automation-mobile__editor > span,
+.session-automation-mobile__list-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.session-automation-mobile__editor > svg,
+.session-automation-mobile__list-row > svg,
+.session-automation-mobile__list-icon > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.session-automation-mobile__editor > svg:last-child,
+.session-automation-mobile__list-row > svg:last-child {
+  color: var(--muted);
+}
+
+.session-automation-mobile__editor:hover,
+.session-automation-mobile__list-row:hover {
+  background: var(--bg-hover);
+  text-decoration: none;
+}
+
+.session-automation-mobile__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, 0.8fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.session-automation-mobile__filter {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.session-automation-mobile__filter-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.session-automation-mobile__filter input,
+.session-automation-mobile__filter select,
+.session-automation-mobile__select {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-accent);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  text-align: start;
+}
+
+.session-automation-mobile__select > .oc-menu-item__label {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-automation-mobile__select .oc-menu-item__label > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Menu owns the label wrapper; size the icon inside it, not a direct button child. */
+.session-automation-mobile__select .oc-menu-item__label > svg {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.session-automation-mobile__run > summary {
+  font-variant-numeric: tabular-nums;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 64px;
+  padding: 10px 12px;
+  list-style: none;
+}
+
+.session-automation-mobile__run > summary::-webkit-details-marker {
+  display: none;
+}
+
+.session-automation-mobile__run > summary > span,
+.session-automation-mobile__list-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.session-automation-mobile__run strong,
+.session-automation-mobile__list-copy > strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__run small,
+.session-automation-mobile__list-copy > small {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-automation-mobile__run > summary > svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+
+.session-automation-mobile__run[open] > summary > svg {
+  transform: rotate(180deg);
+}
+
+.session-automation-mobile__run-body {
+  padding: 0 12px 12px;
+  overflow-wrap: anywhere;
+}
+
+.session-automation-mobile__run-body > .session-automation-mobile__note {
+  padding-inline: 0;
+}
+
+.session-automation-mobile__run-body > button,
+.session-automation-mobile__more,
+.session-automation-mobile__message > button {
+  min-height: 36px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 13px;
+}
+
+.session-automation-mobile__more {
+  display: block;
+  margin: 8px auto 0;
+}
+
+.session-automation-mobile button:disabled {
+  opacity: 0.6;
+}
+
+.session-automation-mobile__empty {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  padding: 36px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.session-automation-mobile__empty > svg {
+  width: 24px;
+  height: 24px;
+}
+
+.session-automation-mobile__empty > strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.session-automation-mobile__empty > p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.session-automation-mobile__message {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.session-automation-mobile__list-row {
+  min-height: 54px;
+  color: var(--text);
+}
+
+.session-automation-mobile__list-icon {
+  position: relative;
+  display: flex;
+  flex: none;
+  color: var(--muted);
+}
+
+.session-automation-mobile-transcript {
+  min-width: 0;
+  padding: 16px;
+}
+
+.session-automation-mobile-transcript > .card {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.session-automation-mobile .cron-table__auto-disabled {
+  color: var(--danger);
+}
+
+.session-automation-mobile__list-row:hover .chat-summary__automation-paused {
+  background: var(--bg-hover);
+}
+
+.session-automation-mobile__list-row:hover .chat-summary__automation-attention {
+  box-shadow: 0 0 0 2px var(--bg-hover);
+}
+
+.session-automation-mobile__empty.session-automation-mobile__message {
+  display: grid;
+  justify-content: normal;
+}

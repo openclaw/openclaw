@@ -147,5 +147,6 @@ export type CronState<Row = CronJob> = CronJobsState<Row> & {
   cronRunsDeliveryStatuses: CronDeliveryStatus[];
   cronRunsQuery: string;
   cronRunsSortDir: CronSortDir;
+  cronRunsSortBy?: "time" | "status";
   cronBusy: boolean;
 };

@@ -660,6 +660,7 @@ export const CronRunsParamsSchema = closedObject({
   deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
   query: Type.Optional(Type.String()),
   sortDir: Type.Optional(CronSortDirSchema),
+  sortBy: Type.Optional(stringLiteralUnion(["time", "status"])),
 });
 
 /** One persisted cron run history entry. */
