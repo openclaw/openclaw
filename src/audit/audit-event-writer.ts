@@ -53,9 +53,7 @@ export function createAuditEventWriter(options: {
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
-  let unavailable = false;
   let maintenancePending = true;
-  let readyPending = true;
   let scheduled: ReturnType<typeof setImmediate> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let lockRetryAttempt = 0;
@@ -99,9 +97,6 @@ export function createAuditEventWriter(options: {
       (scope) => (shutdownExpired ? Promise.resolve(undefined) : scope.execute(command)),
     );
   };
-  const observeLockContention = () => {
-    lockRetryAttempt += 1;
-  };
   const resetLockContention = () => {
     lockRetryAttempt = 0;
     lockContentionDelayMs = 0;
@@ -114,7 +109,7 @@ export function createAuditEventWriter(options: {
       const results = await execute({ type: "audit.writer.prune", input: undefined });
       for (const result of results ?? []) {
         if (result.status === "retry") {
-          observeLockContention();
+          lockRetryAttempt += 1;
           return "retry";
         }
         if (result.error !== undefined) {
@@ -173,7 +168,7 @@ export function createAuditEventWriter(options: {
   const scheduleRetry = () => {
     const delayMs = Math.min(
       AUDIT_LOCK_RETRY_MAX_DELAY_MS,
-      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, Math.max(0, lockRetryAttempt - 1)),
+      AUDIT_LOCK_RETRY_DELAY_MS * 2 ** Math.min(6, lockRetryAttempt - 1),
     );
     lockContentionDelayMs += delayMs;
     if (!lockContentionReported && lockContentionDelayMs >= AUDIT_LOCK_CONTENTION_REPORT_MS) {
@@ -199,10 +194,7 @@ export function createAuditEventWriter(options: {
       if (maintenancePending) {
         maintenancePending = false;
         const maintenance = await reportMaintenance();
-        if (readyPending) {
-          readyPending = false;
-          resolveReady();
-        }
+        resolveReady();
         maintenancePending ||= maintenance !== "settled";
         if (maintenance === "retry") {
           retry = true;
@@ -218,7 +210,7 @@ export function createAuditEventWriter(options: {
       if (request) {
         const result = await processRequest(request);
         if (result.status === "retry") {
-          observeLockContention();
+          lockRetryAttempt += 1;
           retry = true;
         } else {
           // Release settled capacity before an error observer can enqueue or throw.
@@ -254,13 +246,9 @@ export function createAuditEventWriter(options: {
   schedule();
 
   const enqueue = (message: AuditWriterRequest): boolean => {
-    if (stopped || unavailable || queue.length >= maxPending) {
+    if (stopped || queue.length >= maxPending) {
       if (!stopped) {
-        fail(
-          unavailable
-            ? "audit event writer is unavailable; dropping metadata"
-            : `audit event queue is full (${maxPending}); dropping metadata`,
-        );
+        fail(`audit event queue is full (${maxPending}); dropping metadata`);
       }
       return false;
     }
@@ -281,7 +269,6 @@ export function createAuditEventWriter(options: {
             : "audit execution decision receipt could not be queued",
         );
       } else {
-        unavailable = true;
         fail(error);
       }
       return false;
@@ -317,12 +304,9 @@ export function createAuditEventWriter(options: {
             retryTimer = undefined;
           }
           fail("audit event writer shutdown timed out; pending metadata may be lost");
-          if (readyPending && !draining) {
-            readyPending = false;
-            resolveReady();
-          }
           // The deadline drops waiting metadata, but a submitted mutation must settle.
           if (!draining) {
+            resolveReady();
             finishStop();
           }
         }, AUDIT_WRITER_SHUTDOWN_TIMEOUT_MS);
