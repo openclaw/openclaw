@@ -1,4 +1,4 @@
-import { createEffect, createMemo, onSettled, untrack } from "solid-js";
+import { createMemo, onSettled } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
@@ -30,6 +30,23 @@ type Props = {
   store?: CustodianSessionStore;
 };
 export type OpenClawAssistantPanelContent = SolidBridgeElement<Props>;
+
+function ActiveCustodian(props: {
+  store: CustodianSessionStore;
+  variant: CustodianSessionStore["activeVariant"];
+}) {
+  onSettled(() => {
+    void props.store.refreshTranscriptIfIdle();
+  });
+  return (
+    <openclaw-custodian-surface
+      prop:store={props.store}
+      prop:onboarding={props.variant === "onboarding"}
+      prop:newAgentIntent={props.variant === "new-agent"}
+    />
+  );
+}
+
 export const AssistantPanelContent = defineSolidBridge<Props>(
   "openclaw-assistant-panel-content",
   (props, element): SolidJSX.Element => {
@@ -55,17 +72,9 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
     );
     onSettled(() => {
       element.dispatchEvent(
-        new CustomEvent("assistant-custodian-store", { detail: untrack(store), bubbles: true }),
+        new CustomEvent("assistant-custodian-store", { detail: store(), bubbles: true }),
       );
     });
-    createEffect(
-      () => props.active && props.destination === "custodian",
-      (visible) => {
-        if (visible) {
-          void untrack(store).refreshTranscriptIfIdle();
-        }
-      },
-    );
     const variant = () => projection().read().store.activeVariant;
     const workContext = createMemo(() => {
       const current = projection().read().context;
@@ -85,11 +94,7 @@ export const AssistantPanelContent = defineSolidBridge<Props>(
               prop:workContext={workContext()}
             />
           ) : (
-            <openclaw-custodian-surface
-              prop:store={store()}
-              prop:onboarding={variant() === "onboarding"}
-              prop:newAgentIntent={variant() === "new-agent"}
-            />
+            <ActiveCustodian store={store()} variant={variant()} />
           ))}
       </>
     );

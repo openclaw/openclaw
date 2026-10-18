@@ -208,8 +208,10 @@ caches, or relax resource caps to manufacture a favorable comparison. The recipe
 creates only a new benchmark directory and leaves normal caches untouched.
 
 For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
-per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
-overhead: enable it for both comparison sides or keep it outside timing pairs.
+per measured invocation, or use `tsgo:profile --deep`. Go profiling requests select
+tsgo even when tsrs is the default checker. An explicit `OPENCLAW_TYPECHECKER=tsrs`
+combined with `--pprofDir` fails rather than silently omitting profiles. Keep Go-only
+profiling outside tsrs-versus-tsgo timing pairs.
 The evidence records the effective `--pprofDir`; it does not manage or delete those
 profiles. These measurements are developer evidence, not a CI pass/fail threshold.
 

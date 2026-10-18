@@ -115,7 +115,7 @@ function resolveCommand(check: FreshnessCheck): [string, string[]] {
   if (typeof script === "string" && /^node(?: [\w./:=@-]+)+$/u.test(script)) {
     return [process.execPath, [...script.split(" ").slice(1), ...check.args]];
   }
-  return ["pnpm", ["-s", check.script, ...check.args]];
+  return ["pnpm", ["run", check.script, ...check.args]];
 }
 
 // Independent read-only checks run together so the hook costs the slowest one.

@@ -6,6 +6,7 @@ import { createSidebarNarration } from "../../components/app-sidebar-session-nar
 import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.ts";
 import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
@@ -108,6 +109,7 @@ export class SubagentsPanelData {
   private readonly unsubscribe: Array<() => void>;
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
+  private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
     private readonly context: ApplicationContext,
@@ -144,7 +146,9 @@ export class SubagentsPanelData {
       }),
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
-    this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility = this.visibilityDocument
+      ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
+      : undefined;
   }
 
   sync(input: SubagentsPanelInput): void {
@@ -629,6 +633,6 @@ export class SubagentsPanelData {
     for (const unsubscribe of this.unsubscribe) {
       unsubscribe();
     }
-    this.visibilityDocument?.removeEventListener("visibilitychange", this.visibilityChanged);
+    this.stopVisibility?.();
   }
 }

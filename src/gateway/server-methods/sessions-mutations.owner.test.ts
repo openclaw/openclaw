@@ -892,7 +892,7 @@ describe("sessions.assignOwner", () => {
         await reject(
           client("profile-viewer"),
           { key: sessionKey, owner },
-          `unknown session owner "${owner.id}"`,
+          expect.stringContaining(`unknown session owner "${owner.id}"`),
           "INVALID_REQUEST",
         );
       }

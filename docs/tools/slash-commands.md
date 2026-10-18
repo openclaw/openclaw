@@ -443,6 +443,8 @@ use the Control UI Tools panel or config surfaces.
 
 `/loop` is owner-only because it uses the cron control-plane tool. `/loop 5m check deploy status` asks the agent to create a fixed-cadence cron job in the current conversation. Without an interval, `/loop watch for new issues` creates a self-paced loop that checks more often while active and backs off toward 1 hour while quiet. `/loop status` lists the conversation's loop jobs. `/loop stop [name]` removes them.
 
+Multiline prompts retain their line breaks and indentation. Generated loop names collapse whitespace onto one line; the recurring prompt keeps the complete text.
+
 ## `/model`: model selection
 
 Use `-s` to change only the current session, `-a` to also update the agent default, or `-g` to also update the shared global default. The long forms are `--session`, `--agent`, and `--global`. An explicit scope overrides `agents.defaults.modelSelectionScope`.
@@ -601,6 +603,8 @@ tool output).
 ## `/btw`: side questions
 
 `/btw` is a quick side question about the current session context. Alias: `/side`.
+
+Questions can span multiple lines or start on the line after `/btw` or `/side`. Pasted errors, blank lines, and indentation are preserved in the question.
 
 ```text
 /btw what are we doing right now?

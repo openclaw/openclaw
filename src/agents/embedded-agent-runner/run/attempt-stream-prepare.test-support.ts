@@ -45,7 +45,6 @@ export function prepareCatalogExecutor(options?: {
   sessionManager?: SessionManager;
   hookRunner?: StreamInput["agentSession"]["hookRunner"];
   attempt?: Partial<StreamInput["attempt"]>;
-  sandboxSessionKey?: string;
   sessionKey?: string;
   replyOperation?: ReplyOperation;
   onAttemptAbort?: () => void;

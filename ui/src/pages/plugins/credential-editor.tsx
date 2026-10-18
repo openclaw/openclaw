@@ -1,4 +1,4 @@
-import { For, createEffect, createSignal, onCleanup, untrack } from "solid-js";
+import { For, createEffect, createSignal, onCleanup } from "solid-js";
 import type {
   PluginCredentialDescriptor,
   PluginCredentialInspection,
@@ -98,9 +98,11 @@ export function PluginCredentialEditor(props: PluginCredentialEditorProps) {
         next.field !== previous?.field ||
         (next.connected && !next.canInspect);
       // Snapshot this revision's editing intent and error copy; neither retriggers inspection.
-      const [wasOpen, wasSaving, staleMessage] = untrack(
-        () => [dialogOpen(), saving(), t("pluginsPage.credentials.stale")] as const,
-      );
+      const [wasOpen, wasSaving, staleMessage] = [
+        dialogOpen(),
+        saving(),
+        t("pluginsPage.credentials.stale"),
+      ] as const;
       setRevealed(false);
       // Other settings can advance the revision before this field's blur commit.
       // Only retiring the field's identity or access may discard its uncommitted key.

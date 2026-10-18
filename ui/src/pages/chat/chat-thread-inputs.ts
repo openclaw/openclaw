@@ -90,8 +90,9 @@ export function placeChatInputs(
     markSearchVisibility(input.message, inputItems);
     if (input.state === "queued") {
       blocks.push({ items: inputItems, runId: input.runId });
-      // The active run owns this floor even when a fresh client has no local send.
-      if (currentRunId && input.runId === currentRunId) {
+      // On an empty transcript, the first accepted input owns the startup floor
+      // even before execution identity arrives. Later inputs remain ceilings.
+      if (currentRunId ? input.runId === currentRunId : history.length === 0 && !activeInputKey) {
         activeInputKey = first.key;
       }
       continue;

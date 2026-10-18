@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defaultRuntime } from "../../runtime.js";
@@ -31,13 +32,14 @@ describe("cron trigger CLI options", () => {
     const bytes = Buffer.from([0x78, 0xff, 0x79]);
     await fs.writeFile(file, bytes);
     await expect(read(file)).rejects.toThrow(`${label} must be valid UTF-8`);
-    await expect(
-      read("-", {
-        stdin: (async function* () {
-          yield bytes;
-        })(),
-      }),
-    ).rejects.toThrow(`${label} must be valid UTF-8`);
+    const stdin = vi
+      .spyOn(process.stdin, Symbol.asyncIterator)
+      .mockImplementation(() => Readable.from([bytes])[Symbol.asyncIterator]());
+    try {
+      await expect(read("-")).rejects.toThrow(`${label} must be valid UTF-8`);
+    } finally {
+      stdin.mockRestore();
+    }
   });
 
   it("preserves exact scratch BOM, Unicode and CRLF while scripts retain trimming", async () => {

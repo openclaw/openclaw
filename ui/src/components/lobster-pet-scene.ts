@@ -1,3 +1,5 @@
+import { listen } from "../lib/reactive/listener.ts";
+
 export type LobsterSceneLane = { start: number; end: number; y: number };
 export type LobsterSceneTravel = {
   from: { x: number; y: number };
@@ -121,6 +123,7 @@ export class LobsterComposerGeometry {
   private active = false;
   private frame: number | null = null;
   private observed: Element[] = [];
+  private stopResize?: () => void;
 
   constructor(
     private readonly host: HTMLElement,
@@ -187,7 +190,7 @@ export class LobsterComposerGeometry {
       // ResizeObserver runs after layout; keep collision lanes current for this paint.
       this.resize = new ResizeObserver(() => this.measure());
     } else {
-      window.addEventListener("resize", this.scheduleMeasure);
+      this.stopResize = listen(window, "resize", this.scheduleMeasure);
     }
     const composer = this.host.parentElement;
     const root = composer?.closest(".new-session-page__draft") ?? composer;
@@ -230,7 +233,8 @@ export class LobsterComposerGeometry {
     this.mutation?.disconnect();
     this.mutation = null;
     this.observed = [];
-    window.removeEventListener("resize", this.scheduleMeasure);
+    this.stopResize?.();
+    this.stopResize = undefined;
   }
 
   readonly scheduleMeasure = () => {

@@ -191,14 +191,19 @@ openclaw-chat-details-progress {
   border-radius: 0;
   background: transparent;
 }
+.chat-details__row,
+.chat-details .chat-subagent-activity__row,
+.chat-details__process,
+.chat-details__more {
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  padding: 6px 8px;
+}
 .chat-details__row {
   display: flex;
   align-items: center;
   gap: 9px;
   min-height: 36px;
-  width: calc(100% + 16px);
-  margin-inline: -8px;
-  padding: 6px 8px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -325,7 +330,6 @@ openclaw-chat-details-progress {
   row-gap: 1px;
   align-items: center;
   min-height: 30px;
-  padding: 4px 0;
 }
 .chat-details .chat-subagent-activity__row > .chat-details__agent-avatar {
   grid-row: 1 / span 2;
@@ -463,9 +467,7 @@ openclaw-chat-details-progress {
   column-gap: 8px;
   row-gap: 1px;
   align-items: center;
-  width: 100%;
   min-height: 30px;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
@@ -525,8 +527,6 @@ button.chat-details__process:is(:hover, :focus-visible) {
 }
 .chat-details__more {
   display: block;
-  width: 100%;
-  padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;

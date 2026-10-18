@@ -340,7 +340,7 @@ describe("scripts/docker/setup.sh", () => {
         expect(log).toContain("image inspect openclaw:local");
         expect(log).not.toContain(`image inspect ${defaultImage}`);
         expect(log).toContain(`image inspect ${agentImage} host=unix://${socketPath}`);
-        expect(log).not.toContain("image inspect openclaw-sandbox:bookworm-slim");
+        expect(log).not.toContain("image inspect openclaw-sandbox:trixie-slim");
         expect(log).not.toMatch(/^build /m);
         expect(log).not.toMatch(/^pull /m);
       } else {
@@ -560,7 +560,7 @@ describe("scripts/docker/setup.sh", () => {
       `compose compose -f ${path("docker-compose.yml")} up -d --pull never --no-build --force-recreate openclaw-gateway`,
     );
     expect(forceRecreateLine).not.toContain("docker-compose.sandbox.yml");
-    expect(log).toContain(`image inspect openclaw-sandbox:bookworm-slim host=unix://${socketPath}`);
+    expect(log).toContain(`image inspect openclaw-sandbox:trixie-slim host=unix://${socketPath}`);
     expectOfflineComposePolicy(lines);
     await expectMissingPath(path("docker-compose.sandbox.yml"));
   });

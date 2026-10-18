@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   logVerbose,
+  danger,
   warn,
   createSubsystemLogger,
   createNonExitingRuntime,
@@ -51,7 +52,6 @@ import { registerDiscordListener } from "./listeners.js";
 import { createDiscordLivePolicyReader } from "./live-policy.js";
 import { probeDiscordAcpBindingHealth } from "./provider.acp.js";
 import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
-import { cleanupDiscordProviderStartup } from "./provider.cleanup.js";
 import { resolveDiscordProviderCommandSpecs } from "./provider.commands.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 import { createDiscordProviderInteractionSurface } from "./provider.interactions.js";
@@ -488,16 +488,29 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts) {
       gatewaySupervisor,
     });
   } finally {
-    await cleanupDiscordProviderStartup({
-      deactivateMessageHandler,
-      stopMonitorListeners,
-      autoPresenceController,
-      setStatus: opts.setStatus,
-      lifecycleStarted,
-      lifecycleGateway,
-      gatewaySupervisor,
-      threadBindings,
-      runtime,
-    });
+    try {
+      const listenersStopped = stopMonitorListeners?.();
+      try {
+        await deactivateMessageHandler?.();
+      } finally {
+        await listenersStopped;
+      }
+      await autoPresenceController?.stop();
+      opts.setStatus?.({ connected: false });
+      if (!lifecycleStarted) {
+        try {
+          lifecycleGateway?.disconnect();
+        } catch (err) {
+          runtime.error?.(
+            danger(`discord: failed to disconnect gateway during startup cleanup: ${String(err)}`),
+          );
+        }
+      }
+      gatewaySupervisor?.dispose();
+    } finally {
+      if (!lifecycleStarted) {
+        await threadBindings.stop();
+      }
+    }
   }
 }

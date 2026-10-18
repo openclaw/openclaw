@@ -9,6 +9,7 @@ import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sess
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
+import type { GatewayClient } from "./server-methods/client-types.js";
 import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
 import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
@@ -30,6 +31,8 @@ export function prepareSessionEventProjection(
     ancestors: ReturnType<SessionRowProjection["ancestorRows"]>;
     /** The transcript publisher owns the message graph for synchronous fanout. */
     encodeMessage?: true;
+    /** Rechecked per recipient after row projection; exact interest always wins. */
+    omitMessage?: (client: GatewayClient) => boolean;
     controlUiOnly?: boolean;
   },
 ): PrepareSessionEventProjection {
@@ -109,6 +112,7 @@ export function prepareSessionEventProjection(
     >();
     const diff = createSessionRowDeltaDiffer();
     const deltaPayloads = new WeakMap<object, Map<string, Record<string, unknown>>>();
+    const bodylessPayloads = new WeakMap<object, Record<string, unknown>>();
     const baselineIds = new WeakMap<object, number>();
     let nextBaselineId = 0;
     const baselineId = (baseline: object | undefined) => {
@@ -226,11 +230,21 @@ export function prepareSessionEventProjection(
         }
         wirePayload = deltaPayload;
       }
+      const omitMessage = event === "session.message" && prepared?.omitMessage?.(client);
+      if (omitMessage) {
+        let bodyless = bodylessPayloads.get(wirePayload);
+        if (!bodyless) {
+          bodyless = { ...wirePayload };
+          delete bodyless.message;
+          bodylessPayloads.set(wirePayload, bodyless);
+        }
+        wirePayload = bodyless;
+      }
       return {
         payload: wirePayload,
         serializeSession: () =>
           rowDelivery ? JSON.stringify(rowDelivery.wire[0]) : serializeSessionRow(row),
-        serializeMessage,
+        serializeMessage: omitMessage ? undefined : serializeMessage,
         delivered: () => {
           rowDelivery?.delivered();
           references.forget(row.key);
