@@ -240,14 +240,17 @@ async function readSessionFileReference(
   sessionKey: string,
   agentId: string | undefined,
   path: string,
-): Promise<SessionWorkspaceGetResult | null> {
+): Promise<{ result: SessionWorkspaceGetResult; actionPath: string } | null> {
   try {
-    return await state.sessions.getFile(sessionKey, path, { agentId });
+    return {
+      result: await state.sessions.getFile(sessionKey, path, { agentId }),
+      actionPath: path,
+    };
   } catch (error) {
     if (!isMissingSessionFile(error)) {
       const size = readOversizedSessionFileSize(error);
       if (size !== undefined) {
-        return oversizedSessionFileResult(sessionKey, path, size);
+        return { result: oversizedSessionFileResult(sessionKey, path, size), actionPath: path };
       }
       throw error;
     }
@@ -267,12 +270,21 @@ async function readSessionFileReference(
     if (matches.length !== 1 || !match) {
       throw error;
     }
+    // Search entries are workspace-root-relative. Root them before reading so
+    // follow-up actions cannot be resolved against a nested session cwd.
+    const actionPath = workspaceBrowserFilePath(listing.root, match.path);
     try {
-      return await state.sessions.getFile(sessionKey, match.path, { agentId });
+      return {
+        result: await state.sessions.getFile(sessionKey, actionPath, { agentId }),
+        actionPath,
+      };
     } catch (resolvedError) {
       const size = readOversizedSessionFileSize(resolvedError);
       if (size !== undefined) {
-        return oversizedSessionFileResult(sessionKey, match.path, size);
+        return {
+          result: oversizedSessionFileResult(sessionKey, actionPath, size),
+          actionPath,
+        };
       }
       throw resolvedError;
     }
@@ -299,18 +311,18 @@ function openFile(
     workspace,
     viewingSession ? `file:${requestPath}` : JSON.stringify(["file", sessionKey, requestPath]),
     async () => await readSessionFileReference(state, sessionKey, agentId, requestPath),
-    (result) => {
+    (reference) => {
+      const { result, actionPath } = reference;
       const file = result.file;
       if (!file) {
         return null;
       }
-      const resolvedPath = file.path || file.workspacePath || requestPath;
-      const name = file.name || pathDisplayName(resolvedPath);
-      const filePath = file.workspacePath || resolvedPath;
+      const name = file.name || pathDisplayName(file.path || actionPath);
+      const filePath = file.workspacePath || file.path || actionPath;
       const download = (signal: AbortSignal) =>
         downloadSessionFile(
           state,
-          { sessionKey: result.sessionKey, agentId, path: resolvedPath },
+          { sessionKey: result.sessionKey, agentId, path: actionPath },
           signal,
         );
       if (file.previewKind === "image") {
@@ -332,7 +344,7 @@ function openFile(
       }
       if (file.previewKind === "unsupported") {
         return {
-          ...unsupportedFileSidebarContent(file, resolvedPath, download),
+          ...unsupportedFileSidebarContent(file, actionPath, download),
           fileLinkSessionKey: result.sessionKey,
         };
       }
@@ -350,15 +362,10 @@ function openFile(
             hash: file.hash!,
             save: async ({ content, expectedHash }: { content: string; expectedHash: string }) => {
               try {
-                const saved = await state.sessions.setFile(
-                  result.sessionKey,
-                  resolvedPath,
-                  content,
-                  {
-                    agentId,
-                    expectedHash,
-                  },
-                );
+                const saved = await state.sessions.setFile(result.sessionKey, actionPath, content, {
+                  agentId,
+                  expectedHash,
+                });
                 const hash = saved?.file.hash;
                 if (
                   typeof hash === "string" &&
@@ -394,7 +401,7 @@ function openFile(
               }
             },
             fetchLatest: async () => {
-              const latest = await state.sessions.getFile(result.sessionKey, resolvedPath, {
+              const latest = await state.sessions.getFile(result.sessionKey, actionPath, {
                 agentId,
               });
               const latestFile = latest?.file;
@@ -425,7 +432,7 @@ function openFile(
         sessionFileSource: {
           sessionKey: result.sessionKey,
           agentId,
-          path: resolvedPath,
+          path: actionPath,
         },
         draftKey: [
           gatewayUrl,
@@ -454,8 +461,8 @@ function openFile(
       line: opts.line,
       label: pathDisplayName(path),
       revalidate: true,
-      resolveLabel: (result) => result.file?.name,
-      resolveKey: (result) => {
+      resolveLabel: ({ result }) => result.file?.name,
+      resolveKey: ({ result }) => {
         const canonicalPath = result.file?.workspacePath || result.file?.path;
         return canonicalPath
           ? sessionWorkspaceFileKey(result.sessionKey, result.root, canonicalPath)

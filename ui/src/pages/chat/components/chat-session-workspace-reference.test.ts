@@ -11,11 +11,20 @@ import {
 } from "./chat-session-workspace.test-support.ts";
 import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
 
+const downloadSessionFile = vi.hoisted(() =>
+  vi.fn(async () => ({ url: "/download/report", filename: "REPORT.md" })),
+);
+
+vi.mock("../../../api/session-file-download.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../api/session-file-download.ts")>();
+  return { ...actual, downloadSessionFile };
+});
+
 describe("session workspace file reference resolution", () => {
   it("resolves a bare filename to the nested workspace file that search finds once", async () => {
     const nestedPath = "labs/file-organizer/output/sorted-copy-001/ORGANIZATION_REPORT.md";
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path !== nestedPath) {
+      if (path !== `/workspace/${nestedPath}`) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "session file not found",
@@ -72,27 +81,114 @@ describe("session workspace file reference resolution", () => {
       path: "",
       search: "ORGANIZATION_REPORT.md",
     });
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, {
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", `/workspace/${nestedPath}`, {
       agentId: "main",
     });
     if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
       throw new Error("expected editable resolved file content");
     }
     await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
-    expect(setFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, "# Updated", {
+    expect(setFile).toHaveBeenLastCalledWith(
+      "agent:main:current",
+      `/workspace/${nestedPath}`,
+      "# Updated",
+      {
+        agentId: "main",
+        expectedHash: "hash",
+      },
+    );
+    expect(sidebarContent.sessionFileSource).toEqual({
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      path: `/workspace/${nestedPath}`,
+    });
+    await sidebarContent.download?.(new AbortController().signal);
+    expect(downloadSessionFile).toHaveBeenLastCalledWith(
+      state,
+      {
+        sessionKey: "agent:main:current",
+        agentId: "main",
+        path: `/workspace/${nestedPath}`,
+      },
+      expect.any(AbortSignal),
+    );
+    await sidebarContent.edit.fetchLatest();
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", `/workspace/${nestedPath}`, {
+      agentId: "main",
+    });
+  });
+
+  it("keeps the successful root path for actions when the Gateway responds with a cwd-relative path", async () => {
+    const requestPath = "/workspace/src/readme.md";
+    const returnedPath = "src/readme.md";
+    const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
+      if (path !== requestPath) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "session file not found",
+          details: { type: "session_file_not_found" },
+        });
+      }
+      return {
+        sessionKey,
+        root: "/workspace",
+        file: {
+          path: returnedPath,
+          workspacePath: returnedPath,
+          name: "readme.md",
+          kind: "read",
+          missing: false,
+          previewKind: "text",
+          contentEncoding: "utf8",
+          content: "# Readme",
+          hash: "hash",
+        },
+      };
+    });
+    const setFile = vi.fn(async (sessionKey: string, path: string) => ({
+      sessionKey,
+      file: { path, hash: "saved-hash" },
+    }));
+    const state: SessionWorkspaceHost = {
+      client: createGatewayBrowserClientFixture(),
+      connected: true,
+      connectionEpoch: 1,
+      handleOpenSidebar: createSidebarContentRecorder(),
+      hello: gatewayHelloForMethods(["sessions.files.set"]),
+      sessionKey: "agent:main:current",
+      sidebarContent: null,
+      sessions: createSessionCapabilityFixture({ getFile, setFile }),
+    };
+
+    openSessionWorkspaceFile(state, { path: requestPath });
+
+    const sidebarContent = await loadedSidebarContent(state);
+    if (sidebarContent.kind !== "file" || !sidebarContent.edit) {
+      throw new Error("expected editable resolved file content");
+    }
+    expect(sidebarContent.path).toBe(returnedPath);
+    expect(sidebarContent.sessionFileSource?.path).toBe(requestPath);
+    await sidebarContent.edit.save({ content: "# Updated", expectedHash: "hash" });
+    expect(setFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, "# Updated", {
       agentId: "main",
       expectedHash: "hash",
     });
     await sidebarContent.edit.fetchLatest();
-    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", nestedPath, {
+    expect(getFile).toHaveBeenLastCalledWith("agent:main:current", requestPath, {
       agentId: "main",
     });
+    await sidebarContent.download?.(new AbortController().signal);
+    expect(downloadSessionFile).toHaveBeenLastCalledWith(
+      state,
+      { sessionKey: "agent:main:current", agentId: "main", path: requestPath },
+      expect.any(AbortSignal),
+    );
   });
 
   it("uses the resolved nested path for oversized-file metadata", async () => {
     const nestedPath = "labs/output/REPORT.md";
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey, path) => {
-      if (path === nestedPath) {
+      if (path === `/workspace/${nestedPath}`) {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "session file too large",
@@ -130,8 +226,8 @@ describe("session workspace file reference resolution", () => {
 
     const sidebarContent = await loadedSidebarContent(state);
     expect(sidebarContent.kind).toBe("markdown");
-    expect(sidebarContent.fileDownload?.path).toBe(nestedPath);
-    expect(sidebarContent.rawText).toContain(nestedPath);
+    expect(sidebarContent.fileDownload?.path).toBe(`/workspace/${nestedPath}`);
+    expect(sidebarContent.rawText).toContain(`/workspace/${nestedPath}`);
   });
 
   it.each([
