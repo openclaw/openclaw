@@ -125,6 +125,20 @@ changes the draft state without publishing more source or merging the PR. It
 accepts no child or arbitrary PR selector. After an uncertain response, read with
 `edit` before retrying; an already-ready PR returns its observed state.
 
+To request another ClawSweeper review of the current session's shared PR, use
+`github_publish` with `action: "request_review"`. Read the PR with `edit` first,
+then pass its `requestId` and `expectedHeadCommit`. Guests can request this for
+their own authorized publication in local or repository workspaces. The Gateway
+posts exactly `@clawsweeper re-review`; comment text, review focus, other commands,
+and child or arbitrary PR selectors are not accepted.
+
+The result confirms only that the comment was posted and includes its URL.
+ClawSweeper decides whether to accept the request and complete the review. Use
+`github_read` to inspect feedback. A lost or invalid write response is uncertain:
+read existing PR comments before making another request, since the comment may
+already exist. The Gateway never retries the comment POST automatically. Closed
+or merged PRs reject this operation; publisher credentials remain on the Gateway.
+
 A person with full operator write access can request landing in the same conversation, including a guest-created sandboxed session. The agent uses `github_publish` with `action: "inspect"` to read the session's completed shared publication and its current GitHub state. After review and required checks, `action: "ready"` marks its draft ready and `action: "merge"` merges it. To close the PR without merging, use `action: "close"` after inspection. All three writes require the inspected `requestId` and `expectedHeadCommit`; merge also requires an explicit `mergeMethod` (`merge`, `squash`, or `rebase`). GitHub still enforces repository permissions and merge requirements. These operations do not enable auto-merge or delete the branch, workspace, or conversation.
 
 Squash landing uses the current PR title read by the merge action as the commit subject, including for a one-commit PR whose original subject differs. Contributor trailers remain in the commit body. Merge and rebase methods retain GitHub's existing commit-message behavior.

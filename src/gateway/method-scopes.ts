@@ -130,6 +130,7 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
     return [
       record?.action === "refresh_base" ||
       record?.action === "edit" ||
+      record?.action === "request_review" ||
       (record?.action === "ready" && record.publishingSessionKey === undefined)
         ? SESSION_WRITE_SCOPE
         : WRITE_SCOPE,

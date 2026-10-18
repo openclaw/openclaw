@@ -22,7 +22,7 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
@@ -105,6 +105,7 @@ async function fixture(backend: "local" | "repository" = "local") {
   let rejectClose = false;
   let rejectEdit = false;
   let loseResponse = false;
+  let reviewResponse: ReturnType<typeof commandResult> | undefined;
   const previous = mocks.runCommand.getMockImplementation()!;
   mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
     if (argv[0] !== "gh" || !argv.includes("--method")) {
@@ -114,7 +115,20 @@ async function fixture(backend: "local" | "repository" = "local") {
       await beforeRead?.();
       return commandResult(JSON.stringify(state));
     }
-    if (argv.includes("graphql")) {
+    let response = commandResult("{}");
+    if (argv.includes("POST") && argv.some((arg) => /\/issues\/\d+\/comments$/u.test(arg))) {
+      writes.push({ action: "request_review", input: JSON.parse(options!.input!) });
+      response =
+        reviewResponse ??
+        commandResult(
+          JSON.stringify({
+            id: 123,
+            html_url: `${publication.url}#issuecomment-123`,
+            body: "@clawsweeper re-review",
+            user: { id: 42 },
+          }),
+        );
+    } else if (argv.includes("graphql")) {
       writes.push({ action: "ready", input: JSON.parse(options!.input!) });
       state.draft = false;
     } else if (argv.some((arg) => arg.endsWith("/merge"))) {
@@ -154,13 +168,13 @@ async function fixture(backend: "local" | "repository" = "local") {
     if (loseResponse) {
       throw new Error("Connection closed after GitHub accepted the write");
     }
-    return commandResult("{}");
+    return response;
   });
   const invoke = async (
     actor: "guest" | "admin" | "writer",
     args: Record<string, unknown>,
     source = SESSION_KEY,
-    client?: typeof f.guestSource.client,
+    invocation: { raw?: boolean; client?: typeof f.guestSource.client } = {},
   ) => {
     const principal =
       actor === "guest" ? f.guestSource : actor === "writer" ? writerSource : f.maintainerSource;
@@ -171,7 +185,7 @@ async function fixture(backend: "local" | "repository" = "local") {
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: client ?? principal.client,
+        client: invocation.client ?? principal.client,
         context: {
           ...principal.context,
           githubPublicationService: f.coordinator,
@@ -186,11 +200,16 @@ async function fixture(backend: "local" | "repository" = "local") {
       }
       return result as T;
     };
-    return await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, () =>
-      createGitHubPublishTool({ callGateway, actionsAvailable: actor !== "guest" }).execute(
-        "publication-action",
-        args,
-      ),
+    return await withGatewayToolCallerIdentity({ agentId: "main", sessionKey: source }, async () =>
+      invocation.raw
+        ? {
+            content: [],
+            details: await callGateway("sessions.github.action", { sessionKey: source, ...args }),
+          }
+        : createGitHubPublishTool({ callGateway, actionsAvailable: actor !== "guest" }).execute(
+            "publication-action",
+            args,
+          ),
     );
   };
   const expected = { requestId: publication.requestId, expectedHeadCommit: publication.headCommit };
@@ -218,6 +237,9 @@ async function fixture(backend: "local" | "repository" = "local") {
     rejectClose() {
       rejectClose = true;
     },
+    reviewResponse(result: ReturnType<typeof commandResult>) {
+      reviewResponse = result;
+    },
     loseResponse() {
       loseResponse = true;
     },
@@ -230,6 +252,158 @@ describe("session PR actions through the agent tool and registered Gateway metho
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["local", "repository"] as const)(
+    "posts only the fixed re-review command for the guest's current %s PR",
+    async (backend) => {
+      const f = await fixture(backend);
+      const checkpointsBefore = checkpoint.mock.calls.length;
+      const result = await f.invoke("guest", { action: "request_review", ...f.expected });
+      expect(result.details).toMatchObject({
+        publication: f.publication,
+        headCommit: f.publication.headCommit,
+        reviewRequest: {
+          status: "posted",
+          url: `${f.publication.url}#issuecomment-123`,
+          message:
+            "ClawSweeper re-review request posted; review acceptance and completion are not confirmed.",
+        },
+      });
+      expect(f.writes).toEqual([
+        { action: "request_review", input: { body: "@clawsweeper re-review" } },
+      ]);
+      expect(checkpoint.mock.calls.length).toBe(checkpointsBefore);
+    },
+  );
+
+  it("rejects target selectors, freeform commands and missing preconditions through both entry points", async () => {
+    const f = await fixture();
+    const args = { action: "request_review", ...f.expected };
+    for (const extra of [
+      { publishingSessionKey: "agent:main:child" },
+      { body: "@clawsweeper re-review focus on permissions" },
+      { title: "Unexpected metadata edit" },
+      { command: "@clawsweeper stop" },
+      { repository: "other/repo" },
+      { mergeMethod: "merge" },
+    ]) {
+      for (const raw of [false, true]) {
+        await expect(
+          f.invoke("guest", { ...args, ...extra }, SESSION_KEY, { raw }),
+        ).rejects.toThrow();
+      }
+    }
+    for (const extra of [
+      { requestId: undefined },
+      { expectedHeadCommit: undefined },
+      { requestId: randomUUID() },
+    ]) {
+      await expect(f.invoke("guest", { ...args, ...extra })).rejects.toThrow();
+    }
+    f.state.head.sha = "f".repeat(40);
+    await expect(f.invoke("guest", args)).rejects.toThrow("head changed");
+    f.state.head.sha = f.publication.headCommit;
+    for (const merged of [false, true]) {
+      f.state.state = "closed";
+      f.state.merged = merged;
+      await expect(f.invoke("guest", args)).rejects.toThrow("closed");
+    }
+    expect(f.writes).toEqual([]);
+  });
+
+  it("rejects unbound and foreign publications without borrowing the shared publisher's permissions", async () => {
+    const f = await fixture();
+    const args = { action: "request_review", ...f.expected };
+    const unbound = "agent:main:unbound";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: unbound },
+      {
+        sessionId: randomUUID(),
+        lifecycleRevision: randomUUID(),
+        updatedAt: 1,
+        sandbox: "required",
+        createdActor: { type: "human", source: "profile", id: f.guestProfile },
+      },
+    );
+    await expect(f.invoke("guest", args, unbound)).rejects.toThrow(
+      "no completed shared publication",
+    );
+    const other = await ensureCanonicalUserProfileForEmail("publication-other-guest@example.test");
+    const client = createOperatorWsClient({
+      connId: other.id,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    });
+    client.authenticatedUserProfile = {
+      profileId: other.id,
+      displayName: null,
+      avatarRevision: "fixture",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    prepareGatewayConnectOperatorAccess(client);
+    await expect(f.invoke("guest", args, SESSION_KEY, { client })).rejects.toThrow();
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, { visibility: "shared" });
+    await addSessionMember(scope, { identityId: other.id, addedBy: f.guestProfile });
+    const admission = await resolveSessionMutationAuthorizationAsync({
+      client,
+      method: "sessions.github.action",
+      requestParams: { sessionKey: SESSION_KEY, ...args },
+      context: f.guestSource.context as GatewayRequestContext,
+    });
+    try {
+      expect(admission.error).toBeNull();
+      expect(admission.authorization).toBeDefined();
+      admission.authorization?.assertCurrent();
+    } finally {
+      admission.authorization?.release?.();
+    }
+    await expect(f.invoke("guest", args, SESSION_KEY, { client })).rejects.toThrow(
+      "The original GitHub publication requester is no longer authorized.",
+    );
+    expect(f.writes).toEqual([]);
+  });
+
+  it.each(["requester", "publisher"] as const)(
+    "rejects a changed %s after the PR read",
+    async (changed) => {
+      const f = await fixture();
+      f.onRead(async () => {
+        if (changed === "requester") {
+          await f.revoke();
+        } else {
+          mocks.matchesIdentity.mockReturnValue(false);
+        }
+      });
+      await expect(
+        f.invoke("guest", { action: "request_review", ...f.expected }),
+      ).rejects.toThrow();
+      expect(f.writes).toEqual([]);
+    },
+  );
+
+  it.each(["lost response", "rejected", "invalid receipt"])(
+    "reports an uncertain re-review after %s without retrying the POST",
+    async (failure) => {
+      const f = await fixture();
+      if (failure === "lost response") {
+        f.loseResponse();
+      } else {
+        f.reviewResponse(
+          commandResult(
+            failure === "rejected" ? '{"message":"Resource not accessible"}' : "{}",
+            failure === "rejected" ? 1 : 0,
+          ),
+        );
+      }
+      await expect(f.invoke("guest", { action: "request_review", ...f.expected })).rejects.toThrow(
+        /may already have been posted.*Read the PR comments.*do not retry blindly/u,
+      );
+      expect(f.writes).toEqual([
+        { action: "request_review", input: { body: "@clawsweeper re-review" } },
+      ]);
+    },
+  );
 
   it("edits only a guest PR body without publishing dirty workspace files", async () => {
     const f = await fixture();
@@ -445,7 +619,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
     prepareGatewayConnectOperatorAccess(client);
     const scope = { agentId: "main", sessionKey: SESSION_KEY };
     await upsertSessionEntryCore(scope, { visibility: "shared" });
-    addSessionMember(scope, { identityId: participant.id, addedBy: f.guestProfile });
+    await addSessionMember(scope, { identityId: participant.id, addedBy: f.guestProfile });
     const admission = await resolveSessionMutationAuthorizationAsync({
       client,
       context: Object.assign(createRequestContext(), f.guestSource.context),
@@ -457,7 +631,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
       expect(admission.authorization).toBeDefined();
       admission.authorization!.assertCurrent();
       await expect(
-        f.invoke("guest", { action: "ready", ...f.expected }, SESSION_KEY, client),
+        f.invoke("guest", { action: "ready", ...f.expected }, SESSION_KEY, { client }),
       ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
       expect(f.writes).toEqual([]);
       expect(f.state.draft).toBe(true);

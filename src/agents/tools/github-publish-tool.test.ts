@@ -15,6 +15,16 @@ describe("github_publish tool", () => {
     expect(Value.Check(tool.parameters, { action: "edit" })).toBe(true);
     expect(
       Value.Check(tool.parameters, {
+        action: "request_review",
+        requestId: "a1111111-1111-4111-8111-111111111111",
+        expectedHeadCommit: "a".repeat(40),
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(tool.parameters, { action: "request_review", focus: "extra instructions" }),
+    ).toBe(false);
+    expect(
+      Value.Check(tool.parameters, {
         action: "edit",
         title: "New title",
         expectedTitle: "Old title",

@@ -10,6 +10,27 @@ import {
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
 describe("session GitHub publication protocol", () => {
+  it("accepts a fixed current-PR review request without freeform text or target selectors", () => {
+    const request = {
+      sessionKey: "agent:main:publication",
+      action: "request_review",
+      requestId: "a1111111-1111-4111-8111-111111111111",
+      expectedHeadCommit: "a".repeat(40),
+    };
+    expect(Value.Check(SessionGitHubActionParamsSchema, request)).toBe(true);
+    for (const extra of [
+      { body: "@clawsweeper stop" },
+      { focus: "maintainer instructions" },
+      { publishingSessionKey: "child" },
+      { repository: "other/repo" },
+      { url: "https://github.com/other/repo/pull/1" },
+      { mergeMethod: "squash" },
+      { requestId: undefined },
+      { expectedHeadCommit: undefined },
+    ]) {
+      expect(Value.Check(SessionGitHubActionParamsSchema, { ...request, ...extra })).toBe(false);
+    }
+  });
   it("admits only a current-workspace refresh and bounded conflict acknowledgment", () => {
     const refresh = { sessionKey: "agent:main:publication", action: "refresh_base" };
     expect(Value.Check(SessionGitHubActionParamsSchema, refresh)).toBe(true);
