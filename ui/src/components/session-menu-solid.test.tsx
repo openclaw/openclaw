@@ -28,7 +28,8 @@ it("keeps advertised native menu shortcuts ahead of composer autotype", async ()
   const composer = root.appendChild(document.createElement("div"));
   composer.className = "agent-chat__composer-combobox";
   const input = composer.appendChild(document.createElement("textarea"));
-  const capture = (event: KeyboardEvent) => focusChatComposerFromPrintableKeydown(root, event);
+  const capture = (event: KeyboardEvent) =>
+    focusChatComposerFromPrintableKeydown(root, event, input);
   document.addEventListener("keydown", capture, true);
   try {
     menuItem(host, "Pin session").focus();

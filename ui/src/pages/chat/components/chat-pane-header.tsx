@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId } from "solid-js";
+import { Show, createMemo, createUniqueId, onSettled } from "solid-js";
 import { buildControlUiResourcePath } from "../../../../../src/gateway/control-ui-resource-routes.js";
 import { isIncognitoSessionKey } from "../../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
@@ -305,36 +305,47 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
         </Show>
       }
     >
-      <input
-        class="chat-pane__session-title-input"
-        value={props.renameValue}
-        aria-label={t("chat.sessionHeader.renameInputAria")}
-        placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
-        onInput={(event) => props.onRenameInput(event.currentTarget.value)}
-        onCompositionEnd={recordCompositionEnd}
-        ref={nativeListener("keyup", clearCompositionEnd)}
-        onKeyDown={(event) => {
-          if (isComposingKeyboardEvent(event)) {
-            return;
-          }
-          if (event.key === "Enter") {
-            event.preventDefault();
-            if (!props.actionsDisabled) {
-              props.onCommitRename();
-            }
-          } else if (event.key === "Escape") {
-            event.preventDefault();
-            props.onCancelRename();
-          }
-        }}
-        onBlur={(event) => {
-          clearCompositionEnd(event);
+      <SessionRenameInput {...props} />
+    </Show>
+  );
+}
+
+function SessionRenameInput(props: ChatPaneHeaderProps) {
+  let input!: HTMLInputElement;
+  onSettled(() => {
+    input.focus();
+    input.select();
+  });
+  return (
+    <input
+      class="chat-pane__session-title-input"
+      value={props.renameValue}
+      aria-label={t("chat.sessionHeader.renameInputAria")}
+      placeholder={t("chat.sessionHeader.renameInputPlaceholder")}
+      onInput={(event) => props.onRenameInput(event.currentTarget.value)}
+      onCompositionEnd={recordCompositionEnd}
+      ref={[(element) => (input = element), nativeListener("keyup", clearCompositionEnd)]}
+      onKeyDown={(event) => {
+        if (isComposingKeyboardEvent(event)) {
+          return;
+        }
+        if (event.key === "Enter") {
+          event.preventDefault();
           if (!props.actionsDisabled) {
             props.onCommitRename();
           }
-        }}
-      />
-    </Show>
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          props.onCancelRename();
+        }
+      }}
+      onBlur={(event) => {
+        clearCompositionEnd(event);
+        if (!props.actionsDisabled) {
+          props.onCommitRename();
+        }
+      }}
+    />
   );
 }
 

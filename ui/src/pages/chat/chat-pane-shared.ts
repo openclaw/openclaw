@@ -2,6 +2,8 @@ import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-co
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
+import { menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
+import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -171,12 +173,10 @@ const CHAT_DROPDOWN_KEYS = new Set([
 // Shortcut menus own only advertised, enabled keys; every other printable key
 // can still transfer to the composer through the normal browser input pipeline.
 function keyboardShortcutTargetOwnsKey(target: HTMLElement, key: string): boolean {
-  // Browser menu DOM owns shortcut admission across independently rendered surfaces.
   return (
-    /^[a-z0-9]$/iu.test(key) &&
     (target.matches("[data-chat-autotype-shortcuts][open]") ||
       (target.matches('[role="menu"][popover]') && target.matches(":popover-open"))) &&
-    target.querySelector(`[data-shortcut="${key.toLowerCase()}"]:not([disabled])`) !== null
+    menuOwnsShortcut(target, key)
   );
 }
 
@@ -193,26 +193,30 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
     .some(
       (target) =>
         target instanceof HTMLElement &&
-        (target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
+        (target.matches("dialog[open], [aria-modal='true']") ||
+          target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
           keyboardShortcutTargetOwnsKey(target, event.key) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
 
-function openDropdownOwnsKey(root: ParentNode, key: string): boolean {
+function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
   // Portaled menus can belong to any surface in the containing app.
-  const surface = root instanceof Element ? (root.closest("openclaw-app") ?? root) : root;
-  return [...surface.querySelectorAll<HTMLElement>('[role="menu"][popover]')].some(
-    (dropdown) =>
-      dropdown.matches(":popover-open") &&
-      !dropdown.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(dropdown, key)),
+  const surface = root.closest("openclaw-app, openclaw-app-shell") ?? root;
+  return [...registryFor(root.ownerDocument).members.keys()].some(
+    (overlay) =>
+      surface.contains(overlay.surface) &&
+      overlay.open &&
+      overlay.surface.matches('[role="menu"][popover]') &&
+      !overlay.surface.closest("[inert]") &&
+      (CHAT_DROPDOWN_KEYS.has(key) || keyboardShortcutTargetOwnsKey(overlay.surface, key)),
   );
 }
 
 export function focusChatComposerFromPrintableKeydown(
-  root: ParentNode,
+  root: HTMLElement,
   event: KeyboardEvent,
+  composer: HTMLTextAreaElement | null,
 ): void {
   // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
@@ -224,12 +228,11 @@ export function focusChatComposerFromPrintableKeydown(
     openDropdownOwnsKey(root, event.key) ||
     event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
-    document.openClawModalLayers?.size ||
-    document.querySelector("dialog[open], [aria-modal='true']")
+    root.closest("[inert]") ||
+    hasModalSurface(root.ownerDocument)
   ) {
     return;
   }
-  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
