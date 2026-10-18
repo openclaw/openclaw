@@ -16,7 +16,6 @@ import {
 import * as hydration from "../config/sessions/session-transcript-hydration.js";
 import { SessionTranscriptStorageUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { recordOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db-lifecycle.js";
 import { clearOpenClawAgentDatabaseOpenFailure } from "../state/openclaw-agent-db.js";
 import {
@@ -43,12 +42,11 @@ function readPreview(
   return readSessionPreviewItemsFromTranscriptAsync(scope, maxItems, maxChars, "model-context");
 }
 
-function holdHydration(once = false) {
-  const received = createDeferredCore();
-  const release = createDeferredCore();
+async function duringHydration<T>(read: () => Promise<T>, mutate: () => void, once = false) {
   const storageRoots = new Set<string | undefined>();
   const prepare = hydration.prepareSessionTranscriptHydration;
   let first = true;
+  let mutated = false;
   const intercept: typeof prepare = (...args) => {
     const prepared = prepare(...args);
     storageRoots.add(prepared.target.env.OPENCLAW_STATE_DIR);
@@ -59,20 +57,53 @@ function holdHydration(once = false) {
       read: async () => {
         const snapshot = await prepared.read();
         if (pause) {
-          received.resolve();
-          await release.promise;
+          mutate();
+          mutated = true;
         }
         return snapshot;
       },
     };
   };
   const held = vi.spyOn(hydration, "prepareSessionTranscriptHydration");
-  if (once) {
-    held.mockImplementationOnce(intercept);
-  } else {
-    held.mockImplementation(intercept);
+  held[once ? "mockImplementationOnce" : "mockImplementation"](intercept);
+  try {
+    const items = await read();
+    expect(mutated).toBe(true);
+    return { items, storageRoots: [...storageRoots] };
+  } finally {
+    held.mockRestore();
   }
-  return { received, release, storageRoots, held };
+}
+
+async function persistHistory(
+  scope: ReturnType<typeof previewScope>,
+  texts: string[],
+  toolCount = 0,
+) {
+  const history = SessionManager.inMemory("/synthetic/preview-history");
+  history.newSession({ id: scope.sessionId });
+  texts.forEach((content, index) =>
+    history.appendMessage({ role: "user", content, timestamp: index + 1 }),
+  );
+  for (let index = 0; index < toolCount; index++) {
+    history.appendMessage({
+      role: "toolResult",
+      toolCallId: `synthetic-call-${index}`,
+      toolName: "synthetic_tool",
+      content: [{ type: "text", text: "Tool activity" }],
+      isError: false,
+      timestamp: index + 2,
+    });
+  }
+  await replaceTranscriptEvents(scope, history.getPersistedEntries());
+  await waitForSessionTranscriptProjection(scope);
+}
+
+function readTalk(scope: ReturnType<typeof previewScope>, assertCurrent: () => void = vi.fn()) {
+  return readTalkRealtimeInitialItems(
+    { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
+    assertCurrent,
+  );
 }
 
 it("keeps missing preview storage absent and propagates terminal read refusal", async () => {
@@ -96,48 +127,19 @@ it("keeps missing preview storage absent and propagates terminal read refusal", 
 it("keeps widened model previews bound to their prepared storage environment", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const env = { OPENCLAW_STATE_DIR: state.stateDir };
-    const scope = {
-      ...previewScope(state, "preview-captured-environment"),
-      env,
-    };
+    const scope = { ...previewScope(state, "preview-captured-environment"), env };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const history = SessionManager.inMemory("/synthetic/preview-capture");
-    history.newSession({ id: scope.sessionId });
-    history.appendMessage({ role: "user", content: "Retained question", timestamp: 1 });
-    for (let index = 0; index < 65; index++) {
-      history.appendMessage({
-        role: "toolResult",
-        toolCallId: `synthetic-call-${index}`,
-        toolName: "synthetic_tool",
-        content: [{ type: "text", text: "Tool activity" }],
-        isError: false,
-        timestamp: index + 2,
-      });
-    }
-    await replaceTranscriptEvents(scope, history.getPersistedEntries());
-    await waitForSessionTranscriptProjection(scope);
-    const { received, release, storageRoots, held } = holdHydration();
-    const pending = readPreview(scope, 1, 100);
-    const outcome = pending.then(
-      (items) => ({ items }),
-      (error: unknown) => ({ error }),
+    await persistHistory(scope, ["Retained question"], 65);
+    const result = await duringHydration(
+      () => readPreview(scope, 1, 100),
+      () => {
+        env.OPENCLAW_STATE_DIR = state.statePath("replacement-namespace");
+      },
     );
-    try {
-      await Promise.race([
-        received.promise,
-        outcome.then(() => {
-          throw new Error("Preview settled before its hydration boundary");
-        }),
-      ]);
-      env.OPENCLAW_STATE_DIR = state.statePath("replacement-namespace");
-      release.resolve();
-      expect(await outcome).toEqual({ items: [{ role: "user", text: "Retained question" }] });
-      expect([...storageRoots]).toEqual([state.stateDir]);
-    } finally {
-      release.resolve();
-      await outcome;
-      held.mockRestore();
-    }
+    expect(result).toEqual({
+      items: [{ role: "user", text: "Retained question" }],
+      storageRoots: [state.stateDir],
+    });
   });
 });
 
@@ -146,12 +148,7 @@ it("restores cold Talk history through its existing owner before bounded hydrati
     const fixture = await createSessionColdStorageFixture(
       path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
     );
-    const history = SessionManager.inMemory("/synthetic/cold-history");
-    history.newSession({ id: fixture.scope.sessionId });
-    history.appendMessage({ role: "user", content: "Archived question", timestamp: 1 });
-    history.appendMessage({ role: "user", content: "Archived followup", timestamp: 2 });
-    await replaceTranscriptEvents(fixture.scope, history.getPersistedEntries());
-    await waitForSessionTranscriptProjection(fixture.scope);
+    await persistHistory(fixture.scope, ["Archived question", "Archived followup"]);
     fixture
       .database()
       .prepare(
@@ -171,11 +168,7 @@ it("restores cold Talk history through its existing owner before bounded hydrati
     expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
     await replaceSessionEntry(fixture.scope, { sessionId: fixture.scope.sessionId, updatedAt: 1 });
     expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeDefined();
-    const items = await readTalkRealtimeInitialItems(
-      { ...fixture.scope, canonicalKey: fixture.scope.sessionKey, assertCurrent: vi.fn() },
-      () => undefined,
-    );
-    expect(items).toEqual(expected);
+    expect(await readTalk(fixture.scope)).toEqual(expected);
     expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toBeUndefined();
   });
 });
@@ -190,28 +183,20 @@ it("rejects Talk history when its live authority is revoked during real hydratio
       timestamp: 1,
     });
     await waitForSessionTranscriptProjection(scope);
-    const { received, release, held } = holdHydration(true);
     let current = true;
     const assertCurrent = () => {
       if (!current) {
         throw new Error("Synthetic Talk authority revoked");
       }
     };
-    const pending = readTalkRealtimeInitialItems(
-      { ...scope, canonicalKey: scope.sessionKey, assertCurrent },
-      assertCurrent,
+    const pending = duringHydration(
+      () => readTalk(scope, assertCurrent),
+      () => {
+        current = false;
+      },
+      true,
     );
-    const rejected = expect(pending).rejects.toThrow("Synthetic Talk authority revoked");
-    try {
-      await received.promise;
-      current = false;
-      release.resolve();
-      await rejected;
-      expect(await readPreview(scope)).toEqual([{ role: "user", text: "retained history" }]);
-    } finally {
-      release.resolve();
-      await Promise.allSettled([pending]);
-      held.mockRestore();
-    }
+    await expect(pending).rejects.toThrow("Synthetic Talk authority revoked");
+    expect(await readPreview(scope)).toEqual([{ role: "user", text: "retained history" }]);
   });
 });

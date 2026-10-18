@@ -1,13 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import * as acpMetadata from "../acp/runtime/session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "../acp/runtime/session-meta-write.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
-const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
-const getLatestLiveSubagentRunByChildSessionKeyMock = vi.fn();
-const replaceSubagentRunAfterSteerMock = vi.fn();
+const latestRun = vi.fn();
+const liveRun = vi.fn();
+const replaceRun = vi.fn();
 
 vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
   const actual = await vi.importActual<
@@ -15,12 +15,11 @@ vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
   >("../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
-    getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
-      getLatestSubagentRunByChildSessionKeyMock(...args),
+    getLatestSubagentRunByChildSessionKey: (...args: unknown[]) => latestRun(...args),
     getLatestLiveSubagentRunByChildSessionKey: (
       ...args: Parameters<typeof actual.getLatestLiveSubagentRunByChildSessionKey>
     ) => {
-      const run = getLatestLiveSubagentRunByChildSessionKeyMock(...args);
+      const run = liveRun(...args);
       return run && run.childSessionKey === args[0].trim() && (!args[1] || args[1](run))
         ? run
         : null;
@@ -29,16 +28,14 @@ vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
 });
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
-  replaceSubagentRunAfterSteerCore: (...args: unknown[]) =>
-    replaceSubagentRunAfterSteerMock(...args),
+  replaceSubagentRunAfterSteerCore: (...args: unknown[]) => replaceRun(...args),
 }));
 
 import { reactivateCompletedSubagentSession } from "./session-subagent-reactivation.js";
 
-function endedRun(
-  childSessionKey: string,
-  { runId = "run-prev-ended", task = "previous task", createdAt = 40 } = {},
-) {
+const childSessionKey = "agent:main:subagent:followup";
+
+function endedRun({ runId = "run-prev-ended", task = "previous task" } = {}) {
   return {
     runId,
     childSessionKey,
@@ -46,31 +43,34 @@ function endedRun(
     requesterDisplayKey: "main",
     task,
     cleanup: "keep" as const,
-    createdAt,
+    createdAt: 40,
     execution: {
       status: "terminal" as const,
-      startedAt: createdAt + 1,
-      endedAt: createdAt + 2,
+      startedAt: 41,
+      endedAt: 42,
       outcome: { status: "ok" as const },
     },
   };
 }
 
 function mockEndedRun(run: ReturnType<typeof endedRun>) {
-  getLatestSubagentRunByChildSessionKeyMock.mockResolvedValue(run);
-  getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(run);
-  replaceSubagentRunAfterSteerMock.mockReturnValue(true);
+  latestRun.mockResolvedValue(run);
+  liveRun.mockReturnValue(run);
+  replaceRun.mockReturnValue(true);
 }
 
 function reactivate(
-  sessionKey: string,
   overrides: Partial<Parameters<typeof reactivateCompletedSubagentSession>[0]> = {},
 ) {
-  return reactivateCompletedSubagentSession({ sessionKey, runId: "run-next", ...overrides });
+  return reactivateCompletedSubagentSession({
+    sessionKey: childSessionKey,
+    runId: "run-next",
+    ...overrides,
+  });
 }
 
 function expectReplacement(overrides: Record<string, unknown>) {
-  expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
+  expect(replaceRun).toHaveBeenCalledWith({
     previousRunId: "run-prev-ended",
     nextRunId: "run-next",
     preserveCompletedRun: true,
@@ -80,129 +80,101 @@ function expectReplacement(overrides: Record<string, unknown>) {
   });
 }
 
-describe("reactivateCompletedSubagentSession", () => {
-  afterEach(() => vi.restoreAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
-  beforeEach(() => {
-    getLatestSubagentRunByChildSessionKeyMock.mockReset();
-    getLatestLiveSubagentRunByChildSessionKeyMock.mockReset();
-    replaceSubagentRunAfterSteerMock.mockReset();
+beforeEach(() => {
+  latestRun.mockReset();
+  liveRun.mockReset();
+  replaceRun.mockReset();
+});
+
+it("skips ACP reads without an ended run and observes newly written ACP metadata", async () => {
+  await withOpenClawTestState(
+    { scenario: "minimal", label: "subagent-reactivation-acp" },
+    async (state) => {
+      const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg, cfg);
+      const scope = { cfg, agentId: "main", sessionKey: childSessionKey, env: state.env };
+      let entry = await upsertSessionEntryCore(scope, {
+        sessionId: "child-session",
+        lifecycleRevision: "child-lifecycle",
+        updatedAt: 1,
+      });
+      const params = {
+        sessionKey: childSessionKey,
+        runId: "run-next",
+        acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
+      };
+      const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
+
+      await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
+      expect(readMetadata).not.toHaveBeenCalled();
+
+      mockEndedRun(endedRun());
+      await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
+      expect(replaceRun).toHaveBeenCalledOnce();
+
+      entry = await upsertAcpSessionMeta({
+        ...scope,
+        skipMaintenance: true,
+        mutate: () => ({
+          backend: "acpx",
+          agent: "main",
+          runtimeSessionName: "child-acp",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 2,
+        }),
+      });
+      expect(entry).not.toBeNull();
+      params.acpSession.sessionEntry = entry ?? undefined;
+      await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
+      expect(replaceRun).toHaveBeenCalledOnce();
+    },
+  );
+});
+
+it("reactivates the newest ended row despite stale active rows", async () => {
+  const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
+  mockEndedRun(endedRun({ runId: "run-current-ended" }));
+  await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(true);
+
+  expect(latestRun).toHaveBeenCalledWith(childSessionKey);
+  expectReplacement({
+    previousRunId: "run-current-ended",
+    gatewayContextResolver: resolveGatewayContext,
+  });
+});
+
+it("does not replace an ended row after its Gateway owner retires", async () => {
+  mockEndedRun(endedRun({ runId: "run-ended" }));
+  const resolveGatewayContext = vi.fn(() => undefined);
+
+  await expect(reactivate({ gatewayContextResolver: resolveGatewayContext })).resolves.toBe(false);
+
+  expect(resolveGatewayContext).toHaveBeenCalledOnce();
+  expect(replaceRun).not.toHaveBeenCalled();
+});
+
+it("preserves the exact follow-up task for restart redispatch (#77539)", async () => {
+  mockEndedRun(endedRun({ task: "stale original task" }));
+  await expect(reactivate({ task: "  follow-up prompt text  " })).resolves.toBe(true);
+
+  expectReplacement({ task: "  follow-up prompt text  " });
+});
+
+it.each([false, true])("accepts a replacement only when it owns the child (%s)", async (owns) => {
+  mockEndedRun(endedRun());
+  replaceRun.mockImplementationOnce(() => {
+    liveRun.mockReturnValue(endedRun({ runId: owns ? "run-next" : "run-other-successor" }));
+    return false;
   });
 
-  it("skips ACP reads without a completed run and observes ACP metadata written after a native follow-up", async () => {
-    await withOpenClawTestState(
-      { scenario: "minimal", label: "subagent-reactivation-acp" },
-      async (state) => {
-        const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
-        await state.writeConfig(cfg);
-        setRuntimeConfigSnapshot(cfg, cfg);
-        const sessionKey = "agent:main:subagent:acp-followup";
-        const scope = { cfg, agentId: "main", sessionKey, env: state.env };
-        let entry = await upsertSessionEntryCore(scope, {
-          sessionId: "child-session",
-          lifecycleRevision: "child-lifecycle",
-          updatedAt: 1,
-        });
-        const params = {
-          sessionKey,
-          runId: "run-next",
-          acpSession: { cfg, activeSessionAgentId: "main", sessionEntry: entry ?? undefined },
-        };
-        const readMetadata = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
-
-        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
-        expect(readMetadata).not.toHaveBeenCalled();
-
-        mockEndedRun(endedRun(sessionKey));
-        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(true);
-        expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
-
-        entry = await upsertAcpSessionMeta({
-          ...scope,
-          skipMaintenance: true,
-          mutate: () => ({
-            backend: "acpx",
-            agent: "main",
-            runtimeSessionName: "child-acp",
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 2,
-          }),
-        });
-        expect(entry).not.toBeNull();
-        params.acpSession.sessionEntry = entry ?? undefined;
-        await expect(reactivateCompletedSubagentSession(params)).resolves.toBe(false);
-        expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledOnce();
-      },
-    );
-  });
-
-  it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {
-    const childSessionKey = "agent:main:subagent:followup-race";
-    const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
-    const latestEndedRun = endedRun(childSessionKey, {
-      runId: "run-current-ended",
-      task: "current ended task",
-      createdAt: 20,
-    });
-
-    mockEndedRun(latestEndedRun);
-    await expect(
-      reactivate(childSessionKey, { gatewayContextResolver: resolveGatewayContext }),
-    ).resolves.toBe(true);
-
-    expect(getLatestSubagentRunByChildSessionKeyMock).toHaveBeenCalledWith(childSessionKey);
-    expectReplacement({
-      previousRunId: "run-current-ended",
-      gatewayContextResolver: resolveGatewayContext,
-    });
-  });
-
-  it("does not replace an ended row after its Gateway owner retires", async () => {
-    mockEndedRun(endedRun("agent:main:subagent:retired-owner", { runId: "run-ended" }));
-    const resolveGatewayContext = vi.fn(() => undefined);
-
-    await expect(
-      reactivate("agent:main:subagent:retired-owner", {
-        gatewayContextResolver: resolveGatewayContext,
-      }),
-    ).resolves.toBe(false);
-
-    expect(resolveGatewayContext).toHaveBeenCalledOnce();
-    expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
-  });
-
-  it("threads the exact follow-up task into the replacement so restart redispatch rewraps the new prompt instead of the stale original", async () => {
-    // #77539: restart recovery must rewrap the follow-up, not the previous task.
-    const childSessionKey = "agent:main:subagent:reactivate-with-task";
-    const latestEndedRun = endedRun(childSessionKey, {
-      task: "stale original task",
-      createdAt: 30,
-    });
-
-    mockEndedRun(latestEndedRun);
-    await expect(reactivate(childSessionKey, { task: "  follow-up prompt text  " })).resolves.toBe(
-      true,
-    );
-
-    expectReplacement({ task: "  follow-up prompt text  " });
-  });
-
-  it.each([false, true])("accepts a replacement only when it owns the child (%s)", async (owns) => {
-    const childSessionKey = "agent:main:subagent:replacement-race";
-    mockEndedRun(endedRun(childSessionKey));
-    replaceSubagentRunAfterSteerMock.mockImplementationOnce(() => {
-      getLatestLiveSubagentRunByChildSessionKeyMock.mockReturnValue(
-        endedRun(childSessionKey, { runId: owns ? "run-next" : "run-other-successor" }),
-      );
-      return false;
-    });
-
-    const pending = reactivate(childSessionKey);
-    if (owns) {
-      await expect(pending).resolves.toBe(true);
-    } else {
-      await expect(pending).rejects.toThrow("subagent follow-up owner replacement was rejected");
-    }
-  });
+  const pending = reactivate();
+  if (owns) {
+    await expect(pending).resolves.toBe(true);
+  } else {
+    await expect(pending).rejects.toThrow("subagent follow-up owner replacement was rejected");
+  }
 });
