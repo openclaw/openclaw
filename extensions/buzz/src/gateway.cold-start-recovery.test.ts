@@ -4,6 +4,7 @@ import path from "node:path";
 import { finalizeEvent, getPublicKey, type Event, type Filter } from "nostr-tools";
 import type { ChannelGatewayContextV2 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -148,6 +149,7 @@ let previousStateDir: string | undefined;
 let currentNowMs = START_SECONDS * 1_000;
 let handled: string[] = [];
 let gates = new Map<string, Promise<void>>();
+let reportInboundHandled: ((text: string) => void) | undefined;
 
 function nowSeconds(): number {
   return Math.floor(currentNowMs / 1000);
@@ -155,6 +157,17 @@ function nowSeconds(): number {
 
 function advanceSeconds(seconds: number): void {
   currentNowMs += seconds * 1_000;
+}
+
+function waitForInboundHandled(text: string): Promise<void> {
+  const deferred = createDeferred<void>();
+  reportInboundHandled = (handledText) => {
+    if (handledText === text) {
+      reportInboundHandled = undefined;
+      deferred.resolve();
+    }
+  };
+  return deferred.promise;
 }
 
 function gateHandler(text: string): { settle: () => void; fail: (error: Error) => void } {
@@ -303,6 +316,7 @@ beforeEach(() => {
   inboundMocks.handleBuzzInbound.mockImplementation(
     async ({ message }: { message: BuzzInboundMessage }) => {
       handled.push(message.text);
+      reportInboundHandled?.(message.text);
       await gates.get(message.text);
     },
   );
@@ -331,6 +345,7 @@ beforeEach(() => {
 afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  reportInboundHandled = undefined;
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (previousStateDir === undefined) {
@@ -459,9 +474,11 @@ describe("Buzz gateway cold-start recovery", () => {
       postRoomMessage("after-reconnect", START_SECONDS + 1);
     });
     relayMocks.dropSubscriptionReason = "relay dropped the subscription";
+    const afterReconnectHandled = waitForInboundHandled("after-reconnect");
     const process = startGatewayProcess();
     try {
-      await waitForSettled(() => handled.includes("after-reconnect"));
+      await afterReconnectHandled;
+      expect(handled).toContain("after-reconnect");
       expect(handled).not.toContain("before-activation");
       expect(relayMocks.messageFilters.at(1)?.since).toBe(START_SECONDS);
     } finally {
