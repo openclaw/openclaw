@@ -7,6 +7,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
+import type { SessionGoal } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
@@ -55,6 +56,24 @@ type GoalOperation = {
 class GoalOperationOwner {
   private readonly operations = new Map<string, GoalOperation>();
   private readonly listeners = createChangeListeners();
+  private startedExecution?: {
+    goalId: string;
+    runId: string;
+    isCurrent: () => boolean;
+  };
+
+  recordStartedExecution(goalId: string, runId: string, isCurrent: () => boolean): void {
+    // Retain only the latest accepted receipt, not another run lifecycle or durable store.
+    this.startedExecution = { goalId, runId, isCurrent };
+    this.publish();
+  }
+
+  confirmedRunId(goalId: string, currentRunId: string | null | undefined): string | undefined {
+    const execution = this.startedExecution;
+    return execution?.goalId === goalId && execution.runId === currentRunId && execution.isCurrent()
+      ? execution.runId
+      : undefined;
+  }
 
   readonly subscribe = this.listeners.subscribe;
 
@@ -97,6 +116,28 @@ export function chatGoalOperations(host: ChatHost): GoalOperationOwner {
   }
   return owner;
 }
+
+export type ChatGoalPresentation = {
+  value: SessionGoal;
+  executionConfirmed: boolean;
+  confirmedRunId?: string;
+};
+
+/** Receipt confirmation changes the label, never the presence of an existing Goal. */
+export function chatGoalPresentation(
+  host: ChatHost,
+  goal: SessionGoal | undefined,
+): ChatGoalPresentation | undefined {
+  if (!goal) {
+    return undefined;
+  }
+  const confirmedRunId =
+    goal.status === "active"
+      ? goalOperations.get(host)?.confirmedRunId(goal.id, host.chatRunId)
+      : undefined;
+  return { value: goal, executionConfirmed: confirmedRunId !== undefined, confirmedRunId };
+}
+
 const GOAL_REQUEST_TIMEOUT_MS = 30_000;
 const rejectedGoalReasons = new Set([
   "expired",
@@ -530,6 +571,7 @@ async function runGoalOperation(
         }
         if (result.status === "started" && result.runId) {
           adoptStartedChatRun(host, result.runId, Date.now());
+          operations.recordStartedExecution(params.goalId, result.runId, targetIsCurrent);
         }
       }
     }
