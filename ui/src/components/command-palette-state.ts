@@ -71,6 +71,9 @@ export class CommandPaletteState {
       if (this.connected) {
         this.draft.synchronize();
         this.draft.settled();
+        if (this.open) {
+          this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+        }
       }
       this.publicationPending = false;
     });
@@ -84,6 +87,7 @@ export class CommandPaletteState {
   }
   open = false;
   private pluginIconUrls: Record<string, string> = {};
+  private readonly pluginIconTiles = new Set<() => string>();
   private readonly pluginIcons = new PluginIconOwner({
     getFetchContext: () => pluginIconFetchContext(this.context!),
     isConnected: () => this.element.isConnected && this.open && this.gateway.connected,
@@ -427,11 +431,16 @@ export class CommandPaletteState {
         gateway.snapshot.client === client
       ) {
         this.catalogItems = items;
-        this.pluginIcons.reconcileKeys(
-          new Set(
-            items.flatMap((item) => (item.hasPluginIcon && item.pluginId ? [item.pluginId] : [])),
-          ),
+        const eligible = new Set(
+          items.flatMap((item) => (item.hasPluginIcon && item.pluginId ? [item.pluginId] : [])),
         );
+        this.pluginIcons.reconcileKeys(eligible);
+        for (const readId of this.pluginIconTiles) {
+          const pluginId = readId();
+          if (eligible.has(pluginId)) {
+            this.pluginIcons.load(pluginId);
+          }
+        }
         this.catalogLoad = { ...this.catalogLoad, loadedAt: Date.now() };
         this.changed();
       }
@@ -686,7 +695,14 @@ export class CommandPaletteState {
       onSlashCommand: this.props.onSlashCommand,
       pluginIconUrls: this.pluginIconUrls,
       onPluginIconError: (pluginId) => this.pluginIcons.handleError(pluginId),
-      onPluginIconVisible: (pluginId) => this.pluginIcons.load(pluginId),
+      registerPluginIcon: (readId) => {
+        this.pluginIconTiles.add(readId);
+        const pluginId = readId();
+        if (this.catalogItems.some((item) => item.pluginId === pluginId && item.hasPluginIcon)) {
+          this.pluginIcons.load(pluginId);
+        }
+        return () => this.pluginIconTiles.delete(readId);
+      },
       onInputRef: this.handleInputRef,
       draft: this.draft,
     };
