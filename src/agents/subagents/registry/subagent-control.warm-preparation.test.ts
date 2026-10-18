@@ -28,11 +28,14 @@ const { writeSession } = createControlRunFixture(() => fixture.stateDir);
 it.for(["unrelated", "same session"] as const)(
   "prepares warm cancellation with a %s write while retaining publication ordering",
   async (writerTarget, { signal }) => {
-    const childKey = "agent:main:subagent:warm-preparation";
-    const childId = "warm-preparation-session";
-    const revision = "warm-preparation-revision";
-    const peerKey = "agent:main:subagent:unrelated-publication";
-    const peerId = "unrelated-publication-session";
+    const child = "warm-preparation";
+    const peer = "unrelated-publication";
+    const childKey = `agent:main:subagent:${child}`;
+    const childId = `${child}-session`;
+    const revision = `${child}-revision`;
+    const writer = writerTarget === "unrelated" ? peer : child;
+    const writerKey = `agent:main:subagent:${writer}`;
+    const writerSessionId = `${writer}-session`;
     const producerScope = new AsyncLocalStorage<boolean>();
     const operationScope = new AsyncLocalStorage<"preparation" | "publication">();
     const nativeReplyHeld = createDeferredCore();
@@ -51,7 +54,7 @@ it.for(["unrelated", "same session"] as const)(
     let publication: Promise<void> | undefined;
     const release = () => releaseNativeReply.resolve();
     signal.addEventListener("abort", release, { once: true });
-    const gate = (ready: Promise<unknown>, pending: Promise<unknown>, message: string) =>
+    const gate = <T>(ready: Promise<T>, pending: Promise<unknown>, message: string) =>
       withinTest(awaitGateBeforeSettlement(ready, pending, message), signal);
     const identity = { sessionId: childId, lifecycleRevision: revision };
     const prepare = (assertCurrent: () => void) =>
@@ -69,10 +72,8 @@ it.for(["unrelated", "same session"] as const)(
       ).toMatchObject({ sessionId, label: "held write published" });
 
     try {
-      const storePath = await writeSession("warm-preparation", revision);
-      await writeSession("unrelated-publication");
-      const writerKey = writerTarget === "unrelated" ? peerKey : childKey;
-      const writerSessionId = writerTarget === "unrelated" ? peerId : childId;
+      const storePath = await writeSession(child, revision);
+      await writeSession(peer);
       initial = await prepare(() => {});
       execution = executionOwner.captureOpenClawAgentDatabaseExecution({
         agentId: "main",
@@ -125,8 +126,9 @@ it.for(["unrelated", "same session"] as const)(
         if (!producerScope.getStore()) {
           return borrowed;
         }
-        const runExisting: typeof borrowed.runExisting = (source, operation, options) =>
-          borrowed.runExisting(
+        const runExisting = borrowed.runExisting.bind(borrowed);
+        borrowed.runExisting = (source, operation, options) =>
+          runExisting(
             source,
             (scope) =>
               operation({
@@ -143,11 +145,7 @@ it.for(["unrelated", "same session"] as const)(
               }),
             options,
           );
-        return new Proxy(borrowed, {
-          get(original, key, receiver) {
-            return key === "runExisting" ? runExisting : Reflect.get(original, key, receiver);
-          },
-        });
+        return borrowed;
       };
       const captureExecution = executionOwner.captureOpenClawAgentDatabaseExecution;
       vi.spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution").mockImplementation(
@@ -158,38 +156,36 @@ it.for(["unrelated", "same session"] as const)(
         executionOwner,
         "captureOpenClawAgentDatabasePreparationExecution",
       ).mockImplementation((...args) => wrapExecution(capturePreparation(...args)));
+      const write = () =>
+        applySessionEntryExactReplacements({
+          agentId: "main",
+          storePath,
+          sessionKeys: [writerKey],
+          activeSessionKey: writerKey,
+          skipMaintenance: true,
+          requireWriteSuccess: true,
+          update(entries) {
+            const current = entries.find((entry) => entry.sessionKey === writerKey)?.entry;
+            if (!current || current.sessionId !== writerSessionId) {
+              throw new Error("Held writer lost its original session");
+            }
+            return {
+              result: undefined,
+              replacements: [
+                { sessionKey: writerKey, entry: { ...current, label: "held write published" } },
+              ],
+            };
+          },
+        });
       producer = runOutsideAsyncWorkScope(() =>
         runWithGatewayIndependentRootWorkAdmission(
-          () =>
-            producerScope.run(true, () =>
-              applySessionEntryExactReplacements({
-                agentId: "main",
-                storePath,
-                sessionKeys: [writerKey],
-                activeSessionKey: writerKey,
-                skipMaintenance: true,
-                requireWriteSuccess: true,
-                update(entries) {
-                  const peer = entries.find((entry) => entry.sessionKey === writerKey)?.entry;
-                  if (!peer || peer.sessionId !== writerSessionId) {
-                    throw new Error("Held writer lost its original session");
-                  }
-                  return {
-                    result: undefined,
-                    replacements: [
-                      { sessionKey: writerKey, entry: { ...peer, label: "held write published" } },
-                    ],
-                  };
-                },
-              }),
-            ),
+          () => producerScope.run(true, write),
           "test:warm-cancellation-publication",
           signal,
         ),
       );
       await gate(nativeReplyHeld.promise, producer, "Writer publication was not held");
-      // Both the retained native incarnation and freshly read A facts are valid while B's
-      // publication remains pending. A is not waiting for its own generation to settle.
+      // Retained A facts stay current while B owns the pending publication.
       nativeClaim.assertCurrent();
       if (writerTarget === "unrelated") {
         initial.assertCurrent();
@@ -213,27 +209,19 @@ it.for(["unrelated", "same session"] as const)(
         release();
         prepared = await preparation;
         await producer;
-        prepared.assertCurrent();
-        expect(prepared.entry).toMatchObject(identity);
-        expectPublication(childKey, childId);
-        return;
-      }
-      const preparationOutcome = await withinTest(
-        Promise.race([
-          preparation.then((value) => {
-            prepared = value;
-            return "prepared" as const;
-          }),
-          preparationQueued.promise.then(() => "queued behind unrelated writer" as const),
-        ]),
-        signal,
-      );
-      expect(preparationOutcome).toBe("prepared");
-      if (!prepared) {
-        throw new Error("Cancellation preparation returned no retained session");
+      } else {
+        prepared = await gate(
+          preparation.then((value) => value),
+          preparationQueued.promise,
+          "Preparation queued behind unrelated writer",
+        );
       }
       expect(prepared.entry).toMatchObject(identity);
       prepared.assertCurrent();
+      if (writerTarget === "same session") {
+        expectPublication(writerKey, writerSessionId);
+        return;
+      }
       let published = false;
       publication = operationScope.run("publication", () =>
         prepared!.withPublication(async () => {
@@ -248,7 +236,7 @@ it.for(["unrelated", "same session"] as const)(
       expect(published).toBe(true);
       nativeClaim.assertCurrent();
       generationFacts!.assertCurrent();
-      expectPublication(peerKey, peerId);
+      expectPublication(writerKey, writerSessionId);
     } finally {
       release();
       await Promise.allSettled([producer, preparation, publication]);

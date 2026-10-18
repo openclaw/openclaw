@@ -9,6 +9,7 @@ import { holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import {
   controlController as controller,
+  controlSessionKey as key,
   enqueueControlRun,
 } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
@@ -41,15 +42,13 @@ export function registerQueuedReservationFailureTests({
   ] as const)(
     "releases or withdraws the exact queued reservation after %s failure",
     async (failure, replaceAt, rejectSecondWrite) => {
-      const controllerSessionKey = "agent:main:main";
+      const childSessionKey = key("failure-queued");
+      const sessionId = "queued-session";
       let entry = createSubagentRunRecord({
         runId: "failure-queued",
-        childSessionKey: "agent:main:subagent:failure-queued",
-        childSessionIdentity: {
-          sessionId: "queued-session",
-          lifecycleRevision: "queued-session-revision",
-        },
-        controllerSessionKey,
+        childSessionKey,
+        childSessionIdentity: { sessionId, lifecycleRevision: "queued-session-revision" },
+        controllerSessionKey: controller.controllerSessionKey,
         createdAt: 1,
         generation: 1,
         collect: true,
@@ -59,7 +58,7 @@ export function registerQueuedReservationFailureTests({
       await addSubagentRunForTests(entry);
       entry = subagentRuns.get(entry.runId)!;
       const storePath = await writeSessionStoreFixture("queue-failure", {
-        [entry.childSessionKey]: { sessionId: "queued-session", updatedAt: 1 },
+        [childSessionKey]: { sessionId, updatedAt: 1 },
       });
       const dispatch = vi.fn(async () => {});
       const reserve = (runId = entry.runId, start = dispatch) =>
@@ -67,11 +66,9 @@ export function registerQueuedReservationFailureTests({
       reserve();
       let writes = 0;
       let rejectedWrite: number | undefined;
+      const target = { storePath, sessionKey: childSessionKey };
       const replaceSession = () =>
-        replaceSessionEntrySync(
-          { storePath, sessionKey: entry.childSessionKey },
-          { sessionId: "new-session", updatedAt: 2 },
-        );
+        replaceSessionEntrySync(target, { sessionId: "new-session", updatedAt: 2 });
       resetRegistryLeafMocks();
       vi.mocked(runOpenClawStateWorkerOperation).mockImplementation((context, operation, options) =>
         runSubagentStateWorkerOperation(
@@ -105,16 +102,14 @@ export function registerQueuedReservationFailureTests({
         clearSessionQueues: () => ({ followupCleared: 0, keys: [] }),
       });
       if (failure === "claim release") {
+        const identity = { sessionKey: childSessionKey, sessionId, agentId: "main" };
         const operation = createReplyOperation({
-          sessionKey: entry.childSessionKey,
-          sessionId: "queued-session",
-          agentId: "main",
+          ...identity,
           resetTriggered: false,
           target: captureSessionTarget({
             storeScope: storePath,
-            sessionKey: entry.childSessionKey,
-            incarnation: "queued-session",
-            agentId: "main",
+            ...identity,
+            incarnation: sessionId,
           }),
         });
         operation.freezeAbort();

@@ -1,4 +1,3 @@
-/** Real registry/SQLite lifetime shared by cancellation ownership regressions. */
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -57,8 +56,9 @@ vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 export const { runOpenClawStateWorkerOperation: runSubagentStateWorkerOperation } =
   await vi.importActual<typeof stateWorker>("../../../state/openclaw-state-worker-store.js");
 
-export function useSubagentControlFixture(options: { reuseStateDir?: boolean } = {}) {
-  const { reuseStateDir = false } = options;
+export function useSubagentControlFixture({
+  reuseStateDir = false,
+}: { reuseStateDir?: boolean } = {}) {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
   let caseState: "idle" | "active" | "failed" = "idle";
@@ -84,10 +84,10 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
     clearRuntimeConfigSnapshot();
     clearConfigCache();
   };
-  const removeState = async () => {
-    await cleanupSessionStateForTest({ stateDir });
-    await rm(stateDir, { recursive: true, force: true });
-  };
+  const stateEnv = () => ({
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  });
   beforeEach(async () => {
     if (reuseStateDir && caseState !== "idle") {
       throw new Error("Previous subagent control fixture cleanup is incomplete");
@@ -98,8 +98,9 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
         await mkdtemp(path.join(os.tmpdir(), "openclaw-ancestor-retirement-")),
       );
     }
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    for (const [key, value] of Object.entries(stateEnv())) {
+      setTestEnvValue(key, value);
+    }
     const config: OpenClawConfig = { agents: { defaults: { workspace: stateDir } } };
     await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(config));
     resetConfig();
@@ -126,10 +127,10 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       failures.push(error);
     });
     vi.restoreAllMocks();
+    caseState = "failed";
     // Preserve stores and their environment if detached writers have not settled.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        // Shared fixtures clear durable rows through the registry owner before reusing workers.
         if (reuseStateDir) {
           controls.worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
         }
@@ -169,9 +170,6 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
         failures.push(error);
       }
     }
-    if (caseState === "active") {
-      caseState = "failed";
-    }
     if (failures.length) {
       throw failures.length === 1
         ? failures[0]
@@ -186,13 +184,10 @@ export function useSubagentControlFixture(options: { reuseStateDir?: boolean } =
       caseState === "idle" &&
       getActiveGatewayRootWorkCount() === 0
     ) {
-      await withEnvAsync(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-        },
-        removeState,
-      );
+      await withEnvAsync(stateEnv(), async () => {
+        await cleanupSessionStateForTest({ stateDir });
+        await rm(stateDir, { recursive: true, force: true });
+      });
     }
   });
 

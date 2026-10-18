@@ -20,15 +20,18 @@ import {
   withSubagentRunReadSnapshot,
 } from "./subagent-registry-state.js";
 
-const counters = vi.hoisted(() => ({
-  active: false,
-  fullLoads: 0,
-  fullLoadMs: 0,
-  parsedEntries: 0,
-  parsedJsonBytes: 0,
-  fixtureJsonParses: 0,
-  fixtureJsonBytes: 0,
-}));
+const { counters, resetCounters } = vi.hoisted(() => {
+  const empty = {
+    fullLoads: 0,
+    fullLoadMs: 0,
+    parsedEntries: 0,
+    parsedJsonBytes: 0,
+    fixtureJsonParses: 0,
+    fixtureJsonBytes: 0,
+  };
+  const state = { active: false, metrics: { ...empty } };
+  return { counters: state, resetCounters: () => (state.metrics = { ...empty }) };
+});
 
 vi.mock(
   "../../../config/sessions/session-accessor.sqlite-entry-cache-projection.js",
@@ -44,11 +47,11 @@ vi.mock(
           return actual.loadSessionEntrySnapshot(...args);
         }
         const start = performance.now();
-        counters.fullLoads++;
+        counters.metrics.fullLoads++;
         try {
           return actual.loadSessionEntrySnapshot(...args);
         } finally {
-          counters.fullLoadMs += performance.now() - start;
+          counters.metrics.fullLoadMs += performance.now() - start;
         }
       },
     };
@@ -62,8 +65,8 @@ vi.mock("../../../config/sessions/session-accessor.sqlite-status.js", async (loa
     ...actual,
     parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
       if (counters.active) {
-        counters.parsedEntries++;
-        counters.parsedJsonBytes += Buffer.byteLength(args[0].entry_json);
+        counters.metrics.parsedEntries++;
+        counters.metrics.parsedJsonBytes += Buffer.byteLength(args[0].entry_json);
       }
       return actual.parseSessionEntryJson(...args);
     },
@@ -73,19 +76,17 @@ vi.mock("../../../config/sessions/session-accessor.sqlite-status.js", async (loa
 // Opt-in allocation proof; the ordinary prompt suite owns the CI regression.
 it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
   "profiles admission and active-child context across a 5,000-session write workload",
-  async () => {
-    await withOpenClawTestState(
+  () =>
+    withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
         const rows = 5_000;
         const turns = 10;
         const cfg = {};
         const controllerSessionKey = "agent:main:main";
-        const storePath = resolvePhysicalSessionStorePath(
-          { sessionKey: controllerSessionKey, agentId: "main" },
-          cfg,
-        );
-        const mainScope = { agentId: "main", storePath, sessionKey: controllerSessionKey };
+        const owner = { agentId: "main", sessionKey: controllerSessionKey };
+        const storePath = resolvePhysicalSessionStorePath(owner, cfg);
+        const mainScope = { ...owner, storePath };
         const updateChild = (sessionKey: string, update: (entry: SessionEntry) => SessionEntry) =>
           applySessionEntryExactReplacements({
             agentId: "main",
@@ -126,12 +127,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
         inspector.connect();
         const samples: Array<Record<string, string | number>> = [];
         const measure = async <T>(phase: string, iteration: number, run: () => T | Promise<T>) => {
-          counters.fullLoads = 0;
-          counters.fullLoadMs = 0;
-          counters.parsedEntries = 0;
-          counters.parsedJsonBytes = 0;
-          counters.fixtureJsonParses = 0;
-          counters.fixtureJsonBytes = 0;
+          resetCounters();
           await inspector.post("HeapProfiler.startSampling", {
             samplingInterval: 32 * 1024,
             includeObjectsCollectedByMajorGC: true,
@@ -151,33 +147,24 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           const elapsed = process.threadCpuUsage(cpu);
           const heapDeltaBytes = process.memoryUsage().heapUsed - heapBefore;
           const { profile } = await inspector.post("HeapProfiler.stopSampling");
-          let sampledAllocationBytes = 0;
-          const visit = (node: typeof profile.head) => {
-            sampledAllocationBytes += node.selfSize;
-            node.children.forEach(visit);
-          };
-          visit(profile.head);
+          const allocationBytes = (node: typeof profile.head): number =>
+            node.selfSize + node.children.reduce((sum, child) => sum + allocationBytes(child), 0);
           samples.push({
             phase,
             iteration,
             wallMs,
             mainThreadCpuMs: (elapsed.user + elapsed.system) / 1_000,
             heapDeltaBytes,
-            sampledAllocationBytes,
-            fullLoads: counters.fullLoads,
-            fullLoadMs: counters.fullLoadMs,
-            parsedEntries: counters.parsedEntries,
-            parsedJsonBytes: counters.parsedJsonBytes,
-            fixtureJsonParses: counters.fixtureJsonParses,
-            fixtureJsonBytes: counters.fixtureJsonBytes,
+            sampledAllocationBytes: allocationBytes(profile.head),
+            ...counters.metrics,
           });
           return value;
         };
         // A forwarding wrapper counts parsing without retaining every JSON argument/result.
         JSON.parse = (text, reviver) => {
           if (counters.active && typeof text === "string" && text.includes(metadataPayload)) {
-            counters.fixtureJsonParses++;
-            counters.fixtureJsonBytes += Buffer.byteLength(text);
+            counters.metrics.fixtureJsonParses++;
+            counters.metrics.fixtureJsonBytes += Buffer.byteLength(text);
           }
           return parseJson(text, reviver);
         };
@@ -192,8 +179,8 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
             }),
           );
           expect(listed).toHaveLength(rows);
-          expect(counters.fullLoads).toBe(1);
-          expect(counters.parsedEntries).toBeGreaterThanOrEqual(rows);
+          expect(counters.metrics.fullLoads).toBe(1);
+          expect(counters.metrics.parsedEntries).toBeGreaterThanOrEqual(rows);
 
           for (let iteration = 0; iteration < turns; iteration++) {
             const childSessionKey = `agent:main:subagent:benchmark-${iteration}`;
@@ -204,7 +191,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               controllerSessionKey,
               requesterStorePath: storePath,
               controllerStorePath: storePath,
-              task: `Inspect fixture ${iteration}`,
               taskName: `fixture_${iteration}`,
               createdAt: now + iteration,
               execution: { status: "running", startedAt: now + iteration },
@@ -228,8 +214,8 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
             );
             expect(prompt).toContain(`session=${childSessionKey}`);
             expect(prompt).toContain(`taskName_json="fixture_${iteration}"`);
-            expect(counters.fullLoads).toBe(0);
-            expect(counters.parsedEntries).toBeLessThanOrEqual(3);
+            expect(counters.metrics.fullLoads).toBe(0);
+            expect(counters.metrics.parsedEntries).toBeLessThanOrEqual(3);
             await measure("registry-snapshot-only", iteration, () =>
               withSubagentRunReadSnapshot(
                 subagentRuns,
@@ -257,8 +243,7 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               readSubagentListSessionEntries(cfg, context.list),
             );
             expect(metadata.get(run.runId)?.model).toBe("saved-fixture-model");
-            expect(counters.fullLoads).toBe(0);
-            expect(counters.parsedEntries).toBe(0);
+            expect(counters.metrics).toMatchObject({ fullLoads: 0, parsedEntries: 0 });
           }
           console.log(
             JSON.stringify({
@@ -278,6 +263,5 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           clearSubagentRunsReadCacheForTest();
         }
       },
-    );
-  },
+    ),
 );

@@ -34,17 +34,13 @@ const ids = ["root", "child", "healthy"];
 async function seed() {
   let storePath = "";
   for (const id of ids) {
-    ({ storePath } = await controlRuns.seed(
-      id,
-      {
-        requesterSessionKey: id === "root" ? owner : key("root"),
-        requesterTurnRunId: id === "root" ? undefined : "root",
-        requesterDisplayKey: owner,
-        task: "shared label",
-        collect: true,
-      },
-      `${id}-revision`,
-    ));
+    ({ storePath } = await controlRuns.seed(id, {
+      requesterSessionKey: id === "root" ? owner : key("root"),
+      requesterTurnRunId: id === "root" ? undefined : "root",
+      requesterDisplayKey: owner,
+      task: "shared label",
+      collect: true,
+    }));
   }
   return storePath;
 }

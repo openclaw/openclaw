@@ -2,12 +2,16 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
-import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  createSubagentRunParams,
+  createSubagentRunRecord,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { releaseSwarmRun, holdQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
 import * as killSession from "./subagent-control-session.js";
 import {
   controlController as controller,
+  controlSessionKey as key,
   enqueueControlRun,
 } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns } from "./subagent-control.js";
@@ -38,7 +42,6 @@ export function registerLateDescendantControlTests({
   ] as const)(
     "captures descendants registered during %s before releasing capacity (replacement=%s)",
     async (phase, replaceChild) => {
-      const owner = "agent:main:main";
       const identity = (id: string) => ({
         sessionId: `${id}-session`,
         lifecycleRevision: `${id}-session-revision`,
@@ -48,33 +51,31 @@ export function registerLateDescendantControlTests({
         requesterSessionKey: string,
         requesterTurnRunId?: string,
       ) =>
-        registerSubagentRun({
-          runId,
-          childSessionKey: `agent:main:subagent:${runId}`,
-          childAgentId: "main",
-          sessionEntry: identity(runId),
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-          requesterDisplayKey: requesterSessionKey,
-          task: runId,
-          cleanup: "keep",
-          collect: true,
-          queued: true,
-        });
+        registerSubagentRun(
+          createSubagentRunParams({
+            runId,
+            childSessionKey: key(runId),
+            sessionEntry: identity(runId),
+            requesterSessionKey,
+            requesterAgentId: "main",
+            requesterTurnRunId,
+            requesterDisplayKey: requesterSessionKey,
+            collect: true,
+            queued: true,
+          }),
+        );
       let parent = createSubagentRunRecord({
         runId: "late-parent",
-        childSessionKey: "agent:main:subagent:late-parent",
+        childSessionKey: key("late-parent"),
         childSessionIdentity: identity("late-parent"),
-        requesterSessionKey: owner,
-        requesterDisplayKey: owner,
+        requesterDisplayKey: controller.controllerSessionKey,
         createdAt: 1,
         startedAt: 2,
       });
       let activeChild = createSubagentRunRecord({
         ...parent,
         runId: "live-child",
-        childSessionKey: "agent:main:subagent:live-child",
+        childSessionKey: key("live-child"),
         childSessionIdentity: identity("live-child"),
         controllerSessionKey: parent.childSessionKey,
       });
@@ -89,6 +90,11 @@ export function registerLateDescendantControlTests({
       });
       const reached = createDeferred();
       const proceed = createDeferred();
+      const pause = async () => {
+        reached.resolve();
+        await proceed.promise;
+        return true;
+      };
       const admission = await beginSessionEffect({
         scope: storePath,
         identities: [parent.childSessionKey, "late-parent-session"],
@@ -102,7 +108,7 @@ export function registerLateDescendantControlTests({
         },
       });
       const start = vi.fn(async () => {});
-      const childKey = "agent:main:subagent:late-child";
+      const childKey = key("late-child");
       const registerChild = () => {
         const requester = phase === "admission drain" ? activeChild : parent;
         expect(requester.execution.endedAt).toBeUndefined();
@@ -118,8 +124,7 @@ export function registerLateDescendantControlTests({
         const prepareSession = killSession.prepareSubagentKillSession;
         vi.spyOn(killSession, "prepareSubagentKillSession").mockImplementationOnce(
           async (...args) => {
-            reached.resolve();
-            await proceed.promise;
+            await pause();
             return prepareSession(...args);
           },
         );
@@ -129,14 +134,7 @@ export function registerLateDescendantControlTests({
         cfg,
         controller,
         runs: [parent],
-        beforeKill:
-          phase === "parent persistence"
-            ? async () => {
-                reached.resolve();
-                await proceed.promise;
-                return true;
-              }
-            : undefined,
+        beforeKill: phase === "parent persistence" ? pause : undefined,
       });
       try {
         await reached.promise;
@@ -150,7 +148,7 @@ export function registerLateDescendantControlTests({
         }
         await registerChild();
         const outsideStart = vi.fn(async () => {});
-        await registerQueued("other-turn-root", owner, "other-turn");
+        await registerQueued("other-turn-root", controller.controllerSessionKey, "other-turn");
         enqueueControlRun("other-turn", "other-turn-root", [], outsideStart);
         proceed.resolve();
         if (phase === "admission drain") {
@@ -159,9 +157,9 @@ export function registerLateDescendantControlTests({
         await pending;
         if (replaceChild) {
           expect(start).toHaveBeenCalledOnce();
-          expect(
-            (await getSubagentRunByChildSessionKey(childKey))?.execution.endedAt,
-          ).toBeUndefined();
+          expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
+            execution: { endedAt: undefined },
+          });
         } else {
           expect(start).not.toHaveBeenCalled();
           expect(await getSubagentRunByChildSessionKey(childKey)).toMatchObject({
@@ -170,10 +168,9 @@ export function registerLateDescendantControlTests({
           });
         }
         expect(outsideStart).toHaveBeenCalledOnce();
-        expect(
-          (await getSubagentRunByChildSessionKey("agent:main:subagent:other-turn-root"))?.execution
-            .endedAt,
-        ).toBeUndefined();
+        expect(await getSubagentRunByChildSessionKey(key("other-turn-root"))).toMatchObject({
+          execution: { endedAt: undefined },
+        });
       } finally {
         proceed.resolve();
         admission.release();

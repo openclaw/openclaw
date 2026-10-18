@@ -272,11 +272,7 @@ describe("buildSubagentList", () => {
 
         const parse = vi.spyOn(JSON, "parse");
         try {
-          const list = await buildSubagentList({
-            cfg,
-            runs: [run],
-            recentMinutes: 30,
-          });
+          const list = await listRuns([run], cfg);
           expect(list.active).toHaveLength(1);
           expect(list.active[0]).toMatchObject({
             runId: run.runId,
