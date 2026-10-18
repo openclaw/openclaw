@@ -386,6 +386,95 @@ describe("signal outbound", () => {
     },
   );
 
+  it.each([
+    {
+      mode: "newline",
+      expected: [
+        "Intro here.",
+        "• item one aaaa\n• item two bbbb\n• item three cc",
+        "• item four dddd",
+      ],
+    },
+    {
+      mode: "length",
+      expected: [
+        "Intro here.\n\n• item one aaaa\n• item two bbbb",
+        "• item three cc\n• item four dddd",
+      ],
+    },
+  ] as const)("uses $mode chunking for formatted Signal sends", async ({ mode, expected }) => {
+    const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+    await outbound?.sendFormattedText?.({
+      cfg: signalConfig({ textChunkLimit: 60, streaming: { chunkMode: mode } }),
+      to: "+15551234567",
+      text: "Intro here.\n\n- item one aaaa\n- item two bbbb\n- item three cc\n- item four dddd",
+      deps: { signal: send },
+    });
+    expect(send.mock.calls.map((call) => call[1])).toEqual(expected);
+  });
+
+  it("keeps paragraphs whole when rendered links expand their length", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+    await outbound?.sendFormattedText?.({
+      cfg: signalConfig({ textChunkLimit: 25, streaming: { chunkMode: "newline" } }),
+      to: "+15551234567",
+      text: "[one](https://a.example)\n\nTwo three four",
+      deps: { signal: send },
+    });
+    expect(send.mock.calls.map((call) => call[1])).toEqual([
+      "one (https://a.example)",
+      "Two three four",
+    ]);
+  });
+
+  it("retains code blank lines and chunk-local styles in newline mode", async () => {
+    const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+    await outbound?.sendFormattedText?.({
+      cfg: signalConfig({ textChunkLimit: 6, streaming: { chunkMode: "newline" } }),
+      to: "+15551234567",
+      text: "**Intro**\n\n```\naaa\n\nbbb\n```\n\n*End*",
+      deps: { signal: send },
+    });
+    const messages = send.mock.calls.map((call) => ({ text: call[1], styles: call[2].textStyles }));
+    expect(messages[0]).toEqual({
+      text: "Intro",
+      styles: [{ start: 0, length: 5, style: "BOLD" }],
+    });
+    expect(messages.at(-1)).toEqual({
+      text: "End",
+      styles: [{ start: 0, length: 3, style: "ITALIC" }],
+    });
+    const code = messages.slice(1, -1);
+    expect(code.map(({ text }) => text.trim()).join("")).toBe("aaa\n\nbbb");
+    for (const { text, styles } of code) {
+      expect(text.length).toBeLessThanOrEqual(6);
+      expect(styles).toEqual([{ start: 0, length: text.length, style: "MONOSPACE" }]);
+    }
+  });
+
+  it.each([
+    { formatting: undefined, expected: ["One\n\nTwo", "Three"] },
+    { formatting: { chunkMode: "length" as const }, expected: ["One", "Two", "Three"] },
+  ])(
+    "resolves account chunking and formatting overrides: $formatting",
+    async ({ formatting, expected }) => {
+      const send = vi.fn().mockResolvedValue({ messageId: "signal-1" });
+      await outbound?.sendFormattedText?.({
+        cfg: signalConfig({
+          textChunkLimit: 8,
+          streaming: { chunkMode: "length" },
+          accounts: { work: { streaming: { chunkMode: "newline" } } },
+        }),
+        accountId: "work",
+        formatting,
+        to: "+15551234567",
+        text: "One\n\nTwo\n\nThree",
+        deps: { signal: send },
+      });
+      expect(send.mock.calls.map((call) => call[1])).toEqual(expected);
+    },
+  );
+
   it("reports a formatted Signal chunk before a later chunk fails", async () => {
     const send = vi
       .fn()

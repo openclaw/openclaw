@@ -18,7 +18,11 @@ import { attachChannelToResult } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import { chunkText, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
+import {
+  chunkText,
+  resolveChunkMode,
+  resolveTextChunkLimit,
+} from "openclaw/plugin-sdk/reply-chunking";
 import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   buildBaseChannelStatusSummary,
@@ -265,6 +269,7 @@ async function sendFormattedSignalText(
   });
   let chunks = markdownToSignalTextChunks(ctx.text, limit ?? Number.POSITIVE_INFINITY, {
     tableMode,
+    chunkMode: ctx.formatting?.chunkMode ?? resolveChunkMode(ctx.cfg, "signal", ctx.accountId),
   });
   if (chunks.length === 0 && ctx.text) {
     chunks = [{ text: ctx.text, styles: [] }];
