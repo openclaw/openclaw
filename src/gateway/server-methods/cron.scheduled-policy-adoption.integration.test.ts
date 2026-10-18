@@ -229,6 +229,7 @@ describe("cron.update scheduled policy adoption", () => {
               agentRuntimeIdentity: {
                 ...identity,
                 ...callerIdentity,
+                fullPermission: callerIdentity?.fullPermission === true ? true : undefined,
                 ...(caller === "borrowed capture" && method === "cron.update"
                   ? {
                       cronToolsAllowCapture: "final-executable-surface",

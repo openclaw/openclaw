@@ -8,6 +8,7 @@ import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { DEFAULT_ASK_USER_TIMEOUT_SECONDS } from "./ask-user-tool-normalization.js";
 import * as callerScope from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun as createTools } from "./openclaw-delegate-tool.js";
@@ -91,21 +92,29 @@ it("relays context and the completed approval outcome", async () => {
   expect(tool.description).toContain("approve in the Control UI");
   expect(GATEWAY_OWNER_ONLY_CORE_TOOLS).toContain("openclaw");
   const result = await tool.execute("call-1", { message: "Add channel." });
-  expect(callGateway).toHaveBeenCalledWith("openclaw.chat", {
-    sessionId: expect.stringMatching(/^delegate-[a-f0-9]{32}$/),
-    message: "Add channel.",
-    delegation: {
-      agentId: "main",
-      sessionKey: "agent:main:dm:one",
-      turnSourceChannel: "webchat",
+  expect(callGateway).toHaveBeenCalledWith(
+    "openclaw.chat",
+    {
+      sessionId: expect.stringMatching(/^delegate-[a-f0-9]{32}$/),
+      message: "Add channel.",
+      delegation: {
+        agentId: "main",
+        sessionKey: "agent:main:dm:one",
+        turnSourceChannel: "webchat",
+      },
     },
-  });
+    { timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
+  );
   expect(result.details).toEqual({ reply: "Applied." });
   expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
   expect(compactToolOutputHint(tool.outputSchema)).toBe("{ reply: string; action?: string }");
 });
 
 it.each<[string, Options, boolean]>([
+  ["default full", {}, true],
+  ["guarded", { execSession: { permissionMode: "guarded" } }, false],
+  ["workspace", { execSession: { permissionMode: "workspace" } }, false],
+  ["restricted default", { config: { tools: { exec: { mode: "ask" } } } }, false],
   [
     "explicit full overrides configured prompting",
     { execSession: { permissionMode: "full" }, config: { tools: { exec: { mode: "ask" } } } },
@@ -156,4 +165,19 @@ it("points telegram runs to in-chat approvals", () => {
   expect(
     delegate({ agentChannel: "telegram", execSession: { permissionMode: "guarded" } }).description,
   ).toContain("approve in this chat");
+});
+
+it("reuses one session and accepts explicit continuation", async () => {
+  callGateway.mockImplementation(async (_method: string, params: Record<string, unknown>) => ({
+    sessionId: params.sessionId,
+    reply: "Done.",
+  }));
+  const tool = delegate();
+  await tool.execute("call-1", { message: "First." });
+  await tool.execute("call-2", { message: "Second." });
+  await tool.execute("call-3", { message: "Other.", sessionId: "delegate-user-choice" });
+  expect(callGateway.mock.calls[0]?.[1]).toMatchObject({
+    sessionId: callGateway.mock.calls[1]?.[1].sessionId,
+  });
+  expect(callGateway.mock.calls[2]?.[1]).toMatchObject({ sessionId: "delegate-user-choice" });
 });
