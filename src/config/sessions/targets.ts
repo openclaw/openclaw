@@ -388,11 +388,16 @@ function resolveGatewayAgentDatabasePath(
 ): string | undefined {
   const pathname = path.join(resolveAgentDir(cfg, agentId, env), "openclaw-agent.sqlite");
   // Reserved helpers are discovered stores, not missing configured databases to initialize.
-  return isReservedSystemAgentId(agentId) &&
-    !resolveAgentEntry(cfg, agentId) &&
-    !fsSync.lstatSync(pathname, { throwIfNoEntry: false })
-    ? undefined
-    : pathname;
+  if (isReservedSystemAgentId(agentId) && !resolveAgentEntry(cfg, agentId)) {
+    try {
+      if (!fsSync.lstatSync(pathname, { throwIfNoEntry: false })) {
+        return undefined;
+      }
+    } catch {
+      // Keep unreadable candidates for the admission owner's diagnostics.
+    }
+  }
+  return pathname;
 }
 
 /** Candidate files for version inspection only; this does not assign migration ownership. */
