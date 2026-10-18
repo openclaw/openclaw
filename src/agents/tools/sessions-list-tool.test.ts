@@ -22,15 +22,23 @@ function groupRow(key: string, classification: string, sessionId: string, peerKi
 function projectedRow(key: string, classification: string, extra: Record<string, unknown> = {}) {
   return { key, kind: "direct", classification, ...extra };
 }
-function globalConfig(): OpenClawConfig {
+function globalConfig(owned = true): OpenClawConfig {
   return {
     session: { scope: "global" },
     agents: {
       ownership: "explicit",
-      defaults: { sessionStore: { agentId: "ops" } },
+      ...(owned ? { defaults: { sessionStore: { agentId: "ops" } } } : {}),
       entries: { ops: {}, research: {} },
     },
   };
+}
+const createTool = (options: NonNullable<Parameters<typeof createSessionsListTool>[0]> = {}) =>
+  createSessionsListTool({ config: VALID_CONFIG, ...options });
+async function list(
+  params: Record<string, unknown> = {},
+  options: NonNullable<Parameters<typeof createSessionsListTool>[0]> = {},
+) {
+  return getSessionsListDetails(await createTool(options).execute("list", params));
 }
 describe("sessions-list-tool", () => {
   beforeEach(() => {
@@ -39,16 +47,21 @@ describe("sessions-list-tool", () => {
   });
 
   it("filters Gateway-projected agent sessions by their authoritative classification", async () => {
-    const entries = [
-      ["agent:main:main", { sessionId: "session-main", updatedAt: 5 }],
-      [
-        "agent:main:slack:channel:C123",
-        { sessionId: "session-group", updatedAt: 4, chatType: "channel" },
-      ],
-      ["agent:main:cron:nightly", { sessionId: "session-cron", updatedAt: 3 }],
-      ["agent:main:hook:deploy", { sessionId: "session-hook", updatedAt: 2 }],
-      ["agent:main:node-device", { sessionId: "session-node", updatedAt: 1 }],
-    ] satisfies Array<[string, SessionEntry]>;
+    const cases = [
+      ["agent:main:main", "direct", "main", "main"],
+      ["agent:main:slack:channel:C123", "group", "channel", "group"],
+      ["agent:main:cron:nightly", "direct", "cron", "cron"],
+      ["agent:main:hook:deploy", "direct", "hook", "hook"],
+      ["agent:main:node-device", "direct", "node", "node"],
+    ] as const;
+    const entries: Array<[string, SessionEntry]> = cases.map((row, index) => [
+      row[0],
+      {
+        sessionId: `session-${row[3]}`,
+        updatedAt: 5 - index,
+        ...(row[3] === "group" ? { chatType: "channel" as const } : {}),
+      },
+    ]);
     const store = Object.fromEntries(entries);
     const sessions = entries.map(([key, entry]) =>
       buildGatewaySessionRow({
@@ -62,14 +75,10 @@ describe("sessions-list-tool", () => {
       }),
     );
     mocks.gatewayCall.mockResolvedValue({ path: "/tmp/sessions.json", sessions });
-    const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-    const unfiltered = getSessionsListDetails(await tool.execute("all-kinds", {})).sessions ?? [];
+    const unfiltered = (await list()).sessions ?? [];
     const filteredKeys: Record<string, string[]> = {};
     for (const kind of ["main", "group", "cron", "hook", "node"]) {
-      const result = getSessionsListDetails(
-        await tool.execute(`filter-${kind}`, { kinds: [kind] }),
-      );
+      const result = await list({ kinds: [kind] });
       filteredKeys[kind] = (result.sessions ?? []).map((row) => String(row.key));
     }
 
@@ -78,27 +87,9 @@ describe("sessions-list-tool", () => {
       modelVisible: unfiltered.map(({ key, kind }) => [key, kind]),
       filteredKeys,
     }).toEqual({
-      projected: [
-        ["agent:main:main", "direct", "main"],
-        ["agent:main:slack:channel:C123", "group", "channel"],
-        ["agent:main:cron:nightly", "direct", "cron"],
-        ["agent:main:hook:deploy", "direct", "hook"],
-        ["agent:main:node-device", "direct", "node"],
-      ],
-      modelVisible: [
-        ["agent:main:main", "main"],
-        ["agent:main:slack:channel:C123", "group"],
-        ["agent:main:cron:nightly", "cron"],
-        ["agent:main:hook:deploy", "hook"],
-        ["agent:main:node-device", "node"],
-      ],
-      filteredKeys: {
-        main: ["agent:main:main"],
-        group: ["agent:main:slack:channel:C123"],
-        cron: ["agent:main:cron:nightly"],
-        hook: ["agent:main:hook:deploy"],
-        node: ["agent:main:node-device"],
-      },
+      projected: cases.map(([key, wireKind, classification]) => [key, wireKind, classification]),
+      modelVisible: cases.map((row) => [row[0], row[3]]),
+      filteredKeys: Object.fromEntries(cases.map((row) => [row[3], [row[0]]])),
     });
   });
 
@@ -120,13 +111,7 @@ describe("sessions-list-tool", () => {
       ],
     });
 
-    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("filter-kinds", {
-      kinds,
-    });
-
-    expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual(
-      expected,
-    );
+    expect((await list({ kinds })).sessions?.map((session) => session.key)).toEqual(expected);
   });
 
   it.each([
@@ -144,12 +129,14 @@ describe("sessions-list-tool", () => {
         ],
       });
 
-      const result = await createSessionsListTool({
-        agentSessionKey: requester,
-        config: { ...VALID_CONFIG, tools: { sessions: { visibility } } },
-      }).execute("main-tree", {});
-
-      expect(getSessionsListDetails(result).sessions?.map((session) => session.key)).toEqual([
+      const result = await list(
+        {},
+        {
+          agentSessionKey: requester,
+          config: { ...VALID_CONFIG, tools: { sessions: { visibility } } },
+        },
+      );
+      expect(result.sessions?.map((session) => session.key)).toEqual([
         "agent:main:main",
         "agent:main:slack:channel:team-room",
       ]);
@@ -176,9 +163,7 @@ describe("sessions-list-tool", () => {
       ],
     });
 
-    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("blind", {});
-
-    const details = getSessionsListDetails(result);
+    const details = await list();
     expect(details.sessions?.map(({ key, group }) => ({ key, group }))).toEqual([
       { key: "agent:main:dashboard:visible", group: "Projects" },
     ]);
@@ -187,30 +172,19 @@ describe("sessions-list-tool", () => {
   });
 
   it("keeps channel discovery but omits delivery routing metadata", async () => {
-    mockRows([
-      projectedRow("agent:main:dashboard:child", "dashboard", {
-        sessionId: "sess-dashboard-child",
-        deliveryContext: {
-          channel: "discord",
-          to: "discord:child",
-          accountId: "acct-1",
-          threadId: "thread-1",
-        },
-      }),
-      projectedRow("agent:main:telegram:topic", "custom", {
-        sessionId: "sess-telegram-topic",
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:topic",
-          accountId: "acct-2",
-          threadId: 271,
-        },
-      }),
-    ]);
-    const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-    const result = await tool.execute("call-1", {});
-    const details = getSessionsListDetails(result);
+    const deliveries = [
+      ["dashboard:child", "dashboard", "discord", "discord:child", "acct-1", "thread-1"],
+      ["telegram:topic", "custom", "telegram", "telegram:topic", "acct-2", 271],
+    ] as const;
+    mockRows(
+      deliveries.map(([suffix, classification, channel, to, accountId, threadId]) =>
+        projectedRow(`agent:main:${suffix}`, classification, {
+          sessionId: `sess-${suffix.replace(":", "-")}`,
+          deliveryContext: { channel, to, accountId, threadId },
+        }),
+      ),
+    );
+    const details = await list();
 
     expect(details.sessions?.map((session) => session.channel)).toEqual(["discord", "telegram"]);
     expect(details.sessions?.every((session) => !Object.hasOwn(session, "deliveryContext"))).toBe(
@@ -229,11 +203,7 @@ describe("sessions-list-tool", () => {
       ],
     });
 
-    const result = await createSessionsListTool({ config: VALID_CONFIG }).execute("lineage", {});
-
-    expect(getSessionsListDetails(result).sessions?.[0]?.parentSessionKey).toBe(
-      "agent:main:subagent:parent",
-    );
+    expect((await list()).sessions?.[0]?.parentSessionKey).toBe("agent:main:subagent:parent");
   });
 
   it("omits malformed agent keys and derives channels only from valid group keys", async () => {
@@ -254,10 +224,7 @@ describe("sessions-list-tool", () => {
         sessionId: "sess-malformed-agent-mixed-case",
       },
     ]);
-    const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-    const result = await tool.execute("call-agent-scoped-channel", {});
-    const details = getSessionsListDetails(result);
+    const details = await list();
 
     expect(details.sessions?.map((session) => session.channel)).toEqual([
       "slack",
@@ -281,7 +248,7 @@ describe("sessions-list-tool", () => {
           sidebarRoot: true,
         })),
       });
-      const tool = createSessionsListTool({ config: VALID_CONFIG });
+      const tool = createTool();
 
       expect(Value.Check(tool.parameters, { archived })).toBe(true);
       const result = await tool.execute("call-archived", { archived });
@@ -301,38 +268,38 @@ describe("sessions-list-tool", () => {
     },
   );
 
-  it("keeps a bare row's gateway owner during transcript hydration", async () => {
-    mocks.gatewayCall
-      .mockResolvedValueOnce({
-        path: "/tmp/shared-sessions.sqlite",
-        sessions: [
-          {
-            key: "global",
-            agentId: "ops",
-            kind: "main",
-            channel: "webchat",
-            archived: false,
-            pinned: false,
-          },
-        ],
-      })
-      .mockResolvedValueOnce({ messages: [] });
-    const config: OpenClawConfig = {
-      ...globalConfig(),
-      session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-    };
-
-    const result = await createSessionsListTool({
-      agentSessionKey: "global",
-      requesterAgentIdOverride: "ops",
-      config,
-    }).execute("owned-row", { messageLimit: 1 });
-
-    expect(getSessionsListDetails(result).sessions?.[0]).toMatchObject({ agentId: "ops" });
-    expect(mocks.gatewayCall).toHaveBeenLastCalledWith({
-      method: "chat.history",
-      params: { sessionKey: "global", agentId: "ops", limit: 1 },
+  it.each([true, false])("preserves fixed-store owner attribution (owned=%s)", async (owned) => {
+    const store = owned ? "/tmp/shared-sessions.sqlite" : "/tmp/ownerless-shared.sqlite";
+    mocks.gatewayCall.mockResolvedValueOnce({
+      path: store,
+      sessions: [
+        {
+          key: "global",
+          kind: "main",
+          channel: "webchat",
+          archived: false,
+          pinned: false,
+          ...(owned ? { agentId: "ops" } : {}),
+        },
+      ],
     });
+    if (owned) {
+      mocks.gatewayCall.mockResolvedValueOnce({ messages: [] });
+    }
+    const result = await list(owned ? { messageLimit: 1 } : {}, {
+      agentSessionKey: owned ? "global" : "agent:research:main",
+      requesterAgentIdOverride: owned ? "ops" : "research",
+      config: { ...globalConfig(owned), session: { store, scope: "global" } },
+    });
+    if (owned) {
+      expect(result.sessions?.[0]).toMatchObject({ agentId: "ops" });
+      expect(mocks.gatewayCall).toHaveBeenLastCalledWith({
+        method: "chat.history",
+        params: { sessionKey: "global", agentId: "ops", limit: 1 },
+      });
+    } else {
+      expect(result.sessions).toEqual([]);
+    }
   });
 
   it("preserves active sentinel rows and state versions from different agent stores", async () => {
@@ -350,23 +317,26 @@ describe("sessions-list-tool", () => {
       })),
     });
     mocks.getSessionStateVersions.mockReturnValue({ ops: { global: 7 }, research: { global: 9 } });
-    const result = await createSessionsListTool({
-      agentSessionKey: "global",
-      requesterAgentIdOverride: "ops",
-      config: {
-        ...globalConfig(),
-        tools: {
-          sessions: { visibility: "all" },
-          agentToAgent: { enabled: true, allow: ["ops", "research"] },
+    const result = await list(
+      { activeOnly: true },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "ops",
+        config: {
+          ...globalConfig(),
+          tools: {
+            sessions: { visibility: "all" },
+            agentToAgent: { enabled: true, allow: ["ops", "research"] },
+          },
         },
       },
-    }).execute("active-sentinels", { activeOnly: true });
+    );
     expect(mocks.getSessionStateVersions).toHaveBeenCalledWith([
       { sessionKey: "global", agentId: "ops" },
       { sessionKey: "global", agentId: "research" },
     ]);
     expect(
-      getSessionsListDetails(result).sessions?.map(({ key, agentId, sessionId, stateVersion }) => ({
+      result.sessions?.map(({ key, agentId, sessionId, stateVersion }) => ({
         key,
         agentId,
         sessionId,
@@ -378,35 +348,6 @@ describe("sessions-list-tool", () => {
     ]);
   });
 
-  it("does not attribute an ownerless fixed-store bare row to the requester", async () => {
-    mocks.gatewayCall.mockResolvedValue({
-      path: "/tmp/ownerless-shared.sqlite",
-      sessions: [
-        {
-          key: "global",
-          kind: "main",
-          channel: "webchat",
-          archived: false,
-          pinned: false,
-        },
-      ],
-    });
-
-    const result = await createSessionsListTool({
-      agentSessionKey: "agent:research:main",
-      requesterAgentIdOverride: "research",
-      config: {
-        session: { store: "/tmp/ownerless-shared.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          entries: { ops: {}, research: {} },
-        },
-      },
-    }).execute("ownerless-row", {});
-
-    expect(getSessionsListDetails(result).sessions).toEqual([]);
-  });
-
   it.each([
     [{ limit: 1.5 }, "limit must be a positive integer"],
     [{ offset: -1 }, "offset must be a non-negative integer"],
@@ -414,11 +355,7 @@ describe("sessions-list-tool", () => {
     [{ activeMinutes: 0 }, "activeMinutes must be a positive integer"],
     [{ messageLimit: 1.5 }, "messageLimit must be a non-negative integer"],
   ])("rejects invalid numeric parameter %o", async (params, message) => {
-    // Reject before gateway dispatch so malformed limits cannot reach session
-    // store queries.
-    const tool = createSessionsListTool({ config: VALID_CONFIG });
-
-    await expect(tool.execute("call-4", params)).rejects.toThrow(message);
+    await expect(createTool().execute("call-4", params)).rejects.toThrow(message);
     expect(mocks.gatewayCall).not.toHaveBeenCalled();
   });
 });

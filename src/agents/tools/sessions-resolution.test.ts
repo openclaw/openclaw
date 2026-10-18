@@ -1,4 +1,3 @@
-// Sessions resolution tests cover alias mapping, session-id lookup, and visibility normalization.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
@@ -10,20 +9,9 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
     callGateway: (opts: unknown) => callGatewayMock(opts),
   };
 });
-let resolveCurrentSessionClientAlias: typeof import("./sessions-resolution.js").resolveCurrentSessionClientAlias;
-let resolveInternalSessionKey: typeof import("./sessions-resolution.js").resolveInternalSessionKey;
-let resolveMainSessionAlias: typeof import("./sessions-resolution.js").resolveMainSessionAlias;
-let resolveSessionReference: typeof import("./sessions-resolution.js").resolveSessionReference;
-let resolveVisibleSessionReference: typeof import("./sessions-resolution.js").resolveVisibleSessionReference;
-
+let resolution: typeof import("./sessions-resolution.js");
 beforeAll(async () => {
-  ({
-    resolveCurrentSessionClientAlias,
-    resolveInternalSessionKey,
-    resolveMainSessionAlias,
-    resolveSessionReference,
-    resolveVisibleSessionReference,
-  } = await import("./sessions-resolution.js"));
+  resolution = await import("./sessions-resolution.js");
 });
 
 beforeEach(() => {
@@ -31,17 +19,17 @@ beforeEach(() => {
 });
 
 function expectResolvedSessionReference(
-  result: Awaited<ReturnType<typeof resolveSessionReference>>,
-  expected: { key: string; displayKey: string; resolvedViaSessionId: boolean },
+  result: Awaited<ReturnType<typeof resolution.resolveSessionReference>>,
+  key: string,
 ) {
-  expect(result).toMatchObject({ ok: true, ...expected });
+  expect(result).toMatchObject({ ok: true, key, displayKey: key, resolvedViaSessionId: false });
 }
 
 function resolveReference(
-  params: Pick<Parameters<typeof resolveSessionReference>[0], "sessionKey"> &
-    Partial<Parameters<typeof resolveSessionReference>[0]>,
+  params: Pick<Parameters<typeof resolution.resolveSessionReference>[0], "sessionKey"> &
+    Partial<Parameters<typeof resolution.resolveSessionReference>[0]>,
 ) {
-  return resolveSessionReference({
+  return resolution.resolveSessionReference({
     action: "history",
     alias: "main",
     mainKey: "main",
@@ -65,7 +53,7 @@ async function resolveVisible(
   if (!resolvedSession.ok) {
     throw new Error("Expected session reference");
   }
-  return resolveVisibleSessionReference({
+  return resolution.resolveVisibleSessionReference({
     action,
     resolvedSession,
     requesterSessionKey,
@@ -77,42 +65,34 @@ async function resolveVisible(
 }
 
 describe("resolveMainSessionAlias", () => {
-  it("uses normalized main key and global alias for global scope", () => {
-    const cfg = {
-      session: { mainKey: " Primary ", scope: "global" },
-    } as OpenClawConfig;
-
-    expect(resolveMainSessionAlias(cfg)).toEqual({
-      mainKey: "primary",
-      alias: "global",
-      scope: "global",
-    });
-  });
-
-  it("falls back to per-sender defaults", () => {
-    expect(resolveMainSessionAlias({} as OpenClawConfig)).toEqual({
-      mainKey: "main",
-      alias: "main",
-      scope: "per-sender",
-    });
-  });
+  it.each([
+    [{ session: { mainKey: " Primary ", scope: "global" } }, "primary", "global", "global"],
+    [{}, "main", "main", "per-sender"],
+  ] satisfies Array<[OpenClawConfig, string, string, string]>)(
+    "normalizes %j",
+    (cfg, mainKey, alias, scope) => {
+      expect(resolution.resolveMainSessionAlias(cfg)).toEqual({ mainKey, alias, scope });
+    },
+  );
 });
 
 describe("session key display/internal mapping", () => {
   it("preserves literal current when no requester key is provided", () => {
-    expect(resolveInternalSessionKey({ key: "current", alias: "global" })).toBe("current");
+    expect(resolution.resolveInternalSessionKey({ key: "current", alias: "global" })).toBe(
+      "current",
+    );
   });
 
   it("maps interactive client ids to the requester session", () => {
     expect(
-      resolveCurrentSessionClientAlias({
+      resolution.resolveCurrentSessionClientAlias({
         key: "openclaw-tui",
         requesterInternalKey: "agent:main:main",
       }),
     ).toBe("agent:main:main");
-    expect(resolveCurrentSessionClientAlias({ key: "openclaw-tui" })).toBeUndefined();
+    expect(resolution.resolveCurrentSessionClientAlias({ key: "openclaw-tui" })).toBeUndefined();
     expect(
-      resolveCurrentSessionClientAlias({
+      resolution.resolveCurrentSessionClientAlias({
         key: "node-host",
         requesterInternalKey: "agent:main:main",
       }),
@@ -125,7 +105,7 @@ describe("resolved session visibility checks", () => {
     const sessionKey = "agent:main:dashboard:incognito-private";
 
     await expect(
-      resolveVisibleSessionReference({
+      resolution.resolveVisibleSessionReference({
         action: "history",
         resolvedSession: {
           ok: true,
@@ -160,11 +140,7 @@ describe("resolveSessionReference", () => {
       agentId: "main",
     });
 
-    expectResolvedSessionReference(result, {
-      key: "agent:ops:main",
-      displayKey: "agent:ops:main",
-      resolvedViaSessionId: false,
-    });
+    expectResolvedSessionReference(result, "agent:ops:main");
   });
 
   it("resolves current to the requester before any ownership lookup", async () => {
@@ -209,27 +185,14 @@ describe("resolveSessionReference", () => {
     expect(callGatewayMock).toHaveBeenCalledTimes(1);
   });
 
-  it("treats the TUI client label as the requester session", async () => {
-    const result = await resolveReference({ sessionKey: "openclaw-tui" });
-    expectResolvedSessionReference(result, {
-      key: "agent:main:main",
-      displayKey: "agent:main:main",
-      resolvedViaSessionId: false,
-    });
-    expect(callGatewayMock).not.toHaveBeenCalled();
-  });
-
-  it("preserves the main alias without probing configured-main bootstrap", async () => {
-    const result = await resolveReference({
-      sessionKey: "main",
-      requesterInternalKey: "agent:main:dashboard:requester",
-    });
-
-    expectResolvedSessionReference(result, {
-      key: "main",
-      displayKey: "main",
-      resolvedViaSessionId: false,
-    });
+  it.each([
+    ["openclaw-tui", "agent:main:main", "agent:main:main"],
+    ["main", "agent:main:dashboard:requester", "main"],
+  ])("resolves %s without a Gateway probe", async (sessionKey, requesterInternalKey, expected) => {
+    expectResolvedSessionReference(
+      await resolveReference({ sessionKey, requesterInternalKey }),
+      expected,
+    );
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 

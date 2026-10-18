@@ -27,6 +27,13 @@ function mockSessionPages(pages: Array<Array<Record<string, unknown>>>, initialO
 import { VALID_CONFIG, getSessionsListDetails, sessionRow } from "./sessions-list.test-support.js";
 
 const createTool = () => createSessionsListTool({ config: VALID_CONFIG });
+const dashboard = (name: string, agentId = "main", extra: Record<string, unknown> = {}) => ({
+  ...sessionRow(`agent:${agentId}:dashboard:${name}`, "dashboard", agentId),
+  ...extra,
+});
+async function page(params: Record<string, unknown>, tool = createTool()) {
+  return getSessionsListDetails(await tool.execute("inventory", params));
+}
 const sessionKeys = (details: ReturnType<typeof getSessionsListDetails>) =>
   details.sessions?.map((row) => row.key);
 function expectExhausted(details: ReturnType<typeof getSessionsListDetails>, count: number) {
@@ -145,7 +152,7 @@ describe("sessions-list inventory queries", () => {
     mockSessionPages([
       [
         { key: "global", kind: "global", classification: "global", agentId: "main" },
-        sessionRow("agent:other:dashboard:hidden", "dashboard", "other"),
+        dashboard("hidden", "other"),
       ],
       [sessionRow("agent:main:main", "main")],
     ]);
@@ -155,10 +162,38 @@ describe("sessions-list inventory queries", () => {
     expect(mocks.gatewayCall).toHaveBeenCalledTimes(2);
   });
 
-  it("bounds a legacy larger request and resumes at the next unread Gateway row", async () => {
-    const inventory = Array.from({ length: 201 }, (_, index) =>
-      sessionRow("agent:main:dashboard:row-" + index),
+  it("reports exhaustion after scanning several sparse Gateway pages", async () => {
+    const firstRow = dashboard("first");
+    const lastRow = dashboard("last");
+    mockSessionPages(
+      [
+        [sessionRow("agent:other:main", "main", "other")],
+        [firstRow],
+        [dashboard("incognito-private"), lastRow],
+      ],
+      30,
     );
+    const details = await page({ offset: 30, limit: 5 });
+
+    expectExhausted(details, 2);
+    expect(details.limitApplied).toBe(5);
+    expect(sessionKeys(details)).toEqual([firstRow.key, lastRow.key]);
+    expect(mocks.gatewayCall).toHaveBeenCalledTimes(3);
+  });
+
+  it("deduplicates rows when a changing Gateway page overlaps the prior page", async () => {
+    const first = dashboard("first");
+    const overlap = dashboard("overlap");
+    const finalRow = { ...first, key: "agent:main:dashboard:final" };
+    mockSessionPages([
+      [first, overlap],
+      [overlap, finalRow],
+    ]);
+
+    expect(sessionKeys(await page({ limit: 3 }))).toEqual([first.key, overlap.key, finalRow.key]);
+  });
+  it("bounds a legacy larger request and resumes at the next unread Gateway row", async () => {
+    const inventory = Array.from({ length: 201 }, (_, index) => dashboard("row-" + index));
     mocks.gatewayCall.mockImplementation(
       async ({ params }: { params: { offset: number; limit: number } }) => {
         expect(params.limit).toBe(200);
@@ -172,7 +207,7 @@ describe("sessions-list inventory queries", () => {
     expect(Value.Check(tool.parameters, { limit: 200, offset: 0 })).toBe(true);
     expect(Value.Check(tool.parameters, { limit: 201 })).toBe(true);
     expect(Value.Check(tool.parameters, { offset: -1 })).toBe(false);
-    const first = getSessionsListDetails(await tool.execute("first-inventory", { limit: 201 }));
+    const first = await page({ limit: 201 }, tool);
 
     expect(first).toMatchObject({
       count: 200,
@@ -184,56 +219,26 @@ describe("sessions-list inventory queries", () => {
     expect(first).not.toHaveProperty("truncationReason");
     expect(mocks.gatewayCall).toHaveBeenCalledTimes(1);
 
-    const second = getSessionsListDetails(
-      await tool.execute("continued-inventory", {
-        offset: first.nextOffset,
-        limit: 201,
-      }),
-    );
+    const second = await page({ offset: first.nextOffset, limit: 201 }, tool);
 
     expectExhausted(second, 1);
     expect(second.limitApplied).toBe(200);
     expect(sessionKeys(second)).toEqual(inventory.slice(200).map((row) => row.key));
   });
 
-  it("reports exhaustion after scanning several sparse Gateway pages", async () => {
-    const firstRow = sessionRow("agent:main:dashboard:first");
-    const lastRow = sessionRow("agent:main:dashboard:last");
-    mockSessionPages(
-      [
-        [sessionRow("agent:other:main", "main", "other")],
-        [firstRow],
-        [sessionRow("agent:main:dashboard:incognito-private"), lastRow],
-      ],
-      30,
-    );
-    const tool = createTool();
-
-    const details = getSessionsListDetails(
-      await tool.execute("sparse-exhaustion", { offset: 30, limit: 5 }),
-    );
-
-    expectExhausted(details, 2);
-    expect(details.limitApplied).toBe(5);
-    expect(sessionKeys(details)).toEqual([firstRow.key, lastRow.key]);
-    expect(mocks.gatewayCall).toHaveBeenCalledTimes(3);
-  });
-
   it("returns a resumable five-page scan limit with partial visible rows", async () => {
-    const visibleRow = sessionRow("agent:main:dashboard:visible");
-    const pages = Array.from({ length: 6 }, (_pageValue, page) =>
+    const visibleRow = dashboard("visible");
+    const pages = Array.from({ length: 6 }, (_pageValue, pageIndex) =>
       Array.from({ length: 200 }, (_, index) =>
-        page === 0 && index === 199
+        pageIndex === 0 && index === 199
           ? visibleRow
-          : sessionRow("agent:other:dashboard:hidden-" + page + "-" + index, "dashboard", "other"),
+          : dashboard(`hidden-${pageIndex}-${index}`, "other"),
       ),
     );
     mockSessionPages(pages, 10);
     const tool = createTool();
 
-    const details = getSessionsListDetails(
-      await tool.execute("scan-cap", { offset: 10, limit: 2 }),
-    );
+    const details = await page({ offset: 10, limit: 2 }, tool);
 
     expect(details).toMatchObject({
       count: 1,
@@ -245,28 +250,23 @@ describe("sessions-list inventory queries", () => {
     expect(sessionKeys(details)).toEqual([visibleRow.key]);
     expect(mocks.gatewayCall).toHaveBeenCalledTimes(5);
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
-    const finalRow = sessionRow("agent:main:dashboard:after-cap");
+    const finalRow = dashboard("after-cap");
     mockSessionPages([[finalRow]], 1010);
 
-    const resumed = getSessionsListDetails(
-      await tool.execute("scan-cap-resume", { offset: details.nextOffset, limit: 2 }),
-    );
+    const resumed = await page({ offset: details.nextOffset, limit: 2 }, tool);
 
     expectExhausted(resumed, 1);
     expect(sessionKeys(resumed)).toEqual([finalRow.key]);
   });
 
   it("keeps pretty JSON within 64 KiB and resumes at the first byte-omitted row", async () => {
-    const firstRow = { ...sessionRow("agent:main:dashboard:first"), label: "界".repeat(12_000) };
-    const omittedRow = {
-      ...sessionRow("agent:main:dashboard:omitted"),
-      label: "界".repeat(12_000),
-    };
-    const finalRow = sessionRow("agent:main:dashboard:final");
+    const firstRow = dashboard("first", "main", { label: "界".repeat(12_000) });
+    const omittedRow = dashboard("omitted", "main", { label: "界".repeat(12_000) });
+    const finalRow = dashboard("final");
     mockSessionPages(
       [
         [
-          sessionRow("agent:other:dashboard:hidden", "dashboard", "other"),
+          dashboard("hidden", "other"),
           firstRow,
           sessionRow("agent:main:main", "main"),
           omittedRow,
@@ -296,13 +296,7 @@ describe("sessions-list inventory queries", () => {
     expect(Value.Check(tool.outputSchema!, details)).toBe(true);
     mockSessionPages([[omittedRow, finalRow]], 23);
 
-    const resumed = getSessionsListDetails(
-      await tool.execute("byte-cap-resume", {
-        offset: details.nextOffset,
-        limit: 3,
-        kinds: ["other"],
-      }),
-    );
+    const resumed = await page({ offset: details.nextOffset, limit: 3, kinds: ["other"] }, tool);
 
     expect(sessionKeys(resumed)).toEqual([omittedRow.key, finalRow.key]);
     expectExhausted(resumed, 2);
@@ -373,20 +367,5 @@ describe("sessions-list inventory queries", () => {
     });
     await expect(tool.execute("blank-filter", { workspaceDir: "  " })).rejects.toThrow("required");
     expect(mocks.gatewayCall).not.toHaveBeenCalled();
-  });
-
-  it("deduplicates rows when a changing Gateway page overlaps the prior page", async () => {
-    const first = sessionRow("agent:main:dashboard:first");
-    const overlap = sessionRow("agent:main:dashboard:overlap");
-    const finalRow = { ...first, key: "agent:main:dashboard:final" };
-    mockSessionPages([
-      [first, overlap],
-      [overlap, finalRow],
-    ]);
-
-    const result = await createTool().execute("overlapping-list", { limit: 3 });
-    const keys = sessionKeys(getSessionsListDetails(result)) ?? [];
-
-    expect(keys).toEqual([first.key, overlap.key, finalRow.key]);
   });
 });
