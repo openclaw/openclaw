@@ -27,7 +27,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
-import type { GatewayServer } from "./server-public.js";
+import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 
 const startupTraceEventLoopDelay = vi.hoisted(() => ({
   instances: [] as Array<{
@@ -74,6 +74,26 @@ function createStartupTestState(label: string) {
   });
 }
 
+function startupOptions(token: string): GatewayServerOptions {
+  return {
+    auth: { mode: "token", token },
+    bind: "loopback",
+    controlUiEnabled: false,
+    sidecarStartup: "defer",
+  };
+}
+
+async function configureStartup(
+  state: Awaited<ReturnType<typeof createStartupTestState>>,
+  port: number,
+  token: string,
+) {
+  await state.writeConfig({
+    gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+  });
+  state.applyEnv();
+}
+
 describe("Gateway startup lifetime", () => {
   it.each(["close", "startup failure"] as const)(
     "releases idle prepared donor custody before registry retirement during %s",
@@ -81,10 +101,7 @@ describe("Gateway startup lifetime", () => {
       const state = await createStartupTestState(`gateway-idle-donor-${entry}`);
       const port = await getFreePort();
       const token = "gateway-idle-donor-token";
-      await state.writeConfig({
-        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-      });
-      state.applyEnv();
+      await configureStartup(state, port, token);
       const previous = captureActivePluginRegistrySnapshot();
       const bootstrapModule = await import("./server-startup-bootstrap.js");
       const stateModule = await import("./server-runtime-state-prepare.js");
@@ -149,12 +166,7 @@ describe("Gateway startup lifetime", () => {
           ? vi.spyOn(stateModule, "prepareGatewayKernelState").mockRejectedValue(startupError)
           : undefined;
       try {
-        const options = {
-          auth: { mode: "token" as const, token },
-          bind: "loopback" as const,
-          controlUiEnabled: false,
-          sidecarStartup: "defer" as const,
-        };
+        const options = startupOptions(token);
         if (entry === "close") {
           const { startGatewayServerCore } = await import("./server-start.js");
           server = await startGatewayServerCore(port, options);
@@ -354,12 +366,7 @@ describe("Gateway startup lifetime", () => {
     let server: GatewayServer | undefined;
     try {
       const { startGatewayServerCore } = await import("./server-start.js");
-      server = await startGatewayServerCore(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      server = await startGatewayServerCore(port, startupOptions(token));
       await server.startupSettled;
       expect(renewal).toBeDefined();
       expect(stopped).not.toHaveBeenCalled();
@@ -398,14 +405,9 @@ describe("Gateway startup lifetime", () => {
     });
     state.applyEnv();
     try {
-      await expect(
-        createGatewayKernel(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        }),
-      ).rejects.toThrow("gateway tls: cert/key missing");
+      await expect(createGatewayKernel(port, startupOptions(token))).rejects.toThrow(
+        "gateway tls: cert/key missing",
+      );
       expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
     } finally {
       await state.cleanup();
@@ -426,10 +428,7 @@ describe("Gateway startup lifetime", () => {
     const state = await createStartupTestState("gateway-public-startup-trace");
     state.envVars.OPENCLAW_GATEWAY_STARTUP_TRACE = "1";
     const token = "gateway-public-startup-trace-token";
-    await state.writeConfig({
-      gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-    });
-    state.applyEnv();
+    await configureStartup(state, port, token);
     try {
       const listenModule = await import("./server/http-listen.js");
       const listen = listenModule.listenGatewayHttpServer;
@@ -439,14 +438,9 @@ describe("Gateway startup lifetime", () => {
         .mockImplementation((params) => listen({ ...params, retryEaddrinuse: false }));
       try {
         const { startGatewayServerCore } = await import("./server-start.js");
-        await expect(
-          startGatewayServerCore(port, {
-            auth: { mode: "token", token },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          }),
-        ).rejects.toThrow("another gateway instance is already listening");
+        await expect(startGatewayServerCore(port, startupOptions(token))).rejects.toThrow(
+          "another gateway instance is already listening",
+        );
         expect(startupTraceEventLoopDelay.instances[0]?.disable).toHaveBeenCalledOnce();
       } finally {
         listenSpy.mockRestore();
@@ -509,17 +503,9 @@ describe("Gateway startup lifetime", () => {
       };
       try {
         const token = "gateway-deferred-startup-cleanup-token";
-        await state.writeConfig({
-          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-        });
-        state.applyEnv();
+        await configureStartup(state, port, token);
         const { startGatewayServerCore } = await import("./server-start.js");
-        server = await startGatewayServerCore(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        });
+        server = await startGatewayServerCore(port, startupOptions(token));
         await startupEntered.promise;
         expect(server.startupSettled).toBe(publishedStartup);
         if (!kernel) {
@@ -652,17 +638,9 @@ describe("Gateway startup lifetime", () => {
         });
       try {
         const token = "gateway-post-ready-startup-token";
-        await state.writeConfig({
-          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-        });
-        state.applyEnv();
+        await configureStartup(state, port, token);
         const { startGatewayServerCore } = await import("./server-start.js");
-        startupOutcome = startGatewayServerCore(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        }).then(
+        startupOutcome = startGatewayServerCore(port, startupOptions(token)).then(
           (server) => {
             unexpectedServer = server;
             return undefined;

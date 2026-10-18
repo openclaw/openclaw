@@ -1,6 +1,3 @@
-/**
- * Gateway startup plugin bootstrap tests.
- */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -153,16 +150,15 @@ vi.mock("../agents/workspace-state-dirs.js", () => ({
 }));
 
 vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance: (params: unknown) =>
-    runChannelPluginStartupMaintenance(params),
+  runChannelPluginStartupMaintenance,
 }));
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnable(params),
+  applyPluginAutoEnable,
 }));
 
 vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
+  resolveOpenClawPackageRootSync,
 }));
 
 vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
@@ -170,16 +166,15 @@ vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
 }));
 
 vi.mock("../infra/pairing-files.js", () => ({
-  listLegacyPairingStoreFiles: () => listLegacyPairingStoreFiles(),
+  listLegacyPairingStoreFiles,
 }));
 
 vi.mock("../plugins/channel-presence-policy.js", () => ({
-  listAmbientOnlyConfiguredChannelIds: (params: unknown) =>
-    listAmbientOnlyConfiguredChannelIds(params),
+  listAmbientOnlyConfiguredChannelIds,
 }));
 
 vi.mock("../plugins/plugin-lookup-table.js", () => ({
-  loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
+  loadPluginLookUpTable,
 }));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
@@ -209,8 +204,7 @@ vi.mock("./server-plugin-bootstrap.js", () => ({
 
 // mock-isolation: Maintenance composition uses a controlled session repair lifetime.
 vi.mock("./server-startup-session-migration.js", () => ({
-  runGatewaySessionStartupMaintenance: (params: unknown) =>
-    runGatewaySessionStartupMaintenance(params),
+  runGatewaySessionStartupMaintenance,
 }));
 
 function createLog() {
@@ -231,11 +225,7 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
 }
 
 function slackConfig(): OpenClawConfig {
-  return {
-    channels: {
-      slack: { enabled: true, token: "token" },
-    },
-  } as OpenClawConfig;
+  return { channels: { slack: { enabled: true, token: "token" } } } as OpenClawConfig;
 }
 
 async function prepareBootstrapWithRuntimeConfig(
@@ -550,20 +540,10 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   });
 
   it("bypasses plugin lookup when plugins are globally disabled", async () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          botToken: "token",
-        },
-      },
-      plugins: {
-        enabled: false,
-        allow: ["telegram"],
-        entries: {
-          telegram: { enabled: true },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      channels: { telegram: { botToken: "token" } },
+      plugins: { enabled: false, allow: ["telegram"], entries: { telegram: { enabled: true } } },
+    };
 
     const result = await prepareBootstrapWithRuntimeConfig(cfg, {
       pluginMetadataSnapshot,
@@ -757,17 +737,7 @@ describe("loadGatewayStartupPluginRuntime", () => {
     const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
 
     await loadGatewayStartupPluginRuntime({
-      cfg: {
-        memory: {
-          search: {
-            provider: "voyage",
-          },
-        },
-
-        agents: {
-          defaults: {},
-        },
-      } as OpenClawConfig,
+      cfg: { memory: { search: { provider: "voyage" } }, agents: { defaults: {} } },
       workspaceDir: "/workspace",
       log,
       baseMethods: ["ping"],

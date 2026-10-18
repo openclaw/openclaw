@@ -1,8 +1,4 @@
-// Minimal-gateway boot smoke: guards the startup path the Control UI e2e suites
-// depend on. Bundled plugins stay enabled on purpose — disabling them (as other
-// gateway boot tests do) hides startup work that materializes plugin runtime,
-// which is exactly how a startup stall shipped green while hanging every
-// ui-e2e suite that boots a minimal test gateway.
+// Keep bundled plugins enabled: disabling them hid a startup stall from UI e2e proof.
 import fs from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -24,10 +20,35 @@ import {
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 
-// Local boot completes in ~10s; the budget only buys headroom for loaded CI
-// runners. A stall exhausts it and fails in the gateway lane instead of first
-// surfacing on unrelated UI PRs.
+// Allow loaded CI headroom while catching stalls here instead of in UI e2e.
 const BOOT_BUDGET_MS = 90_000;
+
+function createBootState(label: string, env: Record<string, string | undefined>) {
+  return createOpenClawTestState({
+    label,
+    layout: "home",
+    env: {
+      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      OPENCLAW_SKIP_CHANNELS: "1",
+      OPENCLAW_SKIP_CRON: "1",
+      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+      OPENCLAW_SKIP_PROVIDERS: "1",
+      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+      VITEST: "1",
+      ...env,
+    },
+  });
+}
+
+function bootOptions(token: string) {
+  return {
+    auth: { mode: "token" as const, token },
+    bind: "loopback" as const,
+    controlUiEnabled: false,
+    sidecarStartup: "defer" as const,
+  };
+}
 
 afterEach(() => {
   resetLogger();
@@ -40,20 +61,8 @@ afterEach(() => {
 describe("gateway minimal boot smoke", () => {
   it("suppresses ambient channel triggers and awaits subagent recovery", async ({ signal }) => {
     const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "gateway-bootstrap-ambient-default",
-      layout: "home",
-      env: {
-        OPENCLAW_GATEWAY_RESTART_TRACE: "0",
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
+    const state = await createBootState("gateway-bootstrap-ambient-default", {
+      OPENCLAW_GATEWAY_RESTART_TRACE: "0",
     });
     const token = "gateway-bootstrap-test-token";
     await state.writeConfig({
@@ -97,12 +106,7 @@ describe("gateway minimal boot smoke", () => {
       const sql = observeHostDataSql();
       const pendingBootstrap = prepareGatewayServerBootstrap({
         port,
-        opts: {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-        },
+        opts: bootOptions(token),
         log,
         logSecrets: log,
         loadWorkerEnvironmentStartupModule: async () =>
@@ -148,32 +152,16 @@ describe("gateway minimal boot smoke", () => {
     { timeout: BOOT_BUDGET_MS * 2 },
     async () => {
       const port = await getFreePort();
-      const state = await createOpenClawTestState({
-        label: "gateway-minimal-boot-smoke",
-        layout: "home",
-        env: {
-          OPENCLAW_GATEWAY_PASSWORD: undefined,
-          OPENCLAW_GATEWAY_TOKEN: undefined,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_SKIP_CHANNELS: "1",
-          OPENCLAW_SKIP_CRON: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_PROVIDERS: "1",
-          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-          VITEST: "1",
-        },
+      const state = await createBootState("gateway-minimal-boot-smoke", {
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        OPENCLAW_GATEWAY_TOKEN: undefined,
       });
       const token = "gateway-minimal-boot-smoke-token";
       const timelinePath = state.path("gateway-startup.jsonl");
       state.envVars.OPENCLAW_DIAGNOSTICS = "1";
       state.envVars.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
       await state.writeConfig({
-        gateway: {
-          auth: { mode: "token", token },
-          controlUi: { enabled: false },
-          port,
-        },
+        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
       });
       state.applyEnv();
       try {
@@ -181,12 +169,7 @@ describe("gateway minimal boot smoke", () => {
         let snapshotVersion = getSkillsSnapshotVersion();
         for (const startup of [1, 2]) {
           await fs.writeFile(timelinePath, "");
-          const server = await startGatewayServer(port, {
-            auth: { mode: "token", token },
-            bind: "loopback",
-            controlUiEnabled: false,
-            sidecarStartup: "defer",
-          });
+          const server = await startGatewayServer(port, bootOptions(token));
           try {
             const nextVersion = getSkillsSnapshotVersion();
             expect(
