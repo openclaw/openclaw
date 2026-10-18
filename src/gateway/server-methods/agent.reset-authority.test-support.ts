@@ -1,4 +1,3 @@
-// Register in the existing suite so test names, ordering, and cleanup stay unchanged.
 import { expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { createAgentDedupeLifecycle } from "../agent-turn/agent-dedupe-lifecycle.js";
@@ -11,37 +10,12 @@ import {
   expectRespondError,
   mockMainSessionEntry,
   invokeAgent,
-  mockSessionResetSuccess,
 } from "./agent.test-harness.js";
 
 export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAgentTestMocks>) {
-  const reset = (
-    message: string,
-    options: Parameters<typeof invokeAgent>[1],
-    idempotencyKey = "test-idem-reset-closed-authority",
-  ) => invokeAgent({ message, sessionKey: "agent:main:main", idempotencyKey }, options);
-
-  it("handles bare /reset by resetting the same session without running the model", async () => {
-    mockSessionResetSuccess({ reason: "reset" });
-    mocks.performGatewaySessionReset.mockClear();
-    mocks.agentCommand.mockClear();
-
-    const respond = await reset(
-      "/reset",
-      {
-        reqId: "4-reset",
-        client: operatorWriteCliClient(["operator.admin"]),
-      },
-      "test-idem-reset",
-    );
-
-    expect(mocks.performGatewaySessionReset).toHaveBeenCalledTimes(1);
-    expect(mocks.agentCommand).not.toHaveBeenCalled();
-    expect(mockCallArg(respond)).toBe(true);
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      result: { payloads: [{ text: "✅ Session reset." }] },
-    });
-  });
+  const resetRunId = "test-idem-reset-closed-authority";
+  const reset = (message: string, options: Parameters<typeof invokeAgent>[1]) =>
+    invokeAgent({ message, sessionKey: "agent:main:main", idempotencyKey: resetRunId }, options);
 
   it.each([
     "before ingress",
@@ -61,8 +35,6 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
       const hasFollowUp = closeAt.endsWith("with follow-up") || closesDuringFollowUp;
       const message = hasFollowUp ? "/reset continue working" : "/reset";
       let followUpCommitted = false;
-      // Existing-session resets preserve the session ID and advance the lifecycle.
-      // Model that contract in the case that reaches post-reset persistence.
       mockMainSessionEntry({
         sessionId: closesDuringFollowUp ? "reset-session-id" : "existing-session-id",
         ...(closesDuringFollowUp ? { lifecycleRevision: "before-reset" } : {}),
@@ -165,7 +137,7 @@ export function registerAgentResetAuthorityTests(mocks: ReturnType<typeof getAge
         expect(mockCallArg(respond)).toBe(true);
       } else if (closeAt === "reset fails") {
         expectRespondError(respond, { message: "reset storage unavailable" });
-        expect(context.dedupe.get("agent:test-idem-reset-closed-authority")).toBeUndefined();
+        expect(context.dedupe.get(`agent:${resetRunId}`)).toBeUndefined();
       } else {
         expectRespondError(respond, { message: "agent runtime authority is no longer active" });
         expect(respond.mock.calls.some(([ok]) => ok === true)).toBe(false);

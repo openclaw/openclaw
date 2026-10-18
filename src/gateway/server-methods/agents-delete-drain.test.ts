@@ -7,7 +7,7 @@ import {
   registerTestEmbeddedRun as setActiveEmbeddedRun,
   createEmbeddedRunHandle,
 } from "../../agents/embedded-agent-runner/runs.test-support.js";
-import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.entry.js";
@@ -53,7 +53,10 @@ import {
 import { createWorkerInferenceServiceStub } from "../worker-environments/inference-control.test-helpers.js";
 import { localPlacement } from "../worker-environments/placement-suite.test-support.js";
 import { drainAgentDeletionRuns } from "./agents-delete-drain.js";
-import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
+import {
+  configureDeletionAgents,
+  createDeletionCron,
+} from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -62,26 +65,16 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
   "%s deletion after its refused terminal projection and raw execution have settled",
   async (outcome) => {
     await withOpenClawTestState({ label: "deletion-terminal-drain" }, async (state) => {
-      await state.writeConfig({
-        agents: {
-          ownership: "explicit",
-          entries: {
-            keeper: { workspace: state.workspaceDir },
-            doomed: { workspace: state.path("doomed") },
-          },
-        },
-      });
-      await captureRuntimeConfigAsyncReader()();
+      await configureDeletionAgents(state);
       const cleanupError = Object.assign(new Error("EACCES: workspace is unreadable"), {
         code: "EACCES",
       });
       const sessionKey = "agent:doomed:dashboard:ending";
       const sessionId = "ending-session";
       const runId = "ending-run";
-      await replaceSessionEntry(
-        { agentId: "doomed", sessionKey },
-        { sessionId, lifecycleRunId: runId, updatedAt: 1 },
-      );
+      const scope = { agentId: "doomed", sessionKey };
+      const patchLabel = (label: string) => patchSessionEntryCore(scope, () => ({ label }));
+      await replaceSessionEntry(scope, { sessionId, lifecycleRunId: runId, updatedAt: 1 });
       const { scheduler, context } = createDeletionCron(state);
       const subscriptions = startGatewayEventSubscriptions({
         scheduler,
@@ -159,9 +152,7 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
           entry,
         );
         expect(getRuntimeConfig().agents?.entries?.doomed).toBeDefined();
-        await expect(
-          patchSessionEntryCore({ agentId: "doomed", sessionKey }, () => ({ label: "late write" })),
-        ).rejects.toThrow("deletion is draining active work");
+        await expect(patchLabel("late write")).rejects.toThrow("deletion is draining active work");
         if (outcome !== "commits") {
           const lstat = fs.lstat;
           vi.spyOn(fs, "lstat").mockImplementation((...args) => {
@@ -185,11 +176,9 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
           expect(getRuntimeConfig().agents?.entries?.doomed).toBeDefined();
           if (failedReplay) {
             failedReplay.mockRestore();
-            await expect(
-              patchSessionEntryCore({ agentId: "doomed", sessionKey }, () => ({
-                label: "blocked",
-              })),
-            ).rejects.toThrow("deletion cleanup is still pending");
+            await expect(patchLabel("blocked")).rejects.toThrow(
+              "deletion cleanup is still pending",
+            );
             const journal = await deletionJournals.readAgentDeletionJournalAsync("doomed");
             if (!journal) {
               throw new Error("Failed replay must retain deletion custody");
@@ -200,12 +189,10 @@ it.each(["commits", "rolls back", "retries failed rollback persistence"] as cons
             });
           }
           expect(await deletionJournals.readAgentDeletionJournalAsync("doomed")).toBeUndefined();
-          const restored = loadSessionEntry({ agentId: "doomed", sessionKey });
+          const restored = loadSessionEntry(scope);
           expect(restored).toMatchObject({ status: "killed", endedAt: 2_000, lastRunId: runId });
           expect(restored?.lifecycleRunId).toBeUndefined();
-          await expect(
-            patchSessionEntryCore({ agentId: "doomed", sessionKey }, () => ({ label: "reopened" })),
-          ).resolves.toMatchObject({ label: "reopened" });
+          await expect(patchLabel("reopened")).resolves.toMatchObject({ label: "reopened" });
         } else {
           await expect(deleting).resolves.toMatchObject({ ok: true, agentId: "doomed" });
           expect(getRuntimeConfig().agents?.entries?.doomed).toBeUndefined();
@@ -230,16 +217,7 @@ it.each(["rollback", "rollback during recovery"] as const)(
   "keeps session writes fenced after a draining deletion fails until %s",
   async (rollbackPath) => {
     await withOpenClawTestState({ label: "deletion-pending-write" }, async (state) => {
-      await state.writeConfig({
-        agents: {
-          ownership: "explicit",
-          entries: {
-            keeper: { workspace: state.workspaceDir },
-            doomed: { workspace: state.path("doomed") },
-          },
-        },
-      });
-      await captureRuntimeConfigAsyncReader()();
+      await configureDeletionAgents(state);
       const scope = { agentId: "doomed", env: state.env, sessionKey: "agent:doomed:pending" };
       await expect(
         replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),

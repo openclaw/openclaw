@@ -22,6 +22,7 @@ import {
   resetConfigRuntimeState,
   withConfigMutationExclusive,
 } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   patchSessionEntryCore,
@@ -80,9 +81,43 @@ afterEach(async () => {
   scenarioWork = undefined;
 });
 
+function deletionClient(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  agentId: string,
+  workspace: string,
+) {
+  const rpc: typeof client.request = client.request.bind(client);
+  return {
+    rpc,
+    session: (name: string) =>
+      rpc<{ key: string; sessionId: string }>("sessions.create", {
+        agentId,
+        key: `agent:${agentId}:${name}`,
+      }),
+    delete: (options?: Parameters<typeof rpc>[2]) =>
+      rpc("agents.delete", { agentId, deleteFiles: true }, options),
+    async recreate() {
+      await expect(rpc("agents.create", { name: agentId, workspace })).resolves.toMatchObject({
+        ok: true,
+        agentId,
+      });
+      expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+    },
+  };
+}
+
+function expectDeletionResult(result: unknown, workspace: string) {
+  expect(result).toMatchObject({
+    ok: true,
+    failed: [],
+    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
+  });
+  expect(result).not.toHaveProperty("purgeFailed");
+}
+
 async function exerciseLateSessionWritesDuringDeletion(params: {
   state: OpenClawTestState;
-  client: Awaited<ReturnType<typeof connectGatewayClient>>;
+  client: ReturnType<typeof deletionClient>;
   agentId: string;
   workspace: string;
   signal: AbortSignal;
@@ -91,10 +126,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
   const { state, client, agentId, workspace, signal, resolveGatewayContext } = params;
   const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
   const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
-  let session = await client.request<{ key: string; sessionId: string }>("sessions.create", {
-    agentId,
-    key: `agent:${agentId}:late-write-0`,
-  });
+  let session = await client.session("late-write-0");
   // Two cycles cover every held phase before and after same-agent recreation.
   for (let iteration = 0; iteration < 2; iteration += 1) {
     signal.throwIfAborted();
@@ -161,17 +193,12 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       ownerSettled = true;
     });
     // The test owns the deadline while deliberately holding all three deletion phases.
-    const deleting = client.request(
-      "agents.delete",
-      { agentId, deleteFiles: true },
-      { signal, timeoutMs: null },
-    );
+    const deleting = client.delete({ signal, timeoutMs: null });
+    const reach = (gate: Promise<void>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, deleting, message), signal);
     void deleting.catch(() => {});
     try {
-      await withinTest(
-        awaitGateBeforeSettlement(aborted.promise, deleting, "deletion did not abort its run"),
-        signal,
-      );
+      await reach(aborted.promise, "deletion did not abort its run");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
       expect(operation.result).toMatchObject({ kind: "aborted" });
       expect(resolveSessionRunProgressState(session.sessionId)).toBeUndefined();
@@ -180,35 +207,17 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
-      await withinTest(
-        awaitGateBeforeSettlement(closed.promise, deleting, "deletion did not close its database"),
-        signal,
-      );
+      await reach(closed.promise, "deletion did not close its database");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("retiring");
       expect(getRuntimeConfig().agents?.entries).toHaveProperty(agentId);
       await refuseLatePatch("after-clean-close-before-config-reload");
       releaseClosed.resolve();
 
-      await withinTest(
-        awaitGateBeforeSettlement(
-          purgeCaptured.promise,
-          deleting,
-          "deletion did not capture its purge executor",
-        ),
-        signal,
-      );
+      await reach(purgeCaptured.promise, "deletion did not capture its purge executor");
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("retiring");
       await refuseLatePatch("during-purge");
       releasePurge.resolve();
-      await expect(
-        withinTest(deleting, signal),
-        `deletion iteration ${iteration}`,
-      ).resolves.toMatchObject({
-        ok: true,
-        failed: [],
-        removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-      });
-      expect(await deleting).not.toHaveProperty("purgeFailed");
+      expectDeletionResult(await withinTest(deleting, signal), workspace);
       expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
       await expectDeletedStorage(state, agentId, workspace, databasePath);
@@ -221,17 +230,8 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
       captureCleanup.mockRestore();
       closeDatabase.mockRestore();
     }
-    await expect(
-      client.request("agents.create", { name: agentId, workspace }),
-    ).resolves.toMatchObject({
-      ok: true,
-      agentId,
-    });
-    expect(readAgentDeletionJournal(agentId)).toBeUndefined();
-    session = await client.request<{ key: string; sessionId: string }>("sessions.create", {
-      agentId,
-      key: `agent:${agentId}:late-write-${iteration + 1}`,
-    });
+    await client.recreate();
+    session = await client.session(`late-write-${iteration + 1}`);
     expect(session.sessionId).toBeTruthy();
   }
 }
@@ -300,6 +300,15 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
         const sessionId = "deletion-active-session";
         const sessionKey = `agent:${agentId}:active`;
         const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
+        const writeEntry = (
+          key: string,
+          entry: SessionEntry,
+          previousEntry: SessionEntry | null = null,
+        ) =>
+          runOpenClawAgentWriteTransaction(
+            (database) => writeSessionEntry(database, key, entry, { previousEntry }),
+            { agentId, path: databasePath, env: state.env },
+          );
         const session = {
           sessionId,
           updatedAt: 1,
@@ -307,10 +316,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             ? { agentHarnessId: "codex", lifecycleRevision: "native-binding-generation" }
             : {}),
         };
-        runOpenClawAgentWriteTransaction(
-          (database) => writeSessionEntry(database, sessionKey, session, { previousEntry: null }),
-          { agentId, path: databasePath, env: state.env },
-        );
+        writeEntry(sessionKey, session);
         await fs.mkdir(state.sessionsDir(agentId), { recursive: true });
         await fs.writeFile(
           path.join(state.sessionsDir(agentId), "owned-attachment.txt"),
@@ -356,30 +362,20 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 token: "agent-delete-test-token",
                 scopes: ["operator.admin", "operator.read", "operator.write"],
               });
-              const native = nativeApi.createNativeBindingDeletionFixture(
-                createPluginRuntimeMock({
-                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
-                }),
-                { agentId, sessionId, sessionKey },
-              );
+              const operations = deletionClient(client, agentId, workspace);
+              const { rpc } = operations;
+              const binding = (boundId: string, boundKey: string) =>
+                nativeApi.createNativeBindingDeletionFixture(
+                  createPluginRuntimeMock({
+                    state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
+                  }),
+                  { agentId, sessionId: boundId, sessionKey: boundKey },
+                );
+              const native = binding(sessionId, sessionKey);
               const finishedKey = `agent:${agentId}:finished`;
               const finishedId = "deletion-finished-session";
-              runOpenClawAgentWriteTransaction(
-                (database) =>
-                  writeSessionEntry(
-                    database,
-                    finishedKey,
-                    { ...session, sessionId: finishedId },
-                    { previousEntry: null },
-                  ),
-                { agentId, path: databasePath, env: state.env },
-              );
-              const finishedNative = nativeApi.createNativeBindingDeletionFixture(
-                createPluginRuntimeMock({
-                  state: createPluginStateRuntimeStores("codex", () => signal.throwIfAborted()),
-                }),
-                { agentId, sessionId: finishedId, sessionKey: finishedKey },
-              );
+              writeEntry(finishedKey, { ...session, sessionId: finishedId });
+              const finishedNative = binding(finishedId, finishedKey);
               const nativeClient = await nativeApi.attachNativeBindingDeletionClient(
                 native.store,
                 native.key,
@@ -399,13 +395,13 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               try {
                 const history = async (key: string) =>
                   (
-                    await client.request<{ messages: unknown[] }>("chat.history", {
+                    await rpc<{ messages: unknown[] }>("chat.history", {
                       sessionKey: key,
                     })
                   ).messages;
                 const inject = async (key: string, message: string) => {
                   await expect(
-                    client.request("chat.inject", { sessionKey: key, message }),
+                    rpc("chat.inject", { sessionKey: key, message }),
                   ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
                   const messages = await history(key);
                   expect(messages).toContainEqual(
@@ -416,7 +412,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   );
                   return messages;
                 };
-                const keeperSession = await client.request<{ key: string }>("sessions.create", {
+                const keeperSession = await rpc<{ key: string }>("sessions.create", {
                   agentId: "keeper",
                   key: "agent:keeper:injection-isolation",
                 });
@@ -426,7 +422,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 );
                 const assertInjectionRefused = async (phase: string, reason: string) => {
                   await expect(
-                    client.request("chat.inject", {
+                    rpc("chat.inject", {
                       sessionKey,
                       message: `Refused during ${phase}.`,
                     }),
@@ -457,9 +453,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     }
                     return readSummaries(scope);
                   });
-                await expect(
-                  client.request("agents.delete", { agentId, deleteFiles: true }),
-                ).rejects.toThrow("synthetic inventory failure");
+                await expect(operations.delete()).rejects.toThrow("synthetic inventory failure");
                 inventory.mockRestore();
                 expect(readAgentDeletionJournal(agentId)).toMatchObject({
                   phase: "draining",
@@ -473,7 +467,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     { sessionKey, message: "refused", idempotencyKey: "pending-deletion" },
                   ],
                 ] as const) {
-                  await expect(client.request(method, params)).rejects.toThrow(
+                  await expect(rpc(method, params)).rejects.toThrow(
                     "deletion cleanup is still pending",
                   );
                 }
@@ -482,7 +476,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   "deletion cleanup is still pending",
                 );
                 // Deleting agents leave the discovery roster while their owners settle.
-                await expect(client.request("chat.history", { sessionKey })).rejects.toThrow(
+                await expect(rpc("chat.history", { sessionKey })).rejects.toThrow(
                   `Session "${sessionKey}" was not found.`,
                 );
                 const aborted = createDeferred();
@@ -498,11 +492,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 void operation.ownerSettlement.then(() => {
                   ownerSettled = true;
                 });
-                const deleting = client.request(
-                  "agents.delete",
-                  { agentId, deleteFiles: true },
-                  { timeoutMs: 10_000 },
-                );
+                const deleting = operations.delete({ timeoutMs: 10_000 });
                 try {
                   await withinTest(
                     awaitGateBeforeSettlement(
@@ -519,7 +509,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
                   await expect(
-                    client.request("agents.update", { agentId, workspace: relocatedWorkspace }),
+                    rpc("agents.update", { agentId, workspace: relocatedWorkspace }),
                   ).rejects.toThrow(/deletion cleanup is still pending/);
                   expect(getRuntimeConfig().agents?.entries?.[agentId]?.workspace).toBe(workspace);
                   await expect(fs.stat(relocatedWorkspace)).rejects.toMatchObject({
@@ -528,15 +518,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   // Cancellation checkpoints remain writable until the retained run settles.
                   await withinTest(
                     withConfigMutationExclusive(async () => {
-                      runOpenClawAgentWriteTransaction(
-                        (database) =>
-                          writeSessionEntry(
-                            database,
-                            sessionKey,
-                            { ...session, updatedAt: 2, label: "aborted" },
-                            { previousEntry: session },
-                          ),
-                        { agentId, path: databasePath, env: state.env },
+                      writeEntry(
+                        sessionKey,
+                        { ...session, updatedAt: 2, label: "aborted" },
+                        session,
                       );
                     }),
                     signal,
@@ -547,31 +532,17 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   await deleting;
                   expect(performance.now() - started).toBeLessThan(10_000);
                 }
-                expect(await deleting).toMatchObject({
-                  ok: true,
-                  failed: [],
-                  removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-                });
-                expect(await deleting).not.toHaveProperty("purgeFailed");
+                expectDeletionResult(await deleting, workspace);
                 expect(ownerSettled).toBe(true);
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
                 expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
-                await expect(
-                  client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
-                ).rejects.toThrow();
+                await expect(operations.session("gone")).rejects.toThrow();
                 await expectDeletedStorage(state, agentId, workspace, databasePath);
-                await expect(
-                  client.request("agents.create", { name: agentId, workspace }),
-                ).resolves.toMatchObject({ ok: true, agentId });
-                expect(readAgentDeletionJournal(agentId)).toBeUndefined();
-
-                const recreatedSession = await client.request<{ key: string; sessionId: string }>(
-                  "sessions.create",
-                  { agentId, key: `agent:${agentId}:recreated` },
-                );
+                await operations.recreate();
+                const recreatedSession = await operations.session("recreated");
                 for (const message of [
                   { role: "user", content: "Remember the synthetic blue preference." },
                   { role: "assistant", content: "The completed turn recorded blue." },
@@ -650,10 +621,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   };
                   const memoryLeases = readMemoryLeases();
                   expect(memoryLeases.length).toBeGreaterThan(0);
-                  deletingRecreated = client.request("agents.delete", {
-                    agentId,
-                    deleteFiles: true,
-                  });
+                  deletingRecreated = operations.delete();
                   void deletingRecreated.catch(() => {});
                   await withinTest(
                     awaitGateBeforeSettlement(
@@ -671,19 +639,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
                   expect(readMemoryLeases()).toEqual(memoryLeases);
                   releaseScan.resolve();
-                  await expect(deletingRecreated).resolves.toMatchObject({
-                    ok: true,
-                    failed: [],
-                    removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
-                  });
-                  expect(await deletingRecreated).not.toHaveProperty("purgeFailed");
+                  expectDeletionResult(await deletingRecreated, workspace);
                   expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                   expect(readMemoryLeases()).toEqual([]);
                   await expectDeletedStorage(state, agentId, workspace, databasePath);
-                  await expect(
-                    client.request("agents.create", { name: agentId, workspace }),
-                  ).resolves.toMatchObject({ ok: true, agentId });
-                  expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+                  await operations.recreate();
                 } finally {
                   releaseScan.resolve();
                   await Promise.allSettled([deletingRecreated]);
@@ -695,7 +655,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                 }
                 await exerciseLateSessionWritesDuringDeletion({
                   state,
-                  client,
+                  client: operations,
                   agentId,
                   workspace,
                   signal,

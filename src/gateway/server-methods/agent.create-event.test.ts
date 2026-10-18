@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
 import {
@@ -67,34 +67,32 @@ vi.mock("../../agents/prepared-model-runtime.js", async (importOriginal) => {
         pluginGeneration: options.pluginGeneration,
       };
     }),
-    loadPublishedGatewayReplyDispatchRuntime: vi.fn(
-      async ({
+    async loadPublishedGatewayReplyDispatchRuntime({
+      agentId,
+      onRuntimeLease,
+    }: {
+      agentId: string;
+      onRuntimeLease?: (lease: unknown) => void;
+    }) {
+      const runtime = {
         agentId,
-        onRuntimeLease,
-      }: {
-        agentId: string;
-        onRuntimeLease?: (lease: unknown) => void;
-      }) => {
-        const runtime = {
-          agentId,
-          agentDir: configMocks.workspaceDir,
-          config: configMocks.getRuntimeConfig(),
-          pluginGeneration: { pluginMetadataSnapshot: {}, remoteCatalog: null },
-          workspaceDir: configMocks.workspaceDir,
-        };
-        const snapshot = {
-          ...runtime,
-          metadataSnapshot: runtime.pluginGeneration.pluginMetadataSnapshot,
-        };
-        preparedRuntimeMocks.captured(snapshot);
-        onRuntimeLease?.({
-          snapshot,
-          pluginGeneration: runtime.pluginGeneration,
-          [Symbol.asyncDispose]: preparedRuntimeMocks.releaseDispatch,
-        });
-        return runtime;
-      },
-    ),
+        agentDir: configMocks.workspaceDir,
+        config: configMocks.getRuntimeConfig(),
+        pluginGeneration: { pluginMetadataSnapshot: {}, remoteCatalog: null },
+        workspaceDir: configMocks.workspaceDir,
+      };
+      const snapshot = {
+        ...runtime,
+        metadataSnapshot: runtime.pluginGeneration.pluginMetadataSnapshot,
+      };
+      preparedRuntimeMocks.captured(snapshot);
+      onRuntimeLease?.({
+        snapshot,
+        pluginGeneration: runtime.pluginGeneration,
+        [Symbol.asyncDispose]: preparedRuntimeMocks.releaseDispatch,
+      });
+      return runtime;
+    },
   };
 });
 
@@ -104,119 +102,113 @@ vi.mock("../../runtime.js", () => ({
 
 import { agentHandlers } from "./agent.js";
 
-describe("agent handler session create events", () => {
-  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
-  let tempDir: string;
-  let storePath: string;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
 
-  beforeEach(async () => {
-    tempDir = sessionDirs.make();
-    storePath = path.join(tempDir, "sessions.json");
-    configMocks.storePath = storePath;
-    configMocks.workspaceDir = tempDir;
-    setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
-    configMocks.getRuntimeConfig.mockClear();
-    agentIngressMocks.agentCommandFromIngress.mockClear();
-    agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
-    Object.values(preparedRuntimeMocks).forEach((mock) => mock.mockClear());
-    await fs.writeFile(storePath, "{}\n", "utf8");
-  });
-
-  afterEach(() => {
-    clearRuntimeConfigSnapshot();
-    for (const entry of listActiveSessionsForShutdown()) {
-      forgetActiveSessionForShutdown(entry.sessionId);
-    }
-    vi.restoreAllMocks();
-  });
-
-  it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
-    "settles runtime custody with %s preparation",
-    async (preparation) => {
-      const caseId = preparation.replaceAll(" ", "-");
-      const sessionKey = `agent:main:subagent:create-test-${caseId}`;
-      const runId = `idem-agent-create-event-${caseId}`;
-      vi.spyOn(agentHandlerHelpers, "canPrepareAgentSessionWorktree").mockReturnValue(
-        preparation === "deferred workspace",
-      );
-      vi.spyOn(sessionProject, "prepareSessionWorkspaceForRun").mockResolvedValue(undefined);
-      if (preparation === "superseded catalog") {
-        vi.mocked(acquireAgentRunPreparedModelRuntime).mockRejectedValueOnce(
-          new PreparedModelRuntimePublicationSupersededError(
-            "Accepted model catalog changed during runtime preparation",
-          ),
-        );
-      }
-      const broadcastToConnIds = vi.fn();
-      const respond = vi.fn();
-      let execution: Promise<unknown> | undefined;
-
-      await expectDefined(agentHandlers.agent, "agentHandlers.agent test invariant").call(
-        agentHandlers,
-        {
-          params: {
-            message: "hi",
-            sessionKey,
-            idempotencyKey: runId,
-          },
-          respond,
-          context: {
-            trackExecution: (work: () => Promise<void>) => (execution = trackAsyncWork(work)),
-            dedupe: new Map(),
-            deps: {} as never,
-            logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
-            addChatRun: vi.fn(),
-            registerToolEventRecipient: vi.fn(),
-            getRuntimeConfig: configMocks.getRuntimeConfig,
-            getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
-            broadcastToConnIds,
-          } as never,
-          client: null,
-          isWebchatConnect: () => false,
-          req: { id: "req-agent-create-event" } as never,
-        },
-      );
-
-      const responseCall = respond.mock.calls[0];
-      if (preparation === "superseded catalog") {
-        expect(responseCall?.[0]).toBe(false);
-        expect(responseCall?.[2]).toMatchObject({
-          code: "UNAVAILABLE",
-          message: "Model runtime changed before this turn started. Retry the request.",
-          retryable: true,
-          retryAfterMs: 0,
-        });
-        expect(execution).toBeUndefined();
-        expect(agentIngressMocks.agentCommandFromIngress).not.toHaveBeenCalled();
-        expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
-        expect(preparedRuntimeMocks.releaseSelected).not.toHaveBeenCalled();
-        expect(rpcSourceTesting.has(runId)).toBe(false);
-        return;
-      }
-      expect(responseCall).toEqual([
-        true,
-        expect.objectContaining({ status: "accepted", runId }),
-        undefined,
-        expect.objectContaining({ runId }),
-      ]);
-      await execution;
-      expect(preparedRuntimeMocks.acquired).toHaveBeenCalledExactlyOnceWith(
-        preparedRuntimeMocks.captured.mock.calls[0]?.[0],
-        0,
-      );
-      expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
-      expect(preparedRuntimeMocks.releaseSelected).toHaveBeenCalledOnce();
-      await vi.waitFor(
-        () => {
-          expect(broadcastToConnIds.mock.calls[0]).toEqual([
-            "sessions.changed",
-            expect.objectContaining({ sessionKey, reason: "create" }),
-            new Set(["conn-1"]),
-            { agentId: "main", dropIfSlow: true, sessionEventSubscriptionKeys: [sessionKey] },
-          ]);
-        },
-        { timeout: 2_000, interval: 5 },
-      );
-    },
-  );
+beforeEach(async () => {
+  const tempDir = sessionDirs.make();
+  const storePath = path.join(tempDir, "sessions.json");
+  configMocks.storePath = storePath;
+  configMocks.workspaceDir = tempDir;
+  setRuntimeConfigSnapshot(configMocks.getRuntimeConfig());
+  configMocks.getRuntimeConfig.mockClear();
+  agentIngressMocks.agentCommandFromIngress.mockClear();
+  agentIngressMocks.agentCommandFromIngress.mockResolvedValue({ ok: true });
+  Object.values(preparedRuntimeMocks).forEach((mock) => mock.mockClear());
+  await fs.writeFile(storePath, "{}\n", "utf8");
 });
+
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  for (const entry of listActiveSessionsForShutdown()) {
+    forgetActiveSessionForShutdown(entry.sessionId);
+  }
+  vi.restoreAllMocks();
+});
+
+it.each(["immediate", "deferred workspace", "superseded catalog"] as const)(
+  "settles runtime custody with %s preparation",
+  async (preparation) => {
+    const caseId = preparation.replaceAll(" ", "-");
+    const sessionKey = `agent:main:subagent:create-test-${caseId}`;
+    const runId = `idem-agent-create-event-${caseId}`;
+    vi.spyOn(agentHandlerHelpers, "canPrepareAgentSessionWorktree").mockReturnValue(
+      preparation === "deferred workspace",
+    );
+    vi.spyOn(sessionProject, "prepareSessionWorkspaceForRun").mockResolvedValue(undefined);
+    if (preparation === "superseded catalog") {
+      vi.mocked(acquireAgentRunPreparedModelRuntime).mockRejectedValueOnce(
+        new PreparedModelRuntimePublicationSupersededError(
+          "Accepted model catalog changed during runtime preparation",
+        ),
+      );
+    }
+    const broadcastToConnIds = vi.fn();
+    const respond = vi.fn();
+    let execution: Promise<unknown> | undefined;
+
+    const agent = expectDefined(agentHandlers.agent, "agent handler missing");
+    await agent({
+      params: {
+        message: "hi",
+        sessionKey,
+        idempotencyKey: runId,
+      },
+      respond,
+      context: {
+        trackExecution: (work: () => Promise<void>) => (execution = trackAsyncWork(work)),
+        dedupe: new Map(),
+        deps: {} as never,
+        logGateway: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() } as never,
+        addChatRun: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        getRuntimeConfig: configMocks.getRuntimeConfig,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        broadcastToConnIds,
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+      req: { id: "req-agent-create-event" } as never,
+    });
+
+    const responseCall = respond.mock.calls[0];
+    if (preparation === "superseded catalog") {
+      expect(responseCall?.[0]).toBe(false);
+      expect(responseCall?.[2]).toMatchObject({
+        code: "UNAVAILABLE",
+        message: "Model runtime changed before this turn started. Retry the request.",
+        retryable: true,
+        retryAfterMs: 0,
+      });
+      expect(execution).toBeUndefined();
+      expect(agentIngressMocks.agentCommandFromIngress).not.toHaveBeenCalled();
+      expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
+      expect(preparedRuntimeMocks.releaseSelected).not.toHaveBeenCalled();
+      expect(rpcSourceTesting.has(runId)).toBe(false);
+      return;
+    }
+    expect(responseCall).toEqual([
+      true,
+      expect.objectContaining({ status: "accepted", runId }),
+      undefined,
+      expect.objectContaining({ runId }),
+    ]);
+    await execution;
+    expect(preparedRuntimeMocks.acquired).toHaveBeenCalledExactlyOnceWith(
+      preparedRuntimeMocks.captured.mock.calls[0]?.[0],
+      0,
+    );
+    expect(preparedRuntimeMocks.releaseDispatch).toHaveBeenCalledOnce();
+    expect(preparedRuntimeMocks.releaseSelected).toHaveBeenCalledOnce();
+    await vi.waitFor(
+      () => {
+        expect(broadcastToConnIds.mock.calls[0]).toEqual([
+          "sessions.changed",
+          expect.objectContaining({ sessionKey, reason: "create" }),
+          new Set(["conn-1"]),
+          { agentId: "main", dropIfSlow: true, sessionEventSubscriptionKeys: [sessionKey] },
+        ]);
+      },
+      { timeout: 2_000, interval: 5 },
+    );
+  },
+);

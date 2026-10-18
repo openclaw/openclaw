@@ -1,5 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, describe, expect, it } from "vitest";
-import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -23,40 +24,37 @@ import {
   isDirectGatewayChatUserTurn,
   resolveGatewayChatCronCreatorAuthorityAdmission,
   resolveGatewayCronCreatorAuthorityAdmission,
-  type GatewayCronCreatorAuthorityAdmission,
 } from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./shared-types.js";
 
-const agentRuntimeContext = createTestAdmittedRunContext("run-local-operator-runtime");
-const agentRuntimeAuthority = claimAgentRunDelegatedAuthority(
-  agentRuntimeContext.operationalRunInstance,
-);
+const operationalRunInstance = createOperationalRunInstanceRef("run-local-operator-runtime");
 const agentRuntimeIdentity: AgentRuntimeIdentity = {
   kind: "agentRuntime",
   agentId: "main",
   sessionKey: "agent:main:worker",
-  operationalRunInstance: agentRuntimeContext.operationalRunInstance,
-  delegatedAuthority: { kind: "local", ...agentRuntimeAuthority },
+  operationalRunInstance,
+  delegatedAuthority: { kind: "local", ...claimAgentRunDelegatedAuthority(operationalRunInstance) },
 };
 
-afterAll(() => {
-  resetAgentRunRegistryForTest();
-});
+afterAll(resetAgentRunRegistryForTest);
 
-function createClient(overrides: Partial<NonNullable<GatewayClient["internal"]>> = {}) {
+function createClient(
+  overrides: Partial<NonNullable<GatewayClient["internal"]>> = {},
+  scopes = ["operator.admin"],
+) {
   return {
-    connect: { scopes: ["operator.admin"] },
+    connect: { scopes },
     internal: { isLocalClient: true, ...overrides },
   } as unknown as GatewayClient;
 }
 
-function createParams({
+function admitAgent({
   request,
   ...overrides
 }: Partial<Omit<Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0], "request">> & {
   request?: Partial<AgentRunRequest>;
-} = {}): Parameters<typeof resolveGatewayCronCreatorAuthorityAdmission>[0] {
-  return {
+} = {}) {
+  return resolveGatewayCronCreatorAuthorityAdmission({
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
     client: createClient(),
@@ -65,29 +63,21 @@ function createParams({
     isRestartRecoveryResumeRun: false,
     ...overrides,
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
-  };
+  });
 }
 
 describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
   it("mints only for the admitted direct local admin turn", () => {
-    expect(resolveGatewayCronCreatorAuthorityAdmission(createParams())).toEqual({
+    expect(admitAgent()).toEqual({
       runId: "run-local-operator",
       callerOrigin: { kind: "local" },
-    } satisfies GatewayCronCreatorAuthorityAdmission);
+    });
   });
 
   it.each([
     ["missing Gateway client", { client: null }],
     ["non-local client", { client: createClient({ isLocalClient: undefined }) }],
-    [
-      "non-admin client",
-      {
-        client: {
-          ...createClient(),
-          connect: { scopes: ["operator.write"] },
-        } as unknown as GatewayClient,
-      },
-    ],
+    ["non-admin client", { client: createClient({}, ["operator.write"]) }],
     ["ephemeral run", { resolvedSessionKey: "" }],
     ["spawned run", { spawnedBy: "agent:main:parent" }],
     ["external provenance", { inputProvenance: { kind: "external_user" } }],
@@ -116,20 +106,9 @@ describe("resolveGatewayCronCreatorAuthorityAdmission", () => {
       { client: createClient({ pluginSubagentRequester: {} as never }) },
     ],
     ["runtime plugin grant", { client: createClient({ runtimePluginToolGrant: {} as never }) }],
-    [
-      "worker runtime",
-      {
-        client: createClient({
-          agentRuntimeIdentity,
-        }),
-      },
-    ],
+    ["worker runtime", { client: createClient({ agentRuntimeIdentity }) }],
   ] as const)("rejects %s", (_label, override) => {
-    expect(
-      resolveGatewayCronCreatorAuthorityAdmission(
-        createParams(override as Parameters<typeof createParams>[0]),
-      ),
-    ).toBeUndefined();
+    expect(admitAgent(override as Parameters<typeof admitAgent>[0])).toBeUndefined();
   });
 });
 
@@ -151,6 +130,10 @@ function createChatParams(
   };
 }
 
+function admitChat(overrides: Parameters<typeof createChatParams>[0] = {}) {
+  return resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams(overrides));
+}
+
 describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
   it.each(["agent", "chat"] as const)(
     "keeps %s creator grants bound to the original caller after request completion",
@@ -161,29 +144,23 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
         { deviceId: "original-device", role: "operator" },
         () => true,
       );
-      const admission =
+      const admission = expectDefined(
         entry === "agent"
-          ? resolveGatewayCronCreatorAuthorityAdmission({
-              ...createParams(),
-              isCurrent: caller.isCurrent,
-            })
-          : resolveGatewayChatCronCreatorAuthorityAdmission(
-              createChatParams({ isCurrent: caller.isCurrent }),
-            );
-      if (!admission) {
-        throw new Error("expected direct operator admission");
-      }
+          ? admitAgent({ isCurrent: caller.isCurrent })
+          : admitChat({ isCurrent: caller.isCurrent }),
+        "expected direct operator admission",
+      );
       const release = retainGatewayDeviceRevocation(admission.isCurrent);
       caller.release();
-      const capability = createCronCreatorAuthorityCapability(
-        admission.runId,
-        admission.callerOrigin,
-        admission.managementEntitlement,
-        admission.isCurrent,
+      const capability = expectDefined(
+        createCronCreatorAuthorityCapability(
+          admission.runId,
+          admission.callerOrigin,
+          admission.managementEntitlement,
+          admission.isCurrent,
+        ),
+        "expected creator capability",
       );
-      if (!capability) {
-        throw new Error("expected creator capability");
-      }
       try {
         await runWithCronCreatorAuthorityCapability(capability, async () => {
           const grant = mintCronCreatorAuthorityGrant(capability);
@@ -213,7 +190,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
   });
 
   it("mints only for a direct external local-admin user turn", () => {
-    expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams())).toEqual({
+    expect(admitChat()).toEqual({
       runId: "run-local-chat",
       callerOrigin: { kind: "local" },
     });
@@ -223,14 +200,12 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
     "retains host-attested Control UI admin authority with locality %s",
     (isLocalClient) => {
       const client = createClient({ isLocalClient, controlUiAdmin: true });
-      expect(resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams({ client }))).toEqual(
-        {
-          runId: "run-local-chat",
-          callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
-          ...(!isLocalClient ? { callerScopedCreation: true } : {}),
-          managementEntitlement: { source: "control-ui-admin" },
-        },
-      );
+      expect(admitChat({ client })).toEqual({
+        runId: "run-local-chat",
+        callerOrigin: { kind: isLocalClient ? "local" : "unknown" },
+        ...(!isLocalClient ? { callerScopedCreation: true } : {}),
+        managementEntitlement: { source: "control-ui-admin" },
+      });
     },
   );
 
@@ -243,19 +218,15 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
       platform: "web",
     };
     expect(
-      resolveGatewayChatCronCreatorAuthorityAdmission(
-        createChatParams({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" }),
-      ),
+      admitChat({ client, resolvedSessionKey: "agent:main:telegram:direct:operator" }),
     ).toBeUndefined();
   });
 
   it.each(["operator.read", "operator.write"])(
     "rejects a Control UI connection narrowed to %s",
     (scope) => {
-      const client = createClient({ controlUiAdmin: true });
-      client.connect.scopes = [scope];
       expect(
-        resolveGatewayChatCronCreatorAuthorityAdmission(createChatParams({ client })),
+        admitChat({ client: createClient({ controlUiAdmin: true }, [scope]) }),
       ).toBeUndefined();
     },
   );
@@ -268,9 +239,7 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
     ["internal entry", { isDirectExternalUser: false }],
   ] as const)("does not promote Control UI admin authority for %s", (_label, overrides) => {
     expect(
-      resolveGatewayChatCronCreatorAuthorityAdmission(
-        createChatParams({ client: createClient({ controlUiAdmin: true }), ...overrides }),
-      ),
+      admitChat({ client: createClient({ controlUiAdmin: true }), ...overrides }),
     ).toBeUndefined();
   });
 
@@ -285,20 +254,9 @@ describe("resolveGatewayChatCronCreatorAuthorityAdmission", () => {
     ["spawned lineage", { spawnedBy: "agent:main:parent" }],
     ["input provenance", { inputProvenance: { kind: "external_user" } }],
     ["remote client", { client: createClient({ isLocalClient: undefined }) }],
-    [
-      "non-admin client",
-      { client: { ...createClient(), connect: { scopes: ["operator.write"] } } },
-    ],
+    ["non-admin client", { client: createClient({}, ["operator.write"]) }],
     ["cron continuation client", { client: createClient({ cronRunContinuation: true }) }],
   ] as const)("rejects %s", (_label, overrides) => {
-    expect(
-      resolveGatewayChatCronCreatorAuthorityAdmission(
-        createChatParams(
-          overrides as Partial<
-            Parameters<typeof resolveGatewayChatCronCreatorAuthorityAdmission>[0]
-          >,
-        ),
-      ),
-    ).toBeUndefined();
+    expect(admitChat(overrides)).toBeUndefined();
   });
 });

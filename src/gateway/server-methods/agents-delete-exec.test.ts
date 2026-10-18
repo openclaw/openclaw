@@ -18,12 +18,15 @@ import {
   createRunExit,
   runtimeManagedRun,
 } from "../../agents/bash-tools.exec-runtime.test-support.js";
-import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import type { SpawnInput } from "../../process/supervisor/types.js";
 import { readAgentDeletionJournalAsync } from "../../state/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDeletionCron } from "./agents-delete.fixture.test-support.js";
+import {
+  configureDeletionAgents,
+  createDeletionCron,
+} from "./agents-delete.fixture.test-support.js";
 import { deleteGatewayAgent } from "./agents-delete.js";
 
 const supervisor = vi.hoisted(() => ({ spawn: vi.fn(), cancel: vi.fn() }));
@@ -84,14 +87,7 @@ it("drains an independent agent service through exit while preserving another ag
     const workspace = state.path("workspace-doomed");
     await fs.mkdir(workspace);
     await fs.writeFile(`${workspace}/witness.txt`, "process still owns its workspace");
-    await state.writeConfig({
-      agents: {
-        ownership: "explicit",
-        defaults: { skipBootstrap: true },
-        entries: { keeper: { workspace: state.workspaceDir }, doomed: { workspace } },
-      },
-    });
-    await captureRuntimeConfigAsyncReader()();
+    await configureDeletionAgents(state, workspace, { skipBootstrap: true });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const launch = async (agentId: string, cwd: string) => {
       const identity = { runId: `${agentId}-run`, agentId };

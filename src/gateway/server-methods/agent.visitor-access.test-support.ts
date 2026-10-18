@@ -168,10 +168,7 @@ export async function startVisitorGateway({
 }) {
   const handlers = {
     agent: expectDefined(agentHandlers.agent, "agent handler missing"),
-    "tools.invoke": expectDefined(
-      toolsInvokeHandlers["tools.invoke"],
-      "tools.invoke handler missing",
-    ),
+    "tools.invoke": expectDefined(toolsInvokeHandlers["tools.invoke"], "tools.invoke missing"),
     "users.list": expectDefined(usersHandlers["users.list"], "users.list handler missing"),
   };
   const loaded = await loadGatewayPlugins({
@@ -190,9 +187,8 @@ export async function startVisitorGateway({
   let services: PluginServicesHandle | undefined;
   const stop = async () => {
     try {
-      const stopped = await services?.stop({ strict: true });
-      if (stopped) {
-        expect(stopped.errors).toEqual([]);
+      if (services) {
+        expect((await services.stop({ strict: true })).errors).toEqual([]);
       }
     } finally {
       catalog.release();

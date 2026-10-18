@@ -126,13 +126,14 @@ it.for([true, false])(
         const readScope = createSqliteReadOnlyWorkerScope({ signal, deadlineOwnedByCaller: false });
         let scheduler: ReturnType<typeof createTestGatewayScheduler> | undefined;
         let cron: CronService | undefined;
-        const startRecoveryOwner = async () => {
+        const resumeDeletion = async () => {
           await captureRuntimeConfigAsyncReader()();
           const owner = createDeletionCron(state, async () => {
             throw new Error("Unexpected cron dispatch in upgrade fixture");
           });
           ({ scheduler, cron } = owner);
-          return owner.context;
+          await resumeAgentDeletions(owner.context, signal);
+          expect(owner.context.logGateway.warn).not.toHaveBeenCalled();
         };
         const closeOwners = async () => {
           cron?.stop();
@@ -261,10 +262,8 @@ it.for([true, false])(
             });
             await assertKeeper();
 
-            let context = await startRecoveryOwner();
-            await resumeAgentDeletions(context, signal);
+            await resumeDeletion();
             signal.throwIfAborted();
-            expect(context.logGateway.warn).not.toHaveBeenCalled();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({
               phase: "retiring",
               cleanupCompleted: true,
@@ -293,9 +292,7 @@ it.for([true, false])(
               ).toEqual([]);
             }
 
-            context = await startRecoveryOwner();
-            await resumeAgentDeletions(context, signal);
-            expect(context.logGateway.warn).not.toHaveBeenCalled();
+            await resumeDeletion();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({ cleanupCompleted: true });
             await assertKeeper();
             expect(
