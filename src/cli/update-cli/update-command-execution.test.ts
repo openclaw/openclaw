@@ -1,11 +1,14 @@
 // Install the fixture mocks before loading the execution owner and its dependencies.
 import "./update-command-execution.test-support.js";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { StateDatabaseOfflineMaintenanceError } from "../../infra/gateway-state-owner-record.js";
+import * as ownerRecord from "../../infra/gateway-state-owner-record.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -210,36 +213,87 @@ describe("mutable update execution", () => {
     });
   });
 
-  it("waits for transient state maintenance before Git checkout", async () => {
+  it("waits for a real transient maintenance owner before Git checkout", async () => {
     await withTestDir({ prefix: "git-maintenance-before-checkout-" }, async (root) => {
       const params = await runParams(root, "git", path.join(root, "state"));
-      params.updateStepTimeoutMs = 500;
+      params.updateStepTimeoutMs = 5_000;
       const target = { schemaVersions: { state: 15, agent: 19 } };
-      let maintenancePending = false;
-      const assertCurrent = vi.fn(() => {
-        if (maintenancePending) {
-          maintenancePending = false;
-          throw new StateDatabaseOfflineMaintenanceError(
-            path.join(root, "state", "state", "openclaw.sqlite"),
-            "temporary offline maintenance",
-          );
-        }
-      });
-      params.opts.run.executorFence = { assertCurrent };
+      let releaseTimer: ReturnType<typeof setTimeout> | undefined;
+      let releaseRequested = false;
+      const lockModule = new URL("../../infra/gateway-lock.ts", import.meta.url).href;
+      const child = spawn(
+        process.execPath,
+        [
+          "--import",
+          "tsx",
+          "--input-type=module",
+          "--eval",
+          `
+            import { acquireGatewayLock } from ${JSON.stringify(lockModule)};
+            const stateDir = process.env.OPENCLAW_MAINTENANCE_STATE;
+            const lock = await acquireGatewayLock({
+              env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+              role: "sqlite-maintenance",
+              timeoutMs: 10_000,
+              allowInTests: true,
+            });
+            if (!lock) throw new Error("maintenance lock not acquired");
+            process.send("held");
+            process.on("message", async (message) => {
+              if (message === "release") {
+                await lock.release();
+                process.disconnect();
+              }
+            });
+          `,
+        ],
+        {
+          cwd: path.resolve(import.meta.dirname, "../../.."),
+          env: { ...process.env, OPENCLAW_MAINTENANCE_STATE: path.join(root, "state") },
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
+        },
+      );
+      const closed = once(child, "close");
+      await once(child, "message");
+      const refusals: unknown[] = [];
+      const actualAssert = ownerRecord.assertPersistedStateDatabaseAccessAllowed;
+      vi.spyOn(ownerRecord, "assertPersistedStateDatabaseAccessAllowed").mockImplementation(
+        (...args) => {
+          try {
+            return actualAssert(...args);
+          } catch (error) {
+            refusals.push(error);
+            if (!releaseTimer && child.connected) {
+              releaseTimer = setTimeout(() => {
+                releaseRequested = true;
+                child.send("release");
+              }, 300);
+            }
+            throw error;
+          }
+        },
+      );
       mocks.runGitUpdate.mockImplementationOnce(
         async (options: Parameters<typeof updateGitInstall>[0]) => {
-          maintenancePending = true;
           await options.inspectGitTarget?.(target);
           return { ...successfulUpdate, mode: "git" };
         },
       );
 
-      const execution = await execute(params);
+      try {
+        const execution = await execute(params);
 
-      expect(execution?.result.status).toBe("ok");
-      expect(assertCurrent).toHaveBeenCalled();
+        expect(execution?.result.status).toBe("ok");
+        expect(refusals[0]).toBeInstanceOf(StateDatabaseOfflineMaintenanceError);
+        expect(releaseRequested).toBe(true);
+      } finally {
+        if (child.connected && !releaseRequested) {
+          child.send("release");
+        }
+        await closed;
+      }
     });
-  });
+  }, 60_000);
 
   it("refuses service admission before mutable startup housekeeping", async () => {
     mocks.maybeStopService.mockImplementation(async ({ phase, handoffFromGateway }) => {
