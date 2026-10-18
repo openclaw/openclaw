@@ -460,6 +460,26 @@ describe("ManagedWorktreeService allocation and orphan preservation", () => {
     expect(second.name).toBe("release-planning-2");
   });
 
+  it("uses configured fallback nouns only when no name is supplied or inferred", async () => {
+    const configured = new ManagedWorktreeService({
+      env,
+      getConfig: () => ({ session: { fallbackNameNouns: ["otter"] } }),
+    });
+
+    const fallback = await configured.create({ repoRoot: repo, baseRef: "HEAD" });
+    const named = await configured.create({ repoRoot: repo, name: "release", baseRef: "HEAD" });
+    const suggested = await configured.create({
+      repoRoot: repo,
+      suggestedName: "planning",
+      baseRef: "HEAD",
+    });
+
+    expect(fallback.name).toMatch(/^[a-z]+-otter$/);
+    expect(fallback.branch).toBe(`openclaw/${fallback.name}`);
+    expect(named.name).toBe("release");
+    expect(suggested.name).toBe("planning");
+  });
+
   it("numbers inferred names around unmanaged Git and filesystem collisions", async () => {
     const anchor = await service.create({ repoRoot: repo, name: "anchor", baseRef: "HEAD" });
     await git(repo, "branch", "openclaw/release-planning");

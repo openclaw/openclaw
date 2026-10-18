@@ -10,6 +10,7 @@ export const SESSION_FIELD_LABELS: Record<string, string> = {
   "session.dmScope": "DM Session Scope",
   "session.groupScope": "Group Session Scope",
   "session.notifyOnCreate": "Notify Home on Session Creation",
+  "session.fallbackNameNouns": "Fallback Name Nouns",
   "session.identityLinks": "Session Identity Links",
   "session.resetTriggers": "Session Reset Triggers",
   "session.reset": "Session Reset Policy",

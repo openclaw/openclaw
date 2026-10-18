@@ -197,7 +197,8 @@ name. Explicit worktree names are preserved, and typing never creates a worktree
 or runs setup.
 
 If automatic naming fails after submission, the session receives a two-word,
-crustacean-themed name. New worktree branches use the saved session title when
+crustacean-themed name, or one built from
+[`session.fallbackNameNouns`](/gateway/config-agents/sessions#session) when set. New worktree branches use the saved session title when
 available, with the same two-word fallback if naming has not finished. They never
 use the first-message text as a branch-name fallback. A title that arrives later
 updates the sidebar without renaming an existing branch.

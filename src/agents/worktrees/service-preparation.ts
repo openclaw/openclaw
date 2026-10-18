@@ -510,7 +510,12 @@ export async function removeFailedWorktree(
 }
 
 export async function createOwnedWorktree<T>(
-  params: CreateManagedWorktreeParams & WorktreeAllocationGuard & WorktreeSourceCustody,
+  params: CreateManagedWorktreeParams &
+    WorktreeAllocationGuard &
+    WorktreeSourceCustody & {
+      /** Configured `session.fallbackNameNouns`; omitted or empty keeps crustacean nouns. */
+      fallbackNameNouns?: readonly string[];
+    },
   repository: ResolvedRepository,
   env: NodeJS.ProcessEnv,
   create: (name: string) => Promise<T>,
@@ -552,5 +557,9 @@ export async function createOwnedWorktree<T>(
       });
     }
   }
-  return await create(params.name ?? params.suggestedName ?? createCrustaceanSlug());
+  return await create(
+    params.name ??
+      params.suggestedName ??
+      createCrustaceanSlug({ nouns: params.fallbackNameNouns }),
+  );
 }
