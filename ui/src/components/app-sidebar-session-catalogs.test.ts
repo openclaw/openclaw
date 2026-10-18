@@ -244,7 +244,9 @@ describe("catalogErrorMessages", () => {
   it("keeps an offline host out of the provider failure list", () => {
     expect(
       catalogErrorMessages(
-        sessionCatalog({ hosts: [catalogHost({ error: { code: "NODE_OFFLINE", message: "offline" } })] }),
+        sessionCatalog({
+          hosts: [catalogHost({ error: { code: "NODE_OFFLINE", message: "offline" } })],
+        }),
       ),
     ).toEqual([]);
   });
