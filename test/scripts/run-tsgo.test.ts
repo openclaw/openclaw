@@ -1,4 +1,3 @@
-// Run Tsgo tests cover run tsgo script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -28,74 +27,64 @@ const { createTempDir } = createScriptTestHarness();
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
 
-it.each([true])(
-  "refuses a shared install without creating dependency links (linked=%s)",
-  (linked) => {
-    const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
-    const root = path.join(primary, ".claude/worktrees/validation");
-    fs.mkdirSync(root, { recursive: true });
-    expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
-    fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
-    fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
-    fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
-    const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
-    const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
-    const resolverExecuted = path.join(primary, "resolver-executed");
-    fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
-    fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
-    fs.writeFileSync(
-      path.join(nativeRoot, "lib/getExePath.js"),
-      `import fs from "node:fs";
+function sparseGuard(
+  options: Parameters<typeof getSparseTsgoGuardError>[1] = {},
+  args = ["-p", "test/tsconfig/tsconfig.core.test.json"],
+) {
+  return getSparseTsgoGuardError(args, {
+    cwd: options?.cwd ?? createTempDir("openclaw-run-tsgo-"),
+    isSparseCheckoutEnabled: () => true,
+    ...options,
+  });
+}
+
+it("refuses a shared install without creating dependency links", () => {
+  const primary = fs.realpathSync.native(createTempDir("native-primary-install-"));
+  const root = path.join(primary, ".claude/worktrees/validation");
+  fs.mkdirSync(root, { recursive: true });
+  expect(spawnSync("git", ["init", "-q"], { cwd: primary }).status).toBe(0);
+  fs.writeFileSync(path.join(root, ".git"), `gitdir: ${path.join(primary, ".git")}\n`);
+  fs.writeFileSync(path.join(root, "package.json"), '{"private":true}\n');
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: []\n");
+  const sharedInstall = fs.realpathSync.native(createTempDir("native-shared-install-"));
+  const nativeRoot = path.join(sharedInstall, "node_modules/typescript");
+  const resolverExecuted = path.join(primary, "resolver-executed");
+  fs.mkdirSync(path.join(nativeRoot, "lib"), { recursive: true });
+  fs.writeFileSync(path.join(nativeRoot, "package.json"), '{"type":"module"}\n');
+  fs.writeFileSync(
+    path.join(nativeRoot, "lib/getExePath.js"),
+    `import fs from "node:fs";
 fs.writeFileSync(${JSON.stringify(resolverExecuted)}, "executed");
 export default () => process.execPath;\n`,
-    );
-    fs.symlinkSync(
-      path.join(sharedInstall, "node_modules"),
-      path.join(primary, "node_modules"),
-      "junction",
-    );
-    const localModules = path.join(root, "node_modules");
-    if (linked) {
-      fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
-    }
-    const result = spawnSync(
-      process.execPath,
-      [path.resolve("scripts/run-tsgo.mjs"), "--version"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 20_000,
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(result.stderr).toContain("Declaration input escapes checkout");
-    expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
-    expect(fs.existsSync(localModules)).toBe(linked);
-    expect(fs.existsSync(resolverExecuted)).toBe(false);
-  },
-);
+  );
+  fs.symlinkSync(
+    path.join(sharedInstall, "node_modules"),
+    path.join(primary, "node_modules"),
+    "junction",
+  );
+  const localModules = path.join(root, "node_modules");
+  fs.symlinkSync(path.join(primary, "node_modules"), localModules, "junction");
+  const result = spawnSync(process.execPath, [path.resolve("scripts/run-tsgo.mjs"), "--version"], {
+    cwd: root,
+    encoding: "utf8",
+    timeout: 20_000,
+  });
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(1);
+  expect(result.stderr).toContain("Declaration input escapes checkout");
+  expect(result.stderr).toContain("shared installs and external symlinks are unsupported");
+  expect(fs.existsSync(localModules)).toBe(true);
+  expect(fs.existsSync(resolverExecuted)).toBe(false);
+});
 
 describe("run-tsgo sparse guard", () => {
   it("ignores full worktrees", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-
-    expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
-        cwd,
-        isSparseCheckoutEnabled: () => false,
-      }),
-    ).toBeNull();
+    expect(sparseGuard({ isSparseCheckoutEnabled: () => false })).toBeNull();
   });
 
   it("ignores metadata-only commands", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"], {
-        cwd,
-        isSparseCheckoutEnabled: () => true,
-      }),
+      sparseGuard({}, ["-p", "test/tsconfig/tsconfig.core.test.json", "--showConfig"]),
     ).toBeNull();
   });
 
@@ -135,17 +124,9 @@ describe("run-tsgo sparse guard", () => {
     }
 
     expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
+      sparseGuard({
         cwd,
-        isSparseCheckoutEnabled: () => true,
-        sparseCheckoutPatterns: [
-          "/packages/plugin-package-contract/src/index.ts",
-          "/ui/config/control-ui-chunking.ts",
-          "/ui/src/i18n/lib/registry.ts",
-          "/ui/src/i18n/lib/types.ts",
-          "/ui/src/app/settings.ts",
-          "/ui/src/api/gateway.ts",
-        ],
+        sparseCheckoutPatterns: requiredPaths.map((file) => `/${file}`),
       }),
     ).toMatchInlineSnapshot(`
       "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
@@ -156,27 +137,20 @@ describe("run-tsgo sparse guard", () => {
     `);
   });
 
-  it.each(["tsconfig.ui.json"])("does not require plugin browser sources for %s", (project) => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-    const options = {
-      cwd,
-      fileExists: () => true,
-      isSparseCheckoutEnabled: () => true,
-      sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
-    };
-
-    expect(getSparseTsgoGuardError(["-p", project], options)).toBeNull();
+  it("does not require plugin browser sources for tsconfig.ui.json", () => {
+    expect(
+      sparseGuard(
+        {
+          fileExists: () => true,
+          sparseCheckoutPatterns: ["/packages/", "/src/", "/ui/config/", "/ui/src/"],
+        },
+        ["-p", "tsconfig.ui.json"],
+      ),
+    ).toBeNull();
   });
 
   it("returns a helpful message for sparse core-test worktrees missing ui and packages files", () => {
-    const cwd = createTempDir("openclaw-run-tsgo-");
-
-    expect(
-      getSparseTsgoGuardError(["-p", "test/tsconfig/tsconfig.core.test.json"], {
-        cwd,
-        isSparseCheckoutEnabled: () => true,
-      }),
-    ).toMatchInlineSnapshot(`
+    expect(sparseGuard()).toMatchInlineSnapshot(`
       "tsconfig.core.test.json cannot be typechecked from this sparse checkout because tracked project inputs are missing or only partially included:
       - packages/plugin-package-contract/src/index.ts
       - ui/config/control-ui-chunking.ts
@@ -388,22 +362,18 @@ child.once("message", () => process.exit(0));
     }
   }, 30_000);
 
-  it.each([{ bound: "0" }])(
-    "explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of $bound instead of crashing",
-    ({ bound }) => {
-      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
-      writeFakeTsgo(cwd, "#!/bin/sh\nexit 0\n");
+  it("explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of 0 instead of crashing", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
+    writeFakeTsgo(cwd, "#!/bin/sh\nexit 0\n");
 
-      const result = runFakeTsgo(cwd, bound);
+    const result = runFakeTsgo(cwd, "0");
 
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("must be plain decimal digits");
-      expect(result.stderr).toContain("Unset it to disable the watchdog");
-      expect(result.stderr).not.toContain("at readPositiveEnvInt");
-      expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
-    },
-    30_000,
-  );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("must be plain decimal digits");
+    expect(result.stderr).toContain("Unset it to disable the watchdog");
+    expect(result.stderr).not.toContain("at readPositiveEnvInt");
+    expect(result.stderr.trim().split("\n").at(-1)).toBe("[tsgo] FAILED (exit 1)");
+  }, 30_000);
 
   it("kills a wedged tsgo that ignores SIGTERM instead of blocking its caller forever", () => {
     const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
@@ -602,23 +572,13 @@ syncBuiltinESMExports();
   );
 
   // Without saturation Node collapses the delay to 1ms and kills the sleeping child.
-  it.each([
-    {
-      bound: "2147483648",
-      name: "an override past Node's timer ceiling",
-      body: "#!/bin/sh\nsleep 0.25\nexit 0\n",
-    },
-  ])(
-    "leaves a completing tsgo alone under $name",
-    ({ bound, body }) => {
-      const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
-      writeFakeTsgo(cwd, body);
+  it("leaves a completing tsgo alone under an override past Node's timer ceiling", () => {
+    const cwd = createTempDir("openclaw-run-tsgo-watchdog-");
+    writeFakeTsgo(cwd, "#!/bin/sh\nsleep 0.25\nexit 0\n");
 
-      const result = runFakeTsgo(cwd, bound);
+    const result = runFakeTsgo(cwd, "2147483648");
 
-      expect(result.status).toBe(0);
-      expect(result.stderr).not.toContain("killed the tsgo process tree");
-    },
-    30_000,
-  );
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("killed the tsgo process tree");
+  }, 30_000);
 });

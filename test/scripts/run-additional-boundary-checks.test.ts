@@ -1,4 +1,3 @@
-// Run Additional Boundary Checks tests cover run additional boundary checks script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -79,6 +78,24 @@ function runCli(...args: string[]) {
       encoding: "utf8",
     },
   );
+}
+
+function nodeCheck(label: string, script: string) {
+  return { label, command: process.execPath, args: ["-e", script] };
+}
+
+function runNodeCheck(
+  label: string,
+  script: string,
+  options: Partial<Parameters<typeof runSingleCheck>[1]> = {},
+) {
+  return runSingleCheck(nodeCheck(label, script), {
+    checkTimeoutMs: 2_000,
+    cwd: process.cwd(),
+    env: process.env,
+    outputMaxBytes: 4096,
+    ...options,
+  });
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -178,31 +195,21 @@ describe("run-additional-boundary-checks", () => {
   });
 
   it("parses CLI help and shard args before running checks", () => {
-    expect(parseCliArgs(["--help"], {})).toEqual({
-      help: true,
-      shardSpec: "",
-      coreTestBoundaryOwner: "additional",
-    });
-    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({
-      help: false,
-      shardSpec: "2/4",
-      coreTestBoundaryOwner: "additional",
-    });
-    expect(parseCliArgs(["--shard=3/4"], {})).toEqual({
-      help: false,
-      shardSpec: "3/4",
-      coreTestBoundaryOwner: "additional",
-    });
-    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual({
-      help: false,
-      shardSpec: "4/4",
-      coreTestBoundaryOwner: "additional",
-    });
-    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual({
+    const parsed = (overrides: Partial<ReturnType<typeof parseCliArgs>>) => ({
       help: false,
       shardSpec: "",
-      coreTestBoundaryOwner: "test-types",
+      coreTestBoundaryOwner: "additional",
+      ...overrides,
     });
+    expect(parseCliArgs(["--help"], {})).toEqual(parsed({ help: true }));
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual(parsed({ shardSpec: "2/4" }));
+    expect(parseCliArgs(["--shard=3/4"], {})).toEqual(parsed({ shardSpec: "3/4" }));
+    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual(
+      parsed({ shardSpec: "4/4" }),
+    );
+    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual(
+      parsed({ coreTestBoundaryOwner: "test-types" }),
+    );
     expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
     expect(() => parseCliArgs(["--shard", "-h"], {})).toThrow("--shard requires a value");
@@ -290,29 +297,25 @@ describe("run-additional-boundary-checks", () => {
     const buffer = createOutputBuffer();
     const failures = await runChecks(
       [
-        {
-          label: "passes",
-          command: process.execPath,
-          args: ["-e", "console.log('ok-out')"],
-        },
-        {
-          label: "fails",
-          command: process.execPath,
-          args: ["-e", "console.error('bad-out'); process.exit(7)"],
-        },
+        nodeCheck("passes", "console.log('ok-out')"),
+        nodeCheck("fails", "console.error('bad-out'); process.exit(7)"),
       ],
       { concurrency: 2, output: buffer.output },
     );
 
     const text = buffer.text();
     expect(failures).toBe(1);
-    expect(text).toContain("::group::passes");
-    expect(text).toContain("ok-out");
-    expect(text).toContain("[ok] passes in ");
-    expect(text).toContain("::group::fails");
-    expect(text).toContain("bad-out");
-    expect(text).toContain("::error title=fails failed::fails failed (exit 7)");
-    expect(text).toContain("Additional boundary check timings:");
+    for (const expected of [
+      "::group::passes",
+      "ok-out",
+      "[ok] passes in ",
+      "::group::fails",
+      "bad-out",
+      "::error title=fails failed::fails failed (exit 7)",
+      "Additional boundary check timings:",
+    ]) {
+      expect(text).toContain(expected);
+    }
   });
 
   it("preserves UTF-8 split across process output chunks before trimming the byte tail", async () => {
@@ -321,38 +324,16 @@ describe("run-additional-boundary-checks", () => {
       "process.stdout.write(bytes.subarray(0, 5));",
       "setTimeout(() => process.stdout.end(bytes.subarray(5)), 20);",
     ].join("");
-    const result = await runSingleCheck(
-      {
-        label: "split-utf8",
-        command: process.execPath,
-        args: ["-e", script],
-      },
-      {
-        checkTimeoutMs: 2_000,
-        cwd: process.cwd(),
-        env: process.env,
-        outputMaxBytes: 5,
-      },
-    );
+    const result = await runNodeCheck("split-utf8", script, { outputMaxBytes: 5 });
 
     expect(result.code).toBe(0);
     expect(result.output).toBe("[output truncated to last 5 bytes]\nnew");
   });
 
   it("clamps oversized check timers before scheduling", async () => {
-    const result = await runSingleCheck(
-      {
-        label: "slow-pass",
-        command: process.execPath,
-        args: ["-e", "setTimeout(() => process.exit(0), 25)"],
-      },
-      {
-        checkTimeoutMs: Number.MAX_SAFE_INTEGER,
-        cwd: process.cwd(),
-        env: process.env,
-        outputMaxBytes: 4096,
-      },
-    );
+    const result = await runNodeCheck("slow-pass", "setTimeout(() => process.exit(0), 25)", {
+      checkTimeoutMs: Number.MAX_SAFE_INTEGER,
+    });
 
     expect(result.code).toBe(0);
     expect(result.timedOut).toBe(false);
@@ -385,19 +366,10 @@ describe("run-additional-boundary-checks", () => {
 
         releaseAndWait = startProcessWatchdogFixture(
           () =>
-            (completion = runSingleCheck(
-              {
-                label: "wrapper-exits",
-                command: process.execPath,
-                args: ["-e", parentScript],
-              },
-              {
-                checkTimeoutMs: 100,
-                cwd: process.cwd(),
-                env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
-                outputMaxBytes: 4096,
-              },
-            )),
+            (completion = runNodeCheck("wrapper-exits", parentScript, {
+              checkTimeoutMs: 100,
+              env: { ...process.env, OPENCLAW_TEST_CHILD_PID: childPidPath },
+            })),
         );
 
         await withinTest(

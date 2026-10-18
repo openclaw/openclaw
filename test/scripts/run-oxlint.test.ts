@@ -1,4 +1,3 @@
-// Run Oxlint tests cover run oxlint script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -80,6 +79,11 @@ function shouldSerializeShards(env: NodeJS.ProcessEnv, hostResources = CONSTRAIN
 
 function resolveSplitCoreConcurrency(env: NodeJS.ProcessEnv, hostResources = ROOMY_HOST): number {
   return resolveOxlintShardConcurrency({ env, platform: "linux", hostResources, splitCore: true });
+}
+
+function expectParentTermination(result: Awaited<ReturnType<typeof runParentTerminationScenario>>) {
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.signal).toBeNull();
 }
 
 function writeModule(target: string, lines: string[]): void {
@@ -348,29 +352,21 @@ function createPluginShardFixture(
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts([])).toBe(true);
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["src/index.ts"])).toBe(true);
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--type-aware"])).toBe(true);
-    expect(
-      shouldPrepareExtensionPackageBoundaryArtifacts([
-        "--tsconfig",
-        "extensions/tsconfig.json",
-        "extensions/telegram/src/index.ts",
-      ]),
-    ).toBe(true);
-    expect(
-      shouldPrepareExtensionPackageBoundaryArtifacts([
-        "--tsconfig=config/tsconfig/oxlint.core.json",
-        "--tsconfig=extensions/tsconfig.json",
-      ]),
-    ).toBe(true);
+    for (const args of [
+      [],
+      ["src/index.ts"],
+      ["--type-aware"],
+      ["--tsconfig", "extensions/tsconfig.json", "extensions/telegram/src/index.ts"],
+      ["--tsconfig=config/tsconfig/oxlint.core.json", "--tsconfig=extensions/tsconfig.json"],
+    ]) {
+      expect(shouldPrepareExtensionPackageBoundaryArtifacts(args)).toBe(true);
+    }
   });
 
   it("skips artifact preparation for metadata-only oxlint commands", () => {
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--help"])).toBe(false);
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--version"])).toBe(false);
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--print-config"])).toBe(false);
-    expect(shouldPrepareExtensionPackageBoundaryArtifacts(["--rules"])).toBe(false);
+    for (const flag of ["--help", "--version", "--print-config", "--rules"]) {
+      expect(shouldPrepareExtensionPackageBoundaryArtifacts([flag])).toBe(false);
+    }
   });
 
   it("serializes broad oxlint shards on constrained CI hosts", () => {
@@ -529,30 +525,21 @@ describe("run-oxlint", () => {
   it.runIf(process.platform !== "win32")(
     "forwards parent termination to detached oxlint shard processes",
     async ({ signal }) => {
-      const result = await runParentTerminationScenario("forward", signal);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.signal).toBeNull();
+      expectParentTermination(await runParentTerminationScenario("forward", signal));
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "force kills detached shard processes that ignore parent termination",
     async ({ signal }) => {
-      const result = await runParentTerminationScenario("ignore", signal);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.signal).toBeNull();
+      expectParentTermination(await runParentTerminationScenario("ignore", signal));
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "kills parent-terminated shard process groups when the leader exits first",
     async ({ signal }) => {
-      const result = await runParentTerminationScenario("group", signal);
-
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.signal).toBeNull();
+      expectParentTermination(await runParentTerminationScenario("group", signal));
     },
   );
 
