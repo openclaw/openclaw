@@ -8,13 +8,16 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
+import { readUpdateRunDriver } from "./update-run-driver.js";
 import {
   createUpdateRun,
   getUpdateRunAsync,
   getUpdateRunWithReconciliationAsync,
   reconcileAbandonedUpdateRunsAsync,
+  recordUpdateRunPhase,
 } from "./update-run-ledger.js";
 import { loadUpdateRecovery } from "./update-run-recovery.js";
+import { readUpdateRunStatus } from "./update-run-status.js";
 
 const admission = vi.hoisted(
   (): { created?: () => void; beforeGrant?: (stage: string) => void } => ({}),
@@ -66,6 +69,42 @@ async function expiredLegacyRun() {
 }
 
 describe("update run reconciliation workers", () => {
+  it("status terminalizes recent activation after its recorded driver exits", async () => {
+    const state = tempDirs.make("update-driver-loss-");
+    const options = { env: { OPENCLAW_STATE_DIR: state } };
+    const driver = readUpdateRunDriver();
+    if (!driver) {
+      throw new Error("The fixture requires process start identity");
+    }
+    const run = createUpdateRun(
+      {
+        trigger: "cli",
+        origin: { driver: { ...driver, startIdentity: String(Number(driver.startIdentity) + 1) } },
+      },
+      options,
+    );
+    recordUpdateRunPhase(run.runId, "activating", {}, options);
+    await closeOpenClawStateDatabaseAsync();
+    vi.stubEnv("OPENCLAW_STATE_DIR", state);
+    try {
+      expect(await readUpdateRunStatus()).toMatchObject({
+        lastRun: {
+          runId: run.runId,
+          status: "failed",
+          phase: "finished",
+          reason: "abandoned",
+          origin: { nextAction: "Run `openclaw update repair` before retrying the update." },
+        },
+      });
+      expect(await getUpdateRunAsync(run.runId, options)).toMatchObject({
+        status: "failed",
+        phase: "finished",
+      });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["history", "reconciliation"] as const)(
     "settles expired legacy history through %s without host SQLite",
     async (entryPoint) => {

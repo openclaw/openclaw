@@ -208,9 +208,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
-  const expected = params.expectedService?.serviceUpdateVerdict;
-  if (expected?.kind === "unavailable") {
-    return unavailableServiceState(expected);
+  if (params.expectedService?.serviceUpdateVerdict?.kind === "unavailable") {
+    return unavailableServiceState(params.expectedService.serviceUpdateVerdict);
   }
   try {
     if (params.phase === "inspect") {
@@ -290,8 +289,7 @@ async function stopManagedServiceBeforeMutableUpdate(
       warn,
     });
   };
-  // Only a verified live handoff lease admits a helper that retains Gateway ancestry.
-  // Inspection uses the inherited run ID; a missing run ID is refused.
+  // A helper retaining Gateway ancestry requires a verified live handoff and run ID.
   const resolveAncestryBlock = async (state: GatewayServiceState) => {
     delete inspected.serviceMembershipSourceAbsent;
     const block = gatewayMaintenanceBlock(state, params.root, "stop", () => {
@@ -387,7 +385,7 @@ async function stopManagedServiceBeforeMutableUpdate(
         };
       }
     }
-    return unavailableServiceState({
+    const verdict: Extract<ManagedGatewayUpdateVerdict, { kind: "unavailable" }> = {
       kind: "unavailable",
       message:
         err instanceof ServiceInspectionError && err.reason === "windows-task-inspection-failed"
@@ -397,7 +395,9 @@ async function stopManagedServiceBeforeMutableUpdate(
             ? `${err.message}\n${GATEWAY_SERVICE_INSPECTION_WARNING}`
             : GATEWAY_SERVICE_INSPECTION_WARNING,
       ...(err instanceof ServiceInspectionError ? { inspectionReason: err.reason } : {}),
-    });
+    };
+    assertGatewayServiceAdmissionUnchanged(params.expectedService, verdict);
+    return unavailableServiceState(verdict);
   }
   assertCurrent();
   const serviceUpdateVerdict = await withCommandProcessScope(() =>
