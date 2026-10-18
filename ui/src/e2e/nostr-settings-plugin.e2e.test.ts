@@ -137,7 +137,8 @@ suite.define(() => {
         });
         await expect(detail.getByRole("alert")).toContainText("Retain this draft");
         const beforeSave = (await gateway.getRequests("config.set")).length;
-        const beforeRefresh = (await gateway.getRequests("channels.status")).length;
+        const beforeRefresh = (await gateway.getRequests("channels.status", { probe: true }))
+          .length;
         await detail.getByRole("button", { name: "Save", exact: true }).click();
         const saved = await gateway.waitForRequest("config.set", { after: beforeSave });
         expect(saved.params).toMatchObject({ baseHash: "nostr-config-1" });
@@ -153,7 +154,8 @@ suite.define(() => {
           configSnapshot({ channels: { nostr: { enabled: true } } }, "nostr-config-2"),
         );
         const beforeReload = (await gateway.getRequests("config.get")).length;
-        const beforeReloadRefresh = (await gateway.getRequests("channels.status")).length;
+        const beforeReloadRefresh = (await gateway.getRequests("channels.status", { probe: true }))
+          .length;
         await detail.getByRole("button", { name: "Reload", exact: true }).click();
         await gateway.waitForRequest("config.get", { after: beforeReload });
         await expect(enabled).toBeChecked();
@@ -161,7 +163,7 @@ suite.define(() => {
           after: beforeReloadRefresh,
           match: { probe: true },
         });
-        const beforeProbe = (await gateway.getRequests("channels.status")).length;
+        const beforeProbe = (await gateway.getRequests("channels.status", { probe: false })).length;
         await detail.getByRole("button", { name: "Refresh", exact: true }).click();
         await gateway.waitForRequest("channels.status", {
           after: beforeProbe,

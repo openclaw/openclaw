@@ -984,8 +984,8 @@ it.each(["disconnect", "client", "admin", "source", "unmount", "caller"] as cons
 );
 
 it("checks operation authority after consuming a successful response body", async () => {
-  const body = createDeferred();
-  const reading = createDeferred<void>();
+  const body = createDeferred<unknown>();
+  const reading = createDeferred();
   vi.stubGlobal(
     "fetch",
     vi.fn<typeof fetch>().mockResolvedValue({
@@ -1078,7 +1078,11 @@ it("keeps a caller deadline across credential retry and response-body consumptio
                   try {
                     init!.signal!.throwIfAborted();
                   } catch (error) {
-                    reject(error);
+                    reject(
+                      error instanceof Error
+                        ? error
+                        : new Error("Unexpected abort reason", { cause: error }),
+                    );
                   }
                 },
                 { once: true },

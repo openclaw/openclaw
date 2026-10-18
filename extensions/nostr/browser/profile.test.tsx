@@ -215,7 +215,11 @@ it.each(["Save & Publish", "Import from Relays"])(
               try {
                 signal.throwIfAborted();
               } catch (error) {
-                reject(error);
+                reject(
+                  error instanceof Error
+                    ? error
+                    : new Error("Unexpected abort reason", { cause: error }),
+                );
               }
             },
             { once: true },
