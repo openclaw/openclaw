@@ -16,7 +16,6 @@ import type { SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { SessionActor, SessionActorLifetime } from "./session-actor-contract.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
-import type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
 import {
   readRetainedSessionEntryFacts,
   retainSessionEntryReadFacts,
@@ -28,9 +27,13 @@ import { withSessionStoreTarget } from "./session-store-target-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
-export type { SessionAdmissionTransition } from "./session-admission-transition.types.js";
-
-type SessionAdmissionEntryIdentity = SessionAdmissionTransition["current"];
+type SessionAdmissionEntryIdentity = Readonly<
+  Pick<SessionEntry, "sessionId" | "lifecycleRevision">
+>;
+export type SessionAdmissionTransition = Readonly<{
+  previous?: SessionAdmissionEntryIdentity;
+  current: SessionAdmissionEntryIdentity;
+}>;
 
 type ActorSessionAdmissionClaim = {
   kind: "worker" | "memory";

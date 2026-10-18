@@ -29,9 +29,15 @@ type PreparedModels = Awaited<ReturnType<typeof prepareModelsListResult>>;
 export function createChatMetadataModelList(params: {
   facts: PreparedGenerationFacts;
   context: GatewayModelCatalogContext;
+  requested: Map<string, SharedModelsListRequest>;
   maxEntries: number;
 }) {
   const agents = new Map(params.facts.agents.map((agent) => [agent.agentId, agent]));
+  for (const [key, request] of params.requested) {
+    if (!agents.has(request.agentId)) {
+      params.requested.delete(key);
+    }
+  }
   const projections = new Map<string, Promise<PreparedModels>>();
   const prepare = async (
     request: SharedModelsListRequest,
@@ -59,27 +65,33 @@ export function createChatMetadataModelList(params: {
     }
     const { owner, modelCatalog, authStore, authModes } = facts;
     const catalogOwner = facts.owner.catalogOwner;
-    const pending = import("./models-list-result.js").then(({ prepareModelsListResult }) =>
-      prepareModelsListResult({
-        ...request,
-        preparationAuthority: authority,
-        source: {
-          kind: "published",
-          getConfig: params.context.getRuntimeConfig,
-          owner: {
-            ...owner,
-            catalogOwner,
-            agentId: request.agentId,
-            workspaceDir: catalogOwner.workspaceDir,
-            modelCatalog,
-            authStore,
-            authModes,
-            authMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
+    const pending = import("./models-list-result.js")
+      .then(({ prepareModelsListResult }) =>
+        prepareModelsListResult({
+          ...request,
+          preparationAuthority: authority,
+          source: {
+            kind: "published",
+            getConfig: params.context.getRuntimeConfig,
+            owner: {
+              ...owner,
+              catalogOwner,
+              agentId: request.agentId,
+              workspaceDir: catalogOwner.workspaceDir,
+              modelCatalog,
+              authStore,
+              authModes,
+              authMaterializations: getPreparedModelRuntimeAuthMaterializations(owner),
+            },
           },
-        },
-        preloadedOnly: true,
-      }),
-    );
+          preloadedOnly: true,
+        }),
+      )
+      .then((projection) => {
+        params.requested.set(key, { ...request, params: { ...request.params } });
+        pruneMapToMaxSize(params.requested, params.maxEntries);
+        return projection;
+      });
     projections.set(key, pending);
     pruneMapToMaxSize(projections, params.maxEntries);
     void pending.catch(() => {
@@ -88,6 +100,7 @@ export function createChatMetadataModelList(params: {
     return pending;
   };
   return {
+    prepare,
     async read(request: PreparedModelsListRequest): Promise<PreparedModels | undefined> {
       const { requesterProfileId, readScope, ...shared } = request;
       if (readScope) {

@@ -40,8 +40,7 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("../../infra/update-candidate-canary.js").validateUpdateCandidateCanary>(),
 }));
 
-vi.mock("../../daemon/service-process-membership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service-process-membership.js")>()),
+vi.mock("../../daemon/service-process-membership.js", () => ({
   // The simulated running service has no corresponding native host process.
   inspectServiceProcessMembershipSync: (pid: number) =>
     pid === mocks.servicePid ? "outside" : "unknown",

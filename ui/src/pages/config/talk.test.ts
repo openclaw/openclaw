@@ -597,16 +597,8 @@ describe("Talk device and voice wake settings", () => {
     const primary = row("Primary language").querySelector("select")!;
     primary.value = "de-DE";
     primary.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
-      "voice.locale.additional",
-      [],
-      expect.any(Function),
-    );
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
-      "voice.locale.primary",
-      "de-DE",
-      expect.any(Function),
-    );
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.locale.additional", []);
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.locale.primary", "de-DE");
     row("Test microphone…").querySelector("button")?.click();
     expect(nativeDeviceSettings.openPanel).toHaveBeenCalledWith("microphone-test");
     snapshot.voice.wakeEnabled = true;
@@ -645,7 +637,7 @@ describe("Talk device and voice wake settings", () => {
           listeners.delete(notify);
         };
       },
-      set: vi.fn<NativeDeviceSettingsCapability["set"]>(),
+      set: vi.fn(),
       requestPermission: vi.fn(),
       openSystemSettings: vi.fn(),
       openPanel: vi.fn(),
@@ -663,55 +655,40 @@ describe("Talk device and voice wake settings", () => {
     };
     add("de-DE");
     add("fr-FR");
-    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "fr-FR"],
-      expect.any(Function),
-    );
+    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith("voice.locale.additional", [
+      "de-DE",
+      "fr-FR",
+    ]);
     snapshot.voice.locale.additional = ["de-DE"];
-    nativeDeviceSettings.set.mock.calls[0]?.[2]?.();
     for (const notify of listeners) {
       notify();
     }
     flush();
     add("es-ES");
-    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "fr-FR", "es-ES"],
-      expect.any(Function),
-    );
+    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith("voice.locale.additional", [
+      "de-DE",
+      "fr-FR",
+      "es-ES",
+    ]);
     const primary = page.querySelector<HTMLSelectElement>('select[aria-label="Primary language"]')!;
     primary.value = "fr-FR";
     primary.dispatchEvent(new Event("change"));
-    expect(nativeDeviceSettings.set).toHaveBeenCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "es-ES"],
-      expect.any(Function),
-    );
+    expect(nativeDeviceSettings.set).toHaveBeenCalledWith("voice.locale.additional", [
+      "de-DE",
+      "es-ES",
+    ]);
     snapshot.voice.locale.additional = ["de-DE", "fr-FR"];
-    nativeDeviceSettings.set.mock.calls[1]?.[2]?.();
     for (const notify of listeners) {
       notify();
     }
     flush();
     expect(primary.value).toBe("fr-FR");
     add("it-IT");
-    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "es-ES", "it-IT"],
-      expect.any(Function),
-    );
-    nativeDeviceSettings.set.mock.lastCall?.[2]?.(new Error("Native edit failed"));
-    for (const notify of listeners) {
-      notify();
-    }
-    flush();
-    add("es-ES");
-    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith(
-      "voice.locale.additional",
-      ["de-DE", "es-ES"],
-      expect.any(Function),
-    );
+    expect(nativeDeviceSettings.set).toHaveBeenLastCalledWith("voice.locale.additional", [
+      "de-DE",
+      "es-ES",
+      "it-IT",
+    ]);
   });
 });
 
@@ -757,12 +734,19 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     expect(request).toHaveBeenCalledTimes(4);
   });
 
-  it("retains a reset without revisions, then clears it after reconnect with a revision", async () => {
+  it("retains a reset without revisions across stale reads, then clears it on reconnect", async () => {
+    const [staleCatalog, failedCatalog] = [createDeferred(), createDeferred()];
     const { page, request, setConfigHash, setGatewayConnection } = createTalkMutationHarness({
       activeVoiceSelectionPolicy: "allowlist-default",
       configSnapshot: { hash: null, configRevisionHash: null },
       defaultModel: "gpt-realtime-2.1",
       model: null,
+      catalogRequest: (requestIndex, catalog) =>
+        requestIndex === 3
+          ? staleCatalog.promise.then(() => catalog)
+          : requestIndex === 4
+            ? failedCatalog.promise.then(() => expect.fail("catalog refresh failed"))
+            : catalog,
     });
     await waitForSolid(() => {
       expect(request).toHaveBeenCalledTimes(1);
@@ -775,13 +759,20 @@ describe("TalkSettingsPage realtime transport mutation", () => {
     window.dispatchEvent(new Event("focus"));
     await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
     expectVoiceState(page, DEFAULT_VOICES, false);
+    setConfigHash("hash-2");
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
+    staleCatalog.resolve();
+    await request.mock.results[2]?.value;
     await waitForSolid(() => expectVoiceState(page, DEFAULT_VOICES, false));
 
     setGatewayConnection(false);
     setConfigHash("hash-3");
     expectVoiceState(page, DEFAULT_VOICES, false);
+    failedCatalog.resolve();
     setGatewayConnection(true);
-    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(5));
     await waitForSolid(() => expectVoiceState(page, ACTIVE_VOICES, true));
   });
 

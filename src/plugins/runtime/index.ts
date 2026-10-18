@@ -3,6 +3,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status
 import { resolveSandboxWorkspaceAuthority } from "../../agents/sandbox/workspace-authority.js";
 import { withPreparedSessionCapabilityRead } from "../../agents/subagents/spawn/subagent-session-store.js";
 import { runWithLocalStateOwner } from "../../cli/local-state-owner.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { captureMemoryExactSessionReader } from "../../config/sessions/session-accessor.memory-exact-read.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import {
@@ -35,7 +36,7 @@ import { createRuntimeChannel } from "./runtime-channel.js";
 import { createRuntimeLogging } from "./runtime-logging.js";
 import { createRuntimeMedia } from "./runtime-media.js";
 import { subscribeRuntimeSessionChanges } from "./session-changes.js";
-import type { PluginRuntimeBase, PluginRuntimeFactory, PluginRuntime } from "./types.js";
+import type { PluginRuntimeFactory, PluginRuntime } from "./types.js";
 
 const loadTtsRuntime = createLazyRuntimeModule(() => import("../../plugin-sdk/tts-runtime.js"));
 const loadTtsRequestRuntime = createLazyRuntimeModule(() => import("../../tts/runtime-api.js"));
@@ -79,7 +80,6 @@ function createRuntimeTts(): PluginRuntime["tts"] {
   const bindTtsRuntime = createLazyRuntimeMethodBinder(loadTtsRuntime);
   const bindTtsRequestRuntime = createLazyRuntimeMethodBinder(loadTtsRequestRuntime);
   return {
-    buildSystemPromptHintAsync: bindTtsRuntime((runtime) => runtime.buildTtsSystemPromptHintAsync),
     prepareTtsRequest: bindTtsRequestRuntime((runtime) => runtime.prepareTtsRequest),
     textToSpeech: bindTtsRuntime((runtime) => runtime.textToSpeech),
     textToSpeechStream: bindTtsRuntime((runtime) => runtime.textToSpeechStream),
@@ -109,16 +109,16 @@ function createRuntimeMediaUnderstandingFacade(): PluginRuntime["mediaUnderstand
   };
 }
 
-function createRuntimeLlmFacade(getConfig: PluginRuntimeBase["getConfig"]): PluginRuntime["llm"] {
+function createRuntimeLlmFacade(): PluginRuntime["llm"] {
   const loadAcquireLocalService = createLazyRuntimeMethod(
     () => import("../../agents/provider-local-service.js"),
-    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getConfig),
+    (runtime) => runtime.createConfiguredProviderLocalServiceAcquirer(getRuntimeConfig),
   );
   const loadLlm = createLazyRuntimeSurface(
     () => import("./runtime-llm.runtime.js"),
     (m) =>
       m.createRuntimeLlm({
-        getConfig,
+        getConfig: getRuntimeConfig,
         authority: {
           allowComplete: true,
         },
@@ -390,7 +390,7 @@ export const createPluginRuntime: PluginRuntimeFactory = (
         (await import("../../music-generation/runtime.js")).generateMusic(params),
       listProviders: (params) => listMusicGenerationProviders(params?.config),
     },
-    llm: createRuntimeLlmFacade(base.getConfig),
+    llm: createRuntimeLlmFacade(),
   };
   // SDK consumers retain these getter-only descriptors after lazy runtime materialization.
   for (const key of [

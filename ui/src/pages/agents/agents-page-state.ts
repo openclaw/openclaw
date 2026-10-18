@@ -638,19 +638,15 @@ export class AgentsPageState
           this.chatModelCatalogSubscription === subscription &&
           this.context?.gateway === gateway &&
           this.isCurrentRequest(client, generation, agentId, { agents }),
-        unsubscribe: subscribeModelCatalogChanges(
-          this.context.gateway,
-          () => {
-            if (!subscription.isCurrent()) {
-              return;
-            }
-            this.chatModelCatalogRequest?.abort();
-            this.chatModelCatalogRequest = null;
-            this.chatModelCatalogPending = null;
-            this.ensureModelCatalog({ refresh: true });
-          },
-          { agentId },
-        ),
+        unsubscribe: subscribeModelCatalogChanges(this.context.gateway, () => {
+          if (!subscription.isCurrent()) {
+            return;
+          }
+          this.chatModelCatalogRequest?.abort();
+          this.chatModelCatalogRequest = null;
+          this.chatModelCatalogPending = null;
+          this.ensureModelCatalog({ refresh: true });
+        }),
       };
       this.chatModelCatalogSubscription = subscription;
     }

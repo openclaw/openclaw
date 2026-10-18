@@ -38,14 +38,7 @@ export function parseMd(raw: string): ParseResult {
   const { preamble, blocks } = walkBlocks(tokens, bodyLines, bodyFileLine);
 
   return {
-    ast: {
-      kind: "md",
-      raw,
-      frontmatter: fm?.entries ?? [],
-      ...(fm === null ? {} : { frontmatterEndLine: fm.endLine + 1 }),
-      preamble,
-      blocks,
-    },
+    ast: { kind: "md", raw, frontmatter: fm?.entries ?? [], preamble, blocks },
     diagnostics,
   };
 }

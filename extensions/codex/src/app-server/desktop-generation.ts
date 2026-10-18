@@ -172,9 +172,6 @@ function scheduleRearm(
   owner: GenerationOwner,
   retryOnFailure = true,
 ): void {
-  if (current.context?.scheduler.signal.aborted) {
-    return;
-  }
   current.context?.scheduler.schedule({
     id: "watcher-rearm",
     delayMs: REARM_INITIAL_DELAY_MS,

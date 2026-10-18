@@ -15,7 +15,7 @@ import {
   findPaletteOption,
   mountPalette,
 } from "./command-palette.test-support.ts";
-import "./command-palette.tsx";
+import "./command-palette.ts";
 
 describe("CommandPalette pending searches", () => {
   let restoreDialogPolyfill: () => void;

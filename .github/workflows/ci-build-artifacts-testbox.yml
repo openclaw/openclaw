@@ -46,9 +46,6 @@ on:
       - "ui/package.json"
       - "ui/vite.config.ts"
       - "tsdown.config.ts"
-      - "!scripts/README.md"
-      - "!scripts/AGENTS.md"
-      - "!patches/README.md"
 
 permissions:
   contents: read

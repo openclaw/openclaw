@@ -117,7 +117,7 @@ export function renderChatNotice(
   onPermissionRetry?: (message: string) => void,
   recovery?: Pick<
     ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun"
+    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onChangeFailureModel"
   >,
 ) {
   if (item.runError) {
@@ -130,6 +130,9 @@ export function renderChatNotice(
     const failureActions = canRecover
       ? {
           onRetry: recovery.onRetryRun ? () => recovery.onRetryRun?.(runId) : undefined,
+          onChangeModel: recovery.onChangeFailureModel
+            ? () => recovery.onChangeFailureModel?.(runId)
+            : undefined,
         }
       : undefined;
     return html`<div
@@ -140,6 +143,7 @@ export function renderChatNotice(
       <openclaw-chat-run-failure-notice
         .summary=${item.runError.summary}
         .onRetry=${failureActions?.onRetry}
+        .onChangeModel=${failureActions?.onChangeModel}
       ></openclaw-chat-run-failure-notice>
     </div>`;
   }

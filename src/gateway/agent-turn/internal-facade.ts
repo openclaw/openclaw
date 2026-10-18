@@ -256,7 +256,6 @@ export function createInternalAgentTurnFacade(
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
-                replyExpectation: dispatchOptions.replyExpectation,
                 settleWakeReplay: dispatchOptions.settleWakeReplay,
               });
             },

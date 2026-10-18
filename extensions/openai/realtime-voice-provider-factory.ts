@@ -60,7 +60,6 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
-// Retained for public synchronous SDK calls through 2026-12-31.
 function resolveOpenAIRealtimeVoiceConfig(
   {
     cfg,
@@ -393,7 +392,6 @@ export function buildOpenAIRealtimeVoiceProvider(
     voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    // Retained for public synchronous SDK calls through 2026-12-31.
     resolveConfig: (params) => resolveOpenAIRealtimeVoiceConfig(params, context),
     resolveConfigAsync: (params) => resolveOpenAIRealtimeVoiceConfigAsync(params, context),
     isConfigured: ({ cfg, providerConfig, agentId }) => {
@@ -517,7 +515,6 @@ export function buildOpenAIRealtimeVoiceProvider(
     );
   };
   const internalApi: InternalRealtimeVoiceProviderApi = {
-    // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {

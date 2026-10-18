@@ -58,7 +58,6 @@ async function sleepWithAbort(
 function isPendingCompletionTask(task: MediaGenerationOperation): boolean {
   return (
     COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind) &&
-    task.completionDelivery !== "queued" &&
     !isTerminalMediaGenerationStatus(task.status)
   );
 }
@@ -69,7 +68,7 @@ function* iterateAsyncTaskRunIds(
 ): Generator<string> {
   for (const meta of toolMetas) {
     const runId = meta.asyncStarted === true ? meta.asyncTaskRunId?.trim() : undefined;
-    if (runId && findMediaGenerationOperation(runId)?.completionDelivery !== "queued") {
+    if (runId) {
       yield runId;
     }
   }
@@ -153,10 +152,6 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       throwIfAborted(params.abortSignal);
       pendingRunIds = pendingRunIds.filter((runId) => {
         const task = findMediaGenerationOperation(runId);
-        // Queued delivery needs this same session; waiting would hold its lane.
-        if (task?.completionDelivery === "queued") {
-          return false;
-        }
         if (!task || !isTerminalMediaGenerationStatus(task.status)) {
           return true;
         }

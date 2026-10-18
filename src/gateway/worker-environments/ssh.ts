@@ -240,10 +240,10 @@ export async function runWorkerSshCandidates<T extends WorkerSshCommandResult>(
   timeoutMs: number,
   run: (port: number, remainingTimeoutMs: number) => Promise<T>,
 ): Promise<T> {
-  const deadlineMs = performance.now() + timeoutMs;
+  const deadlineMs = Date.now() + timeoutMs;
   let lastResult: T | undefined;
   for (const port of workerSshCandidatePorts(prepared)) {
-    const remainingTimeoutMs = deadlineMs - performance.now();
+    const remainingTimeoutMs = deadlineMs - Date.now();
     if (lastResult !== undefined && remainingTimeoutMs <= 0) {
       return lastResult;
     }

@@ -12,7 +12,7 @@ import type { CoreConfig, ResolvedClickClackAccount } from "../types.js";
 import {
   clearPendingDiscussionOpen,
   clearDiscussionBindingGeneration,
-  getPendingDiscussionOpen,
+  listPendingDiscussionOpens,
   recordPendingDiscussionOpen,
   reserveDiscussionBindingGeneration,
   type PendingDiscussionOpen,
@@ -240,7 +240,9 @@ export async function openClickClackDiscussionBinding(
       serverBaseUrl,
       channelId,
     });
-  const unresolved = await getPendingDiscussionOpen(runtime, sessionKey);
+  const unresolved = (await listPendingDiscussionOpens(runtime)).find(
+    (pending) => pending.sessionKey === sessionKey,
+  );
   if (
     unresolved &&
     (unresolved.accountId !== account.accountId ||
@@ -249,7 +251,11 @@ export async function openClickClackDiscussionBinding(
       unresolved.workspaceId !== workspace.id)
   ) {
     await params.reconcilePendingOpen(unresolved);
-    if (await getPendingDiscussionOpen(runtime, sessionKey)) {
+    if (
+      (await listPendingDiscussionOpens(runtime)).some(
+        (pending) => pending.sessionKey === sessionKey,
+      )
+    ) {
       throw new Error(
         "A previous ClickClack discussion open is still unresolved; restore its credential and retry",
       );

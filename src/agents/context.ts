@@ -64,7 +64,11 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
 }
 
 export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
-  if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
+  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
+  if (
+    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
+    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === generation
+  ) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
@@ -90,12 +94,14 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
       }
-      // A racing refresh may publish older passive metadata until the next refresh.
-      replaceDiscoveredContextTokenCache(stagedTokenCache);
+      if (CONTEXT_WINDOW_RUNTIME_STATE.generation === generation) {
+        replaceDiscoveredContextTokenCache(stagedTokenCache);
+      }
     })
     .catch(() => {
       // Keep lookup best-effort.
     });
+  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
 }
 
@@ -110,11 +116,14 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   // Post-ready warmup owns a published-owner generation. Do not reuse a request-time
   // load that may have completed before Gateway catalog publication.
   beginContextWindowCacheRefresh();
-  if (params.isCancelled?.()) {
+  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
+  const shouldStop = () =>
+    CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation || params.isCancelled?.() === true;
+  if (shouldStop()) {
     return;
   }
   let published = false;
-  const loadPromise = Promise.resolve().then(async () => {
+  const loadPromise = (async () => {
     const { getPublishedPreparedModelCatalogOwnerSnapshot } =
       await loadPreparedModelCatalogRuntime();
     const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
@@ -130,7 +139,8 @@ export async function prewarmContextWindowCacheAfterReady(params: {
       config: owner.config,
       modelCatalog: owner.modelCatalog,
     });
-    if (params.isCancelled?.() || CONTEXT_WINDOW_RUNTIME_STATE.loadPromise !== trackedLoadPromise) {
+    // Superseded projections may finish; only publication needs the current generation.
+    if (shouldStop()) {
       return;
     }
     replaceContextWindowCaches(caches);
@@ -138,16 +148,22 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
     CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
     published = true;
-  });
+  })();
   const trackedLoadPromise = loadPromise.catch(() => {});
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = trackedLoadPromise;
+  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
   try {
     await loadPromise;
   } catch {
-    // Optional Gateway warmup is best-effort; failed publication can retry on demand.
+    // Optional Gateway warmup is best-effort; request-time loading remains exact.
   } finally {
-    if (!published && CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === trackedLoadPromise) {
+    if (
+      !published &&
+      CONTEXT_WINDOW_RUNTIME_STATE.generation === generation &&
+      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === trackedLoadPromise
+    ) {
       CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
+      CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
     }
   }
 }

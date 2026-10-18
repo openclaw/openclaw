@@ -510,17 +510,6 @@ export async function runBridgeRequest(params: {
     }
     params.reply.settle(true, value);
   } catch (error) {
-    const classified =
-      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
-        ? (error.cause ?? error)
-        : error;
-    const code =
-      sessionStoreRequest && error instanceof RangeError
-        ? "store_range"
-        : sessionStoreRequest && error instanceof TypeError
-          ? "store_type"
-          : (getToolContractFailureCode(classified) ??
-            (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error"));
     logCodeModeFailure(error, {
       sessionId: params.ctx.sessionId,
       sessionKey: params.ctx.sessionKey,
@@ -529,14 +518,23 @@ export async function runBridgeRequest(params: {
       codeModeRunId: params.activeRunId,
       workerId: params.workerId,
       failurePhase: "bridge",
-      failureCode: code,
       bridgeDispatchStarted: true,
       bridgeRequestId: params.request.id,
       bridgeMethod: params.request.method,
     });
+    const classified =
+      getBeforeToolCallFailureDisposition(error) !== undefined && error instanceof Error
+        ? (error.cause ?? error)
+        : error;
     params.reply.settle(false, {
       message: redactCodeModeCatalogIds(formatErrorMessage(error), catalogProjection.bindings),
-      code,
+      code:
+        sessionStoreRequest && error instanceof RangeError
+          ? "store_range"
+          : sessionStoreRequest && error instanceof TypeError
+            ? "store_type"
+            : (getToolContractFailureCode(classified) ??
+              (isTrustedToolInputError(classified) ? "invalid_input" : "tool_error")),
       effectStatus: "unknown",
     });
   }

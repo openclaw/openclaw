@@ -12,19 +12,14 @@ vi.mock("./agent-runner-execution.js", () => ({
 
 // mock-isolation: Forward the real persistence owners without loading the unrelated accessor barrel graph.
 vi.mock("../../config/sessions/session-accessor.js", async () => {
-  const { bindSessionPendingInputSources, withSessionPendingInputPersistence } =
+  const { bindSessionPendingInputSources } =
     await import("../../config/sessions/session-accessor.pending-inputs.js");
-  const { loadSessionEntry, patchSessionEntryTarget, replaceSessionEntry } =
+  const { loadSessionEntry, replaceSessionEntry } =
     await import("../../config/sessions/session-accessor.sqlite-entry.js");
-  const { persistSessionTranscriptTurn } =
-    await import("../../config/sessions/session-accessor.transcript-turn.js");
   return {
     bindSessionPendingInputSources,
     loadSessionEntry,
-    patchSessionEntryTarget,
-    persistSessionTranscriptTurn,
     replaceSessionEntry,
-    withSessionPendingInputPersistence,
   };
 });
 

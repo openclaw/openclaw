@@ -298,11 +298,6 @@ describe("gateway crash-loop breaker", () => {
   it("recovers after completed stopped-daemon failures but retains genuine crash protection", async () => {
     const lifecycle = createLifecycleDb();
     const nowMs = 1_000_000;
-    expect(await inspectGatewayCrashLoopBreakerAsync(lifecycle.env, nowMs)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
-      recovered: false,
-    });
     const safeModeBootId = recordGatewayBootStart(
       lifecycle.env,
       nowMs - GATEWAY_BOOT_LOOP_WINDOW_MS - 1,
@@ -345,11 +340,6 @@ describe("gateway crash-loop breaker", () => {
       lifecycle.env,
       nowMs + 6,
     );
-    expect(await inspectGatewayCrashLoopBreakerAsync(lifecycle.env, nowMs + 7)).toMatchObject({
-      tripped: false,
-      uncleanBoots: 0,
-      recovered: false,
-    });
     insertBootRows(lifecycle, [
       {
         bootId: "unclean-dependency",

@@ -280,7 +280,6 @@ describe("shared worktree receipt observation", () => {
     const observer = vi.fn();
     const stop = onSessionLifecycleEvent(observer);
     const sql = observeHostDataSql();
-    const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     try {
       expect(await coordinator.sharedStatus(session, published.requestId)).toEqual({
         result: published,
@@ -294,11 +293,6 @@ describe("shared worktree receipt observation", () => {
         result: published,
         confirmation: null,
       });
-      expect(
-        reads.mock.calls.filter(
-          ([, command]) => command.type === "githubPublication.sharedObservation",
-        ),
-      ).toHaveLength(3);
       expect(observer).not.toHaveBeenCalled();
       expect(mocks.prepareIdentity).not.toHaveBeenCalled();
       expect(mocks.refreshIdentity).not.toHaveBeenCalled();
@@ -332,7 +326,10 @@ describe("shared worktree receipt observation", () => {
         .spyOn(stateReads, "executeExistingOpenClawStateRead")
         .mockImplementation(async (...args) => {
           const result = await execute(...args);
-          if (args[1].type === "githubPublication.sharedObservation") {
+          if (
+            args[1].type === "githubPublication.sharedObservation" &&
+            args[1].input.kind === "worktree"
+          ) {
             entered.resolve();
             await release.promise;
           }
@@ -729,8 +726,7 @@ describe("shared repository receipt observation", () => {
     expect(await coordinator.sharedStatus(session, row.request_id)).toBeUndefined();
   });
 
-  it("keeps repository history precedence while discovering the current worktree after a workspace-kind change", async () => {
-    publishWorktree(insertSharedWorktreeReceipt("repository-request"));
+  it("keeps terminal repository history explicit while refusing discovery after a workspace-kind change", async () => {
     const workspace = await sharedRepositoryWorkspace();
     const coordinator = sharedPublicationCoordinator();
     const row = insertRepositoryGitHubPublicationFixture(
@@ -741,18 +737,11 @@ describe("shared repository receipt observation", () => {
       }),
       () => {},
     );
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      status: "published",
-      headCommit: OLD_HEAD,
-    });
     changeSession({
       repositoryWorkspaceId: undefined,
       worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
     });
-    expect((await coordinator.latestShared(session))?.result).toMatchObject({
-      status: "published",
-      headCommit: NEW_HEAD,
-    });
+    expect(await coordinator.latestShared(session)).toBeNull();
     expect((await coordinator.sharedStatus(session, row.request_id))?.result).toMatchObject({
       status: "published",
       headCommit: OLD_HEAD,

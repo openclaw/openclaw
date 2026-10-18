@@ -25,6 +25,7 @@ import {
   getAdmittedSqliteSchemaFacts,
   getSqliteReadOperationRevision,
   installSqliteTempTrackingSchema,
+  readSqliteDataVersion,
   registerSqliteSchemaMutationListener,
   runSqliteReadOperationSync,
 } from "./sqlite-schema-facts.js";
@@ -73,7 +74,7 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
-  it("retains validation across closed handles and refreshes after DDL or replacement", () => {
+  it("shares validation across open handles and revalidates after final close or replacement", () => {
     const root = tempDirs.make("openclaw-schema-process-");
     const filename = path.join(root, "state.sqlite");
     const first = openDatabase(undefined, true, filename);
@@ -92,17 +93,12 @@ describe("admitted SQLite schema facts", () => {
       first.close();
       const reopened = openDatabase("", true, filename);
       expect(tableExists(reopened, "original")).toBe(true);
-      expect(validations()).toHaveLength(0);
+      expect(validations()).toHaveLength(1);
       const sibling = openDatabase("", true, filename);
       expect(tableExists(sibling, "original")).toBe(true);
-      expect(validations()).toHaveLength(0);
-      sibling.close();
-      reopened.exec("CREATE TABLE added (id)");
-      reopened.close();
-      const afterDdl = openDatabase("", true, filename);
-      expect(tableExists(afterDdl, "added")).toBe(true);
       expect(validations()).toHaveLength(1);
-      afterDdl.close();
+      sibling.close();
+      reopened.close();
 
       const replacementPath = path.join(root, "replacement.sqlite");
       const replacement = new DatabaseSync(replacementPath);
@@ -116,7 +112,7 @@ describe("admitted SQLite schema facts", () => {
       replaced.close();
       const replacementReopened = openDatabase("", true, filename);
       expect(tableExists(replacementReopened, "replacement")).toBe(true);
-      expect(validations()).toHaveLength(2);
+      expect(validations()).toHaveLength(3);
     } finally {
       observation.restore();
     }
@@ -325,6 +321,53 @@ describe("admitted SQLite schema facts", () => {
     },
   );
 
+  it("retains table and column facts without statements after sibling data commits", () => {
+    const filename = path.join(tempDirs.make("openclaw-schema-data-"), "state.sqlite");
+    const reader = openDatabase(
+      "CREATE TABLE session_nodes (id INTEGER); PRAGMA user_version = 1;",
+      true,
+      filename,
+    );
+    reader.exec("PRAGMA journal_mode=WAL");
+    const writer = openNodeSqliteDatabase(filename);
+    databases.push(writer);
+    const schemaMutation = vi.fn();
+    registerSqliteSchemaMutationListener(reader, schemaMutation);
+    const read = () =>
+      runSqliteReadOperationSync(reader, () => {
+        expect(tableExists(reader, "session_nodes")).toBe(true);
+        expect(hasSqliteSessionOwnerColumns(reader)).toBe(false);
+        expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(1);
+      });
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      read();
+      const insert = writer.prepare("INSERT INTO session_nodes VALUES (?)");
+      for (let index = 0; index < 100; index += 1) {
+        insert.run(index);
+        read();
+      }
+      expect(
+        observation.queries.filter((sql) => /sqlite_schema|pragma_table_info/iu.test(sql)),
+      ).toHaveLength(0);
+      expect(observation.queries).toHaveLength(0);
+      expect(schemaMutation).not.toHaveBeenCalled();
+    } finally {
+      observation.restore();
+    }
+  });
+
+  it("does not retain an expired snapshot's identity when adopting matching facts", () => {
+    const database = openDatabase(undefined, false);
+    const facts = runSqliteSchemaReadSnapshotSync(database, () => {
+      admitSqliteSchema(database);
+      return getAdmittedSqliteSchemaFacts(database)!;
+    });
+    expect(adoptSqliteSchemaFacts(database, structuredClone(facts))).toBe(true);
+    expect(getAdmittedSqliteSchemaFacts(database)).not.toBe(facts);
+    expect(tableExists(database, "original")).toBe(true);
+  });
+
   it("derives owner columns from admitted sibling schema publications without table-info reads", () => {
     const filename = path.join(tempDirs.make("openclaw-schema-adoption-"), "state.sqlite");
     const reader = openDatabase("CREATE TABLE session_nodes (id INTEGER)", true, filename);
@@ -350,6 +393,22 @@ describe("admitted SQLite schema facts", () => {
       observation.restore();
     }
   });
+  it.each(["data_version", "schema_version", "user_version", "encoding"])(
+    "uses native freshness without consulting a table shadowing %s",
+    (name) => {
+      const database = openDatabase(
+        `CREATE TABLE original (id); CREATE TABLE pragma_${name} (${name} INTEGER);
+         INSERT INTO pragma_${name} VALUES (999); PRAGMA user_version = 1;`,
+      );
+      expect(runSqliteReadOperationSync(database, () => tableExists(database, "original"))).toBe(
+        true,
+      );
+      expect(readSqliteDataVersion(database)).not.toBe(999);
+      expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(1);
+      expect(getAdmittedSqliteSchemaFacts(database)?.textEncoding).toBe("UTF-8");
+    },
+  );
+
   it.each(["transaction", "implicit snapshot"])(
     "refreshes foreign row commits while trusting admitted format through an active %s",
     (pin) => {
@@ -820,10 +879,12 @@ describe("admitted SQLite schema facts", () => {
   );
 
   it.each([
+    { method: "run", admitted: true, binding: undefined },
     { method: "get", admitted: true, binding: undefined },
     { method: "all", admitted: true, binding: undefined },
     { method: "iterate", admitted: true, binding: undefined },
     { method: "run", admitted: false, binding: undefined },
+    { method: "run", admitted: true, binding: "positional" },
     { method: "run", admitted: true, binding: "named" },
   ] as const)(
     "tracks prepared DDL: $method, admitted=$admitted, binding=$binding",
@@ -833,7 +894,7 @@ describe("admitted SQLite schema facts", () => {
       const sql = !admitted
         ? "DROP TABLE original"
         : binding
-          ? "CREATE TABLE prepared_table AS SELECT $id AS id"
+          ? `CREATE TABLE prepared_table AS SELECT ${binding === "named" ? "$id" : "?"} AS id`
           : "CREATE TABLE prepared_table (id)";
       const statement = database.prepare(sql);
       if (!admitted) {
@@ -844,13 +905,15 @@ describe("admitted SQLite schema facts", () => {
         expect([...statement.iterate()]).toEqual([]);
       } else if (binding === "named") {
         statement.run({ $id: 11 });
+      } else if (binding === "positional") {
+        statement.run(7);
       } else {
         statement[method]();
       }
       expect(tableExists(database, table)).toBe(admitted);
       if (binding) {
         expect(database.prepare("SELECT id FROM prepared_table").get()).toEqual({
-          id: 11,
+          id: binding === "named" ? 11 : 7,
         });
       }
       database.prepare("PRAGMA user_version = 5").run();

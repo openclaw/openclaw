@@ -162,7 +162,7 @@ describe("exec PATH login shell merge", () => {
         workdir: `${tempDir}</arg_value>>`,
         host: "gateway</arg_value>>",
         ask: "off</arg_value>>",
-        node: "node-1</arg_value>>",
+        node: "ignored-node</arg_value>>",
         yieldMs: FOREGROUND_TEST_YIELD_MS,
       } as unknown as Parameters<typeof tool.execute>[1];
       const prepared = await tool.prepareBeforeToolCallParams?.(malformedArgs, {});
@@ -171,12 +171,9 @@ describe("exec PATH login shell merge", () => {
         workdir: tempDir,
         host: "gateway",
         ask: "off",
-        node: "node-1",
+        node: "ignored-node",
       });
-      await expect(tool.execute("call-xml-conflict", malformedArgs)).rejects.toThrow(
-        'exec node="node-1" conflicts with host="gateway"',
-      );
-      const result = await tool.execute("call-xml-suffix", { ...malformedArgs, node: undefined });
+      const result = await tool.execute("call-xml-suffix", malformedArgs);
       const value = normalizeText(result.content.find((c) => c.type === "text")?.text);
 
       expect(value).toBe("ok");

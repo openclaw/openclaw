@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
@@ -6,7 +7,7 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { invalidateChatAvatarCache, refreshSenderAgentAvatars } from "./chat-avatar.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { mountChatThread } from "./components/chat-thread.test-support.ts";
+import { renderChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -65,19 +66,18 @@ describe("forwarded avatar publication", () => {
         senderAgentAvatars: host.senderAgentAvatars,
       };
       const transcript = createTestTranscript();
-      await refreshSenderAgentAvatars(host);
-      props.senderAgentAvatars = host.senderAgentAvatars;
-      const view = mountChatThread(props, transcript);
-      const { container } = view;
+      const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         props.messages = host.chatMessages;
         props.senderAgentAvatars = host.senderAgentAvatars;
-        view.update(props);
+        render(renderChatThread(props, transcript), container);
+        flush();
         transcript.hostConnected();
         transcript.hostUpdated();
         flush();
       };
       try {
+        await refreshSenderAgentAvatars(host);
         rerender();
         const researchRow = expectDefined(
           container.querySelector('[data-entry-id="report-research"]'),
@@ -123,7 +123,7 @@ describe("forwarded avatar publication", () => {
         expect(image.getAttribute("src")).not.toBe("blob:avatar-0");
         expect(host.requestUpdate).toHaveBeenCalledOnce();
       } finally {
-        view.unmount();
+        render(nothing, container);
         transcript.hostDisconnected();
         invalidateChatAvatarCache(host);
       }

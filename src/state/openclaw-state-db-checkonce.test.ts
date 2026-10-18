@@ -148,7 +148,7 @@ it("checks integrity once before index repair and once after rebuilding the inde
   copyFileSync(pathname, replacement);
   {
     using database = new DatabaseSync(replacement);
-    database.exec("DROP INDEX idx_task_runs_runtime_run");
+    database.exec("DROP INDEX idx_task_runs_status");
   }
   renameSync(replacement, pathname);
   const observation = observeSqliteReadSql(StatementSync.prototype);
@@ -156,22 +156,33 @@ it("checks integrity once before index repair and once after rebuilding the inde
     const repaired = openOpenClawStateDatabase({ env });
     expect(
       repaired.db
-        .prepare("PRAGMA index_info(idx_task_runs_runtime_run)")
+        .prepare("PRAGMA index_info(idx_task_runs_status)")
         .all()
         .map((row) => row.name),
-    ).toEqual(["runtime", "run_id", "source_id", "created_at", "task_id"]);
+    ).toEqual(["status"]);
     repaired.db.exec("CREATE TABLE checkonce_later (value TEXT)");
     assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(repaired.db), pathname);
     expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
     expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
       2,
     );
+    closeOpenClawStateDatabaseForTest();
+    unlinkSync(`${pathname}.seal`);
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
+    observation.queries.length = 0;
+    expect(openOpenClawStateDatabase({ env }).db.isOpen).toBe(true);
+    expect(validationStatements(observation.queries)).toEqual([]);
   } finally {
     observation.restore();
   }
 });
 
-it("reuses admission after the final handles close without a seal", () => {
+it("reuses live admission and revalidates after the final handles close without a seal", () => {
   const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-") };
   const first = openOpenClawStateDatabase({ env });
   const pathname = first.path;
@@ -190,7 +201,10 @@ it("reuses admission after the final handles close without a seal", () => {
     closeOpenClawStateDatabaseForTest();
     unlinkSync(`${pathname}.seal`);
     const reopened = openOpenClawStateDatabase({ env });
-    expect(validationStatements(observation.queries)).toEqual([]);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(1);
+    expect(observation.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+      1,
+    );
     observation.queries.length = 0;
     const reader = openOpenClawStateReadOnlyLocation(pathname, pathname);
     reader.close();
@@ -202,7 +216,7 @@ it("reuses admission after the final handles close without a seal", () => {
   }
 });
 
-it.each(["schema_meta"] as const)(
+it.each(["config_machine_state", "schema_meta"] as const)(
   "does not reuse row-backed metadata after recreating %s with identical definitions",
   (table) => {
     const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-metadata-") };
@@ -215,15 +229,48 @@ it.each(["schema_meta"] as const)(
       .all(table);
     db.exec(`DROP TABLE ${table}; ${definitions.map(({ sql }) => sql).join(";")};`);
     expect(db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get()).toEqual({ total: 0 });
-    expect(() =>
-      assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
-    ).toThrow(/inconsistent ownership or schema metadata/iu);
+    if (table === "schema_meta") {
+      expect(() =>
+        assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+      ).toThrow(/inconsistent ownership or schema metadata/iu);
+    } else {
+      assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname);
+      expect(readStateSchemaContentVersion(db, 0)).toBe(0);
+    }
   },
 );
 
-it.each(["newer header"] as const)(
+it.each([
+  {
+    change: "required table removal",
+    sql: "DROP TABLE config_machine_state",
+    object: "config_machine_state",
+  },
+  {
+    change: "same-name index drift",
+    sql: "DROP INDEX idx_state_leases_expiry; CREATE INDEX idx_state_leases_expiry ON state_leases(scope)",
+    object: "idx_state_leases_expiry",
+  },
+  {
+    change: "new canonical-table trigger",
+    sql: "CREATE TRIGGER checkonce_unexpected AFTER INSERT ON config_machine_state BEGIN SELECT 1; END",
+    object: "checkonce_unexpected",
+  },
+])("refuses stale runtime admission after $change", ({ sql, object }) => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-shape-") };
+  const { db, path: pathname } = openOpenClawStateDatabase({ env });
+  expect(() =>
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+  ).not.toThrow();
+  db.exec(sql);
+  expect(() =>
+    assertExistingOpenClawStateRuntimeSchema(requireNativeSqliteDatabase(db), pathname),
+  ).toThrow(object);
+});
+
+it.each(["required definition", "newer header"] as const)(
   "invalidates retained subset admission after a tracked %s change",
-  () => {
+  (change) => {
     const env = { OPENCLAW_STATE_DIR: directories.make("state-checkonce-subset-") };
     const state = openOpenClawStateDatabase({ env });
     const options = { env, path: state.path };
@@ -242,9 +289,15 @@ it.each(["newer header"] as const)(
       } finally {
         observed.restore();
       }
-      state.db.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+      state.db.exec(
+        change === "required definition"
+          ? "ALTER TABLE config_machine_state ADD COLUMN unexpected TEXT"
+          : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      );
       const mutate = vi.fn();
-      expect(() => writer.run(mutate, options)).toThrow(/newer schema version/iu);
+      expect(() => writer.run(mutate, options)).toThrow(
+        change === "required definition" ? /column definitions differ/iu : /newer schema version/iu,
+      );
       expect(mutate).not.toHaveBeenCalled();
     } finally {
       writer.close();
@@ -252,9 +305,9 @@ it.each(["newer header"] as const)(
   },
 );
 
-it.each(["newer header"] as const)(
+it.each(["missing table", "missing index", "newer header"] as const)(
   "readmits startup checkpoint storage after a tracked %s change",
-  () => {
+  (change) => {
     const root = directories.make("state-checkonce-checkpoint-");
     const options = {
       env: { OPENCLAW_STATE_DIR: root },
@@ -283,10 +336,24 @@ it.each(["newer header"] as const)(
     } finally {
       observed.restore();
     }
-    peer.exec(`PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    peer.exec(
+      change === "missing table"
+        ? "DROP TABLE state_leases"
+        : change === "missing index"
+          ? "DROP INDEX idx_state_leases_expiry"
+          : `PRAGMA user_version=${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    );
     callback.mockClear();
-    expect(read).toThrow(/newer schema version/iu);
-    expect(callback).not.toHaveBeenCalled();
+    if (change !== "newer header") {
+      expect(read()).toBe(0);
+      expect(callback).toHaveBeenCalledOnce();
+      expect(
+        peer.prepare("SELECT name FROM sqlite_schema WHERE name = 'idx_state_leases_expiry'").get(),
+      ).toEqual({ name: "idx_state_leases_expiry" });
+    } else {
+      expect(read).toThrow(/newer schema version/iu);
+      expect(callback).not.toHaveBeenCalled();
+    }
   },
 );
 

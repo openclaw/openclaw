@@ -102,6 +102,7 @@ export type SessionTurnPlan = {
         freshGuard?: true;
         preparedMessage?: {
           prepared: boolean;
+          expected: { messageId: string; message: unknown } | undefined;
           message: unknown;
         };
       }

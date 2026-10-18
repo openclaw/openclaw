@@ -9,7 +9,6 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { SessionDetailsController } from "../../components/session-details-controller.ts";
-import { hasSessionArchiveDescendants } from "../../components/session-menu-descendants.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
 import { moveSessionFromMenu } from "../../components/session-placement-action.ts";
 import "../../components/session-menu.ts";
@@ -1397,6 +1396,9 @@ export class SessionsPageController {
               sessionScope: true,
             });
             break;
+          case "archive-tree":
+            void this.archiveActions.archiveTree(row);
+            break;
           case "move-to-group":
             this.assignCategory(row.key, action.category);
             break;
@@ -1409,8 +1411,7 @@ export class SessionsPageController {
                 sessionScope: true,
               });
             } else {
-              const rows = this.state.result?.sessions ?? [];
-              void this.archiveActions.archive(row, hasSessionArchiveDescendants(row, rows));
+              void this.archiveActions.archive(row);
             }
             break;
           case "assign-owner": {

@@ -55,12 +55,10 @@ describe("vydra speech provider", () => {
     expect(result.audioBuffer).toEqual(Buffer.from("mp3-data"));
   });
 
-  it("does not treat a blank environment API key as configured", async () => {
+  it("does not treat a blank environment API key as configured", () => {
     vi.stubEnv("VYDRA_API_KEY", "   ");
 
-    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(
-      false,
-    );
+    expect(provider.isConfigured?.({ providerConfig: {}, timeoutMs: 30_000 })).toBe(false);
   });
 
   it("rejects blank environment API keys before making requests", async () => {

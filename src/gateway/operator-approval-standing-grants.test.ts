@@ -195,6 +195,7 @@ function seedCronJob(
           claimCronRunReceiptInDatabaseForTest({
             database: db,
             prepared,
+            resolveAgentId: (current) => current.agentId ?? "main",
           }),
         databaseOptions,
       ),

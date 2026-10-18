@@ -148,7 +148,7 @@ export async function patchSessionEntryInWorker(params: {
             }
             params.assertCurrent();
             params.guard?.assertCurrent?.();
-            // Async planning releases the writer FIFO; commit compares the snapshot with current rows.
+            // The foreground FIFO stays held; async planners may read through it before commit.
             input = await params.prepare(snapshot);
             params.assertCurrent();
             params.guard?.assertCurrent?.();
@@ -177,17 +177,18 @@ export async function patchSessionEntryInWorker(params: {
             databaseIdentity: fileIdentity.physicalIdentity,
             databaseBirthtime: fileIdentity.birthtime,
           },
-          committed.entry,
+          structuredClone(committed.entry),
         );
       }
     },
     async onCommitted(committed, published, identity) {
       try {
         if (committed.applied && committed.entry) {
+          const entry = structuredClone(committed.entry);
           if (committed.transcriptPredicate) {
-            params.onCommitted?.(committed.entry, committed.transcriptPredicate);
+            params.onCommitted?.(entry, committed.transcriptPredicate);
           } else {
-            params.onCommitted?.(committed.entry);
+            params.onCommitted?.(entry);
           }
         }
       } finally {

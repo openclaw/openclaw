@@ -86,6 +86,7 @@ const runtimeAuthStoreSnapshotRevisions = new Map<string, number>();
 const runtimeAuthStoreDeletedSnapshotRevisions = new Map<string, number>();
 let runtimeAuthStoreMetadataRevision = 0;
 const runtimeAuthStoreMetadataRevisions = new Map<string, number>();
+let runtimeAuthStoreMetadataRevisionFloor = 0;
 
 const runtimeAuthFileObservation = createRuntimeAuthProfileFileObservation({
   snapshots: runtimeAuthStoreSnapshots,
@@ -176,8 +177,12 @@ function advanceRuntimeAuthStoreMetadataRevision(key: string): void {
   runtimeAuthStoreMetadataRevisions.set(key, runtimeAuthStoreMetadataRevision);
   // Keep unpublished and deleted owners fenced without retaining them indefinitely.
   while (runtimeAuthStoreMetadataRevisions.size > 256) {
-    const oldestKey = runtimeAuthStoreMetadataRevisions.keys().next().value!;
+    const [oldestKey, revision] = runtimeAuthStoreMetadataRevisions.entries().next().value!;
     runtimeAuthStoreMetadataRevisions.delete(oldestKey);
+    runtimeAuthStoreMetadataRevisionFloor = Math.max(
+      runtimeAuthStoreMetadataRevisionFloor,
+      revision,
+    );
   }
 }
 
@@ -269,7 +274,7 @@ export function registerRuntimeAuthProfileStoreMutationListener(
   return registerListener(runtimeAuthStoreMutationListeners, listener);
 }
 
-/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Use replaceRuntimeAuthProfileStoreSnapshotsAsync. Removal is planned for a later stable release. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ databasePath?: string; agentDir?: string; store: AuthProfileStore }>,
 ): void {
@@ -416,6 +421,7 @@ export function clearRuntimeAuthProfileStoreSnapshots(): void {
   runtimeAuthProfileRowsCache.clear();
   // Explicit lifecycle clears also fence in-flight reads without a published snapshot.
   runtimeAuthStoreMetadataRevision += 1;
+  runtimeAuthStoreMetadataRevisionFloor = runtimeAuthStoreMetadataRevision;
   runtimeAuthStoreSnapshots.clear();
   clearAllRuntimeAuthMaterializations();
   runtimeAuthStoreSnapshotRevisions.clear();

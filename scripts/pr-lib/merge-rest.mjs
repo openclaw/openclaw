@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { parseGithubResponse } from "./gh-api-preflight.mjs";
-import { execPrGh, execPrGhAsync, execPrGhJson } from "./github.mjs";
+import { execPrGh, execPrGhJson } from "./github.mjs";
 
 const OID = /^[0-9a-f]{40}$/;
 const UUID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/;
@@ -52,7 +52,7 @@ function canonical(value) {
     : value;
 }
 
-export function parseMergeRepository(value) {
+function parseRepository(value) {
   const repo = JSON.parse(value);
   requireEvidence(
     repo &&
@@ -87,61 +87,8 @@ function read(repo, endpoint, paginate = false) {
   );
 }
 
-function request(repo, endpoint, paginate = false, raw = false) {
-  return {
-    args: apiArgs(repo, endpoint, raw ? ["--include"] : paginate ? ["--paginate", "--slurp"] : []),
-    raw,
-  };
-}
-
-function requestResult(result) {
-  if (result.status === "rejected") {
-    throw result.reason;
-  }
-  return result.value;
-}
-
-function runReadSteps(steps) {
-  let step = steps.next();
-  while (!step.done) {
-    const results = step.value.map(({ args, raw }) => {
-      try {
-        const value = execPrGh(args, { encoding: "utf8" }, "plain");
-        return { status: "fulfilled", value: raw ? value : JSON.parse(value) };
-      } catch (reason) {
-        return { status: "rejected", reason };
-      }
-    });
-    step = steps.next(results);
-  }
-  return step.value;
-}
-
-async function runReadStepsAsync(steps) {
-  let step = steps.next();
-  while (!step.done) {
-    // Drain every sibling before propagating a refusal or changing authority rounds.
-    const results = await Promise.allSettled(
-      step.value.map(async ({ args, raw }) => {
-        const value = await execPrGhAsync(args, { encoding: "utf8" }, "plain");
-        return raw ? value : JSON.parse(value);
-      }),
-    );
-    step = steps.next(results);
-  }
-  return step.value;
-}
-
-function* readSteps(repo, endpoint, paginate = false) {
-  const [result] = yield [request(repo, endpoint, paginate)];
-  return requestResult(result);
-}
-
 function readMain(repo) {
-  return mainReference(read(repo, "/git/ref/heads/main"));
-}
-
-function mainReference(reference) {
+  const reference = read(repo, "/git/ref/heads/main");
   requireEvidence(
     reference?.ref === "refs/heads/main" &&
       reference.object?.type === "commit" &&
@@ -159,22 +106,16 @@ function pageArrays(pages) {
   return pages.flat();
 }
 
-function readMergePolicy(repo) {
-  return runReadSteps(mergePolicySteps(repo));
-}
-
-export function readMergePolicyAsync(repo) {
-  return runReadStepsAsync(mergePolicySteps(repo));
-}
-
-function* mergePolicySteps(repo) {
-  const [protectionResult, rulesResult] = yield [
-    request(repo, "/branches/main/protection", false, true),
-    request(repo, "/rules/branches/main?per_page=100", true),
-  ];
+export function readMergePolicy(repo) {
   let response;
   try {
-    response = requestResult(protectionResult);
+    response = execPrGh(
+      apiArgs(repo, "/branches/main/protection", ["--include"]),
+      {
+        encoding: "utf8",
+      },
+      "plain",
+    );
   } catch (error) {
     // A missing classic protection rule is authoritative only with its HTTP body;
     // stderr, inaccessible repositories, and generic 404s do not prove absence.
@@ -182,7 +123,7 @@ function* mergePolicySteps(repo) {
     const parsed = parseGithubResponse(response);
     requireEvidence(
       !(parsed.status === "404" && parsed.body?.message === "Not Found"),
-      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence. The CI exception requires an authoritative policy read. Repair failed CI and use ordinary green-CI landing when its normal admission succeeds; do not change credentials or supply a policy snapshot. This refusal does not establish environment approval or production deployment authority",
+      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence",
     );
     if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
       throw error;
@@ -193,7 +134,7 @@ function* mergePolicySteps(repo) {
     protection.status === "404" && protection.body?.message === "Branch not protected",
     "classic branch protection is not supported",
   );
-  const rules = pageArrays(requestResult(rulesResult));
+  const rules = pageArrays(read(repo, "/rules/branches/main?per_page=100", true));
   for (const rule of rules) {
     requireEvidence(nonemptyString(rule?.type), "missing effective branch rule");
     requireRestSupport(RULE_TYPES.has(rule.type), "unsupported effective branch rule");
@@ -226,10 +167,6 @@ function readPullRequest(repo, authority, pr) {
   const response = parseGithubResponse(
     execPrGh(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
   );
-  return validatePullRequest(repo, authority, pr, response);
-}
-
-function validatePullRequest(repo, authority, pr, response) {
   const record = response.body;
   requireEvidence(
     response.status === "200" &&
@@ -294,7 +231,13 @@ function pullRequest(record) {
   };
 }
 
-function repositoryAuthority(repo, response) {
+function beginRead(repo, pr, observe, priorCiObservation) {
+  const startedAtMs = Date.now();
+  // Included headers select the protected writer route, so pooled-reader
+  // permissions cannot establish the actor's access to branch policy.
+  const response = parseGithubResponse(
+    execPrGh(apiArgs(repo, "", ["--include"]), { encoding: "utf8" }, "plain"),
+  );
   const authority = response.body;
   requireEvidence(
     response.status === "200" &&
@@ -305,17 +248,6 @@ function repositoryAuthority(repo, response) {
       authority.html_url === repo.url,
     "repository identity changed",
   );
-  return authority;
-}
-
-function beginRead(repo, pr, observe, priorCiObservation) {
-  const startedAtMs = Date.now();
-  // Included headers select the protected writer route, so pooled-reader
-  // permissions cannot establish the actor's access to branch policy.
-  const response = parseGithubResponse(
-    execPrGh(apiArgs(repo, "", ["--include"]), { encoding: "utf8" }, "plain"),
-  );
-  const authority = repositoryAuthority(repo, response);
   const mainSha = readMain(repo);
   const record = readPullRequest(repo, authority, pr);
   // An already-merged receipt proves a historical action. New protection or
@@ -331,7 +263,8 @@ function beginRead(repo, pr, observe, priorCiObservation) {
   return { authority, main: mainSha, record, policy, startedAtMs };
 }
 
-function samePullRequestIdentity(current, previous) {
+function finishRead(repo, pr, snapshot, requireStableMain, priorCiObservation) {
+  const current = readPullRequest(repo, snapshot.authority, pr);
   const identity = (record) => {
     const {
       mergeable: _mergeable,
@@ -340,12 +273,8 @@ function samePullRequestIdentity(current, previous) {
     } = pullRequest(record);
     return facts;
   };
-  return JSON.stringify(identity(current)) === JSON.stringify(identity(previous));
-}
-
-function finishRead(repo, pr, snapshot, requireStableMain, priorCiObservation) {
-  const current = readPullRequest(repo, snapshot.authority, pr);
-  const sameIdentity = samePullRequestIdentity(current, snapshot.record);
+  const sameIdentity =
+    JSON.stringify(identity(current)) === JSON.stringify(identity(snapshot.record));
   const { requiredChecks: _checks, ...policy } = snapshot.policy ?? {};
   const samePolicy =
     !priorCiObservation ||
@@ -379,11 +308,8 @@ function finishRead(repo, pr, snapshot, requireStableMain, priorCiObservation) {
   return current;
 }
 
-function* checkPagesSteps(repo, endpoint, key, head) {
-  return checkPageValues(yield* readSteps(repo, endpoint, true), key, head);
-}
-
-function checkPageValues(pages, key, head) {
+function checkPages(repo, endpoint, key, head) {
+  const pages = read(repo, endpoint, true);
   requireEvidence(Array.isArray(pages) && pages.length > 0, "missing check pages");
   const count = pages[0]?.total_count;
   requireEvidence(Number.isSafeInteger(count) && count >= 0, "invalid check count");
@@ -439,7 +365,7 @@ function validCheckRuns(checks, head) {
   );
 }
 
-function* latestRequiredChecksSteps(repo, head, checks) {
+function latestRequiredChecks(repo, head, checks) {
   const repeated = new Set();
   const names = new Set();
   for (const check of checks) {
@@ -452,7 +378,7 @@ function* latestRequiredChecksSteps(repo, head, checks) {
   if (repeated.size === 0) {
     return checks;
   }
-  const runs = yield* checkPagesSteps(
+  const runs = checkPages(
     repo,
     `/actions/runs?head_sha=${head}&exclude_pull_requests=true&per_page=100`,
     "workflow_runs",
@@ -501,15 +427,7 @@ function* latestRequiredChecksSteps(repo, head, checks) {
   return [...unique, ...groups.values()];
 }
 
-function readRequiredMergeChecks(repo, head, policy, options = {}) {
-  return runReadSteps(requiredMergeChecksSteps(repo, head, policy, options));
-}
-
-export function readRequiredMergeChecksAsync(repo, head, policy, options = {}) {
-  return runReadStepsAsync(requiredMergeChecksSteps(repo, head, policy, options));
-}
-
-function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = false } = {}) {
+export function readRequiredMergeChecks(repo, head, policy, { includeCheckIdentity = false } = {}) {
   const requirements = new Map();
   for (const rule of policy.rules) {
     if (rule.type !== "required_status_checks") {
@@ -531,12 +449,13 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
   const contexts = new Set(required.map(({ context }) => context));
   const nameFilter =
     contexts.size === 1 ? `&check_name=${encodeURIComponent(required[0].context)}` : "";
-  const [checksResult, statusesResult] = yield [
-    request(repo, `/commits/${head}/check-runs?filter=latest${nameFilter}&per_page=100`, true),
-    request(repo, `/commits/${head}/status?per_page=100`, true),
-  ];
-  const checks = checkPageValues(requestResult(checksResult), "check_runs", head);
-  const statuses = checkPageValues(requestResult(statusesResult), "statuses", head);
+  const checks = checkPages(
+    repo,
+    `/commits/${head}/check-runs?filter=latest${nameFilter}&per_page=100`,
+    "check_runs",
+    head,
+  );
+  const statuses = checkPages(repo, `/commits/${head}/status?per_page=100`, "statuses", head);
   requireEvidence(
     validCheckRuns(checks, head) &&
       statuses.every(
@@ -549,10 +468,10 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
     "invalid, duplicate, or mismatched check identities",
   );
   const matchingChecks = checks.filter(matchesRequired);
-  const candidates = yield* latestRequiredChecksSteps(repo, head, matchingChecks);
+  const candidates = latestRequiredChecks(repo, head, matchingChecks);
   // Check-runs silently omit suites beyond 1,000. Fresh suite success also
   // prevents an earlier check page from hiding a rerun that has just started.
-  const suites = yield* checkPagesSteps(
+  const suites = checkPages(
     repo,
     `/commits/${head}/check-suites?per_page=100`,
     "check_suites",
@@ -593,7 +512,7 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
     // The complete suite inventory above bounds that documented truncation.
     // Read all checks once, then reread suites after their checks, rather than
     // making two requests per empty installed-app suite or skipped labeler.
-    const complete = yield* checkPagesSteps(
+    const complete = checkPages(
       repo,
       `/commits/${head}/check-runs?filter=latest&per_page=100`,
       "check_runs",
@@ -615,7 +534,7 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
         "terminal suite contains missing or required check evidence",
       );
     }
-    const current = yield* checkPagesSteps(
+    const current = checkPages(
       repo,
       `/commits/${head}/check-suites?per_page=100`,
       "check_suites",
@@ -686,120 +605,6 @@ function* requiredMergeChecksSteps(repo, head, policy, { includeCheckIdentity = 
     }
   }
   return canonical(rows);
-}
-
-function observationResult(repo, snapshot, current, priorCiObservation) {
-  return {
-    data: {
-      repository: {
-        id: snapshot.authority.node_id,
-        databaseId: snapshot.authority.id,
-        url: repo.url,
-        nameWithOwner: repo.nameWithOwner,
-        ref: { target: { oid: snapshot.main } },
-        pullRequest: pullRequest(current),
-      },
-    },
-    restPolicy: snapshot.policy,
-    ...(priorCiObservation ? { mainBefore: snapshot.mainBefore } : {}),
-    transport: "rest",
-  };
-}
-
-export async function withPriorCiObservation(repo, pr, { prepare, finish }) {
-  const startedAtMs = Date.now();
-  const [authorityResult, mainResult, policyResult, recordResult] = await Promise.allSettled([
-    execPrGhAsync(apiArgs(repo, "", ["--include"]), { encoding: "utf8" }, "plain"),
-    runReadStepsAsync(readSteps(repo, "/git/ref/heads/main")),
-    readMergePolicyAsync(repo),
-    execPrGhAsync(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
-  ]);
-  const response = parseGithubResponse(requestResult(authorityResult));
-  const authority = repositoryAuthority(repo, response);
-  const startingMain = mainReference(requestResult(mainResult));
-  const record = validatePullRequest(
-    repo,
-    authority,
-    pr,
-    parseGithubResponse(requestResult(recordResult)),
-  );
-  const policy = record.merged ? null : requestResult(policyResult);
-  requireRestSupport(
-    record.merged || authority.permissions?.admin === true || authority.permissions?.push === true,
-    "policy-reader admin access changed",
-  );
-  const shared = {
-    policy,
-    main: startingMain,
-    head: record.head.sha,
-    repositoryId: authority.id,
-  };
-  const prepared = await prepare(shared);
-  const checks =
-    record.state === "open"
-      ? await readRequiredMergeChecksAsync(repo, record.head.sha, policy, {
-          includeCheckIdentity: true,
-        })
-      : undefined;
-  const [currentResult, currentPolicyResult] = await Promise.allSettled([
-    execPrGhAsync(apiArgs(repo, `/pulls/${pr}`, ["--include"]), { encoding: "utf8" }, "plain"),
-    readMergePolicyAsync(repo),
-  ]);
-  const current = validatePullRequest(
-    repo,
-    authority,
-    pr,
-    parseGithubResponse(requestResult(currentResult)),
-  );
-  const sameIdentity = samePullRequestIdentity(current, record);
-  const samePolicy =
-    current.merged || JSON.stringify(requestResult(currentPolicyResult)) === JSON.stringify(policy);
-  const finalMain = mainReference(await runReadStepsAsync(readSteps(repo, "/git/ref/heads/main")));
-  const finishedAtMs = Date.now();
-  console.error(
-    `REST merge observation: ${JSON.stringify({
-      transport: "rest",
-      requestedGhRoute: "plain",
-      observedGhRoute: "unrecorded",
-      requestedCacheControl: "max-age=0",
-      mainBefore: startingMain,
-      mainAfter: finalMain,
-      startedAtMs,
-      finishedAtMs,
-      elapsedMs: finishedAtMs - startedAtMs,
-    })}`,
-  );
-  requireEvidence(sameIdentity, "PR identity, head, or lifecycle changed while reading evidence");
-  requireEvidence(samePolicy, "branch policy changed while reading evidence");
-  // Review, security, and final writer authority follow the final main read.
-  const value = await finish(prepared, { ...shared, checks: checks ?? [], main: finalMain });
-  return {
-    observation: observationResult(
-      repo,
-      {
-        authority,
-        main: finalMain,
-        mainBefore: startingMain,
-        policy:
-          checks === undefined
-            ? policy
-            : {
-                ...policy,
-                requiredChecks: canonical(
-                  checks.map(({ name, bucket: checkBucket, state }) => ({
-                    name,
-                    bucket: checkBucket,
-                    state,
-                  })),
-                ),
-              },
-      },
-      current,
-      true,
-    ),
-    value,
-    qualifiedMain: finalMain,
-  };
 }
 
 function mergeBody(value) {
@@ -882,15 +687,7 @@ function asyncMergeResponse(repo, pr, head, uuid, payload) {
   };
 }
 
-async function main([
-  mode,
-  repository,
-  prValue,
-  head,
-  bodySnapshot,
-  expectedObservation,
-  ...extra
-]) {
+function main([mode, repository, prValue, head, bodySnapshot, expectedObservation, ...extra]) {
   if (mode === "merge-result") {
     requireEvidence(
       /^[1-9][0-9]*$/.test(prValue ?? "") &&
@@ -903,7 +700,7 @@ async function main([
     );
     process.stdout.write(
       `${JSON.stringify(
-        asyncMergeResponse(parseMergeRepository(repository), Number(prValue), bodySnapshot, head),
+        asyncMergeResponse(parseRepository(repository), Number(prValue), bodySnapshot, head),
       )}\n`,
     );
     return;
@@ -922,17 +719,9 @@ async function main([
         : head === undefined),
     "invalid command arguments",
   );
-  const repo = parseMergeRepository(repository);
+  const repo = parseRepository(repository);
   const pr = Number(prValue);
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  if (priorCiObservation) {
-    const { observation } = await withPriorCiObservation(repo, pr, {
-      prepare: async () => undefined,
-      finish: async () => undefined,
-    });
-    process.stdout.write(`${JSON.stringify(observation)}\n`);
-    return;
-  }
   const snapshot = beginRead(repo, pr, observing, priorCiObservation);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
@@ -986,7 +775,22 @@ async function main([
       transport: "rest",
     };
   } else if (observing) {
-    result = observationResult(repo, snapshot, current, priorCiObservation);
+    result = {
+      data: {
+        repository: {
+          id: snapshot.authority.node_id,
+          databaseId: snapshot.authority.id,
+          url: repo.url,
+          nameWithOwner: repo.nameWithOwner,
+          ref: { target: { oid: snapshot.main } },
+          pullRequest: pullRequest(current),
+        },
+      },
+      restPolicy: snapshot.policy,
+      // The admission owner validates both endpoints before retaining an observation.
+      ...(priorCiObservation ? { mainBefore: snapshot.mainBefore } : {}),
+      transport: "rest",
+    };
   } else {
     // The async endpoint also merges downstack PRs. This owner admits one PR;
     // GitHub includes `stack` on REST resources belonging to a stack.
@@ -1028,7 +832,7 @@ async function main([
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    await main(process.argv.slice(2));
+    main(process.argv.slice(2));
   } catch (error) {
     console.error(
       error.code === "OPENCLAW_GH_ACCESS"

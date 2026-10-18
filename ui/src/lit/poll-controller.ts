@@ -1,6 +1,6 @@
-import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
-export class PollController implements SolidController {
+export class PollController implements ReactiveController {
   private timer: ReturnType<typeof globalThis.setInterval> | null = null;
   private running = false;
   private readonly handleVisibilityChange = () => {
@@ -12,7 +12,7 @@ export class PollController implements SolidController {
   };
 
   constructor(
-    host: SolidControllerHost,
+    host: ReactiveControllerHost,
     private readonly intervalMs: number,
     private readonly tick: () => void,
     private readonly autoStart = true,

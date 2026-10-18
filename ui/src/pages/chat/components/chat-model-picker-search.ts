@@ -259,17 +259,11 @@ export function handleModelPickerKeydown(event: KeyboardEvent): void {
   // SAFETY: Bound only to the model picker’s details element.
   const details = event.currentTarget as HTMLDetailsElement;
   if (
-    event.defaultPrevented ||
     !details.open ||
     event.target instanceof HTMLInputElement ||
     event
       .composedPath()
-      .some(
-        (target) =>
-          target instanceof HTMLElement &&
-          target !== details &&
-          target.matches('[role="menu"][popover], details[data-chat-native-picker]'),
-      ) ||
+      .some((target) => target instanceof HTMLElement && target.localName === "wa-dropdown") ||
     !/^[1-9]$/u.test(event.key)
   ) {
     return;

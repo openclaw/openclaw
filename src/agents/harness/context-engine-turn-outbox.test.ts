@@ -509,14 +509,6 @@ describe("context-engine turn outbox", () => {
       database.db
         .prepare("SELECT payload_state FROM context_engine_turn_outbox WHERE advancement_key = ?")
         .get(payload.boundary.admission.logicalTurnId)?.payload_state;
-    const sequence = () =>
-      database.db
-        .prepare(
-          "SELECT enqueue_sequence FROM context_engine_turn_outbox WHERE advancement_key = ?",
-        )
-        .get(payload.boundary.admission.logicalTurnId)?.enqueue_sequence;
-    const admittedSequence = sequence();
-    expect(admittedSequence).toBe(1);
     expect(storedState()).toBe("admitted");
     acceptContextEngineTurnIntent({
       boundary: payload.boundary,
@@ -525,7 +517,6 @@ describe("context-engine turn outbox", () => {
       isHeartbeat: false,
     });
     expect(storedState()).toBe("accepted");
-    expect(sequence()).toBe(admittedSequence);
     const warn = vi.fn();
 
     recoverContextEngineTurnOutbox({
@@ -535,7 +526,6 @@ describe("context-engine turn outbox", () => {
       warn,
     });
     expect(storedState()).toBe("blocked");
-    expect(sequence()).toBe(admittedSequence);
 
     const queued = database.db
       .prepare("SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?")
@@ -649,13 +639,6 @@ describe("context-engine turn outbox", () => {
       "session-a:z-first",
       "session-b:1",
     ]);
-    expect(
-      database.db
-        .prepare(
-          "SELECT enqueue_sequence, attempt_count FROM context_engine_turn_outbox WHERE advancement_key = 'session-a:z-first'",
-        )
-        .get(),
-    ).toEqual({ enqueue_sequence: 1, attempt_count: 1 });
     failFirstTurn = false;
 
     await drainContextEngineTurnOutbox({

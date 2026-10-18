@@ -172,7 +172,6 @@ const changedPaths = (() => {
 })();
 const docsOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ONLY);
 const docsChanged = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_CHANGED);
-const rootProseOnly = parseCiEnvFlag(process.env.OPENCLAW_CI_DOCS_ROOT_PROSE_ONLY);
 const releaseGate = parseCiEnvFlag(process.env.OPENCLAW_CI_RELEASE_GATE) && !ciQualification;
 const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
 const runtimePullRequest = isCanonicalRepository && (compactPullRequest || releaseGate);
@@ -953,9 +952,6 @@ const runSqliteSessionLifecycle =
   (changedScopeHasSqliteSessionLifecycleImpact ||
     selectedOwnerTest("test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts"));
 const postgresConformancePaths = [
-  "src/state/openclaw-state-db*",
-  "src/state/openclaw-state-feature-schema-ensure.ts",
-  "src/state/user-profiles-schema.ts",
   "src/snapshot/**",
   "src/infra/backup-*.ts",
   "src/infra/update-database-*.ts",
@@ -988,10 +984,8 @@ const runPostgresConformance =
     ((eventName === "pull_request" || releaseGate) &&
       !docsOnly &&
       (changedPaths === null ||
-        changedPaths.some(
-          (file) =>
-            !changedNodeTestPlan.isCiDocumentationPath?.(file) &&
-            postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
+        changedPaths.some((file) =>
+          postgresConformancePaths.some((pattern) => matchesGlob(file, pattern)),
         ))));
 const runBuildArtifacts =
   publishedDriverUpdate ||
@@ -1036,7 +1030,6 @@ const rawNodeTestShards = runNodeFull
           // the complete compact inventory within its 77-row main-tier cap.
           compact: compactPlanMode !== undefined,
           compactMode: mainValidation ? "pull-request" : compactPlanMode,
-          mainValidation,
           compactNodeJobCap: nodeMatrixLimit - nodeWorkerE2eShards.length,
           runnerBackend: nodeRunnerBackend,
         }),
@@ -1253,7 +1246,6 @@ const nodeTestShards = targetNodeTestShards
           "src/agents/sessions/tools/grep.byte-path.test.ts",
           "src/agents/filesystem-tools-output-contract.test.ts",
           "test/scripts/check-database-worker-ratchet.test.ts",
-          "test/scripts/pr-baseline-publication.test.ts",
           "test/scripts/pr-baseline-signing.test.ts",
           "test/scripts/pr-baseline-successor.test.ts",
           "test/scripts/pr-correction-continuation.test.ts",
@@ -1569,7 +1561,6 @@ const manifest = {
   shared_sdk_declarations: sharedSdkDeclarations,
   check_additional_matrix: createMatrix(runNodeFull && !releaseFastLane ? additionalChecks : []),
   run_check_docs: docsChanged && eventName !== "push",
-  run_docs_content: !(ordinaryPullRequest && docsOnly && rootProseOnly),
   run_format_check: runFormatCheck,
   run_control_ui_i18n: runControlUiI18n,
   run_ui_tests: runUiTests,
@@ -1781,6 +1772,7 @@ if (hybridHostedEligible) {
   }).reduce((total, rows) => total + rows, 0);
   hybridHostedOffloadRows =
     1 +
+    count(manifest.run_ui_tests, 3) +
     count(
       manifest.run_ui_e2e && !compatibilityTarget,
       manifest.ui_e2e_matrix.include.filter((row) => row.task === "browser-extension").length,

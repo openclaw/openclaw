@@ -89,10 +89,10 @@ describe("resident profile display and reference catalog", () => {
     const options = fixture();
     const absent = await prepareUserProfileCatalog(options);
     releases.push(absent.release);
-    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    expect(isUserProfileCatalogReady(options)).toBe(true);
     expect(fs.existsSync(options.path)).toBe(false);
     const profile = ensureProfileForEmail("appeared@example.test", options);
-    expect(isUserProfileCatalogReady(options.path)).toBe(false);
+    expect(isUserProfileCatalogReady(options)).toBe(false);
     const database = openOpenClawStateDatabase(options);
     await database.walMaintenance.stop();
     const native = vi.spyOn(database.db, "prepare");
@@ -100,12 +100,8 @@ describe("resident profile display and reference catalog", () => {
     releases.push(current.release);
     expect(current.readCurrentIdentity(profile.id)?.profileId).toBe(profile.id);
     expect(getUserProfileDisplay(profile.id, options).displayName).toBe("appeared");
-    expect(isUserProfileCatalogReady(options.path)).toBe(true);
+    expect(isUserProfileCatalogReady(options)).toBe(true);
     expect(native).not.toHaveBeenCalled();
-    absent.release();
-    expect(isUserProfileCatalogReady(options.path)).toBe(true);
-    current.release();
-    expect(isUserProfileCatalogReady(options.path)).toBe(false);
   });
 
   it("reads current batch identities through merges and refuses unsettled authority without host SQL", async () => {
@@ -288,7 +284,7 @@ describe("resident profile display and reference catalog", () => {
       fs.renameSync(replacement.path, options.path);
       expect(() => prepared.readCurrentFacts()).toThrow();
       expect(() => prepared.readCurrentProfile()).toThrow();
-      const seen = vi.fn(() => isUserProfileCatalogReady(options.path));
+      const seen = vi.fn(() => isUserProfileCatalogReady(options));
       releases.push(onUserProfilesChanged(seen));
       if (admission === "native") {
         openOpenClawStateDatabase(options);

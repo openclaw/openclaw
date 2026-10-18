@@ -1,4 +1,5 @@
 import {
+  applyProviderNativeStreamingUsageCompat,
   buildManifestModelProviderConfig,
   readManifestProviderDefaultModelRef,
 } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -15,6 +16,15 @@ export const MOONSHOT_DEFAULT_MODEL_REF = readManifestProviderDefaultModelRef(
   "moonshot",
 )!;
 export const MOONSHOT_DEFAULT_MODEL_ID = MOONSHOT_DEFAULT_MODEL_REF.slice("moonshot/".length);
+
+export function applyMoonshotNativeStreamingUsageCompat(
+  provider: ModelProviderConfig,
+): ModelProviderConfig {
+  return applyProviderNativeStreamingUsageCompat({
+    providerId: "moonshot",
+    providerConfig: provider,
+  });
+}
 
 export function buildMoonshotProvider(): ModelProviderConfig {
   return buildManifestModelProviderConfig({

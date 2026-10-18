@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html } from "lit";
+import { html, render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
-import { createLitTestRenderer } from "../../../test-helpers/lit-render.ts";
 import { renderAssistantAttachments as renderAttachmentCards } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import {
@@ -54,7 +53,6 @@ async function flushAttachmentResolution() {
 }
 
 const subscribers = new Set<() => void>();
-const { render, cleanup } = createLitTestRenderer();
 
 function stubAttachmentIntersection(): () => Promise<void> {
   const callbacks: IntersectionObserverCallback[] = [];
@@ -77,8 +75,7 @@ function stubAttachmentIntersection(): () => Promise<void> {
   };
 }
 
-afterEach(async () => {
-  await cleanup();
+afterEach(() => {
   for (const subscriber of subscribers) {
     releaseChatMediaResourceSubscriber(subscriber);
   }
@@ -347,7 +344,7 @@ describe("attachment sidebar source ownership", () => {
     expect(container.querySelector("img.chat-message-image")?.getAttribute("alt")).toBe(
       "Renamed vector",
     );
-    expect(fetchMock.mock.calls.map(([input]) => input)).toEqual([source]);
+    expect(fetchMock).toHaveBeenCalledOnce();
     svg.label = "vector.svg";
     await svg.updateComplete;
     expect(container.querySelector("iframe")).toBeNull();
@@ -903,7 +900,7 @@ describe("attachment sidebar source ownership", () => {
     container.remove();
   });
 
-  it("retains an open local sidebar attachment's message while refreshing runtime credentials", async () => {
+  it("resolves an open local sidebar attachment with the current runtime credentials", async () => {
     const source = "/tmp/openclaw/clip.mp3";
     const container = document.body.appendChild(document.createElement("div"));
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
@@ -936,8 +933,6 @@ describe("attachment sidebar source ownership", () => {
           ],
           {
             authToken: "token-A",
-            sessionKey: "agent:main:sidebar-audio",
-            messageId: "saved-audio-message",
             onRequestUpdate: transcriptUpdate,
           },
           (content) => {
@@ -966,14 +961,12 @@ describe("attachment sidebar source ownership", () => {
     expect(
       resolveSource?.(sidebarUpdate, {
         authToken: "token-B",
-        sessionKey: "agent:main:sidebar-audio",
       }),
     ).toEqual({ status: "pending" });
     await vi.waitFor(() =>
       expect(
         resolveSource?.(sidebarUpdate, {
           authToken: "token-B",
-          sessionKey: "agent:main:sidebar-audio",
         }),
       ).toEqual(
         expect.objectContaining({
@@ -989,24 +982,6 @@ describe("attachment sidebar source ownership", () => {
     expect(new Headers(fetchMock.mock.calls.at(-1)?.[1]?.headers).get("Authorization")).toBe(
       "Bearer token-B",
     );
-    expect(
-      fetchMock.mock.calls.map(([url]) =>
-        new URL(url instanceof Request ? url.url : url, window.location.origin).searchParams.get(
-          "messageId",
-        ),
-      ),
-    ).toEqual(["saved-audio-message", "saved-audio-message"]);
-    const refreshed = resolveSource?.(sidebarUpdate, {
-      authToken: "token-B",
-      sessionKey: "agent:main:sidebar-audio",
-    });
-    expect(refreshed?.status).toBe("ready");
-    if (refreshed?.status === "ready") {
-      const params = new URL(refreshed.src, window.location.origin).searchParams;
-      expect(params.get("messageId")).toBe("saved-audio-message");
-      expect(params.get("sessionKey")).toBe("agent:main:sidebar-audio");
-      expect(params.get("mediaTicket")).toBe("ticket-token-B");
-    }
     container.remove();
   });
 });

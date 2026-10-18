@@ -1,5 +1,5 @@
 import "../../styles/connection.css";
-import { createSignal, onCleanup, untrack } from "solid-js";
+import { createSignal, onCleanup } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -25,11 +25,13 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import {
   CONNECTION_PING_SAMPLE_LIMIT,
   summarizeConnectionPing,
   type ConnectionPingSummary,
 } from "./latency.ts";
+import { isUnknownSystemInfoMethodError } from "./system-info.ts";
 import { ConnectionView } from "./view.tsx";
 
 const CONNECTION_DOCS_URL = "https://docs.openclaw.ai/gateway/remote";
@@ -219,7 +221,7 @@ class ConnectionDraft {
         this.pingFailed = true;
       } else {
         this.statusFailed = true;
-        if (isMissingOperatorReadScopeError(error)) {
+        if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
           this.systemInfo = null;
           this.systemInfoUnavailable = true;
         }
@@ -361,15 +363,11 @@ class ConnectionDraft {
   }
 }
 
-function ConnectionContent(props: { host: HTMLElement }) {
+function ConnectionContent(_props: object, host: HTMLElement) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const changed = () => setRevision((value) => value + 1);
-  const draft = new ConnectionDraft(
-    context,
-    untrack(() => props.host),
-    changed,
-  );
+  const draft = new ConnectionDraft(context, host, changed);
   draft.polling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, () => draft.refreshDiagnostics());
   draft.gateway = useGatewayPage({
     getGateway: () => context.gateway,
@@ -381,7 +379,7 @@ function ConnectionContent(props: { host: HTMLElement }) {
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
   onCleanup(() => draft.dispose());
-  const viewProps = () => {
+  const props = () => {
     revision();
     return draft.viewProps();
   };
@@ -396,17 +394,12 @@ function ConnectionContent(props: { host: HTMLElement }) {
         }
       />
       <SettingsWorkspace>
-        <ConnectionView {...viewProps()} />
+        <ConnectionView {...props()} />
       </SettingsWorkspace>
     </>
   );
 }
 
-export function ConnectionPage() {
-  let host!: HTMLElement;
-  return (
-    <openclaw-connection-page ref={(element) => (host = element)}>
-      <ConnectionContent host={host} />
-    </openclaw-connection-page>
-  );
-}
+export const ConnectionPage = defineSolidBridge("openclaw-connection-page", ConnectionContent, {
+  properties: {},
+});

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { Model } from "../llm/types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
-import { modelCatalogRouteVariantKey } from "./model-catalog-entry.js";
+import { modelCatalogRouteVariantKey, modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -199,8 +199,9 @@ export function prepareModelCatalogPublication(
     | undefined,
   auth: PreparedModelCatalogAuth,
   normalizeProvider: (provider: string) => string,
+  hookRows: ReadonlyMap<string, ReadonlySet<string>>,
 ): Pick<PreparedModelCatalogInventory, "catalog" | "discoveryOrigins" | "runtimeModels"> & {
-  legacyProviders: ReadonlySet<string>;
+  legacyRows: ReadonlyMap<string, ReadonlySet<string>>;
 } {
   // Provider discovery publishes provider rows; the inventory owner merges native observations.
   const catalog: ModelCatalogSnapshot = {
@@ -216,20 +217,47 @@ export function prepareModelCatalogPublication(
   const discoveryOrigins = (catalog.providerOutcomes ?? [])
     .filter((outcome) => outcome.status === "ready")
     .map(({ provider, profileId }) => ({ provider: normalizeProvider(provider), profileId }));
+  const identityKey = createModelCatalogIdentityKeyResolver();
+  const rowKey = (entry: ModelCatalogSnapshot["entries"][number]) =>
+    modelCatalogRouteVariantKey(
+      entry,
+      identityKey({ provider: normalizeProvider(entry.provider), id: entry.id }),
+    );
+  const acceptedRows = new Map<string, Set<string>>();
+  for (const [owner, keys] of hookRows) {
+    const provider = normalizeProvider(owner);
+    acceptedRows.set(provider, new Set([...(acceptedRows.get(provider) ?? []), ...keys]));
+  }
   const outcomeProviders = new Set(
     catalog.providerOutcomes?.map((outcome) => normalizeProvider(outcome.provider)),
   );
-  const legacyProviders = new Set(
-    catalog.entries
-      .map((entry) => normalizeProvider(entry.provider))
-      .filter((provider) => !outcomeProviders.has(provider)),
-  );
+  const legacyRows = new Map<string, Set<string>>();
+  for (const entry of [...catalog.entries, ...catalog.routeVariants]) {
+    const provider = normalizeProvider(entry.provider);
+    const key = rowKey(entry);
+    if (outcomeProviders.has(provider) || !acceptedRows.get(provider)?.has(key)) {
+      continue;
+    }
+    const keys = legacyRows.get(provider) ?? new Set<string>();
+    keys.add(key);
+    legacyRows.set(provider, keys);
+  }
   if (failed.length === 0) {
     catalog.acceptedDiscoveryOrigins = discoveryOrigins;
-    return { catalog, discoveryOrigins, runtimeModels, legacyProviders };
+    return { catalog, discoveryOrigins, runtimeModels, legacyRows };
   }
   const previous = inventory?.catalog;
   const previousAuth = previous && getPreparedModelFullCatalogAuth(previous);
+  const previousLegacyRows = new Map<string, Set<string>>();
+  for (const entry of [...(previous?.entries ?? []), ...(previous?.routeVariants ?? [])]) {
+    const provider = normalizeProvider(entry.provider);
+    const key = rowKey(entry);
+    if (!entry.nativeRuntime && inventory?.providers.get(provider)?.legacyRows?.has(key)) {
+      const keys = previousLegacyRows.get(provider) ?? new Set<string>();
+      keys.add(key);
+      previousLegacyRows.set(provider, keys);
+    }
+  }
   const starterProviders = new Set(
     failed
       .map(({ provider }) => normalizeProvider(provider))
@@ -244,7 +272,7 @@ export function prepareModelCatalogPublication(
       const previousOrigins = inventory?.discoveryOrigins.filter(
         (candidate) => normalizeProvider(candidate.provider) === provider,
       );
-      const hasLegacyInventory = inventory?.providers.get(provider)?.legacyAcquired === true;
+      const hasLegacyInventory = Boolean(previousLegacyRows.get(provider)?.size);
       if (
         discoveryOrigins.some((origin) => origin.provider === provider) ||
         // A completed legacy acquisition can retain rows without claiming live discovery.
@@ -267,9 +295,14 @@ export function prepareModelCatalogPublication(
         : [];
     }),
   );
-  for (const provider of retainedProviders) {
-    if (inventory?.providers.get(provider)?.legacyAcquired) {
-      legacyProviders.add(provider);
+  const discoveredRetainedProviders = new Set(
+    [...retainedProviders].filter((provider) =>
+      inventory?.discoveryOrigins.some((origin) => normalizeProvider(origin.provider) === provider),
+    ),
+  );
+  for (const [provider, keys] of previousLegacyRows) {
+    if (retainedProviders.has(provider) && !discoveredRetainedProviders.has(provider)) {
+      legacyRows.set(provider, keys);
     }
   }
   const retain = (
@@ -279,10 +312,16 @@ export function prepareModelCatalogPublication(
       entry: ModelCatalogSnapshot["entries"][number],
     ) => string = createModelCatalogIdentityKeyResolver(),
   ) =>
-    // A failed refresh keeps the provider's last-good view, including its configured overlays.
     dedupeByKey(
       [
-        ...current.filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider))),
+        ...current.filter(
+          (entry) =>
+            !discoveredRetainedProviders.has(normalizeProvider(entry.provider)) &&
+            !(
+              retainedProviders.has(normalizeProvider(entry.provider)) &&
+              legacyRows.get(normalizeProvider(entry.provider))?.has(rowKey(entry))
+            ),
+        ),
         ...starters
           .filter((entry) => !retainedProviders.has(normalizeProvider(entry.provider)))
           .map((entry) =>
@@ -290,7 +329,10 @@ export function prepareModelCatalogPublication(
           ),
         ...retained.filter(
           (entry) =>
-            !entry.nativeRuntime && retainedProviders.has(normalizeProvider(entry.provider)),
+            !entry.nativeRuntime &&
+            retainedProviders.has(normalizeProvider(entry.provider)) &&
+            (discoveredRetainedProviders.has(normalizeProvider(entry.provider)) ||
+              legacyRows.get(normalizeProvider(entry.provider))?.has(rowKey(entry))),
         ),
       ],
       key,
@@ -321,12 +363,29 @@ export function prepareModelCatalogPublication(
   };
   setPreparedModelFullCatalogAuth(published, auth);
   const publishedRuntimeModels = new Map(
-    [...runtimeModels].filter(([provider]) => !retainedProviders.has(normalizeProvider(provider))),
+    [...runtimeModels].filter(
+      ([provider]) => !discoveredRetainedProviders.has(normalizeProvider(provider)),
+    ),
   );
   for (const [provider, models] of inventory?.runtimeModels ?? []) {
     const normalized = normalizeProvider(provider);
-    if (retainedProviders.has(normalized)) {
+    if (discoveredRetainedProviders.has(normalized)) {
       publishedRuntimeModels.set(provider, models);
+    } else if (retainedProviders.has(normalized)) {
+      publishedRuntimeModels.set(
+        provider,
+        dedupeByKey(
+          [
+            ...(publishedRuntimeModels.get(provider) ?? []).filter(
+              (model) => !legacyRows.get(normalized)?.has(rowKey(modelCatalogRowToEntry(model))),
+            ),
+            ...models.filter((model) =>
+              legacyRows.get(normalized)?.has(rowKey(modelCatalogRowToEntry(model))),
+            ),
+          ],
+          (model) => rowKey(modelCatalogRowToEntry(model)),
+        ),
+      );
     }
   }
   published.acceptedDiscoveryOrigins = [
@@ -338,7 +397,7 @@ export function prepareModelCatalogPublication(
   return {
     catalog: published,
     runtimeModels: publishedRuntimeModels,
-    legacyProviders,
+    legacyRows,
     discoveryOrigins: published.acceptedDiscoveryOrigins,
   };
 }

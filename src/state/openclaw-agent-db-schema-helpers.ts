@@ -33,7 +33,6 @@ import {
   CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION,
   AGENT_STORAGE_SCHEMA_VERSION,
   AGENT_JSON_PREDICATE_SCHEMA_VERSION,
-  AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION,
 } from "./openclaw-agent-db-contract.js";
 import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
@@ -48,7 +47,6 @@ import {
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
 import { withoutAgentJsonPredicateColumns } from "./openclaw-agent-json-predicate-schema.js";
-import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import {
   LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
   withLegacySessionParticipantsSchema,
@@ -80,14 +78,10 @@ export {
 
 /** Compare historical migration targets against only the representation they support. */
 export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
-  const sequenceSchemaSql =
-    targetVersion < AGENT_OUTBOX_SEQUENCE_SCHEMA_VERSION
-      ? withoutOutboxEnqueueSequence(OPENCLAW_AGENT_SCHEMA_SQL)
-      : OPENCLAW_AGENT_SCHEMA_SQL;
   const predicateSchemaSql =
     targetVersion < AGENT_JSON_PREDICATE_SCHEMA_VERSION
-      ? withoutAgentJsonPredicateColumns(sequenceSchemaSql)
-      : sequenceSchemaSql;
+      ? withoutAgentJsonPredicateColumns(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
   const canonicalSchemaSql =
     targetVersion < CANONICAL_SESSION_WRITER_VALIDATION_SCHEMA_VERSION
       ? withLegacyCanonicalSessionValidationTriggers(predicateSchemaSql)
@@ -350,6 +344,9 @@ export function finishAgentSchemaMigration(
   requiresMaintenance: boolean,
   assertMigration: () => void,
 ): void {
+  repairCanonicalSqliteIndexes(db, pathname, schemaSql, {
+    verifyPhysicalIntegrity: false,
+  });
   db.exec(`PRAGMA user_version = ${targetVersion};`);
   persistAgentSchemaMetadata(db, agentId, targetVersion);
   assertAgentSchemaVersion(db, { agentId, pathname, version: targetVersion }, schemaSql);

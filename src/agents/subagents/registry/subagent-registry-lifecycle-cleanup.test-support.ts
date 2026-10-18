@@ -49,7 +49,7 @@ export function registerDetachedCleanupAuthorityTest({
   createLifecycleController: (
     params: { entry: SubagentRunRecord } & Pick<
       LifecycleControllerFixtureOptions,
-      "runSubagentAnnounceFlow"
+      "runSubagentAnnounceFlow" | "beforeWrite"
     >,
   ) => Pick<SubagentLifecycleController, "startSubagentAnnounceCleanupFlow">;
 }) {
@@ -81,7 +81,7 @@ export function registerDetachedCleanupAuthorityTest({
       payload: delivered,
     });
     const dispatchFinished = createDeferredCore<unknown>();
-    const joinCleanup = observeRootWork();
+    const cleanupFinished = createDeferredCore();
     const runSubagentAnnounceFlow = vi.fn(async () => {
       await cleanupReady.promise;
       try {
@@ -105,6 +105,11 @@ export function registerDetachedCleanupAuthorityTest({
     const controller = createLifecycleController({
       entry,
       runSubagentAnnounceFlow,
+      beforeWrite: ({ postimages }) => {
+        if (postimages.get(entry.runId)?.cleanupCompletedAt !== undefined) {
+          cleanupFinished.resolve();
+        }
+      },
     });
 
     await withGatewayToolCallerIdentity(
@@ -129,10 +134,9 @@ export function registerDetachedCleanupAuthorityTest({
     cleanupReady.resolve();
 
     await dispatchResult;
-    await joinCleanup();
+    await cleanupFinished.promise;
     expect(freshTranscriptWrite).toHaveBeenCalledOnce();
     expect(readLifecycleRun(entry).delivery?.status).toBe("delivered");
-    expect(readLifecycleRun(entry).cleanupCompletedAt).toBeTypeOf("number");
     expect(requesterTranscriptWrite).not.toHaveBeenCalled();
     expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce();
   });

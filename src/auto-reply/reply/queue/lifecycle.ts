@@ -1,5 +1,5 @@
 import type { TurnAdoptionLifecycle } from "../../get-reply-options.types.js";
-import { FollowupRunDeferredError, type FollowupRun } from "./types.js";
+import type { FollowupRun } from "./types.js";
 
 const enqueuedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
 const admittedTurnAdoptionLifecycles = new WeakSet<TurnAdoptionLifecycle>();
@@ -13,26 +13,6 @@ type FollowupLifecycleRun = Pick<
   FollowupRun,
   "steerPending" | "turnAdoptionLifecycle" | "operatorAuthority"
 >;
-
-function stopFollowupRunPreAdoptionHeartbeat(lifecycle: TurnAdoptionLifecycle | undefined): void {
-  if (lifecycle) {
-    deferredHeartbeatStops.get(lifecycle)?.();
-  }
-}
-
-export function updateFollowupRetryHeartbeats(
-  error: unknown,
-  sources: readonly FollowupRun[],
-): void {
-  // Preparation failures stop renewal; a later capacity wait restores source liveness.
-  for (const source of sources) {
-    if (error instanceof FollowupRunDeferredError) {
-      startFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
-    } else {
-      stopFollowupRunPreAdoptionHeartbeat(source.turnAdoptionLifecycle);
-    }
-  }
-}
 
 export function startFollowupRunPreAdoptionHeartbeat(
   lifecycle: TurnAdoptionLifecycle | undefined,
@@ -55,13 +35,13 @@ export function startFollowupRunPreAdoptionHeartbeat(
   ) {
     return undefined;
   }
-  stopFollowupRunPreAdoptionHeartbeat(lifecycle);
+  deferredHeartbeatStops.get(lifecycle)?.();
   const pulse = () => {
     try {
       heartbeat();
     } catch {
       // Leave recovery to the ingress watchdog when its liveness callback fails.
-      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
+      deferredHeartbeatStops.get(lifecycle)?.();
     }
   };
   const timer = setInterval(pulse, intervalMs).unref();
@@ -147,7 +127,7 @@ export async function admitFollowupRunLifecycle(run: FollowupLifecycleRun): Prom
       await lifecycle.onAdopted();
       run.operatorAuthority?.assertCurrent();
       admittedTurnAdoptionLifecycles.add(lifecycle);
-      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
+      deferredHeartbeatStops.get(lifecycle)?.();
     }
   });
 
@@ -186,7 +166,7 @@ export function completeFollowupRunLifecycle(
     };
 
     if (lifecycle && !completedTurnAdoptionLifecycles.has(lifecycle)) {
-      stopFollowupRunPreAdoptionHeartbeat(lifecycle);
+      deferredHeartbeatStops.get(lifecycle)?.();
       completedTurnAdoptionLifecycles.add(lifecycle);
     }
 

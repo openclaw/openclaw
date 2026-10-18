@@ -104,9 +104,8 @@ import type {
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 import { readUserBackgroundCommand } from "./user-background.kernel.js";
 import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
-import { readUserPreferences, selectUserPreferenceValues } from "./user-preferences.store.js";
+import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileCommand } from "./user-profile-read.worker.js";
-import { selectResolvedUserProfileMetadataById } from "./user-profiles-internal.js";
 
 export {
   prepareAcpSessionMetadataRead,
@@ -369,12 +368,13 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (command.type === "githubPublication.sharedObservation") {
-    const { session, selector, entry } = command.input;
+    const { kind, session, selector, entry } = command.input;
     return {
       type: command.type,
       row:
-        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
+        kind === "repository"
+          ? readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry)
+          : readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
     };
   }
   if (command.type === "githubPublication.request") {
@@ -420,26 +420,7 @@ export function readOpenClawStateDatabaseCommand(
       values: selectUserPreferenceValues(db, command.profileIds, command.key),
     };
   }
-  if (command.type === "userPreferences.read") {
-    return {
-      type: command.type,
-      preferences: runSqliteDeferredTransactionSync(db, () => {
-        const profile = tableExists(db, "user_profiles")
-          ? selectResolvedUserProfileMetadataById(db, command.profileId)
-          : undefined;
-        return profile
-          ? {
-              profileId: profile.id,
-              entries: tableExists(db, "user_preferences")
-                ? readUserPreferences(db, profile.id, command.keys)
-                : {},
-            }
-          : undefined;
-      }),
-    };
-  }
   if (
-    command.type === "userModelAccounts.authorization" ||
     command.type === "userModelAccounts.links" ||
     command.type === "userModelAccounts.summary" ||
     command.type === "userModelAccounts.selection" ||

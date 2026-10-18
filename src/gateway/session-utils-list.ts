@@ -46,36 +46,37 @@ import type { SessionListRowContext } from "./session-utils-contracts.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
+function resolveSessionsListWindowLimit(limit: number | undefined, offset: number) {
+  if (limit === undefined) {
+    return undefined;
+  }
+  const windowLimit = offset + limit;
+  return Number.isFinite(windowLimit) ? Math.min(windowLimit, Number.MAX_SAFE_INTEGER) : undefined;
+}
+
 export function* selectSessionEntries(
   params: SessionListFilterParams & { defaultLimit?: number },
 ): SynchronousWork<SessionEntrySelection> {
+  const { ownerEntries, entries: filtered, ...facets } = yield* filterSessionEntries(params);
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
   const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
-  const ownerLimit =
-    params.ownerFirstActorId && offset === 0
-      ? Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT)
-      : 0;
-  const {
-    ownerEntries,
-    entries: filtered,
-    ...facets
-  } = yield* filterSessionEntries(
-    params,
-    params.entriesSorted ? { offset, limit, ownerLimit } : undefined,
-  );
-  const sharedEntries = params.entriesSorted
-    ? filtered
-    : (yield* sortAndLimitSessionEntries(
+  const windowLimit = resolveSessionsListWindowLimit(limit, offset);
+  const sortedWindow = params.entriesSorted
+    ? filtered.slice(0, windowLimit)
+    : yield* sortAndLimitSessionEntries(
         filtered,
-        limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER),
+        windowLimit,
         params.opts.sortBy,
         params.shouldYield,
-      )).slice(offset);
+      );
+  const sharedEntries =
+    limit === undefined ? sortedWindow.slice(offset) : sortedWindow.slice(offset, offset + limit);
   let entries = sharedEntries;
   let ownerCount = 0;
-  if (ownerLimit > 0) {
+  if (params.ownerFirstActorId && offset === 0) {
+    const ownerLimit = Math.min(limit ?? SESSIONS_LIST_OWNER_LIMIT, SESSIONS_LIST_OWNER_LIMIT);
     const owned = params.entriesSorted
-      ? ownerEntries
+      ? ownerEntries.slice(0, ownerLimit)
       : yield* sortAndLimitSessionEntries(
           ownerEntries,
           ownerLimit,
@@ -87,11 +88,12 @@ export function* selectSessionEntries(
     entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
   }
   const nextOffset = offset + sharedEntries.length;
-  const hasMore = nextOffset < facets.totalCount;
+  const hasMore = nextOffset < filtered.length;
   return {
     ...facets,
     entries,
     ownerCount,
+    totalCount: filtered.length,
     limitApplied: limit,
     offset,
     nextOffset: hasMore ? nextOffset : null,
@@ -267,7 +269,6 @@ export function prepareSessionRowSelection(
     now,
     modelCatalog,
     entries,
-    configuredAgentIds: selected.configuredAgentIds,
     involvementKeys: selected.involvementKeys,
     candidateKeys(identities: Iterable<string>) {
       return new Set(
@@ -323,7 +324,7 @@ export async function prepareSessionSearchIdentityNames(
   });
   const scope = projection.state.scope(opts);
   const agentIds = new Set(scope.agentId ? [scope.agentId] : listAgentIds(prepared.cfg));
-  for (const [key] of prepared.entries("all")) {
+  for (const [key] of prepared.entries) {
     const agentId = prepared.getTarget(key)?.agentId;
     if (agentId) {
       agentIds.add(agentId);
@@ -387,18 +388,20 @@ export function prepareProjectedSessionList(params: {
     projectActiveRun: context
       ? (key, entry, agentId) => active(getTarget(key)?.key ?? key, entry, agentId)!
       : undefined,
-    entryFilter: (key, entry, row) => {
-      const storeKey = row.storeKey ?? key;
+    entryFilter: (key, entry) => {
+      const row = getTarget(key);
       let visible = params.visibility?.get(entry);
       if (visible === undefined) {
-        visible =
-          client === undefined || (presentation.sharing.entryFilter?.(storeKey, entry) ?? true);
+        visible = Boolean(
+          row &&
+          (client === undefined || (presentation.sharing.entryFilter?.(row.key, entry) ?? true)),
+        );
         params.visibility?.set(entry, visible);
       }
       return (
         visible &&
-        (opts.hasBoard === undefined || row.hasBoard === opts.hasBoard) &&
-        (!opts.activeOnly || Boolean(active(storeKey, entry, row.agentId)?.active))
+        (opts.hasBoard === undefined || row?.hasBoard === opts.hasBoard) &&
+        (!opts.activeOnly || Boolean(row && active(row.key, entry, row.agentId)?.active))
       );
     },
   };
@@ -425,11 +428,6 @@ export async function listProjectedSessions(params: {
   onResult?: (result: SessionsListResult) => void;
 }): Promise<SessionsListResult> {
   const { projection, opts, key: exactKey, context, client, diagnostics } = params;
-  // Search and Board filters inspect full row facts; ordinary paging selects from metadata.
-  const selectionPreparation = {
-    metadataOnly: !opts.search?.trim() && opts.hasBoard === undefined,
-    includeCatalog: true,
-  };
   return projection.withSelectionPreparation(async () => {
     const dirtyRowCount = projection.dirtyRowCount;
     const materializedBefore = projection.materializedCount;
@@ -439,12 +437,12 @@ export async function listProjectedSessions(params: {
     let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
     do {
       yieldCount++;
-      await projection.prepareSelection({ ...selectionPreparation, yieldForCatalog: true });
+      await projection.prepareSelection({ yieldForCatalog: true });
       if (opts.search?.trim()) {
         searchIdentities = await prepareSessionSearchIdentityNames(projection, opts, true);
       }
     } while (
-      projection.needsSelectionPreparation(selectionPreparation) ||
+      projection.needsSelectionPreparation() ||
       (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
     );
     let prepareSyncMs = 0;
@@ -597,7 +595,7 @@ export async function listProjectedSessions(params: {
           diagnostics?.finishSyncCpu("rowThreadCpuMs", syncCpu);
         }
       },
-      { selection: selectionPreparation },
+      { selection: true },
     );
   });
 }

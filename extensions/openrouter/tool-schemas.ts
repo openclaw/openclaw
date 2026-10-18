@@ -1,8 +1,7 @@
-import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type { ProviderNormalizeToolSchemasContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeOpenRouterApiModelId } from "./models.js";
+import { normalizeOpenRouterApiModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 
 const openAiTools = buildProviderToolCompatFamilyHooks("openai");
 const schemaTypes = new Set(["null", "boolean", "object", "array", "number", "integer", "string"]);

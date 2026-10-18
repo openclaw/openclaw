@@ -12,7 +12,7 @@ import {
   normalizeSingleOrTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parse as parseYaml } from "yaml";
-import { planHermesMcpServer } from "./config-mcp.js";
+import { importsMcpSensitiveValues, mapMcpServer, mcpManualItems } from "./config-mcp.js";
 import { providerConfig } from "./config-provider-contract.js";
 import {
   addSelectedModelToProvider,
@@ -154,17 +154,7 @@ export function buildConfigItems(params: {
       if (!isRecord(rawServer)) {
         continue;
       }
-      const {
-        server,
-        sensitive,
-        items: manualItems,
-      } = planHermesMcpServer({
-        name,
-        raw: rawServer,
-        includeSecrets: Boolean(params.ctx.includeSecrets),
-        env: mcpEnv,
-        source: `${rawMcpSource}.${name}`,
-      });
+      const server = mapMcpServer(rawServer, Boolean(params.ctx.includeSecrets), mcpEnv);
       if (Object.keys(server).length > 0) {
         const value = { [name]: server };
         addConfigPatch({
@@ -173,10 +163,18 @@ export function buildConfigItems(params: {
           path: ["mcp", "servers"],
           value,
           message: `Import Hermes MCP server definition "${name}".`,
-          sensitive,
+          sensitive: importsMcpSensitiveValues(rawServer, Boolean(params.ctx.includeSecrets)),
         });
       }
-      items.push(...manualItems);
+      items.push(
+        ...mcpManualItems({
+          name,
+          raw: rawServer,
+          includeSecrets: Boolean(params.ctx.includeSecrets),
+          env: mcpEnv,
+          source: `${rawMcpSource}.${name}`,
+        }),
+      );
     }
   }
 

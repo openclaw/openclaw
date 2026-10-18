@@ -67,7 +67,7 @@ export type TestSessionsPage = HTMLElement & {
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
-  archiveActions: Pick<SessionsPageArchive, "archive">;
+  archiveActions: Pick<SessionsPageArchive, "archive" | "archiveTree">;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };

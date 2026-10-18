@@ -45,7 +45,7 @@ import {
   getSubagentAnnounceRuntimeConfig,
   loadRequesterSessionEntry,
   loadSessionEntryByKey,
-  withSubagentRequesterDelivery,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   sendSubagentAnnounceDirectly,
@@ -149,10 +149,23 @@ export async function deliverSubagentAnnouncement(
     preparedRequester?: { binding: SessionDeliveryRequesterBinding; entry: SessionEntry };
   },
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterDelivery(
+  return withSubagentRequesterSource(
     params.targetRequesterSessionKey,
-    params,
-    deliverSubagentAnnouncementBound,
+    params.requesterAgentId,
+    async (
+      isRequesterCurrent,
+    ): Promise<Awaited<ReturnType<typeof deliverSubagentAnnouncement>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return deliverSubagentAnnouncementBound(guardedParams);
+    },
   );
 }
 

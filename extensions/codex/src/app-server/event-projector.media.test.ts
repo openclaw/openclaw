@@ -399,7 +399,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     },
   );
 
-  it.each(["file-url", "error"] as const)(
+  it.each(["replaced", "file-url", "error"] as const)(
     "preserves the processed internal UI attachment: %s",
     async (presentation) => {
       const replacementUrl = "https://example.test/filtered-preview.png";
@@ -414,12 +414,12 @@ describe("CodexAppServerEventProjector media projection", () => {
         return {
           ...event.result,
           details:
-            presentation === "file-url"
+            presentation === "replaced" || presentation === "file-url"
               ? {
                   deliveryStatus: "sent",
                   sourceReplySink: "internal-ui",
                   sourceReply: {
-                    text: "Attached.",
+                    text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
                     mediaUrls: [processedUrl],
                   },
                 }
@@ -452,9 +452,11 @@ describe("CodexAppServerEventProjector media projection", () => {
           ? []
           : [
               {
-                text: "Attached.",
+                text: presentation === "replaced" ? "Filtered attachment." : "Attached.",
                 sourceReplyFinal: true,
-                mediaUrls: [pathToFileURL(stagedPath).href],
+                mediaUrls: [
+                  presentation === "replaced" ? replacementUrl : pathToFileURL(stagedPath).href,
+                ],
               },
             ],
       );

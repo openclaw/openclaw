@@ -1,6 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import {
   agentTabIconShape,
+  type AgentTabIconShape,
   type TabIconPreference,
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
@@ -42,6 +43,22 @@ function LobsterPreview(props: { palette: LobsterPetPalette }) {
   );
 }
 
+function AvatarPreview(props: {
+  source: string | null;
+  fallbackUrl: string;
+  shape?: AgentTabIconShape;
+  fallbackOnly?: boolean;
+}) {
+  return (
+    <TabIconAvatar
+      imageUrl={props.source}
+      shape={props.shape ?? "square"}
+      fallbackOnly={props.fallbackOnly ?? false}
+      fallbackUrl={props.fallbackUrl}
+    />
+  );
+}
+
 export function TabIconSection(props: TabIconViewProps) {
   const defaultSource = createMemo(
     () => controlUiFaviconBaseSvg() ?? inferControlUiPublicAssetPath("favicon.svg"),
@@ -62,7 +79,7 @@ export function TabIconSection(props: TabIconViewProps) {
       value: "default",
       label: (
         <span class="settings-tab-icon__option">
-          <TabIconAvatar imageUrl={null} fallbackUrl={defaultSource()} />
+          <AvatarPreview source={null} fallbackUrl={defaultSource()} />
           {t("configView.appearance.tabIcon.default")}
         </span>
       ),
@@ -71,8 +88,8 @@ export function TabIconSection(props: TabIconViewProps) {
       value: "agent",
       label: (
         <span class="settings-tab-icon__option">
-          <TabIconAvatar
-            imageUrl={props.tabIconAgentAvatar ?? null}
+          <AvatarPreview
+            source={props.tabIconAgentAvatar ?? null}
             shape={selectedShape() ?? "square"}
             fallbackUrl={defaultSource()}
           />
@@ -91,7 +108,7 @@ export function TabIconSection(props: TabIconViewProps) {
         <span class="settings-tab-icon__preview">
           <Show
             when={preview()}
-            fallback={<TabIconAvatar imageUrl={null} fallbackOnly fallbackUrl={defaultSource()} />}
+            fallback={<AvatarPreview source={null} fallbackOnly fallbackUrl={defaultSource()} />}
           >
             {(palette) => <LobsterPreview palette={palette()} />}
           </Show>
@@ -150,8 +167,8 @@ export function TabIconSection(props: TabIconViewProps) {
                       title={t(`configView.appearance.tabIcon.${choice}`)}
                       onClick={() => props.setTabIconMode(preference)}
                     >
-                      <TabIconAvatar
-                        imageUrl={props.tabIconAgentAvatar ?? null}
+                      <AvatarPreview
+                        source={props.tabIconAgentAvatar ?? null}
                         shape={choice}
                         fallbackUrl={defaultSource()}
                       />

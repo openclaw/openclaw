@@ -94,7 +94,6 @@ export function buildOpenAIRealtimeTranscriptionProvider(
     defaultModel: OPENAI_REALTIME_TRANSCRIPTION_DEFAULT_MODEL,
     autoSelectOrder: 10,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
         normalizeProviderConfig(providerConfig).apiKey ||

@@ -181,6 +181,14 @@ vi.mock("../commands/gateway-install-token.js", () => ({
   resolveGatewayInstallToken,
 }));
 
+vi.mock("../commands/daemon-runtime.js", () => ({
+  DEFAULT_GATEWAY_DAEMON_RUNTIME: "node",
+  GATEWAY_DAEMON_RUNTIME_OPTIONS: [
+    { value: "node", label: "Node" },
+    { value: "bun", label: "Bun 1.4+" },
+  ],
+}));
+
 vi.mock("../commands/health-format.js", () => ({
   formatHealthCheckFailure: vi.fn(() => "health failed"),
 }));
@@ -811,13 +819,13 @@ describe("finalizeSetupWizard", () => {
       typeof import("../commands/daemon-install-helpers.js")
     >("../commands/daemon-install-helpers.js");
     const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+    Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.2" });
     const discoverNode = vi
       .spyOn(runtimePaths, "resolvePreferredNodePath")
       .mockResolvedValue(undefined);
     const probeBun = vi.spyOn(runtimePaths, "resolveBunRuntimeInfo").mockResolvedValue({
       status: "supported",
-      version: "1.4.3",
+      version: "1.4.2",
       sqliteVersion: "3.53.4",
       sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       nodeSharedSqlite: false,
@@ -1293,13 +1301,14 @@ describe("finalizeSetupWizard", () => {
   );
 
   it.each([
+    { flow: "advanced", choice: "bun" },
     { flow: "advanced", choice: "node" },
     { flow: "quickstart", choice: "bun" },
   ] as const)(
     "reinstalls recorded Bun through $flow with choice=$choice",
     async ({ flow, choice }) => {
       const recordedPath = "/opt/recorded/bin/bun";
-      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.3"));
+      runExec.mockResolvedValue(createRuntimeProbeResult("1.4.2"));
       gatewayServiceIsLoaded.mockResolvedValue(true);
       gatewayServiceReadCommand.mockResolvedValue({
         programArguments: [recordedPath, "/app/openclaw.mjs", "gateway"],

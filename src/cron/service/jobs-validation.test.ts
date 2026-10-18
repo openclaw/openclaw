@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assertExternalSourceScheduleSupport,
-  assertSupportedJobSpec,
-  assertTriggerSupport,
-} from "./jobs-validation.js";
+import { assertSupportedJobSpec, assertTriggerSupport } from "./jobs-validation.js";
 
 describe("cron target and payload guidance", () => {
   it.each(["current", "session:agent:main:dashboard:continuation"] as const)(
@@ -40,30 +36,6 @@ describe("cron target and payload guidance", () => {
     ).toThrow(
       'cron sessionTarget "main" requires payload.kind="systemEvent" or "script"; agent turns use "isolated", "current", or "session:<key>"',
     );
-  });
-});
-
-describe("event source schedule validation", () => {
-  it("validates source definitions and agent-turn payloads without widening target validation", () => {
-    const schedule = { kind: "event" as const, source: "mcp-events", options: {} };
-    expect(() =>
-      assertExternalSourceScheduleSupport({
-        schedule,
-        payload: { kind: "agentTurn", message: "Handle the event." },
-      }),
-    ).not.toThrow();
-    expect(() =>
-      assertExternalSourceScheduleSupport({
-        schedule: { ...schedule, source: "invalid source" },
-        payload: { kind: "agentTurn", message: "Handle the event." },
-      }),
-    ).toThrow("event schedules require");
-    expect(() =>
-      assertExternalSourceScheduleSupport({
-        schedule,
-        payload: { kind: "command", argv: ["echo", "event"] },
-      }),
-    ).toThrow("event schedules require");
   });
 });
 

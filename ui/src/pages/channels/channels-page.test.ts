@@ -25,6 +25,7 @@ function mountPage(context: ApplicationContext): HTMLElement {
   const mounted = mountSolid(
     () =>
       createComponent(ChannelsPage, {
+        host: page,
         get context() {
           return current();
         },

@@ -9,13 +9,26 @@ import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
-import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
+import { rowDemandsVisibility } from "./app-sidebar-session-types.ts";
 import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import "./elapsed-time.tsx";
 import "./tooltip.ts";
+const SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT = 4;
+export function visibleSessionChildren(params: {
+  session: SidebarRecentSession;
+  fullyShown: boolean;
+}): readonly SidebarRecentSession[] {
+  // Active, running, and attention-bearing branches must bypass the quiet-child cap.
+  return params.fullyShown
+    ? params.session.children
+    : params.session.children.filter(
+        (child, index) =>
+          index < SIDEBAR_VISIBLE_CHILD_SESSION_LIMIT || rowDemandsVisibility(child),
+      );
+}
 
 /** Compose independently owned session state and context indicators. */
 
@@ -285,7 +298,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <span class="sidebar-child-session-toggle__icon" aria-hidden="true">
             {childrenExpanded() ? <Icon name="chevronDown" /> : <Icon name="chevronRight" />}
           </span>
-          {team() ? undefined : (
+          {childrenExpanded() || team() ? undefined : (
             <span class="sidebar-child-session-toggle__count">
               {session().childSessionKeys.length}
             </span>
@@ -405,7 +418,20 @@ export function renderSessionTree(params: {
       data-session-tree={session().key}
       role={listItem() ? "listitem" : undefined}
     >
-      <RecentSession host={host()} session={session()} listItem={false} icon={icon()} />
+      {renderRecentSession({
+        get host() {
+          return host();
+        },
+        get session() {
+          return session();
+        },
+        get listItem() {
+          return false;
+        },
+        get icon() {
+          return icon();
+        },
+      })}
       {expanded() ? (
         <div class="sidebar-session-tree__children">
           {visibleChildren().length > 0 ? (
@@ -415,7 +441,19 @@ export function renderSessionTree(params: {
               aria-label={listItem() ? t("sessionsView.childSessions") : undefined}
             >
               <For each={visibleChildren()} keyed={(child) => child.key}>
-                {(child) => <SessionTree host={host()} session={child()} listItem={listItem()} />}
+                {(child) =>
+                  renderSessionTree({
+                    get host() {
+                      return host();
+                    },
+                    get session() {
+                      return child();
+                    },
+                    get listItem() {
+                      return listItem();
+                    },
+                  })
+                }
               </For>
             </div>
           ) : undefined}
@@ -451,5 +489,3 @@ export function renderSessionTree(params: {
   );
 }
 export { renderSidebarSessionIndicators };
-const RecentSession = renderRecentSession;
-const SessionTree = renderSessionTree;

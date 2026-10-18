@@ -4,7 +4,6 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   mockDeletedAgentSession,
@@ -13,9 +12,8 @@ import {
 import type { RespondFn } from "./types.js";
 
 describe("chat.send deleted-agent guard", () => {
-  beforeEach(async () => {
+  beforeEach(() => {
     resetDeletedAgentSessionMocks();
-    await loadOrCreateProcessDeviceIdentityAsync();
   });
 
   it("rejects keys belonging to a deleted agent", async () => {

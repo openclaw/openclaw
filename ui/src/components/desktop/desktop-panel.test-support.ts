@@ -1,4 +1,3 @@
-import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
@@ -24,7 +23,7 @@ export const desktopEnvironment = {
     tunnelStatus: "connected",
     desktopApps: [],
   },
-} satisfies EnvironmentSummary;
+} as const;
 
 export function createPanel() {
   const panel = new DesktopPanelController(document.createElement("div"));

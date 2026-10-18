@@ -16,6 +16,7 @@ import {
 } from "./viewer-assets.js";
 
 const BROWSER_IDLE_MS = 30_000;
+const SHARED_BROWSER_KEY = "__default__";
 const IMAGE_SIZE_LIMIT_ERROR = "Diff frame did not render within image size limits.";
 const PDF_REFERENCE_PAGE_HEIGHT_PX = 1_056;
 const MAX_PDF_PAGES = 50;
@@ -29,12 +30,20 @@ type BrowserLease = {
 };
 
 type SharedBrowserState = {
+  browser?: BrowserInstance;
   browserPromise: Promise<BrowserInstance>;
   idleTimer: ReturnType<typeof setTimeout> | null;
+  key: string;
   users: number;
 };
 
+type ExecutablePathCache = {
+  key: string;
+  valuePromise: Promise<string | undefined>;
+};
+
 let sharedBrowserState: SharedBrowserState | null = null;
+let executablePathCache: ExecutablePathCache | null = null;
 
 export class PlaywrightDiffScreenshotter {
   private readonly config: OpenClawConfig;
@@ -294,6 +303,36 @@ function injectBaseHref(html: string): string {
 }
 
 async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<string | undefined> {
+  const cacheKey = JSON.stringify({
+    configPath: config.browser?.executablePath?.trim() || "",
+    env: [
+      process.env.OPENCLAW_BROWSER_EXECUTABLE_PATH ?? "",
+      process.env.BROWSER_EXECUTABLE_PATH ?? "",
+      process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? "",
+    ],
+    path: process.env.PATH ?? "",
+  });
+
+  if (executablePathCache?.key === cacheKey) {
+    return await executablePathCache.valuePromise;
+  }
+
+  const valuePromise = resolveBrowserExecutablePathUncached(config).catch((error: unknown) => {
+    if (executablePathCache?.valuePromise === valuePromise) {
+      executablePathCache = null;
+    }
+    throw error;
+  });
+  executablePathCache = {
+    key: cacheKey,
+    valuePromise,
+  };
+  return await valuePromise;
+}
+
+async function resolveBrowserExecutablePathUncached(
+  config: OpenClawConfig,
+): Promise<string | undefined> {
   const configPath = config.browser?.executablePath?.trim();
   if (configPath) {
     await assertExecutable(configPath, "browser.executablePath");
@@ -324,33 +363,42 @@ async function resolveBrowserExecutablePath(config: OpenClawConfig): Promise<str
 }
 
 async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLease> {
+  const executablePath = await resolveBrowserExecutablePath(config);
+  const desiredKey = executablePath || SHARED_BROWSER_KEY;
+  if (sharedBrowserState && sharedBrowserState.key !== desiredKey) {
+    await closeSharedBrowser();
+  }
+
   if (!sharedBrowserState) {
-    // Browser selection changes take effect after the shared browser's idle close.
-    const browserPromise = resolveBrowserExecutablePath(config)
-      .then((executablePath) =>
-        chromium.launch({
-          headless: true,
-          ...(executablePath ? { executablePath } : {}),
-          args: ["--disable-dev-shm-usage"],
-        }),
-      )
+    const browserPromise = chromium
+      .launch({
+        headless: true,
+        ...(executablePath ? { executablePath } : {}),
+        args: ["--disable-dev-shm-usage"],
+      })
       .then((browser) => {
-        browser.on("disconnected", () => {
-          if (sharedBrowserState?.browserPromise === browserPromise) {
-            clearIdleTimer(sharedBrowserState);
-            sharedBrowserState = null;
-          }
-        });
+        if (sharedBrowserState?.browserPromise === browserPromise) {
+          sharedBrowserState.browser = browser;
+          browser.on("disconnected", () => {
+            if (sharedBrowserState?.browser === browser) {
+              clearIdleTimer(sharedBrowserState);
+              sharedBrowserState = null;
+            }
+          });
+        }
         return browser;
       })
       .catch((error: unknown) => {
-        sharedBrowserState = null;
+        if (sharedBrowserState?.browserPromise === browserPromise) {
+          sharedBrowserState = null;
+        }
         throw error;
       });
 
     sharedBrowserState = {
       browserPromise,
       idleTimer: null,
+      key: desiredKey,
       users: 0,
     };
   }
@@ -360,10 +408,15 @@ async function acquireSharedBrowser(config: OpenClawConfig): Promise<BrowserLeas
   const browser = await state.browserPromise;
   state.users += 1;
 
+  let released = false;
   return {
     browser,
     release: async () => {
-      state.users -= 1;
+      if (released) {
+        return;
+      }
+      released = true;
+      state.users = Math.max(0, state.users - 1);
       if (state.users === 0) {
         scheduleIdleBrowserClose(state);
       }
@@ -396,7 +449,7 @@ async function closeSharedBrowser(): Promise<void> {
   }
   sharedBrowserState = null;
   clearIdleTimer(state);
-  const browser = await state.browserPromise.catch(() => null);
+  const browser = state.browser ?? (await state.browserPromise.catch(() => null));
   await browser?.close().catch(() => {});
 }
 

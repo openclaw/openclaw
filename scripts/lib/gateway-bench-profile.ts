@@ -3,7 +3,6 @@ import { existsSync, readFileSync } from "node:fs";
 import type { HeapProfiler, Profiler } from "node:inspector";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { WorkerMessageMetric } from "../../src/infra/worker-message-metrics.ts";
 import type { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 
 export const GATEWAY_PROFILE_CHANNEL = "openclaw-gateway-bench-profile";
@@ -59,20 +58,13 @@ export type GatewayCpuProfile = ReturnType<typeof readGatewayCpuProfile>;
 type GatewayProfileArtifacts = {
   diagnosticsPath?: string;
   diagnostics?: ReturnType<ReturnType<typeof startGatewayBenchDiagnostics>>;
-  workerMessages?: WorkerMessageMetric[];
 };
 
 function readProfileArtifacts(profilePath: string): GatewayProfileArtifacts {
   const diagnosticsPath = `${profilePath}.diagnostics.json`;
-  const workerMessagesPath = `${profilePath}.worker-messages.json`;
-  return {
-    ...(existsSync(diagnosticsPath)
-      ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
-      : {}),
-    ...(existsSync(workerMessagesPath)
-      ? { workerMessages: JSON.parse(readFileSync(workerMessagesPath, "utf8")) }
-      : {}),
-  };
+  return existsSync(diagnosticsPath)
+    ? { diagnosticsPath, diagnostics: JSON.parse(readFileSync(diagnosticsPath, "utf8")) }
+    : {};
 }
 
 export async function controlGatewayProfile(

@@ -1,4 +1,3 @@
-import { withSqlitePostCommitPublications } from "../../infra/sqlite-post-commit.js";
 import {
   assertTransactionUsable,
   runSqliteWorkerTransactionSync,
@@ -7,7 +6,6 @@ import {
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../../infra/sqlite-worker-database-context.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
-import { enrollAuthProfileAuthorizationInDatabase } from "./authorization-enrollment.js";
 import { reportCommittedInlineAuthFailure } from "./constants.js";
 import {
   recordInlineAuthFailureInDatabase,
@@ -27,19 +25,12 @@ export function bindSqliteWorkerBackend(
 ): SqliteWorkerBackend<InlineAuthFailureOperations> {
   return {
     execute(command) {
-      if (command.type === "authProfiles.enrollAuthorization") {
-        return runSqliteWorkerTransactionSync(context, () =>
-          enrollAuthProfileAuthorizationInDatabase(context.database, "agent", command.input),
-        );
-      }
       if (command.type === "authProfiles.update") {
         if (!authProfilePeerGenerationMayMatch(context.database, command.input)) {
           return false;
         }
-        withSqlitePostCommitPublications(context.database, () =>
-          runSqliteWorkerTransactionSync(context, () =>
-            updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
-          ),
+        runSqliteWorkerTransactionSync(context, () =>
+          updateAuthProfileStoreInDatabase(context.database, "agent", command.input),
         );
         return true;
       }

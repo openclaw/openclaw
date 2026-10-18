@@ -22,7 +22,7 @@ internal class AccessibilitySnapshotter {
     val root = service.rootInActiveWindow
     val packageName = root?.packageName?.toString()
     val windowTitle = root?.readWindowTitle()
-    val normalized = root?.let(AccessibilityTreeNormalizer::normalize)
+    val normalized = root?.let { AccessibilityTreeNormalizer.normalize(AndroidAccessibilityNode(it)) }
     return AccessibilitySnapshotCapture(
       snapshot =
         MobileUiSnapshot(
@@ -32,62 +32,126 @@ internal class AccessibilitySnapshotter {
           windowTitle = windowTitle,
           nodes = normalized?.nodes.orEmpty(),
         ),
-      nodesByRef = normalized?.retainedNodes.orEmpty(),
+      nodesByRef =
+        normalized
+          ?.retainedNodes
+          ?.mapValues { (_, node) ->
+            (node as AndroidAccessibilityNode).platformNode
+          }.orEmpty(),
     )
   }
 }
 
+internal interface AccessibilityNodeAdapter {
+  val className: String?
+  val text: String?
+  val contentDescription: String?
+  val viewId: String?
+  val boundsInScreen: Rect
+  val clickable: Boolean
+  val editable: Boolean
+  val scrollable: Boolean
+  val enabled: Boolean
+  val focused: Boolean
+  val password: Boolean
+  val inputType: Int
+  val actionIds: List<Int>
+  val childCount: Int
+
+  fun childAt(index: Int): AccessibilityNodeAdapter?
+
+  fun recycle()
+}
+
+private class AndroidAccessibilityNode(
+  val platformNode: AccessibilityNodeInfo,
+) : AccessibilityNodeAdapter {
+  override val className: String?
+    get() = platformNode.className?.toString()
+  override val text: String?
+    get() = platformNode.text?.toString()
+  override val contentDescription: String?
+    get() = platformNode.contentDescription?.toString()
+  override val viewId: String?
+    get() = platformNode.viewIdResourceName
+  override val boundsInScreen: Rect
+    get() = Rect().also(platformNode::getBoundsInScreen)
+  override val clickable: Boolean
+    get() = platformNode.isClickable
+  override val editable: Boolean
+    get() = platformNode.isEditable
+  override val scrollable: Boolean
+    get() = platformNode.isScrollable
+  override val enabled: Boolean
+    get() = platformNode.isEnabled
+  override val focused: Boolean
+    get() = platformNode.isFocused
+  override val password: Boolean
+    get() = platformNode.isPassword
+  override val inputType: Int
+    get() = platformNode.inputType
+  override val actionIds: List<Int>
+    get() = platformNode.actionList.map(AccessibilityNodeInfo.AccessibilityAction::getId)
+  override val childCount: Int
+    get() = platformNode.childCount
+
+  override fun childAt(index: Int): AccessibilityNodeAdapter? = platformNode.getChild(index)?.let(::AndroidAccessibilityNode)
+
+  @Suppress("DEPRECATION")
+  override fun recycle() = platformNode.recycle()
+}
+
 internal data class NormalizedAccessibilityTree(
   val nodes: List<MobileUiNode>,
-  val retainedNodes: Map<String, AccessibilityNodeInfo>,
+  val retainedNodes: Map<String, AccessibilityNodeAdapter>,
 )
 
 internal object AccessibilityTreeNormalizer {
   private data class PendingNode(
-    val node: AccessibilityNodeInfo,
+    val node: AccessibilityNodeAdapter,
     val depth: Int,
     val parentRef: String?,
   )
 
-  fun normalize(root: AccessibilityNodeInfo): NormalizedAccessibilityTree {
+  fun normalize(root: AccessibilityNodeAdapter): NormalizedAccessibilityTree {
     val pending = ArrayDeque<PendingNode>()
     val nodes = mutableListOf<MobileUiNode>()
-    val retained = linkedMapOf<String, AccessibilityNodeInfo>()
+    val retained = linkedMapOf<String, AccessibilityNodeAdapter>()
     pending.addLast(PendingNode(root, depth = 0, parentRef = null))
     var discoveredNodeCount = 1
 
-    var current: AccessibilityNodeInfo? = null
+    var current: AccessibilityNodeAdapter? = null
     try {
       while (pending.isNotEmpty()) {
         val item = pending.removeLast()
         current = item.node
-        val bounds = Rect().also(current::getBoundsInScreen)
-        val rawText = current.text?.toString()
-        val rawDescription = current.contentDescription?.toString()
+        val bounds = current.boundsInScreen
+        val rawText = current.text
+        val rawDescription = current.contentDescription
         val include =
           (bounds.width() > 0 && bounds.height() > 0) ||
             !rawText.isNullOrEmpty() ||
             !rawDescription.isNullOrEmpty() ||
-            current.isClickable
+            current.clickable
         val ref = if (include) "n${nodes.size}" else item.parentRef
-        val sensitive = shouldRedactText(current.isPassword, current.isEditable, current.inputType)
+        val sensitive = shouldRedactText(current.password, current.editable, current.inputType)
 
         if (include) {
           nodes +=
             MobileUiNode(
               ref = checkNotNull(ref),
               parentRef = item.parentRef,
-              role = stableRole(current.className?.toString(), current.isClickable, current.isEditable),
+              role = stableRole(current.className, current.clickable, current.editable),
               text = normalizeNodeText(rawText, sensitive),
               contentDescription = normalizeNodeText(rawDescription, sensitive),
-              viewId = truncateNodeText(current.viewIdResourceName),
-              boundsInScreen = bounds,
-              clickable = current.isClickable,
-              editable = current.isEditable,
-              scrollable = current.isScrollable,
-              enabled = current.isEnabled,
-              focused = current.isFocused,
-              actions = stableActionNames(current.actionList.map(AccessibilityNodeInfo.AccessibilityAction::getId)),
+              viewId = truncateNodeText(current.viewId),
+              boundsInScreen = Rect(bounds),
+              clickable = current.clickable,
+              editable = current.editable,
+              scrollable = current.scrollable,
+              enabled = current.enabled,
+              focused = current.focused,
+              actions = stableActionNames(current.actionIds),
             )
         }
 
@@ -97,7 +161,7 @@ internal object AccessibilityTreeNormalizer {
           val childSlotsToInspect = minOf(current.childCount, remainingTraversalBudget)
           for (index in childSlotsToInspect - 1 downTo 0) {
             discoveredNodeCount += 1
-            current.getChild(index)?.let { child ->
+            current.childAt(index)?.let { child ->
               pending.addLast(PendingNode(child, depth = item.depth + 1, parentRef = ref))
             }
           }
@@ -106,25 +170,21 @@ internal object AccessibilityTreeNormalizer {
         if (include) {
           retained[checkNotNull(ref)] = current
         } else {
-          recycle(current)
+          current.recycle()
         }
         current = null
         if (reachedNodeLimit) break
       }
     } catch (error: Throwable) {
-      current?.let(::recycle)
-      retained.values.forEach(::recycle)
-      pending.forEach { recycle(it.node) }
+      current?.recycle()
+      retained.values.forEach(AccessibilityNodeAdapter::recycle)
+      pending.forEach { it.node.recycle() }
       throw error
     }
 
-    pending.forEach { recycle(it.node) }
+    pending.forEach { it.node.recycle() }
     return NormalizedAccessibilityTree(nodes = nodes, retainedNodes = retained)
   }
-
-  // Android 31–32 still pool nodes; recycle became a no-op only in API 33.
-  @Suppress("DEPRECATION")
-  private fun recycle(node: AccessibilityNodeInfo) = node.recycle()
 }
 
 internal fun shouldRedactText(

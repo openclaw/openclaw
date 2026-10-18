@@ -19,8 +19,6 @@ export {
   isImageWithMediaPayload,
 } from "@openclaw/ai/internal/shared";
 export {
-  buildGoogleGenerationConfig,
-  buildGoogleSimpleThinking,
   coerceTransportToolCallArguments,
   consumeGoogleGenerateContentStream,
   convertGoogleTools,

@@ -84,15 +84,15 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
     return;
   }
   if (userVersion === 1) {
-    runSqliteImmediateTransactionSync(database, () =>
-      database.exec(`
+    database.exec(`
+      BEGIN IMMEDIATE;
       ALTER TABLE quarantined_databases ADD COLUMN verified_generation TEXT;
       PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
-    `),
-    );
+      COMMIT;
+    `);
   } else if (userVersion !== OPENCLAW_QUARANTINE_SCHEMA_VERSION) {
-    runSqliteImmediateTransactionSync(database, () =>
-      database.exec(`
+    database.exec(`
+    BEGIN IMMEDIATE;
     CREATE TABLE IF NOT EXISTS quarantined_databases (
       path TEXT NOT NULL PRIMARY KEY,
       kind TEXT NOT NULL,
@@ -102,8 +102,8 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
       verified_generation TEXT
     ) STRICT;
     PRAGMA user_version = ${OPENCLAW_QUARANTINE_SCHEMA_VERSION};
-    `),
-    );
+    COMMIT;
+    `);
   }
   // Preserve the released v2 layout. Runtime receipts now live in file seals;
   // removing this inert table belongs to a future schema migration.
@@ -117,8 +117,14 @@ function configureQuarantineWriter(database: DatabaseSync, storePath: string): v
   });
 }
 
-function readQuarantineSchemaVersion(database: DatabaseSync, storePath: string): number {
-  const admitted = getSqliteDatabaseAdmission(database, quarantineSchemaAdmission);
+function readQuarantineSchemaVersion(
+  database: DatabaseSync,
+  storePath: string,
+  fresh = false,
+): number {
+  const admitted = fresh
+    ? undefined
+    : getSqliteDatabaseAdmission(database, quarantineSchemaAdmission);
   if (admitted) {
     return admitted.version;
   }
@@ -182,7 +188,7 @@ function readOpenClawDatabaseQuarantine(
   options: { env?: NodeJS.ProcessEnv; fresh?: true } = {},
 ): OpenClawDatabaseQuarantine | undefined {
   const storePath = resolveQuarantineStorePath(options.env ?? process.env);
-  const load = () => readPersistedQuarantineDecision(pathname, storePath) ?? null;
+  const load = () => readPersistedQuarantineDecision(pathname, storePath, options.fresh) ?? null;
   const decision = options.fresh
     ? load()
     : getOrLoadSqliteDatabaseAdmissionForPath(
@@ -196,6 +202,7 @@ function readOpenClawDatabaseQuarantine(
 function readPersistedQuarantineDecision(
   pathname: string,
   storePath: string,
+  fresh = false,
 ): QuarantineDecision | undefined {
   if (!existsSync(storePath)) {
     return undefined;
@@ -205,7 +212,7 @@ function readPersistedQuarantineDecision(
   });
   let outcome: { value: QuarantineDecision | undefined } | { error: unknown };
   try {
-    outcome = { value: readQuarantineDecision(database, pathname, storePath) };
+    outcome = { value: readQuarantineDecision(database, pathname, storePath, fresh) };
   } catch (error) {
     outcome = { error };
   }
@@ -236,8 +243,9 @@ function readQuarantineDecision(
   database: DatabaseSync,
   pathname: string,
   storePath: string,
+  fresh = false,
 ): QuarantineDecision | undefined {
-  const userVersion = readQuarantineSchemaVersion(database, storePath);
+  const userVersion = readQuarantineSchemaVersion(database, storePath, fresh);
   if (userVersion === 0) {
     return undefined;
   }

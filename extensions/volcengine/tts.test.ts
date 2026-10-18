@@ -81,18 +81,18 @@ describe("Volcengine speech provider", () => {
     vi.unstubAllEnvs();
   });
 
-  it("reports configured for legacy appId and token in providerConfig", async () => {
+  it("reports configured for legacy appId and token in providerConfig", () => {
     expect(
-      await provider.isConfiguredAsync?.({
+      provider.isConfigured({
         providerConfig: { appId: "test-app-id", token: "test-token" },
         timeoutMs: 30000,
       }),
     ).toBe(true);
   });
 
-  it("falls back to env vars for credentials", async () => {
+  it("falls back to env vars for credentials", () => {
     vi.stubEnv("BYTEPLUS_SEED_SPEECH_API_KEY", "env-api-key");
-    expect(await provider.isConfiguredAsync?.({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
+    expect(provider.isConfigured({ providerConfig: {}, timeoutMs: 30000 })).toBe(true);
   });
 
   it("rejects blank Seed and legacy credentials before requests", async () => {
@@ -101,7 +101,7 @@ describe("Volcengine speech provider", () => {
     }
     const providerConfig = { apiKey: "   ", appId: "   ", token: "   " };
 
-    expect(await provider.isConfiguredAsync?.({ providerConfig, timeoutMs: 30_000 })).toBe(false);
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 30_000 })).toBe(false);
     await expect(
       provider.synthesize({
         text: "hello",

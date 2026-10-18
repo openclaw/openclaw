@@ -454,7 +454,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
               <div class="exec-approval-sub">${description}</div>
             </div>
           </div>
-          <openclaw-modal-actions class="exec-approval-actions">
+          <div class="exec-approval-actions">
             <button
               class="btn primary"
               type="button"
@@ -470,7 +470,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
             >
               ${t("common.cancel")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </div>
       </openclaw-modal-dialog>
     `;

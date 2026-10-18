@@ -18,7 +18,6 @@ export function startCloseWorkerPoolResources<Input, Output>(
   retire: (slot: Slot<Input, Output>) => RetainedOperation<void>,
   key?: string,
   options?: WorkerTaskPoolOwnerOptions,
-  observeReply?: () => void,
 ): RetainedOperation<void> {
   const operations = [...slots].map((slot) => {
     if (slot.retiring) {
@@ -37,7 +36,7 @@ export function startCloseWorkerPoolResources<Input, Output>(
     closure.pending++;
     resourceClosures.set(worker, closure);
     worker.ref();
-    return startCloseWorkerTaskResources(slot, worker, closure, key, options, retire, observeReply);
+    return startCloseWorkerTaskResources(slot, worker, closure, key, options, retire);
   });
   const completion = createRetainedOperation<void>(() => {
     for (const operation of operations) {
@@ -105,7 +104,6 @@ function startCloseWorkerTaskResources<Input, Output>(
   key: string | undefined,
   options: WorkerTaskPoolOwnerOptions | undefined,
   retire: (slot: Slot<Input, Output>) => RetainedOperation<void>,
-  observeReply?: () => void,
 ): RetainedOperation<void> {
   const { port1, port2 } = new MessageChannel();
   const runInContext = AsyncLocalStorage.snapshot();
@@ -159,7 +157,6 @@ function startCloseWorkerTaskResources<Input, Output>(
       }
     });
   const receive = (reply: unknown) => {
-    observeReply?.();
     try {
       if (isRecord(reply) && reply.ok === true) {
         finish();

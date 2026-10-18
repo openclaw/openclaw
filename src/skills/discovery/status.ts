@@ -4,7 +4,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareBinaryAvailability } from "../../shared/config-eval.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
-import { isOsRequirementSatisfied } from "../../shared/requirements.js";
 import { CONFIG_DIR } from "../../utils.js";
 import { prepareSkillLibrarySelection } from "../library/selection.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
@@ -121,13 +120,16 @@ function normalizeInstallOptions(
   platform: string,
 ): SkillInstallOption[] {
   // Recipes execute where the workspace dependencies live.
-  if (!isOsRequirementSatisfied(entry.metadata?.os ?? [], [platform])) {
+  const requiredOs = entry.metadata?.os ?? [];
+  if (requiredOs.length > 0 && !requiredOs.includes(platform)) {
     return [];
   }
 
   const install = entry.metadata?.install ?? [];
-  const supportsPlatform = (spec: SkillInstallSpec) =>
-    isOsRequirementSatisfied(spec.os ?? [], [platform]);
+  const supportsPlatform = (spec: SkillInstallSpec) => {
+    const osList = spec.os ?? [];
+    return osList.length === 0 || osList.includes(platform);
+  };
   const filtered = install.filter(supportsPlatform);
 
   const toOption = (spec: SkillInstallSpec, index: number): SkillInstallOption => {

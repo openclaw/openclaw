@@ -29,13 +29,12 @@ const coreText = (origin: string) =>
 function containedFixture(
   command: CommandFixture,
   groups: readonly string[] = TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-  extraEntrypoints: readonly string[] = [],
 ) {
   const ancestor = fs.realpathSync.native(
     command.createTempDir("openclaw-declaration-resolution-"),
   );
   const root = path.join(ancestor, ".claude/worktrees/validation");
-  const fixture = createFixture(command, groups, root, extraEntrypoints);
+  const fixture = createFixture(command, groups, root);
   const ancestorPackage = path.join(ancestor, "node_modules/@types/synthetic-core");
   const ancestorInput = path.join(ancestorPackage, "index.d.ts");
   const wrapper = "node_modules/.pnpm/wrapper/node_modules/@types/synthetic-wrapper";
@@ -102,13 +101,15 @@ describe("tsdown checkout declaration resolution", () => {
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root, write } = containedFixture(command, undefined, [
-        "scripts/build-workspace-package.mts",
-      ]);
+      const { root, write } = containedFixture(command);
       fs.symlinkSync(
         fs.realpathSync("node_modules/semver"),
         path.join(root, "node_modules/semver"),
         "junction",
+      );
+      write(
+        "scripts/build-workspace-package.mts",
+        fs.readFileSync("scripts/build-workspace-package.mts", "utf8"),
       );
       const manifest = JSON.parse(
         fs.readFileSync("packages/gateway-client/package.json", "utf8"),
@@ -561,7 +562,8 @@ console.log("cold sibling ownership and fresh build isolation verified");
     ["node", "workspace", "AI"].flatMap((owner) => [true, false].map((dts) => ({ owner, dts }))),
   )("honors resolved dts=$dts over the opposite $owner default", ({ owner, dts }, { command }) =>
     command.lifetime.run(async () => {
-      const { root } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
+      const { root, write } = containedFixture(command);
+      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
       const outside = path.join(path.dirname(root), "runtime.ts");
       fs.writeFileSync(outside, 'export const runtimeValue = "outside-runtime";');
       const result = await runFixtureModule(
@@ -582,7 +584,7 @@ const owner = ${JSON.stringify(owner)};
 const config = owner === "AI" ? ai : configs.find(config => config.outDir ===
   (owner === "node" ? "packages/agent-core/dist" : "packages/gateway-protocol/dist"));
 assert.ok(config);
-assert.deepEqual(config.dts, ${dts ? "false" : '{ tsconfig: "tsconfig.packages.json" }'});
+assert.equal(config.dts, ${!dts});
 // The build API's cwd, rather than the importing process's cwd, owns inputs.
 process.chdir(path.dirname(root));
 let finishedRuntime;
@@ -650,7 +652,8 @@ console.log("resolved declaration override honored");
     command,
   }) =>
     command.lifetime.run(async () => {
-      const { root, write } = containedFixture(command, undefined, ["tsdown.ai.config.ts"]);
+      const { root, write } = containedFixture(command);
+      write("tsdown.ai.config.ts", fs.readFileSync("tsdown.ai.config.ts", "utf8"));
       write(
         "src/second.ts",
         'import "synthetic-wrapper"; export const secondOrigin = declarationOrigin;',

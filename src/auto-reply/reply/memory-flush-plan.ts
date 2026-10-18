@@ -85,7 +85,7 @@ export function resolveMemoryFlushPlanForRun(
   if (!timing) {
     return null;
   }
-  const resolution = resolveMemoryFlushPlan({ ...params, nowMs: params.nowMs ?? Date.now() });
+  const resolution = resolveMemoryFlushPlan(params);
   if (resolution && isToolsMemoryFlushPlan(resolution.plan) && !resolution.selectedSlotOwner) {
     log.warn(
       `memory flush skipped: plugin "${resolution.pluginId}" supplied a tools-arm plan but is not the selected memory slot owner`,

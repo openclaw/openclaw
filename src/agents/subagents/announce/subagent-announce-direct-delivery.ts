@@ -62,7 +62,7 @@ import {
   loadRequesterSessionEntry,
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
-  withSubagentRequesterDelivery,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 import { createDirectAnnounceResponseClassifier } from "./subagent-announce-direct-response.js";
 import {
@@ -123,10 +123,23 @@ function completionHandoffPendingResult(): SubagentAnnounceDeliveryResult {
 export async function sendSubagentAnnounceDirectly(
   params: SubagentAnnounceDirectParams,
 ): Promise<SubagentAnnounceDeliveryResult> {
-  return withSubagentRequesterDelivery(
+  return withSubagentRequesterSource(
     params.targetRequesterSessionKey,
-    params,
-    sendSubagentAnnounceDirectlyBound,
+    params.requesterAgentId,
+    async (
+      isRequesterCurrent,
+    ): Promise<Awaited<ReturnType<typeof sendSubagentAnnounceDirectly>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return sendSubagentAnnounceDirectlyBound(guardedParams);
+    },
   );
 }
 
@@ -475,12 +488,6 @@ async function sendSubagentAnnounceDirectlyBound(
               }
               return await runAnnounceAgentCall({
                 agentParams: directAgentParams,
-                // Individual result delivery and an owed public synthesis remain
-                // required; optional settle intake may complete without repeating it.
-                replyExpectation:
-                  params.expectsCompletionMessage || params.requireVisibleReply
-                    ? "required"
-                    : "optional",
                 // A resumed parent has no inbound channel dispatcher to keep activity visible.
                 typing:
                   sourceToolId === "subagent_settle" &&

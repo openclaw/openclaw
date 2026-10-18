@@ -493,7 +493,6 @@ export async function resolveOpenAIQuicksilverBridgeAuth(
   );
 }
 
-// Retained for public synchronous SDK calls through 2026-12-31.
 export function hasOpenAIRealtimePlatformAuthInput(
   params: Parameters<typeof resolveOpenAIRealtimePlatformAuth>[0],
   {
@@ -589,7 +588,7 @@ export async function hasOpenAIChatGptSubscriptionAuthInputAsync(
     cfg: params.cfg,
     agentDir:
       params.cfg && params.agentId ? resolveAgentDir(params.cfg, params.agentId) : undefined,
-    profileTypes: OPENAI_CHATGPT_SUBSCRIPTION_PROFILE_TYPES,
+    profileTypes: ["oauth"],
     includeExternalCliAuth: false,
   });
 }

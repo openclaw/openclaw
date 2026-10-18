@@ -62,7 +62,6 @@ export type MenuNavigationOptions = {
   surface?: "menu" | "listbox";
   /** Searchable lists keep focus in their input while Zag moves the highlight. */
   focus?: "item" | "retain";
-  pointerFocus?: () => "menu" | "trigger";
   items?: () => readonly { value: string; disabled?: boolean }[];
   value?: () => string | null;
 };
@@ -113,16 +112,6 @@ export function useMenuMachine(
   const computed = machine.computed!;
   const adapted: typeof machine = {
     ...machine,
-    // The overlay subscription below owns controlled visibility. Keep the
-    // remaining Zag watchers without dispatching each open change twice.
-    watch({ track, action, context }) {
-      track([() => context.get("isSubmenu")], () => action(["setSubmenuPlacement"]));
-      track([() => context.hash("anchorPoint")], () => {
-        if (context.get("anchorPoint")) {
-          action(["reposition"]);
-        }
-      });
-    },
     computed: {
       ...computed,
       highlightedId(params) {
@@ -253,16 +242,9 @@ export function useMenuMachine(
     // Zag's default link click is not cancelable; native click keeps selection vetoable.
     navigate: ({ node }) => queueMicrotask(() => node.click()),
   };
-  // Keep one current input snapshot. Vanilla updateProps retains every prior
-  // source, making each subsequent prop read replay the whole update history.
-  const service = new VanillaMachine(adapted, () => props);
+  const service = new VanillaMachine(adapted, props);
+  createEffect(direction, (dir) => service.updateProps({ ...props, dir, open: overlay.open }));
   const [revision, setRevision] = createSignal(0);
-  createEffect(direction, (dir) => {
-    if (props.dir !== dir) {
-      props.dir = dir;
-      setRevision((n) => n + 1);
-    }
-  });
   const read = () => {
     revision();
     return connect(service.service, normalizer);
@@ -273,15 +255,10 @@ export function useMenuMachine(
       focusItem(state);
     });
     const stopOpen = overlay.subscribe((open) => {
-      props.dir = untrack(direction);
-      props.open = open;
-      // Deliver the same controlled transition as the menu open-prop watcher,
-      // preserving the event that selected keyboard opening/closing behavior.
-      service.send({
-        type: open ? "CONTROLLED.OPEN" : "CONTROLLED.CLOSE",
-        previousEvent: service.service.event,
-      });
-      if (open && options.items) {
+      service.updateProps({ ...props, dir: untrack(direction), open });
+      if (!open) {
+        service.send({ type: "CONTROLLED.CLOSE" });
+      } else if (options.items) {
         untrack(() => {
           const enabled = options.items!().filter((item) => !item.disabled);
           service.send({
@@ -409,20 +386,14 @@ export function useMenuMachine(
       return {
         ...result,
         onClick: (event: MouseEvent) => {
-          const anchor = event.currentTarget;
-          if (anchor instanceof HTMLAnchorElement) {
+          if (event.currentTarget instanceof HTMLAnchorElement) {
             if (disabled) {
               event.preventDefault();
               return;
             }
-            if (
-              !shouldHandleNavigationClick(event) ||
-              (anchor.target !== "" && anchor.target !== "_self") ||
-              anchor.hasAttribute("download")
-            ) {
+            if (!shouldHandleNavigationClick(event)) {
               return;
             }
-            // Selection is queued; prevent navigation now so its cancelable event can veto it.
             event.preventDefault();
           }
           result.onClick?.(event);
@@ -460,10 +431,7 @@ export function useMenuMachine(
           if (disabled) {
             return;
           }
-          focusFromKeyboard = event.detail === 0 || options.pointerFocus?.() !== "trigger";
-          if (!focusFromKeyboard) {
-            overlay.trigger?.focus({ preventScroll: true });
-          }
+          focusFromKeyboard = true;
           result.onClick?.(event);
         },
         onKeyDown: (e: KeyboardEvent) => {

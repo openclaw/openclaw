@@ -6,10 +6,8 @@ import { t } from "../../lib/reactive/i18n.ts";
 import type { PluginInstallPolicyWarningDetails } from "./install-policy-warning.ts";
 
 export type PluginRowMessage = {
-  kind: "error" | "warning" | "info";
+  kind: "error" | "warning";
   text: string;
-  link?: { href: string; text: string };
-  details?: JSX.Element;
   savedInstall?: string;
   installPolicyWarning?: {
     details: PluginInstallPolicyWarningDetails;
@@ -36,22 +34,13 @@ export function renderPluginRowMessage(
         "oc-banner",
         {
           "oc-banner-error": message.kind === "error",
-          "oc-banner-warning": message.kind === "warning",
+          "oc-banner-warning": message.kind !== "error",
         },
       ]}
       role={message.kind === "error" || message.installPolicyWarning ? "alert" : "status"}
     >
       <div>
         {message.text}
-        {message.link ? (
-          <>
-            {" "}
-            <a href={message.link.href} target="_blank" rel="noopener noreferrer">
-              {message.link.text}
-            </a>
-          </>
-        ) : undefined}
-        {message.details}
         {message.installPolicyWarning ? (
           <>
             <p>{t("pluginConsent.installPolicy.policyScope")}</p>

@@ -1,8 +1,3 @@
-import { registerSessionMaintenancePreserveKeysProvider } from "../../config/sessions/store-maintenance-preserve.js";
-import {
-  sessionChanges,
-  sessionChangeScopeAffectsStoredRows,
-} from "../../sessions/session-row-changes.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./placement-target.js";
@@ -38,49 +33,6 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
   };
   const invalidateAll = () => {
     fullScanPending = true;
-  };
-  const installMaintenancePreservation = (
-    placements: Pick<WorkerSessionPlacementStore, "prepareMaintenancePlacements">,
-  ) => {
-    const unsubscribeFacts = sessionChanges.subscribeFacts((change) => {
-      if ("all" in change) {
-        if (
-          change.scope === "config" ||
-          change.scope === "worker-environments" ||
-          sessionChangeScopeAffectsStoredRows(change)
-        ) {
-          invalidateAll();
-        }
-      } else if (
-        change.factsInvalidated === true &&
-        change.scope !== "transcript" &&
-        sessionChangeScopeAffectsStoredRows(change)
-      ) {
-        // Unknown storage outcomes have no committed identity to enqueue.
-        invalidateAll();
-      }
-    });
-    const unregisterPreservation = registerSessionMaintenancePreserveKeysProvider(async () => {
-      const prepared = await placements.prepareMaintenancePlacements();
-      return {
-        // Session evidence survives until its remote owner is reclaimed or proven gone.
-        capture: () =>
-          prepared.placements.flatMap((placement) =>
-            placement.state === "failed" &&
-            isFailedWorkerPlacementEnvironmentGone({
-              environmentService: deps.environments,
-              placement,
-            })
-              ? []
-              : [placement.sessionKey],
-          ),
-        dispose: prepared.release,
-      };
-    });
-    return () => {
-      unsubscribeFacts();
-      unregisterPreservation();
-    };
   };
   const retireCurrent = async (placement: WorkerSessionPlacementRecord): Promise<boolean> => {
     if (placement.turnClaim) {
@@ -202,5 +154,5 @@ export function createPlacementSessionRetirement(deps: PlacementSessionRetiremen
     }
   };
 
-  return { reconcile, markPending, installMaintenancePreservation };
+  return { reconcile, markPending, invalidateAll };
 }

@@ -22,11 +22,11 @@ export function renderContinueInTerminalDialog(params: { command: string; onClos
         <p class="continue-in-terminal-dialog__note">
           ${t("chat.sessionHeader.continueInTerminal.authNote")}
         </p>
-        <openclaw-modal-actions class="exec-approval-actions">
+        <footer class="exec-approval-actions">
           <button type="button" class="btn primary" @click=${params.onClose}>
             ${t("common.close")}
           </button>
-        </openclaw-modal-actions>
+        </footer>
       </section>
     </openclaw-modal-dialog>
   `;

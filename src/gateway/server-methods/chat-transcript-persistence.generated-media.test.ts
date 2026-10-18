@@ -31,7 +31,6 @@ async function withTranscriptFixture(
     };
     mediaBlock: Record<string, unknown>;
   }) => Promise<void>,
-  singleText = false,
 ): Promise<void> {
   await withOpenClawTestState({ label: "generated-media-transcript" }, async (state) => {
     setRuntimeConfigSnapshot({});
@@ -54,8 +53,6 @@ async function withTranscriptFixture(
       alt: "generated-sheet.png",
       mimeType: "image/png",
     };
-    const warning = { type: "text", text: "Synthetic attachment warning." };
-    const mediaGroup = singleText ? [mediaBlock, warning] : [mediaBlock];
     const messages = [
       {
         eventId: "older-answer",
@@ -96,20 +93,12 @@ async function withTranscriptFixture(
         eventId: MESSAGE_ID,
         message: {
           role: "assistant",
-          content: singleText
-            ? [
-                {
-                  type: "text",
-                  text: `[[reply_to_current]]\nHere are four options.\nMEDIA:${mediaUrl}\nMEDIA:${mediaUrl}\nPick 1, 2, 3, or 4.`,
-                  textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
-                },
-              ]
-            : [
-                { type: "thinking", thinking: "Synthetic reasoning.", thinkingSignature: "opaque" },
-                { type: "text", text: "Here are four options.\n", textSignature: "signed-caption" },
-                { type: "text", text: `MEDIA:${mediaUrl}`, textSignature: "signed-media" },
-                { type: "text", text: "\nPick 1, 2, 3, or 4.", textSignature: "signed-choice" },
-              ],
+          content: [
+            { type: "thinking", thinking: "Synthetic reasoning.", thinkingSignature: "opaque" },
+            { type: "text", text: "Here are four options.\n", textSignature: "signed-caption" },
+            { type: "text", text: `MEDIA:${mediaUrl}`, textSignature: "signed-media" },
+            { type: "text", text: "\nPick 1, 2, 3, or 4.", textSignature: "signed-choice" },
+          ],
           stopReason: "stop",
           openclawDelivery: { replyToCurrent: true },
           __openclaw: { runId: RUN_ID },
@@ -163,16 +152,7 @@ async function withTranscriptFixture(
           scope,
           runId,
           expectedLifecycleRevision: lifecycleRevision,
-          content: [
-            {
-              type: "text",
-              text: singleText
-                ? "Here are four options.\nPick 1, 2, 3, or 4."
-                : "Here are four options.\n\n\nPick 1, 2, 3, or 4.",
-            },
-            ...mediaGroup,
-          ],
-          mediaBySource: new Map([[mediaUrl, mediaGroup]]),
+          content: [mediaBlock],
           mediaUrls: [mediaUrl],
         }),
     });
@@ -181,7 +161,7 @@ async function withTranscriptFixture(
 
 describe("generated-media transcript enrichment", () => {
   it.each([null, "initial-revision"])(
-    "keeps a joined caption across authored blocks ordered without duplication through replay (revision=%s)",
+    "enriches only its run's reply and preserves model bytes through replay (revision=%s)",
     async (revision) => {
       await withTranscriptFixture(revision, async ({ enrich, snapshot, mediaBlock }) => {
         const before = snapshot();
@@ -221,14 +201,6 @@ describe("generated-media transcript enrichment", () => {
             "Here are four options.",
             "Pick 1, 2, 3, or 4.",
           ]);
-          expect(
-            display.flatMap((block) => {
-              if (!isRecord(block) || block.type === "thinking") {
-                return [];
-              }
-              return [typeof block.text === "string" ? block.text.trim() : block.type];
-            }),
-          ).toEqual(["Here are four options.", "image", "Pick 1, 2, 3, or 4."]);
         }
 
         await expect(enrich()).resolves.toEqual({ messageId: MESSAGE_ID });
@@ -236,44 +208,6 @@ describe("generated-media transcript enrichment", () => {
       });
     },
   );
-
-  it("keeps a signed single-text reply, duplicate directives, and its warning ordered through replay", async () => {
-    await withTranscriptFixture(
-      "initial-revision",
-      async ({ enrich, snapshot }) => {
-        const before = snapshot();
-        await enrich();
-        const after = snapshot();
-        const original = before.rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
-        const rewritten = after.rows.find((row) => row.event.id === MESSAGE_ID)?.event.message;
-        if (
-          !isRecord(original) ||
-          !isRecord(rewritten) ||
-          !Array.isArray(rewritten.openclawDisplayContent)
-        ) {
-          throw new Error("completion display missing");
-        }
-        expect(rewritten.content).toEqual(original.content);
-        expect(
-          rewritten.openclawDisplayContent.map((block) =>
-            isRecord(block) && typeof block.text === "string"
-              ? block.text.trim()
-              : isRecord(block)
-                ? block.type
-                : undefined,
-          ),
-        ).toEqual([
-          "Here are four options.",
-          "image",
-          "Synthetic attachment warning.",
-          "Pick 1, 2, 3, or 4.",
-        ]);
-        await enrich();
-        expect(snapshot()).toEqual(after);
-      },
-      true,
-    );
-  });
 
   it("leaves the transcript unchanged when the requested run has no assistant reply", async () => {
     await withTranscriptFixture("initial-revision", async ({ enrich, snapshot }) => {

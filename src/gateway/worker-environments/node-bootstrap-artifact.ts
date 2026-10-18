@@ -25,7 +25,14 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
           temporaryRoot = await fs.mkdtemp(
             path.join(resolvePreferredOpenClawTmpDir(), "openclaw-node-runtime-"),
           );
-          return await prepareNodeBootstrapArtifactInWorker(options, temporaryRoot);
+          if (closed) {
+            throw new Error("Node bootstrap artifact provider is closed");
+          }
+          const artifact = await prepareNodeBootstrapArtifactInWorker(options, temporaryRoot);
+          if (closed) {
+            throw new Error("Node bootstrap artifact provider is closed");
+          }
+          return artifact;
         } catch (error) {
           if (temporaryRoot) {
             await fs.rm(temporaryRoot, { recursive: true, force: true });
@@ -36,7 +43,12 @@ export function createNodeBootstrapArtifactProvider(options: NodeBootstrapArtifa
         }
       });
       // Cancellation releases this consumer; process shutdown still drains the shared producer.
-      return racePromiseWithAbortSignal(prepared, signal);
+      const artifact = await racePromiseWithAbortSignal(prepared, signal);
+      signal?.throwIfAborted();
+      if (closed) {
+        throw new Error("Node bootstrap artifact provider is closed");
+      }
+      return artifact;
     },
     async close(): Promise<void> {
       closed = true;

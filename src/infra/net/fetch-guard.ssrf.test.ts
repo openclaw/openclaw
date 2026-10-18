@@ -817,14 +817,9 @@ describe("request lifecycle", () => {
     }
   });
 
-  it.each([
-    [undefined, undefined, true],
-    [5_000, undefined, true],
-    [2_000_000, undefined, true],
-    [undefined, 2_000_000, false],
-  ] as const)(
-    "keeps request=%s and stream=%s deadlines separate (pinned=%s)",
-    async (timeoutMs, streamTimeoutMs, pinDns) => {
+  it.each([undefined, 5_000, 2_000_000])(
+    "keeps inherited stream and explicit request deadlines separate (%s)",
+    async (timeoutMs) => {
       const previous = getGlobalDispatcher();
       try {
         ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
@@ -832,23 +827,15 @@ describe("request lifecycle", () => {
         const fetchImpl = fetchStub();
         const beforeRequest = vi.fn();
         const lookupFn = createPublicLookup();
-        const result = await guardedRequest(fetchImpl, {
-          lookupFn,
-          beforeRequest,
-          timeoutMs,
-          streamTimeoutMs,
-          pinDns,
-        });
+        const result = await guardedRequest(fetchImpl, { lookupFn, beforeRequest, timeoutMs });
         expect(lookupFn).toHaveBeenCalledBefore(beforeRequest);
         expect(beforeRequest).toHaveBeenCalledBefore(fetchImpl);
         expect(agentCtor).toHaveBeenCalledWith(
           expect.objectContaining({
             allowH2: false,
-            bodyTimeout: timeoutMs ?? streamTimeoutMs ?? 1_900_000,
-            headersTimeout: timeoutMs ?? streamTimeoutMs ?? 1_900_000,
-            ...(pinDns
-              ? { connect: expect.objectContaining({ lookup: expect.any(Function) }) }
-              : {}),
+            bodyTimeout: timeoutMs ?? 1_900_000,
+            headersTimeout: timeoutMs ?? 1_900_000,
+            connect: expect.objectContaining({ lookup: expect.any(Function) }),
           }),
         );
         if (timeoutMs === undefined) {

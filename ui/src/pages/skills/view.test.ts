@@ -111,10 +111,6 @@ describe("renderSkills", () => {
         "API key (OPENAI_API_KEY)",
       );
       expect(save?.disabled).toBe(disabled);
-      const actions = container.querySelector(".skill-reader-dialog__actions");
-      expect(save?.closest("openclaw-modal-actions")).toBe(actions);
-      expect(actions?.parentElement?.lastElementChild).toBe(actions);
-      expect(container.querySelector(".skill-reader-dialog__body")?.contains(save!)).toBe(false);
 
       save?.click();
 
@@ -194,9 +190,6 @@ describe("renderSkills", () => {
       ),
     ).toContain("bin:any of (claude, codex, opencode)");
     expect(install).toBeInstanceOf(HTMLButtonElement);
-    expect(install?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild).toBe(
-      install?.closest("openclaw-modal-actions"),
-    );
     install!.click();
     expect(onInstall).toHaveBeenCalledWith("coding-agent", "Coding Agent", "node-codex");
   });
@@ -500,7 +493,7 @@ describe("renderSkills", () => {
       Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
     ).toEqual(["rate limited Retry", "Installed github"]);
     expect(normalizeText(container.querySelector(".skill-reader-dialog__body")!)).toBe(
-      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux",
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) · Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
     );
     expect(container.querySelector<HTMLImageElement>(".clawhub-skill-icon--detail")?.src).toBe(
       "blob:clawhub-detail-icon",
@@ -508,32 +501,13 @@ describe("renderSkills", () => {
     expect(container.querySelector(".clawhub-skill-icon--profile")).toBeNull();
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
-      ".skill-reader-dialog__actions .btn.primary",
+      ".skill-reader-dialog__body .btn.primary",
     );
     expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
-    expect(detailInstallButton?.textContent?.trim()).toBe("Install GitHub");
-    expect(
-      detailInstallButton?.closest("openclaw-modal-actions")?.parentElement?.lastElementChild,
-    ).toBe(detailInstallButton?.closest("openclaw-modal-actions"));
     detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
-  });
-
-  it.each([
-    { clawhubDetailLoading: true, clawhubDetailError: null },
-    { clawhubDetailLoading: false, clawhubDetailError: "Unable to read skill" },
-    { clawhubDetailLoading: false, clawhubDetailError: null },
-  ])("keeps unavailable ClawHub details footer-free: %j", async (state) => {
-    const container = createContainer();
-    installDialogMethod("showModal", function (this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    });
-    renderView(container, { clawhubDetailRef: "guide", ...state });
-    await Promise.resolve();
-    expect(container.querySelector(".skill-reader-dialog__body")).not.toBeNull();
-    expect(container.querySelector(".skill-reader-dialog openclaw-modal-actions")).toBeNull();
   });
 
   it("offers install without a detail card for an install-only search result", async () => {
@@ -725,7 +699,10 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
-  it.each([{ loading: true, label: "Refreshing…", warning: false }])(
+  it.each([
+    { loading: true, label: "Refreshing…", warning: false },
+    { loading: false, label: "Unavailable", warning: true },
+  ])(
     "shows $label consistently for a missing ClawHub verdict while loading=$loading",
     async ({ loading, label, warning }) => {
       const container = createContainer();

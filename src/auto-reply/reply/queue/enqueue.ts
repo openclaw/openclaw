@@ -101,11 +101,6 @@ export function enqueueFollowupRun(
   if (dedupeMode !== "none" && isRunAlreadyQueued(run, queue.items)) {
     return false;
   }
-  // Automatic Goal work must not consume the last slot needed by real input.
-  // Capture candidates now, but retire them only after the incoming source is admitted.
-  const supersededGoals = run.goalContinuation
-    ? []
-    : queue.items.filter((item) => item.goalContinuation && !queue.inFlight.has(item));
   // Preserve later prompts while an older steer decides between same-turn
   // delivery and fallback; overflow resumes when the gate resolves.
   const deferOverflow = options.steerCandidate || queue.items.some((item) => item.steerPending);
@@ -115,7 +110,7 @@ export function enqueueFollowupRun(
     !deferOverflow &&
     queue.dropPolicy === "new" &&
     queue.cap > 0 &&
-    countPendingQueueItems(queue.items, queue.inFlight) - supersededGoals.length >= queue.cap
+    countPendingQueueItems(queue.items, queue.inFlight) >= queue.cap
   ) {
     run.onQueueDisposition?.("queue-cap-new");
     completeFollowupRunLifecycle(run);
@@ -123,13 +118,6 @@ export function enqueueFollowupRun(
   }
   if (!markFollowupRunEnqueued(run)) {
     return false;
-  }
-  for (const goal of supersededGoals) {
-    const index = queue.items.indexOf(goal);
-    if (index >= 0 && !queue.inFlight.has(goal)) {
-      queue.items.splice(index, 1);
-      completeFollowupRunLifecycle(goal);
-    }
   }
   if (options.steerCandidate) {
     const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();

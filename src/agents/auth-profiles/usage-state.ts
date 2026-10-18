@@ -1,6 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { resolveProviderManagesOwnAvailability } from "../../plugins/provider-availability-policy.js";
 import { isStringOption } from "../../utils/string-readers.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
@@ -37,67 +36,31 @@ const clearedWindows = Object.fromEntries(
 export function resetAuthProfileFailureState(
   existing: ProfileUsageStats,
   overrides?: Partial<ProfileUsageStats>,
-  successfulModel?: string,
 ): ProfileUsageStats {
   return {
     ...existing,
     errorCount: 0,
     ...clearedWindows,
     failureCounts: undefined,
-    // A sibling model succeeding does not replenish this model's quota.
-    ...(successfulModel && existing.cooldownModel && existing.cooldownModel !== successfulModel
-      ? {
-          cooldownUntil: existing.cooldownUntil,
-          cooldownReason: existing.cooldownReason,
-          cooldownClassification: existing.cooldownClassification,
-          cooldownModel: existing.cooldownModel,
-          errorCount: existing.errorCount,
-          failureCounts: existing.failureCounts,
-        }
-      : {}),
     ...overrides,
   };
 }
 
-/** Only provider-managed transient capacity failures bypass the local cooldown. */
-export function isAuthCooldownBypassedForProvider(
-  provider: string | undefined,
-  reason: AuthProfileFailureReason | undefined,
-): boolean {
-  return (
-    (reason === "rate_limit" || reason === "overloaded") &&
-    resolveProviderManagesOwnAvailability(provider ?? "")
-  );
-}
-
-/** Projects enforced health while preserving stored evidence and permanent failures. */
-export function readAuthProfileUsageStats(
-  store: AuthProfileStore,
-  profileId: string,
-): ProfileUsageStats | undefined {
-  const stats = store.usageStats?.[profileId];
-  if (
-    !stats ||
-    !isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider, stats.cooldownReason)
-  ) {
-    return stats;
-  }
-  return {
-    ...stats,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-  };
+/** Returns true for providers whose auth-profile cooldowns are provider-managed. */
+export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
+  const normalized = normalizeProviderId(provider ?? "");
+  return normalized === "openrouter" || normalized === "kilocode";
 }
 
 export function resolveInlineProviderApiKeyUsageId(provider: string): string {
   return `inline-api-key:${normalizeProviderId(provider)}`;
 }
 
-/** Reads health recorded for the canonical inline API-key identity. */
+/** Reads inline-key health using the same identity and bypass policy as its writer. */
 export function readInlineProviderApiKeyUsage(store: AuthProfileStore, provider: string) {
-  const stats = store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
+  const stats = isAuthCooldownBypassedForProvider(provider)
+    ? undefined
+    : store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
   return { stats, unusableUntil: stats ? resolveProfileUnusableUntil(stats) : null };
 }
 
@@ -202,7 +165,10 @@ export function isProfileInCooldown(
   now?: number,
   forModel?: string | null,
 ): boolean {
-  const stats = readAuthProfileUsageStats(store, profileId);
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return false;
+  }
+  const stats = store.usageStats?.[profileId];
   if (!stats) {
     return false;
   }
@@ -232,7 +198,7 @@ export function getSoonestCooldownExpiry(
   let soonest: number | null = null;
   let latestMatchingModelCooldown: number | null = null;
   for (const id of profileIds) {
-    const stats = readAuthProfileUsageStats(store, id);
+    const stats = store.usageStats?.[id];
     if (!stats) {
       continue;
     }
@@ -336,7 +302,7 @@ export function resolveProfilesUnavailableReason(params: {
   };
 
   for (const profileId of params.profileIds) {
-    const stats = readAuthProfileUsageStats(params.store, profileId);
+    const stats = params.store.usageStats?.[profileId];
     if (!stats) {
       continue;
     }
@@ -402,7 +368,10 @@ export function resolveProfileUnusableUntilForDisplay(
   store: AuthProfileStore,
   profileId: string,
 ): number | null {
-  const stats = readAuthProfileUsageStats(store, profileId);
+  if (isAuthCooldownBypassedForProvider(store.profiles[profileId]?.provider)) {
+    return null;
+  }
+  const stats = store.usageStats?.[profileId];
   if (!stats) {
     return null;
   }

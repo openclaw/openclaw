@@ -133,18 +133,12 @@ suite.define(() => {
         );
         let moduleRequests = 0;
         let documentProbes = 0;
-        // Automatic recovery outlives the first failed probe. Keep the outage
-        // until the scenario has established the owner that must block reloads.
-        let documentReachable = false;
         await page.route("**/*", async (route) => {
-          if (route.request().method() === "HEAD") {
-            documentProbes += 1;
-            if (!documentReachable) {
-              await route.fulfill({ status: 503 });
-              return;
-            }
+          if (route.request().method() === "HEAD" && ++documentProbes === 1) {
+            await route.fulfill({ status: 503 });
+          } else {
+            await route.fallback();
           }
-          await route.fallback();
         });
         await page.route(
           controlUiE2eBuiltModuleRequest(
@@ -162,7 +156,6 @@ suite.define(() => {
         );
         await page.reload();
         await expect.poll(() => moduleRequests).toBe(1);
-        await expect.poll(() => documentProbes).toBeGreaterThan(0);
         const alert = pane.getByRole("alert").filter({ hasText: "startup needs attention" });
         try {
           await alert.getByRole("button", { name: "Retry", exact: true }).waitFor();
@@ -237,9 +230,6 @@ suite.define(() => {
               });
             }
           }
-          // Restored connectivity must not bypass the live unsaved-start owner.
-          const blockedDocumentProbes = documentProbes;
-          documentReachable = true;
           await page.setViewportSize({ width: 390, height: 844 });
           // The resize event schedules the shell's mobile layout after the viewport RPC.
           await expect
@@ -295,7 +285,7 @@ suite.define(() => {
             });
           });
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-          expect(documentProbes).toBe(blockedDocumentProbes);
+          expect(documentProbes).toBe(1);
           expect(
             await page.evaluate(
               (text) =>
@@ -332,7 +322,7 @@ suite.define(() => {
           await expect.poll(() => toast.textContent()).toContain(warning);
 
           expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-          expect(documentProbes).toBe(blockedDocumentProbes);
+          expect(documentProbes).toBe(1);
           if (captureUiProofEnabled) {
             await page.screenshot({
               animations: "disabled",
@@ -384,7 +374,6 @@ suite.define(() => {
               .click();
           }
         } else {
-          documentReachable = true;
           await alert.getByRole("button", { name: "Retry", exact: true }).click();
         }
         expect(await gateway.waitForRequest("sessions.send")).toMatchObject({

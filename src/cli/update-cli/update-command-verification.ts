@@ -191,7 +191,7 @@ function updateGatewayHealthFacts(
       ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
       ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
     ],
-    channelsReady: health.healthy,
+    channelsReady: health.healthy && !health.channelProbeErrors?.length,
     settled: health.healthy,
     readyz,
   };
@@ -219,12 +219,11 @@ export async function verifyUpdatedGateway(
     deadline: params.opts.run?.deadline ?? params.deadline,
   });
   const channelWarnings = [
-    ...(health.channelProbeErrors ?? []),
     ...(health.channelProbeTimeouts ?? []),
     ...(health.channelRuntimeWarnings ?? []),
   ].map(({ id, error }) =>
     redactSupportDiagnosticLine(
-      `Channel health warning (${id}: ${error}). Run openclaw channels status --probe or openclaw health --json to inspect it.`,
+      `Channel health warning (${id}: ${error}). Run openclaw health --json to inspect it.`,
       { env: params.serviceEnv, stateDir: resolveStateDir(params.serviceEnv) },
     ),
   );
@@ -388,11 +387,13 @@ export async function verifyUpdatedGateway(
       ? "build-id-mismatch"
       : health.activatedPluginErrors?.length
         ? "plugin-errors"
-        : httpFailed
-          ? "readyz-unhealthy"
-          : !serviceRunning
-            ? "service-not-running"
-            : (health.waitOutcome ?? "restart-unhealthy");
+        : health.channelProbeErrors?.length
+          ? "channel-errors"
+          : httpFailed
+            ? "readyz-unhealthy"
+            : !serviceRunning
+              ? "service-not-running"
+              : (health.waitOutcome ?? "restart-unhealthy");
   const facts: UpdateFailureFact[] = [];
   for (const [mismatch, label, code] of [
     [health.versionMismatch, "version", "version-mismatch"],
@@ -420,8 +421,13 @@ export async function verifyUpdatedGateway(
       message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
     });
   }
-  for (const { id: pluginId, error: message } of health.activatedPluginErrors ?? []) {
-    facts.push({ check: "pluginErrors", code: "plugin-errors", pluginId, message });
+  for (const [errors, check, code] of [
+    [health.activatedPluginErrors, "pluginErrors", "plugin-errors"],
+    [health.channelProbeErrors, "channelsReady", "channel-errors"],
+  ] as const) {
+    for (const error of errors ?? []) {
+      facts.push({ check, code, pluginId: error.id, message: error.error });
+    }
   }
   if (!facts.length || health.waitOutcome === "timeout") {
     facts.push({

@@ -59,6 +59,13 @@ export function createUserTurnProcessingCompletion(
       if (!pendingInput?.complete) {
         return undefined;
       }
+      warnPluginSdkDeprecation({
+        family: "session-input-completion",
+        method: "UserTurnTranscriptRecorder.completeProcessing",
+        replacement: "await UserTurnTranscriptRecorder.completeProcessingAsync(outcome)",
+        compatibility: "Synchronous completion remains supported until the next Plugin SDK major.",
+        code: "DEP_SESSION_INPUT_COMPLETION",
+      });
       if (!processingCompletion) {
         if (processingCompletionPromise) {
           throw new Error("Input completion is pending; await completeProcessingAsync");

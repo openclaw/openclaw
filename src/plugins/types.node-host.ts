@@ -36,7 +36,7 @@ export type OpenClawPluginNodeHostCommandContext = {
   signal?: AbortSignal;
   /** Prepare local exec policy; call the returned guard synchronously immediately before spawn. */
   prepareExecAuthorization?: (source: "human-approved" | "session-full") => () => void;
-  /** @deprecated Use acquireManagedWorkspaceAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use acquireManagedWorkspaceAsync; retained for synchronous plugin compatibility. */
   acquireManagedWorkspace?: (request: OpenClawPluginNodeWorkspace) => {
     workspaceDir: string;
     /** Stable HOME owned and validated by this exact prepared workspace binding. */

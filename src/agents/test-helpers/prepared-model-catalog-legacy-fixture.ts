@@ -110,12 +110,8 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       )
       .map(({ id }) => id)
       .toSorted();
-  const expectConfiguredRow = (catalog: ModelCatalogSnapshot, revision: number) => {
-    expect(catalog.entries.filter(({ id }) => id.startsWith("proof-refresh-"))).toEqual([
-      expect.objectContaining({
-        id: expect.stringMatching(new RegExp(`^proof-refresh-${revision}-`)),
-      }),
-    ]);
+  const expectFreshConfiguredRow = (catalog: ModelCatalogSnapshot, revision: number) => {
+    expect(catalog.entries.filter(({ id }) => id.startsWith("proof-refresh-"))).toEqual([]);
     expect(
       catalog.entries.find(
         ({ provider, id }) => provider === PROVIDER_ID && id === "configured-row",
@@ -127,25 +123,24 @@ export async function expectLegacyWorkerCatalogRetention(params: {
   fs.writeFileSync(control, "unavailable", "utf8");
   const failed = await snapshot.loadFullModelCatalog!({ refresh: true });
   expect(failed.providerOutcomes).toContainEqual({ provider: PROVIDER_ID, status: "unavailable" });
-  // Failed discovery keeps the entire last-good provider snapshot, including overlays.
-  expectConfiguredRow(failed, 1);
+  expectFreshConfiguredRow(failed, 2);
   if (params.catalogReturnsRows) {
     expect(learnedIds(failed)).toEqual(["Learned", "learned"]);
     const repeated = await snapshot.loadFullModelCatalog!({ refresh: true });
     expect(learnedIds(repeated)).toEqual(["Learned", "learned"]);
-    expectConfiguredRow(repeated, 1);
+    expectFreshConfiguredRow(repeated, 3);
     fs.writeFileSync(control, "seed", "utf8");
     const seeded = await snapshot.loadFullModelCatalog!({ refresh: true });
     expect(
       seeded.entries.find(({ provider, id }) => provider === PROVIDER_ID && id === "Learned")?.name,
     ).toBe("Uppercase legacy model");
-    expectConfiguredRow(seeded, 1);
+    expectFreshConfiguredRow(seeded, 4);
     fs.writeFileSync(control, "empty", "utf8");
     const empty = await snapshot.loadFullModelCatalog!({ refresh: true });
     expect(learnedIds(empty)).toEqual([]);
     fs.writeFileSync(control, "unavailable", "utf8");
     const afterEmpty = await snapshot.loadFullModelCatalog!({ refresh: true });
     expect(learnedIds(afterEmpty)).toEqual([]);
-    expectConfiguredRow(afterEmpty, 5);
+    expectFreshConfiguredRow(afterEmpty, 6);
   }
 }

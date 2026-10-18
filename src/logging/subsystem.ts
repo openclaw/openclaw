@@ -368,9 +368,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     if (
       level === "error" ||
       level === "fatal" ||
-      (level !== "info" &&
-        areDiagnosticsEnabledForProcess() &&
-        hasInternalDiagnosticEventInterest("log.record"))
+      (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("log.record"))
     ) {
       return fileChild;
     }

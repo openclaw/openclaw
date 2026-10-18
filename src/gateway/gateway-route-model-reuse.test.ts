@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   BUILD_STAMP_FILE,
   resolveGitHead,
@@ -298,25 +297,11 @@ describe("Gateway route model reuse", () => {
           signal.throwIfAborted();
           const activeClient = client;
           // Measure reuse after startup publication has settled its runtime facts.
-          const refreshCatalog = () =>
-            activeClient.request(
-              "models.list",
-              { agentId: "main", view: "all", refresh: true },
-              { signal },
-            );
-          // A startup publication can supersede this refresh; follow the documented
-          // one-retry contract for retryable catalog supersession, as the Control UI does.
-          await refreshCatalog().catch((error: unknown) => {
-            if (
-              !isGatewayProtocolResponseError(error) ||
-              error.gatewayCode !== "UNAVAILABLE" ||
-              !error.retryable
-            ) {
-              throw error;
-            }
-            signal.throwIfAborted();
-            return refreshCatalog();
-          });
+          await activeClient.request(
+            "models.list",
+            { agentId: "main", view: "all", refresh: true },
+            { signal },
+          );
           signal.throwIfAborted();
           await expect
             .poll(

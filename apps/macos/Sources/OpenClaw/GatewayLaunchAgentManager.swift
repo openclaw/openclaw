@@ -16,25 +16,7 @@ enum GatewayLaunchAgentManager {
         var isInferredLegacyInstall = false
         var sourcePrefix: [String]?
         var serviceAuthority: ServiceAuthority?
-
-        /// Flags remain exact invocation custody; bundle identity uses its concrete packaged files.
-        func matchesBundledRuntime(_ runtime: BundledRuntime) -> Bool {
-            let concrete = GatewayLaunchAgentManager.concreteServicePrefix(self.prefix)
-            guard concrete.first == runtime.bun.resolvingSymlinksInPath().path,
-                  let entry = GatewayLaunchAgentManager.serviceCLIEntrypoint(concrete),
-                  let sqliteLibrary,
-                  URL(fileURLWithPath: sqliteLibrary).resolvingSymlinksInPath() ==
-                  runtime.sqliteLibrary.resolvingSymlinksInPath()
-            else { return false }
-            return GatewayLaunchAgentManager.serviceCLIEntrypoints.contains {
-                runtime.packageRoot.appendingPathComponent($0).resolvingSymlinksInPath() == entry
-            }
-        }
     }
-
-    private static let serviceCLIEntrypoints = [
-        "openclaw.mjs", "dist/index.js", "dist/index.mjs", "dist/entry.js", "dist/entry.mjs",
-    ]
 
     private static let logger = Logger(subsystem: "ai.openclaw", category: "gateway.launchd")
     private static let disableLaunchAgentMarker = "disable-launchagent"
@@ -496,23 +478,11 @@ enum GatewayLaunchAgentManager {
             programArguments: snapshot.programArguments,
             environmentFile: environmentFile,
             environmentWrapper: environmentWrapper),
-            let service = command.firstIndex(of: subcommand), service >= 2
+            let service = command.firstIndex(of: subcommand), service >= 2,
+            let executable = command.first,
+            ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
         else { return nil }
         let prefix = Array(command[..<service])
-        guard self.serviceCLIEntrypoint(prefix) != nil else { return nil }
-        return InstalledServiceCLI(
-            prefix: self.concreteServicePrefix(prefix),
-            sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
-            environment: snapshot.environment,
-            usesGeneratedEnvironment: snapshot.programArguments.first == "/bin/sh" ||
-                snapshot.programArguments.first == environmentWrapper.path,
-            sourcePrefix: prefix)
-    }
-
-    private static func serviceCLIEntrypoint(_ prefix: [String]) -> URL? {
-        guard let executable = prefix.first,
-              ["node", "bun"].contains(URL(fileURLWithPath: executable).lastPathComponent)
-        else { return nil }
         let entry = prefix.dropFirst().drop(while: {
             ($0 == "--no-install" && URL(fileURLWithPath: executable).lastPathComponent == "bun") ||
                 $0.hasPrefix("--max-old-space-size=") ||
@@ -520,7 +490,17 @@ enum GatewayLaunchAgentManager {
         })
         guard entry.count == 1, let script = entry.first, script.hasPrefix("/") else { return nil }
         let url = URL(fileURLWithPath: script)
-        return self.serviceCLIEntrypoints.contains { url.path.hasSuffix("/" + $0) } ? url : nil
+        guard url.lastPathComponent == "openclaw.mjs" ||
+            (url.deletingLastPathComponent().lastPathComponent == "dist" &&
+                ["index.js", "index.mjs", "entry.js", "entry.mjs"].contains(url.lastPathComponent))
+        else { return nil }
+        return InstalledServiceCLI(
+            prefix: self.concreteServicePrefix(prefix),
+            sqliteLibrary: snapshot.environment["OPENCLAW_SQLITE_LIBRARY"],
+            environment: snapshot.environment,
+            usesGeneratedEnvironment: snapshot.programArguments.first == "/bin/sh" ||
+                snapshot.programArguments.first == environmentWrapper.path,
+            sourcePrefix: prefix)
     }
 
     static func kickstart() async -> String? {
@@ -839,9 +819,8 @@ extension GatewayLaunchAgentManager {
                 runtime: runtime,
                 installedCLI: installedCLI),
             // Only an explicitly selected bundled CLI carries this interop contract.
-            supportsExpectedRuntimePin: runtime.map {
-                installedCLI == nil || installedCLI?.matchesBundledRuntime($0) == true
-            } ?? false)
+            supportsExpectedRuntimePin: runtime != nil &&
+                (installedCLI == nil || installedCLI?.prefix == runtime?.cliCommand))
     }
 
     static func daemonEnvironment(

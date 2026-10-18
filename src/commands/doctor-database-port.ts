@@ -12,11 +12,10 @@ import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
 import {
-  runDatabasePortTask,
-  type DatabasePortInspection,
-  DatabasePortError,
+  runWorkboardPortTask,
+  type WorkboardPortInspection,
+  WorkboardPortError,
 } from "../infra/database-engine/port-command.worker.js";
-import { databasePortProviders } from "../infra/database-engine/port-provider.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import type { DatabaseEngineId } from "../infra/database-engine/registry.js";
 import {
@@ -77,31 +76,30 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
   const config = current.snapshot.config;
   const from = config.database?.engine ?? "sqlite",
     to = options.to!;
-  const context = { stateDir: ctx.stateDir, config, env: ctx.env };
-  const plugins = resolvePluginMetadataSnapshot(context);
-  const roots = databasePortProviders.flatMap((provider) =>
-    provider.resolveRoots({ ...context, plugins }),
-  );
+  const plugins = resolvePluginMetadataSnapshot({ stateDir: ctx.stateDir, config, env: ctx.env });
+  const roots = plugins.plugins
+    .filter((plugin) => plugin.id === "workboard")
+    .flatMap((plugin) =>
+      (plugin.backupResources ?? [])
+        .filter((resource) => resource.scope === "state" && resource.disposition === "include")
+        .map((resource) => path.join(ctx.stateDir, resource.relativePath)),
+    );
   privatePaths(ctx, roots);
   const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
   const stores = all.filter((file) =>
     roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
   );
-  const inspected = new Map<string, DatabasePortInspection>();
+  const inspected = new Map<string, WorkboardPortInspection>();
   for (const file of all) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
       if (readBackupEngine(file).engine !== "sqlite") {
-        refuse(
-          ctx,
-          "unclassified PostgreSQL anchor",
-          `registered ownership; supported families: ${databasePortProviders.map((provider) => provider.id).join(", ")}`,
-        );
+        refuse(ctx, "unclassified PostgreSQL anchor", "registered workboard ownership");
       }
       continue;
     }
-    const facts = await runDatabasePortTask(
+    const facts = await runWorkboardPortTask(
       { operation: "inspect", sourcePath: file, config: postgresConfig(config), to },
       ctx,
     );
@@ -115,7 +113,7 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     stores.map((file) => ({ path: file, size: fs.statSync(file).size })),
   );
   if (stores.length && from !== to) {
-    await runDatabasePortTask(
+    await runWorkboardPortTask(
       { operation: "preflight", config: postgresConfig(config), probe: false },
       ctx,
     );
@@ -252,7 +250,7 @@ async function privateMigrate(ctx: Context, index: number) {
     targetPath: file,
     preserveRowIds: true,
   });
-  await runDatabasePortTask({ operation: "migrate", sourcePath: file }, ctx);
+  await runWorkboardPortTask({ operation: "migrate", sourcePath: file }, ctx);
   syncDatabasePortPath(file);
   syncDatabasePortPath(path.dirname(file));
   manifest(ctx).artifacts.push(await captureDatabaseArtifact(file));
@@ -268,7 +266,7 @@ async function stageMaterialize(ctx: Context, index: number, config: OpenClawCon
   }
   const working = await privateMigrate(ctx, index);
   ctx.phase = "stage/materialize";
-  const result = await runDatabasePortTask(
+  const result = await runWorkboardPortTask(
     {
       operation: "stage",
       sourcePath: working,
@@ -327,7 +325,7 @@ async function verify(
       : original
         ? target.original
         : target.intended;
-  await runDatabasePortTask(
+  await runWorkboardPortTask(
     {
       operation: "verify",
       sourcePath: sourcePath ?? (original ? target.originalCapture.path : stagePath(ctx, index)),
@@ -444,7 +442,7 @@ async function prepareStores(ctx: Context, config: OpenClawConfig, restoring: bo
       await verify(ctx, index, config);
     }
     ctx.phase = restoring ? "rollback" : "publish stores";
-    await runDatabasePortTask({ operation: "checkpoint", sourcePath: ctx.target }, ctx);
+    await runWorkboardPortTask({ operation: "checkpoint", sourcePath: ctx.target }, ctx);
     const settled = await captureDatabaseArtifact(ctx.target),
       bytes = await captureDatabaseArtifact(source);
     const image = await prepareVerifiedSqliteFile({
@@ -690,7 +688,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
       },
     });
   } catch (error) {
-    if (error instanceof DatabasePortError) {
+    if (error instanceof WorkboardPortError) {
       throw error;
     }
     // Untrusted driver/config messages may contain a DSN or row payload.

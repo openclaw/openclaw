@@ -146,9 +146,7 @@ function authorizeWrite(mode, options) {
     workflowPath:
       mode === "finalize-core"
         ? ".github/workflows/openclaw-release-publish.yml"
-        : mode === "publish"
-          ? ".github/workflows/linux-app-release.yml"
-          : ".github/workflows/linux-app-mirror.yml",
+        : ".github/workflows/linux-app-release.yml",
     workflowEvent: mode === "publish" ? "workflow_run" : "workflow_dispatch",
     runStatePolicy: "active",
     ...(runGh ? { runGh } : {}),

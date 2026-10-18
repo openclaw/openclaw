@@ -25,6 +25,7 @@ import {
   readSessionUpdatedAtAsync,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
 import { ChannelType } from "../internal/discord.js";
 import { normalizeDiscordAllowList, normalizeDiscordSlug } from "./allow-list.js";
@@ -140,16 +141,11 @@ export async function buildDiscordMessageProcessContext(params: {
   const senderUsername = sender.isPluralKit
     ? (sender.tag ?? sender.name ?? author.username)
     : author.username;
-  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext, toolPolicy } =
+  const { groupSystemPrompt, ownerAllowFrom, channelStructuredContext } =
     buildDiscordInboundAccessContext({
-      cfg,
-      accountId,
-      parentId: threadParentId,
       channelConfig,
       guildInfo,
       sender: { id: sender.id, name: sender.name, tag: sender.tag },
-      senderName,
-      senderUsername,
       allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
       isGuild: isGuildMessage,
       channelTopic: channelInfo?.topic,
@@ -502,7 +498,6 @@ export async function buildDiscordMessageProcessContext(params: {
       historyKind: isGuildMessage ? "recent" : "pending",
     },
     access: {
-      toolPolicy,
       mentions: {
         canDetectMention: ctx.canDetectMention,
         wasMentioned: ctx.effectiveWasMentioned,
@@ -603,8 +598,9 @@ export async function buildDiscordMessageProcessContext(params: {
   }
 
   if (shouldLogVerbose()) {
+    const preview = truncateUtf16Safe(combinedBody, 200).replace(/\n/g, "\\n");
     logVerbose(
-      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} chars=${combinedBody.length}`,
+      `discord inbound: channel=${messageChannelId} deliver=${deliverTarget} from=${ctxPayload.From} preview="${preview}"`,
     );
   }
 

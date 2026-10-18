@@ -184,11 +184,31 @@ function observeModelCallStream(
       throw error;
     }
   };
-  // StreamFn exposes iteration and its final result, not provider implementation methods.
-  return {
-    [Symbol.asyncIterator]: observedIterator,
-    ...(observedResult ? { result: observedResult } : {}),
-  };
+  let hasNonConfigurableIterator;
+  try {
+    hasNonConfigurableIterator =
+      Object.getOwnPropertyDescriptor(stream, Symbol.asyncIterator)?.configurable === false;
+  } catch {
+    hasNonConfigurableIterator = true;
+  }
+  if (hasNonConfigurableIterator) {
+    return {
+      [Symbol.asyncIterator]: observedIterator,
+      ...(observedResult ? { result: observedResult } : {}),
+    };
+  }
+  return new Proxy(stream, {
+    get(target, property, receiver) {
+      if (property === Symbol.asyncIterator) {
+        return observedIterator;
+      }
+      if (property === "result" && observedResult) {
+        return observedResult;
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
 }
 
 function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle): unknown {

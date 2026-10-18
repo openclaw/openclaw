@@ -186,23 +186,15 @@ function createLazyGoogleRealtimeVoiceBridge(
 }
 
 export function createLazyGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
-  const resolveConfig: NonNullable<RealtimeVoiceProviderPlugin["resolveConfig"]> = ({
-    cfg,
-    rawConfig,
-  }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg);
-  const isConfigured: RealtimeVoiceProviderPlugin["isConfigured"] = ({ cfg, providerConfig }) =>
-    Boolean(
-      normalizeOptionalString(providerConfig.apiKey) ??
-      normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
-      resolveGoogleEnvApiKey(),
-    );
   return {
     ...GOOGLE_REALTIME_VOICE_METADATA,
-    // Retained for public synchronous SDK calls through 2026-12-31.
-    resolveConfig,
-    isConfigured,
-    resolveConfigAsync: async (context) => resolveConfig(context),
-    isConfiguredAsync: async (context) => isConfigured(context),
+    resolveConfig: ({ cfg, rawConfig }) => resolveGoogleRealtimeProviderConfig(rawConfig, cfg),
+    isConfigured: ({ cfg, providerConfig }) =>
+      Boolean(
+        normalizeOptionalString(providerConfig.apiKey) ??
+        normalizeOptionalString(cfg?.models?.providers?.google?.apiKey) ??
+        resolveGoogleEnvApiKey(),
+      ),
     createBridge: createLazyGoogleRealtimeVoiceBridge,
     createBrowserSession: async (req) => {
       const provider = await loadGoogleRealtimeVoiceProvider();

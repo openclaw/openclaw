@@ -60,7 +60,6 @@ export type ProviderEndpointClass =
   | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
-  | "novita-native"
   | "nvidia-native"
   | "openai-public"
   | "openai"
@@ -492,7 +491,6 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "minimax-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
-    endpointClass === "novita-native" ||
     endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
     endpointClass === "openai" ||

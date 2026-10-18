@@ -1,7 +1,6 @@
 // Control UI tests cover array draft recovery and repeated-item constraints.
 import { describe, expect, it, vi } from "vitest";
 import { renderArrayFixture } from "../test-helpers/config-form-fixtures.tsx";
-import { flush } from "../test-helpers/solid-settle.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
 function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
@@ -120,7 +119,7 @@ describe("config form array integrity", () => {
     expect(onPatch).toHaveBeenCalledWith(["values"], []);
   });
 
-  it("preserves unquoted strings and decodes quoted strings in string-number arrays", () => {
+  it("preserves unquoted strings and decodes quoted strings in string-number arrays", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -141,9 +140,9 @@ describe("config form array integrity", () => {
       container.querySelector("openclaw-config-form-collection-draft"),
       "string-number array draft",
     );
-    const addDraftValue = (value: string) => {
+    const addDraftValue = async (value: string) => {
       expectElement(findAddButton(container), "string-number array add").click();
-      flush();
+      await draftHost.updateComplete;
       const draftValue = expectElement(
         draftHost.querySelector<HTMLInputElement | HTMLTextAreaElement>(
           "[data-collection-draft-value]",
@@ -152,24 +151,24 @@ describe("config form array integrity", () => {
       );
       draftValue.value = value;
       draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-      flush();
+      await draftHost.updateComplete;
       expectElement(findAddButton(draftHost), "string-number array draft commit").click();
-      flush();
+      await draftHost.updateComplete;
     };
 
-    addDraftValue(identifier);
+    await addDraftValue(identifier);
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     expect(onPatch.mock.calls[0]?.[1]?.[0]).not.toBe(Number(identifier));
     onPatch.mockClear();
-    addDraftValue(JSON.stringify(identifier));
+    await addDraftValue(JSON.stringify(identifier));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [identifier]);
     onPatch.mockClear();
-    addDraftValue("1e5");
+    await addDraftValue("1e5");
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], [100_000]);
     container.remove();
   });
 
-  it("keeps large and unique array minimums incrementally editable", () => {
+  it("keeps large and unique array minimums incrementally editable", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -203,37 +202,37 @@ describe("config form array integrity", () => {
       container.querySelector("openclaw-config-form-collection-draft"),
       "unique array draft",
     );
-    flush();
+    await draftHost.updateComplete;
     expectElement(findAddButton(container), "unique array add").click();
-    flush();
+    await draftHost.updateComplete;
     const draftValue = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "unique array draft value",
     );
     draftValue.value = "first";
     draftValue.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    await draftHost.updateComplete;
     expectElement(findAddButton(draftHost), "unique array draft commit").click();
     expect(onPatch).toHaveBeenCalledWith(["codes"], ["first"]);
 
     // An autosave ack clones the form: identity churn with identical content
     // must not close an open draft mid-typing.
     expectElement(findAddButton(container), "reopened unique array add").click();
-    flush();
+    await draftHost.updateComplete;
     const typedDraft = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "typed unique array draft",
     );
     typedDraft.value = "in-progress";
     typedDraft.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    await draftHost.updateComplete;
     renderSchema({
       type: "array",
       minItems: 2,
       uniqueItems: true,
       items: { type: "string" },
     });
-    flush();
+    await draftHost.updateComplete;
     const survivingDraft = draftHost.querySelector<HTMLInputElement>(
       "[data-collection-draft-value]",
     );
@@ -255,18 +254,18 @@ describe("config form array integrity", () => {
       container.querySelector("openclaw-config-form-collection-draft"),
       "duplicate array draft",
     );
-    flush();
+    await duplicateDraft.updateComplete;
     expectElement(findAddButton(container), "duplicate array add").click();
-    flush();
+    await duplicateDraft.updateComplete;
     const duplicateValue = expectElement(
       duplicateDraft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "duplicate array draft value",
     );
     duplicateValue.value = "first";
     duplicateValue.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    await duplicateDraft.updateComplete;
     expectElement(findAddButton(duplicateDraft), "duplicate array draft commit").click();
-    flush();
+    await duplicateDraft.updateComplete;
     expect(duplicateValue.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalled();
 
@@ -285,28 +284,28 @@ describe("config form array integrity", () => {
       container.querySelector("openclaw-config-form-collection-draft"),
       "composed item draft",
     );
-    flush();
+    await composedDraft.updateComplete;
     expectElement(findAddButton(container), "composed item add").click();
-    flush();
+    await composedDraft.updateComplete;
     const composedValue = expectElement(
       composedDraft.querySelector<HTMLInputElement>("[data-collection-draft-value]"),
       "composed item draft value",
     );
     composedValue.value = "abc";
     composedValue.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    await composedDraft.updateComplete;
     const composedCommit = expectElement(
       findAddButton(composedDraft),
       "composed item draft commit",
     );
     composedCommit.click();
-    flush();
+    await composedDraft.updateComplete;
     expect(composedValue.getAttribute("aria-invalid")).toBe("true");
     expect(onPatch).not.toHaveBeenCalled();
 
     composedValue.value = "123";
     composedValue.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    await composedDraft.updateComplete;
     composedCommit.click();
     expect(onPatch).toHaveBeenCalledWith(["codes"], ["123"]);
     container.remove();
@@ -409,7 +408,7 @@ describe("config form array integrity", () => {
     expect(remainingJson.getAttribute("aria-invalid")).toBe("false");
   });
 
-  it("adds null through nullable scalar collection drafts", () => {
+  it("adds null through nullable scalar collection drafts", async () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     document.body.append(container);
@@ -428,14 +427,14 @@ describe("config form array integrity", () => {
       "nullable scalar collection draft",
     );
     expectElement(findAddButton(container), "nullable scalar array add").click();
-    flush();
+    await draftHost.updateComplete;
     const nullToggle = expectElement(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-null]"),
       "nullable scalar null toggle",
     );
     nullToggle.checked = true;
     nullToggle.dispatchEvent(new Event("change", { bubbles: true }));
-    flush();
+    await draftHost.updateComplete;
     expect(
       draftHost.querySelector<HTMLInputElement>("[data-collection-draft-value]")?.disabled,
     ).toBe(true);

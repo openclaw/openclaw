@@ -67,7 +67,7 @@ function listRestartDrainRuns(
 }
 
 function isRestartRecoveryRun(entry: ChatAbortControllerEntry): boolean {
-  // A prior restart cancellation can still own an uncommitted terminal write.
+  // The close prelude can abort connection work before the shutdown marker runs.
   return (
     (!entry.controller.signal.aborted ||
       entry.abortStopReason === "restart" ||
@@ -98,8 +98,6 @@ export type GatewayRunShutdownParams = {
     isActiveRun: (run: RestartRecoveryCandidate) => boolean;
   }) => Promise<void> | void;
   resolveActiveSessionIdForKey?: (sessionKey: string) => string | undefined;
-  /** Cancel received execution and retire its principals only after recovery is recorded. */
-  cancelReceivedWork?: (reason?: Error) => void;
 };
 
 function collectActiveRestartSessionRefs(
@@ -321,7 +319,6 @@ export async function prepareGatewayRunShutdown(
   if (!params.restart) {
     abortQueuedTurns(params, false);
     abortActiveRuns(params, false);
-    params.cancelReceivedWork?.();
     return startGatewaySessionWorkAdmissionInterruption(
       params.resolveGatewayContext,
       new Error("Gateway stopping."),
@@ -351,8 +348,7 @@ export async function prepareGatewayRunShutdown(
     }
   }
 
-  // Reply and connection cancellation can release session admissions. The
-  // prelude fences producers and entry; this owner records custody first.
+  // Queue cancellation releases session admissions, so record their recovery custody first.
   const abortReplies = await prepareActiveRunsForRestartRecovery({
     ...params,
     reason: "gateway restart shutdown",
@@ -362,7 +358,6 @@ export async function prepareGatewayRunShutdown(
     shutdownLog.warn(`aborted ${abortedQueuedTurns} queued turn(s) during restart shutdown`);
   }
   const abortedRuns = abortReplies() + abortActiveRuns(params, true);
-  params.cancelReceivedWork?.(createAgentRunRestartAbortError());
   const admissions = startGatewaySessionWorkAdmissionInterruption(
     params.resolveGatewayContext,
     createAgentRunRestartAbortError(),

@@ -1,34 +1,20 @@
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const inventories = new Map();
 
 // Share one process snapshot across UI ownership and fast-lane discovery.
-export function getRepositoryFileInventory(directory, selected) {
-  const cwd = resolve(directory ?? repoRoot);
-  const key = JSON.stringify([cwd, selected]);
-  const fullInventory = JSON.stringify([cwd, undefined]);
-  if (selected && inventories.has(fullInventory)) {
-    return inventories.get(fullInventory);
-  }
-  if (!inventories.has(key)) {
+export function getRepositoryFileInventory(directory = repoRoot) {
+  const cwd = resolve(directory);
+  if (!inventories.has(cwd)) {
     // Share working-tree facts without probing each inventoried owner. Include
     // untracked destinations and remove indexed paths deleted by unstaged renames.
     const result = spawnSync(
       "git",
-      [
-        "ls-files",
-        "--cached",
-        "--others",
-        "--deleted",
-        "--exclude-standard",
-        "-t",
-        "-z",
-        ...(selected ? ["--", ...selected.map((file) => `:(literal)${file}`)] : []),
-      ],
+      ["ls-files", "--cached", "--others", "--deleted", "--exclude-standard", "-t", "-z"],
       {
         cwd,
         encoding: "utf8",
@@ -46,9 +32,9 @@ export function getRepositoryFileInventory(directory, selected) {
         }
       }
     }
-    inventories.set(key, files);
+    inventories.set(cwd, files);
   }
-  return inventories.get(key);
+  return inventories.get(cwd);
 }
 
 /** Resolve an inventoried owner after a TS/TSX rename, retaining absent paths. */
@@ -56,7 +42,7 @@ export function resolveUiTypeScriptPath(file, cwd = repoRoot) {
   if (!/\.tsx?$/u.test(file)) {
     return file;
   }
-  const inventory = getRepositoryFileInventory(cwd, [dirname(file)]);
+  const inventory = getRepositoryFileInventory(cwd);
   const exists = (candidate) =>
     inventory ? inventory.has(candidate) : existsSync(resolve(cwd, candidate));
   if (exists(file)) {
@@ -138,13 +124,10 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
-  "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
-  "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
   "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
   "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-roster-request-rate.real-gateway.e2e.test.ts",
-  "ui/src/e2e/sidebar-running-counts.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/model-api-keys.real-gateway.e2e.test.ts",
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
@@ -155,7 +138,6 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-loading-performance.real-gateway.e2e.test.ts",
-  "ui/src/e2e/chat-managed-media-order.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",

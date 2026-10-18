@@ -2,7 +2,6 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
-  sqliteStringSetEntries,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -72,7 +71,9 @@ export function readAgentProvenanceBatchInDatabase(
   const db = getNodeSqliteKysely<AgentProvenanceDatabase>(database);
   const requestedIds = JSON.stringify(agentIds.map(normalizeAgentId));
   const query = db
-    .selectFrom(sqliteStringSetEntries(requestedIds).as("requested"))
+    .selectFrom((eb) =>
+      eb.fn<{ key: number; value: string }>("json_each", [eb.val(requestedIds)]).as("requested"),
+    )
     .innerJoin("agent_provenance", "agent_provenance.agent_id", "requested.value")
     .selectAll("agent_provenance")
     .orderBy("requested.key", "asc");

@@ -1,9 +1,11 @@
-import { StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+
+const STREAMABLE_RESPONSE_BODY_MARKER = "Error POSTing to endpoint:";
+const LEGACY_RESPONSE_BODY_RE = /Error POSTing to endpoint \(HTTP \d+\):/;
 
 /** MCP lifecycle errors use the protocol code, including serialized SDK errors. */
 export function isMcpRequestTimeoutError(error: unknown): boolean {
@@ -20,12 +22,17 @@ export function isMcpMethodNotFoundError(error: unknown): boolean {
 
 /** Redacts MCP diagnostics, including response bodies the SDK includes in thrown errors. */
 export function redactMcpDiagnosticError(error: unknown): string {
-  const message =
-    error instanceof StreamableHTTPError && error.code === 401
-      ? "authentication refused (401); check this MCP server's credentials or sign in again"
-      : formatErrorMessage(error).replace(
-          /(Error POSTing to endpoint(?: \(HTTP \d+\))?:)[\s\S]*/,
-          "$1 [redacted response body]",
-        );
+  let message = formatErrorMessage(error);
+  const streamableIndex = message.indexOf(STREAMABLE_RESPONSE_BODY_MARKER);
+  const legacyMatch = LEGACY_RESPONSE_BODY_RE.exec(message);
+  const prefixEnd =
+    streamableIndex >= 0
+      ? streamableIndex + STREAMABLE_RESPONSE_BODY_MARKER.length
+      : legacyMatch
+        ? legacyMatch.index + legacyMatch[0].length
+        : undefined;
+  if (prefixEnd !== undefined) {
+    message = `${message.slice(0, prefixEnd)} [redacted response body]`;
+  }
   return redactToolPayloadText(redactSensitiveUrlLikeString(message));
 }

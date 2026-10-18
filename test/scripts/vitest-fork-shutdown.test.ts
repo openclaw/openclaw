@@ -3,24 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as waitForReaper } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { afterAll, expect, it, vi, type TestContext } from "vitest";
+import { expect, it, vi, type TestContext } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
-import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.js";
 import { fixturePreloadArgs } from "./fixtures/ci-fixture-runtime.cjs";
-
-// Preparation belongs to collection, before the unchanged per-scenario shutdown deadline.
-const fixtureWorkers = createVitestWorkerRun();
-afterAll(() => fixtureWorkers.dispose());
-try {
-  await fixtureWorkers.prepare();
-} catch (error) {
-  await fixtureWorkers.dispose();
-  throw error;
-}
 
 const fixture = fileURLToPath(new URL("../fixtures/vitest-fork-shutdown.mjs", import.meta.url));
 // Outside the enclosing Vitest TMPDIR: its owner must not erase retained writers.
@@ -80,9 +69,7 @@ async function runFixture(
 ) {
   try {
     const result = await runVitestShutdownCommand({
-      nodeArgs,
-      args: [fixture, root, JSON.stringify(options)],
-      workerRun: options.setup === "shared" ? fixtureWorkers : undefined,
+      args: [...nodeArgs, fixture, root, JSON.stringify(options)],
       timeoutMs: 20_000,
       ...commandOptions,
     });

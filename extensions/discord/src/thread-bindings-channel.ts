@@ -2,9 +2,7 @@ import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ResolvedDiscordAccount } from "./accounts.js";
 import { loadDiscordThreadBindingsManagerModule } from "./channel.loaders.js";
 import {
-  setThreadBindingIdleTimeoutBySessionKey,
   setThreadBindingIdleTimeoutBySessionKeyAsync,
-  setThreadBindingMaxAgeBySessionKey,
   setThreadBindingMaxAgeBySessionKeyAsync,
 } from "./monitor/thread-bindings.session-updates.js";
 import { defaultTopLevelPlacement } from "./thread-binding-api.js";
@@ -37,17 +35,6 @@ export const discordConversationBindings: NonNullable<
       persist: false,
       enableSweeper: false,
     }),
-  // Released synchronous runtime setters dispatch here through 2026-12-31.
-  setIdleTimeoutBySessionKey: (params) =>
-    setThreadBindingIdleTimeoutBySessionKey({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }).map(toConversationLifecycleBinding),
-  setMaxAgeBySessionKey: (params) =>
-    setThreadBindingMaxAgeBySessionKey({
-      ...params,
-      accountId: params.accountId ?? undefined,
-    }).map(toConversationLifecycleBinding),
   setIdleTimeoutBySessionKeyAsync: async (params) =>
     (
       await setThreadBindingIdleTimeoutBySessionKeyAsync({

@@ -6,7 +6,6 @@ import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { isPreDispatchToolCallRejectionMessage } from "../../failover/message-patterns.js";
 import {
   EMPTY_RESPONSE_RETRY_BODY,
-  TEXT_TOOL_CALL_RETRY_BODY,
   REASONING_ONLY_RETRY_BODY,
   REJECTED_TOOL_CALL_RETRY_BODY,
   SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
@@ -41,7 +40,6 @@ export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 const REASONING_ONLY_RETRY_INSTRUCTION = withRecoveryDeliveryContract(REASONING_ONLY_RETRY_BODY);
 const EMPTY_RESPONSE_RETRY_INSTRUCTION = withRecoveryDeliveryContract(EMPTY_RESPONSE_RETRY_BODY);
-const TEXT_TOOL_CALL_RETRY_INSTRUCTION = withRecoveryDeliveryContract(TEXT_TOOL_CALL_RETRY_BODY);
 const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION = withRecoveryDeliveryContract(
   TOOL_USE_WITHOUT_CALL_RETRY_BODY,
 );
@@ -215,20 +213,11 @@ function readSettledToolCalls(
 }
 
 /** Proves settlement and intentional termination for the exact current-turn tool-call batch. */
-export function resolveSettledToolBatchEvidence(
-  attempt: IncompleteTurnAttempt,
-  // Set only when the attempt stopped before its next model call: a user message after
-  // the current attempt's batch was steered into this run and does not start a new turn.
-  options?: { midTurn?: boolean },
-) {
+export function resolveSettledToolBatchEvidence(attempt: IncompleteTurnAttempt) {
   const snapshot = attempt.messagesSnapshot ?? [];
+  const latestUserIndex = snapshot.findLastIndex((message) => message.role === "user");
   let assistant = attempt.currentAttemptAssistant;
   let assistantIndex = assistant ? snapshot.indexOf(assistant) : -1;
-  const latestUserIndex = snapshot.findLastIndex(
-    (message, index) =>
-      message.role === "user" &&
-      !(options?.midTurn && assistantIndex >= 0 && index > assistantIndex),
-  );
   if (assistantIndex <= latestUserIndex || readSettledToolCalls(assistant).length === 0) {
     assistantIndex = snapshot.findLastIndex(
       (message, index) =>
@@ -439,10 +428,6 @@ export function resolveEmptyResponseRetryInstruction(
     })
   ) {
     return null;
-  }
-
-  if (params.attempt.textToolCallAttempt) {
-    return TEXT_TOOL_CALL_RETRY_INSTRUCTION;
   }
 
   // A tool-use stop with no structured call executed nothing; its text is not an answer.

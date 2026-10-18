@@ -771,7 +771,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
-    "rejects a %s HEAD object when branch suggestions refresh",
+    "rejects a %s HEAD object after a branch-list cache hit",
     async (damage) => {
       const head = await git(repo, "rev-parse", "HEAD");
       let object = path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2));
@@ -795,7 +795,6 @@ describe("ManagedWorktreeService branch discovery", () => {
       } else {
         await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
       }
-      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
 
       await expect(
         service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
@@ -810,7 +809,7 @@ describe("ManagedWorktreeService branch discovery", () => {
   );
 
   it.each(["global", "worktree", "included", "environment", "relative", "parameters"])(
-    "observes changed %s config on branch suggestion refresh",
+    "observes changed %s config after warming checkout admission",
     async (source) => {
       let config = path.join(root, "global.gitconfig");
       if (source === "worktree") {
@@ -832,7 +831,6 @@ describe("ManagedWorktreeService branch discovery", () => {
         vi.stubEnv("GIT_CONFIG_GLOBAL", config);
       }
       await fs.writeFile(config, "[malformed\n");
-      await fs.utimes(path.join(repo, ".git", "HEAD"), 0, 0);
       expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
         {
           branches: [],
@@ -842,7 +840,7 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it("supports tag HEADs and alternate object storage through native Git refresh", async () => {
+  it("keeps tag peeling and alternate object storage under native Git admission", async () => {
     const head = await git(repo, "rev-parse", "HEAD");
     await git(repo, "tag", "-a", "tag-head", "-m", "tagged commit");
     const tag = await git(repo, "rev-parse", "tag-head");
@@ -854,7 +852,6 @@ describe("ManagedWorktreeService branch discovery", () => {
     }
     await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
     for (const checkout of [repo, alternate]) {
-      await fs.utimes(path.join(checkout, ".git", "HEAD"), 0, 0);
       expect(
         await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
       ).toEqual({

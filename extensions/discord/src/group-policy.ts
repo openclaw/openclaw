@@ -11,7 +11,6 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { normalizeAtHashSlug as normalizeDiscordSlug } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   findDiscordChannelPolicyKey,
-  findDiscordGuildPolicyKey,
   getDiscordChannelPolicyBinding,
 } from "./channel-policy-state.js";
 
@@ -23,7 +22,6 @@ const channelScopeKey = (guildKey: string, channelKey: string) =>
 function resolveDiscordGuildKey(
   guilds: DiscordConfig["guilds"],
   groupSpace?: string | null,
-  accountId?: string | null,
 ): string | undefined {
   if (!guilds || Object.keys(guilds).length === 0) {
     return undefined;
@@ -31,10 +29,6 @@ function resolveDiscordGuildKey(
   const space = normalizeOptionalString(groupSpace) ?? "";
   if (space && guilds[space]) {
     return space;
-  }
-  const boundKey = findDiscordGuildPolicyKey(accountId, space);
-  if (boundKey !== undefined && guilds[boundKey]) {
-    return boundKey;
   }
   const normalized = normalizeDiscordSlug(space);
   if (normalized && guilds[normalized]) {
@@ -86,7 +80,7 @@ function resolveDiscordPolicyScope(params: ChannelGroupContext) {
   }
   // Guild "*" is selected only after every guild candidate misses; matched guilds hide it.
   // Within the selected guild, channel fields still cascade to guild fields.
-  const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace, params.accountId);
+  const guildKey = resolveDiscordGuildKey(guilds, params.groupSpace);
   if (!guildKey) {
     return { tree, path: [] };
   }

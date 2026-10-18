@@ -7,12 +7,7 @@ import type { StartupMigrationLease } from "../infra/startup-migration-checkpoin
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { RetiredStateFormatError } from "../infra/state-migrations.retired-files.js";
 import { assertNoRetiredRuntimeStateFiles } from "../infra/state-migrations.retired-runtime-files.js";
-import {
-  getPluginCache,
-  getPluginMetadataSnapshotCache,
-  withPluginCache,
-  type PluginCache,
-} from "../plugins/plugin-cache.js";
+import type { PluginCache } from "../plugins/plugin-cache.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
 import {
   readAdmittedConfigSnapshot,
@@ -215,12 +210,11 @@ async function prepareStartupConfig(
         }
       }
     }
-    const verification = await withPluginCache(
-      read.pluginMetadataSnapshot
-        ? getPluginMetadataSnapshotCache(read.pluginMetadataSnapshot)
-        : getPluginCache(),
-      () => refreshStartupPluginQuarantine({ cfg: read.snapshot.sourceConfig, env, measure }),
-    );
+    const verification = await refreshStartupPluginQuarantine({
+      cfg: read.snapshot.sourceConfig,
+      env,
+      measure,
+    });
     setActiveDegradedPlugins(verification.quarantinedPlugins);
     recordStartupMigrationWarnings([
       ...readStartupStateWarnings(env),

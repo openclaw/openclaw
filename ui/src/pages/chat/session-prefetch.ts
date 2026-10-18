@@ -61,10 +61,13 @@ type SessionPrefetchSnapshot = {
 };
 
 type SessionPrefetchCandidate = {
+  activityAt: number;
   sessionKey: string;
   snapshotKey: string;
   canonicalSessionKey: string;
   sessionId: GatewaySessionRow["sessionId"];
+  activeLeafEntryId: GatewaySessionRow["activeLeafEntryId"];
+  updatedAt: GatewaySessionRow["updatedAt"];
 };
 
 function mayPrefetchHistory(
@@ -356,6 +359,7 @@ class SessionPrefetcher {
       return null;
     }
     return {
+      activityAt,
       sessionKey: row.key,
       canonicalSessionKey: resolveChatSnapshotSessionKey(snapshot.snapshotHost, {
         sessionKey: row.key,
@@ -363,6 +367,8 @@ class SessionPrefetcher {
       }),
       snapshotKey,
       sessionId: row.sessionId,
+      activeLeafEntryId: row.activeLeafEntryId,
+      updatedAt: row.updatedAt,
     };
   }
 
@@ -383,13 +389,31 @@ class SessionPrefetcher {
     if (!candidate) {
       return true;
     }
-    // Warm history is best effort; opening the pane revalidates its cursor.
-    // Cache invalidation and the final open-pane check still own publication.
-    return (
-      current.rows?.some(
-        (row) => row.key === candidate.sessionKey && row.sessionId === candidate.sessionId,
-      ) === true
-    );
+    // Unrelated roster refreshes cannot retire this read, but every row sharing
+    // its snapshot key must agree: an unchanged alias cannot hide newer history.
+    let found = false;
+    for (const row of current.rows ?? []) {
+      if (
+        resolveChatSnapshotKey(current.snapshotHost, {
+          sessionKey: row.key,
+          agentId: row.agentId,
+        }) !== candidate.snapshotKey
+      ) {
+        continue;
+      }
+      const activityAt = sessionActivityAt(row);
+      if (
+        row.sessionId !== candidate.sessionId ||
+        row.activeLeafEntryId !== candidate.activeLeafEntryId ||
+        (row.updatedAt ?? 0) > (candidate.updatedAt ?? 0) ||
+        activityAt > candidate.activityAt ||
+        isSessionRunActive(row)
+      ) {
+        return false;
+      }
+      found ||= row.updatedAt === candidate.updatedAt && activityAt === candidate.activityAt;
+    }
+    return found;
   }
 
   private isOpen(snapshotKey: string): boolean {

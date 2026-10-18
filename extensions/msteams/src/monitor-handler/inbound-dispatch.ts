@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { bindIngressLifecycleToReplyOptions } from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { RuntimeEnv } from "../../runtime-api.js";
 import { formatUnknownError } from "../errors.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -254,7 +255,8 @@ export async function dispatchMSTeamsInboundTurn(params: {
     },
   });
 
-  logVerboseMessage(`msteams inbound: from=${ctxPayload.From} chars=${rawBody.length}`);
+  const preview = sliceUtf16Safe(rawBody.replace(/\s+/g, " "), 0, 160);
+  logVerboseMessage(`msteams inbound: from=${ctxPayload.From} preview="${preview}"`);
 
   const { dispatcherOptions, delivery, replyOptions } = createMSTeamsReplyDispatcher({
     cfg,

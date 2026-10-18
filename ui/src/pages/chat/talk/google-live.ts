@@ -8,7 +8,12 @@ import {
   RealtimeTalkPcmOutputQueue,
 } from "./audio.ts";
 import { RealtimeTalkCameraController } from "./camera-controller.ts";
-import { buildGoogleLiveUrl, GOOGLE_LIVE_SETUP_TIMEOUT_MS } from "./google-live-lifecycle.ts";
+import {
+  buildGoogleLiveUrl,
+  GoogleLiveConnectionLifecycle,
+  GOOGLE_LIVE_SETUP_TIMEOUT_MS,
+  runRealtimeTalkCleanup,
+} from "./google-live-lifecycle.ts";
 import { GoogleLiveToolOwner, type GoogleLiveFunctionCall } from "./google-live-tools.ts";
 import {
   type RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -71,9 +76,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private closed = false;
   private interruptedTurn = false;
   private readonly camera: RealtimeTalkCameraController;
-  private active = false;
-  private readonly startup = Promise.withResolvers<RealtimeTalkTransportStartResult>();
-  private startupError: Error | undefined;
+  private readonly lifecycle = new GoogleLiveConnectionLifecycle();
   private cameraPublished = false;
   private videoFramesActive = false;
   private hasSentVideoFrame = false;
@@ -113,7 +116,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       isClosed: () => this.closed,
       onStream: (stream) => {
         if (stream) {
-          if (!this.active) {
+          if (!this.lifecycle.isActive) {
             return;
           }
           this.cameraPublished = true;
@@ -124,7 +127,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         }
       },
       onAcquired: () => {
-        if (this.active) {
+        if (this.lifecycle.isActive) {
           this.startVideoFrames();
         }
       },
@@ -140,12 +143,15 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error(`Unsupported realtime WebSocket protocol: ${this.session.protocol}`);
     }
     const wsUrl = buildGoogleLiveUrl(this.session);
+    this.closed = false;
+    this.cameraPublished = false;
     this.input.adopt((detail) => this.failConnection(this.ws, detail));
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     const ws = new WebSocket(wsUrl);
     this.ws = ws;
     ws.binaryType = "arraybuffer";
+    const startup = this.lifecycle.begin(ws);
     this.setupTimeout = globalThis.setTimeout(() => {
       if (this.closed || this.ws !== ws) {
         return;
@@ -171,31 +177,30 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     ws.addEventListener("error", () => {
       this.failConnection(ws, "Realtime connection failed");
     });
-    const result = await this.startup.promise;
-    if (this.startupError) {
-      throw this.startupError;
-    }
-    return this.closed ? "cancelled" : result;
+    return this.lifecycle.finishStart(await startup);
   }
 
   activate(): void {
-    if (this.closed || this.active) {
+    if (this.closed || !this.lifecycle.activate()) {
       return;
     }
-    this.active = true;
     try {
       this.ctx.callbacks.onStatus?.("listening");
+      this.assertActivationCurrent();
       this.emitTalkEvent({ type: "session.ready" });
+      this.assertActivationCurrent();
       if (this.ctx.callbacks.onInputLevel && this.input.stream && this.inputContext) {
         const inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
         this.inputMeter = inputMeter;
         inputMeter.start(this.input.stream, this.inputContext);
+        this.assertActivationCurrent();
       }
       this.startMicrophonePump();
       if (this.camera.stream && !this.cameraPublished) {
         this.cameraPublished = true;
         this.ctx.callbacks.onVideoStream?.(this.camera.stream);
       }
+      this.assertActivationCurrent();
       this.startVideoFrames();
     } catch (error) {
       try {
@@ -204,6 +209,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         // Preserve the activation callback as the terminal cause after cleanup.
       }
       throw error;
+    }
+  }
+
+  private assertActivationCurrent(): void {
+    if (this.closed || !this.lifecycle.isActive) {
+      throw new Error("Google Live transport activation cancelled");
     }
   }
 
@@ -216,17 +227,17 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   stop(options?: { emitClosed?: boolean }): void {
-    const emitClosed = !this.closed && this.active && options?.emitClosed !== false;
+    const emitClosed = !this.closed && this.lifecycle.isActive && options?.emitClosed !== false;
     this.closed = true;
-    this.active = false;
-    this.startup.resolve("cancelled");
-    try {
-      if (emitClosed) {
-        this.emitTalkEvent({ type: "session.closed", final: true });
-      }
-    } finally {
-      this.releaseResources();
-    }
+    this.lifecycle.cancel();
+    runRealtimeTalkCleanup([
+      () => {
+        if (emitClosed) {
+          this.emitTalkEvent({ type: "session.closed", final: true });
+        }
+      },
+      () => this.releaseResources(),
+    ]);
   }
 
   private releaseResources(): void {
@@ -234,21 +245,29 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     this.interruptedTurn = false;
     this.pendingTranscripts.user = { text: "", byteCount: 0 };
     this.pendingTranscripts.assistant = { text: "", byteCount: 0 };
-    this.input.stop();
-    this.toolOwner.release();
-    this.inputPump.stop();
-    this.outputQueue.stop(this.outputContext);
-    void this.inputContext?.close();
-    this.inputContext = null;
-    void this.outputContext?.close();
-    this.outputContext = null;
-    this.ws?.close();
-    this.ws = null;
-    // Release capture and native resources before notifying presentation callbacks.
-    this.camera.release();
     const inputMeter = this.inputMeter;
     this.inputMeter = null;
-    inputMeter?.stop();
+    const inputContext = this.inputContext;
+    this.inputContext = null;
+    const outputContext = this.outputContext;
+    this.outputContext = null;
+    const ws = this.ws;
+    this.ws = null;
+    runRealtimeTalkCleanup([
+      () => this.input.stop(),
+      () => this.toolOwner.release(),
+      () => this.inputPump.stop(),
+      () => inputMeter?.stop(),
+      () => this.camera.release(),
+      () => this.outputQueue.stop(this.outputContext),
+      () => {
+        void inputContext?.close();
+      },
+      () => {
+        void outputContext?.close();
+      },
+      () => ws?.close(),
+    ]);
   }
 
   private clearSetupTimeout(): void {
@@ -264,13 +283,11 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed || !ws || this.ws !== ws) {
       return;
     }
-    if (!this.active) {
-      this.startupError = new Error(detail);
-      this.startup.reject(this.startupError);
+    if (this.lifecycle.failStartup(ws, new Error(detail))) {
       try {
         this.stop({ emitClosed: false });
       } catch {
-        // Preserve the startup rejection after releasing capture.
+        // Startup rejection owns terminal precedence; cleanup still ran to completion.
       }
       return;
     }
@@ -323,13 +340,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     if (this.closed || this.ws !== ws) {
       return;
     }
-    if (message.setupComplete) {
-      this.startup.resolve("ready");
+    if (message.setupComplete && this.lifecycle.markReady(ws)) {
       this.clearSetupTimeout();
     }
     // The parent session adopts the candidate after start() resolves. Provider
     // events remain provisional until activate() publishes that ownership.
-    if (!this.active) {
+    if (!this.lifecycle.isActive) {
       return;
     }
     const content = message.serverContent;

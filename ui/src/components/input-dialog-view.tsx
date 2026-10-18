@@ -107,7 +107,7 @@ export function InputDialogView(props: {
             {state().failure}
           </div>
         ) : undefined}
-        <openclaw-modal-actions class="exec-approval-actions">
+        <div class="exec-approval-actions">
           <button
             type="submit"
             class="btn primary"
@@ -123,7 +123,7 @@ export function InputDialogView(props: {
           >
             {options.cancelLabel ?? t("common.cancel")}
           </button>
-        </openclaw-modal-actions>
+        </div>
       </form>
     </openclaw-modal-dialog>
   );

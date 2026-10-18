@@ -657,7 +657,6 @@ async function runSettledFailureClientReplacementTest(
   const requests = options.requests ?? [];
   const clients: Array<ReturnType<typeof createCodexLifecycleHarness>> = [];
   const turnStarted = createDeferred<ReturnType<typeof createCodexLifecycleHarness>>();
-  const failedThreadRead = createDeferred<void>();
   onTestFinished(async () => {
     await Promise.all(clients.map(({ client }) => client.closeAndWait()));
   });
@@ -701,11 +700,7 @@ async function runSettledFailureClientReplacementTest(
       if (method !== "initialize") {
         methods.push(method);
       }
-      const response = nativeRequest(method, params, requestOptions);
-      if (startIndex === 0 && method === "thread/read") {
-        void response.then(() => failedThreadRead.resolve());
-      }
-      return response;
+      return nativeRequest(method, params, requestOptions);
     });
     clients.push(wire);
     return wire.client;
@@ -728,8 +723,6 @@ async function runSettledFailureClientReplacementTest(
       }),
   );
   const { run, started } = startClockControlledAttempt(createParams(sessionFile, workspaceDir));
-  await failedThreadRead.promise;
-  await vi.advanceTimersByTimeAsync(2_000);
   const [readyClient] = await Promise.all([turnStarted.promise, started]);
   readyClient.notify({
     method: "turn/completed",

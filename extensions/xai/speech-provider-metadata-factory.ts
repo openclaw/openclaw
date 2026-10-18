@@ -198,7 +198,6 @@ export function createXaiSpeechProviderMetadata(
         ...(speed === undefined ? {} : { speed }),
       };
     },
-    // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured: ({ providerConfig, cfg }) =>
       Boolean(resolveDirectXaiAudioApiKey(readXaiSpeechProviderConfig(providerConfig).apiKey)) ||
       context.isProviderAuthProfileConfigured({ provider: "xai", cfg }),

@@ -697,9 +697,7 @@ describeLive("xai plugin live", () => {
       );
 
       const reconnectStart = clientEvents.length;
-      const socket = (
-        bridge as unknown as { transport?: { socket?: { terminate(): void } | null } }
-      ).transport?.socket;
+      const socket = (bridge as unknown as { ws?: { terminate(): void } }).ws;
       if (!socket) {
         throw new Error("xAI realtime voice live bridge has no active WebSocket");
       }

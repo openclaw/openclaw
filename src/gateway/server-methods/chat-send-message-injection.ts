@@ -366,7 +366,7 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
   });
   const updatedAt = Date.now();
   if (entry) {
-    session.entry = { ...entry, updatedAt };
+    entry.updatedAt = updatedAt;
   }
   await updateSessionEntry({ storePath, sessionKey }, () => ({ updatedAt }), {
     skipMaintenance: true,

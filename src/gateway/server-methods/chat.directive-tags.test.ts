@@ -45,7 +45,6 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import {
@@ -1127,14 +1126,13 @@ beforeEach(({ signal }) => {
   testSignal = signal;
 });
 
-beforeAll(async () => {
+beforeAll(() => {
   suiteResources = createChatDirectiveSuiteResources();
   suiteFixtureRoot = suiteResources.root;
   suiteDatabasePath = suiteResources.databasePath;
   suiteFixtureEnv = suiteResources.env;
   mockState.storePath = suiteDatabasePath;
   suiteResources.open();
-  await loadOrCreateProcessDeviceIdentityAsync();
 });
 
 afterEach(async () => {
@@ -2523,15 +2521,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const content = Array.isArray(rewritten?.content)
         ? (rewritten.content as Array<Record<string, unknown>>)
         : [];
-      expect(content[0]).toEqual({
-        type: "text",
-        text: "Dinner options",
-        textSignature: "msg_final",
-      });
+      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
       expect(content.filter((block) => block.type === "image")).toHaveLength(1);
       expect((await readRawActiveAssistantTranscriptMessages())[1]?.content).toEqual([
         { type: "text", text: "Dinner options", textSignature: "msg_final" },
-        { type: "text", text: `MEDIA:${mediaUrl}` },
       ]);
       expect(rewritten?.openclawDelivery).toEqual({
         audioAsVoice: true,
@@ -2564,9 +2557,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           { type: "text", text: `MEDIA:${mediaUrl}` },
           { type: "toolCall", id: "call-1", name: "read", arguments: {} },
         ];
-        const originalRuntimeContent = JSON.stringify(
-          mockState.runtimeAssistantContentBeforeDelivery,
-        );
         mockState.runtimeAssistantTextsBeforeDelivery = [`Later reply\nMEDIA:${mediaUrl}`];
         mockState.dispatchedReplies = [
           {
@@ -2609,7 +2599,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           "image",
           "toolCall",
         ]);
-        expect(JSON.stringify(rawMessages[1]?.content)).toBe(originalRuntimeContent);
+        expect(rawMessages[1]?.content).toEqual([
+          { type: "thinking", thinking: "preserve runtime reasoning" },
+          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Image reply" },
+          { type: "toolCall", id: "call-1", name: "read", arguments: {} },
+        ]);
         expect(JSON.stringify(content)).toContain("artifact_managed_image_");
         expect(JSON.stringify(content)).not.toContain("MEDIA:");
         expect(messages[1]?.openclawDelivery).toEqual({ mediaUrls: [mediaUrl] });
@@ -4160,7 +4155,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       timestamp: expect.any(Number),
       idempotencyKey: "idem-system-provenance-acp:user",
       __openclaw: {
-        chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
         senderIsOwner: true,
         transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
       },
@@ -4312,7 +4306,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         timestamp: expect.any(Number),
         idempotencyKey: "idem-user-transcript-acp-images:user",
         __openclaw: {
-          chatRequestIdentity: expect.stringMatching(/^[a-f0-9]{64}$/u),
           transport: { clients: [{ id: "cli", mode: "cli", displayName: "ACP" }] },
         },
       });

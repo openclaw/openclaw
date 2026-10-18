@@ -140,7 +140,6 @@ export function createEmbeddedAuthProfileAdmission(
  * share this state so profile rotation cannot leave either with stale credentials.
  */
 export function createEmbeddedRunAuthController(params: {
-  authProfileBinding?: RunEmbeddedAgentParams["authProfileBinding"];
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
   workspaceDir: string;
@@ -195,10 +194,6 @@ export function createEmbeddedRunAuthController(params: {
     authMode: string;
     profileId?: string;
   }) => {
-    // Canonical observation follows credential resolution and precedes provider egress.
-    // It catches another process replacing a profile that retained the same ID.
-    await params.authProfileBinding?.revalidate();
-    params.authProfileBinding?.assertCurrent();
     const preparedAuth = await prepareProviderRuntimeAuth({
       provider: prepareParams.runtimeModel.provider,
       config: params.config,
@@ -481,11 +476,7 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
-  const applyApiKeyInfo = async (
-    candidate?: string,
-    attemptIndex?: number,
-    forceRefresh = false,
-  ): Promise<void> => {
+  const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);
     const apiKeyInfo = await getApiKeyForModelCore({
       model: preparedModel?.runtimeModel ?? state.models.runtime,
@@ -494,8 +485,7 @@ export function createEmbeddedRunAuthController(params: {
       store: params.authStore,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
-      lockedProfile: forceRefresh || (candidate != null && candidate === params.lockedProfileId),
-      forceRefresh,
+      lockedProfile: candidate != null && candidate === params.lockedProfileId,
       allowAuthProfileFallback: preparedModel?.allowAuthProfileFallback,
       secretSentinels: true,
     });
@@ -516,10 +506,6 @@ export function createEmbeddedRunAuthController(params: {
       throw new Error(
         `Resolved ${apiKeyInfo.mode ?? "unknown"} credentials are incompatible with the selected ${preparedModel.authRequirement} route for ${preparedModel.runtimeModel.provider}.`,
       );
-    }
-    params.authProfileBinding?.assertCurrent();
-    if (params.authProfileBinding && apiKeyInfo.profileId !== params.authProfileBinding.profileId) {
-      throw new Error("Resolved credentials do not belong to the automation inference owner.");
     }
     // Preserve the checked source even when resolution fails before route commit.
     state.apiKeyInfo = apiKeyInfo;
@@ -563,7 +549,7 @@ export function createEmbeddedRunAuthController(params: {
         runtimeAuthHandled = true;
       }
     } catch (error) {
-      if (params.authProfileBinding || !usesAwsSdkChain) {
+      if (!usesAwsSdkChain) {
         throw error;
       }
       params.log.warn(
@@ -637,24 +623,15 @@ export function createEmbeddedRunAuthController(params: {
     errorText: string,
     retried: boolean,
   ): Promise<boolean> => {
-    if (retried || classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
+    if (!state.runtimeAuthState || retried) {
+      return false;
+    }
+    if (classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {
       return false;
     }
     try {
-      if (state.runtimeAuthState) {
-        await refreshRuntimeAuth("auth-error");
-        scheduleRuntimeAuthRefresh();
-      } else if (
-        params.provider === "openai" &&
-        state.lastProfileId &&
-        state.apiKeyInfo?.mode === "oauth" &&
-        state.apiKeyInfo.authFlow === "chatgpt-token-sharing" &&
-        /\btoken_expired\b|\bauthentication token is expired\b/iu.test(errorText)
-      ) {
-        await applyApiKeyInfo(state.lastProfileId, state.profileIndex, true);
-      } else {
-        return false;
-      }
+      await refreshRuntimeAuth("auth-error");
+      scheduleRuntimeAuthRefresh();
       return true;
     } catch {
       return false;

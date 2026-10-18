@@ -264,10 +264,7 @@ extension GatewayProcessManager {
         self.hostingRevision &+= 1
     }
 
-    func appHostedEnvironment(
-        runtime: BundledRuntime,
-        capturedServiceEnvironment: [String: String] = [:]) throws -> [String: String]
-    {
+    func appHostedEnvironment(runtime: BundledRuntime) throws -> [String: String] {
         let profile = AppProfile.current
         let retained = try GatewayLaunchAgentManager.retainedServiceEnvironment(
             stateDirectory: profile.stateDirectoryURL(), profile: profile)
@@ -276,8 +273,7 @@ extension GatewayProcessManager {
             profile: profile,
             processEnvironment: ProcessInfo.processInfo.environment,
             retainedEnvironment: retained,
-            searchPaths: CommandResolver.preferredPaths(),
-            capturedServiceEnvironment: capturedServiceEnvironment)
+            searchPaths: CommandResolver.preferredPaths())
     }
 
     static func appHostedEnvironment(
@@ -285,11 +281,9 @@ extension GatewayProcessManager {
         profile: AppProfile,
         processEnvironment: [String: String],
         retainedEnvironment: [String: String],
-        searchPaths: [String],
-        capturedServiceEnvironment: [String: String] = [:]) -> [String: String]
+        searchPaths: [String]) -> [String: String]
     {
         var environment = processEnvironment.merging(retainedEnvironment) { _, retained in retained }
-            .merging(capturedServiceEnvironment) { _, captured in captured }
         let servicePaths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
         environment.merge(runtime.environment) { _, runtimeValue in runtimeValue }
         var seen = Set<String>()
@@ -529,6 +523,32 @@ extension GatewayProcessManager {
         return self.desiredActive ? nil : .failed(reason: self.lastFailureReason)
     }
 
+    private func restartPreparedBundledChild(
+        selection: (hosting: GatewayHosting, port: Int, allowUnconfigured: Bool),
+        expectedService: ManagedNodeGatewayMigration.ServiceCustody) async throws
+        -> (activation: CLIInstaller.LocalGatewayActivation?, generation: UInt64)
+    {
+        let authority = try expectedService.serviceAuthority()
+        self.stop(preservingActivationIntent: true, expectedServiceAuthority: authority)
+        let stopGeneration = self.gatewayStartGeneration
+        await self.waitForPendingLaunchAgentDisable()
+        if try self.bundledRuntimeUpdateIsPaused(generation: stopGeneration) { return (.deferred, stopGeneration) }
+        guard try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false) == expectedService
+        else {
+            throw GatewayHostingError(
+                message: "Gateway ownership changed while restarting; the newer service was preserved.")
+        }
+        if try self.bundledRuntimeUpdateIsPaused(generation: stopGeneration) { return (.deferred, stopGeneration) }
+        if let failure = self.lastFailureReason { throw GatewayHostingError(message: failure) }
+        guard self.gatewayHosting == selection.hosting, GatewayEnvironment.gatewayPort() == selection.port,
+              self.hostsLocalGatewayWithRemotePrimary == selection.allowUnconfigured
+        else { throw GatewayHostingError(message: "Gateway selection changed while restarting; retry.") }
+        guard self.desiredActive else { return (self.inactiveBundledRuntimeActivation(), stopGeneration) }
+        self.hostingChangeInProgress = false
+        self.startIfNeeded()
+        return (nil, self.gatewayStartGeneration)
+    }
+
     private func performBundledRuntimeUpdate(
         source: ActivationSource, generation updateGeneration: UInt64) async throws -> BundledRuntimeUpdateResult
     {
@@ -536,7 +556,7 @@ extension GatewayProcessManager {
         if let activation = try self.validateBundledRuntimeArrival(generation: updateGeneration) {
             return .init(activation: activation, generation: updateGeneration, source: source)
         }
-        let ownedGeneration = updateGeneration
+        var ownedGeneration = updateGeneration
         func completion(_ activation: CLIInstaller.LocalGatewayActivation) -> BundledRuntimeUpdateResult {
             .init(activation: activation, generation: ownedGeneration, source: source)
         }
@@ -548,7 +568,7 @@ extension GatewayProcessManager {
         let hosting = self.gatewayHosting
         let port = GatewayEnvironment.gatewayPort()
         let allowUnconfigured = self.hostsLocalGatewayWithRemotePrimary
-        let custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
+        var custody = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
         let pausedUpdate = AppStateStore.shared.isPaused ? try self.preparePausedServiceUpdate() : nil
         self.hostingChangeInProgress = true
         defer { self.hostingChangeInProgress = false }
@@ -571,7 +591,54 @@ extension GatewayProcessManager {
             generation: updateGeneration,
             selection: (hosting, port, allowUnconfigured),
             expectedService: custody) { return completion(activation) }
-        return try await self.repairPreparedBundledRuntime(
-            runtime: runtime, source: source, expectedService: custody)
+        if hosting == .app {
+            let restart = try await self.restartPreparedBundledChild(
+                selection: (hosting, port, allowUnconfigured), expectedService: custody)
+            ownedGeneration = restart.generation
+            if let activation = restart.activation { return completion(activation) }
+        } else {
+            self.gatewayStartGeneration &+= 1
+            let generation = self.gatewayStartGeneration
+            ownedGeneration = generation
+            self.status = .starting
+            let expectedService = custody
+            let result = try await self.enableLaunchAgentIfNeeded(
+                port: port,
+                generation: generation,
+                runtimeForUpdate: runtime,
+                expectedServiceAuthority: custody.serviceAuthority(),
+                mutationCheck: {
+                    let current = try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false)
+                    guard !self.isTerminating, !AppStateStore.shared.isPaused,
+                          self.isCurrentGatewayStart(generation), current == expectedService
+                    else { throw CancellationError() }
+                })
+            if try self.bundledRuntimeUpdateIsPaused(generation: generation) { return completion(.deferred) }
+            if let error = result.error {
+                self.fail(error)
+                throw GatewayHostingError(message: error)
+            }
+            guard result.installed
+            else { throw GatewayHostingError(message: "The updated Gateway service was not installed.") }
+            custody = try await ManagedNodeGatewayMigration.installedServiceCustody(
+                runtime: runtime, port: port, allowUnconfigured: allowUnconfigured)
+            if try self.bundledRuntimeUpdateIsPaused(generation: generation) { return completion(.deferred) }
+        }
+        let readinessGeneration = ownedGeneration
+        let ready = await self.waitForGatewayReady(timeout: GatewayLaunchAgentManager.startupMigrationTolerance)
+        if try self.bundledRuntimeUpdateIsPaused(generation: readinessGeneration) { return completion(.deferred) }
+        guard ready else {
+            return completion(.failed(reason: self.lastFailureReason ?? "The updated Gateway did not become ready."))
+        }
+        guard try await ManagedNodeGatewayMigration.captureServiceCustody(requireService: false) == custody,
+              GatewayEnvironment.gatewayPort() == port, self.gatewayHosting == hosting,
+              self.hostsLocalGatewayWithRemotePrimary == allowUnconfigured
+        else { throw GatewayHostingError(message: "Gateway ownership changed while verifying its runtime; retry.") }
+        if try self.bundledRuntimeUpdateIsPaused(generation: readinessGeneration) { return completion(.deferred) }
+        do { try await BundledRuntime.garbageCollectAfterHealthy() } catch {
+            self.appendLog("[gateway] old runtime cleanup deferred: \(error.localizedDescription)\n")
+        }
+        if try self.bundledRuntimeUpdateIsPaused(generation: readinessGeneration) { return completion(.deferred) }
+        return completion(self.desiredActive ? .ready : self.inactiveBundledRuntimeActivation())
     }
 }

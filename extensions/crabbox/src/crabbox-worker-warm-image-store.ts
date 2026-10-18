@@ -443,11 +443,11 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
       assertCurrent: () => void;
     }) {
       let rejection: string | undefined;
-      let owner: Awaited<ReturnType<typeof lookupLease>>;
+      let acceptedOwnerJson: string | undefined;
       await canonical.update(params.key, (current) => {
         params.assertCurrent();
         rejection = undefined;
-        owner = undefined;
+        acceptedOwnerJson = undefined;
         const record = withCrabboxWarmImageDisplayFacts(
           current ?? {
             version: 3,
@@ -456,15 +456,12 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
           },
           params.displayFacts,
         );
-        const existing = Object.hasOwn(record.allocations, params.id)
-          ? record.allocations[params.id]
-          : undefined;
-        if (existing) {
-          owner = {
+        if (Object.hasOwn(record.allocations, params.id)) {
+          acceptedOwnerJson = JSON.stringify({
             key: params.key,
             projectKey: record.projectKey,
-            ...existing,
-          };
+            ...record.allocations[params.id],
+          });
           return params.displayFacts ? record : undefined;
         }
         if (Object.keys(record.allocations).length >= WARM_IMAGE_MAX_ALLOCATIONS) {
@@ -483,44 +480,50 @@ export function openCrabboxWarmImageStore(state: CrabboxState, env?: NodeJS.Proc
           )
             ? { kind: "checkpoint", checkpointId: record.image.checkpointId }
             : { kind: "cold" };
-        const allocation: WarmAllocationRecord = {
-          choice,
-          ...(choice.kind === "cold"
-            ? { coldReason: params.coldReason ?? "snapshot-unavailable" }
-            : {}),
-          ...params.allocation,
-          imageGeneration:
-            choice.kind === "checkpoint"
-              ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
-              : null,
-          ...(choice.kind === "cold" && record.image?.pinned
-            ? {
-                publicationBase: {
-                  checkpointId: record.image.checkpointId,
-                  createdAtMs: record.image.createdAtMs,
-                },
-              }
-            : {}),
-        };
-        owner = {
-          key: params.key,
-          projectKey: record.projectKey,
-          ...allocation,
-        };
-        return {
+        const next = {
           ...record,
           ...(choice.kind === "cold"
             ? { latestColdReason: params.coldReason ?? "snapshot-unavailable" }
             : {}),
-          allocations: { ...record.allocations, [params.id]: allocation },
+          allocations: {
+            ...record.allocations,
+            [params.id]: {
+              choice,
+              ...(choice.kind === "cold"
+                ? { coldReason: params.coldReason ?? "snapshot-unavailable" }
+                : {}),
+              ...params.allocation,
+              imageGeneration:
+                choice.kind === "checkpoint"
+                  ? { checkpointId: choice.checkpointId, createdAtMs: record.image!.createdAtMs }
+                  : null,
+              ...(choice.kind === "cold" && record.image?.pinned
+                ? {
+                    publicationBase: {
+                      checkpointId: record.image.checkpointId,
+                      createdAtMs: record.image.createdAtMs,
+                    },
+                  }
+                : {}),
+            },
+          },
         };
+        acceptedOwnerJson = JSON.stringify({
+          key: params.key,
+          projectKey: next.projectKey,
+          ...next.allocations[params.id],
+        });
+        return next;
       });
       // Publish only the rejection from the observation accepted by the store.
       if (rejection) {
         throw new Error(rejection);
       }
-      if (!owner) {
-        throw new Error("Crabbox allocation was not recorded.");
+      const owner = await lookupLease(params.id);
+      if (!owner || JSON.stringify(owner) !== acceptedOwnerJson) {
+        throw new Error(
+          "Crabbox allocation changed before provisioning completed; retry the worker operation.",
+        );
       }
       return owner;
     },

@@ -255,7 +255,7 @@ export async function resolveRuntimeConversationBindingRouteAsync(
   return result;
 }
 
-/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveRuntimeConversationBindingRouteAsync; removal follows a stable deprecation period. */
 export function resolveRuntimeConversationBindingRoute(
   params: RuntimeConversationBindingRouteInput & {
     touchBinding?: boolean;

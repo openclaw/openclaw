@@ -32,12 +32,8 @@ export type ArtifactDownloadResolver = (
 
 export type ImageRenderOptions = {
   galleryImages?: readonly ImageBlock[];
-  galleryVideos?: (item: AttachmentItem) => {
-    index: number;
-    items: readonly (AttachmentItem & { messageId?: string })[];
-  };
+  galleryVideos?: (item: AttachmentItem) => { index: number; items: readonly AttachmentItem[] };
   sessionKey?: string;
-  messageId?: string;
   agentId?: string;
   policyKey?: string;
   canonicalMessageKey?: string;
@@ -275,7 +271,7 @@ export function notifyChatMediaResourceSubscribers(resource: ChatMediaResource<u
   if (!isChatMediaResourceCurrent(resource)) {
     return;
   }
-  chatMediaRenderVersion += 1;
+  chatMediaRenderVersion = (chatMediaRenderVersion + 1) % Number.MAX_SAFE_INTEGER;
   // A pane can change its subscription while another pane is being notified.
   // Snapshot the current generation so a replacement never receives stale work.
   for (const subscriber of Array.from(resource.subscribers)) {
@@ -308,6 +304,9 @@ export function scheduleChatMediaResourceRefresh(
     at: refreshAt,
     timer: setTimeout(
       () => {
+        if (!isChatMediaResourceCurrent(resource) || resource.refresh !== refresh) {
+          return;
+        }
         resource.refresh = undefined;
         onRefresh();
       },
@@ -401,18 +400,26 @@ export function retainManagedImageBlobUrl(cacheKey: string): (() => void) | unde
       return;
     }
     released = true;
-    cached.retainCount -= 1;
+    const current = managedImageBlobUrls.get(cacheKey);
+    if (current && current.retainCount > 0) {
+      current.retainCount -= 1;
+    }
     trimManagedImageBlobUrlCache();
   };
 }
 
 export function cacheManagedImageBlob(cacheKey: string, blob: Blob): string {
   const blobUrl = URL.createObjectURL(blob);
+  const previous = managedImageBlobUrls.get(cacheKey);
+  managedImageBlobUrls.delete(cacheKey);
   managedImageBlobUrls.set(cacheKey, {
     blob,
     url: blobUrl,
-    retainCount: 0,
+    retainCount: previous?.retainCount ?? 0,
   });
+  if (previous && previous.url !== blobUrl) {
+    URL.revokeObjectURL(previous.url);
+  }
 
   // Blob URLs retain browser-managed image data. Keep recent previews reusable,
   // but protect an image while its lightbox still uses that object URL.

@@ -276,6 +276,7 @@ export async function createFullModelCatalogAccess(
         configuredRuntimeModels,
         runtimeModels,
         providerExpiries,
+        hookRows,
       } = await worker.loadCatalog(
         providerIds,
         (error) => attempt.failed(error, providers, "provider"),
@@ -303,7 +304,7 @@ export async function createFullModelCatalogAccess(
             scope.has(normalizeProvider(provider)),
           )
         : discoveredAuth;
-      const { legacyProviders, ...publication } = prepareModelCatalogPublication(
+      const { legacyRows, ...publication } = prepareModelCatalogPublication(
         providerIds
           ? filterPreparedProviderCatalog(workerCatalog, (provider) =>
               scope.has(normalizeProvider(provider)),
@@ -313,6 +314,7 @@ export async function createFullModelCatalogAccess(
         retained,
         auth,
         normalizeProvider,
+        hookRows,
       );
       const completedProviders = new Map(
         [...scope].map((provider) => {
@@ -327,7 +329,7 @@ export async function createFullModelCatalogAccess(
               source: providerSource(provider),
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
               ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
-              ...(legacyProviders.has(provider) ? { legacyAcquired: true } : {}),
+              ...(legacyRows.get(provider)?.size ? { legacyRows: legacyRows.get(provider) } : {}),
             },
           ] as const;
         }),
@@ -581,7 +583,7 @@ export async function createFullModelCatalogAccess(
   );
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
-    void recheckNativeLogin();
+    recheckNativeLogin();
     if (pending || !published.inventory) {
       return;
     }

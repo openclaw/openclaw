@@ -3,11 +3,13 @@ import {
   bindExecutionOwnerLifecycleMetadata,
   ensureExecutionOwnerLifecycleBindingSchema,
 } from "../../audit/execution-owner-lifecycle-binding-store.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { deleteStaleCronJobFamilyRows } from "./row-codec.js";
 import { markCronDeliveryStartedInDatabase } from "./run-receipt-delivery.js";
+import type { CronRunReceiptDatabase } from "./run-receipt-read.js";
 import { CronRunReceiptRevisionError } from "./run-receipt-store.js";
 import { prepareCronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
 import type { CronRuntimeWorkerOperations } from "./runtime-worker.types.js";
@@ -19,8 +21,16 @@ export function bindCronRunReceiptExecutionInWorker(
 ): boolean {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      // A callback delayed past receipt pruning may leave an orphan diagnostic link;
-      // this metadata never grants execution or delivery authority.
+      const receipt = executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<CronRunReceiptDatabase>(db)
+          .selectFrom("cron_run_receipts")
+          .select("receipt_id")
+          .where("receipt_id", "=", input.receiptId),
+      );
+      if (!receipt) {
+        return false;
+      }
       if (!prepareCronRunReceiptWriteSchema(db).executionOwnerLifecycleBindings) {
         ensureExecutionOwnerLifecycleBindingSchema(db);
       }

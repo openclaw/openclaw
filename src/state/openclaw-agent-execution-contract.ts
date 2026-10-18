@@ -82,6 +82,7 @@ export type AgentDatabaseNativeGeneration = {
     assertCallerCurrent?: (identity?: AgentDatabaseExecutionFileIdentity) => void,
     createIfMissing?: boolean,
     signal?: AbortSignal,
+    readmitSchema?: boolean,
   ): Promise<T | undefined>;
   close(): Promise<void>;
 };

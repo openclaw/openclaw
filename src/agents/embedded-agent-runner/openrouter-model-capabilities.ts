@@ -291,7 +291,7 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
  * The cold synchronous read is retained for the v2026.9.8 provider-stream SDK contract.
  *
  * @deprecated Await loadOpenRouterModelCapabilities, then use getLoadedOpenRouterModelCapabilities.
- * Supported through 2026-12-31; removal ships in the first January 2027 stable.
+ * This synchronous SQLite lookup will be removed in the next Plugin SDK major.
  */
 export function getOpenRouterModelCapabilities(
   modelId: string,

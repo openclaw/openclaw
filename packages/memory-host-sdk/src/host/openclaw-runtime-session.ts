@@ -42,7 +42,7 @@ export function assertBoundIncognitoMemorySyncAccess(
   }
 }
 
-/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await readTranscriptStatsBatchReadOnlyAsync. Retained during stable deprecation. */
 export function readTranscriptStatsBatchReadOnlySync(
   scopes: Parameters<typeof readAccessorTranscriptStatsBatchReadOnlySync>[0],
 ) {
@@ -301,7 +301,7 @@ export function extractAgentIdFromSessionPath(absPath: string): string | null {
 export {
   DREAMING_NARRATIVE_RUN_PREFIX,
   isDreamingNarrativeSessionStoreKey,
-} from "./openclaw-runtime-paths.js";
+} from "./session-transcript-corpus-policy.js";
 
 export async function readSessionResetRecallCutoffInWorker(
   ...args: Parameters<

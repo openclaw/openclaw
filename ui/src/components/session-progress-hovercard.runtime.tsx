@@ -473,19 +473,12 @@ class SessionProgressHovercardController {
       personActivity: this.personActivity(),
       automationLink: this.applicationContext
         ? {
-            gateway: this.applicationGateway,
-            sessionKey,
-            agentId: session.agentId!,
             href: `${pathForRoute("cron", this.applicationContext.basePath)}?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
-            navigate: (jobId) => {
+            navigate: () => {
               const context = this.applicationContext;
-              const search = new URLSearchParams({ session: sessionKey, agent: session.agentId! });
-              if (jobId) {
-                search.set("job", jobId);
-              }
               this.close();
               context?.navigate("cron", {
-                search: `?${search}`,
+                search: `?${new URLSearchParams({ session: sessionKey, agent: session.agentId! })}`,
               });
             },
           }

@@ -80,6 +80,38 @@ function mockCall(mock: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return call;
 }
 
+async function handleClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  assertHandled: (response: unknown) => void = (response) => expect(response).not.toBeUndefined(),
+): Promise<unknown> {
+  let response: unknown;
+  await vi.waitFor(async () => {
+    response = await client.handleRequest(request);
+    assertHandled(response);
+  });
+  return response;
+}
+
+async function startClientRequestWhenReady(
+  client: ReturnType<typeof createFakeClient>,
+  request: Parameters<ReturnType<typeof createFakeClient>["handleRequest"]>[0],
+  started: Promise<void>,
+): Promise<void> {
+  await vi.waitFor(async () => {
+    const requestResult = client.handleRequest(request);
+    void requestResult.catch(() => undefined);
+    const state = await Promise.race([
+      started.then(() => "started" as const),
+      requestResult.then(
+        () => "unhandled" as const,
+        () => "unhandled" as const,
+      ),
+    ]);
+    expect(state).toBe("started");
+  });
+}
+
 function flushDiagnosticEvents() {
   return new Promise<void>((resolve) => {
     setImmediate(resolve);
@@ -180,14 +212,11 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("cancels an active side tool when its app-server request is cancelled", async () => {
-    const turnStarted = createDeferred<void>();
-    const toolStarted = createDeferred<void>();
-    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
+    const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     let toolSignal: AbortSignal | undefined;
     toolExecuteMock.mockImplementation((_callId: string, _args: unknown, signal?: AbortSignal) => {
       toolSignal = signal;
-      toolStarted.resolve();
       return new Promise((_resolve, reject) => {
         signal?.addEventListener("abort", () => reject(new Error("tool cancelled")), {
           once: true,
@@ -195,7 +224,9 @@ describe("runCodexAppServerSideQuestion", () => {
       });
     });
     const run = runCodexAppServerSideQuestion(sideParams());
-    await turnStarted.promise;
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.some(([method]) => method === "turn/start")).toBe(true),
+    );
     const requestController = new AbortController();
     const request = client.handleRequest(
       {
@@ -211,10 +242,9 @@ describe("runCodexAppServerSideQuestion", () => {
       requestController.signal,
     );
     try {
-      await toolStarted.promise;
-      expect(toolSignal).toBeDefined();
+      await vi.waitFor(() => expect(toolSignal).toBeDefined());
       requestController.abort(new Error("app-server request deadline"));
-      expect(toolSignal?.aborted).toBe(true);
+      await vi.waitFor(() => expect(toolSignal?.aborted).toBe(true), { timeout: 200 });
     } finally {
       client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
       await run;
@@ -469,11 +499,12 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("returns an explicit unsupported decline for ordinary MCP input", async () => {
     const approvalSpy = vi.spyOn(elicitationBridge, "routeCodexAppServerElicitationRequest");
-    const turnStarted = createDeferred<void>();
-    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
+    const client = createFakeClient({ completeTurn: false });
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
     const run = runCodexAppServerSideQuestion(sideParams());
-    await turnStarted.promise;
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.map(([method]) => method)).toContain("turn/start"),
+    );
 
     const item = {
       type: "mcpToolCall",
@@ -489,7 +520,7 @@ describe("runCodexAppServerSideQuestion", () => {
     });
 
     await expect(
-      client.handleRequest({
+      handleClientRequestWhenReady(client, {
         id: "side-elicitation",
         method: "mcpServer/elicitation/request",
         params: {
@@ -923,7 +954,7 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       ]);
       try {
-        const response = await client.handleRequest({
+        await handleClientRequestWhenReady(client, {
           id: "side-approval-policy",
           method: "mcpServer/elicitation/request",
           params: {
@@ -935,7 +966,6 @@ describe("runCodexAppServerSideQuestion", () => {
             requestedSchema: { type: "object", properties: { value: { type: "string" } } },
           },
         });
-        expect(response).not.toBeUndefined();
         const policy = approvalSpy.mock.calls.at(-1)?.[0].pluginAppPolicyContext;
         expect(Object.keys(policy?.apps ?? {}).toSorted()).toEqual([
           "ask-app",
@@ -1740,8 +1770,7 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("omits computer control from side threads without a compaction owner", async () => {
-    const turnStarted = createDeferred<void>();
-    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
+    const client = createPendingClient();
     const computerExecute = vi.fn();
     createOpenClawCodingToolsMock.mockReturnValue([
       {
@@ -1754,8 +1783,7 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
-    await turnStarted.promise;
-    const toolResponse = await client.handleRequest({
+    const toolResponse = await handleClientRequestWhenReady(client, {
       id: 43,
       method: "item/tool/call",
       params: {
@@ -1777,15 +1805,19 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("aborts active side tools before waiting for thread cleanup", async () => {
     const client = createPendingClient({ interrupt: false });
-    const turnStarted = createDeferred<void>();
-    const unsubscribeStarted = createDeferred<void>();
-    const unsubscribePending = createDeferred<void>();
+    let releaseUnsubscribe: (() => void) | undefined;
+    const unsubscribePending = new Promise<void>((resolve) => {
+      releaseUnsubscribe = resolve;
+    });
     let toolAborted = false;
-    const toolStarted = createDeferred<void>();
+    let resolveToolStarted: (() => void) | undefined;
+    const toolStarted = new Promise<void>((resolve) => {
+      resolveToolStarted = resolve;
+    });
     toolExecuteMock.mockImplementation(
       (_callId: string, _args: unknown, signal?: AbortSignal) =>
         new Promise((_resolve, reject) => {
-          toolStarted.resolve();
+          resolveToolStarted?.();
           signal?.addEventListener(
             "abort",
             () => {
@@ -1798,12 +1830,8 @@ describe("runCodexAppServerSideQuestion", () => {
     );
     const baseRequest = client.request.getMockImplementation()!;
     client.request.mockImplementation(async (method: string, requestParams?: unknown) => {
-      if (method === "turn/start") {
-        turnStarted.resolve();
-      }
       if (method === "thread/unsubscribe") {
-        unsubscribeStarted.resolve();
-        await unsubscribePending.promise;
+        await unsubscribePending;
         return {};
       }
       return baseRequest(method, requestParams);
@@ -1811,28 +1839,29 @@ describe("runCodexAppServerSideQuestion", () => {
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
-    await turnStarted.promise;
-    const toolResponse = client.handleRequest({
-      id: 42,
-      method: "item/tool/call",
-      params: {
-        ...codexTestTurnIds("side-thread"),
-        callId: "tool-1",
-        tool: "wiki_status",
-        arguments: {},
+    await startClientRequestWhenReady(
+      client,
+      {
+        id: 42,
+        method: "item/tool/call",
+        params: {
+          ...codexTestTurnIds("side-thread"),
+          callId: "tool-1",
+          tool: "wiki_status",
+          arguments: {},
+        },
       },
-    });
-    void toolResponse.catch(() => undefined);
-    await toolStarted.promise;
+      toolStarted,
+    );
     client.emit(turnCompleted("side-thread", "turn-1", "Finished answer."));
-    try {
-      await unsubscribeStarted.promise;
-      expect(toolAborted).toBe(true);
-    } finally {
-      unsubscribePending.resolve();
-    }
+    await vi.waitFor(() =>
+      expect(client.request.mock.calls.some(([method]) => method === "thread/unsubscribe")).toBe(
+        true,
+      ),
+    );
+    expect(toolAborted).toBe(true);
+    releaseUnsubscribe?.();
     await expect(run).resolves.toEqual({ text: "Finished answer." });
-    await toolResponse;
   });
 
   it("projects native side-thread tool notifications into trusted diagnostics", async () => {
@@ -2001,13 +2030,11 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("returns an empty response for side-thread user input requests", async () => {
-    const turnStarted = createDeferred<void>();
-    const client = createFakeClient({ completeTurn: false, onTurnStart: turnStarted.resolve });
+    const client = createPendingClient();
     getSharedCodexAppServerClientMock.mockResolvedValue(client);
 
     const run = runCodexAppServerSideQuestion(sideParams());
-    await turnStarted.promise;
-    const userInputResponse = await client.handleRequest({
+    const userInputResponse = await handleClientRequestWhenReady(client, {
       id: 43,
       method: "item/tool/requestUserInput",
       params: {
@@ -2042,33 +2069,26 @@ describe("runCodexAppServerSideQuestion", () => {
   });
 
   it("retires an uncertain policy after a lost acknowledgement without replaying the fork", async () => {
-    type WrittenRequest = { id: number; method: string; params: unknown };
-    const forkWritten = createDeferred<WrittenRequest>();
-    const policyWritten = createDeferred<void>();
-    const unsubscribeWritten = createDeferred<WrittenRequest>();
-    const harness = createClientHarness({
-      onWrite(line) {
-        const request = JSON.parse(line) as WrittenRequest;
-        if (request.method === "thread/fork") {
-          forkWritten.resolve(request);
-        } else if (request.method === "thread/inject_items") {
-          policyWritten.resolve();
-        } else if (request.method === "thread/unsubscribe") {
-          unsubscribeWritten.resolve(request);
-        }
-      },
-    });
+    const harness = createClientHarness();
     getSharedCodexAppServerClientMock.mockResolvedValue(harness.client);
+    const waitForRequest = async (method: string) =>
+      await vi.waitFor(() => {
+        const request = harness.writes
+          .map((write) => JSON.parse(write) as { id: number; method: string; params: unknown })
+          .find((message) => message.method === method);
+        expect(request).toBeDefined();
+        return request!;
+      });
     const controller = new AbortController();
     const run = runCodexAppServerSideQuestion(
       sideParams({ opts: { abortSignal: controller.signal } }),
     );
     const failure = run.catch((error: unknown) => error);
-    const fork = await forkWritten.promise;
+    const fork = await waitForRequest("thread/fork");
     harness.send({ id: fork.id, result: threadResult("side-thread") });
-    await policyWritten.promise;
+    await waitForRequest("thread/inject_items");
     controller.abort("lost policy ACK");
-    const unsubscribe = await unsubscribeWritten.promise;
+    const unsubscribe = await waitForRequest("thread/unsubscribe");
     expect(unsubscribe.params).toEqual({ threadId: "side-thread" });
     harness.send({ id: unsubscribe.id, result: { status: "unsubscribed" } });
     await expect(failure).resolves.toMatchObject({

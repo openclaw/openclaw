@@ -85,6 +85,10 @@ export class SqliteDatabaseCleanCloseSeals {
       value: unknown,
       revision: number,
     ) => void,
+    private readonly references: {
+      retain: (record: Admission) => void;
+      release: (record: Admission) => void;
+    },
   ) {}
 
   markCreated(record: Admission): void {
@@ -160,11 +164,19 @@ export class SqliteDatabaseCleanCloseSeals {
     verifiedAt: number | undefined,
   ): Disposable & { publish(this: void): boolean } {
     const publish = this.preparePublication(database, record, verifiedAt);
+    if (record) {
+      // Native close must not retire this generation before its seal is published.
+      this.references.retain(record);
+    }
     let retained = record;
     return {
       publish: () => retained !== undefined && publish(),
       [Symbol.dispose]: () => {
+        const released = retained;
         retained = undefined;
+        if (released) {
+          this.references.release(released);
+        }
       },
     };
   }

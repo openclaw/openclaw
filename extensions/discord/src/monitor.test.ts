@@ -19,12 +19,13 @@ import {
   normalizeDiscordAllowList,
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
+  resolveDiscordGuildEntry,
   resolveDiscordOwnerAccess,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor/allow-list.js";
 import { createDiscordLivePolicyReader } from "./monitor/live-policy.js";
-import { resolveDiscordReplyTarget } from "./monitor/threading.js";
+import { resolveDiscordReplyTarget, sanitizeDiscordThreadName } from "./monitor/threading.js";
 import { setDiscordRuntime } from "./runtime.js";
 import { firstMockArg, firstMockCall } from "./test-support/mock-calls.js";
 type DiscordReactionEvent = Parameters<
@@ -225,6 +226,18 @@ describe("discord allowlist helpers", () => {
 });
 
 describe("discord guild/channel resolution", () => {
+  it("falls back to wildcard guild entry", () => {
+    const guildEntries = makeEntries({
+      "*": { requireMention: false },
+    });
+    const resolved = resolveDiscordGuildEntry({
+      guild: fakeGuild("123", "Friends of OpenClaw"),
+      guildEntries,
+    });
+    expect(resolved?.id).toBe("123");
+    expect(resolved?.requireMention).toBe(false);
+  });
+
   it("denies channel when config present but no match", () => {
     const guildInfo: DiscordGuildEntryResolved = {
       channels: {
@@ -350,6 +363,13 @@ describe("discord reply target selection", () => {
         expected,
       );
     }
+  });
+});
+
+describe("discord autoThread name sanitization", () => {
+  it("falls back to thread + id when empty after cleaning", () => {
+    const name = sanitizeDiscordThreadName("   <@123>", "abc");
+    expect(name).toBe("Thread abc");
   });
 });
 
@@ -1081,3 +1101,4 @@ describe("discord reaction notification modes", () => {
     }
   });
 });
+/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

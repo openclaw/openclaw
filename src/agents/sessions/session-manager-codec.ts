@@ -135,18 +135,14 @@ export function cloneSessionModelContextEntries(
   header: SessionHeader | null,
   branch: readonly SessionEntry[],
 ): FileEntry[] {
-  // Project storage-only payloads before cloning, while isolating mutable manager entries.
-  const events: FileEntry[] = [...(header ? [header] : []), ...branch];
-  for (let index = 0; index < events.length; index++) {
-    const entry = events[index]!;
+  // Public manager entries are mutable; preserve durable bytes before publication.
+  const events = structuredClone([...(header ? [header] : []), ...branch]);
+  for (const entry of events) {
     if (entry.type === "message") {
-      const message = projectModelContextMessages([entry.message])[0]!;
-      if (message !== entry.message) {
-        events[index] = { ...entry, message };
-      }
+      entry.message = projectModelContextMessages([entry.message])[0]!;
     }
   }
-  return structuredClone(events);
+  return events;
 }
 
 export function buildSessionContext(

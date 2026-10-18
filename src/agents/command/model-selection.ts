@@ -488,15 +488,9 @@ export async function resolveEmbeddedModelSelection(params: {
         params.sessionKey &&
         !params.suppressVisibleSessionEffects
       ) {
-        const authEntry = { ...entry };
-        sessionEntryForAttempt = authEntry;
-        if (sessionEntry === entry) {
-          sessionEntry = authEntry;
-        }
-        params.sessionStore[params.sessionKey] = authEntry;
         await clearSessionAuthProfileOverride({
           agentId: params.sessionAgentId,
-          sessionEntry: authEntry,
+          sessionEntry: entry,
           sessionStore: params.sessionStore,
           sessionKey: params.sessionKey,
           storePath: params.storePath,

@@ -63,28 +63,19 @@ export function admitAttachmentFiles(
   candidates: readonly File[],
   limits: ChatAttachmentLimits | undefined,
   stagedBytes: number,
-  options: { resizeImages?: boolean; compressVideos?: boolean } = {},
+  options: { resizeImages?: boolean } = {},
 ): File[] {
   const admitted: File[] = [];
   const empty: File[] = [];
   const oversized: File[] = [];
   let total = stagedBytes;
   for (const file of candidates) {
-    const compressible = options.compressVideos && file.type.startsWith("video/");
-    const reservation = attachmentReservationBytes(
-      file.size,
-      file.type,
-      limits,
-      compressible ? (limits?.maxBatchBytes ?? Infinity) - total : Infinity,
-    );
+    const reservation = attachmentReservationBytes(file.size, file.type, limits);
     if (file.size === 0) {
       empty.push(file);
     } else if (
       limits &&
-      (reservation <= 0 ||
-        (file.size > reservation &&
-          !compressible &&
-          !(options.resizeImages && canResizeChatAttachment(file))) ||
+      ((file.size > reservation && !(options.resizeImages && canResizeChatAttachment(file))) ||
         total + reservation > limits.maxBatchBytes)
     ) {
       oversized.push(file);
@@ -102,10 +93,9 @@ export function attachmentReservationBytes(
   sizeBytes: number,
   mimeType: string,
   limits: ChatAttachmentLimits | undefined,
-  availableBytes = Infinity,
 ): number {
   const ceiling = mimeType.startsWith("image/") ? limits?.maxImageBytes : limits?.maxBytes;
-  return Math.max(0, Math.min(sizeBytes, ceiling ?? Infinity, availableBytes));
+  return Math.min(sizeBytes, ceiling ?? Infinity);
 }
 
 function attachmentBytes(attachment: ChatAttachment): number {

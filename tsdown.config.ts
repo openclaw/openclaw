@@ -22,7 +22,6 @@ import {
   publicPluginSdkEntrypoints,
 } from "./scripts/lib/plugin-sdk-entries.mts";
 import { createPublicSessionCardAssetsPlugin } from "./scripts/lib/public-session-card-assets.mts";
-import { isRecord } from "./scripts/lib/record-shared.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "./scripts/lib/runtime-dependency-ownership-build-plugin.mts";
 import { runtimeProcessBuildEntries } from "./scripts/lib/runtime-process-build-entries.mts";
 import {
@@ -83,9 +82,6 @@ const workerDeployVersion = (
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
 const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 const TSDOWN_DECLARATIONS = !RUN_NODE_SKIP_DTS_BUILD;
-const TSDOWN_PACKAGE_DECLARATIONS = TSDOWN_DECLARATIONS
-  ? { tsconfig: "tsconfig.packages.json" }
-  : false;
 export { createStateSchemaInlinePlugin, STATE_SCHEMA_INLINE_PLUGIN_NAME };
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
@@ -330,7 +326,7 @@ function workerHelperBuildConfig(
 function nodeWorkspacePackageBuildConfig(packageDir: string, config: UserConfig = {}): UserConfig {
   return {
     ...config,
-    dts: TSDOWN_PACKAGE_DECLARATIONS,
+    dts: TSDOWN_DECLARATIONS,
     hooks: createDeclarationBoundaryHooks(config.hooks),
     entry: config.entry ?? buildPackageDistEntriesFromExports(packageDir),
     env,
@@ -410,9 +406,7 @@ const rootDependencyOptions = withExternalPackageSubpaths({
     "vitest",
     // Selected plugin distributions install platform optionals beside bundled JavaScript.
     ...bundledPluginBuildEntries.flatMap(({ packageJson }) =>
-      isRecord(packageJson) && isRecord(packageJson.optionalDependencies)
-        ? Object.keys(packageJson.optionalDependencies)
-        : [],
+      Object.keys(packageJson?.optionalDependencies ?? {}),
     ),
   ],
 });
@@ -654,13 +648,9 @@ const rootBundledPluginBuildEntries = collectSourceCheckoutPluginBuildEntries(
   bundledPluginBuildInventory,
 ).filter(({ isolated }) => !isolated);
 const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) => {
-  const openclaw =
-    isRecord(plugin.packageJson) && isRecord(plugin.packageJson.openclaw)
-      ? plugin.packageJson.openclaw
-      : undefined;
   const sourceEntries = plugin.sourceEntries.filter(
     (source) =>
-      source === openclaw?.setupEntry ||
+      source === plugin.packageJson?.openclaw?.setupEntry ||
       plugin.catalogSourceEntries.includes(source) ||
       /^\.\/setup-api\.[cm]?[jt]s$/u.test(source),
   );
@@ -668,15 +658,13 @@ const bundledInventoryEntries = rootBundledPluginBuildEntries.flatMap((plugin) =
     return [];
   }
   const entries = [{ id: plugin.id, sourceEntries }];
-  const extensions = openclaw?.extensions;
-  if (
-    extensions !== undefined &&
-    (!Array.isArray(extensions) || extensions.some((entry) => typeof entry !== "string"))
-  ) {
-    throw new Error(`Plugin ${plugin.id} extensions must be an array of strings`);
-  }
   const runtime = listBundledPluginEntrySources([
-    { id: plugin.id, sourceEntries: extensions?.length ? extensions : ["./index.ts"] },
+    {
+      id: plugin.id,
+      sourceEntries: plugin.packageJson?.openclaw?.extensions?.length
+        ? plugin.packageJson.openclaw.extensions
+        : ["./index.ts"],
+    },
   ]);
   const runtimeSources = new Set(Object.values(runtime).map((source) => fs.realpathSync(source)));
   for (const [name, source] of Object.entries(listBundledPluginEntrySources(entries))) {
@@ -813,17 +801,14 @@ const unifiedDeclarationCompilerOptions: NonNullable<DtsOptions["compilerOptions
 } = { stableTypeOrdering: true };
 
 const configs: UserConfig[] = [
-  nodeBuildConfig(
-    {
-      name: TSDOWN_PACKAGE_CONFIG_GROUP,
-      entry: buildAgentCoreDistEntries(),
-      outDir: tsdownPackageOutputRoot("agent-core"),
-      deps: {
-        neverBundle: shouldExternalizeAgentCoreDependency,
-      },
+  nodeBuildConfig({
+    name: TSDOWN_PACKAGE_CONFIG_GROUP,
+    entry: buildAgentCoreDistEntries(),
+    outDir: tsdownPackageOutputRoot("agent-core"),
+    deps: {
+      neverBundle: shouldExternalizeAgentCoreDependency,
     },
-    TSDOWN_PACKAGE_DECLARATIONS,
-  ),
+  }),
   nodeWorkspacePackageBuildConfig("gateway-protocol", {
     deps: {
       neverBundle: shouldExternalizeGatewayProtocolDependency,

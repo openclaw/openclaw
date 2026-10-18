@@ -632,11 +632,11 @@ function EmbeddedModelSetup(props: {
       >
         <div class="model-setup-wizard model-setup-discovery">
           <div class="model-setup-wizard__body">{props.content}</div>
-          <openclaw-modal-actions class="model-setup-wizard__footer">
+          <div class="model-setup-wizard__footer">
             <button class="btn" onClick={() => props.view.onClose?.()}>
               {t("common.close")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </div>
       </openclaw-modal-dialog>{" "}
     </>

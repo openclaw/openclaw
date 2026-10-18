@@ -1,4 +1,4 @@
-import { html, type TemplateResult } from "lit";
+import { html } from "lit";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
@@ -28,9 +28,16 @@ import type { ChatProps } from "./chat-view.tsx";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatPermissionPickerProps } from "./components/chat-permission-picker.tsx";
+import { getChatRunOwnerSessionKey } from "./history-merge.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 registerModelControlsEnglish();
+
+export function openChatPaneModelPicker(state: ChatPageHost): void {
+  state.chatModelPickerOpenSessionKey = state.sessionKey;
+  void refreshChatModelCatalogOnDemand(state);
+  state.requestUpdate?.();
+}
 
 type SessionActionAccess = ReturnType<typeof readChatSessionActionAccess>;
 type SessionAction = keyof SessionActionAccess;
@@ -137,7 +144,7 @@ export function renderChatPaneComposerControls(params: {
   onProviderSettings?: (provider: string) => void;
   onModelAccounts?: () => void;
 }): {
-  composerControls: TemplateResult;
+  composerControls: NonNullable<ChatProps["composerControls"]>;
   permissionPicker: ChatPermissionPickerProps;
 } {
   const {
@@ -265,6 +272,7 @@ export function renderChatPaneComposerControls(params: {
               onRequestUpdate: () => state.requestUpdate?.(),
             }),
           activeRunId: state.chatRunId,
+          activeRunSessionKey: getChatRunOwnerSessionKey(state),
           agentDefaultModel,
           connected: state.connected,
           gatewayAvailable: Boolean(state.client),

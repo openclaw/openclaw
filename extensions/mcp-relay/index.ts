@@ -4,6 +4,7 @@ import {
   registerMcpRelayGatewayMethods,
   registerMcpRelayConnectRoute,
 } from "./src/gateway-methods.js";
+import { identityFromPrivateKey } from "./src/protocol.js";
 import type { RelayService } from "./src/service.js";
 
 export default definePluginEntry({
@@ -51,7 +52,7 @@ export default definePluginEntry({
         const state = new RelayState(api.runtime, config.relayUrl, () =>
           scheduler.signal.throwIfAborted(),
         );
-        const identity = await state.initialize();
+        const identity = identityFromPrivateKey((await state.initialize()).privateKey);
         scheduler.signal.throwIfAborted();
         const gateway = { name: "OpenClaw", version: api.runtime.version };
         service = new Service({

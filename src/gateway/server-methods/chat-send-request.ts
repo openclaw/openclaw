@@ -1,5 +1,5 @@
-import { createHmac } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { Static } from "typebox";
 import {
   GATEWAY_CLIENT_CAPS,
@@ -23,7 +23,6 @@ import {
   type AttachedChatWorkContext,
 } from "../../chat/work-context.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
-import { loadChatRequestIdentityKeyAsync } from "../../infra/device-identity-async.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   isProgressCardRefreshInputProvenance,
@@ -79,7 +78,7 @@ export type NormalizedChatSendRequest = {
   normalizedAttachments: ChatAttachment[];
   rawMessage: string;
   /** Submitted annotation identity is immutable even when profile aliases later merge. */
-  requestIdentity?: string;
+  requestIdentity: string;
   mentions?: HumanMention[];
   workContext?: AttachedChatWorkContext;
   reconnectResumeRequested: boolean;
@@ -283,12 +282,14 @@ export function normalizeChatSendRequest(params: {
   const modelMessage = workContext
     ? [rawMessage, formatChatWorkContext(workContext.snapshot)].filter(Boolean).join("\n\n")
     : rawMessage;
-  const requestInput = JSON.stringify([
-    p.message,
-    p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
-    ...(workContext ? [workContext.snapshot] : []),
-    ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
-  ]);
+  const requestIdentity = sha256Hex(
+    JSON.stringify([
+      p.message,
+      p.mentions?.map(({ profileId, start, end }) => [profileId, start, end]) ?? [],
+      ...(workContext ? [workContext.snapshot] : []),
+      ...(providerReview ? [providerReview.review.id, providerReview.target.sessionId] : []),
+    ]),
+  );
 
   const value: NormalizedChatSendRequest = {
     chatSendReceivedAtMs,
@@ -310,31 +311,23 @@ export function normalizeChatSendRequest(params: {
     turnKind,
     normalizedAttachments,
     rawMessage: modelMessage,
+    requestIdentity,
     ...(mentions.value ? { mentions: mentions.value } : {}),
     reconnectResumeRequested: controlUiReconnectResume.resumeRequested,
   };
-  if (stopCommand) {
-    return { ok: true, value };
+  if (p.intent && !params.goalResume) {
+    const goalStart = {
+      action: "start" as const,
+      operationId: p.idempotencyKey,
+      issuedAtMs: p.intent.issuedAtMs,
+      objective: p.message,
+    };
+    return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
+      (requestFingerprint) => ({
+        ok: true,
+        value: { ...value, goalOperation: { ...goalStart, requestFingerprint } },
+      }),
+    );
   }
-  return loadChatRequestIdentityKeyAsync().then((key) => {
-    // A keyed verifier survives redaction without storing an offline prompt digest.
-    const request: NormalizedChatSendRequest = key
-      ? { ...value, requestIdentity: createHmac("sha256", key).update(requestInput).digest("hex") }
-      : value;
-    if (p.intent && !params.goalResume) {
-      const goalStart = {
-        action: "start" as const,
-        operationId: p.idempotencyKey,
-        issuedAtMs: p.intent.issuedAtMs,
-        objective: p.message,
-      };
-      return fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]).then(
-        (requestFingerprint) => ({
-          ok: true,
-          value: { ...request, goalOperation: { ...goalStart, requestFingerprint } },
-        }),
-      );
-    }
-    return { ok: true as const, value: request };
-  });
+  return { ok: true, value };
 }

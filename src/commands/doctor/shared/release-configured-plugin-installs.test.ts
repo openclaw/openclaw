@@ -222,7 +222,7 @@ describe("configured plugin install release step", () => {
       cfg: {
         agents: {
           defaults: {
-            model: "groq/openai/gpt-oss-120b",
+            model: "groq/llama-3.3-70b-versatile",
           },
         },
         tts: {

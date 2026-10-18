@@ -37,7 +37,7 @@ function collectAppendedEvents(
   return events;
 }
 
-/** Assemble a receipt; the backend owns capturing its postimage before publication. */
+/** Project the exact phase result and complete postimage into one backend-independent receipt. */
 export function createSessionActorCommittedOutcome<
   Value extends SessionActorPhaseResults[SessionActorPhase],
 >(params: {
@@ -96,7 +96,7 @@ export function createSessionActorCommittedOutcome<
       pendingInputMutationReceipt: applied.pendingInputMutationReceipt,
       pendingFinalDelivery: structuredClone(after.entry?.pendingFinalDelivery),
       reducers: applied.reducers,
-      postimage: after,
+      postimage: structuredClone(after),
     },
   };
 }

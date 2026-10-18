@@ -445,7 +445,6 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authSuccessMock).toHaveBeenCalledWith({
       store,
       profileId,
-      modelId: runParams.model,
       provider: "google-gemini-cli",
       agentDir: "/tmp/agent",
     });

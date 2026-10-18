@@ -80,7 +80,7 @@ suite.define(() => {
           });
           const status = (sha: string, behind: number) => ({
             updateAvailable: {
-              channel: "beta" as const,
+              channel: "dev" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -88,7 +88,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "beta" as const,
+              channel: "dev" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -238,7 +238,7 @@ suite.define(() => {
             activeRun: null,
             lastRun: run,
             updateAvailable: {
-              channel: "beta" as const,
+              channel: "dev" as const,
               currentVersion: "1.0.0",
               latestVersion: "1.0.0",
               currentSha: "a".repeat(40),
@@ -247,7 +247,7 @@ suite.define(() => {
               commitsBehind: behind,
             },
             schedule: {
-              channel: "beta" as const,
+              channel: "dev" as const,
               autoEnabled: false,
               target: {
                 kind: "git" as const,
@@ -344,12 +344,12 @@ suite.define(() => {
     },
   );
 
-  it("refreshes the Git release target when opening the update card and again before confirmation", async () => {
+  it("refreshes the Dev target when opening the update card and again before confirmation", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
         const available = (sha: string, behind: number): UpdateAvailable => ({
-          channel: "beta",
+          channel: "dev",
           currentVersion: "1.0.0",
           latestVersion: "1.0.0",
           currentSha: "a".repeat(40),
@@ -364,7 +364,7 @@ suite.define(() => {
         ): { updateAvailable: UpdateAvailable; schedule: UpdateScheduleState } => ({
           updateAvailable: available(sha, behind),
           schedule: {
-            channel: "beta",
+            channel: "dev",
             autoEnabled: false,
             target: {
               kind: "git",
@@ -427,7 +427,7 @@ suite.define(() => {
         expect((await page.goto(`${suite.server.baseUrl}chat`))?.status()).toBe(200);
         await gateway.waitForRequest("chat.startup");
 
-        // The Inbox badge carries dismissible attention; the menu keeps release availability.
+        // The Inbox is the sole update surface; the badge carries the attention.
         const inboxBadge = page.locator(".sidebar-issues-button__count");
         await inboxBadge.waitFor();
         expect(
@@ -456,13 +456,7 @@ suite.define(() => {
         await inboxBadge.waitFor({ state: "detached" });
 
         await page.locator(".sidebar-identity-card").click();
-        await page
-          .getByRole("menuitem", { name: "Updates. Update available", exact: true })
-          .waitFor();
-        await page
-          .locator(".sidebar-identity-menu__update-badge")
-          .getByText("Available", { exact: true })
-          .waitFor();
+        await page.getByText("Update available", { exact: true }).waitFor();
         await page.keyboard.press("Escape");
 
         await page.reload();
@@ -477,7 +471,7 @@ suite.define(() => {
     );
   });
 
-  it("keeps Inbox snoozes account-scoped without hiding release availability", async () => {
+  it("keeps Inbox snoozes and the account-menu update chip with their authenticated account", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
       async ({ page }) => {
@@ -531,9 +525,9 @@ suite.define(() => {
           await page.locator(".sidebar-identity-menu").waitFor({ state: "visible" });
           await expect
             .poll(() =>
-              page.locator(".sidebar-identity-menu .sidebar-identity-menu__update-badge").count(),
+              page.locator(".sidebar-identity-menu .sidebar-footer-build__update").count(),
             )
-            .toBe(1);
+            .toBe(snoozed ? 1 : 0);
           await page.keyboard.press("Escape");
           await page.locator(".sidebar-identity-menu").waitFor({ state: "detached" });
         }

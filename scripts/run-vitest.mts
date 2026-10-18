@@ -64,7 +64,6 @@ import {
   stripVitestAnsi,
   writeVitestUnhandledErrorSummary,
 } from "./lib/vitest-unhandled-errors.mts";
-import { getVitestWorkerDescriptor } from "./lib/vitest-worker-descriptor.mts";
 import { createVitestWorkerRun, type VitestWorkerRun } from "./lib/vitest-worker-run.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import {
@@ -1121,7 +1120,7 @@ export async function runVitest(
   }
   const workers = sourceMode
     ? undefined
-    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv), getVitestWorkerDescriptor());
+    : createVitestWorkerRun(resolveVitestProcessEnv(invocationEnv));
   const withCacheSlot = createVitestCacheSlots();
   let interrupted: NodeJS.Signals | undefined;
   let preparingWorkers = false;

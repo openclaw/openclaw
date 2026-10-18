@@ -8,11 +8,7 @@ import {
   fullReleaseCandidateArtifactName,
   validateFullReleaseCandidateRequest,
 } from "./full-release-candidate-contract.mjs";
-import {
-  classifyReleaseGhTransportError,
-  isReleaseGhServerError,
-  readReleaseJobListing,
-} from "./full-release-validation-policy.mjs";
+import { classifyReleaseGhTransportError } from "./full-release-validation-policy.mjs";
 import { downloadExactActionsArtifactArchive } from "./lib/actions-artifact-archive.mjs";
 import {
   CandidateConstituentUnavailableError,
@@ -53,14 +49,7 @@ function requestContract(input) {
   };
 }
 
-function runGhJson(
-  repository,
-  path,
-  label,
-  deadlineMs,
-  paginate = false,
-  smallerPageFallback = false,
-) {
+function runGhJson(repository, path, label, deadlineMs, paginate = false) {
   for (let attempt = 1; ; attempt += 1) {
     requireDiscoveryBudget(deadlineMs);
     const remainingMs =
@@ -95,7 +84,6 @@ function runGhJson(
     }
     if (
       attempt === CANDIDATE_GH_RETRY_ATTEMPTS ||
-      (smallerPageFallback && isReleaseGhServerError(lastError)) ||
       classifyReleaseGhTransportError(lastError) !== "transient"
     ) {
       throw lastError;
@@ -115,25 +103,22 @@ function runGhJson(
 }
 
 function readWorkflowJobPages(repository, path, deadlineMs) {
-  return readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
-    const pages = runGhJson(
-      repository,
-      `${path}${path.includes("?") ? "&" : "?"}per_page=${perPage}`,
-      "full release candidate workflow jobs",
-      deadlineMs,
-      true,
-      smallerPageFallback,
-    );
-    if (
-      !Array.isArray(pages) ||
-      pages.length === 0 ||
-      pages.some((page) => !isRecord(page) || !Array.isArray(page.jobs))
-    ) {
-      fail("full release candidate workflow job pages are invalid");
-    }
-    const jobs = pages.flatMap((page) => page.jobs);
-    return { jobs, total_count: pages[0].total_count };
-  });
+  const pages = runGhJson(
+    repository,
+    path,
+    "full release candidate workflow jobs",
+    deadlineMs,
+    true,
+  );
+  if (
+    !Array.isArray(pages) ||
+    pages.length === 0 ||
+    pages.some((page) => !isRecord(page) || !Array.isArray(page.jobs))
+  ) {
+    fail("full release candidate workflow job pages are invalid");
+  }
+  const jobs = pages.flatMap((page) => page.jobs);
+  return { jobs, total_count: pages[0].total_count };
 }
 
 function readRepositoryArtifacts(repository, requestSha256, deadlineMs) {
@@ -235,7 +220,7 @@ async function discover(args) {
       readWorkflowJobs: async (runId) =>
         readWorkflowJobPages(
           contract.request.repository,
-          `actions/runs/${runId}/jobs?filter=all`,
+          `actions/runs/${runId}/jobs?filter=all&per_page=100`,
           deadlineMs,
         ),
     });
@@ -291,7 +276,7 @@ async function discover(args) {
       readWorkflowJobs: async (runId, runAttempt) =>
         readWorkflowJobPages(
           contract.request.repository,
-          `actions/runs/${runId}/attempts/${runAttempt}/jobs`,
+          `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
           deadlineMs,
         ),
       request: contract.request,
@@ -366,7 +351,7 @@ async function verify(args) {
     readWorkflowJobs: async (runId, runAttempt) =>
       readWorkflowJobPages(
         binding.request.repository,
-        `actions/runs/${runId}/attempts/${runAttempt}/jobs`,
+        `actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`,
       ),
     downloadArchive: (params) =>
       downloadExactActionsArtifactArchive({

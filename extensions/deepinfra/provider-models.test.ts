@@ -116,7 +116,7 @@ describe("discoverDeepInfraModels", () => {
         max_tokens: 4096,
         pricing: { input_tokens: 4, output_tokens: 8, cache_read_tokens: 0.4 },
       }),
-      surfaceEntry("moonshotai/Kimi-K2.6", ["chat", "vlm", "vision"], {
+      surfaceEntry("stepfun-ai/Step-3.7-Flash", ["chat", "vlm", "vision"], {
         context_length: 192000,
         max_tokens: 16384,
         pricing: { input_tokens: 0.2, output_tokens: 1.15 },
@@ -147,7 +147,7 @@ describe("discoverDeepInfraModels", () => {
             },
           },
           {
-            id: "moonshotai/Kimi-K2.6",
+            id: "stepfun-ai/Step-3.7-Flash",
             reasoning: true,
             input: ["text", "image"],
             contextWindow: 192000,

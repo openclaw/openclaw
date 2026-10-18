@@ -709,6 +709,7 @@ describe("worker turn launcher terminal results", () => {
       placements,
       loadSessionRuntime,
       revokeSessionAuthority: () => {},
+      awaitTurnClaimRelease: (sessionId, wait) => dispatch.awaitTurnClaimRelease(sessionId, wait),
     });
     const moveService = createWorkerPlacementMoveService({
       placements,

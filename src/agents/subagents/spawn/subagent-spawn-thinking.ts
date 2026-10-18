@@ -9,7 +9,6 @@ export function resolveSubagentThinkingOverride(params: {
   targetAgentConfig?: ResolvedAgentConfig;
   thinkingOverrideRaw?: string;
   callerThinkingRaw?: string;
-  callerThinkingExplicit?: boolean;
 }) {
   const resolvedThinkingDefaultRaw =
     normalizeOptionalString(params.requesterAgentConfig?.subagents?.thinking) ??
@@ -17,10 +16,7 @@ export function resolveSubagentThinkingOverride(params: {
     normalizeOptionalString(params.cfg.agents?.defaults?.subagents?.thinking);
 
   const overrideCandidateRaw = params.thinkingOverrideRaw || resolvedThinkingDefaultRaw;
-  // An automatic parent tier must not become a saved explicit child preference.
-  const candidate =
-    overrideCandidateRaw ||
-    (params.callerThinkingExplicit === false ? undefined : params.callerThinkingRaw);
+  const candidate = overrideCandidateRaw || params.callerThinkingRaw;
   const normalizedThinking = candidate ? normalizeThinkLevel(candidate) : undefined;
   if (overrideCandidateRaw && !normalizedThinking) {
     return {

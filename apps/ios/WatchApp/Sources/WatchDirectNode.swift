@@ -289,28 +289,38 @@ final class WatchDirectNode {
             role: "node",
             gatewayID: configuration.gatewayID,
             profile: .primary)?.token
-        var credential: ConnectCredential
+        let response: WatchNodeConnectResponse
+        let usedBootstrap: Bool
         if let bootstrapToken = link.bootstrapToken {
-            credential = .bootstrap(bootstrapToken)
+            do {
+                response = try await self.establishSession(
+                    identity: identity,
+                    baseURL: baseURL,
+                    credential: .bootstrap(bootstrapToken))
+                usedBootstrap = true
+            } catch let error as HTTPError where error.status == 401 {
+                guard let storedToken else { throw error }
+                response = try await self.establishSession(
+                    identity: identity,
+                    baseURL: baseURL,
+                    credential: .device(storedToken))
+                usedBootstrap = false
+            }
         } else if let storedToken {
-            credential = .device(storedToken)
+            response = try await self.establishSession(
+                identity: identity,
+                baseURL: baseURL,
+                credential: .device(storedToken))
+            usedBootstrap = false
         } else {
             throw HTTPError(status: 401, detail: String(localized: "No watch device credential"))
-        }
-        let response: WatchNodeConnectResponse
-        do {
-            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
-        } catch let error as HTTPError where error.status == 401 {
-            guard case .bootstrap = credential, let storedToken else { throw error }
-            credential = .device(storedToken)
-            response = try await self.establishSession(identity: identity, baseURL: baseURL, credential: credential)
         }
         // A successful bootstrap response has already consumed the one-time code.
         // Finish that durable handoff across background/toggle cancellation, but
         // never let an obsolete attempt overwrite a forgotten or newer setup.
         do {
             guard self.isInstalledConfiguration(configuration) else { throw CancellationError() }
-            if case .device = credential, response.voiceCredential != nil {
+            guard usedBootstrap || response.voiceCredential == nil else {
                 throw HTTPError(
                     status: 0,
                     detail: String(localized: "Voice access requires a new setup from iPhone Settings."))

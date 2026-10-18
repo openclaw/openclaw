@@ -9,7 +9,6 @@ import {
   captureComposerProof,
   installTalkBrowserFixtures,
   TALK_READY_HISTORY_MESSAGE,
-  waitForTalkReady,
 } from "./browser-talk-start-stop.fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -504,7 +503,6 @@ suite.define(() => {
       { permissions: ["microphone"], viewport: { width: 390, height: 844 } },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
-          historyMessages: [TALK_READY_HISTORY_MESSAGE],
           methodResponses: createDictationMethodResponses(
             "dictation-browser-proof",
             "dictation-browser-proof",
@@ -512,7 +510,6 @@ suite.define(() => {
         });
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}chat`);
-        await waitForTalkReady(page);
 
         const microphone = page.getByRole("button", { name: "Dictation" });
         await microphone.click();

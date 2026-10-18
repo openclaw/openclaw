@@ -19,7 +19,6 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -107,8 +106,7 @@ class WearChatFlowTest {
 
   @Test
   fun remoteTerminalsAndCanonicalReplacements() {
-    val initialConnection = CompletableDeferred<Unit>()
-    val phone = ControlledPhone(initialConnection = initialConnection)
+    val phone = ControlledPhone()
     val app = instrumentation.targetContext.applicationContext as WearApplication
     // Reuse the existing production transport seam, without a new runtime/fixture owner.
     val clientField = WearApplication::class.java.getDeclaredField("proxyClient\$delegate")
@@ -141,9 +139,6 @@ class WearChatFlowTest {
         ) as MainActivity
       lateinit var vm: WearViewModel
       instrumentation.runOnMainSync { vm = ViewModelProvider(activity)[WearViewModel::class.java] }
-      // Register input callbacks before the phone supplies a conversation.
-      assertTrue(device.wait(Until.hasObject(By.text("Checking phone")), 10_000))
-      initialConnection.complete(Unit)
       awaitState("initial history") { !vm.state.value.loading && vm.state.value.connected }
       instrumentation.addMonitor(monitor)
       capture("00-ready")
@@ -240,7 +235,6 @@ class WearChatFlowTest {
 
   private class ControlledPhone(
     private val fullReply: String? = null,
-    private val initialConnection: CompletableDeferred<Unit>? = null,
   ) {
     var sequence = 0L
     var sends = 0
@@ -248,11 +242,7 @@ class WearChatFlowTest {
     var lastMessage: String? = null
     val client: WearProxyClient =
       WearProxyClient(
-        nodeResolver =
-          WearNodeResolver {
-            initialConnection?.await()
-            "synthetic-phone"
-          },
+        nodeResolver = WearNodeResolver { "synthetic-phone" },
         transport = WearMessageTransport { _, path, bytes -> respond(path, bytes) },
       )
 

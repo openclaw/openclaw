@@ -25,21 +25,20 @@ const portal: PortalSummary = {
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
   url: `https://preview.example.test:8443/app?view=one%2Ftwo&openclaw_portal=${"a".repeat(64)}`,
   publicUrl: "https://preview.example.test:8443/app?view=one%2Ftwo",
-  exposure: { kind: "non-loopback", browserReachability: "unverified" },
   createdAtMs: 1,
 };
 
-function recorder(summary: PortalSummary = portal) {
+function recorder() {
   const calls: Array<[string, unknown]> = [];
   const requestScopes: Array<[string, readonly string[] | undefined]> = [];
   const reply = (method: string) => {
     if (method === "portal.list" || method === "portal.session.list") {
-      return { portals: [summary] } as PortalListResult;
+      return { portals: [portal] } as PortalListResult;
     }
     if (method === "portal.close" || method === "portal.session.close") {
       return { closed: true } as PortalCloseResult;
     }
-    return summary;
+    return portal;
   };
   const callGateway: InProcessGatewayCaller = async <T>(
     method: string,
@@ -141,7 +140,7 @@ describe("portal tool", () => {
     expect(opened.details).toEqual(portal);
     expect(opened.content[0]).toMatchObject({
       type: "text",
-      text: expect.stringContaining("remain unverified from the requesting viewer"),
+      text: `Portal route allocated at ${portal.url}. Pass PUBLIC_URL=${portal.publicUrl} and PORT=${portal.port} when starting the dev server. Open it in the Control UI Portals page to verify browser access and application rendering; allocation does not prove either. Remote access requires private portal ingress or a reachable direct listener.`,
     });
     expect(listed.details).toEqual({ portals: [portal] });
     // Listing asks for write scope so the bearer URL is not redacted away from a
@@ -152,24 +151,6 @@ describe("portal tool", () => {
     expect(Value.Check(tool.outputSchema!, opened.details)).toBe(true);
     expect(Value.Check(tool.outputSchema!, listed.details)).toBe(true);
     expect(Value.Check(tool.outputSchema!, closed.details)).toBe(true);
-  });
-
-  it("warns before loopback launch instructions without refusing local use or rewriting URLs", async () => {
-    const localPortal: PortalSummary = {
-      ...portal,
-      publicUrl: "http://127.0.0.1:43123/",
-      url: `http://127.0.0.1:43123/?${portal.tokenQuery}`,
-      exposure: { kind: "loopback-only", browserReachability: "unverified" },
-    };
-    const tool = createAvailablePortalTools(recorder(localPortal))[0]!;
-    for (const action of ["open", "list"]) {
-      const result = await tool.execute(action, { action, port: 3000 });
-      expect(result.content[0]).toMatchObject({
-        type: "text",
-        text: expect.stringMatching(/^Loopback-only portal:.*local use is still valid/u),
-      });
-      expect(result.details).toEqual(action === "open" ? localPortal : { portals: [localPortal] });
-    }
   });
 
   it("keeps attached-environment portal operations on the selected machine", async () => {

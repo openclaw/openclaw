@@ -14,11 +14,10 @@ import {
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeVideoGenerationDuration,
-  type VideoGenerationProvider,
-  type VideoGenerationRequest,
-  type VideoGenerationSourceAsset,
+import type {
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_XAI_VIDEO_BASE_URL,
@@ -141,11 +140,10 @@ function resolveDurationSeconds(
   min: number,
   max: number,
 ): number | undefined {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
-  if (duration === undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  return Math.max(min, Math.min(max, duration));
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function resolveAspectRatio(value: string | undefined): string | undefined {

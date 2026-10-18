@@ -166,17 +166,14 @@ describe("applyModelDefaults", () => {
     expect(next.agents?.defaults?.models?.["anthropic/claude-sonnet-5-5"]?.alias).toBeUndefined();
   });
 
-  it.each([
-    { name: "adds current Google aliases", alias: undefined },
-    { name: "respects explicit empty alias disables", alias: "" },
-  ])("$name", ({ alias }) => {
+  it("respects explicit empty alias disables", () => {
     const cfg = {
       agents: {
         defaults: {
           models: {
-            "google/gemini-4-argon": { alias },
-            "google/gemini-3.8-flash": { alias },
-            "google/gemini-3.5-flash-lite": { alias },
+            "google/gemini-3.1-pro-preview": { alias: "" },
+            "google/gemini-3-flash-preview": {},
+            "google/gemini-3.1-flash-lite-preview": {},
           },
         },
       },
@@ -184,12 +181,12 @@ describe("applyModelDefaults", () => {
 
     const next = applyModelDefaults(cfg);
 
-    expect(next.agents?.defaults?.models?.["google/gemini-4-argon"]?.alias).toBe(alias ?? "gemini");
-    expect(next.agents?.defaults?.models?.["google/gemini-3.8-flash"]?.alias).toBe(
-      alias ?? "gemini-flash",
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-pro-preview"]?.alias).toBe("");
+    expect(next.agents?.defaults?.models?.["google/gemini-3-flash-preview"]?.alias).toBe(
+      "gemini-flash",
     );
-    expect(next.agents?.defaults?.models?.["google/gemini-3.5-flash-lite"]?.alias).toBe(
-      alias ?? "gemini-flash-lite",
+    expect(next.agents?.defaults?.models?.["google/gemini-3.1-flash-lite"]?.alias).toBe(
+      "gemini-flash-lite",
     );
   });
 

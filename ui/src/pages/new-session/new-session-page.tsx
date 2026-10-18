@@ -3,6 +3,7 @@ import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
 import { renderLazyViewError } from "../../components/lazy-view-error.ts";
 import { renderSessionBackground } from "../../components/session-background-view.ts";
+import "../../components/web-awesome-popover.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -216,12 +217,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       owner.submission.setVisibility(visibility),
   };
   const completed = () => page().submission.completedSubmission;
-  const creationComposer = createMemo(() => {
-    const submission = page().submission;
-    const composer = submission.creationComposer;
-    // Rollback restores the initial composer; keep a second one only for retained input.
-    return submission.pendingMessage || composer?.hasInput ? composer : undefined;
-  });
   const userId = () => {
     const identity = page().context?.gateway.snapshot.selfUser?.identity;
     return identity?.type === "profile" ? identity.id : null;
@@ -290,7 +285,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           onOpenImage={owner.setImageLightbox}
         />
         <CreationComposer
-          composer={creationComposer()}
+          composer={page().submission.creationComposer}
           onOpenImage={owner.setImageLightbox}
           renderRevision={revision()}
         />

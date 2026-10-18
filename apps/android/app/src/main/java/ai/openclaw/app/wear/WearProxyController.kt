@@ -456,14 +456,7 @@ internal fun projectWearChatEvent(payload: JsonElement): JsonObject? {
     copyBoolean(source, "replace")
     copyString(source, "errorMessage", MAX_ERROR_MESSAGE_CHARS)
     copyString(source, "stopReason", 100)
-    projectMessage(source["message"])?.let { message ->
-      val anonymousFinal =
-        source.stringOrNull("state") == "final" && message.stringOrNull("role") == "assistant" &&
-          message["id"] == null && message["entryId"] == null && message["idempotencyKey"] == null
-      // Anonymous final timestamps describe broadcast time, not the stored reply.
-      // History owns its canonical timestamp; retaining this clock duplicates the reply on Wear.
-      put("message", if (anonymousFinal) JsonObject(message - "timestamp") else message)
-    }
+    projectMessage(source["message"])?.let { put("message", it) }
   }
 }
 

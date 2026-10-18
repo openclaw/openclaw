@@ -447,7 +447,7 @@ function CardModalContent(props: WorkboardProps) {
               </section>
             ) : undefined}
           </div>
-          <openclaw-modal-actions class="workboard-modal__actions">
+          <div class="workboard-modal__actions">
             <button
               class="btn"
               type="button"
@@ -462,7 +462,7 @@ function CardModalContent(props: WorkboardProps) {
             >
               {editing() ? t("common.save") : t("common.create")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </form>
         <WorkboardErrorToast
           owner={state()}
@@ -526,14 +526,14 @@ export function CardDiscardDialog(props: {
         <section class="workboard-discard">
           <h2>{props.title}</h2>
           <p>{t("workboard.discardDraftHelp")}</p>
-          <openclaw-modal-actions class="workboard-discard__actions">
+          <div class="workboard-discard__actions">
             <button class="btn" type="button" autofocus onClick={() => props.onKeepEditing()}>
               {t("workboard.keepEditing")}
             </button>
             <button class="btn danger" type="button" onClick={() => props.onDiscard()}>
               {t("workboard.discardDraft")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </section>
         {props.error ?? undefined}
       </>

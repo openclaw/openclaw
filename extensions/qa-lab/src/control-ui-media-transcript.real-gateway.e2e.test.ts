@@ -377,8 +377,7 @@ suite.define(() => {
             executablePath: process.execPath,
             argsPrefix: [path.join(process.cwd(), "openclaw.mjs")],
             cwd: process.cwd(),
-            // Repository fixtures stage auth directly; package repair has separate coverage.
-            usePackagedPlugins: false,
+            usePackagedPlugins: true,
           },
           providerMode: "mock-openai",
           primaryModel: "mock-openai/gpt-5.6-luna",

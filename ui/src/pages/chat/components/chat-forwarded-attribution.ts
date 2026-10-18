@@ -16,6 +16,7 @@ type ForwardedAttributionOptions = Parameters<typeof renderForwardedAvatar>[1] &
   basePath?: string;
   linkSource?: boolean;
   updateCount?: number;
+  showAvatar?: boolean;
 };
 
 /**
@@ -64,7 +65,7 @@ export function renderForwardedAttribution(
   const sourceAgentPrefix =
     !sourceIsMainSession && sourceIsOtherAgent ? sourceAgentDisplayName : undefined;
   const sourceAvatar =
-    sourceIsOtherAgent && opts.updateCount === undefined
+    sourceIsOtherAgent && opts.updateCount === undefined && opts.showAvatar !== false
       ? renderForwardedAvatar(sourceParsed.agentId, opts)
       : nothing;
   const sourceLink =

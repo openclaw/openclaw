@@ -36,26 +36,6 @@ type LoadedSkillRecord = Pick<LoadedLocalSkill, "skill" | "frontmatter"> & {
   syncDirName?: string;
 };
 
-/** Admitted entries shared only within one synchronous discovery pass and environment. */
-export type SkillSourceReadBatch = Map<string, WorkspaceSkillSources["entries"]>;
-
-function readSourceEntries(
-  batch: SkillSourceReadBatch | undefined,
-  input: readonly unknown[],
-  read: () => WorkspaceSkillSources["entries"],
-): WorkspaceSkillSources["entries"] {
-  if (!batch) {
-    return read();
-  }
-  const key = JSON.stringify(input);
-  let entries = batch.get(key);
-  if (!entries) {
-    entries = read();
-    batch.set(key, entries);
-  }
-  return entries;
-}
-
 export function warnInvalidSkill(source: string, diagnostic: LocalSkillLoadDiagnostic): void {
   skillsLogger.warn("Skipping invalid skill.", {
     source,
@@ -235,31 +215,23 @@ function loadGeneratedPluginSkillRecords(params: {
 export function loadWorkspaceSkillSourceEntries(
   plan: WorkspaceSkillSourcePlan,
   config?: OpenClawConfig,
-  batch?: SkillSourceReadBatch,
 ): WorkspaceSkillSources["entries"] {
-  const grouped = new Map<string, WorkspaceSkillSources["entries"]>();
+  const grouped = new Map<string, Array<LoadedSkillRecord & { sourceOrder?: number }>>();
   for (const root of plan.roots) {
-    const { tier, order, ...policy } = root;
-    const input = { ...policy, config };
-    const records = grouped.get(tier) ?? [];
-    for (const entry of readSourceEntries(batch, ["root", input], () =>
-      loadSkillRootRecords(input).map(createSkillEntry),
-    )) {
-      records.push(order === undefined ? entry : { ...entry, sourceOrder: order });
+    const records = grouped.get(root.tier) ?? [];
+    for (const record of loadSkillRootRecords({ ...root, config })) {
+      records.push({ ...record, sourceOrder: root.order });
     }
-    grouped.set(tier, records);
+    grouped.set(root.tier, records);
   }
   const extra = grouped.get("extra") ?? [];
   if (plan.pluginSkillsDir) {
-    const input = {
+    for (const record of loadGeneratedPluginSkillRecords({
       pluginSkillsDir: plan.pluginSkillsDir,
       pluginSkillRoots: plan.pluginSkillRoots,
       source: "openclaw-extra",
       limits: resolveSkillDiscoveryLimits(config),
-    };
-    for (const record of readSourceEntries(batch, ["generated", input], () =>
-      loadGeneratedPluginSkillRecords(input).map(createSkillEntry),
-    )) {
+    })) {
       extra.push({
         ...record,
         sourceOrder:
@@ -277,20 +249,16 @@ export function loadWorkspaceSkillSourceEntries(
         left.skill.name.localeCompare(right.skill.name, "en") ||
         left.skill.source.localeCompare(right.skill.source, "en"),
     );
-  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"].flatMap(
-    (tier) => grouped.get(tier) ?? [],
-  );
+  return ["extra", "bundled", "workshop", "managed", "personal", "workspace"]
+    .flatMap((tier) => grouped.get(tier) ?? [])
+    .map(createSkillEntry);
 }
 
 export function loadExecutionSkillEntries(
   executionWorkspaceDir: string,
   config?: OpenClawConfig,
-  batch?: SkillSourceReadBatch,
 ): SkillEntry[] {
-  return resolveWorkspaceSkillDirectories(executionWorkspaceDir).flatMap((root) => {
-    const input = { ...root, config };
-    return readSourceEntries(batch, ["root", input], () =>
-      loadSkillRootRecords(input).map(createSkillEntry),
-    );
-  });
+  return resolveWorkspaceSkillDirectories(executionWorkspaceDir)
+    .flatMap((root) => loadSkillRootRecords({ ...root, config }))
+    .map(createSkillEntry);
 }

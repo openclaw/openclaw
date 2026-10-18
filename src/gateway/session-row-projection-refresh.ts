@@ -8,7 +8,6 @@ import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
 import { withSessionRowDatabaseFacts } from "./session-row-database-facts.js";
-import type { SessionRowSelectionPreparationOptions } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow as isCold } from "./session-row-projection-archive.js";
 import { createSessionRowMaterializer } from "./session-row-projection-materialize.js";
 import * as records from "./session-row-projection-record.js";
@@ -51,7 +50,7 @@ export function createSessionRowRefresh(
   let exactReadBytes = 0;
   let exactPreparations = 0;
   let exactPreparationsIdle: Deferred | undefined;
-  const selectionPreparations = new Map<string, Promise<void>>();
+  const selectionPreparations = new Map<boolean, Promise<void>>();
   const runtimeOwnershipRetries = new Set<string>();
   // Admission and the background drain must share each pending database acquisition.
   let refreshing: Promise<void> | undefined;
@@ -198,9 +197,8 @@ export function createSessionRowRefresh(
       },
     );
   }
-  function selectionNeedsPreparation(options: SessionRowSelectionPreparationOptions = {}) {
+  function selectionNeedsPreparation(options: { metadataOnly?: boolean } = {}) {
     const metadataOnly = options.metadataOnly === true;
-    const includeCatalog = !metadataOnly || options.includeCatalog === true;
     const state = owner.state();
     if (state.disposed) {
       return false;
@@ -208,7 +206,7 @@ export function createSessionRowRefresh(
     if (
       state.topologyDirty ||
       !state.registryPrepared ||
-      (includeCatalog && owner.catalog.needsInitialRead) ||
+      (!metadataOnly && owner.catalog.needsInitialRead) ||
       owner.membership.needsPreparation
     ) {
       return true;
@@ -256,16 +254,15 @@ export function createSessionRowRefresh(
     };
   }
   function prepareSelection(
-    options: SessionRowSelectionPreparationOptions & { yieldForCatalog?: boolean } = {},
+    options: { yieldForCatalog?: boolean; metadataOnly?: boolean } = {},
   ): Promise<void> | undefined {
     const metadataOnly = options.metadataOnly === true;
-    const includeCatalog = !metadataOnly || options.includeCatalog === true;
-    if (includeCatalog && !owner.state().disposed && !owner.catalog.needsInitialRead) {
+    if (!metadataOnly && !owner.state().disposed && !owner.catalog.needsInitialRead) {
       void owner.runAsOwner(() => owner.catalog.refresh());
     }
     if (options.yieldForCatalog && owner.catalog.isRefreshing) {
       // Adopt completed catalog publications without waiting for a pending renewal.
-      return yieldSessionListWork().then(() => prepareSelection({ metadataOnly, includeCatalog }));
+      return yieldSessionListWork().then(() => prepareSelection({ metadataOnly }));
     }
     // Committed metadata can serve a picker while full-row readiness is still pending.
     if (!selectionNeedsPreparation(options)) {
@@ -274,12 +271,7 @@ export function createSessionRowRefresh(
       }
       return undefined;
     }
-    const preparationKey = metadataOnly
-      ? includeCatalog
-        ? "metadata-catalog"
-        : "metadata"
-      : "full";
-    const selectionPending = selectionPreparations.get(preparationKey);
+    const selectionPending = selectionPreparations.get(metadataOnly);
     if (selectionPending) {
       return selectionPending;
     }
@@ -288,52 +280,40 @@ export function createSessionRowRefresh(
     const preparation = owner.runAsOwner(async () => {
       try {
         const attempted = new Set<string>();
-        const held = new Set<Promise<void>>();
-        let candidates: Iterator<string> | undefined;
-        while (!owner.state().disposed) {
+        while (selectionNeedsPreparation(options)) {
           for (
             let pending = owner.prepareRegistryFacts();
             pending;
             pending = owner.prepareRegistryFacts()
           ) {
-            candidates = undefined;
             await pending;
           }
           if (owner.state().topologyDirty) {
-            candidates = undefined;
             await owner.topology();
           }
           if (owner.state().disposed || owner.state().topologyDirty) {
             continue;
           }
-          if (owner.membership.needsPreparation) {
-            candidates = undefined;
-          }
           await owner.membership.prepare();
-          if (!candidates) {
-            // Acquire lineage before any batch; keep the dirty cursor across accepted batches.
-            // Restart only when another preparation owner or a joined read changes readiness.
-            if (owner.state().registryPrepared) {
-              for (const id of owner.dirty) {
-                const row = owner.rows.get(id);
-                if (
-                  row?.entryAcquisitionPending &&
-                  row.storedEntry &&
-                  row.sharingEntry === row.storedEntry &&
-                  !row.unresolvedDatabaseFacts
-                ) {
-                  owner.acquireEntry(row, row.storedEntry);
-                }
+          if (owner.state().registryPrepared) {
+            for (const id of owner.dirty) {
+              const row = owner.rows.get(id);
+              if (
+                row?.entryAcquisitionPending &&
+                row.storedEntry &&
+                row.sharingEntry === row.storedEntry &&
+                !row.unresolvedDatabaseFacts
+              ) {
+                owner.acquireEntry(row, row.storedEntry);
               }
             }
-            candidates = owner.dirty.values();
           }
-          if (includeCatalog && owner.catalog.needsInitialRead) {
+          if (!metadataOnly && owner.catalog.needsInitialRead) {
             await owner.catalog.refresh();
           }
           const selected = new Set<string>();
-          for (let next = candidates.next(); !next.done; next = candidates.next()) {
-            const id = next.value;
+          const held = new Set<Promise<void>>();
+          for (const id of owner.dirty) {
             if (attempted.has(id) || !rowNeedsDatabaseRead(id, metadataOnly)) {
               continue;
             }
@@ -366,19 +346,17 @@ export function createSessionRowRefresh(
             }
           } else {
             await Promise.all(held);
-            held.clear();
-            candidates = undefined;
           }
         }
         if (!owner.state().disposed) {
           owner.prepare();
         }
       } finally {
-        selectionPreparations.delete(preparationKey);
+        selectionPreparations.delete(metadataOnly);
         release();
       }
     });
-    selectionPreparations.set(preparationKey, preparation);
+    selectionPreparations.set(metadataOnly, preparation);
     return preparation;
   }
   async function refreshBatch() {

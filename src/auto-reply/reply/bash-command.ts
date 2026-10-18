@@ -293,7 +293,8 @@ export async function handleBashChatCommand(params: {
         state: "running",
         sessionId,
       };
-      logVerbose(`Started bash session ${formatSessionSnippet(sessionId)}`);
+      const snippet = formatSessionSnippet(sessionId);
+      logVerbose(`Started bash session ${snippet}: ${commandText}`);
       return {
         text: `⚙️ bash started (session ${sessionId}). Still running; use !poll / !stop (or /bash poll / /bash stop).`,
       };

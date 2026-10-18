@@ -132,7 +132,6 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
   const {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
-    countActiveSubagentRunsForSession,
     prepareSubagentRegistrationRows,
     publishSubagentRunsAfterAtomicStore,
     rememberRestoredSubagentRunNotification,
@@ -140,7 +139,6 @@ vi.mock("./subagent-registry-state.js", async (importOriginal) => {
   return {
     clearSubagentRunsReadCacheForTest,
     consumeFreshSubagentRegistryRows,
-    countActiveSubagentRunsForSession,
     prepareSubagentRegistrationRows,
     rememberRestoredSubagentRunNotification,
     getSubagentRunsSnapshotForChildSession: mocks.getSubagentRunsSnapshotForChildSession,

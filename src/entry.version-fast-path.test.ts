@@ -82,10 +82,7 @@ describe("entry root version fast path", () => {
         return true;
       });
       vi.mocked(resolveCommitHash).mockImplementation(() => {
-        const error = new Error("version resolution failed");
-        // Bun can materialize a collected stack with a bare header and no message.
-        error.stack = "Error\n    at resolveCommitHash (git-commit.js:1:1)";
-        throw error;
+        throw new Error("version resolution failed");
       });
       logging.setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
 

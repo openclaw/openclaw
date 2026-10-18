@@ -15,6 +15,7 @@ import {
   runGoogleGenerateContentLifecycle,
 } from "./google-shared.js";
 import {
+  assertRecord,
   convertMessages,
   expectConvertedRoles,
   getFirstToolParameters,
@@ -54,15 +55,10 @@ describe("buildGoogleSimpleThinking", () => {
     ["gemini-3.7-flash", "LOW"],
   ])("uses the supported thinking floor for %s", (id, level) => {
     const target = { ...model, id };
-    const thinking = buildGoogleSimpleThinking(target, { reasoning: "minimal" });
-    expect(thinking).toEqual({
+    expect(buildGoogleSimpleThinking(target, { reasoning: "minimal" })).toEqual({
       enabled: true,
       level,
     });
-    expect(
-      buildGoogleGenerateContentParams(target, { messages: [] }, { thinking }).config
-        ?.thinkingConfig,
-    ).toEqual({ includeThoughts: true, thinkingLevel: level });
     expect(
       buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
         ?.thinkingConfig,
@@ -76,6 +72,11 @@ describe("buildGoogleSimpleThinking", () => {
       enabled: { enabled: true },
       disabled: { thinkingLevel: "MINIMAL" },
     },
+    {
+      id: "gemini-4-argon",
+      enabled: { enabled: true },
+      disabled: { thinkingLevel: "LOW" },
+    },
   ])("preserves adaptive and disabled thinking for $id", ({ id, enabled, disabled }) => {
     const target = { ...model, id };
     expect(buildGoogleSimpleThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
@@ -83,6 +84,12 @@ describe("buildGoogleSimpleThinking", () => {
       buildGoogleGenerateContentParams(target, { messages: [] }, disabledThinking).config
         ?.thinkingConfig,
     ).toEqual(disabled);
+  });
+
+  it("uses low thinking for the Flash alias", () => {
+    expect(
+      buildGoogleSimpleThinking({ ...model, id: "gemini-flash-latest" }, { reasoning: "low" }),
+    ).toEqual({ enabled: true, level: "LOW" });
   });
 
   it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
@@ -538,6 +545,34 @@ describe("runGoogleGenerateContentLifecycle", () => {
 });
 
 describe("buildGoogleGenerateContentParams", () => {
+  it.each([
+    { provider: "google", api: "google-generative-ai", signature: undefined },
+    { provider: "google-vertex", api: "google-vertex", signature: undefined },
+    { provider: "google", api: "google-generative-ai", signature: "c2lnbmVk" },
+    { provider: "google-gemini-cli", api: "google-generative-ai", signature: undefined },
+  ] as const)(
+    "replays Gemini 4 tool signatures on $provider ($signature)",
+    ({ provider, api, signature }) => {
+      const target = { ...model, id: "gemini-4-argon", provider, api };
+      const assistant = {
+        ...createAssistantOutput(target),
+        content: [toolCall({}, signature)],
+      };
+      const params = buildGoogleGenerateContentParams(target, {
+        messages: [assistant, makeTextToolResult("call_1", "lookup", "ok", false, 0)],
+      });
+      const functionCallPart = params.contents
+        .flatMap((content) => content.parts ?? [])
+        .find((part) => part.functionCall);
+      expect(functionCallPart?.functionCall?.name).toBe("lookup");
+      expect(functionCallPart?.thoughtSignature).toBe(
+        provider === "google-gemini-cli"
+          ? undefined
+          : (signature ?? "skip_thought_signature_validator"),
+      );
+    },
+  );
+
   it("forwards stop sequences to Google generation config", () => {
     const params = buildGoogleGenerateContentParams(
       model,
@@ -708,6 +743,20 @@ describe("Google message conversion", () => {
       name: "lookup",
       response: { output: "ok" },
     });
+  });
+
+  it("serializes structured tool results into function responses", () => {
+    const contents = convertMessagesForTest(conversionModel, {
+      messages: [
+        {
+          ...result,
+          content: [{ type: "json", payload: { sessionKey: "current", status: "ok" } }],
+        },
+      ],
+    } as unknown as Context);
+    expect(assertRecord(contents[0]?.parts?.[0]?.functionResponse?.response).output).toBe(
+      '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
+    );
   });
 
   it("omits payload-less tool images without media placeholders", () => {

@@ -553,13 +553,11 @@ suite.define(() => {
               expect(await selectedReplacement.getAttribute("aria-label")).toBe(
                 "Replacement usage session",
               );
-              await expect
-                .poll(() =>
-                  observedOverviews
-                    .slice(focusOverviewStart)
-                    .some((overview) => overview.session?.sessionId === replacementId),
-                )
-                .toBe(true);
+              expect(
+                observedOverviews
+                  .slice(focusOverviewStart)
+                  .some((overview) => overview.session?.sessionId === replacementId),
+              ).toBe(true);
               expect(connections).toBe(selectedConnections);
               if (pointCount === 2) {
                 await moveOriginalRange();

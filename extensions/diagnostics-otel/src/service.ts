@@ -22,7 +22,13 @@ import {
 import {
   DEFAULT_SERVICE_NAME,
   OTEL_EXPORTER_OTLP_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
   OTEL_EXPORTER_OTLP_PROTOCOL_ENV,
+  OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV,
+  OTEL_EXPORTER_OTLP_TRACES_PROTOCOL_ENV,
 } from "./service-constants.js";
 import { hasPreloadedOtelSdk } from "./service-content-normalization.js";
 import { createDiagnosticsEventHandler } from "./service-events.js";
@@ -65,6 +71,11 @@ type ExporterHealthReporter = {
   reportExporterHealth?: (update: Omit<ExporterHealthUpdate, "exporter">) => void;
 };
 type PublicExporterEvent = Omit<TelemetryExporterDiagnosticEvent, "type" | "seq" | "ts">;
+const OTEL_SIGNAL_PROTOCOL_ENV = {
+  traces: OTEL_EXPORTER_OTLP_TRACES_PROTOCOL_ENV,
+  metrics: OTEL_EXPORTER_OTLP_METRICS_PROTOCOL_ENV,
+  logs: OTEL_EXPORTER_OTLP_LOGS_PROTOCOL_ENV,
+} satisfies Record<TelemetryExporterDiagnosticEvent["signal"], string>;
 
 function isOtelSdkDisabled(logger: { warn(message: string): void }): boolean {
   const value = process.env.OTEL_SDK_DISABLED?.trim().toLowerCase();
@@ -301,7 +312,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       for (const signal of ownedOtlpSignals) {
         const protocol =
           otel.protocol ??
-          readNonBlankString(process.env[`OTEL_EXPORTER_OTLP_${signal.toUpperCase()}_PROTOCOL`]) ??
+          readNonBlankString(process.env[OTEL_SIGNAL_PROTOCOL_ENV[signal]]) ??
           readNonBlankString(process.env[OTEL_EXPORTER_OTLP_PROTOCOL_ENV]) ??
           OTLP_HTTP_PROTOBUF_PROTOCOL;
         if (protocol === OTLP_HTTP_PROTOBUF_PROTOCOL) {
@@ -346,41 +357,43 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         [ATTR_SERVICE_NAME]: serviceName,
       });
 
-      const resolveSignal = (
-        signal: TelemetryExporterDiagnosticEvent["signal"],
-        enabled: boolean,
-      ) => {
-        if (!enabled) {
-          return {};
-        }
-        const signalIdentifier = ({ logs: "LOGS", traces: "TRACES", metrics: "METRICS" } as const)[
-          signal
-        ];
-        const url = resolveSignalOtelUrl({
-          signalEndpoint: otel[`${signal}Endpoint`],
-          signalEnvEndpoint: process.env[`OTEL_EXPORTER_OTLP_${signalIdentifier}_ENDPOINT`],
-          sharedEnvEndpoint,
-          endpoint,
-          path: `v1/${signal}`,
-        });
-        return {
-          url,
-          httpAgentOptions: resolveOtelHttpAgentOptions({ url, signalIdentifier }),
-        };
-      };
+      const logUrl = logsToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.logsEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_LOGS_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/logs",
+          })
+        : undefined;
+      const traceUrl = tracesToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.tracesEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_TRACES_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/traces",
+          })
+        : undefined;
+      const metricUrl = metricsToOtlp
+        ? resolveSignalOtelUrl({
+            signalEndpoint: otel.metricsEndpoint,
+            signalEnvEndpoint: process.env[OTEL_EXPORTER_OTLP_METRICS_ENDPOINT_ENV],
+            sharedEnvEndpoint,
+            endpoint,
+            path: "v1/metrics",
+          })
+        : undefined;
       // Validate every owned signal before any SDK can export with downgraded TLS trust.
-      const { url: logUrl, httpAgentOptions: logHttpAgentOptions } = resolveSignal(
-        "logs",
-        logsToOtlp,
-      );
-      const { url: traceUrl, httpAgentOptions: traceHttpAgentOptions } = resolveSignal(
-        "traces",
-        tracesToOtlp,
-      );
-      const { url: metricUrl, httpAgentOptions: metricHttpAgentOptions } = resolveSignal(
-        "metrics",
-        metricsToOtlp,
-      );
+      const logHttpAgentOptions = logsToOtlp
+        ? resolveOtelHttpAgentOptions({ url: logUrl, signalIdentifier: "LOGS" })
+        : undefined;
+      const traceHttpAgentOptions = tracesToOtlp
+        ? resolveOtelHttpAgentOptions({ url: traceUrl, signalIdentifier: "TRACES" })
+        : undefined;
+      const metricHttpAgentOptions = metricsToOtlp
+        ? resolveOtelHttpAgentOptions({ url: metricUrl, signalIdentifier: "METRICS" })
+        : undefined;
       if (tracesToOtlp || metricsToOtlp) {
         try {
           // Trace and metric providers stay generation-private; only context and propagation

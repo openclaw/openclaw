@@ -53,10 +53,6 @@ import {
   withPreparedModelRuntimePluginGenerationScope,
 } from "../prepared-model-runtime-generation-scope.js";
 import {
-  PreparedModelRuntimeInitialRunAdmissionError,
-  PreparedModelRuntimeOwnerNotPublishedError,
-} from "../prepared-model-runtime.errors.js";
-import {
   acquireAgentRunPreparedModelRuntime,
   acquireReadOnlyPreparedModelRuntime,
 } from "../prepared-model-runtime.js";
@@ -371,23 +367,10 @@ async function runEmbeddedAgentForSession(
                   ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
                 }
               : {}),
-          })
-            .catch((error: unknown) => {
-              // A refreshed generation may already have executed tools. Only the first
-              // acquisition can prove that this candidate never entered execution.
-              if (
-                !refreshed &&
-                error instanceof PreparedModelRuntimeOwnerNotPublishedError &&
-                error.admissionBlocked
-              ) {
-                throw new PreparedModelRuntimeInitialRunAdmissionError(error);
-              }
-              throw error;
-            })
-            .finally(() => {
-              noteLaneTaskProgress();
-              laneController.setLaneTaskDeadline(undefined);
-            });
+          }).finally(() => {
+            noteLaneTaskProgress();
+            laneController.setLaneTaskDeadline(undefined);
+          });
           preparedRuntimeResource = preparedModelRuntimeLease;
           startupStages.mark("prepared-runtime");
           const preparedModelRuntimeOwnerSnapshot = preparedModelRuntimeLease.snapshot;

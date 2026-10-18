@@ -120,11 +120,10 @@ async function collectViolations(): Promise<PluginSdkViolation[]> {
     // Workspace packages resolve private facades through TS paths; core runtime stays relative.
     const isCoreRuntimeFile =
       repoPath.startsWith("src/") && !isTestLikeTypeScriptFile(filePath, extraTestSuffixes);
-    using retainedSource = (parser.api ??= new API({ cwd: repoRoot })).createSourceFile(
+    const sourceFile = (parser.api ??= new API({ cwd: repoRoot })).createSourceFile(
       filePath,
       sourceText,
     );
-    const sourceFile = retainedSource.sourceFile;
 
     visitModuleSpecifiers(
       sourceFile,

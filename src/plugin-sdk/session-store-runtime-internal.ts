@@ -25,8 +25,7 @@ export async function getSessionEntryAsync(
   params: SessionStoreReadParams,
 ): Promise<SessionEntry | undefined> {
   const entry = await readSessionEntryReadOnlyInWorker(toSessionAccessScope(params));
-  // The public read owns its mutable result; internal actor readers borrow committed facts.
-  return entry ? structuredClone(projectPluginSessionEntry(entry)) : undefined;
+  return entry ? projectPluginSessionEntry(entry) : undefined;
 }
 
 /** Looks up a visible current session ID in one selected store. */

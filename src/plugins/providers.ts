@@ -21,7 +21,7 @@ import {
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
 import { createPluginIdScopeSet } from "./plugin-scope.js";
-import { getProviderOwnerIndex } from "./provider-owner-index.js";
+import { pluginOwnsProviderRef } from "./provider-owner-index.js";
 
 type ProviderManifestLoadParams = {
   config?: PluginLoadOptions["config"];
@@ -38,15 +38,19 @@ type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
 };
 type ProviderRefOwnership =
   | { status: "unowned" }
-  | { status: "owned"; pluginIds: readonly string[] }
-  | { status: "ambiguous"; pluginIds: readonly string[] };
+  | { status: "owned"; pluginIds: string[] }
+  | { status: "ambiguous"; pluginIds: string[] };
 type ProviderOwnershipLookupParams = {
   provider: string;
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
+};
+type ProviderOwnershipContext = {
+  manifestRegistry: PluginManifestRegistry;
+  metadataSnapshot?: ProviderOwnershipLookupParams["metadataSnapshot"];
 };
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
@@ -376,12 +380,42 @@ function matchesModelPattern(plugin: PluginManifestRecord, modelId: string): boo
   );
 }
 
-function classifyProviderRefOwnership(
-  pluginIds: readonly string[] | undefined,
-): ProviderRefOwnership {
+function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
   return pluginIds?.length
     ? { status: pluginIds.length === 1 ? "owned" : "ambiguous", pluginIds }
     : { status: "unowned" };
+}
+
+function listNormalizedOwnerMapPluginIds(
+  owners: ReadonlyMap<string, readonly string[]>,
+  normalizedId: string,
+): string[] {
+  const matched: string[] = [];
+  for (const [ownedId, pluginIds] of owners) {
+    if (normalizeProviderId(ownedId) === normalizedId) {
+      matched.push(...pluginIds);
+    }
+  }
+  return sortUniqueStrings(matched);
+}
+
+function resolveOwningPluginIdsForProviderFromSnapshot(
+  snapshot: Pick<PluginMetadataSnapshot, "owners" | "byPluginId">,
+  normalizedProvider: string,
+): string[] | undefined {
+  const directOwners = listNormalizedOwnerMapPluginIds(
+    snapshot.owners.providers,
+    normalizedProvider,
+  );
+  const aliasOwners = listNormalizedOwnerMapPluginIds(
+    snapshot.owners.modelCatalogProviders,
+    normalizedProvider,
+  ).filter((pluginId) => {
+    const plugin = snapshot.byPluginId.get(pluginId);
+    return plugin ? pluginOwnsProviderRef(plugin, normalizedProvider) : false;
+  });
+  const pluginIds = sortUniqueStrings([...directOwners, ...aliasOwners]);
+  return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
 function resolvePreferredManifestPluginIds(
@@ -402,9 +436,9 @@ function resolvePreferredManifestPluginIds(
   return nonBundledPluginIds.length === 1 ? nonBundledPluginIds : undefined;
 }
 
-function resolveProviderOwnershipIndex(
+function resolveProviderOwnershipContext(
   params: ProviderOwnershipLookupParams,
-): ReturnType<typeof getProviderOwnerIndex> {
+): ProviderOwnershipContext {
   // Provider and CLI-backend ownership are one fallback decision. Prepare their
   // process-stable metadata once so a miss cannot rebuild discovery for each branch.
   const metadataSnapshot =
@@ -419,7 +453,7 @@ function resolveProviderOwnershipIndex(
         }));
   const manifestRegistry = params.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   if (manifestRegistry) {
-    return getProviderOwnerIndex(manifestRegistry);
+    return { manifestRegistry, ...(metadataSnapshot ? { metadataSnapshot } : {}) };
   }
   const registryParams = {
     config: params.config ?? {},
@@ -427,34 +461,94 @@ function resolveProviderOwnershipIndex(
     env: params.env ?? process.env,
   };
   const loaded = loadPluginRegistrySnapshotWithMetadata(registryParams);
-  return getProviderOwnerIndex(
-    loadPluginManifestRegistryForInstalledIndex({
+  return {
+    manifestRegistry: loadPluginManifestRegistryForInstalledIndex({
       ...registryParams,
       index: loaded.snapshot,
       manifestRegistry: loaded.manifestRegistry,
       includeDisabled: true,
     }),
-  );
+  };
+}
+
+function resolveOwningPluginIdsForProviderFromContext(
+  normalizedProvider: string,
+  context: ProviderOwnershipContext,
+): string[] | undefined {
+  const metadataSnapshot = context.metadataSnapshot;
+  if (metadataSnapshot) {
+    const ownerIds = resolveOwningPluginIdsForProviderFromSnapshot(
+      metadataSnapshot,
+      normalizedProvider,
+    );
+    if (ownerIds) {
+      return ownerIds;
+    }
+  }
+
+  const pluginIds = context.manifestRegistry.plugins
+    .filter((plugin) => pluginOwnsProviderRef(plugin, normalizedProvider))
+    .map((plugin) => plugin.id);
+
+  return pluginIds.length > 0 ? pluginIds : undefined;
 }
 
 export function resolveOwningPluginIdsForProvider(
   params: ProviderOwnershipLookupParams,
-): readonly string[] | undefined {
-  if (!params.provider.trim()) {
+): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
     return undefined;
   }
-  const owners = resolveProviderOwnershipIndex(params).providers;
-  return owners.get(params.provider) ?? owners.get(normalizeProviderId(params.provider));
+  return resolveOwningPluginIdsForProviderFromContext(
+    normalizedProvider,
+    resolveProviderOwnershipContext(params),
+  );
+}
+
+function resolveOwningPluginIdsForCliBackendFromContext(
+  normalizedBackend: string,
+  context: ProviderOwnershipContext,
+): string[] | undefined {
+  const metadataSnapshot = context.metadataSnapshot;
+  if (metadataSnapshot) {
+    const ownerIds = listNormalizedOwnerMapPluginIds(
+      metadataSnapshot.owners.cliBackends,
+      normalizedBackend,
+    );
+    if (ownerIds.length > 0) {
+      return ownerIds;
+    }
+  }
+
+  const pluginIds = context.manifestRegistry.plugins
+    .filter(
+      (plugin) =>
+        plugin.cliBackends.some(
+          (backendId) => normalizeProviderId(backendId) === normalizedBackend,
+        ) ||
+        (plugin.setup?.cliBackends ?? []).some(
+          (backendId) => normalizeProviderId(backendId) === normalizedBackend,
+        ),
+    )
+    .map((plugin) => plugin.id);
+
+  const deduped = sortUniqueStrings(pluginIds);
+  return deduped.length > 0 ? deduped : undefined;
 }
 
 export function resolveOwningPluginIdsForProviderRef(
   params: ProviderOwnershipLookupParams,
-): readonly string[] | undefined {
-  if (!params.provider.trim()) {
+): string[] | undefined {
+  const normalizedProvider = normalizeProviderId(params.provider);
+  if (!normalizedProvider) {
     return undefined;
   }
-  const owners = resolveProviderOwnershipIndex(params).refs;
-  return owners.get(params.provider) ?? owners.get(normalizeProviderId(params.provider));
+  const context = resolveProviderOwnershipContext(params);
+  return (
+    resolveOwningPluginIdsForProviderFromContext(normalizedProvider, context) ??
+    resolveOwningPluginIdsForCliBackendFromContext(normalizedProvider, context)
+  );
 }
 
 export function resolveProviderRefOwnership(
@@ -470,7 +564,7 @@ export function resolveOwningPluginIdsForModelRef(params: {
   env?: PluginLoadOptions["env"];
   manifestRegistry?: PluginManifestRegistry;
   registry?: PluginRegistrySnapshot;
-}): readonly string[] | undefined {
+}): string[] | undefined {
   const parsed = splitExplicitModelRef(params.model);
   if (!parsed) {
     return undefined;

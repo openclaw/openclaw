@@ -254,9 +254,9 @@ describe("prepareEmbeddedAttemptTransport", () => {
       input.attempt.provider = input.attempt.model.provider;
       input.attempt.modelId = input.attempt.model.id;
       input.attempt.trigger = trigger;
-      input.attempt.runtimePlan!.transport.resolveExtraParams = (params = {}) => ({
+      input.attempt.runtimePlan!.transport.resolveExtraParams = ({ extraParamsOverride } = {}) => ({
         responsesServerCompaction: true,
-        ...params.extraParamsOverride,
+        ...extraParamsOverride,
       });
       streamFn.mockImplementation(async (model, _context, options) => {
         const payload: Record<string, unknown> = { input: [] };

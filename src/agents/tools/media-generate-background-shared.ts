@@ -139,31 +139,24 @@ type WakeMediaGenerationTaskCompletionParams = Omit<
 >;
 
 async function wakeMediaGenerationTaskCompletionWithRetry(params: {
-  handle: MediaGenerationTaskHandle;
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
   const deadline = Date.now() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
-  let queueOwnsCompletion = false;
-  while (outcome.status === "pending" || outcome.status === "queued") {
-    if (outcome.status === "queued" && !queueOwnsCompletion) {
-      queueOwnsCompletion = true;
-      updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
-    }
+  while (outcome.status === "pending") {
     const remainingMs = deadline - Date.now();
-    if (!queueOwnsCompletion && remainingMs <= 0) {
+    if (remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }
-    // The deadline bounds unconfirmed handoff, not work the queue already owns.
-    // Keep observing its receipt so real delivery failures still retain the media.
+    // Queue admission and an owned continuation can both be transient. Keep the
+    // operation live until delivery, permanent refusal, or the bounded deadline.
     const delayMs = computeBackoffSchedule(
       MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
       retryIndex + 1,
     );
-    const retryDelayMs = queueOwnsCompletion ? delayMs : Math.min(delayMs, remainingMs);
-    await sleepWithAbort(retryDelayMs, undefined, { ref: false });
+    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
     params.beforeRetry?.();
     outcome = await params.wake();
     retryIndex += 1;
@@ -425,7 +418,6 @@ export function scheduleMediaGenerationTaskCompletion(params: {
       }
       try {
         const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
-          handle: params.handle,
           wake: async () =>
             await params.lifecycle.wakeTaskCompletion({
               handle: params.handle,
@@ -462,7 +454,6 @@ export function scheduleMediaGenerationTaskCompletion(params: {
     let terminalResult: RequiredCompletionTerminalResult | undefined;
     try {
       const wakeOutcome = await wakeMediaGenerationTaskCompletionWithRetry({
-        handle: params.handle,
         wake: async () =>
           await params.lifecycle.wakeTaskCompletion({
             handle: params.handle,

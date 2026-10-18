@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { For, createMemo } from "solid-js";
 import { SettingsSection, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import "../../components/tooltip.ts";
 import { formatAnalysisCost, formatUsageTokens } from "./metrics.ts";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
@@ -35,43 +35,91 @@ export function SessionsCard(props: {
   loading?: boolean;
   totalSessions: number;
 }) {
-  const isTokenMode = createMemo(() => props.usage.display.chartMode === "tokens");
-  const selectedRows = () => props.usage.data.overview?.selectedRows ?? [];
-  const averageLabel = createMemo(() => {
-    i18nRevision();
+  const state = createMemo(() => {
+    const sessions = props.sessions;
+    const filters = props.usage.filters;
+    const display = props.usage.display;
+    const callbacks = props.usage.callbacks;
+    const totalSessions = props.totalSessions;
+
+    const { selectedSessions } = filters;
+    const { sessionSort, sessionSortDir, sessionsTab } = display;
+    const { onSelectSession } = callbacks.details;
+    const onDisplayChange = callbacks.display.onChange;
+    const { onClearSessions } = callbacks.filters;
+    const isTokenMode = display.chartMode === "tokens";
+    const sortDirectionLabel = t(
+      sessionSortDir === "desc" ? "usage.sessions.descending" : "usage.sessions.ascending",
+    );
+
+    const toEntry = (session: UsageSessionEntry) => {
+      const usage = session.usage;
+      const tokens = usage?.totalTokens ?? 0;
+      const cost = usage?.totalCost ?? 0;
+      const rawLabel = session.label || session.key;
+      // Agent session keys often include a token query param; remove it for readability.
+      const displayLabel =
+        rawLabel.startsWith("agent:") && rawLabel.includes("?token=")
+          ? rawLabel.slice(0, rawLabel.indexOf("?token="))
+          : rawLabel;
+      return {
+        session,
+        displayLabel,
+        value: isTokenMode ? tokens : cost,
+      };
+    };
+    const entries = sessions.map(toEntry);
     const count = props.overview?.tableSessionCount ?? 0;
     const totals = props.overview?.tableTotals;
-    const value = (isTokenMode() ? totals?.tokens : totals?.cost) ?? 0;
-    const average = count ? value / count : 0;
-    return isTokenMode()
-      ? formatUsageTokens(average, totals?.usageReport)
-      : formatAnalysisCost(average, totals?.usageReport);
+    const totalValue = (isTokenMode ? totals?.tokens : totals?.cost) ?? 0;
+    const avgValue = count ? totalValue / count : 0;
+    const totalErrors = totals?.errors ?? 0;
+
+    const selectedEntries = props.usage.data.overview?.selectedRows.map(toEntry) ?? [];
+    const selectedCount = selectedEntries.length;
+    const displayedEntries = entries;
+
+    return {
+      displayedEntries,
+      totalSessions,
+      isTokenMode,
+      avgValue,
+      usageReport: totals?.usageReport,
+      totalErrors,
+      sessionsTab,
+      onDisplayChange,
+      sessionSort,
+      sortDirectionLabel,
+      sessionSortDir,
+      selectedCount,
+      onClearSessions,
+      selectedSessions,
+      onSelectSession,
+      sessions,
+      selectedEntries,
+    };
   });
-  const sortDirectionLabel = () =>
-    t(
-      props.usage.display.sessionSortDir === "desc"
-        ? "usage.sessions.descending"
-        : "usage.sessions.ascending",
-    );
   return (
     <SettingsSection title={t("usage.sessions.title")}>
       <div class="usage-panel sessions-card">
         <div class="sessions-card-header">
           <div class="sessions-card-count">
-            {t("usage.sessions.shown", { count: String(props.sessions.length) })}
-            {props.totalSessions !== props.sessions.length
-              ? ` · ${t("usage.sessions.total", { count: String(props.totalSessions) })}`
+            {t("usage.sessions.shown", { count: String(state().displayedEntries.length) })}
+            {state().totalSessions !== state().displayedEntries.length
+              ? ` · ${t("usage.sessions.total", { count: String(state().totalSessions) })}`
               : ""}
           </div>
         </div>
         <div class="sessions-card-meta">
           <div class="sessions-card-stats">
             <span>
-              {averageLabel()} {t("usage.sessions.avg")}
+              {state().isTokenMode
+                ? formatUsageTokens(state().avgValue, state().usageReport)
+                : formatAnalysisCost(state().avgValue, state().usageReport)}{" "}
+              {t("usage.sessions.avg")}
             </span>
             <span>
-              {props.overview?.tableTotals.errors ?? 0}{" "}
-              {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
+              {state().totalErrors} {normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))}
             </span>
           </div>
           <SettingsSegmented
@@ -79,9 +127,9 @@ export function SessionsCard(props: {
             variant="accent"
             ariaPressed={false}
             class="small"
-            value={props.usage.display.sessionsTab}
-            onChange={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
-            onReselect={(tab) => props.usage.callbacks.display.onChange({ sessionsTab: tab })}
+            value={state().sessionsTab}
+            onChange={(tab) => state().onDisplayChange({ sessionsTab: tab })}
+            onReselect={(tab) => state().onDisplayChange({ sessionsTab: tab })}
             options={[
               { value: "all", label: t("usage.sessions.all") },
               { value: "recent", label: t("usage.sessions.recent") },
@@ -96,45 +144,42 @@ export function SessionsCard(props: {
                   (option) => option.value === event.currentTarget.value,
                 );
                 if (selected) {
-                  props.usage.callbacks.display.onChange({ sessionSort: selected.value });
+                  state().onDisplayChange({ sessionSort: selected.value });
                 }
               }}
             >
               <For each={SESSION_SORT_OPTIONS}>
                 {({ value, labelKey }) => (
-                  <option value={value} selected={props.usage.display.sessionSort === value}>
+                  <option value={value} selected={state().sessionSort === value}>
                     {t(labelKey)}
                   </option>
                 )}
               </For>
             </select>
           </label>
-          <openclaw-tooltip prop:content={sortDirectionLabel()}>
+          <openclaw-tooltip prop:content={state().sortDirectionLabel}>
             <button
               class="btn btn--sm"
-              aria-label={sortDirectionLabel()}
+              aria-label={state().sortDirectionLabel}
               onClick={() =>
-                props.usage.callbacks.display.onChange({
-                  sessionSortDir: props.usage.display.sessionSortDir === "desc" ? "asc" : "desc",
+                state().onDisplayChange({
+                  sessionSortDir: state().sessionSortDir === "desc" ? "asc" : "desc",
                 })
               }
             >
-              {props.usage.display.sessionSortDir === "desc" ? "↓" : "↑"}
+              {state().sessionSortDir === "desc" ? "↓" : "↑"}
             </button>
           </openclaw-tooltip>
-          {props.usage.filters.selectedSessions.length > 0 ? (
-            <button
-              class="btn btn--sm"
-              onClick={() => props.usage.callbacks.filters.onClearSessions()}
-            >
+          {state().selectedSessions.length > 0 ? (
+            <button class="btn btn--sm" onClick={() => state().onClearSessions()}>
               {t("usage.sessions.clearSelection")}
             </button>
           ) : undefined}
         </div>
-        {props.sessions.length === 0 ? (
+        {state().displayedEntries.length === 0 ? (
           <div class="usage-empty-block">
             {t(
-              props.usage.display.sessionsTab === "recent"
+              state().sessionsTab === "recent"
                 ? "usage.sessions.noRecent"
                 : "usage.sessions.noneInRange",
             )}
@@ -142,20 +187,20 @@ export function SessionsCard(props: {
         ) : (
           <div
             class={
-              props.usage.display.sessionsTab === "recent"
+              state().sessionsTab === "recent"
                 ? "session-bars session-bars--recent"
                 : "session-bars"
             }
           >
             <SessionRows
-              sessions={props.sessions}
-              selectedSessions={props.usage.filters.selectedSessions}
-              isTokenMode={isTokenMode()}
-              onSelect={props.usage.callbacks.details.onSelectSession}
+              entries={state().displayedEntries}
+              selectedSessions={state().selectedSessions}
+              isTokenMode={state().isTokenMode}
+              onSelect={state().onSelectSession}
             />
           </div>
         )}
-        {props.usage.display.sessionsTab === "all" && props.overview ? (
+        {state().sessionsTab === "all" && props.overview ? (
           <div class="data-table-pagination">
             <div class="data-table-pagination__controls">
               <button
@@ -186,17 +231,17 @@ export function SessionsCard(props: {
             </div>
           </div>
         ) : undefined}
-        {selectedRows().length > 1 ? (
+        {state().selectedCount > 1 ? (
           <div class="sessions-selected-group">
             <div class="sessions-card-count">
-              {t("usage.sessions.selected", { count: String(selectedRows().length) })}
+              {t("usage.sessions.selected", { count: String(state().selectedCount) })}
             </div>
             <div class="session-bars session-bars--selected">
               <SessionRows
-                sessions={selectedRows()}
-                selectedSessions={props.usage.filters.selectedSessions}
-                isTokenMode={isTokenMode()}
-                onSelect={props.usage.callbacks.details.onSelectSession}
+                entries={state().selectedEntries}
+                selectedSessions={state().selectedSessions}
+                isTokenMode={state().isTokenMode}
+                onSelect={state().onSelectSession}
               />
             </div>
           </div>
@@ -206,46 +251,32 @@ export function SessionsCard(props: {
   );
 }
 
+type SessionCardEntry = { session: UsageSessionEntry; displayLabel: string; value: number };
+
 function SessionRows(props: {
-  sessions: UsageSessionEntry[];
+  entries: SessionCardEntry[];
   selectedSessions: string[];
   isTokenMode: boolean;
   onSelect: UsageProps["callbacks"]["details"]["onSelectSession"];
 }) {
-  const orderedKeys = createMemo(() => props.sessions.map((session) => session.key));
+  const orderedKeys = createMemo(() => props.entries.map((entry) => entry.session.key));
   return (
-    <For each={props.sessions} keyed={(session) => session.key}>
-      {(session) => {
-        const label = createMemo(() => {
-          const raw = session().label || session().key;
-          // Agent session keys often include a token query param; remove it for readability.
-          return raw.startsWith("agent:") && raw.includes("?token=")
-            ? raw.slice(0, raw.indexOf("?token="))
-            : raw;
-        });
-        const meta = createMemo(() => {
-          i18nRevision();
-          return buildSessionMeta(session());
-        });
-        const valueLabel = createMemo(() => {
-          i18nRevision();
-          const usage = session().usage;
-          return props.isTokenMode
-            ? formatUsageTokens(usage?.totalTokens ?? 0, usage?.usageReport)
-            : formatAnalysisCost(usage?.totalCost ?? 0, usage?.usageReport);
-        });
-        return (
-          <SessionBarRow
-            sessionKey={session().key}
-            displayLabel={label()}
-            meta={meta()}
-            agentId={session().agentId}
-            valueLabel={valueLabel()}
-            isSelected={props.selectedSessions.includes(session().key)}
-            onSelect={(event) => props.onSelect(session().key, event.shiftKey, orderedKeys())}
-          />
-        );
-      }}
+    <For each={props.entries} keyed={(entry) => entry.session.key}>
+      {(entry) => (
+        <SessionBarRow
+          sessionKey={entry().session.key}
+          displayLabel={entry().displayLabel}
+          meta={buildSessionMeta(entry().session)}
+          agentId={entry().session.agentId}
+          valueLabel={
+            props.isTokenMode
+              ? formatUsageTokens(entry().value, entry().session.usage?.usageReport)
+              : formatAnalysisCost(entry().value, entry().session.usage?.usageReport)
+          }
+          isSelected={props.selectedSessions.includes(entry().session.key)}
+          onSelect={(event) => props.onSelect(entry().session.key, event.shiftKey, orderedKeys())}
+        />
+      )}
     </For>
   );
 }

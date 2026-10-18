@@ -80,7 +80,7 @@ export function memoryCoreWorkspaceStateKey(workspaceDir: string): string {
   return createHash("sha256").update(normalizeMemoryCoreWorkspaceKey(workspaceDir)).digest("hex");
 }
 
-export function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
+function memoryCoreWorkspaceEntryKey(workspaceDir: string, logicalKey: string): string {
   const workspaceKey = memoryCoreWorkspaceStateKey(workspaceDir);
   const itemKey = createHash("sha256").update(logicalKey).digest("hex");
   return `${workspaceKey}:${itemKey}`;
@@ -90,7 +90,7 @@ export function memoryCoreStateReference(namespace: string, workspaceDir: string
   return `plugin-state:${MEMORY_CORE_PLUGIN_ID}/${namespace}/${memoryCoreWorkspaceStateKey(workspaceDir)}`;
 }
 
-export function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<WorkspaceValue<T>> {
+function openWorkspaceStore<T>(namespace: string): PluginStateKeyedStore<WorkspaceValue<T>> {
   return openMemoryCoreStateStore<WorkspaceValue<T>>({
     namespace,
     maxEntries: DREAMING_WORKSPACE_STATE_MAX_ENTRIES,

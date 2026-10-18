@@ -33,6 +33,7 @@ public actor OpenClawChatSourceResources {
     private let request: Request
     private let loadConfig: ConfigLoader
     private let isCurrent: IsCurrent
+    private var revision: UInt64 = 0
     private struct ContextSnapshot: Sendable {
         let context: OpenClawChatSourceContext
         let resourceBaseURL: URL
@@ -58,6 +59,7 @@ public actor OpenClawChatSourceResources {
     }
 
     public func invalidate() {
+        self.revision &+= 1
         self.contextTask?.cancel()
         self.contextTask = nil
         for task in self.faviconTasks.values {
@@ -73,6 +75,7 @@ public actor OpenClawChatSourceResources {
 
     private func loadContextSnapshot() async -> ContextSnapshot? {
         guard await self.isCurrent(), !Task.isCancelled else { return nil }
+        let revision = self.revision
         let task: Task<ContextSnapshot?, Never>
         if let existing = contextTask {
             task = existing
@@ -81,14 +84,15 @@ public actor OpenClawChatSourceResources {
             self.contextTask = task
         }
         let context = await task.value
-        guard await self.isCurrent(), !task.isCancelled, !Task.isCancelled else { return nil }
+        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled else { return nil }
         return context
     }
 
     public func loadFavicon(host: String) async -> Data? {
+        let revision = self.revision
         guard let snapshot = await loadContextSnapshot(), snapshot.context.automaticallyFetchFavicons,
               let url = Self.faviconURL(host: host, baseURL: snapshot.resourceBaseURL),
-              await isCurrent(), !Task.isCancelled
+              await isCurrent(), self.revision == revision, !Task.isCancelled
         else { return nil }
         let task: Task<Data?, Never>
         if let cached = self.faviconTasks[url] {
@@ -98,19 +102,19 @@ public actor OpenClawChatSourceResources {
                 let oldest = self.faviconOrder.removeFirst()
                 self.faviconTasks.removeValue(forKey: oldest)?.cancel()
             }
-            task = Task { await self.downloadFavicon(url: url) }
+            task = Task { await self.downloadFavicon(url: url, revision: revision) }
             self.faviconTasks[url] = task
             self.faviconOrder.append(url)
         }
         let data = await task.value
-        guard await self.isCurrent(), !task.isCancelled, !Task.isCancelled else { return nil }
+        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled else { return nil }
         return data
     }
 
-    private func downloadFavicon(url: URL) async -> Data? {
-        guard await self.isCurrent(), !Task.isCancelled,
+    private func downloadFavicon(url: URL, revision: UInt64) async -> Data? {
+        guard await self.isCurrent(), self.revision == revision, !Task.isCancelled,
               let (data, response) = try? await self.request(url, Self.maximumFaviconBytes),
-              await self.isCurrent(), !Task.isCancelled,
+              await self.isCurrent(), self.revision == revision, !Task.isCancelled,
               let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),
               http.mimeType?.lowercased().hasPrefix("image/") == true,

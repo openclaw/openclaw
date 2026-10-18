@@ -5,7 +5,6 @@ import { parseWindowsNativeCommandLine } from "../process/windows-command-line.j
 import { parseWindowsNetstatListeners } from "./ports-netstat.js";
 import type { PortUsageStatus } from "./ports-types.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
-import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 import {
   getWindowsPowerShellExePath,
   getWindowsSystem32ExePath,
@@ -62,7 +61,6 @@ export function readWindowsListeningPidsResultSync(
   port: number,
   timeoutMs = DEFAULT_TIMEOUT_MS,
 ): WindowsListeningPidsResult {
-  assertAppContainerSpawnSupported();
   const powershellPids = readListeningPidsViaPowerShell(port, timeoutMs);
   if (powershellPids != null) {
     return { ok: true, pids: powershellPids };
@@ -95,7 +93,6 @@ export function readWindowsPortUsageSync(port: number, timeoutMs: number): PortU
   ) {
     return "unknown";
   }
-  assertAppContainerSpawnSupported();
   const result = spawnSync(
     getWindowsPowerShellExePath(),
     [
@@ -152,7 +149,6 @@ export function readWindowsProcessArgsResultSync(
   if (remainingTimeoutMs() <= 0) {
     return { ok: false, permanent: false };
   }
-  assertAppContainerSpawnSupported();
   const powershellPath = getWindowsPowerShellExePath(env, deadlineMs);
   const powershellTimeoutMs = remainingTimeoutMs();
   if (powershellTimeoutMs <= 0) {

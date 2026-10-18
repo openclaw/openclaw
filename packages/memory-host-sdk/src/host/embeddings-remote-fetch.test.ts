@@ -32,7 +32,6 @@ function respond(body: string, status = 200, headers?: Record<string, string>): 
         status,
         headers: { "content-length": String(responseBytes), ...headers },
       }),
-      params.init?.headers,
     ),
   );
   return responseBytes;

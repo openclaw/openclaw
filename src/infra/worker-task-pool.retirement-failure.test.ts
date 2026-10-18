@@ -11,8 +11,7 @@ import { createOwnedWorkerTaskPool, WorkerTaskError, WorkerTaskPool } from "./wo
 type PostedTask = { taskId: number; responseId?: number; nativeSections?: SharedArrayBuffer };
 
 type FakeWorker = EventEmitter & {
-  posted: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
-  postMessage: (message: PostedTask) => void;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
@@ -29,10 +28,9 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      posted = vi.fn<(message: PostedTask) => void>(() => {
+      postMessage = vi.fn<(message: PostedTask) => void>(() => {
         taskPosted();
       });
-      postMessage = this.posted;
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -63,7 +61,7 @@ function createPool(validateResult?: (value: string) => void) {
   return pool;
 }
 function taskId(worker: FakeWorker) {
-  return expectDefined(worker.posted.mock.calls[0]?.[0].taskId, "posted task");
+  return expectDefined(worker.postMessage.mock.calls[0]?.[0].taskId, "posted task");
 }
 
 beforeEach(() => {
@@ -90,7 +88,7 @@ describe("worker task retirement failures", () => {
       .catch((error: unknown) => error);
     const worker = expectDefined(workers[0], "task worker");
     const state = new Int32Array(
-      expectDefined(worker.posted.mock.calls[0]?.[0].nativeSections, "native section state"),
+      expectDefined(worker.postMessage.mock.calls[0]?.[0].nativeSections, "native section state"),
     );
     const release = nativeSections.withWorkerTaskNativeSectionScope(
       state,
@@ -338,7 +336,7 @@ describe("worker task retirement failures", () => {
         )
         .catch((error: unknown) => error);
       const worker = expectDefined(workers[0], "task worker");
-      worker.posted.mockImplementation((message) => {
+      worker.postMessage.mockImplementation((message) => {
         if (message.responseId !== undefined) {
           responsePosted.resolve();
         }
@@ -424,7 +422,7 @@ describe("worker task retirement failures", () => {
     const first = pool.run("first", options).catch((error: unknown) => error);
     const worker = expectDefined(workers[0], "task worker");
     const nextPosted = createDeferredCore<{ taskId: number }>();
-    worker.posted.mockImplementation((message) => nextPosted.resolve(message));
+    worker.postMessage.mockImplementation((message) => nextPosted.resolve(message));
     const queued = pool
       .run(() => {
         order.push("successor");

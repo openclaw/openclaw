@@ -191,56 +191,23 @@ struct GatewayServiceRuntimeTests {
     }
 
     @Test func `existing service CLI keeps its runtime package flags and SQLite selection`() throws {
-        let runtime = BundledRuntime(root: URL(fileURLWithPath: "/old"))
-        let fixtures: [([String], String?, Bool, String)] = [
-            (
-                ["/old/bin/bun", "/old/lib/node_modules/openclaw/openclaw.mjs"],
-                "/old/lib/libsqlite3.dylib",
-                true,
-                "/old/bin:/usr/bin"),
+        let fixtures: [([String], String?)] = [
+            (["/old/bin/bun", "/old/lib/node_modules/openclaw/openclaw.mjs"], "/old/lib/libsqlite3.dylib"),
             (
                 ["/old/bin/bun", "--no-install", "/old/lib/node_modules/openclaw/dist/index.js"],
-                "/old/lib/libsqlite3.dylib", true, "/old/bin:/usr/bin"),
+                "/old/lib/libsqlite3.dylib"),
             (
                 ["/old/bin/bun", "--max-heap-size=8192", "--no-install", "/old/lib/node_modules/openclaw/openclaw.mjs"],
-                nil, false, "/old/bin:/usr/bin"),
-            (
-                ["/old/bin/node", "--max-old-space-size=8192", "/old/lib/node_modules/openclaw/dist/index.js"],
-                nil,
-                false,
-                "/old/bin:/usr/bin"),
-            (
-                [
-                    "/old/bin/bun",
-                    "--max-heap-size=8192",
-                    "--no-install",
-                    "/old/lib/node_modules/openclaw/dist/entry.mjs",
-                ],
-                "/old/lib/libsqlite3.dylib", true, "/old/bin:/usr/bin"),
-            (
-                ["/other/bin/bun", "/old/lib/node_modules/openclaw/openclaw.mjs"],
-                "/old/lib/libsqlite3.dylib",
-                false,
-                "/other/bin:/usr/bin"),
-            (
-                ["/old/bin/bun", "/other/lib/node_modules/openclaw/openclaw.mjs"],
-                "/old/lib/libsqlite3.dylib",
-                false,
-                "/old/bin:/usr/bin"),
-            (
-                ["/old/bin/bun", "/old/lib/node_modules/openclaw/openclaw.mjs"],
-                "/other/lib/libsqlite3.dylib",
-                false,
-                "/old/bin:/usr/bin"),
+                nil),
+            (["/old/bin/node", "--max-old-space-size=8192", "/old/lib/node_modules/openclaw/dist/index.js"], nil),
         ]
-        for (prefix, library, matches, expectedPath) in fixtures {
+        for (prefix, library) in fixtures {
             let cli = try #require(GatewayLaunchAgentManager.installedServiceCLI(
                 snapshot: self.snapshot(prefix + ["gateway", "--port", "29871"], sqliteLibrary: library),
                 environmentFile: URL(fileURLWithPath: "/profile/service-env/gateway.env"),
                 environmentWrapper: URL(fileURLWithPath: "/profile/service-env/gateway-env-wrapper.sh")))
             #expect(cli.prefix == prefix)
             #expect(cli.sourcePrefix == prefix)
-            #expect(cli.matchesBundledRuntime(runtime) == matches)
             let environment = GatewayLaunchAgentManager.daemonEnvironment(
                 runtime: nil,
                 installedCLI: cli,
@@ -248,7 +215,7 @@ struct GatewayServiceRuntimeTests {
                 profile: AppProfile(environment: [:]),
                 searchPaths: ["/usr/bin"])
             #expect(environment["OPENCLAW_SQLITE_LIBRARY"] == library)
-            #expect(environment["PATH"] == expectedPath)
+            #expect(environment["PATH"] == "/old/bin:/usr/bin")
         }
     }
 

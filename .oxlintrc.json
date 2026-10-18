@@ -248,14 +248,9 @@
   ],
   "overrides": [
     {
-      "files": [
-        "ui/**/*.tsx",
-        "ui/src/lib/reactive/**/*.ts",
-        "ui/src/components/solid/**/*.ts",
-        "ui/src/test-helpers/**/*.ts"
-      ],
+      "files": ["ui/**/*.tsx"],
       "jsPlugins": ["./tools/solid-lint/index.mjs"],
-      // Solid 2 rendering and helper scopes; plain TypeScript domain owners are not components.
+      // eslint-plugin-solid/configs/v2; keep the AST-only rules on the UI boundary.
       "rules": {
         "solid/jsx-no-duplicate-props": "error",
         "solid/jsx-no-undef": "error",
@@ -378,7 +373,6 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
-        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -400,7 +394,6 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
-        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -422,7 +415,6 @@
         "**/*.{test,spec,suite}.*",
         "**/__generated__/**",
         "**/generated/**",
-        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",
@@ -443,7 +435,6 @@
       "excludeFiles": [
         "**/__generated__/**",
         "**/generated/**",
-        "**/*.generated/**",
         "**/protocol-gen/**",
         "**/*.generated.*",
         "**/dist/**",

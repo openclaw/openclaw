@@ -7,31 +7,23 @@ export type DiscordChannelPolicyBinding = {
   channelId: string;
 };
 
-const policyBindings = resolveGlobalMap<
-  string,
-  { channels: readonly DiscordChannelPolicyBinding[]; guilds: ReadonlyMap<string, string> }
->(Symbol.for("openclaw.discord.policy-bindings"), "close-and-restart");
+const channelPolicyBindings = resolveGlobalMap<string, readonly DiscordChannelPolicyBinding[]>(
+  Symbol.for("openclaw.discord.channel-policy-bindings"),
+  "close-and-restart",
+);
 
-export function setDiscordPolicyBindings(
+export function setDiscordChannelPolicyBindings(
   accountId: string,
   bindings: readonly DiscordChannelPolicyBinding[],
-  guilds: ReadonlyMap<string, string> = new Map(),
 ): void {
   // Each allowlist resolution replaces the account's complete snapshot, including misses.
-  policyBindings.set(normalizeAccountId(accountId), { channels: bindings, guilds });
+  channelPolicyBindings.set(normalizeAccountId(accountId), [...bindings]);
 }
 
 function listBindings(accountId: string | null | undefined, guildKey: string) {
-  return (policyBindings.get(normalizeAccountId(accountId))?.channels ?? []).filter(
+  return (channelPolicyBindings.get(normalizeAccountId(accountId)) ?? []).filter(
     (binding) => binding.guildKey === guildKey,
   );
-}
-
-export function findDiscordGuildPolicyKey(
-  accountId: string | null | undefined,
-  guildId: string,
-): string | undefined {
-  return policyBindings.get(normalizeAccountId(accountId))?.guilds.get(guildId);
 }
 
 export function getDiscordChannelPolicyBinding(

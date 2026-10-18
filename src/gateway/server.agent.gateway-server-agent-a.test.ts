@@ -45,8 +45,8 @@ type GatewayModelFixture = {
 };
 
 const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
-  id: "deepseek-v4-pro",
-  name: "DeepSeek V4 Pro",
+  id: "deepseek-v4-flash",
+  name: "DeepSeek V4 Flash",
   provider: "ollama-cloud",
   input: ["text"],
 };
@@ -393,7 +393,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-pro" } };
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
     testState.agentsConfig = {
       entries: {
         main: {},

@@ -737,6 +737,60 @@ describe("native hook relay registry", () => {
     expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe(successor.runId);
   });
 
+  it("keeps the callback-created successor after replacement teardown", async () => {
+    const relayId = uniqueNativeHookRelayIdForTests("replacement-reentrant-successor");
+    let callbackSuccessor: ReturnType<typeof registerNativeHookRelay> | undefined;
+    const first = registerOwnedRelay({
+      relayId,
+      runId: "run-first",
+      allowedEvents: ["post_tool_use"],
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: () => {
+          callbackSuccessor = registerNativeHookRelay({
+            provider: "codex",
+            relayId,
+            sessionId: "session-1",
+            runId: "run-callback-successor",
+            allowedEvents: ["post_tool_use"],
+          });
+        },
+      },
+    });
+    const replacementUnregistered = vi.fn();
+    registerOwnedRelay({
+      relayId,
+      runId: "run-replacement",
+      allowedEvents: ["post_tool_use"],
+      retention: {
+        readClaim: readTestNativeAgentId,
+        shouldRetainAfterForegroundClose: () => false,
+        allowPreToolUse: () => false,
+        onDispose: replacementUnregistered,
+      },
+    });
+
+    expect(callbackSuccessor).toBeDefined();
+    expect(replacementUnregistered).toHaveBeenCalledOnce();
+    expect(testing.getNativeHookRelayRegistrationForTests(relayId)?.runId).toBe(
+      "run-callback-successor",
+    );
+    await expect(
+      invokeNativeHookRelayBridge({
+        provider: "codex",
+        relayId,
+        generation: callbackSuccessor!.generation,
+        event: "post_tool_use",
+        timeoutMs: 2_000,
+        rawPayload: { hook_event_name: "PostToolUse", tool_name: "Bash", tool_response: {} },
+      }),
+    ).resolves.toMatchObject({ exitCode: 0 });
+    first.unregister();
+    callbackSuccessor?.unregister();
+  });
+
   it("delivers old replacement callback when the successor signal is already aborted", async () => {
     const relayId = uniqueNativeHookRelayIdForTests("replacement-preaborted");
     const oldUnregistered = vi.fn();
@@ -1297,10 +1351,8 @@ describe("native hook relay registry", () => {
       return true;
     });
 
-    // Cold locator startup must not consume this invalid-record fixture's deadline.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    try {
-      const result = invokeNativeHookRelayBridge({
+    await expect(
+      invokeNativeHookRelayBridge({
         provider: "codex",
         relayId,
         event: "pre_tool_use",
@@ -1311,14 +1363,9 @@ describe("native hook relay registry", () => {
           tool_name: "Bash",
           tool_input: { command: "pnpm test" },
         },
-      });
-      vi.advanceTimersByTime(1);
-      await expect(result).rejects.toThrow("native hook relay bridge not found");
-      expect(kill).toHaveBeenCalledWith(9_999_996, 0);
-      expect(testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+      }),
+    ).rejects.toThrow("native hook relay bridge not found");
+    expect(kill).toHaveBeenCalledWith(9_999_996, 0);
   });
 
   it("accepts only loopback direct bridge records", async () => {
@@ -1337,10 +1384,8 @@ describe("native hook relay registry", () => {
       } as unknown as NativeHookRelayBridgeRecord,
     });
 
-    // Cold locator startup must not consume this invalid-record fixture's deadline.
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    try {
-      const result = invokeNativeHookRelayBridge({
+    await expect(
+      invokeNativeHookRelayBridge({
         provider: "codex",
         relayId: relay.relayId,
         generation: relay.generation,
@@ -1352,13 +1397,8 @@ describe("native hook relay registry", () => {
           tool_name: "Bash",
           tool_input: { command: "pnpm test" },
         },
-      });
-      vi.advanceTimersByTime(1);
-      await expect(result).rejects.toThrow("native hook relay bridge not found");
-      expect(testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
-    } finally {
-      vi.useRealTimers();
-    }
+      }),
+    ).rejects.toThrow("native hook relay bridge not found");
   });
 
   it("reports whether a relay already observed a tool use invocation", async () => {
@@ -2182,7 +2222,7 @@ describe("native hook relay registry", () => {
     expect(responses.at(-1)).toEqual({ stdout: "", stderr: "", exitCode: 0 });
   });
 
-  it("fingerprints all bounded input properties independently of key order", () => {
+  it("fingerprints broad inputs without key enumeration and preserves tail sensitivity", () => {
     const toolInput = Object.fromEntries(
       Array.from({ length: 300 }, (_, index) => [`key-${index}`, `value-${index}`]),
     );
@@ -2193,20 +2233,21 @@ describe("native hook relay registry", () => {
       toolName: "exec",
       toolInput,
     } as const;
-    const fingerprint = testing.permissionRequestContentFingerprintForTests(request);
-    expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
-    expect(fingerprint).toBe(
-      testing.permissionRequestContentFingerprintForTests({
-        ...request,
-        toolInput: Object.fromEntries(Object.entries(toolInput).toReversed()),
-      }),
-    );
-    expect(fingerprint).not.toBe(
-      testing.permissionRequestContentFingerprintForTests({
-        ...request,
-        toolInput: { ...toolInput, "key-299": "changed" },
-      }),
-    );
+    const objectKeys = vi.spyOn(Object, "keys").mockImplementation(() => {
+      throw new Error("Object.keys should not be used for permission fingerprints");
+    });
+    try {
+      const fingerprint = testing.permissionRequestContentFingerprintForTests(request);
+      expect(fingerprint).toMatch(/^[a-f0-9]{64}$/);
+      expect(fingerprint).not.toBe(
+        testing.permissionRequestContentFingerprintForTests({
+          ...request,
+          toolInput: { ...toolInput, "key-299": "changed" },
+        }),
+      );
+    } finally {
+      objectKeys.mockRestore();
+    }
   });
 
   it.each([

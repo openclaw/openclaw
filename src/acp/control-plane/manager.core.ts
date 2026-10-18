@@ -112,7 +112,7 @@ export class AcpSessionManager {
     });
   }
 
-  /** @deprecated Use resolveSessionAsync; final compatibility day: 2026-12-31. */
+  /** @deprecated Use resolveSessionAsync; retained for the v2026.9.4 Plugin SDK contract. */
   resolveSession(params: {
     cfg: OpenClawConfig;
     sessionKey: string;

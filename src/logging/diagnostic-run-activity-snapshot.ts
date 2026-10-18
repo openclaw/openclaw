@@ -3,7 +3,7 @@ import {
   type DiagnosticArgumentChurnActivity,
   resolveArgumentChurnProgress,
 } from "./diagnostic-argument-churn-activity.js";
-import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
 import {
   type DiagnosticRepeatedRequestActivity,
   resolveRepeatedRequestNoProgressAgeMs,
@@ -21,10 +21,7 @@ export type DiagnosticSessionActivitySnapshot = {
   lastProgressAgeMs?: number;
   lastProgressReason?: string;
   repeatedRequestNoProgressAgeMs?: number;
-  /** Quiet allowance owned by the current core request generation. */
   activeModelCallRequestTimeoutMs?: number;
-  /** Start-relative diagnostic recovery eligibility, not a client HTTP timeout. */
-  activeModelCallRecoveryDeadlineAtMs?: number;
   /** Absolute quiet deadline validated against the exact executing backend owner. */
   activeBackendLivenessDeadlineAtMs?: number;
   /** Absolute provider retry deadline validated against the live logical run. */
@@ -40,15 +37,9 @@ type SnapshotTool = {
 };
 type SnapshotActivity = DiagnosticArgumentChurnActivity &
   DiagnosticRepeatedRequestActivity & {
-    activeEmbeddedRuns: ReadonlyMap<
-      string,
-      { runId: string; sequence: number; generation?: object }
-    >;
+    activeEmbeddedRuns: ReadonlyMap<string, { runId: string; sequence: number }>;
     activeModelCalls: ReadonlyMap<string, unknown>;
-    activeCoreModelCalls: ReadonlyMap<
-      object,
-      ReadonlyMap<string, { requestTimeoutMs?: number; deadlineAtMs?: number }>
-    >;
+    activeCoreModelCalls: ReadonlyMap<object, ReadonlyMap<string, { requestTimeoutMs?: number }>>;
     activeTools: ReadonlyMap<string, SnapshotTool>;
     lastProgressAt: number;
     lastProgressReason?: string;
@@ -58,28 +49,17 @@ export function buildDiagnosticSessionActivitySnapshot(
   activity: SnapshotActivity,
   now: number,
 ): DiagnosticSessionActivitySnapshot {
-  const currentOwner = resolveCurrentDiagnosticRun(activity.activeEmbeddedRuns.values());
-  const currentOwnerRunId = currentOwner?.runId;
   let activeCoreModelCallCount = 0;
   let activeModelCallRequestTimeoutMs: number | undefined;
-  let activeModelCallRecoveryDeadlineAtMs: number | undefined;
-  for (const [generation, calls] of activity.activeCoreModelCalls) {
+  for (const calls of activity.activeCoreModelCalls.values()) {
     activeCoreModelCallCount += calls.size;
-    if (generation !== currentOwner?.generation) {
-      continue;
-    }
     for (const call of calls.values()) {
-      if (call.requestTimeoutMs !== undefined) {
-        activeModelCallRequestTimeoutMs = Math.max(
-          activeModelCallRequestTimeoutMs ?? 0,
-          call.requestTimeoutMs,
-        );
-      }
-      if (call.deadlineAtMs !== undefined) {
-        activeModelCallRecoveryDeadlineAtMs = Math.max(
-          activeModelCallRecoveryDeadlineAtMs ?? 0,
-          call.deadlineAtMs,
-        );
+      if (
+        call.requestTimeoutMs !== undefined &&
+        (activeModelCallRequestTimeoutMs === undefined ||
+          call.requestTimeoutMs > activeModelCallRequestTimeoutMs)
+      ) {
+        activeModelCallRequestTimeoutMs = call.requestTimeoutMs;
       }
     }
   }
@@ -94,6 +74,7 @@ export function buildDiagnosticSessionActivitySnapshot(
   let activeTool: SnapshotTool | undefined;
   let activeToolDeadlineAtMs: number | undefined;
   let activeToolRecoveryDeadlineAtMs: number | undefined;
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(activity.activeEmbeddedRuns.values());
   for (const tool of activity.activeTools.values()) {
     if (!activeTool || tool.startedAt < activeTool.startedAt) {
       activeTool = tool;
@@ -130,7 +111,6 @@ export function buildDiagnosticSessionActivitySnapshot(
       now,
     ),
     activeModelCallRequestTimeoutMs,
-    activeModelCallRecoveryDeadlineAtMs,
   };
 }
 

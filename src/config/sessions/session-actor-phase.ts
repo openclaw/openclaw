@@ -6,10 +6,7 @@ import {
   projectRestartRecoveryDeliverySettlement,
   resolveRestartRecoveryTerminalDeliveryDisposition,
 } from "./restart-recovery-receipt-state.js";
-import {
-  getRestartRecoveryPendingFinalSourceRunId,
-  mergeRestartRecoveryTerminalRunIds,
-} from "./restart-recovery-state.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
   SessionActorAppend,
@@ -283,18 +280,7 @@ export function applySessionActorPhaseWithBackend(
       break;
     }
     case "session.actor.completeTurn": {
-      const { turn: input, bookkeeping } = command.input;
-      const pendingFinalDelivery = command.input.pendingFinalDelivery
-        ? {
-            ...command.input.pendingFinalDelivery,
-            sourceRunId: hot.entry
-              ? getRestartRecoveryPendingFinalSourceRunId(
-                  hot.entry,
-                  command.input.pendingFinalDelivery.context,
-                )
-              : undefined,
-          }
-        : undefined;
+      const { pendingFinalDelivery, turn: input, bookkeeping } = command.input;
       if (bookkeeping) {
         if (requireEntry().activeWriterRunId !== bookkeeping.writerRunId) {
           throw new SessionActorStaleStateError(

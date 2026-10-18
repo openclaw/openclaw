@@ -22,7 +22,6 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
-import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -359,11 +358,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             // Keep the selected config readable until its original is atomically restored.
             const staged = `${target}.pending-${randomUUID()}`;
             try {
-              await writeTextAtomic(staged, current.raw, {
-                mode: 0o600,
-                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
-                durable: true,
-              });
+              await writeTextAtomic(staged, current.raw, { mode: 0o600, durable: true });
               const identity = await fs.lstat(staged);
               assertCurrent();
               await publishFileExclusive({
@@ -388,7 +383,6 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
-              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });

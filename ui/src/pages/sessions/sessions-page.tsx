@@ -9,6 +9,7 @@ import { i18n } from "../../i18n/index.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/settings.css";
 import type { SessionsRouteData } from "./route.ts";
 import { SessionManagementMenu } from "./session-menu.tsx";
@@ -38,9 +39,17 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
     <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
       <section class="content-header content-header--settings content-header--page hub-page-header sessions-hub-header">
         <div class="hub-page-header__title">
-          <div class="page-title">{titleForRoute("sessions", t)}</div>
+          <div class="page-title">
+            {(() => {
+              locale.revision();
+              return titleForRoute("sessions");
+            })()}
+          </div>
           <div class="page-subtitle">
-            {subtitleForRoute("sessions", t)}{" "}
+            {(() => {
+              locale.revision();
+              return subtitleForRoute("sessions");
+            })()}{" "}
             <LearnMoreLink url="https://docs.openclaw.ai/concepts/session" />
           </div>
         </div>
@@ -83,24 +92,18 @@ export function SessionsPageContent(props: { controller: SessionsPageController 
   );
 }
 
-export function SessionsPage(props: { routeData?: SessionsRouteData }) {
+function SessionsPageRoot(props: { routeData?: SessionsRouteData }) {
   const controller = new SessionsPageController();
   controller.routeData = untrack(() => props.routeData);
   createEffect(
     () => props.routeData,
     (routeData) => controller.setRouteData(routeData),
   );
-  return (
-    <openclaw-sessions-page>
-      <SessionsPageContent controller={controller} />
-    </openclaw-sessions-page>
-  );
+  return <SessionsPageContent controller={controller} />;
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-sessions-page": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
+export const SessionsPage = defineSolidBridge<{ routeData?: SessionsRouteData }>(
+  "openclaw-sessions-page",
+  SessionsPageRoot,
+  { properties: { routeData: { default: undefined, attribute: false } } },
+);

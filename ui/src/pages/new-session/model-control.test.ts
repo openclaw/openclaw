@@ -388,7 +388,7 @@ describe("configured defaults", () => {
   function setupDefaults() {
     const state = contextWith(models);
     Object.assign(state.context, {
-      config: { ...state.context.config, current: { newSessionModelDefaults: "configured" } },
+      config: { current: { newSessionModelDefaults: "configured" } },
     });
     return state;
   }

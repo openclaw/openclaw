@@ -3,7 +3,8 @@ import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageContentItem } from "../../../lib/chat/chat-types.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { omittedMediaReason } from "./chat-message-media.ts";
 
 type OmittedMediaItem = Extract<MessageContentItem, { type: "omitted_media" }>;
@@ -54,11 +55,13 @@ export function AssistantAttachmentStatusCard(
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
-          <AttachmentFileIcon
-            filename={props.label}
-            mimeType={props.mimeType}
-            mode="large-placeholder"
-            unavailable={unavailable()}
+          <LitContent
+            value={renderAttachmentFileIcon({
+              filename: props.label,
+              mimeType: props.mimeType,
+              mode: "large-placeholder",
+              unavailable: unavailable(),
+            })}
           />
           <span class="chat-assistant-attachment-card__details">
             <span

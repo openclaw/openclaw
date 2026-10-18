@@ -39,9 +39,6 @@ function automationSchedule(job: CronJob): string {
       time: formatUpdatedTime(Date.parse(schedule.at)) || schedule.at,
     });
   }
-  if (schedule.kind === "event") {
-    return t("workboard.automationEvent", { source: schedule.source });
-  }
   if (schedule.kind === "on-exit") {
     return t("workboard.automationOnExit", { command: schedule.command });
   }
@@ -154,11 +151,9 @@ function BoardAutomationHeadingContent(props: {
                 <dd>{automationSchedule(loaded())}</dd>
                 <dt>{t("workboard.automationNextRunLabel")}</dt>
                 <dd>
-                  {loaded().enabled && loaded().schedule.kind === "event"
-                    ? t("workboard.automationWaitingForEvent")
-                    : loaded().enabled && loaded().state.nextRunAtMs
-                      ? formatUpdatedTime(loaded().state.nextRunAtMs)
-                      : t("workboard.automationNotScheduled")}
+                  {loaded().enabled && loaded().state.nextRunAtMs
+                    ? formatUpdatedTime(loaded().state.nextRunAtMs)
+                    : t("workboard.automationNotScheduled")}
                 </dd>
                 <dt>{t("workboard.detailUpdated")}</dt>
                 <dd>{formatUpdatedTime(loaded().updatedAtMs)}</dd>
@@ -236,8 +231,6 @@ function BoardAutomationContent(props: {
                 <span>{automationSchedule(loaded())}</span>
                 {!loaded().enabled ? (
                   <small>{t("workboard.automationPaused")}</small>
-                ) : loaded().schedule.kind === "event" ? (
-                  <small>{t("workboard.automationWaitingForEvent")}</small>
                 ) : loaded().state.nextRunAtMs ? (
                   <small>
                     {t("workboard.automationNextRun", {

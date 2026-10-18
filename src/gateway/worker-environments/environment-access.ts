@@ -279,6 +279,7 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
         assertCurrent,
         signal: request.signal,
         knownRecipe: () => ({
+          project: projectSnapshot,
           setupRecipe: preparation.setupRecipe,
           recipe: preparation.recipe,
         }),

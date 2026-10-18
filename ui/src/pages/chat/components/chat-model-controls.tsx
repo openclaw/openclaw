@@ -35,7 +35,8 @@ import {
   resolveModelRuntimeEntry,
 } from "../../../lib/model-runtime-choice.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { areUiSessionKeysEquivalent } from "../../../lib/sessions/session-key.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { ChatEffortPicker, type ChatEffortPickerParams } from "./chat-effort-picker.tsx";
 import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 import {
@@ -57,6 +58,7 @@ type ChatModelControlsProps = {
   accountSelection?: ChatAccountSelection | null;
   renderAccountSection?: (model: string) => ChatModelAccountSection | undefined;
   activeRunId: string | null;
+  activeRunSessionKey?: string;
   agentDefaultModel?: string;
   connected: boolean;
   gatewayAvailable: boolean;
@@ -284,14 +286,24 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       sessionsResult: props.sessionsResult,
     });
     const activeSession = props.selectedSession;
+    const localRunMatchesSession = Boolean(
+      props.activeRunId &&
+      props.activeRunSessionKey &&
+      areUiSessionKeysEquivalent(props.activeRunSessionKey, props.sessionKey),
+    );
+    const activeRunId = localRunMatchesSession ? props.activeRunId : null;
+    const stream = localRunMatchesSession ? props.stream : null;
     const resolvedFastMode = resolveChatFastModeSelectState({
+      activeRunId,
       catalog: props.modelCatalog,
       connected: props.connected,
       currentModelOverride: currentOverride,
       fastModeTarget: props.fastModeTarget ?? props.selectedSession,
       gatewayAvailable: props.gatewayAvailable,
       loading: props.loading,
+      sending: props.sending,
       sessionsResult: props.sessionsResult,
+      stream,
     });
     // Reasoning/fast state still describes the previous model until the refreshed
     // session row lands. Lock both so stale levels cannot be committed mid-switch.
@@ -333,11 +345,6 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         isDefault,
         value: option.value,
         label: resolveChatModelPickerLabel(catalogEntry, option.label),
-        contextWindow: catalogEntry?.contextWindow,
-        supportsTools: catalogEntry?.supportsTools,
-        recommended: catalogEntry?.recommended,
-        disabled: option.disabled,
-        unavailableReason: option.disabled ? option.unavailableReason : undefined,
         provider: catalog.provider(
           option.value,
           isDefault
@@ -358,6 +365,19 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         // Default clears the runtime pin; session-scoped metadata describes the route being left.
         pickerOption.agentRuntimeId = undefined;
       }
+      if (catalogEntry?.contextWindow) {
+        pickerOption.contextWindow = catalogEntry.contextWindow;
+      }
+      if (typeof catalogEntry?.supportsTools === "boolean") {
+        pickerOption.supportsTools = catalogEntry.supportsTools;
+      }
+      if (catalogEntry?.recommended) {
+        pickerOption.recommended = true;
+      }
+      if (option.disabled) {
+        pickerOption.disabled = true;
+        pickerOption.unavailableReason = option.unavailableReason;
+      }
       const options = [pickerOption];
       for (const choice of runtimeSelectionLocked ? [] : (catalogEntry?.runtimeChoices ?? [])) {
         if (choice.manualSelectionAllowed === false) {
@@ -376,7 +396,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
           supportsTools: choice.supportsTools,
           disabled: choice.available === false,
           unavailableReason: choice.unavailableReason,
-          recommended: pickerOption.recommended,
+          ...(pickerOption.recommended ? { recommended: true } : {}),
         });
       }
       return options;
@@ -414,13 +434,15 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
     ) {
       modelOptions.push({
         commitValue: currentOverride,
-        contextWindow: currentCatalogEntry?.contextWindow,
-        supportsTools: currentCatalogEntry?.supportsTools,
-        disabled: currentCatalogEntry?.available === false,
-        unavailableReason:
-          currentCatalogEntry?.available === false
-            ? currentCatalogEntry.unavailableReason
-            : undefined,
+        ...(currentCatalogEntry?.contextWindow
+          ? { contextWindow: currentCatalogEntry.contextWindow }
+          : {}),
+        ...(typeof currentCatalogEntry?.supportsTools === "boolean"
+          ? { supportsTools: currentCatalogEntry.supportsTools }
+          : {}),
+        ...(currentCatalogEntry?.available === false
+          ? { disabled: true, unavailableReason: currentCatalogEntry.unavailableReason }
+          : {}),
         isDefault: false,
         value: currentOverride,
         label: resolveChatModelPickerLabel(
@@ -608,7 +630,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
             disabledReason: props.effortMutationDisabledReason,
             fastMode: {
               ...fastMode,
-              disabled: fastMode.disabled || commonDisabled || effortMutationDisabled,
+              disabled: fastMode.disabled || commonDisabled || busy || effortMutationDisabled,
             },
             sessionKey: props.sessionKey,
             thinkingDisabled,
@@ -636,5 +658,5 @@ export function ChatModelControls(props: ChatModelControlsProps) {
 }
 
 export function renderChatModelControls(props: ChatModelControlsProps) {
-  return solidContent(ChatModelControls, props);
+  return solidTemplate(ChatModelControls, props);
 }

@@ -1,12 +1,10 @@
-import type {
-  SessionFileEntry,
-  SessionFileState,
-  SessionTranscriptCorpusEntry,
-} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isCronRunSessionKey,
   isDreamingNarrativeSessionStoreKey,
-} from "openclaw/plugin-sdk/session-key-runtime";
+  type SessionFileEntry,
+  type SessionFileState,
+  type SessionTranscriptCorpusEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type { MemorySourceFileStateRow } from "./manager-source-state.js";
 
 export type MemorySessionStartupFileState = SessionFileState;

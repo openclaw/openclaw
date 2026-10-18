@@ -139,6 +139,9 @@ export async function migrateLegacyDeviceAuth(params: {
                   }),
                 ),
             );
+            if (!executeSqliteQueryTakeFirstSync(db, query)) {
+              throw new Error("SQLite verification failed for a device-auth token");
+            }
             imported += 1;
           }
           return { imported, preserved };

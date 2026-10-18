@@ -41,10 +41,7 @@ import type {
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
-import {
-  readSqliteSessionArchivePruning,
-  withSqliteSessionPageReclamation,
-} from "./session-accessor.sqlite-page-reclamation.js";
+import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
   resolveSessionReclamationDatabaseOptions,
@@ -59,15 +56,16 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import {
+  hasCanonicalSessionTranscriptArchives,
   pruneAllSessionTranscriptArchivesToHighWater,
   reclaimSqliteFreePages,
 } from "./session-history-archive-pruning.js";
 import {
+  budgetKickStateByStore,
   createPhysicalBudgetResult,
   deferPhysicalBudgetForCheckpoint,
   getBudgetKickState,
   recordPhysicalBudgetOutcome,
-  sessionHistoryBudgetStoreKey,
   PHYSICAL_BUDGET_CHECK_INTERVAL_MS,
   FORCED_PHYSICAL_BUDGET_CHECK_INTERVAL_MS,
   type SessionHistoryBudgetKick,
@@ -92,13 +90,6 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 export async function inspectSqliteSessionHistoryDiskBudget(
   input: SessionHistoryDiskBudgetParams,
 ): Promise<{ diskBudget: SessionDiskBudgetSweepResult | null; wouldMutate: boolean }> {
-  return inspectSessionHistoryDiskBudget(input, false);
-}
-
-async function inspectSessionHistoryDiskBudget(
-  input: SessionHistoryDiskBudgetParams,
-  physicalReclamation: boolean,
-): Promise<{ diskBudget: SessionDiskBudgetSweepResult | null; wouldMutate: boolean }> {
   if (resolveExplicitIncognitoAgentSqliteTarget(input.storePath, { agentId: input.agentId })) {
     return { diskBudget: null, wouldMutate: false };
   }
@@ -113,12 +104,11 @@ async function inspectSessionHistoryDiskBudget(
     totalBytesBefore: usage.totalBytes,
     maxBytes: maxDiskBytes,
     highWaterBytes,
-    walBytesAfter: usage.databaseWalBytes,
   });
   if (!diskBudget.overBudget || params.mode !== "enforce") {
     return { diskBudget, wouldMutate: false };
   }
-  const blocked = getBudgetKickState(params.storePath, params.maintenance).checkpointBlocked;
+  const blocked = budgetKickStateByStore.get(params.storePath)?.checkpointBlocked;
   if (blocked) {
     return {
       diskBudget: {
@@ -141,10 +131,8 @@ async function inspectSessionHistoryDiskBudget(
     storePath: params.storePath,
   });
   const databaseOptions = toDatabaseOptions(resolved);
-  const pruning = await readSqliteSessionArchivePruning(databaseOptions);
   if (
-    (pruning?.archives.length ?? 0) > 0 ||
-    (physicalReclamation && ((pruning?.freePages ?? 0) > 0 || usage.databaseWalBytes > 0)) ||
+    (await hasCanonicalSessionTranscriptArchives(databaseOptions)) ||
     (await hasRetainedSessionTranscriptArchives(params.storePath))
   ) {
     return { diskBudget, wouldMutate: true };
@@ -293,14 +281,14 @@ export function kickSessionHistoryDiskBudgetMaintenance(input: SessionHistoryBud
     state.lastForcedCheckAt = now;
   }
   state.running = true;
-  const budgetParams: SessionHistoryDiskBudgetParams = {
+  budgetKickStateByStore.set(params.storePath, state);
+  void enforceSqliteSessionHistoryDiskBudget({
     ...(params.agentId ? { agentId: params.agentId } : {}),
     env: params.env,
     storePath: params.storePath,
     mode: maintenance.mode,
     maintenance,
-  };
-  void runSessionHistoryDiskBudgetMaintenance(budgetParams, true)
+  })
     .catch((error: unknown) => {
       // Best-effort: budget pressure is retried on the next throttled kick,
       // but a persistently failing sweep must stay operator-visible — silent
@@ -329,13 +317,6 @@ const SESSION_HISTORY_MAINTENANCE_QUEUES = new Map<string, StoreWriterQueue>();
 export async function enforceSqliteSessionHistoryDiskBudget(
   input: SessionHistoryDiskBudgetParams,
 ): Promise<SessionDiskBudgetSweepResult | null> {
-  return runSessionHistoryDiskBudgetMaintenance(input, false);
-}
-
-async function runSessionHistoryDiskBudgetMaintenance(
-  input: SessionHistoryDiskBudgetParams,
-  automatic: boolean,
-): Promise<SessionDiskBudgetSweepResult | null> {
   if (resolveExplicitIncognitoAgentSqliteTarget(input.storePath, { agentId: input.agentId })) {
     return null;
   }
@@ -351,19 +332,10 @@ async function runSessionHistoryDiskBudgetMaintenance(
   const identities = captureSessionStoreCandidateIdentities(candidates);
   return await runQueuedStoreWrite({
     queues: SESSION_HISTORY_MAINTENANCE_QUEUES,
-    storePath: sessionHistoryBudgetStoreKey(params.storePath),
+    storePath: params.storePath,
     label: "enforceSqliteSessionHistoryDiskBudget",
     fn: async () => {
       try {
-        if (automatic && getBudgetKickState(params.storePath, params.maintenance).protected) {
-          // Released readers can allow truncation without changing WAL length;
-          // the throttled probe retries retained WAL as well as newly eligible data.
-          const preview = await inspectSessionHistoryDiskBudget(params, true);
-          if (!preview.wouldMutate) {
-            recordPhysicalBudgetOutcome(params, preview.diskBudget);
-            return preview.diskBudget;
-          }
-        }
         const result = await enforceSessionHistoryMaintenanceSerialized(params, {
           candidates,
           identities,
@@ -402,7 +374,6 @@ async function enforceSessionHistoryMaintenanceSerialized(
       totalBytesBefore: initialUsage.totalBytes,
       maxBytes: maxDiskBytes,
       highWaterBytes,
-      walBytesAfter: initialUsage.databaseWalBytes,
     });
   }
 
@@ -478,7 +449,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
       removedFiles,
       maxBytes: maxDiskBytes,
       highWaterBytes,
-      walBytesAfter: usage.databaseWalBytes,
       ...(pruning.checkpointIncomplete
         ? {
             deferred: {

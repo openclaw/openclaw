@@ -49,6 +49,11 @@ export function runResolveOutboundTargetCoreTests(): void {
 
     it.each([
       {
+        name: "normalizes target through the loaded plugin",
+        input: { channel: "alpha" as const, to: " Alpha:Room One " },
+        expected: { ok: true as const, to: "room-one" },
+      },
+      {
         name: "uses channel defaultTo when no target was provided",
         input: {
           channel: "beta" as const,
@@ -56,6 +61,15 @@ export function runResolveOutboundTargetCoreTests(): void {
           cfg: { channels: { beta: { defaultTo: "Beta:Default Room" } } },
         },
         expected: { ok: true as const, to: "default-room" },
+      },
+      {
+        name: "passes explicit allowFrom without using it as an implicit target",
+        input: {
+          channel: "alpha" as const,
+          to: "",
+          allowFrom: ["alpha:room-one"],
+        },
+        expectedErrorIncludes: "Alpha",
       },
       {
         name: "rejects plugin-specific invalid targets",
@@ -86,7 +100,7 @@ export function runResolveOutboundTargetCoreTests(): void {
       }
     });
 
-    it.each(["tg:self"])(
+    it.each(["current", "telegram:current", "tg:self"])(
       "rejects plugin-reserved literal target %s before direct outbound fallback",
       async (to) => {
         setActivePluginRegistry(

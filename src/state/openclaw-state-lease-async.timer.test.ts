@@ -139,7 +139,7 @@ function fixture() {
       const { admission } = scope.createAdmission({ settled: settled.promise });
       try {
         const attachment = withSqliteWorkerOperationAdmission(
-          admission,
+          { port: admission.port },
           takeSqliteWorkerOperationAdmissionAttachment,
         );
         if (

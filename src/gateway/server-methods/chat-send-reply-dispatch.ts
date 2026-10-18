@@ -371,7 +371,6 @@ export function createChatSendReplyDispatch(params: {
         mediaMessage,
         assistantContent,
         persistedAssistantContent,
-        mediaBySource,
       } = await prepareWebchatReplyMediaForDisplay({
         scope: mediaScope,
         storePath: latestStorePath,
@@ -432,7 +431,6 @@ export function createChatSendReplyDispatch(params: {
         // identity so media materialization cannot append a parallel reply.
         rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
           content: persistedContentForAppend,
-          mediaBySource,
           idempotencyKey: ownedTranscriptIdempotencyKey,
           managedMediaUrls: sourceMediaUrls,
           scope: transcriptScope,
@@ -453,7 +451,6 @@ export function createChatSendReplyDispatch(params: {
           afterSeq: assistantTranscriptRewriteState.afterSeq,
           assistantMessageIndex,
           content: persistedContentForAppend,
-          mediaBySource,
           expectedGeneration: assistantTranscriptRewriteState.generation,
           mediaUrls: sourceMediaUrls,
           rejectedMediaCount: mediaFailures.filter(

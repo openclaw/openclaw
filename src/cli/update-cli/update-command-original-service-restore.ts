@@ -45,7 +45,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
         const current = await fingerprintGatewayServiceDefinition(state.command);
         assertOwned();
         const expectedPin = readDaemonRuntimePinForInstall(
-          { kind: "gateway", env, allowNativeRead: true },
+          { kind: "gateway", env },
           state.command,
           true,
         );

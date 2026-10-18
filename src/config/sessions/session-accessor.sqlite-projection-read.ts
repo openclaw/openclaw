@@ -21,7 +21,6 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { UnindexedHistoryControl } from "./session-accessor.sqlite-history-navigation.types.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
-import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import { retainTranscriptContextFacts } from "./session-transcript-context-facts.js";
@@ -395,10 +394,7 @@ const projectionSnapshotReader = createSqliteQueryCache((db: DatabaseSync) =>
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
   const actor = readSessionActorTransactionState(database, { sessionId });
   if (actor) {
-    return {
-      ...projectSessionTranscriptFacts(actor),
-      contextMetadata: projectSessionActorContextMetadata(actor),
-    };
+    return projectSessionTranscriptFacts(actor);
   }
   const retained = readSessionTranscriptProjectionReceipt(database, sessionId);
   if (retained && !retained.contextOnly) {

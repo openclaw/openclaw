@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { BoardOp } from "../../lib/board/types.ts";
-import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.tsx";
+import { applyBoardFixtureOps } from "../../test-helpers/board-fixture.ts";
 import "./board-view.ts";
 import {
   boardWidget,

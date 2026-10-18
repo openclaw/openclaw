@@ -232,24 +232,12 @@ export class DraftPlaceState {
     );
   }
 
-  get currentCheckoutUnavailableReason(): string | undefined {
-    const reason = this.repositoryState.currentCheckoutUnavailable;
-    return reason === "checking"
-      ? t("newSession.checkingPlace")
-      : reason === "worktree"
-        ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
-  }
-
   get checkoutVisible(): boolean {
     return (
       !this.deviceFolder &&
-      !this.hostedEnvironment &&
       !this.freshWorkspace &&
-      (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.worktreeAvailable() || this.worktree || Boolean(this.browser.projectId))
+      this.repository.kind !== "direct" &&
+      (this.worktreeAvailable() || this.worktree)
     );
   }
 
@@ -410,10 +398,7 @@ export class DraftPlaceState {
       return false;
     }
     if (this.browser.projectId || this.browser.remoteProject) {
-      return (
-        !this.browser.remoteProject &&
-        (!this.browser.selectedProject() || this.repositoryState.checkoutSubmissionBlocked)
-      );
+      return !this.browser.remoteProject && !this.browser.selectedProject();
     }
     // Free-typed paths still reach sessions.create so the Gateway can return
     // the authoritative missing-scope error instead of the UI dead-ending.
@@ -683,7 +668,7 @@ export class DraftPlaceState {
     this.callbacks.onError(null);
     this.selection.folderSelectedByUser = false;
     markDraftPlaceProjectChoice(this.selection, false);
-    this.repositoryState.clearDetails(true);
+    this.repositoryState.selectWorktree(false);
     this.persistPreference({
       projectId: selection.kind === "local" ? selection.id : "",
       remoteProject: selection.kind === "remote" ? selection.project : null,
@@ -774,7 +759,6 @@ export class DraftPlaceState {
         );
       },
     });
-    this.repositoryState.synchronizeProjectCheckout();
   }
 
   browseAvailable(): boolean {

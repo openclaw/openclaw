@@ -7,6 +7,8 @@ import {
   validatePluginsControlUiReportParams,
   validatePluginsControlUiStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
+import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import {
   listControlUiPluginCatalog,
   listControlUiPluginActivations,
@@ -15,6 +17,13 @@ import {
 } from "../control-ui-plugin-assets.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayHandler } from "./validation.js";
+
+function captureCatalogAuthority(): () => boolean {
+  const registry = getPluginRegistryForContext();
+  return registry
+    ? (capturePluginLifecycleAuthority(registry) ?? (() => false))
+    : () => getPluginRegistryForContext() === null;
+}
 
 export const pluginsControlUiHandlers: GatewayRequestHandlers = {
   "plugins.controlUi.report": defineValidatedGatewayHandler(
@@ -79,12 +88,15 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
       });
     },
   ),
-  // In-flight catalogs may finish with their selected record; asset reads recheck authority.
   "plugins.controlUi.list": defineValidatedGatewayHandler(
     "plugins.controlUi.list",
     validatePluginsControlUiListParams,
     async ({ respond }) => {
+      const isCurrent = captureCatalogAuthority();
       const catalog = await listControlUiPluginCatalog();
+      if (!isCurrent()) {
+        throw new Error("plugin registry was replaced");
+      }
       respond(true, catalog);
     },
     () => errorShape(ErrorCodes.UNAVAILABLE, "Control UI plugin catalog is unavailable"),
@@ -93,7 +105,11 @@ export const pluginsControlUiHandlers: GatewayRequestHandlers = {
     "plugins.controlUi.reload",
     validatePluginsControlUiReloadParams,
     async ({ params, respond, context }) => {
+      const isCurrent = captureCatalogAuthority();
       const catalog = await reloadControlUiPluginCatalog(params.pluginId);
+      if (!isCurrent()) {
+        throw new Error("plugin registry was replaced");
+      }
       context.broadcast("plugins.controlUi.changed", { revision: catalog.revision });
       respond(true, catalog);
     },

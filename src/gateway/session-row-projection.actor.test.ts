@@ -179,10 +179,7 @@ it("publishes user and assistant actor previews without background reads or losi
           expect(
             projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
           ).toBe("Accepted question");
-          expect(actor.snapshot(authority)?.transcript).toMatchObject({
-            anchorsState: "unavailable",
-            projection: { state: { activeMessageCount: 1 } },
-          });
+          expect(actor.snapshot(authority)?.transcript.anchors).toHaveLength(1);
 
           const reply = await appendSessionManagerActor({
             actor,
@@ -209,10 +206,7 @@ it("publishes user and assistant actor previews without background reads or losi
           expect(
             projection.snapshot(query, { includeLastMessage: true }).row?.lastMessagePreview,
           ).toBe("Committed answer");
-          expect(actor.snapshot(authority)?.transcript).toMatchObject({
-            anchorsState: "unavailable",
-            projection: { state: { activeMessageCount: 2 } },
-          });
+          expect(actor.snapshot(authority)?.transcript.anchors).toHaveLength(2);
           expect(reads).toEqual([]);
 
           release();

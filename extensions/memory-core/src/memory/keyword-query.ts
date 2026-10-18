@@ -1,4 +1,4 @@
-import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FtsCanonicalTokenizer = "unicode61" | "trigram";

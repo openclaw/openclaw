@@ -40,32 +40,28 @@ function categoryHue(category: string): number {
   return Math.abs(hash) % 360;
 }
 
-function StatusChip(props: { children: JSX.Element; kind?: string; title?: string }) {
-  return (
-    <span
-      class={["logbook__chip", props.kind && `logbook__chip--${props.kind}`]}
-      title={props.title}
-    >
-      {props.children}
+function StatusChips(props: { status: LogbookStatusPayload }) {
+  const chip = (content: JSX.Element, kind = "", title?: string) => (
+    <span class={["logbook__chip", kind && `logbook__chip--${kind}`]} title={title}>
+      {content}
     </span>
   );
-}
-
-function ActionButton(props: JSX.ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button class="btn btn--small" type="button" {...props} />;
-}
-
-function StatusChips(props: { status: LogbookStatusPayload }) {
   return (
     <div class="logbook__chips">
-      <StatusChip
-        kind={
-          props.status.captureEnabled &&
-          !props.status.capturePaused &&
-          !props.status.lastCaptureError
-            ? "ok"
-            : "warn"
-        }
+      <span
+        class={[
+          "logbook__chip",
+          {
+            "logbook__chip--ok":
+              props.status.captureEnabled &&
+              !props.status.capturePaused &&
+              !props.status.lastCaptureError,
+            "logbook__chip--warn":
+              !props.status.captureEnabled ||
+              props.status.capturePaused ||
+              Boolean(props.status.lastCaptureError),
+          },
+        ]}
       >
         <span class="logbook__chip-dot" />
         {props.status.capturePaused
@@ -75,34 +71,40 @@ function StatusChips(props: { status: LogbookStatusPayload }) {
                 seconds: String(props.status.captureIntervalSeconds),
               })
             : t("logbook.status.disabled")}
-      </StatusChip>
+      </span>
       <Show when={props.status.nodeName || props.status.nodeId}>
-        <StatusChip title={t("logbook.status.nodeHelp")}>
-          <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
-        </StatusChip>
+        {chip(
+          <>
+            <Icon name="monitor" /> {props.status.nodeName ?? props.status.nodeId}
+          </>,
+          "",
+          t("logbook.status.nodeHelp"),
+        )}
       </Show>
       <Show when={props.status.pendingFrames > 0}>
-        <StatusChip title={t("logbook.status.pendingHelp")}>
-          {t("logbook.status.pending", { count: String(props.status.pendingFrames) })}
-        </StatusChip>
+        {chip(
+          t("logbook.status.pending", { count: String(props.status.pendingFrames) }),
+          "",
+          t("logbook.status.pendingHelp"),
+        )}
       </Show>
-      <Show when={props.status.analysisRunning}>
-        <StatusChip kind="busy">{t("logbook.status.analyzing")}</StatusChip>
-      </Show>
+      <Show when={props.status.analysisRunning}>{chip(t("logbook.status.analyzing"), "busy")}</Show>
       <Show when={props.status.lastCaptureError}>
-        <StatusChip kind="error" title={formatUiExternalText(props.status.lastCaptureError)}>
-          {t("logbook.status.captureError")}
-        </StatusChip>
+        {chip(
+          t("logbook.status.captureError"),
+          "error",
+          formatUiExternalText(props.status.lastCaptureError),
+        )}
       </Show>
       <Show when={props.status.lastBatch?.status === "error"}>
-        <StatusChip kind="error" title={formatUiExternalText(props.status.lastBatch?.error)}>
-          {t("logbook.status.batchError")}
-        </StatusChip>
+        {chip(
+          t("logbook.status.batchError"),
+          "error",
+          formatUiExternalText(props.status.lastBatch?.error),
+        )}
       </Show>
       <Show when={props.status.visionModelSource === "missing"}>
-        <StatusChip kind="warn" title={t("logbook.status.modelMissingHelp")}>
-          {t("logbook.status.modelMissing")}
-        </StatusChip>
+        {chip(t("logbook.status.modelMissing"), "warn", t("logbook.status.modelMissingHelp"))}
       </Show>
     </div>
   );
@@ -281,7 +283,9 @@ function Standup(props: {
     <section class="card logbook-side__card">
       <div class="logbook-side__card-header">
         <div class="card-title">{t("logbook.standup.title")}</div>
-        <ActionButton
+        <button
+          class="btn btn--small"
+          type="button"
           disabled={props.state().standupLoading}
           onClick={() =>
             void loadLogbookStandup(props.state(), props.client, props.state().standup !== null)
@@ -292,7 +296,7 @@ function Standup(props: {
             : props.state().standup
               ? t("logbook.standup.refresh")
               : t("logbook.standup.generate")}
-        </ActionButton>
+        </button>
       </div>
       <Show
         when={props.state().standup}
@@ -330,9 +334,9 @@ function Ask(props: { state: () => LogbookControllerState; client: GatewayBrowse
             props.state().askQuestion = event.currentTarget.value;
           }}
         />
-        <ActionButton type="submit" disabled={props.state().askLoading}>
+        <button class="btn btn--small" type="submit" disabled={props.state().askLoading}>
           {props.state().askLoading ? t("common.loading") : t("logbook.ask.submit")}
-        </ActionButton>
+        </button>
       </form>
       <Show when={props.state().askAnswer}>
         <p class="logbook-ask__answer">{props.state().askAnswer}</p>
@@ -373,39 +377,48 @@ export function Logbook(props: LogbookProps) {
     },
   );
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
+  const button = (content: JSX.Element, onClick: () => void, disabled = false, label?: string) => (
+    <button
+      class="btn btn--small"
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onClick={onClick}
+    >
+      {content}
+    </button>
+  );
   return (
     <section class="logbook">
       <header class="logbook__header">
         <div class="logbook__daynav">
-          <ActionButton
-            onClick={() =>
-              void loadLogbook(state(), props.client, { day: shiftDay(state().day, -1) })
-            }
-            aria-label={t("logbook.nav.previousDay")}
-          >
-            ‹
-          </ActionButton>
+          {button(
+            "‹",
+            () => void loadLogbook(state(), props.client, { day: shiftDay(state().day, -1) }),
+            false,
+            t("logbook.nav.previousDay"),
+          )}
           <span class="logbook__day">{state().day}</span>
-          <ActionButton
-            onClick={() =>
-              void loadLogbook(state(), props.client, { day: shiftDay(state().day, 1) })
-            }
-            disabled={isToday()}
-            aria-label={t("logbook.nav.nextDay")}
-          >
-            ›
-          </ActionButton>
+          {button(
+            "›",
+            () => void loadLogbook(state(), props.client, { day: shiftDay(state().day, 1) }),
+            isToday(),
+            t("logbook.nav.nextDay"),
+          )}
           <Show when={!isToday()}>
-            <ActionButton onClick={() => void loadLogbook(state(), props.client, { today: true })}>
-              {t("logbook.nav.today")}
-            </ActionButton>
+            {button(
+              t("logbook.nav.today"),
+              () => void loadLogbook(state(), props.client, { today: true }),
+            )}
           </Show>
         </div>
         <Show when={state().status}>{(status) => <StatusChips status={status()} />}</Show>
         <div class="logbook__actions">
           <Show when={state().status}>
             {(status) => (
-              <ActionButton
+              <button
+                class="btn btn--small"
+                type="button"
                 disabled={state().actionPending || !status().captureEnabled}
                 onClick={() =>
                   void setLogbookCapturePaused(
@@ -416,21 +429,19 @@ export function Logbook(props: LogbookProps) {
                 }
               >
                 {t(status().capturePaused ? "logbook.actions.resume" : "logbook.actions.pause")}
-              </ActionButton>
+              </button>
             )}
           </Show>
-          <ActionButton
-            onClick={() => void runLogbookAnalysisNow(state(), props.client)}
-            disabled={state().actionPending}
-          >
-            {t("logbook.actions.analyzeNow")}
-          </ActionButton>
-          <ActionButton
-            onClick={() => void loadLogbook(state(), props.client)}
-            disabled={state().loading}
-          >
-            <Icon name="refresh" />
-          </ActionButton>
+          {button(
+            t("logbook.actions.analyzeNow"),
+            () => void runLogbookAnalysisNow(state(), props.client),
+            state().actionPending,
+          )}
+          {button(
+            <Icon name="refresh" />,
+            () => void loadLogbook(state(), props.client),
+            state().loading,
+          )}
         </div>
       </header>
       <Show when={state().error}>

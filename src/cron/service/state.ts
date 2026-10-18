@@ -432,7 +432,6 @@ export type CronListResult = CronJob[];
 export type CronAddInput = CronJobCreate;
 /** Caller-specific declaration-key visibility and explicit enablement metadata. */
 export type CronAddOptions = {
-  inferenceBinding?: CronStoredJob["inferenceBinding"];
   sourceConversation?: CronStoredJob["sourceConversation"];
   /** Selected revisions captured from a validated caller session, never public input. */
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
@@ -457,11 +456,7 @@ export type CronUpdateInput = CronJobPatch;
 /** Authenticated caller provenance used only when a tool policy is explicitly adopted. */
 export type CronUpdateOptions = Pick<
   CronAddOptions,
-  | "toolsAllowProvenance"
-  | "toolsAllowExecTarget"
-  | "commitGuard"
-  | "captureRuntimeAuthority"
-  | "inferenceBinding"
+  "toolsAllowProvenance" | "toolsAllowExecTarget" | "commitGuard" | "captureRuntimeAuthority"
 > & {
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;

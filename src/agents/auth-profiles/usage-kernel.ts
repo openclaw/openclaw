@@ -59,14 +59,10 @@ export function recordAuthProfileUsageInDatabase(
   const next =
     reduction.kind === "success"
       ? !profile.setup?.replacement && canonicalProvider(profile.provider) === input.providerKey
-        ? resetAuthProfileFailureState(
-            previous ?? {},
-            {
-              lastProbeAt: now,
-              ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
-            },
-            reduction.modelId,
-          )
+        ? resetAuthProfileFailureState(previous ?? {}, {
+            lastProbeAt: now,
+            ...(input.inherited ? {} : { lastUsed: reduction.lastUsed }),
+          })
         : undefined
       : reduceAuthProfileFailure(profile, previous, reduction, now);
   if (!next) {

@@ -331,7 +331,6 @@ describe("chat pane header", () => {
       HTMLElement & { updateComplete?: Promise<unknown> }
     >("openclaw-viewer-facepile.chat-pane__participants");
     await facepile?.updateComplete;
-    await vi.dynamicImportSettled();
 
     await vi.waitFor(() =>
       expect(facepile?.querySelector(".identity-avatar__agent-face")).not.toBeNull(),

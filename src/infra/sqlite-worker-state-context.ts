@@ -33,11 +33,9 @@ export function captureSqliteWorkerStateContext(
       ? { initializationAgentPaths: [...context.initializationAgentPaths] }
       : {}),
     existingSchemaPath: context.existingSchemaPath,
-    ...(context.stateIntegrity ? { stateIntegrity: context.stateIntegrity } : {}),
+    stateIntegrity: context.stateIntegrity,
     artifactPreservingReads: context.artifactPreservingReads,
-    ...(context.scheduledMaintenanceSuspension
-      ? { scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension }
-      : {}),
+    scheduledMaintenanceSuspension: context.scheduledMaintenanceSuspension,
   };
 }
 

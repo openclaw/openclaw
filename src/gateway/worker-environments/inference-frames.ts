@@ -27,7 +27,6 @@ export function terminalError(
   reason: WorkerInferenceErrorReason,
   outcome?: WorkerInferenceTerminalOutcome,
   errorMessage?: string,
-  retryAfterMs?: number | null,
 ): WorkerInferenceTerminalOutcome {
   const usage =
     outcome?.type === "done"
@@ -40,7 +39,6 @@ export function terminalError(
     reason,
     message: errorMessage ?? TERMINAL_ERROR_MESSAGES[reason],
     ...(usage ? { usage } : {}),
-    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 

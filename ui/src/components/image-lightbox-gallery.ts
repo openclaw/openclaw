@@ -27,7 +27,8 @@ export class ImageLightboxGalleryController {
   private video?: HTMLVideoElement;
   private disconnectVideo?: () => void;
   private gallery: ImageLightboxGallery | undefined;
-  private images = new Map<number, Promise<ImageLightboxItem | null>>();
+  private generation = 0;
+  private readonly images = new Map<number, Promise<ImageLightboxItem | null>>();
 
   constructor(private readonly notify: () => void) {}
 
@@ -55,12 +56,19 @@ export class ImageLightboxGalleryController {
     load: () => Promise<ImageLightboxItem | null>,
     preview?: ImageLightboxItem,
   ) {
-    const pending: Promise<ImageLightboxItem | null> = Promise.resolve()
-      .then(() => (this.images.get(index) === pending ? load() : null))
+    const generation = this.generation;
+    const pending = Promise.resolve()
+      .then(() => (generation === this.generation ? load() : null))
       .then(decodeImage)
       .catch(() => null)
       .then((item) => {
-        if (preview && item && this.images.get(index) === pending && this.index === index) {
+        if (
+          preview &&
+          item &&
+          generation === this.generation &&
+          this.images.get(index) === pending &&
+          this.index === index
+        ) {
           this.current = item;
           this.notify();
         }
@@ -75,10 +83,11 @@ export class ImageLightboxGalleryController {
 
   dispose() {
     this.stopPlayer();
+    this.generation += 1;
     for (const image of this.images.values()) {
       void image.then((item) => item?.release?.());
     }
-    this.images = new Map();
+    this.images.clear();
     this.gallery = undefined;
     this.current = undefined;
     this.busy = false;
@@ -94,13 +103,13 @@ export class ImageLightboxGalleryController {
     if (this.busy || !this.canMove(delta)) {
       return false;
     }
-    const images = this.images;
+    const generation = this.generation;
     const next = this.index + delta;
     this.busy = true;
     this.failed = false;
     this.notify();
     const item = await this.load(next, true);
-    if (images !== this.images) {
+    if (generation !== this.generation) {
       return false;
     }
     this.busy = false;

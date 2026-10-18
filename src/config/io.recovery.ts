@@ -1,6 +1,5 @@
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
-import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -8,7 +7,7 @@ import {
   resolveConfigForRead,
   resolveConfigIncludesForRead,
 } from "./io.read-helpers.js";
-import { resolveIsConfigReadOnly, resolveStateDir } from "./paths.js";
+import { resolveIsConfigReadOnly } from "./paths.js";
 import type { ConfigFileSnapshot } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
@@ -105,12 +104,7 @@ export async function recoverConfigFromJsonRootSuffixWithContext(
   await replaceFileAtomic({
     filePath: context.configPath,
     content: suffixRecovery.raw,
-    dirMode:
-      readExistingStateRootMode(
-        path.dirname(context.configPath),
-        resolveStateDir(context.deps.env, context.deps.homedir),
-        context.deps.fs,
-      ) ?? 0o700,
+    dirMode: 0o700,
     mode: 0o600,
     tempPrefix: path.basename(context.configPath),
     fileSystem: context.deps.fs,

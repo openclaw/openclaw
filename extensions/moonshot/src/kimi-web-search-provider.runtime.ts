@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
 import {
   buildSearchCacheKey,
   buildUnsupportedSearchFilterResponse,
-  DEFAULT_SEARCH_COUNT,
   MAX_SEARCH_COUNT,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
@@ -17,9 +16,7 @@ import {
   readStringParam,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
-  resolveSearchCount,
   resolveSearchTimeoutSeconds,
-  resolveSiteName,
   setProviderWebSearchPluginConfigValue,
   type SearchConfigRecord,
   type WebSearchProviderSetupContext,
@@ -29,6 +26,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   asNonArrayRecord,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -38,11 +36,58 @@ import {
 } from "../provider-catalog.js";
 
 const DEFAULT_KIMI_BASE_URL = MOONSHOT_BASE_URL;
+// Search owns a separate model default so chat onboarding changes do not silently reroute searches.
+const DEFAULT_KIMI_SEARCH_MODEL = "kimi-k2.6";
+/** Models that require explicit thinking disablement for web search. */
+const KIMI_THINKING_MODELS = new Set(["kimi-k2.6", "kimi-k2.5"]);
+const KIMI_WEB_SEARCH_TOOL = {
+  type: "builtin_function",
+  function: { name: "$web_search" },
+} as const;
 
 type KimiConfig = {
   apiKey?: string;
   baseUrl?: string;
+  model?: string;
 };
+
+type KimiToolCall = {
+  id?: string;
+  type?: string;
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+};
+
+type KimiMessage = {
+  role?: string;
+  content?: string;
+  reasoning_content?: string;
+  tool_calls?: KimiToolCall[];
+};
+
+type KimiSearchResponse = {
+  choices?: Array<{
+    finish_reason?: string;
+    message?: KimiMessage;
+  }>;
+  search_results?: Array<{
+    title?: string;
+    url?: string;
+    content?: string;
+  }>;
+};
+
+type KimiSearchResult = {
+  content: string;
+  citations: string[];
+  grounded: boolean;
+};
+
+function throwMalformedKimiResponse(): never {
+  throw new Error("Kimi API error: malformed JSON response");
+}
 
 function resolveKimiApiKey(kimi?: KimiConfig): string | undefined {
   return (
@@ -68,58 +113,186 @@ function resolveKimiBaseUrl(kimi?: KimiConfig, openClawConfig?: OpenClawConfig):
   return DEFAULT_KIMI_BASE_URL;
 }
 
-async function runKimiSearch(params: {
-  query: string;
-  count: number;
-  apiKey: string;
-  baseUrl: string;
-  timeoutSeconds: number;
-  signal?: AbortSignal;
-}) {
-  return withTrustedWebSearchEndpoint(
-    {
-      url: `${params.baseUrl}/tools/search`,
-      timeoutSeconds: params.timeoutSeconds,
-      signal: params.signal,
-      init: {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${params.apiKey}`,
-        },
-        body: JSON.stringify({ text_query: params.query, limit: params.count }),
-      },
-    },
-    async (res) => {
-      if (!res.ok) {
-        throw await createProviderHttpError(res, "Kimi API error");
-      }
+function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
+  const content = message?.content?.trim();
+  if (content) {
+    return content;
+  }
+  const reasoning = message?.reasoning_content?.trim();
+  return reasoning || undefined;
+}
 
-      const data = await readProviderJsonObjectResponse(res, "Kimi API error");
-      if (!Array.isArray(data.search_results)) {
-        throw new Error("Kimi API error: malformed JSON response");
+function collectKimiCitations(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+  toolCalls: KimiToolCall[],
+  citations: Set<string>,
+): void {
+  for (const entry of searchResults) {
+    const url = isRecord(entry) && typeof entry.url === "string" ? entry.url.trim() : "";
+    if (url) {
+      citations.add(url);
+    }
+  }
+
+  for (const toolCall of toolCalls) {
+    if (!isRecord(toolCall) || !isRecord(toolCall.function)) {
+      continue;
+    }
+    const rawArguments = toolCall.function.arguments;
+    if (typeof rawArguments !== "string" || !rawArguments) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(rawArguments) as {
+        search_results?: Array<{ url?: string }>;
+        url?: string;
+      };
+      const parsedUrl = normalizeOptionalString(parsed.url);
+      if (parsedUrl) {
+        citations.add(parsedUrl);
       }
-      return data.search_results.slice(0, params.count).map((entry) => {
-        const result = asNonArrayRecord(entry);
-        const title = normalizeOptionalString(result.title);
-        const url = normalizeOptionalString(result.url) ?? "";
-        const description = normalizeOptionalString(result.snippet);
-        return {
-          title: title ? wrapWebContent(title, "web_search") : "",
-          url,
-          description: description ? wrapWebContent(description, "web_search") : "",
-          // Provider metadata is page-controlled text; keep only values that cannot carry prose.
-          published: normalizeKimiResultDate(result.date),
-          siteName: resolveSiteName(url) || undefined,
-        };
-      });
-    },
+      for (const result of parsed.search_results ?? []) {
+        const resultUrl = normalizeOptionalString(result.url);
+        if (resultUrl) {
+          citations.add(resultUrl);
+        }
+      }
+    } catch {
+      // ignore malformed tool arguments
+    }
+  }
+}
+
+function hasKimiSearchResults(
+  searchResults: NonNullable<KimiSearchResponse["search_results"]>,
+): boolean {
+  return searchResults.some(
+    (entry) =>
+      isRecord(entry) &&
+      (Boolean(normalizeOptionalString(entry.url)) ||
+        Boolean(normalizeOptionalString(entry.title)) ||
+        Boolean(normalizeOptionalString(entry.content))),
   );
 }
 
-function normalizeKimiResultDate(value: unknown): string | undefined {
-  const date = normalizeOptionalString(value);
-  return date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : undefined;
+function extractKimiToolResultContent(toolCall: KimiToolCall): string | undefined {
+  const rawArguments = toolCall.function?.arguments;
+  if (typeof rawArguments !== "string" || rawArguments.trim().length === 0) {
+    return undefined;
+  }
+  return rawArguments;
+}
+
+async function runKimiSearch(params: {
+  query: string;
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  timeoutSeconds: number;
+  signal?: AbortSignal;
+}): Promise<KimiSearchResult> {
+  const endpoint = `${params.baseUrl.trim().replace(/\/$/, "")}/chat/completions`;
+  const messages: Array<Record<string, unknown>> = [{ role: "user", content: params.query }];
+  const collectedCitations = new Set<string>();
+  let hasGroundingEvidence = false;
+
+  for (let round = 0; round < 3; round += 1) {
+    const next = await withTrustedWebSearchEndpoint(
+      {
+        url: endpoint,
+        timeoutSeconds: params.timeoutSeconds,
+        signal: params.signal,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${params.apiKey}`,
+          },
+          body: JSON.stringify({
+            model: params.model,
+            ...(KIMI_THINKING_MODELS.has(params.model) ? { thinking: { type: "disabled" } } : {}),
+            messages,
+            tools: [KIMI_WEB_SEARCH_TOOL],
+          }),
+        },
+      },
+      async (
+        res,
+      ): Promise<{ done: true; content: string; citations: string[] } | { done: false }> => {
+        if (!res.ok) {
+          throw await createProviderHttpError(res, "Kimi API error");
+        }
+
+        const data = (await readProviderJsonObjectResponse(
+          res,
+          "Kimi API error",
+        )) as KimiSearchResponse;
+        if (!Array.isArray(data.choices)) {
+          throwMalformedKimiResponse();
+        }
+        const searchResults = data.search_results ?? [];
+        if (!Array.isArray(searchResults)) {
+          throwMalformedKimiResponse();
+        }
+        const choice = data.choices[0];
+        if (!isRecord(choice) || !isRecord(choice.message)) {
+          throwMalformedKimiResponse();
+        }
+        const message = choice.message;
+        const toolCalls = message.tool_calls ?? [];
+        if (!Array.isArray(toolCalls)) {
+          throwMalformedKimiResponse();
+        }
+        collectKimiCitations(searchResults, toolCalls, collectedCitations);
+        hasGroundingEvidence ||= hasKimiSearchResults(searchResults) || collectedCitations.size > 0;
+
+        const text = extractKimiMessageText(message);
+        if (choice.finish_reason === "tool_calls" && toolCalls.length > 0) {
+          messages.push({
+            role: "assistant",
+            content: message.content ?? "",
+            ...(message.reasoning_content ? { reasoning_content: message.reasoning_content } : {}),
+            tool_calls: toolCalls,
+          });
+
+          let pushed = false;
+          for (const toolCall of toolCalls) {
+            const toolCallId = toolCall.id?.trim();
+            const toolCallName = toolCall.function?.name?.trim();
+            const toolContent = extractKimiToolResultContent(toolCall);
+            if (!toolCallId || !toolCallName || !toolContent) {
+              continue;
+            }
+            if (toolCallName === KIMI_WEB_SEARCH_TOOL.function.name) {
+              hasGroundingEvidence = true;
+            }
+            pushed = true;
+            messages.push({
+              role: "tool",
+              tool_call_id: toolCallId,
+              name: toolCallName,
+              content: toolContent,
+            });
+          }
+          if (pushed) {
+            return { done: false };
+          }
+        }
+        if (!text) {
+          throwMalformedKimiResponse();
+        }
+        return { done: true, content: text, citations: [...collectedCitations] };
+      },
+    );
+
+    if (next.done) {
+      return { content: next.content, citations: next.citations, grounded: hasGroundingEvidence };
+    }
+  }
+
+  throw new Error(
+    "Kimi web search exhausted its tool-call rounds without producing a final answer. Retry the query or choose another search provider.",
+  );
 }
 
 export async function executeKimiWebSearchProviderTool(
@@ -150,15 +323,13 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const query = readStringParam(args, "query", { required: true });
-  const count = resolveSearchCount(
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ?? searchConfig?.maxResults,
-    DEFAULT_SEARCH_COUNT,
-  );
+  void readPositiveIntegerParam(args, "count", {
+    max: MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
+  });
+  const model = normalizeOptionalString(kimiConfig.model) ?? DEFAULT_KIMI_SEARCH_MODEL;
   const baseUrl = resolveKimiBaseUrl(kimiConfig, ctx.config);
-  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, count]);
+  const cacheKey = buildSearchCacheKey(["kimi", query, baseUrl, model]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
@@ -166,19 +337,31 @@ export async function executeKimiWebSearchProviderTool(
   }
 
   const start = Date.now();
-  const results = await runKimiSearch({
+  const result = await runKimiSearch({
     query,
-    count,
     apiKey,
     baseUrl,
+    model,
     timeoutSeconds: resolveSearchTimeoutSeconds(searchConfig),
     signal: opts?.signal,
   });
   opts?.signal?.throwIfAborted();
+  if (!result.grounded) {
+    return {
+      error: "kimi_web_search_ungrounded",
+      message:
+        "Kimi returned a chat completion without native web-search grounding. Retry the query, switch to a structured provider such as Brave, or use web_fetch/browser for a specific URL.",
+      query,
+      provider: "kimi",
+      model,
+      docs: "https://docs.openclaw.ai/tools/kimi-search",
+      tookMs: Date.now() - start,
+    };
+  }
   const payload = {
     query,
     provider: "kimi",
-    count: results.length,
+    model,
     tookMs: Date.now() - start,
     externalContent: {
       untrusted: true,
@@ -186,7 +369,8 @@ export async function executeKimiWebSearchProviderTool(
       provider: "kimi",
       wrapped: true,
     },
-    results,
+    content: wrapWebContent(result.content),
+    citations: result.citations,
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
@@ -200,6 +384,7 @@ export async function runKimiSearchProviderSetup(
   const normalizedBaseUrl = normalizeBaseUrl(
     normalizeOptionalString(existingPluginConfig?.baseUrl),
   );
+  const existingModel = normalizeOptionalString(existingPluginConfig?.model) ?? "";
 
   const isCustomBaseUrl = normalizedBaseUrl && !isNativeMoonshotBaseUrl(normalizedBaseUrl);
   const regionOptions: Array<{ value: string; label: string; hint?: string }> = [];
@@ -228,8 +413,44 @@ export async function runKimiSearchProviderSetup(
     options: regionOptions,
     initialValue: normalizedBaseUrl || MOONSHOT_BASE_URL,
   });
+  const currentModelLabel = existingModel
+    ? `Keep current (moonshot/${existingModel})`
+    : `Use default (moonshot/${DEFAULT_KIMI_SEARCH_MODEL})`;
+  const modelChoice = await ctx.prompter.select<string>({
+    message: "Kimi web search model",
+    options: [
+      {
+        value: "__keep__",
+        label: currentModelLabel,
+      },
+      {
+        value: "__custom__",
+        label: "Enter model manually",
+      },
+      {
+        value: DEFAULT_KIMI_SEARCH_MODEL,
+        label: `moonshot/${DEFAULT_KIMI_SEARCH_MODEL}`,
+      },
+    ],
+    initialValue: "__keep__",
+  });
+
+  let model: string;
+  if (modelChoice === "__keep__") {
+    model = existingModel || DEFAULT_KIMI_SEARCH_MODEL;
+  } else if (modelChoice === "__custom__") {
+    const customModel = await ctx.prompter.text({
+      message: "Kimi model name",
+      initialValue: existingModel || DEFAULT_KIMI_SEARCH_MODEL,
+      placeholder: DEFAULT_KIMI_SEARCH_MODEL,
+    });
+    model = customModel?.trim() || DEFAULT_KIMI_SEARCH_MODEL;
+  } else {
+    model = modelChoice;
+  }
 
   const next = { ...ctx.config };
   setProviderWebSearchPluginConfigValue(next, "moonshot", "baseUrl", baseUrl);
+  setProviderWebSearchPluginConfigValue(next, "moonshot", "model", model);
   return next;
 }

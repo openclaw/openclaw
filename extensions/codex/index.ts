@@ -119,8 +119,7 @@ export default definePluginEntry({
       return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
-    const registrationConfig = readCodexPluginConfig(api.pluginConfig);
-    const appServerConfig = registrationConfig.appServer;
+    const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;
     api.registerService(
       createCodexDesktopGenerationService({
         onGenerationChange: retireSharedCodexAppServerClientsBeforeDesktopGeneration,
@@ -152,7 +151,7 @@ export default definePluginEntry({
     // The base registration runtime deliberately rejects state access. Open the
     // store only when a proxied runtime performs the first binding operation.
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
-      // Final effect guards retain raw SDK revocations through 2026-12-31.
+      // Final effect guards still see raw SDK revocations until the next SDK major.
       lookup: (key) => openBindingStateStore().lookup(key),
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
@@ -200,7 +199,8 @@ export default definePluginEntry({
           overflowPolicy: "reject-new",
         }),
     });
-    const sessionCatalogEnabled = registrationConfig.sessionCatalog?.enabled !== false;
+    const sessionCatalogEnabled =
+      readCodexPluginConfig(resolveCurrentPluginConfig()).sessionCatalog?.enabled !== false;
     api.registerService({
       id: "codex-session-catalog",
       start: () => (sessionCatalogEnabled ? sessionCatalogControlFactory.start() : undefined),
@@ -225,7 +225,7 @@ export default definePluginEntry({
     for (const policy of createCodexSessionCatalogNodeInvokePolicies()) {
       api.registerNodeInvokePolicy(policy);
     }
-    if (registrationConfig.supervision?.enabled === true) {
+    if (readCodexPluginConfig(resolveCurrentPluginConfig()).supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
         resolveCodexAppServerAuthProfileIdAtEffect,

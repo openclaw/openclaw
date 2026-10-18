@@ -9,7 +9,6 @@ import type { MediaUnderstandingRuntime } from "../../media-understanding/runtim
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
-type BuildTtsSystemPromptHintAsync = TtsRuntimeApi["buildTtsSystemPromptHintAsync"];
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
 type PrepareTtsRequest = TtsRuntimeApi["prepareTtsRequest"];
 type TextToSpeech = typeof import("../../tts/tts.js").textToSpeech;
@@ -402,7 +401,7 @@ export type PluginRuntimeCore = {
      * registered backend, stored credential mode) so opted-in callers can
      * budget timeouts for the run that will actually execute.
      */
-    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    /** @deprecated Use resolveCliBackendDispatchEligibilityAsync. Removed at the next Plugin SDK major. */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
     resolveCliBackendDispatchEligibilityAsync: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibilityAsync;
     ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
@@ -411,9 +410,9 @@ export type PluginRuntimeCore = {
       createSessionEntry: (
         params: RuntimeCreateSessionEntryParams,
       ) => Promise<RuntimeCreateSessionEntryResult>;
-      /** @deprecated Use getSessionEntryAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+      /** @deprecated Use getSessionEntryAsync. Removed at the next Plugin SDK major. */
       getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
-      /** Worker-backed descriptive read; keep live effect authority with the owning operation. */
+      /** Worker-backed descriptive read; final synchronous authority checks still use getSessionEntry. */
       getSessionEntryAsync: (
         params: RuntimeSessionStoreReadParams,
       ) => Promise<RuntimeSessionEntry | undefined>;
@@ -425,7 +424,7 @@ export type PluginRuntimeCore = {
           orderBy?: "updatedAt";
         },
       ) => Promise<RuntimeSessionStoreEntrySummary | undefined>;
-      /** @deprecated Use listSessionEntriesAsync for metadata reads. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+      /** @deprecated Use listSessionEntriesAsync for metadata reads. Removed at the next Plugin SDK major. */
       listSessionEntries: (
         params?: RuntimeSessionStoreListParams,
       ) => RuntimeSessionStoreEntrySummary[];
@@ -441,7 +440,7 @@ export type PluginRuntimeCore = {
           assertCurrent: () => void;
         }>
       >;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; removed after a stable deprecation period. */
       patchSessionEntry: (
         params: RuntimeSessionStoreEntryPatchParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -451,7 +450,7 @@ export type PluginRuntimeCore = {
         params: RuntimeSessionWorkAdmissionParams,
         run: (signal: AbortSignal) => Promise<T>,
       ) => Promise<T>;
-      /** @deprecated Use prepareSessionEntryPatch; final compatibility day: 2026-12-31. */
+      /** @deprecated Use prepareSessionEntryPatch; removed after a stable deprecation period. */
       updateSessionStoreEntry: (
         params: RuntimeSessionStoreEntryUpdateParams,
       ) => Promise<RuntimeSessionEntry | null>;
@@ -498,8 +497,6 @@ export type PluginRuntimeCore = {
     resizeToJpeg: typeof import("../../media/media-services.js").resizeToJpeg;
   };
   tts: {
-    /** Await machine preference preparation before rendering; optional for older custom runtimes. */
-    buildSystemPromptHintAsync?: BuildTtsSystemPromptHintAsync;
     prepareTtsRequest: PrepareTtsRequest;
     textToSpeech: TextToSpeech;
     textToSpeechStream: TextToSpeechStream;
@@ -540,7 +537,7 @@ export type PluginRuntimeCore = {
     ) => import("../../music-generation/types.js").MusicGenerationProvider[];
   };
   webSearch: {
-    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. Final compatibility day: 2026-12-31. */
+    /** @deprecated Await listProvidersAsync so discovery policy is prepared off-thread. */
     listProviders: (
       params?: RuntimeProviderListParams,
     ) => import("../web-provider-types.js").PluginWebSearchProviderEntry[];
@@ -577,7 +574,7 @@ export type PluginRuntimeCore = {
     ) => import("../../plugin-state/plugin-state-store.types.js").PluginStateKeyedStore<T, 2>;
     /**
      * @deprecated Use openKeyedStoreV2 and await its operations. This synchronous
-     * compatibility adapter is supported through 2026-12-31, then removed in the first January 2027 stable release.
+     * compatibility adapter will be removed after a stable deprecation period.
      */
     openSyncKeyedStore: <T>(
       options: import("../../plugin-state/plugin-state-store.types.js").OpenKeyedStoreOptions,
@@ -626,12 +623,12 @@ export type PluginRuntimeCore = {
   modelAuth: {
     /** Existing synchronous SDK operations, composed by the native host. */
     resolveProviderIdForAuth: typeof import("../../agents/provider-auth-aliases.js").resolveProviderIdForAuth;
-    /** @deprecated Use ensureAuthProfileStoreAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    /** @deprecated Use ensureAuthProfileStoreAsync. Removed at the next Plugin SDK major. */
     ensureAuthProfileStore: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStore;
     ensureAuthProfileStoreAsync: typeof import("../../agents/auth-profiles/store-runtime.js").ensureAuthProfileStoreAsync;
     resolveAuthProfileOrder: typeof import("../../agents/auth-profiles/order.js").resolveAuthProfileOrder;
     listProfilesForProvider: typeof import("../../agents/auth-profiles/profile-list.js").listProfilesForProvider;
-    /** @deprecated Use isProviderApiKeyConfiguredAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
+    /** @deprecated Use isProviderApiKeyConfiguredAsync. Removed at the next Plugin SDK major. */
     isProviderApiKeyConfigured: typeof import("../provider-auth-availability.js").isProviderApiKeyConfigured;
     isProviderApiKeyConfiguredAsync: typeof import("../provider-auth-availability.js").isProviderApiKeyConfiguredAsync;
     /** Resolve auth for a model. Only provider/model, optional cfg, and workspaceDir are used. */

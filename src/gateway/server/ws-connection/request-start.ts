@@ -156,7 +156,6 @@ export function scheduleGatewayRequestStart(
     const independentRead =
       request.method === "chat.history" ||
       request.method === "sessions.list" ||
-      request.method === "cron.list" ||
       request.method === "gateway.suspend.status" ||
       request.method === "update.status";
     const control =

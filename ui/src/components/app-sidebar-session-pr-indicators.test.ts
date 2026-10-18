@@ -49,12 +49,11 @@ class LifecycleTestHost extends LitElement {
 
   protected override render() {
     return this.rows.map(
-      (row) =>
-        html`<span data-session-key=${row.key}>
-          ${this.controller
-            .summary(row.key, row.worktreeId ?? "", row.pullRequest)
-            ?.numbers.join(",")}
-        </span>`,
+      (row) => html`<span data-session-key=${row.key}>
+        ${this.controller
+          .summary(row.key, row.worktreeId ?? "", row.pullRequest)
+          ?.numbers.join(",")}
+      </span>`,
     );
   }
 }

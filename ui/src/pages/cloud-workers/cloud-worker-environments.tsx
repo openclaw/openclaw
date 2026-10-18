@@ -521,11 +521,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       ),
     ),
   );
-  const unlabeledImages = createMemo(() =>
-    (view.result?.images ?? [])
-      .filter((image) => !image.projectKey && !image.projectLabel && !image.projectRoot)
-      .toSorted((a, b) => (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey)),
-  );
   const unlabeledBuilds = createMemo(() =>
     (view.inventory?.environments ?? []).filter(
       (environment) =>
@@ -654,13 +649,26 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
           <CloudWorkerSnapshotPolicy />
           <Show
             when={
-              unlabeledImages().length ||
+              view.result?.images.some(
+                (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
+              ) ||
               view.result?.legacyLeases.length ||
               unlabeledBuilds().length
             }
           >
             <SettingsSection title={t("cloudWorkersPage.environments.machineImages")}>
-              <For each={unlabeledImages()} keyed={(image) => image.profileKey}>
+              <For
+                each={
+                  view.result?.images
+                    .filter(
+                      (image) => !image.projectKey && !image.projectLabel && !image.projectRoot,
+                    )
+                    .toSorted((a, b) =>
+                      (a.profileId ?? a.profileKey).localeCompare(b.profileId ?? b.profileKey),
+                    ) ?? []
+                }
+                keyed={(image) => image.profileKey}
+              >
                 {(image) => (
                   <CloudWorkerSnapshotRow
                     image={image()}

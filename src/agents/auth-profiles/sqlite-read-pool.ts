@@ -14,17 +14,15 @@ import {
 import { isPathInside } from "../../infra/path-guards.js";
 import type { SqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { openSqliteReadOnlyDatabase } from "../../infra/sqlite-snapshot-source.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
-import { registerSqliteCacheExitClose } from "../../infra/sqlite-wal.js";
-import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import {
+  registerSqliteCacheExitClose,
+  runInSqliteMaintenanceContext,
+} from "../../infra/sqlite-wal.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db-contract.js";
-
-export type AuthProfileReadDatabaseOpener = (
-  pathname: string,
-  options: { timeout: number },
-) => DatabaseSync;
 
 const AUTH_PROFILE_READ_HANDLE_CAP = 64;
 const AUTH_PROFILE_READ_IDLE_MS = 30 * 60_000;
@@ -93,7 +91,7 @@ function armReadHandleIdleClose(pathname: string, entry: AuthProfileReadHandle):
     entry.idleTimer.refresh();
     return;
   }
-  const timer = runInDetachedAsyncContext(() =>
+  const timer = runInSqliteMaintenanceContext(() =>
     setTimeout(() => {
       if (authProfileReadDatabases.get(pathname) !== entry || entry.idleTimer !== timer) {
         return;
@@ -124,7 +122,6 @@ export function isMissingDatabasePath(pathname: string): boolean {
 
 export function acquireAuthProfileReadDatabase(
   pathname: string,
-  openReadOnlyDatabase: AuthProfileReadDatabaseOpener,
   schema?: SqliteAuthSchema,
   expectedIdentity?: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
@@ -160,13 +157,13 @@ export function acquireAuthProfileReadDatabase(
   }
   let db: DatabaseSync;
   try {
-    db = openReadOnlyDatabase(resolvedPath, {
+    db = openSqliteReadOnlyDatabase(resolvedPath, {
       timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
     });
   } catch {
     return isMissingDatabasePath(resolvedPath) ? { status: "missing" } : { status: "unreadable" };
   }
-  // The worker validates identity before transferring rows; native open also binds its own file.
+  // The worker validates this identity around the read; native open also binds its own file.
   const candidate: AuthProfileReadHandle = { db, identity: expectedIdentity, ready: false };
   if (!inspection) {
     authProfileReadDatabases.set(resolvedPath, candidate);

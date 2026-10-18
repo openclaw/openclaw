@@ -245,6 +245,9 @@ export function createOverlay(
       }
       refreshRegistry();
       refreshOverlayRoots(registry, api);
+      if (disposed) {
+        return false;
+      }
       if (notifyingRetirement || (next && !valid())) {
         return !next;
       }

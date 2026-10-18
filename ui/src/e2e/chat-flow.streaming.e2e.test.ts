@@ -668,7 +668,7 @@ suite.define(() => {
       });
 
       await page.locator(".chat-thread-inner").getByText(response).waitFor({ timeout: 10_000 });
-      await indicator.waitFor({ state: "detached", timeout: 10_000 });
+      await indicator.waitFor({ timeout: 10_000 });
       const streamingLayout = await pendingRow.evaluate(
         (row, visibleResponse) => ({
           connected: row.isConnected,
@@ -681,13 +681,9 @@ suite.define(() => {
       expect(streamingLayout).toEqual({
         connected: true,
         hasResponse: true,
-        hasTokens: false,
+        hasTokens: true,
         key: pendingLayout.key,
       });
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      expect(
-        await page.locator(".chat-thread-inner").getByText(response, { exact: true }).count(),
-      ).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);
     }

@@ -50,7 +50,6 @@ export function buildEmbeddedAttemptToolRunContext(
   params: AttemptToolRunFacts & {
     model?: Pick<EmbeddedRunAttemptParams["model"], "provider" | "id">;
     thinkLevel?: ThinkLevel;
-    thinkingExplicit?: boolean;
     trigger?: EmbeddedRunTrigger;
     continuesConversation?: boolean;
     jobId?: string;
@@ -105,7 +104,6 @@ export function buildEmbeddedAttemptToolRunContext(
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
     requesterThinkingLevel: params.thinkLevel,
-    requesterThinkingExplicit: params.thinkingExplicit,
     // modelId may still be a configured alias; children need the prepared identity.
     requesterModel: params.model
       ? { provider: params.model.provider, model: params.model.id }

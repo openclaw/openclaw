@@ -81,13 +81,10 @@ describe("file.stat", () => {
         params: { path: target, followSymlinks: true, preflightOnly: true },
         pluginConfig: { nodes: { "node-1": { allowReadPaths: [target], ask: "off" } } },
       });
-      invokeNode.mockImplementation(async (options = {}) => {
-        const { params } = options;
-        return {
-          ok: true,
-          payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
-        };
-      });
+      invokeNode.mockImplementation(async ({ params } = {}) => ({
+        ok: true,
+        payload: await handleFileStat(params as Parameters<typeof handleFileStat>[0]),
+      }));
       const result = await createFileTransferNodeInvokePolicy().handle(ctx);
       expect(result).toMatchObject({
         ok: true,

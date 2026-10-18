@@ -44,14 +44,3 @@ declare global {
     "openclaw-chat-retry-status": SolidBridgeElement<ChatRetryStatusProps>;
   }
 }
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-retry-status": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-retry-status"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-chat-retry-status"]>;
-    }
-  }
-}

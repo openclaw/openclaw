@@ -47,7 +47,6 @@ export type ControlUiGitHubPreviewIdentity = {
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   stale?: true;
-  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
@@ -76,7 +75,7 @@ export async function assertPublicGitHubRepository(
   token?: string,
   identity?: ControlUiGitHubPreviewIdentity,
   signal?: AbortSignal,
-): Promise<Record<string, unknown>> {
+): Promise<void> {
   // Stop before item reads so shared credentials cannot probe private item numbers.
   const repository = await readGitHubJsonResponse(
     await fetchGitHubApi(
@@ -94,7 +93,6 @@ export async function assertPublicGitHubRepository(
   if (!isPublicGitHubRepository(repository)) {
     throw new ControlUiGitHubError(404, "GitHub repository is not public");
   }
-  return repository;
 }
 
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {

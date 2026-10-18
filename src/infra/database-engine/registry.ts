@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { DatabaseEngineId } from "./types.js";
-export type { DatabaseEngineId } from "./types.js";
+
+export type DatabaseEngineId = "sqlite" | "postgres";
 
 export type DatabaseEngineStore = {
   id: string;
@@ -13,7 +13,7 @@ const stores: readonly DatabaseEngineStore[] = [
   { id: "state", label: "Shared state" },
   { id: "agent", label: "Agent data" },
   { id: "workboard", label: "Workboard", postgres: true },
-  { id: "logbook", label: "Logbook", postgres: true },
+  { id: "logbook", label: "Logbook" },
   { id: "quarantine", label: "Database quarantine" },
   { id: "managed-update", label: "Managed update handoffs" },
   { id: "package-activation", label: "Package activation journal" },

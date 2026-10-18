@@ -44,7 +44,6 @@ import { listImportedRuntimePluginIds } from "./runtime.js";
 import { buildPluginRuntimeLoadOptions } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
 import { loadPluginMetadataRegistrySnapshot } from "./runtime/metadata-registry-loader.js";
-import { buildPluginSdkDeprecationNotices } from "./sdk-deprecation-notices.js";
 import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
@@ -124,9 +123,7 @@ function buildCompatibilityNoticesForInspect(
     diagnostics: readonly PluginDiagnostic[];
   },
 ): PluginCompatibilityNotice[] {
-  const warnings: PluginCompatibilityNotice[] = buildPluginSdkDeprecationNotices(
-    inspect.plugin.id,
-  ).map((notice) => Object.assign(notice, { pluginId: inspect.plugin.id }));
+  const warnings: PluginCompatibilityNotice[] = [];
   if (inspect.shape === "hook-only") {
     warnings.push({
       pluginId: inspect.plugin.id,

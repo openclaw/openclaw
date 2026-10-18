@@ -165,21 +165,19 @@ suite.define(() => {
           .toBeLessThan(550);
         await captureUiProof(suite, page, `mobile-more-followup-after-${colorScheme}.png`);
 
-        await menuHost.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+        await menuHost.locator('wa-dropdown-item[value="compact:open-advanced"]').click();
         const deleteIconColor = await menuHost
-          .getByRole("menuitem", { name: "Delete…", exact: true })
-          .locator(".session-menu__icon")
+          .locator('wa-dropdown-item[value="delete"] .session-menu__icon')
           .evaluate((element) => getComputedStyle(element).color);
         const deleteLabelColor = await menuHost
-          .getByRole("menuitem", { name: "Delete…", exact: true })
-          .locator(".session-menu__text")
+          .locator('wa-dropdown-item[value="delete"] .session-menu__text')
           .evaluate((element) => getComputedStyle(element).color);
         expect(deleteIconColor).toBe(deleteLabelColor);
         await menuHost.getByRole("menuitem", { name: "Back", exact: true }).click();
         await expect
           .poll(() => page.getByRole("button", { name: "Session sharing" }).count())
           .toBe(0);
-        await menuHost.getByRole("menuitem", { name: "Session sharing", exact: true }).click();
+        await menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').click();
         const publish = menuHost.locator(".chat-pane__publish-draft");
         await publish.waitFor();
         await menuHost.getByText("Members", { exact: true }).waitFor();
@@ -234,9 +232,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Actions for Member draft" }).click();
       const menuHost = page.locator("openclaw-chat-header-session-menu");
       await expect
-        .poll(() =>
-          menuHost.getByRole("menuitem", { name: "Session sharing", exact: true }).count(),
-        )
+        .poll(() => menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').count())
         .toBe(0);
     } finally {
       await context.close();

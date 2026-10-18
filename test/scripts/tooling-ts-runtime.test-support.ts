@@ -1,9 +1,4 @@
 export const toolingTsEntrypoints = {
-  codeModeModelMatrix: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../../scripts/code-mode-model-matrix",
-    distWorkerPath: "legacy-finalizer/scripts/code-mode-model-matrix.js",
-  },
   sqliteReliabilityWriter: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../../scripts/lib/sqlite-reliability-writer",

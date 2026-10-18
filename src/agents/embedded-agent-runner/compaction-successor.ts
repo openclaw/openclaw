@@ -3,7 +3,6 @@ import {
   buildSessionEndHookPayload,
   buildSessionStartHookPayload,
 } from "../../auto-reply/reply/session-hooks.js";
-import { projectHarnessCompletionCompaction } from "../../config/sessions/harness-completion-compaction.js";
 import {
   formatSqliteSessionFileMarker,
   parseSqliteSessionFileMarker,
@@ -12,7 +11,7 @@ import {
   patchSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
-import type { SessionAdmissionTransition } from "../../config/sessions/session-admission-transition.types.js";
+import type { SessionAdmissionTransition } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import {
   readSessionEntryReadOnlyInWorker,
   readSessionEntrySummariesInWorker,
@@ -241,10 +240,7 @@ export async function acceptCompactionSuccessor(params: {
       currentTarget,
       (entry) => {
         requireCompactionWriterEntry(entry, expected);
-        return {
-          sessionId: successor.sessionId,
-          ...projectHarnessCompletionCompaction(entry, successor.sessionId),
-        };
+        return { sessionId: successor.sessionId };
       },
       {
         skipMaintenance: true,
@@ -268,12 +264,6 @@ export async function acceptCompactionSuccessor(params: {
             }),
           };
           params.onCommitted?.(committed);
-          if (committed.admissionTransition) {
-            params.assertActive.onSessionCompactionCommitted?.(
-              committed.admissionTransition,
-              entry,
-            );
-          }
         },
       },
     );

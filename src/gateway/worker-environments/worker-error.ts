@@ -3,7 +3,6 @@ import { projectProviderError } from "@openclaw/ai/internal/shared";
 import { stableStringify } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveRetryAfterMs } from "../../agents/failover/retry-evidence.js";
 import { formatErrorMessage, formatErrorMessageWithCode } from "../../infra/errors.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { extractErrorHttpStatus, parseApiErrorInfo } from "../../shared/assistant-error-format.js";
@@ -32,26 +31,12 @@ export function boundedWorkerErrorWithCode(error: unknown, maxChars = 1_024): st
   return boundWorkerErrorText(formatErrorMessageWithCode(error), maxChars);
 }
 
-/** Preserve provider retry facts before bounding the display-only error text. */
-export function projectWorkerInferenceError(error: unknown): {
-  message: string;
-  retryAfterMs?: number | null;
-} {
+/** Preserve provider classification inside the existing bounded inference error text. */
+export function formatWorkerInferenceError(error: unknown): string {
   const snapshot = projectDiagnosticValue(error, { omitField: (key) => key === "stack" });
-  const projected = projectProviderError(error);
+  const projected = projectProviderError(snapshot);
   const record = asOptionalRecord(snapshot);
   const response = asOptionalRecord(record?.response);
-  const retryFloor = resolveRetryAfterMs(projected.errorMessage, Date.now(), snapshot);
-  const retryFloors = [projected.retryAfterMs, record?.retryAfterMs, retryFloor].filter(
-    (value): value is number =>
-      typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
-  );
-  const timing =
-    projected.retryAfterMs === null || record?.retryAfterMs === null || retryFloor === Infinity
-      ? { retryAfterMs: null }
-      : retryFloors.length > 0
-        ? { retryAfterMs: Math.max(...retryFloors) }
-        : {};
   const status = [
     record?.status,
     record?.statusCode,
@@ -73,7 +58,7 @@ export function projectWorkerInferenceError(error: unknown): {
   const code = info?.code ?? projected.errorCode;
   const type = projected.errorType ?? info?.type;
   if (!code && !type && status === undefined) {
-    return { message: boundedWorkerError(snapshot, 256), ...timing };
+    return boundedWorkerError(snapshot, 256);
   }
   const details = {
     ...(code ? { code: boundedWorkerError(code, 64) } : {}),
@@ -100,5 +85,5 @@ export function projectWorkerInferenceError(error: unknown): {
       encoded = encode();
     }
   }
-  return { message: encoded, ...timing };
+  return encoded;
 }

@@ -31,7 +31,11 @@ export function projectChatSystemNotice(
   const provenance = asRecord(raw?.provenance);
   const agentUpdate = provenance?.kind === "inter_session";
   const pendingText =
-    pending && agentUpdate && (pending.status === "cancelled" || pending.status === "interrupted")
+    pending &&
+    agentUpdate &&
+    (pending.status === "queued" ||
+      pending.status === "cancelled" ||
+      pending.status === "interrupted")
       ? t(`chat.pendingInputs.agentUpdate.${pending.status}`)
       : pending && pending.status !== "queued"
         ? t(`chat.pendingInputs.${pending.status}`)
@@ -79,13 +83,10 @@ export function projectChatSystemNotice(
   );
   const pendingSummaryKey = pending && noticeKind?.pendingSummaryKeys?.[pending.status];
   const summaryKey = pendingSummaryKey ?? noticeKind?.summaryKey;
-  const text =
-    summaryKey === null
-      ? ""
-      : summaryKey
-        ? t(summaryKey)
-        : (extractTextCached(item.message)?.replace(/^\[System\] /u, "") ?? "");
-  if (!text.trim() && summaryKey !== null) {
+  const text = summaryKey
+    ? t(summaryKey)
+    : extractTextCached(item.message)?.replace(/^\[System\] /u, "");
+  if (!text?.trim()) {
     return pendingItems;
   }
   return [

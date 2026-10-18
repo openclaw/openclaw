@@ -110,7 +110,7 @@ describe("plugin-boundary-report", () => {
     expect(result.stdout).toMatch(/readerRefs=\d+ readers=/u);
   });
 
-  it("reports the inbound reply dispatch undated stable-release gate as date-ineligible", () => {
+  it("reports the inbound reply dispatch major-version gate as date-ineligible", () => {
     const jsonResult = createPluginBoundaryReport(["--json", "--owner", "channel"]);
     const report = JSON.parse(jsonResult.stdout) as {
       compat?: {
@@ -128,14 +128,14 @@ describe("plugin-boundary-report", () => {
 
     expect(jsonResult.exitCode).toBe(0);
     expect(record).toMatchObject({
-      removalGate: "stable-deprecation-period",
+      removalGate: "next-plugin-sdk-major",
       eligibleForRemoval: false,
     });
     expect(record?.removeAfter).toBeUndefined();
 
     const textResult = createPluginBoundaryReport(["--owner", "channel"]);
     expect(textResult.stdout).toContain(
-      "stable-deprecation-period plugin-sdk-inbound-reply-dispatch-subpath",
+      "next-plugin-sdk-major plugin-sdk-inbound-reply-dispatch-subpath",
     );
     expect(textResult.stdout).not.toContain("no-date plugin-sdk-inbound-reply-dispatch-subpath");
   });

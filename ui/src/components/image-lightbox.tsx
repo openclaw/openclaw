@@ -18,7 +18,7 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import { LightboxAction, LightboxChrome, lightboxImageStyle } from "./image-lightbox-view.tsx";
+import { LightboxAction, LightboxHeader, lightboxImageStyle } from "./image-lightbox-view.tsx";
 import type { ImageLightboxGallery, ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
@@ -569,13 +569,14 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
           element.addEventListener("keydown", handleKeydown, true);
         }}
       >
-        <LightboxChrome
-          title={title()}
-          originalUrl={openOriginalUrl()}
-          resolvingOriginal={hasGallery() && resolvingOriginal()}
-          isVideo={props.mediaKind === "video"}
-          onClose={emitClose}
-        >
+        <section class="lightbox">
+          <LightboxHeader
+            title={title()}
+            originalUrl={openOriginalUrl()}
+            resolvingOriginal={hasGallery() && resolvingOriginal()}
+            isVideo={props.mediaKind === "video"}
+            onClose={emitClose}
+          />
           <div
             class={
               props.mediaKind === "video"
@@ -702,7 +703,7 @@ function ImageLightboxContent(props: ImageLightboxProps, host: ImageLightboxElem
               </LightboxAction>
             </div>
           </Show>
-        </LightboxChrome>
+        </section>
       </openclaw-modal-dialog>
     </>
   );

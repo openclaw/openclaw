@@ -229,32 +229,22 @@ describe("managed image record SQLite store", () => {
 
   it("recovers exact native mutation receipts after ordinary replies are lost", async () => {
     const initial = record();
-    const dispatch = brokerReply.dispatchSqliteWorkerJob;
     const receive = brokerReply.receiveSqliteWorkerReply;
-    const commandTypes = new WeakMap<object, string>();
     const corrupted: string[] = [];
-    vi.spyOn(brokerReply, "dispatchSqliteWorkerJob").mockImplementation((slot, job, onRejected) => {
-      if (job.request.type === "execute") {
-        const command: unknown = deserialize(job.request.input);
-        if (isRecord(command) && typeof command.type === "string") {
-          commandTypes.set(job.request, command.type);
-        }
-      }
-      return dispatch(slot, job, onRejected);
-    });
     vi.spyOn(brokerReply, "receiveSqliteWorkerReply").mockImplementation((slot, reply, owner) => {
       if (slot.current?.request.type === "execute" && reply.ok && !reply.transfer && !reply.input) {
-        const commandType = commandTypes.get(slot.current.request);
+        const command: unknown = deserialize(slot.current.request.input);
         if (
-          commandType &&
+          isRecord(command) &&
+          typeof command.type === "string" &&
           [
             "managedImages.insert",
             "managedImages.attach",
             "managedImages.claimCleanup",
             "managedImages.deleteClaimed",
-          ].includes(commandType)
+          ].includes(command.type)
         ) {
-          corrupted.push(commandType);
+          corrupted.push(command.type);
           return receive(slot, { ...reply, value: new Uint8Array([0]) }, owner);
         }
       }

@@ -43,7 +43,10 @@ function publicFailureKey(event: ExporterHealthUpdate): string {
 
 /** Owns route transitions so one producer cannot recover another producer's failure. */
 export function createExporterHealthEventEmitter(publish: (event: ExporterHealthUpdate) => void) {
-  const failures = new Map<string, Map<FailureReason, ExporterHealthUpdate>>();
+  const failures = new Map<
+    string,
+    { active: Map<FailureReason, ExporterHealthUpdate>; reported?: FailureReason }
+  >();
   return (event: ExporterHealthUpdate) => {
     const key = `${event.exporter}\u0000${event.signal}\u0000${event.transport}`;
     if (event.status === "started" || event.status === "dropped") {
@@ -53,25 +56,28 @@ export function createExporterHealthEventEmitter(publish: (event: ExporterHealth
     }
     const reason = event.reason ?? "unspecified";
     if (event.status === "failure") {
-      const active = failures.get(key) ?? new Map<FailureReason, ExporterHealthUpdate>();
-      if (active.has(reason)) {
+      const route = failures.get(key) ?? {
+        active: new Map<FailureReason, ExporterHealthUpdate>(),
+      };
+      failures.set(key, route);
+      if (route.active.has(reason)) {
         return;
       }
-      active.set(reason, event);
-      failures.set(key, active);
-      if (active.size === 1) {
+      route.active.set(reason, event);
+      if (route.reported === undefined) {
+        route.reported = reason;
         publish(event);
       }
       return;
     }
-    const active = failures.get(key);
-    const reported = active?.keys().next().value;
-    if (!active?.delete(reason) || reported !== reason) {
+    const route = failures.get(key);
+    if (!route?.active.delete(reason) || route.reported !== reason) {
       return;
     }
-    const next = active.values().next().value;
+    const next = route.active.entries().next().value;
     if (next) {
-      publish(next);
+      route.reported = next[0];
+      publish(next[1]);
       return;
     }
     failures.delete(key);

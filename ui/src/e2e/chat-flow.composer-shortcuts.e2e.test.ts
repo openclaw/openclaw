@@ -425,13 +425,13 @@ suite.define(() => {
           followUpMode === "steer"
             ? "Steer ⏎ · Queue ⌘/Ctrl+Enter"
             : "Queue ⏎ · Steer ⌘/Ctrl+Enter";
-        const tooltipHost = primary.locator("..");
-        const tooltipContent = tooltipHost.locator('[slot="content"]');
+        const tooltipContent = primary
+          .locator("..")
+          .locator(".tooltip-surface[popover] .tooltip-content");
         await expect
           .poll(async () => (await tooltipContent.textContent())?.replace(/\s+/gu, ""))
           .toBe(tooltip.replace(/\s+/gu, ""));
-        await tooltipHost.locator(".tooltip-surface[popover]").waitFor({ state: "visible" });
-        expect(await tooltipContent.locator("kbd").count()).toBe(2);
+        await tooltipContent.waitFor({ state: "visible" });
         await composer.press("Control+Enter");
 
         if (followUpMode === "steer") {

@@ -396,7 +396,7 @@ export function createSessionReconciliation(host: Host) {
     eventInfo: ReturnType<typeof readSessionChangedEvent>;
     reconciled: SessionChangedResult;
     claimChanged?: boolean;
-    notifyManaged?: () => void;
+    notifyManaged?: (primaryPublished?: boolean) => void;
     notifyEvent?: (event: GatewayEventFrame) => void;
   } => {
     const {
@@ -586,6 +586,7 @@ export function createSessionReconciliation(host: Host) {
       eventObservation,
       invalidationReason,
     );
+    const notifyManaged = () => staged.notify();
     const claimChanged = thinkingClaims.observeEvent(
       eventInfo?.reason === "delete"
         ? reconciled
@@ -605,7 +606,7 @@ export function createSessionReconciliation(host: Host) {
       eventInfo,
       reconciled,
       claimChanged,
-      notifyManaged: staged.notify,
+      notifyManaged,
       notifyEvent,
     };
   };

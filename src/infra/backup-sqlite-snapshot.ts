@@ -128,7 +128,6 @@ export function classifyBackupSqliteSource(
 
 async function discoverBackupSqliteSources(params: {
   inventory: BackupResourceInventory;
-  resourceRoots?: readonly string[];
 }): Promise<{ snapshotPaths: string[]; discoveredSourcePaths: Set<string> }> {
   const snapshotPaths = new Set<string>();
   const discoveredSourcePaths = new Set<string>();
@@ -137,11 +136,6 @@ async function discoverBackupSqliteSources(params: {
 
   const isRetainedPath = (pathname: string) =>
     !isPathInside(gatewayLockDir, pathname) && !params.inventory.isVolatile(pathname);
-  const isSelectedPath = (pathname: string) =>
-    !params.resourceRoots ||
-    params.resourceRoots.some(
-      (root) => isPathInside(root, pathname) || isPathInside(pathname, root),
-    );
   for (const directory of [
     params.inventory.stateDir,
     ...params.inventory.agentRoots.map(({ sourcePath }) => sourcePath),
@@ -155,13 +149,11 @@ async function discoverBackupSqliteSources(params: {
       symlinks: "include",
       include: (entry) =>
         (entry.kind === "file" || entry.kind === "symlink") &&
-        isSelectedPath(entry.path) &&
         isRetainedPath(entry.path) &&
         classifyBackupSqliteSource(entry.path, params.inventory) === "sqlite",
       descend: (entry) => {
         if (
           visitedDirectories.has(entry.path) ||
-          !isSelectedPath(entry.path) ||
           !isRetainedPath(entry.path) ||
           !params.inventory.isTraversable(entry.path) ||
           params.inventory.isPackageContent(entry.path)
@@ -229,15 +221,7 @@ export async function discoverBackupDatabasePaths(params: {
     pluginRoots: plugins.plugins.map((plugin) => plugin.rootDir),
   });
   const inventory = sealBackupResourceInventory(resources, []);
-  // Core paths are already known; unrelated state cannot contribute plugin stores.
-  paths.push(
-    ...(
-      await discoverBackupSqliteSources({
-        inventory,
-        resourceRoots: resources.pluginResourceRoots,
-      })
-    ).snapshotPaths,
-  );
+  paths.push(...(await discoverBackupSqliteSources({ inventory })).snapshotPaths);
   const existing: string[] = [];
   for (const file of new Set(paths)) {
     const info = await fs.stat(file).catch(ignoreMissingSource);

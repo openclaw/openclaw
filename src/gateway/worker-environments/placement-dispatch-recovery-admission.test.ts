@@ -288,10 +288,12 @@ describe("placement recovery session admission with persisted placements", () =>
     const interruption = new Error("fixture Move interrupted after claim wait");
     const harness = await createHarness(support.testState.stateDb, placements, {
       workspacePath: support.testState.root,
-      runMoveBarrier: async ({ begin }) => {
+      runMoveBarrier: async ({ sessionId, begin }) => {
         await begin();
-        claimWaitEntered.resolve();
-        await releaseClaimWait.promise;
+        await coordinated.awaitTurnClaimRelease(sessionId, () => {
+          claimWaitEntered.resolve();
+          return releaseClaimWait.promise;
+        });
         throw interruption;
       },
     });

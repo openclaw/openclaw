@@ -28,7 +28,7 @@ import { hasUserFileAttachments } from "../chat/components/chat-message-attachme
 import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
 import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
-import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
+import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
 
 registerEnglishCatalog(registerNewSessionSetupEnglish);
@@ -230,9 +230,11 @@ function NewSessionSubmission(props: {
           <Show
             when={props.completion}
             fallback={
-              <ChatWorkingIndicator
-                part={{ kind: "reading-indicator", key, startedAt: props.message.timestamp }}
-                options={{ startupLabel: props.statusLabel ?? t("newSession.starting") }}
+              <LitContent
+                value={renderChatWorkingIndicator(
+                  { kind: "reading-indicator", key, startedAt: props.message.timestamp },
+                  { startupLabel: props.statusLabel ?? t("newSession.starting") },
+                )}
               />
             }
           >

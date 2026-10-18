@@ -39,11 +39,11 @@ export type NotificationsSectionProps = Pick<
 >;
 
 const WEB_PUSH_CATEGORIES = [
-  "approvalRequested",
-  "agentFinished",
-  "agentQuestion",
-  "humanMentioned",
-  "scheduledTaskFailed",
+  ["approvalRequested", () => t("configView.notifications.approvalRequested")],
+  ["agentFinished", () => t("configView.notifications.agentFinished")],
+  ["agentQuestion", () => t("configView.notifications.agentQuestion")],
+  ["humanMentioned", () => t("configView.notifications.humanMentioned")],
+  ["scheduledTaskFailed", () => t("configView.notifications.scheduledTaskFailed")],
 ] as const;
 
 function minutesToTime(value: number): string {
@@ -171,13 +171,13 @@ function UserNotificationPreferences(props: {
     <section class="settings-section">
       <SettingsSectionHeader title={t("configView.notifications.accountDefaults")} />
       <div class="settings-group">
-        <For each={WEB_PUSH_CATEGORIES}>
+        <For each={WEB_PUSH_CATEGORIES} keyed={(entry) => entry[0]}>
           {(entry) => (
             <SettingsToggleRow
-              title={t(`configView.notifications.${entry}`)}
-              checked={props.preferences.categories[entry] === true}
+              title={entry()[1]()}
+              checked={props.preferences.categories[entry()[0]] === true}
               onChange={(checked) =>
-                patch({ categories: { ...props.preferences.categories, [entry]: checked } })
+                patch({ categories: { ...props.preferences.categories, [entry()[0]]: checked } })
               }
             />
           )}
@@ -298,14 +298,14 @@ function DeviceNotificationPreferences(props: {
             <AgentIdsRow agentIds={agentIds()} onChange={(value) => patch({ agentIds: value })} />
           )}
         </Show>
-        <For each={WEB_PUSH_CATEGORIES}>
+        <For each={WEB_PUSH_CATEGORIES} keyed={(entry) => entry[0]}>
           {(entry) => (
             <SettingsSelectRow
-              title={t(`configView.notifications.${entry}`)}
+              title={entry()[1]()}
               value={
-                props.preferences.categories?.[entry] === undefined
+                props.preferences.categories?.[entry()[0]] === undefined
                   ? "inherit"
-                  : props.preferences.categories?.[entry]
+                  : props.preferences.categories?.[entry()[0]]
                     ? "on"
                     : "off"
               }
@@ -313,9 +313,9 @@ function DeviceNotificationPreferences(props: {
               onChange={(value) => {
                 const categories = { ...props.preferences.categories };
                 if (value === "inherit") {
-                  delete categories[entry];
+                  delete categories[entry()[0]];
                 } else {
-                  categories[entry] = value === "on";
+                  categories[entry()[0]] = value === "on";
                 }
                 patch({ categories });
               }}

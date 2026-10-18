@@ -38,16 +38,19 @@ function normalizeDisplayPath(pathname: string, env: NodeJS.ProcessEnv = process
 }
 
 /**
- * @deprecated Display provider/profile identifiers instead. Public database-path displays are retired;
- * there is no public async path replacement. Bundled callers use AuthStorage.resolvePathForDisplayAsync.
- * Supported through 2026-12-31; removal ships in the first January 2027 stable release.
+ * @deprecated New SDK displays should use resolveProviderAuthProfileMetadataAsync from
+ * openclaw/plugin-sdk/provider-auth-runtime. This selected-path helper remains supported until
+ * removal in a later stable release after deprecation ships;
+ * resolveAuthStorePathForDisplayAsync is core-internal.
  */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
   warnPluginSdkDeprecation({
     family: "auth-profile-sync-operations",
     method: "resolveAuthStorePathForDisplay",
     replacement:
-      "provider/profile identifiers for displays (there is no public async database-path replacement)",
+      "provider metadata from resolveProviderAuthProfileMetadataAsync in openclaw/plugin-sdk/provider-auth-runtime",
+    compatibility:
+      "This selected-path helper remains supported until removal in a later stable release after deprecation ships; its async path replacement is core-internal.",
   });
   prepareSharedAuthStoreOwnershipForNative();
   const localPath = agentDir

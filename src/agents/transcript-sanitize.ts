@@ -241,7 +241,6 @@ export function sanitizeOpenAIReasoningSignature(
     ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
     type: "reasoning",
     summary: [],
-    ...(Array.isArray(parsed.content) && parsed.content.length === 0 ? { content: [] } : {}),
     ...(parsed.status !== undefined ? { status: parsed.status } : {}),
     ...(hasEncryptedContent ? { encrypted_content: encryptedContent } : {}),
     ...(replayMetadata ? { [OPENAI_REASONING_REPLAY_METADATA_KEY]: replayMetadata } : {}),

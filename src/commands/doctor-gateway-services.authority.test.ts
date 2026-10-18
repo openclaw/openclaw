@@ -62,7 +62,7 @@ const refusals = [
     tokenPresent: false,
   },
 ] as const;
-type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "repairable" | "rejected";
+type Scenario = (typeof refusals)[number]["scenario"] | "writable" | "rejected";
 type CustodyLoss =
   | "before-publication"
   | "backup-published"
@@ -167,10 +167,8 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         ? blockedTarget === "installed"
           ? installedEnvironmentPath
           : environmentPath
-        : path.dirname(unitPath);
-      await fs.chmod(unsafePath, 0o777);
-    } else if (scenario === "repairable") {
-      await fs.chmod(unitPath, 0o664);
+        : unitPath;
+      await fs.chmod(unsafePath, 0o666);
     } else if (scenario === "uninspectable") {
       const lstat = fs.lstat.bind(fs);
       vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
@@ -457,7 +455,6 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
           returnedTokenPreserved: result.gateway?.auth?.token === cfg.gateway?.auth?.token,
           returnedConfigPreserved: isDeepStrictEqual(result, JSON.parse(originalConfig)),
           unitBytesPreserved: (await fs.readFile(unitPath, "utf8")) === originalUnit,
-          unitMode: (await fs.stat(unitPath)).mode & 0o777,
           environmentBytesPreserved:
             (await fs.readFile(environmentPath, "utf8")) === originalEnvironment,
           installedEnvironmentBytesPreserved:
@@ -592,26 +589,22 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     expect(observations.events).not.toContain("service-published");
   });
 
-  it.each(["writable", "repairable"] as const)(
-    "preserves authentication while publishing an authorized %s service repair",
-    async (scenario) => {
-      const { observations, errors } = await runRepair(scenario);
-      expect(observations.capability).toEqual({ kind: "writable" });
-      expect(errors).toEqual([]);
-      expect(observations.embeddedTokenReferenced).toBe(true);
-      expect(observations.unitBytesPreserved).toBe(false);
-      expect(observations.unitMode).toBe(0o600);
-      expect(observations.events).toEqual(
-        expect.arrayContaining(["config-published", "service-published"]),
-      );
-      expect(observations.events.indexOf("config-published")).toBeLessThan(
-        observations.events.indexOf("service-published"),
-      );
-      expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
-      expect(observations.unitDirectoryEntries.toSorted()).toEqual([
-        "openclaw-gateway.service",
-        "openclaw-gateway.service.bak",
-      ]);
-    },
-  );
+  it("preserves authentication while publishing an authorized service repair", async () => {
+    const { observations, errors } = await runRepair("writable");
+    expect(observations.capability).toEqual({ kind: "writable" });
+    expect(errors).toEqual([]);
+    expect(observations.embeddedTokenReferenced).toBe(true);
+    expect(observations.unitBytesPreserved).toBe(false);
+    expect(observations.events).toEqual(
+      expect.arrayContaining(["config-published", "service-published"]),
+    );
+    expect(observations.events.indexOf("config-published")).toBeLessThan(
+      observations.events.indexOf("service-published"),
+    );
+    expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
+    expect(observations.unitDirectoryEntries.toSorted()).toEqual([
+      "openclaw-gateway.service",
+      "openclaw-gateway.service.bak",
+    ]);
+  });
 });

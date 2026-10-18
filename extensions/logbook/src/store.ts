@@ -1,16 +1,10 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import {
-  openEngineWorkerStore,
-  resolveDatabaseEngineInput,
-  runEngineStoreOperation,
-  type DatabaseEngineInput,
-} from "openclaw/plugin-sdk/database-engine-runtime";
+import { openEngineWorkerStore } from "openclaw/plugin-sdk/database-engine-runtime";
 import { canonicalPathFromExistingAncestor } from "openclaw/plugin-sdk/file-access-runtime";
 import { SqliteWorkerError, type SqliteWorkerStore } from "openclaw/plugin-sdk/sqlite-runtime";
 import { acquireLogbookFrameIo } from "./frame-io.js";
-import { isLogbookWriteOperation } from "./store-contract.js";
 import type {
   LogbookBatchInput,
   LogbookFrameInput,
@@ -27,32 +21,26 @@ export class LogbookStore {
   readonly framesDir: string;
   private closing: Promise<void> | undefined;
 
-  static async open(
-    dataDir: string,
-    workerModuleUrl: URL,
-    config: Parameters<typeof resolveDatabaseEngineInput>[0] = {},
-  ): Promise<LogbookStore> {
+  static async open(dataDir: string, workerModuleUrl: URL): Promise<LogbookStore> {
     if (!dataDir) {
       throw new Error("Logbook data directory is required");
     }
     const root = await canonicalPathFromExistingAncestor(path.resolve(dataDir));
-    const postgresInput = await resolveDatabaseEngineInput(config);
     const worker = await openEngineWorkerStore<LogbookOperations>(
       {
         moduleUrl: workerModuleUrl,
         databasePath: path.join(dataDir, "logbook.sqlite"),
-        input: { dataDir: root, postgresInput },
+        input: { dataDir: root },
       },
-      postgresInput,
+      undefined,
     );
-    return new LogbookStore(dataDir, worker, acquireLogbookFrameIo(root), postgresInput);
+    return new LogbookStore(dataDir, worker, acquireLogbookFrameIo(root));
   }
 
   private constructor(
     readonly dataDir: string,
     private readonly worker: SqliteWorkerStore<LogbookOperations>,
     private readonly frameIo: ReturnType<typeof acquireLogbookFrameIo>,
-    private readonly postgresInput: DatabaseEngineInput,
   ) {
     this.framesDir = path.join(dataDir, "frames");
   }
@@ -72,21 +60,7 @@ export class LogbookStore {
     if (this.closing) {
       return Promise.reject(new SqliteWorkerError("Logbook store is closed", "closed"));
     }
-    return this.executeWorker(type, input);
-  }
-
-  private executeWorker<Key extends keyof LogbookOperations>(
-    type: Key,
-    input: LogbookOperations[Key]["input"],
-  ): Promise<LogbookOperations[Key]["output"]> {
-    return runEngineStoreOperation(
-      this.worker,
-      this.postgresInput,
-      isLogbookWriteOperation(type),
-      (scope) => scope.execute({ type, input }),
-      undefined,
-      path.join(this.dataDir, "logbook.sqlite"),
-    );
+    return this.worker.execute({ type, input });
   }
 
   frameFilePath(day: string, capturedAtMs: number): string {
@@ -195,27 +169,30 @@ export class LogbookStore {
     const input = { ...params, buffer };
     return this.frameIo.run(async () => {
       const contentHash = createHash("sha256").update(buffer).digest("hex");
-      const previous = await this.executeWorker("lastFrame", undefined);
+      const previous = await this.worker.execute({ type: "lastFrame", input: undefined });
       const filePath = this.frameFilePath(input.day, input.capturedAtMs);
       await mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
       await writeFile(filePath, buffer, { mode: 0o600 });
-      return await this.executeWorker("insertFrame", {
-        capturedAtMs: input.capturedAtMs,
-        day: input.day,
-        path: filePath,
-        screenIndex: input.screenIndex,
-        width: input.width,
-        height: input.height,
-        byteSize: buffer.byteLength,
-        contentHash,
-        idle: previous?.contentHash === contentHash,
+      return await this.worker.execute({
+        type: "insertFrame",
+        input: {
+          capturedAtMs: input.capturedAtMs,
+          day: input.day,
+          path: filePath,
+          screenIndex: input.screenIndex,
+          width: input.width,
+          height: input.height,
+          byteSize: buffer.byteLength,
+          contentHash,
+          idle: previous?.contentHash === contentHash,
+        },
       });
     });
   }
 
   framePayload(id: number) {
     return this.frameIo.run(async () => {
-      const frame = await this.executeWorker("frameById", { id });
+      const frame = await this.worker.execute({ type: "frameById", input: { id } });
       if (!frame) {
         return null;
       }
@@ -232,7 +209,7 @@ export class LogbookStore {
 
   batchImages(batchId: number) {
     return this.frameIo.run(async () => {
-      const frames = await this.executeWorker("sampledBatchFrames", { batchId });
+      const frames = await this.worker.execute({ type: "sampledBatchFrames", input: { batchId } });
       const images = [];
       for (const frame of frames) {
         images.push({ frame, buffer: await readFile(frame.path) });
@@ -242,6 +219,8 @@ export class LogbookStore {
   }
 
   pruneFrames(olderThanMs: number) {
-    return this.frameIo.run(() => this.executeWorker("pruneFrames", { olderThanMs }));
+    return this.frameIo.run(() =>
+      this.worker.execute({ type: "pruneFrames", input: { olderThanMs } }),
+    );
   }
 }

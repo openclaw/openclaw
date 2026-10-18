@@ -338,8 +338,6 @@ function resolveElevenLabsTtsRequest(
 export function buildElevenLabsSpeechProvider({
   formatErrorMessage,
 }: Pick<PluginCapabilityCatalogContext, "formatErrorMessage">): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey));
   return {
     id: "elevenlabs",
     label: "ElevenLabs",
@@ -413,9 +411,8 @@ export function buildElevenLabsSpeechProvider({
         timeoutMs: req.timeoutMs,
       });
     },
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) =>
+      Boolean(resolveElevenLabsApiKey(readElevenLabsProviderConfig(providerConfig).apiKey)),
     synthesize: async (req) => {
       const overrides = req.providerOverrides ?? {};
       const outputPlan = resolveElevenLabsOutputPlan(req);

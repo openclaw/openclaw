@@ -71,7 +71,7 @@ export function renderSidebarRail(
       ? t("nav.pages")
       : view === "sessions"
         ? titleForRoute("sessions")
-        : t("presence.usersTitle");
+        : t("presence.rosterTitle");
   return (
     <nav
       class="sidebar-rail"
@@ -111,7 +111,7 @@ export function renderSidebarRail(
               type="button"
               class="sidebar-rail__button"
               title={
-                host.navigationView === view && view !== "online"
+                host.navigationView === view
                   ? `${viewLabel(view)} · ${t(host.navigationCollapsed ? "nav.expand" : "nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`
                   : viewLabel(view)
               }
@@ -125,10 +125,13 @@ export function renderSidebarRail(
               onClick={() => {
                 const active = host.navigationView === view;
                 host.navigationView = view;
-                if (
-                  !isMobileNavLayout() &&
-                  ((active && view !== "online") || host.navigationCollapsed)
-                ) {
+                if (view === "online") {
+                  host.teamOnlineExpanded = true;
+                  if (host.collapsedSessionSections.has("online")) {
+                    host.toggleSection("online");
+                  }
+                }
+                if (!isMobileNavLayout() && (active || host.navigationCollapsed)) {
                   host.onToggleSidebar?.();
                 }
                 host.requestUpdate();
@@ -434,12 +437,9 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
           </span>
         )
       }
-      running={
-        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
-        props.session.runningChildCount > 0
-      }
+      running={props.session.hasActiveRun || props.session.runningChildCount > 0}
       queued={
-        (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
+        props.session.hasActiveRun &&
         props.session.status === "queued" &&
         props.session.runningChildCount === 0
       }
@@ -454,9 +454,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
   const dashboards = () => host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     host.sidebarSnapshot
-      ? host.sidebarSnapshot.pages
-          .filter((row) => !row.archived)
-          .map((row) => restoreSnapshotSession(row, host.getRouteSessionKey()))
+      ? host.sidebarSnapshot.pages.map((row) =>
+          restoreSnapshotSession(row, host.getRouteSessionKey()),
+        )
       : (dashboards()?.result?.sessions ?? []).map((row) =>
           host.getSessionNavigationState().toSidebarSession(row),
         ),
@@ -499,13 +499,9 @@ export function renderSidebarPages(host: AppSidebarRenderHost): JSX.Element {
         {(entry) => {
           const fixedEntry = untrack(entry);
           const key = serializeSidebarEntry(fixedEntry);
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = untrack(() =>
-            renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs),
-          );
           return (
             <div class="sidebar-pages__entry">
-              {content}
+              {renderAppSidebarPageEntry(host, fixedEntry, rows, () => zone().pluginTabs)}
               <button
                 type="button"
                 class={[

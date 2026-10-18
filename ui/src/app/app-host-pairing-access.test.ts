@@ -577,9 +577,7 @@ describe("application shell pairing access", () => {
     });
     document.body.append(container);
     const pairing = await renderPairingDialog();
-    const button = pairing.querySelector<HTMLButtonElement>(
-      ".device-pair-setup__actions button:has([data-copy-label])",
-    );
+    const button = pairing.querySelector<HTMLButtonElement>(".device-pair-setup__actions button");
 
     button?.click();
     expect(writeText).toHaveBeenCalledWith("pair-mobile-secret");

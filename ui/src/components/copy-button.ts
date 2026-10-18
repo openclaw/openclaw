@@ -6,7 +6,7 @@ import { CopyButton } from "./solid/copy-button.tsx";
 
 export { copyMarkdownLabel, handleCopyButton } from "./copy-button-state.ts";
 
-function renderCopyButton(
+export function renderCopyButton(
   text: string,
   idleLabel = copyMarkdownLabel(),
   bare = false,

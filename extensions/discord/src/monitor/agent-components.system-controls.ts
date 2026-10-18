@@ -79,9 +79,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   });
 
   const eventText = params.formatEventText({ componentId, username, userId });
-  logDebug(
-    `${label}: enqueuing event for channel ${channelId} interaction=${params.interaction.id}`,
-  );
+  logDebug(`${label}: enqueuing event for channel ${channelId}: ${eventText}`);
 
   enqueueRoutedSystemEvent(eventText, route, {
     // The immutable interaction ID identifies one occurrence, preserving repeat clicks while

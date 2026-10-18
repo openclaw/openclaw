@@ -156,7 +156,27 @@ function FacepilePerson(props: {
       ? personActivityLink(props.user.identity.id, props.routing, presenceViewerLabel(props.user))
       : null,
   );
-  const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
+  const avatar = (
+    <Show
+      when={props.user.identity?.type === "agent" ? props.user.identity : undefined}
+      fallback={
+        <ViewerAvatar
+          user={props.user}
+          identity={props.user.identity}
+          markAsViewer={props.markAsViewer}
+          variant="session"
+        />
+      }
+    >
+      {(identity) => (
+        <AgentViewerAvatar
+          user={props.user}
+          identity={identity()}
+          markAsViewer={props.markAsViewer}
+        />
+      )}
+    </Show>
+  );
   return (
     <Show when={link()} fallback={avatar}>
       {(target) => (
@@ -172,49 +192,29 @@ function FacepilePerson(props: {
   );
 }
 
-export function ParticipantAvatar(props: {
-  user: FacepileUser;
+export function AgentViewerAvatar(props: {
+  user: Pick<PresenceViewer, "id" | "name" | "email" | "avatarUrl">;
+  identity: Extract<SessionParticipantIdentity, { type: "agent" }>;
   markAsViewer?: boolean;
   label?: string;
-  "aria-hidden"?: "true";
 }) {
-  const agent = () => {
-    const identity = props.user.identity;
-    return identity?.type === "agent" ? identity : undefined;
-  };
+  const avatar = createMemo(() => {
+    const resolved = resolveAvatar({
+      identity: props.identity,
+      id: props.user.id,
+      name: props.user.name,
+      profileAvatarUrl: props.user.avatarUrl,
+    });
+    return resolved.kind === "profile" ? resolved.url : null;
+  });
   return (
-    <Show
-      when={agent()}
-      fallback={
-        <ViewerAvatar
-          user={props.user}
-          markAsViewer={props.markAsViewer}
-          variant="session"
-          aria-hidden={props["aria-hidden"]}
-        />
-      }
+    <span
+      class="viewer-avatar viewer-avatar--session"
+      aria-label={props.label ?? presenceViewerLabel(props.user)}
+      data-viewer-id={props.markAsViewer ? props.user.id : undefined}
     >
-      {(identity) => {
-        const avatar = createMemo(() => {
-          const resolved = resolveAvatar({
-            identity: identity(),
-            id: props.user.id,
-            name: props.user.name,
-            profileAvatarUrl: props.user.avatarUrl,
-          });
-          return resolved.kind === "profile" ? resolved.url : null;
-        });
-        return (
-          <span
-            class="viewer-avatar viewer-avatar--session"
-            aria-label={props.label ?? presenceViewerLabel(props.user)}
-            data-viewer-id={props.markAsViewer ? props.user.id : undefined}
-          >
-            <AgentIdentityAvatar agent={{ id: identity().id, avatar: avatar() }} />
-          </span>
-        );
-      }}
-    </Show>
+      <AgentIdentityAvatar agent={{ id: props.identity.id, avatar: avatar() }} />
+    </span>
   );
 }
 

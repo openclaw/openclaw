@@ -1,6 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
-import { expectPendingQuestionAnswerClaimable } from "../../agents/harness/gateway-question-claim.test-support.js";
 import type { AgentQuestionDispatcher } from "../../agents/harness/gateway-question-dispatch.js";
 import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
@@ -362,7 +361,7 @@ describe("dispatch input custody after a question response", () => {
       expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
         expect.objectContaining({ outcome: "error", reason: "question-response-rejected" }),
       );
-      await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
+      expect(question.isResolving()).toBe(false);
       expect(broker.get({ id: questionId }).question).toMatchObject({ status: "pending" });
       expect(broker.get({ id: questionId }).question.answers).toBeUndefined();
       expect(onResolved).not.toHaveBeenCalled();
@@ -456,7 +455,7 @@ describe("dispatch input custody after a question response", () => {
         await expect(result).resolves.toMatchObject({
           queuedFinal: true,
         });
-        await expectPendingQuestionAnswerClaimable(fixture.operation.key, false);
+        expect(question.isResolving()).toBe(true);
         expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             text: expect.stringContaining("confirmation was lost"),
@@ -468,7 +467,7 @@ describe("dispatch input custody after a question response", () => {
         );
       } else {
         await expect(result).rejects.toBe(error);
-        await expectPendingQuestionAnswerClaimable(fixture.operation.key, true);
+        expect(question.isResolving()).toBe(false);
         expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
         expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
           expect.objectContaining({ outcome: "error", error: String(error) }),

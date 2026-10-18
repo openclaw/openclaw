@@ -38,7 +38,6 @@ import {
   loadTranscriptEventsSync,
   patchSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -287,15 +286,15 @@ describe("steering input custody", () => {
           if (!incoming) {
             throw new Error("Expected authenticated owner authority");
           }
-          const incomingTools = prepareReplyToolAuthority({
-            ...run,
-            operatorAuthority: incoming.authority,
-          });
           try {
             expect(incoming.authority.source).not.toBe(captured.authority.source);
-            expect(await incomingTools.fingerprintAsync(run.run)).toBe(fingerprint);
+            expect(
+              await prepareReplyToolAuthority({
+                ...run,
+                operatorAuthority: incoming.authority,
+              }).fingerprintAsync(run.run),
+            ).toBe(fingerprint);
           } finally {
-            incomingTools.close();
             incoming.release();
           }
         }
@@ -524,7 +523,6 @@ describe("steering input custody", () => {
           }
         }
       }
-      assertNoRetainedSessionSharingReads();
     },
   );
 

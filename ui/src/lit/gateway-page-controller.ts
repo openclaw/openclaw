@@ -1,11 +1,11 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { GatewayPageBinding, type GatewayPageBindingOptions } from "../lib/gateway-page-binding.ts";
-import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
 
-/** Host lifecycle adapter; the binding owns connection and request identity. */
-export class GatewayPageController extends GatewayPageBinding implements SolidController {
+/** Lit lifecycle adapter; the binding owns connection and request identity. */
+export class GatewayPageController extends GatewayPageBinding implements ReactiveController {
   private hostAttached = false;
 
-  constructor(host: SolidControllerHost, options: GatewayPageBindingOptions) {
+  constructor(host: ReactiveControllerHost, options: GatewayPageBindingOptions) {
     super(() => host.requestUpdate(), options);
     host.addController(this);
   }

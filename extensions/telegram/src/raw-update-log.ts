@@ -1,5 +1,6 @@
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
+const MAX_RAW_UPDATE_STRING = 500;
 const MAX_RAW_UPDATE_ARRAY = 20;
 const MAX_RAW_UPDATE_CHARS = 8000;
 const REDACTED_TELEGRAM_FIELD = "[redacted]";
@@ -56,7 +57,9 @@ export function formatTelegramRawUpdateForLog(update: unknown): string {
       return REDACTED_TELEGRAM_FIELD;
     }
     if (typeof value === "string") {
-      return REDACTED_TELEGRAM_FIELD;
+      return value.length > MAX_RAW_UPDATE_STRING
+        ? `${truncateUtf16Safe(value, MAX_RAW_UPDATE_STRING)}...`
+        : value;
     }
     if (Array.isArray(value)) {
       const items = value.slice(0, MAX_RAW_UPDATE_ARRAY).map((item) => transform(item, key, key));

@@ -1,5 +1,4 @@
 // Zalo test support covers monitor.image.polling plugin behavior.
-import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,15 +30,14 @@ async function startImageMonitor(
     dmPolicy: "open",
     ...setup,
   });
-  const runtime = createRuntimeEnv();
   const run = monitorZaloProvider({
     token: "zalo-token",
     account,
     config,
-    runtime,
+    runtime: createRuntimeEnv(),
     abortSignal: abort.signal,
   });
-  return { abort, run, runtime };
+  return { abort, run };
 }
 
 describe("Zalo polling image handling", () => {
@@ -190,25 +188,20 @@ describe("Zalo polling image handling", () => {
     await run;
   });
 
-  it("keeps the caption fallback without logging the failed image source", async () => {
+  it("dispatches an unavailable notice when the inbound image download fails", async () => {
     const processed = Promise.withResolvers<void>();
-    const photoUrl = "https://example.com/private-zalo-photo.jpg?access=private-source-marker";
-    saveRemoteMediaMock.mockRejectedValueOnce(
-      new MediaFetchError("http_error", `Failed to fetch media from ${photoUrl}: HTTP 403`, {
-        status: 403,
-      }),
-    );
+    saveRemoteMediaMock.mockRejectedValueOnce(new Error("expired image URL"));
     getUpdatesMock
       .mockResolvedValueOnce({
         ok: true,
-        result: createImageUpdate({ caption: "/reset", photoUrl }),
+        result: createImageUpdate({ caption: "/reset" }),
       })
       .mockImplementation(() => {
         processed.resolve();
         return new Promise(() => {});
       });
 
-    const { abort, run, runtime } = await startImageMonitor();
+    const { abort, run } = await startImageMonitor();
 
     try {
       await processed.promise;
@@ -221,13 +214,6 @@ describe("Zalo polling image handling", () => {
           media: [expect.objectContaining({ kind: "image" })],
         }),
       );
-      expect(runtime.error).toHaveBeenCalledWith("[default] Failed to download Zalo image");
-      const diagnostics = [runtime.error, runtime.log]
-        .flatMap((log) => vi.mocked(log).mock.calls)
-        .flat()
-        .join("\n");
-      expect(diagnostics).not.toContain(photoUrl);
-      expect(diagnostics).not.toContain("private-source-marker");
     } finally {
       abort.abort();
       await run;

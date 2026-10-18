@@ -144,7 +144,7 @@ function captureTarget(database: Database, sessionKey: string): FileTarget | und
   };
 }
 
-/** Borrow immutable committed facts; callers own edits and live-authority assertions. */
+/** The actor owner admits committed facts; callers keep their own live assertions. */
 export function readRetainedSessionEntryFacts(
   database: Database,
   request: Selection,
@@ -325,24 +325,21 @@ export function retainSessionEntryReadFacts(
       sessionKeys.push(parentKey);
     }
   }
-  if (sessionKeys.length === 0) {
-    return;
-  }
-  const target = captureTarget(database, sessionKeys[0]!);
-  if (
-    !target ||
-    target.database.physicalIdentity !== result.source.databaseIdentity ||
-    target.database.birthtime !== result.source.databaseBirthtime
-  ) {
-    return;
-  }
-  const entries = sessionKeys.map((key) => {
-    const previous = readSessionActorEntryFacts({ ...target, sessionKey: toUSVString(key) });
+  for (const key of sessionKeys) {
+    const target = captureTarget(database, key);
+    if (
+      !target ||
+      target.database.physicalIdentity !== result.source.databaseIdentity ||
+      target.database.birthtime !== result.source.databaseBirthtime
+    ) {
+      return;
+    }
+    const previous = readSessionActorEntryFacts(target);
     const entry = byKey.get(toUSVString(key));
     const fields = request.projection === "sharing" ? [] : (request.snapshotFields ?? "full");
-    return {
-      sessionKey: toUSVString(key),
-      facts: {
+    retainSessionActorEntryFacts(
+      target,
+      {
         entry: previous?.entry && entry ? { ...previous.entry, ...entry } : entry,
         snapshots:
           previous?.snapshots === "full" || fields === "full"
@@ -353,10 +350,10 @@ export function retainSessionEntryReadFacts(
           ? (result.participantRecords[key] ?? [])
           : previous?.participants,
         projection: previous?.projection,
-      } satisfies Parameters<typeof retainSessionActorEntryFacts>[1][number]["facts"],
-    };
-  });
-  retainSessionActorEntryFacts(target.database, entries, result.databaseIdentity.incarnation);
+      },
+      result.databaseIdentity.incarnation,
+    );
+  }
 }
 
 /**

@@ -360,7 +360,7 @@ function withGatewayServiceMutationGuards(
       kind,
       action,
       async (args: GatewayServiceInstallArgs) => {
-        const scope = { kind, env: { ...args.env }, allowNativeRead: true as const };
+        const scope = { kind, env: { ...args.env } };
         const update = args.runtimePinUpdate ?? {
           expected: readDaemonRuntimePinForInstall(scope, null, true),
         };
@@ -412,8 +412,7 @@ function withGatewayServiceMutationGuards(
         }
       },
       readCommand,
-      (env) =>
-        readDaemonRuntimePinForInstall({ kind, env, allowNativeRead: true }, null, true).revision,
+      (env) => readDaemonRuntimePinForInstall({ kind, env }, null, true).revision,
     );
   return {
     ...service,
@@ -423,7 +422,7 @@ function withGatewayServiceMutationGuards(
       kind,
       `uninstall the ${kind} service`,
       async (args: GatewayServiceManageArgs & { assertCurrent?: () => void }) => {
-        const scope = { kind, env: { ...args.env }, allowNativeRead: true as const };
+        const scope = { kind, env: { ...args.env } };
         const expected = readDaemonRuntimePinForInstall(scope, null, true);
         await service.uninstall(args);
         if (!expected.stored) {

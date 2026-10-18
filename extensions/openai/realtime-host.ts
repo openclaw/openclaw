@@ -25,7 +25,6 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 
 export const openAIRealtimeHost = {
   resolveAgentDir,
-  // Retained for public synchronous SDK calls through 2026-12-31.
   isProviderAuthProfileConfigured,
   isProviderAuthProfileConfiguredAsync,
   resolveProviderAuthProfileApiKey,

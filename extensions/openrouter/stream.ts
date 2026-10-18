@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -10,7 +9,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
+import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,

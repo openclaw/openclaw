@@ -26,12 +26,12 @@ import {
   type SessionCostUsageDeferredMetadata,
 } from "./session-cost-usage-cache.kernel.js";
 import {
+  deleteSessionCostUsageRollupsExcept,
   isSessionCostUsageRefreshRunning,
   prepareSessionCostUsageRefreshLock,
 } from "./session-cost-usage-cache.sqlite.js";
 import {
   readSessionCostUsageRollupRows,
-  pruneUsageCostRollupsForTest,
   readSessionCostUsageRollupEntry,
 } from "./session-cost-usage-cache.test-support.js";
 import {
@@ -303,7 +303,11 @@ describe("session cost usage SQLite cache", () => {
             updatedAt: 7,
           }),
         ).toBe(true);
-        await owner.pruneRows(readSessionCostUsageRollupRows(agentId));
+        await deleteSessionCostUsageRollupsExcept({
+          agentId,
+          liveKeys: new Set(),
+          rows: readSessionCostUsageRollupRows(agentId),
+        });
         expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
         expect(readPartitions()).toEqual([]);
       } finally {
@@ -590,7 +594,7 @@ describe("session cost usage SQLite cache", () => {
           valueJson: utf8Json(refreshedValue),
           updatedAt: 2,
         });
-        await pruneUsageCostRollupsForTest({ agentId, liveKeys: new Set(), rows });
+        await deleteSessionCostUsageRollupsExcept({ agentId, liveKeys: new Set(), rows });
         expect(refreshed).toBe(true);
 
         expect(readSessionCostUsageRollupRows(agentId)).toEqual([
@@ -635,7 +639,7 @@ describe("session cost usage SQLite cache", () => {
         /^delete from "cache_entries"/i.test(sql) ? "delete" : null,
       );
 
-      await pruneUsageCostRollupsForTest({
+      await deleteSessionCostUsageRollupsExcept({
         agentId,
         liveKeys: new Set(["live\0雪"]),
         rows: rows.map((row) => ({
@@ -657,7 +661,7 @@ describe("session cost usage SQLite cache", () => {
   });
 
   it.each(["string", "utf8"] as const)(
-    "rolls back all %s stale cleanup when a later deletion fails",
+    "rolls back all %s stale and legacy cleanup when a later deletion fails",
     async (format) => {
       const stateDir = tempDirs.make("openclaw-usage-cache-prune-rollback-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -695,15 +699,13 @@ describe("session cost usage SQLite cache", () => {
 
         await owner.pruneRows(rows);
 
-        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual(
-          before.filter((row) => row.scope !== "session-cost-usage-rollup-v3"),
-        );
+        expect(db.prepare("SELECT * FROM cache_entries ORDER BY scope, key").all()).toEqual([]);
         await owner.release();
       });
     },
   );
 
-  it("reads and prunes only current rollups without touching retired scopes", async () => {
+  it("reads only v3 rollups and prunes retired usage cache rows by scope", async () => {
     const stateDir = tempDirs.make("openclaw-usage-cache-retired-");
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
@@ -729,7 +731,7 @@ describe("session cost usage SQLite cache", () => {
         { key: "current.jsonl", updatedAt: 2, valueJson: '{"version":2}', bodyBytes: 0 },
       ]);
 
-      await pruneUsageCostRollupsForTest({
+      await deleteSessionCostUsageRollupsExcept({
         agentId,
         liveKeys: new Set(["current.jsonl"]),
         rows,
@@ -739,9 +741,7 @@ describe("session cost usage SQLite cache", () => {
         database.db.prepare("SELECT scope, key FROM cache_entries ORDER BY scope, key").all(),
       ).toEqual([
         { key: "keep", scope: "other" },
-        { key: "cache", scope: "session-cost-usage" },
         { key: "refresh-lock", scope: "session-cost-usage" },
-        { key: "retired.jsonl", scope: "session-cost-usage-rollup-v1" },
         { key: "current.jsonl", scope: "session-cost-usage-rollup-v3" },
       ]);
     });

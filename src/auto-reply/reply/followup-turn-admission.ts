@@ -28,13 +28,15 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { isGoalContinuationCurrent } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
-import { isFollowupRunAborted, resolveFollowupAbortSignal, type FollowupRun } from "./queue.js";
-import { getFollowupQueueDepth } from "./queue/enqueue.js";
+import {
+  admitFollowupRunLifecycle,
+  isFollowupRunAborted,
+  resolveFollowupAbortSignal,
+  type FollowupRun,
+} from "./queue.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
-import type { ReplyRestartRecoveryClaimController } from "./restart-recovery-claim.types.js";
 import {
   createReplySessionEntryHandle,
   ReplySessionGenerationInvalidatedError as FollowupSessionGenerationInvalidatedError,
@@ -71,7 +73,6 @@ export type AdmittedFollowupTurn = {
   preflightCompactionApplied: boolean;
   preflightFailurePayload?: ReplyPayload;
   preflightError?: unknown;
-  restartRecovery?: ReplyRestartRecoveryClaimController;
 };
 
 type FollowupAdmissionResult =
@@ -79,7 +80,7 @@ type FollowupAdmissionResult =
   | { kind: "deferred"; reason: "active-run" }
   | {
       kind: "skipped";
-      reason: "aborted" | "lifecycle-invalidated" | "goal-inactive";
+      reason: "aborted" | "lifecycle-invalidated";
       operation?: ReplyOperation;
     };
 
@@ -157,9 +158,6 @@ export async function admitFollowupTurn(params: {
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
   });
   if (admission.status === "skipped") {
-    if (admission.error) {
-      params.queued.run.internalEventExecution?.onFailed?.(admission.error);
-    }
     if (admission.reason !== "active-run") {
       return { kind: "skipped", reason: admission.reason };
     }
@@ -171,8 +169,8 @@ export async function admitFollowupTurn(params: {
   const admittedSelectionEntry = selectionEntry ? { ...selectionEntry } : undefined;
   operation.retainFailureUntilComplete();
   let queuedFollowupAdmitted = false;
-  let admissionFailed = false;
   try {
+    await admitFollowupRunLifecycle(params.queued);
     if (isFollowupRunAborted(params.queued)) {
       return { kind: "skipped", reason: "aborted", operation };
     }
@@ -207,23 +205,6 @@ export async function admitFollowupTurn(params: {
     let activeEntry =
       admissionEntry ??
       (initialEntry?.sessionId === operation.sessionId ? initialEntry : undefined);
-    const goalContinuation = params.queued.goalContinuation;
-    if (goalContinuation) {
-      const goalEntry =
-        replySessionKey && params.defaults.storePath
-          ? await readSessionEntryInWorker({
-              storePath: params.defaults.storePath,
-              sessionKey: replySessionKey,
-            })
-          : activeEntry;
-      assertOperatorCurrent();
-      if (
-        !isGoalContinuationCurrent(goalContinuation, goalEntry) ||
-        getFollowupQueueDepth(replySessionKey ?? "") > 0
-      ) {
-        return { kind: "skipped", reason: "goal-inactive", operation };
-      }
-    }
     const lifecycleRevisionChanged =
       operation.sessionId === params.queued.run.sessionId &&
       activeEntry?.sessionId === operation.sessionId &&
@@ -247,8 +228,9 @@ export async function admitFollowupTurn(params: {
     }
     run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
       run,
-      // Preferences stay fixed at admission; lifecycle checks and compaction
-      // independently consume current session state.
+      // Reconcile the probe against the same admitted preferences, not a newer
+      // selection published while source adoption awaited. Lifecycle checks and
+      // compaction still consume fresh session state independently above/below.
       entry: admittedSelectionEntry,
       sessionKey: replySessionKey,
     });
@@ -425,7 +407,7 @@ export async function admitFollowupTurn(params: {
       if (error instanceof FollowupSessionGenerationInvalidatedError) {
         throw error;
       }
-      turn.preflightError = error;
+      operation.fail("run_failed", error);
       const admittedVerboseLevel =
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
@@ -435,7 +417,9 @@ export async function admitFollowupTurn(params: {
         buildPreflightCompactionFailureText(formatErrorMessage(error), {
           includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
         });
-      if (text) {
+      if (!text) {
+        turn.preflightError = error;
+      } else {
         turn.preflightFailurePayload = markReplyPayloadForSourceSuppressionDelivery({ text });
       }
     }
@@ -462,35 +446,12 @@ export async function admitFollowupTurn(params: {
         );
       }
     }
-    if (goalContinuation) {
-      const currentEntry =
-        replySessionKey && params.defaults.storePath
-          ? await readSessionEntryInWorker({
-              storePath: params.defaults.storePath,
-              sessionKey: replySessionKey,
-            })
-          : session.current();
-      assertOperatorCurrent();
-      if (
-        operation.abortSignal.aborted ||
-        !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
-        getFollowupQueueDepth(replySessionKey ?? "") > 0
-      ) {
-        return { kind: "skipped", reason: "goal-inactive", operation };
-      }
-    }
-    // Only a returned turn transfers presentation cleanup to the runner.
-    queuedFollowupAdmitted = false;
     return { kind: "admitted", turn };
   } catch (error) {
-    admissionFailed = true;
-    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
-  } finally {
     if (queuedFollowupAdmitted) {
       await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
     }
-    if (admissionFailed) {
-      operation.complete();
-    }
+    operation.complete();
+    throw error instanceof Error ? error : new Error(formatErrorMessage(error));
   }
 }

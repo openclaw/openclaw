@@ -17,11 +17,10 @@ import {
   type ProviderOperationTimeoutMs,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeVideoGenerationDuration,
-  type GeneratedVideoAsset,
-  type VideoGenerationProvider,
-  type VideoGenerationRequest,
+import type {
+  GeneratedVideoAsset,
+  VideoGenerationProvider,
+  VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   assertMinimaxBaseResp,
@@ -87,10 +86,10 @@ function resolveDurationSeconds(params: {
   model: string;
   durationSeconds: number | undefined;
 }): number | undefined {
-  const rounded = normalizeVideoGenerationDuration({ durationSeconds: params.durationSeconds });
-  if (rounded === undefined) {
+  if (typeof params.durationSeconds !== "number" || !Number.isFinite(params.durationSeconds)) {
     return undefined;
   }
+  const rounded = Math.max(1, Math.round(params.durationSeconds));
   const allowed = MINIMAX_MODEL_ALLOWED_DURATIONS[params.model];
   if (!allowed || allowed.length === 0) {
     return rounded;

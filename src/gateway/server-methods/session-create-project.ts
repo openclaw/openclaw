@@ -384,17 +384,16 @@ export async function prepareSessionWorkspaceForRun(params: {
   const prepare = () =>
     workspacePreparations.enqueue(`${storePath}\0${sessionKey}`, async () => {
       assertRunOwnership();
-      const initial = metadata
+      const saved = metadata
         ? metadata.readCurrent()
         : await readSessionEntryReadOnlyInWorker(target, assertRunOwnership);
       if (
-        !initial ||
-        initial.sessionId !== entry.sessionId ||
-        initial.lifecycleRevision !== entry.lifecycleRevision
+        !saved ||
+        saved.sessionId !== entry.sessionId ||
+        saved.lifecycleRevision !== entry.lifecycleRevision
       ) {
         throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
       }
-      let saved = initial;
       let pending = saved.pendingWorktree;
       const assertSavedWorkspaceIntent = (current: Partial<typeof saved> | undefined) => {
         assertRunOwnership();
@@ -514,7 +513,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           if (!updated) {
             throw new Error(SESSION_PROJECT_OWNERSHIP_ERROR);
           }
-          saved = { ...saved, ...updated };
+          Object.assign(saved, updated);
           pending = next;
         }
         // Retries inherit workspace intent, not a previous caller's setup authority.
@@ -555,7 +554,7 @@ export async function prepareSessionWorkspaceForRun(params: {
                 });
                 // Subsequent Git effects must accept the project binding this
                 // preparation just published, while retaining its pending intent.
-                saved = { ...saved, ...bound };
+                Object.assign(saved, bound);
                 Object.assign(entry, bound);
                 params.onPromptReady?.();
               }

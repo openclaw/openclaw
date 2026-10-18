@@ -55,7 +55,6 @@ import {
   isRetiredManagedHandoffLeasePayload,
   parseManagedHandoffLeasePayload,
   type ManagedHandoffLeaseAction,
-  type HandoffProcessIdentity,
 } from "./update-managed-service-handoff-schema.js";
 import { createManagedHandoffScopeReader } from "./update-managed-service-handoff-scope.js";
 
@@ -409,7 +408,11 @@ function createLeaseStore(
   }
   // Paired original-root/occupied-slot child rows must become bound atomically.
   // A parent dying between separate binds must not expose either installation.
-  function bindUpdateChildren(leases: ManagedHandoffLease[], executor: HandoffProcessIdentity) {
+  function bindUpdateChildren(
+    leases: ManagedHandoffLease[],
+    pid: number,
+    argv?: readonly string[],
+  ) {
     if (
       !leases.length ||
       new Set(leases.map((lease) => lease.key)).size !== leases.length ||
@@ -428,10 +431,11 @@ function createLeaseStore(
     const custody = managedCommandCustody(leases[0]!);
     if (
       leases.some((lease) => managedCommandCustody(lease) !== custody) ||
-      (custody && executor.pid === process.pid)
+      (custody && pid === process.pid)
     ) {
       return null;
     }
+    const executor = processIdentity(pid, argv);
     return withDatabase(true, (db) =>
       transact(db, () => {
         if (

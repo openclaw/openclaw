@@ -591,8 +591,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_transcript_event_sequence
   ON transcript_event_identities(session_id, event_type, seq DESC);
 
 CREATE TABLE IF NOT EXISTS context_engine_turn_outbox (
-  enqueue_sequence INTEGER PRIMARY KEY,
-  advancement_key TEXT NOT NULL UNIQUE,
+  advancement_key TEXT NOT NULL PRIMARY KEY,
   engine_id TEXT NOT NULL,
   owner_plugin_id TEXT,
   session_id TEXT NOT NULL,

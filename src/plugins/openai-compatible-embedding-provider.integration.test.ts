@@ -481,7 +481,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
     },
     { name: "whitespace key", apiKey: "   ", authorization: undefined },
     { name: "omitted key", apiKey: undefined, authorization: undefined },
-  ])("keeps $name authentication with auth.order at HTTP", async ({ apiKey, authorization }) => {
+  ])("preserves configured $name authentication at HTTP", async ({ apiKey, authorization }) => {
     const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-embedding-profile-"));
     const profileId = "tenant-embeddings:default";
     try {
@@ -500,10 +500,7 @@ describe("OpenAI-compatible embedding destination credential ownership", () => {
       );
       const result = await openAICompatibleEmbeddingProviderAdapter.create({
         config: {
-          auth: {
-            profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } },
-            order: { "tenant-embeddings": [profileId] },
-          },
+          auth: { profiles: { [profileId]: { provider: "tenant-embeddings", mode: "api_key" } } },
           agents: {
             ownership: "explicit",
             entries: { ops: {}, research: { agentDir } },

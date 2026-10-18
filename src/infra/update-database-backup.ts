@@ -407,7 +407,6 @@ export async function createUpdateDatabaseBackup({
   timeoutMs,
   signal: callerSignal,
   rehearsal,
-  retryAdvice,
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
@@ -415,7 +414,6 @@ export async function createUpdateDatabaseBackup({
   timeoutMs?: number;
   signal?: AbortSignal;
   rehearsal?: DoctorRehearsalDatabaseCoverage;
-  retryAdvice?: boolean;
 }): Promise<UpdateDatabaseBackup> {
   const controller = new AbortController();
   const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
@@ -464,7 +462,6 @@ export async function createUpdateDatabaseBackup({
           : parseUpdateStateInspectionWorker(
               await runUpdateStateInspectionWorker({
                 ...worker,
-                retryAdvice,
                 input: { ...workerInput, mode: "discover" },
                 databases: custody
                   ? await readUpdateStateDatabaseSizesInProcess([shared], signal)
@@ -486,7 +483,6 @@ export async function createUpdateDatabaseBackup({
       const backup = parseUpdateStateInspectionWorker(
         await runUpdateStateInspectionWorker({
           ...worker,
-          retryAdvice,
           input: { ...capturedInput, mode: "database-backup", inspectionPlan },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
           databases: custody

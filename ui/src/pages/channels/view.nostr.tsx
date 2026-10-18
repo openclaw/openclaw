@@ -25,33 +25,6 @@ function truncatePubkey(pubkey: string | null | undefined): string {
   return pubkey.length <= 20 ? pubkey : `${pubkey.slice(0, 8)}...${pubkey.slice(-8)}`;
 }
 
-function NostrAccount(props: { account: ChannelAccountSnapshot }) {
-  const account = () => props.account;
-  const publicKey = () => readStringField(asNullableRecord(account()), "publicKey");
-  const profile = createMemo(() => {
-    // SAFETY: Nostr resolveAccountSnapshot copies its schema-validated account.profile into this metadata field.
-    return asNullableRecord(account())?.profile as NostrProfile | null | undefined;
-  });
-  const displayName = () =>
-    profile()?.displayName ?? profile()?.name ?? account().name ?? account().accountId;
-  return (
-    <ChannelAccount
-      title={displayName()}
-      accountId={account().accountId}
-      facts={[
-        `${t("common.configured")}: ${account().configured ? t("common.yes") : t("common.no")}`,
-        `${t("common.publicKey")}: ${truncatePubkey(publicKey())}`,
-      ]}
-      status={{
-        kind: boolStatusKind(account().running),
-        label: account().running ? t("common.running") : t("common.no"),
-      }}
-      lastInboundAt={account().lastInboundAt}
-      lastError={account().lastError}
-    />
-  );
-}
-
 export function NostrCard(props: ChannelsProps) {
   const snapshot = () => props.channels.channelsSnapshot;
   const accounts = createMemo(() => resolveChannelAccounts(snapshot()?.channelAccounts, "nostr"));
@@ -69,6 +42,30 @@ export function NostrCard(props: ChannelsProps) {
     nostr()?.publicKey ?? readStringField(asNullableRecord(primaryAccount()), "publicKey");
   const lastStart = () => nostr()?.lastStartAt ?? primaryAccount()?.lastStartAt;
   const lastError = () => nostr()?.lastError ?? primaryAccount()?.lastError;
+
+  const renderAccountRow = (account: ChannelAccountSnapshot) => {
+    const accountPublicKey = readStringField(asNullableRecord(account), "publicKey");
+    // SAFETY: Nostr resolveAccountSnapshot copies its schema-validated account.profile into this metadata field.
+    const profile = asNullableRecord(account)?.profile as NostrProfile | null | undefined;
+    const displayName = profile?.displayName ?? profile?.name ?? account.name ?? account.accountId;
+
+    return (
+      <ChannelAccount
+        title={displayName}
+        accountId={account.accountId}
+        facts={[
+          `${t("common.configured")}: ${account.configured ? t("common.yes") : t("common.no")}`,
+          `${t("common.publicKey")}: ${truncatePubkey(accountPublicKey)}`,
+        ]}
+        status={{
+          kind: boolStatusKind(account.running),
+          label: account.running ? t("common.running") : t("common.no"),
+        }}
+        lastInboundAt={account.lastInboundAt}
+        lastError={account.lastError}
+      />
+    );
+  };
 
   const profile = createMemo(() => {
     // SAFETY: Nostr account profile metadata comes from the plugin's schema-validated config.
@@ -156,9 +153,7 @@ export function NostrCard(props: ChannelsProps) {
       count={resolveChannelAccountCount("nostr", snapshot()?.channelAccounts)}
     >
       {accounts().length > 1 ? (
-        <For each={accounts()} keyed={(account) => account.accountId}>
-          {(account) => <NostrAccount account={account()} />}
-        </For>
+        accounts().map((account) => renderAccountRow(account))
       ) : (
         <ChannelFacts
           rows={[

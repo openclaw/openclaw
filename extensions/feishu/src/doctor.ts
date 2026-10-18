@@ -12,9 +12,8 @@ import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   isValidAgentHarnessSessionStoreEntry,
   deleteSessionEntry,
-  getSessionEntryAsync,
-  listSessionEntriesAsync,
-  loadTranscriptEvents,
+  listSessionEntries,
+  loadTranscriptEventsSync,
   resolveSessionStoreBackupPaths,
   resolveStorePath,
 } from "openclaw/plugin-sdk/session-store-runtime";
@@ -74,7 +73,7 @@ type FeishuDoctorSessionEntry = {
   entry: FeishuSessionEntry;
 };
 
-type FeishuDoctorInspection = Awaited<ReturnType<typeof inspectFeishuDoctorState>>;
+type FeishuDoctorInspection = ReturnType<typeof inspectFeishuDoctorState>;
 type FeishuDoctorRepairReport = Awaited<ReturnType<typeof repairFeishuDoctorState>>;
 
 function timestampForPath(now = new Date()): string {
@@ -425,15 +424,15 @@ function inspectSessionTranscript(params: {
   return inspectTranscriptEntries({ ...params, entries, malformedLines });
 }
 
-async function inspectCanonicalSessionTranscript(params: {
+function inspectCanonicalSessionTranscript(params: {
   agentId: string;
   sessionId: string;
   sessionKey: string;
   storePath: string;
-}): Promise<FeishuDoctorFinding | null> {
+}): FeishuDoctorFinding | null {
   let entries: unknown[];
   try {
-    entries = await loadTranscriptEvents({
+    entries = loadTranscriptEventsSync({
       agentId: params.agentId,
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
@@ -457,15 +456,15 @@ async function inspectCanonicalSessionTranscript(params: {
   });
 }
 
-async function collectFeishuSessionFindings(params: {
+function collectFeishuSessionFindings(params: {
   agentId: string;
   sessionKey: string;
   storePath: string;
   entry: FeishuSessionEntry;
-}): Promise<FeishuDoctorFinding[]> {
+}): FeishuDoctorFinding[] {
   const sessionId = typeof params.entry.sessionId === "string" ? params.entry.sessionId.trim() : "";
   if (sessionId) {
-    const finding = await inspectCanonicalSessionTranscript({
+    const finding = inspectCanonicalSessionTranscript({
       agentId: params.agentId,
       sessionId,
       sessionKey: params.sessionKey,
@@ -530,7 +529,7 @@ function collectRepairSessionEntries(
   );
 }
 
-async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
+function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: NodeJS.ProcessEnv }) {
   const env = params.env ?? process.env;
   const stateDir = resolveStateDir(env, os.homedir);
   const feishuStateDir = path.join(stateDir, FEISHU_STATE_DIR);
@@ -538,11 +537,10 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
   const sessionEntries: FeishuDoctorSessionEntry[] = [];
 
   for (const target of collectFeishuSessionTargets({ cfg: params.cfg, env, stateDir })) {
-    const entries = await listSessionEntriesAsync({
+    for (const { sessionKey: key, entry } of listSessionEntries({
       agentId: target.agentId,
       storePath: target.storePath,
-    });
-    for (const { sessionKey: key, entry } of entries
+    })
       .filter(
         ({ sessionKey, entry: sessionEntry }) =>
           !isValidAgentHarnessSessionStoreEntry(sessionKey, sessionEntry) &&
@@ -557,12 +555,12 @@ async function inspectFeishuDoctorState(params: { cfg: OpenClawConfig; env?: Nod
         entry: sessionEntry,
       });
       findings.push(
-        ...(await collectFeishuSessionFindings({
+        ...collectFeishuSessionFindings({
           sessionKey: key,
           storePath: target.storePath,
           agentId: target.agentId,
           entry: sessionEntry,
-        })),
+        }),
       );
     }
   }
@@ -672,8 +670,7 @@ async function repairFeishuDoctorState(params: {
 }) {
   const env = params.env ?? process.env;
   const now = params.now ?? new Date();
-  const inspection =
-    params.inspection ?? (await inspectFeishuDoctorState({ cfg: params.cfg, env }));
+  const inspection = params.inspection ?? inspectFeishuDoctorState({ cfg: params.cfg, env });
   const backupDir = ensureBackupDir(inspection.stateDir, now);
   const archiveTimestamp = timestampForPath(now);
   const warnings: string[] = [];
@@ -712,7 +709,9 @@ async function repairFeishuDoctorState(params: {
       const removedEntries: typeof entries = [];
       for (const entry of entries) {
         const { key } = entry;
-        const currentEntry = await getSessionEntryAsync({ agentId, storePath, sessionKey: key });
+        const currentEntry = listSessionEntries({ agentId, storePath }).find(
+          (candidate) => candidate.sessionKey === key,
+        )?.entry;
         if (!currentEntry || isValidAgentHarnessSessionStoreEntry(key, currentEntry)) {
           continue;
         }
@@ -812,9 +811,7 @@ async function runFeishuDoctorSequence(params: {
   shouldRepair: boolean;
 }): Promise<ChannelDoctorSequenceResult> {
   const notes = collectFeishuWebhookNotes(params);
-  const inspection = params.cfg.channels?.feishu
-    ? await inspectFeishuDoctorState(params)
-    : undefined;
+  const inspection = params.cfg.channels?.feishu ? inspectFeishuDoctorState(params) : undefined;
   if (!inspection || inspection.findings.length === 0) {
     return { changeNotes: [], ...notes };
   }

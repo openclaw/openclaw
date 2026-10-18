@@ -190,11 +190,6 @@ The `openclaw agent` command also has its own request deadline. Its 600-second f
 
 ### Claude CLI specifics
 
-For channels that deliver one final reply per turn, a Claude Code Stop-hook
-rejection discards the rejected reply segment, including when Claude runs a tool
-before rewriting. A `NO_REPLY` rewrite stays silent. Ordinary tool-split replies
-still preserve substantive pre-tool text.
-
 Interrupted turns can retain ordinary partial prose. If an unfinished reply contains
 standalone tool-protocol markup outside a code example, OpenClaw discards that
 partial reply instead of saving it in conversation history. Completed replies keep
@@ -588,12 +583,6 @@ The loopback bridge sends keepalive bytes while a tool response or notification
 stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
 bytes are not tool results or agent progress; client request deadlines and the
 current model attempt's timeout still apply.
-
-Each loopback response uses `Connection: close` so clients cannot reuse a pooled
-socket as the server closes it after an idle timeout. The connection closes only
-when the response ends; long-running tool responses and SSE notification streams
-remain open until completion or shutdown. Each later request opens a new loopback
-TCP connection.
 
 The shared listener remains available after the turn that first started it completes.
 Later calls use their own run's permissions and caller liveness, without retaining

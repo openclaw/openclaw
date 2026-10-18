@@ -351,7 +351,7 @@ const boardFixtureHtml = `<!doctype html>
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/test-helpers/board-fixture.tsx"></script>
+    <script type="module" src="/src/test-helpers/board-fixture.ts"></script>
   </body>
 </html>`;
 
@@ -3796,7 +3796,7 @@ try {
         logLevel: "error",
         optimizeDeps: {
           ...(options.fixture === "board"
-            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
+            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.ts")] }
             : {}),
           include: ["diff", "lit/directives/repeat.js"],
         },

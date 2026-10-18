@@ -172,7 +172,7 @@ async function finish(
 }
 
 describe("state lease heartbeat lifetime", () => {
-  it.each(["failure", "uncertain"] as const)(
+  it.each(["success", "failure", "uncertain"] as const)(
     "preserves heartbeat handoff after late startup renewal %s",
     async (settlement) => {
       const params = options();
@@ -200,14 +200,19 @@ describe("state lease heartbeat lifetime", () => {
         worker.emit("message", { startup: "prepared" });
         await vi.advanceTimersByTimeAsync(0);
         expect(worker.activationSeen).toBe(false);
-        const failure =
-          settlement === "uncertain"
-            ? new AggregateError([
-                Object.assign(new Error("Unknown startup renewal"), { code: "outcome-unknown" }),
-              ])
-            : new Error("Known startup renewal contention");
-        renewal.reject(failure);
-        await expect(renewal.promise).rejects.toBe(failure);
+        if (settlement === "success") {
+          renewal.resolve(Date.now() + 5_000);
+          await renewal.promise;
+        } else {
+          const failure =
+            settlement === "uncertain"
+              ? new AggregateError([
+                  Object.assign(new Error("Unknown startup renewal"), { code: "outcome-unknown" }),
+                ])
+              : new Error("Known startup renewal contention");
+          renewal.reject(failure);
+          await expect(renewal.promise).rejects.toBe(failure);
+        }
         await vi.advanceTimersByTimeAsync(0);
         if (settlement === "uncertain") {
           await expect(heartbeat.ready).rejects.toBeInstanceOf(AggregateError);
@@ -398,6 +403,8 @@ describe("state lease heartbeat lifetime", () => {
   it.each([
     { operation: "verify", delivery: "reply-first" },
     { operation: "verify", delivery: "deadline-first" },
+    { operation: "renew", delivery: "reply-first" },
+    { operation: "renew", delivery: "deadline-first" },
   ] as const)(
     "accepts a completed $operation with delayed $delivery delivery",
     async ({ operation, delivery }) => {

@@ -25,7 +25,6 @@ import {
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { stripMalformedXmlArgValueSuffixFromKeys } from "./agent-tools.params.js";
@@ -193,8 +192,7 @@ export function resolveExecPreparedRunEnvironment(defaults?: ExecToolDefaults) {
     ...(defaults?.preparedRunEnvironment ??
       prepareGitHubToolEnvironment({
         config: defaults?.config ?? {},
-        sourceConfig: getActiveSecretsRuntimeConfigSnapshot()?.sourceConfig,
-        agentId: defaults?.executionAgentId ?? defaults?.agentId ?? "main",
+        agentId: defaults?.agentId ?? "main",
       })),
     localProcessEnv: installationTargetEnv(getInstallationTarget()),
   };

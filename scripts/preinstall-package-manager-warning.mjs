@@ -2,11 +2,7 @@ import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync, realpathSync, rmSync } from "node:fs";
 import { posix, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  isNodeVersionAtLeast,
-  MINIMUM_BUN_VERSION,
-  parseNodeReleaseVersion,
-} from "../node-version.mjs";
+import { isNodeVersionAtLeast, parseNodeReleaseVersion } from "../node-version.mjs";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./lib/package-lifecycle-marker.mjs";
 
 const allowedLifecyclePackageManagers = new Set(["pnpm", "npm", "yarn", "bun"]);
@@ -301,12 +297,16 @@ export function enforceSupportedNodeRuntime(
     : { version, execPath };
   if (detectedRuntime?.bunVersion) {
     if (
-      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), MINIMUM_BUN_VERSION)
+      isNodeVersionAtLeast(parseNodeReleaseVersion(detectedRuntime.bunVersion), {
+        major: 1,
+        minor: 4,
+        patch: 0,
+      })
     ) {
       return true;
     }
     reportError(
-      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4.3+ (detected ${detectedRuntime.bunVersion}).`,
+      `[openclaw] error: Bun launcher ${detectedRuntime.execPath ?? execPath} requires Bun 1.4+ (detected ${detectedRuntime.bunVersion}).`,
     );
     return false;
   }

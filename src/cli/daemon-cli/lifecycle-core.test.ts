@@ -567,6 +567,23 @@ describe("Gateway service lifecycle", () => {
     },
   );
 
+  it("preserves the readiness failure and exit code after starting a stopped service", async () => {
+    await expect(
+      runServiceStart({
+        ...createServiceRunArgs(),
+        postStartCheck: async ({ fail }) =>
+          fail("Gateway is still starting.", [], "still-starting"),
+      }),
+    ).rejects.toThrow("__exit__:2");
+    expect(readJsonLog()).toMatchObject({
+      ok: false,
+      result: "still-starting",
+      error: "Gateway is still starting.",
+    });
+    expect(lifecycleRuntimeLogs.filter((line) => line.trim().startsWith("{"))).toHaveLength(1);
+    expect(service.start).toHaveBeenCalledOnce();
+  });
+
   it.each([["Gateway", "", "", "openclaw gateway", "restart"]] as const)(
     "warns in json with the %s service repair command and active context",
     async (serviceNoun, profile, container, command, repairAction) => {
@@ -737,6 +754,14 @@ describe("Gateway service lifecycle", () => {
     (
       [
         ["start-recovery", "start", "started", "service repaired", true, true],
+        [
+          "already-running",
+          "start",
+          "already-running",
+          "Gateway service already running.",
+          true,
+          true,
+        ],
         ["stop-empty", "stop", "stopped", "", false, true],
         ["stop-missing", "stop", "not-loaded", "Gateway service not loaded.", false, false],
         ["restart-no-message", "restart", "restarted", undefined, false, true],
@@ -780,6 +805,12 @@ describe("Gateway service lifecycle", () => {
           await postCheck();
         },
       });
+    } else if (row.action === "start") {
+      service.readRuntime.mockResolvedValue({
+        status: "running",
+      });
+      service.readCommand.mockResolvedValue({ programArguments: [], environment: {} });
+      result = await runServiceStart(args);
     } else if (row.action === "stop") {
       result = await runServiceStop({
         ...args,

@@ -20,6 +20,7 @@ const LANGUAGE_PACK_RUNTIME_CANDIDATE_RELATIVE_PATHS = [
 ] as const;
 
 type RuntimeAssetCache = {
+  mtimeMs: number;
   runtimeBody: Buffer;
   loaderBody: string;
 };
@@ -47,15 +48,22 @@ function createViewerAssetHandler(
   const runtimePath = `${prefix}viewer-runtime.js`;
   let cache: RuntimeAssetCache | null = null;
 
-  const loadRuntimeAssets = async (): Promise<RuntimeAssetCache> => {
-    const runtimeUrl = await resolveRuntimeFileUrl(relativePaths);
+  const loadRuntimeAssets = async (runtimeUrl: URL): Promise<RuntimeAssetCache> => {
+    const cached = cache;
     const runtimeFilePath = fileURLToPath(runtimeUrl);
+    const runtimeStat = await fs.stat(runtimeFilePath);
+    if (cached && cached.mtimeMs === runtimeStat.mtimeMs) {
+      return cached;
+    }
+
     const runtimeBody = await fs.readFile(runtimeFilePath);
     const hash = crypto.createHash("sha1").update(runtimeBody).digest("hex").slice(0, 12);
-    return {
+    cache = {
+      mtimeMs: runtimeStat.mtimeMs,
       runtimeBody,
       loaderBody: `import "${VIEWER_RUNTIME_RELATIVE_IMPORT_PATH}?v=${hash}";\n`,
     };
+    return cache;
   };
 
   return async (pathname: string) => {
@@ -63,8 +71,8 @@ function createViewerAssetHandler(
       return null;
     }
     try {
-      // Packaged viewer assets remain stable until the plugin runtime reloads.
-      const assets = (cache ??= await loadRuntimeAssets());
+      const runtimeUrl = await resolveRuntimeFileUrl(relativePaths);
+      const assets = await loadRuntimeAssets(runtimeUrl);
       return {
         body: pathname === loaderPath ? assets.loaderBody : assets.runtimeBody,
         contentType: "text/javascript; charset=utf-8",

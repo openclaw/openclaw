@@ -314,12 +314,12 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     }
   });
 
-  it("rejects whitespace-only environment keys before session creation", async () => {
+  it("rejects whitespace-only environment keys before session creation", () => {
     resolveElevenLabsApiKeyWithProfileFallbackMock.mockReturnValue(null);
     vi.stubEnv("ELEVENLABS_API_KEY", "");
     vi.stubEnv("XI_API_KEY", "   ");
 
-    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: {} })).toBe(false);
+    expect(provider.isConfigured({ cfg: {}, providerConfig: {} })).toBe(false);
     expect(() => provider.createSession({ providerConfig: {} })).toThrow(
       "ElevenLabs API key missing",
     );

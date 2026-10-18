@@ -1,4 +1,6 @@
+import { AsyncLocalStorage, createHook } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STALL_MS = 1_000;
@@ -6,11 +8,12 @@ const MAX_PENDING_STALLS = 8;
 
 type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = { enter(name: string): () => void; stop(): void };
-type MainThreadTaskState = { observer?: TaskObserver };
+type TaskScope = { name: string; active: boolean };
+type MainThreadTaskState = { context: AsyncLocalStorage<TaskScope>; observer?: TaskObserver };
 
 const taskState = resolveGlobalSingleton<MainThreadTaskState>(
   Symbol.for("openclaw.mainThreadTask"),
-  () => ({}),
+  () => ({ context: new AsyncLocalStorage<TaskScope>() }),
 );
 
 /** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
@@ -22,14 +25,27 @@ export function runWithMainThreadTask(name: string, run: () => unknown): unknown
     return run();
   }
   const exit = observer.enter(name);
+  const scope: TaskScope = { name, active: true };
+  const finish = () => {
+    scope.active = false;
+  };
   try {
-    return run();
+    const result = taskState.context.run(scope, run);
+    // Detached descendants keep the context, but no longer own a completed task's label.
+    if (isPromiseLike(result)) {
+      return Promise.resolve(result).finally(finish);
+    }
+    finish();
+    return result;
+  } catch (error) {
+    finish();
+    throw error;
   } finally {
     exit();
   }
 }
 
-/** Measure explicit synchronous scopes; unscoped stalls rely on best-effort loop sampling. */
+/** Measure callback execution, never the time an async operation spends awaiting I/O. */
 export function createMainThreadStallMonitor(now: () => number = () => performance.now()) {
   taskState.observer?.stop();
   const pending: Stall[] = [];
@@ -55,7 +71,8 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       return;
     }
     startedAt = segmentAt = now();
-    task = longestTask = "unattributed";
+    const scope = taskState.context.getStore();
+    task = longestTask = scope?.active ? scope.name : "unattributed";
     longestMs = 0;
   };
   const after = () => {
@@ -80,6 +97,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
         return;
       }
       stopped = true;
+      hook.disable();
       if (taskState.observer === observer) {
         delete taskState.observer;
       }
@@ -88,6 +106,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       delayMaxMs = 0;
     },
     enter(name) {
+      // Activation can occur within an already-running callback, before its hook was enabled.
       const ownsTurn = depth === 0;
       if (ownsTurn) {
         before();
@@ -104,7 +123,10 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       };
     },
   };
+  // No init/destroy hooks or async-id map: each turn retains only its longest named segment.
+  const hook = createHook({ before, after });
   taskState.observer = observer;
+  hook.enable();
   return {
     drain() {
       const stalls = pending.splice(0);

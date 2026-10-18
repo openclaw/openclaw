@@ -40,7 +40,6 @@ import type {
 import {
   buildSenderName,
   getTelegramTextParts,
-  joinTelegramTextParts,
   resolveTelegramNonTextBody,
   hasLeadingBotCommandAddressedToOtherBot,
   hasBotMentionInText,
@@ -266,35 +265,23 @@ export async function resolveTelegramInboundBody(params: {
   const historyBody =
     rawBody || formattedStickerDescription || formatMediaPlaceholderText(nativeMediaFacts);
 
-  const mentionMessages = options?.bufferedMessages?.some((message) => message.contact)
-    ? options.bufferedMessages
-    : undefined;
-  const mentionTextParts = mentionMessages
-    ? joinTelegramTextParts(
-        mentionMessages.filter((message) => !message.contact),
-        "\n",
-      )
-    : messageTextParts;
-  const hasAnyMention = mentionTextParts.entities.some((ent) => ent.type === "mention");
+  const hasAnyMention = messageTextParts.entities.some((ent) => ent.type === "mention");
   const explicitlyMentioned = botUsername
-    ? (mentionMessages
-        ? mentionMessages.some((message) => hasBotMention(message, botUsername, primaryCtx.me?.id))
-        : hasBotMention(msg, botUsername, primaryCtx.me?.id)) ||
+    ? hasBotMention(msg, botUsername, primaryCtx.me?.id) ||
       (richText ? hasBotMentionInText(richText, botUsername) : false)
     : false;
-  const mentionText = mentionMessages || !msg.contact ? mentionTextParts.text : "";
   const groupThread = resolveGroupThreadMentionFacts({
     cfg,
     channel: "telegram",
     peerId: isGroup ? String(chatId) : resolveTelegramDirectPeerId({ chatId, senderId }),
-    text: [mentionText, richText, preflightTranscript].filter(Boolean).join("\n"),
+    text: [messageTextParts.text, richText, preflightTranscript].filter(Boolean).join("\n"),
     sessionKey: params.sessionKey,
     acpBinding: params.acpBinding,
   });
   const computedWasMentioned =
     Boolean(groupThread?.mentionedAgentIds.length) ||
     matchesMentionWithExplicit({
-      text: mentionText || richText || "",
+      text: messageTextParts.text || richText || "",
       mentionRegexes,
       explicit: {
         hasAnyMention,

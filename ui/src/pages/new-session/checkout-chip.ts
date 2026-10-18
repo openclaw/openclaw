@@ -37,7 +37,6 @@ export function resolveCheckoutChip(params: {
 export type CheckoutChipOptions = {
   state: CheckoutChipState;
   remotePlacement: boolean;
-  currentCheckoutUnavailableReason?: string;
   repository?: boolean;
   folderLabel: string;
   worktree: boolean;

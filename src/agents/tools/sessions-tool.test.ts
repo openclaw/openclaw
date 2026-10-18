@@ -182,7 +182,7 @@ describe("sessions tool", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("does not accept independent creation through management actions", async () => {
+  it("does not expose direct session creation outside controlled spawning", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsTool({
       agentSessionKey: "agent:main:main",

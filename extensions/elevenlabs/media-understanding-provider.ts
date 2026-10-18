@@ -68,7 +68,7 @@ async function transcribeElevenLabsAudio(
       "ElevenLabs audio transcription failed",
     );
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "ElevenLabs audio transcription response missing text",
     );
     return { text, model };

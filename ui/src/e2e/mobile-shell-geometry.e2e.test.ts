@@ -10,11 +10,7 @@ import {
   defaultControlUiFeatureMethods,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  closeChatDetails,
-  openChatDetails,
-  openDetailsPullRequests,
-} from "./chat-details.test-support.ts";
+import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -509,7 +505,7 @@ suite.define(() => {
           path: path.join(artifacts, "progress.png"),
           animations: "disabled",
         });
-        await closeChatDetails(page);
+        await page.getByRole("button", { name: "Close details", exact: true }).click();
         const keyboard = [];
         if (mobile) {
           await textarea.focus();

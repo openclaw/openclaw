@@ -1,10 +1,10 @@
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
-import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
-registerEnglishCatalog(registerSettingsEnglish);
+registerEnglishCatalog(registerModelControlsEnglish);
 
 const AUTH_STATUS: Record<
   ModelProviderAuthKind,
@@ -53,14 +53,8 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (card.checkingModels) {
     return (
       <SettingsStatus
-        kind="muted"
-        dot={false}
-        label={
-          <span class="model-providers__checking" role="status">
-            <span class="btn__spinner" aria-hidden="true" />
-            <span>{t("modelProviders.status.checking")}</span>
-          </span>
-        }
+        kind={"muted"}
+        label={t("chat.modelControls.checkingProviderModels", { providers: card.displayName })}
       />
     );
   }

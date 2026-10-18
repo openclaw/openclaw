@@ -33,7 +33,6 @@ export function normalizeOpenAIResponsesReasoningReplayItem(
     id: item.id,
     type: "reasoning",
     summary: [],
-    ...(Array.isArray(item.content) && item.content.length === 0 ? { content: [] } : {}),
     status: item.status,
     encrypted_content: item.encrypted_content,
   };

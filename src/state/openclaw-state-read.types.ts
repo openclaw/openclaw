@@ -124,7 +124,6 @@ import type {
   UserBackgroundReadCommand,
   UserBackgroundReadReply,
 } from "./user-background.types.js";
-import type { CanonicalUserPreferences } from "./user-preferences.types.js";
 import type { UserProfileAvatarReadCommand } from "./user-profiles-avatar.types.js";
 import type {
   UserChannelIdentitySelector,
@@ -225,7 +224,6 @@ export type OpenClawStateReadCommand =
       type: "userProfiles.catalogIdentity";
       input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
     }
-  | { type: "userModelAccounts.authorization"; authProfileId: string }
   | { type: "userModelAccounts.links"; profileId: string }
   | { type: "userModelAccounts.summary"; profileId: string; authProfileId: string }
   | { type: "userModelAccounts.selection"; profileId?: string; authProfileId: string }
@@ -234,7 +232,6 @@ export type OpenClawStateReadCommand =
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
-  | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
       type: "githubPublication.lifecycle";
       publicationKind: "shared" | "personal";
@@ -432,7 +429,6 @@ export type OpenClawStateReadResult =
       type: "userPreferences.values";
       values: Map<string, unknown>;
     }
-  | { type: "userPreferences.read"; preferences: CanonicalUserPreferences | undefined }
   | UserBackgroundReadReply
   | {
       type: "exec-approvals.read";

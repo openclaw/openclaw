@@ -26,6 +26,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
   let scope: string | undefined;
   let wasPresented = true;
   let shownAt = 0;
+  let pending: ActivityHeadline | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const clearTimer = () => {
     if (timer !== undefined) {
@@ -59,6 +60,7 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
       const activity = input.activity;
       const resume = !wasPresented;
       wasPresented = true;
+      pending = undefined;
       if (!activity) {
         setShown(undefined);
         return;
@@ -85,9 +87,13 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
         if (input.current) {
           setShown({ ...previous, status: current?.status });
         }
+        pending = activity;
         timer = setTimeout(() => {
           timer = undefined;
-          show(activity);
+          if (pending) {
+            show(pending);
+            pending = undefined;
+          }
         }, remaining);
       }
     },

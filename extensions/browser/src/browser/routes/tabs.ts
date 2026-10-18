@@ -2,7 +2,6 @@ import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime"
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserNavigationTimeoutMs } from "../act-policy.js";
-import { isLocalManagedProfile } from "../config.js";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -200,13 +199,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       navigationPolicy: browserNavigationPolicyForProfile(ctx, profileCtx),
     });
     signal.throwIfAborted();
-    // Only an isolated browser owned by OpenClaw may follow the preview size.
-    // Attached sessions and remote CDP browsers retain their existing viewport.
-    return {
-      running: true,
-      tabs,
-      canAutoResizeViewport: isLocalManagedProfile(profileCtx.profile),
-    };
+    return { running: true, tabs };
   };
 
   const focusTab = async (

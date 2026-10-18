@@ -81,7 +81,7 @@ const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.t
 const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
 const nativeBunTarget = nativeQualificationFixtures.second;
-const nodeTarget = "src/cli/cli-process-diagnostics.test.ts";
+const nodeTarget = "test/scripts/update-restart-module-outcome.test.ts";
 const agentsSupportConfig = "test/vitest/vitest.agents-support.config.ts";
 const worktreeRecoveryTarget = "src/agents/worktrees/service.removal-recovery.test.ts";
 const gatewayCoreConfig = "test/vitest/vitest.gateway-core.config.ts";
@@ -666,12 +666,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         mixedCompilerTest,
         pluginRetentionTest,
         "src/process/spawn-broker/proxy-retention.test.ts",
-        "src/infra/main-thread-stall.test.ts",
         "src/auto-reply/reply/get-reply.imports.test.ts",
         "src/plugin-sdk/provider-catalog-shared.cancellation.test.ts",
         "src/plugin-sdk/provider-catalog-shared.retention.test.ts",
       ].toSorted();
-      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark, nodeTarget];
+      const nodeFiles = [skippedOnBun, nodeHistoryBenchmark, "src/infra/main-thread-stall.test.ts"];
       const nativeFiles = vitestArgs.length ? [] : [bunTarget, nativeBunTarget];
       const bunFiles = nativeFiles.length
         ? bunVitestFiles
@@ -743,21 +742,18 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
-  it.each(["bun-compatible", "dual"] as const)(
+  it.each(["bun-compatible"] as const)(
     "runs qualified process coverage on Bun while retaining process siblings on Node under %s",
     async (policy) => {
       const bunFiles = [
         "src/process/spawn-broker/event-order.test.ts",
         "src/process/spawn-broker/group-custody.test.ts",
+        "src/process/terminal-pty-bun.test.ts",
+      ];
+      const nodeFiles = [
         "src/process/spawn-broker/context.test.ts",
         "src/process/spawn-broker/startup.test.ts",
         "src/process/terminal-pty.test.ts",
-        "src/process/terminal-pty-bun.test.ts",
-      ].toSorted();
-      const nodeFiles = [
-        "src/process/spawn-broker/cleanup.test.ts",
-        "src/process/spawn-broker/execa.test.ts",
-        "src/process/supervisor/service-child-relay-host.retirement.test.ts",
       ];
       const includePatterns = [...bunFiles, ...nodeFiles];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
@@ -787,12 +783,11 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        { runtime: "node", includes: policy === "dual" ? includePatterns : nodeFiles },
+        { runtime: "node", includes: nodeFiles },
         { runtime: "bun", includes: bunFiles },
       ]);
       for (const bunFile of bunFiles) {
         expect(resolveCiTestRuntimeSelections({ targets: [bunFile] }, policy)).toEqual([
-          ...(policy === "dual" ? [{ runtime: "node" }] : []),
           { runtime: "bun" },
         ]);
       }
@@ -879,26 +874,20 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     {
       policy: "bun-compatible",
       config: unitConfig,
-      nodeFiles: ["packages/acp-core/src/error-format.test.ts"],
+      nodeFile: "packages/acp-core/src/error-format.test.ts",
     },
-    {
-      policy: "bun-compatible",
-      config: unitSrcConfig,
-      nodeFiles: [],
-    },
+
+    { policy: "bun-compatible", config: unitSrcConfig, nodeFile: "src/audit/audit-config.test.ts" },
   ] as const)(
     "admits qualified unit coverage while preserving $config siblings under $policy",
-    async ({ policy, config, nodeFiles }) => {
+    async ({ policy, config, nodeFile }) => {
       const bunFiles = [
         ...(config === unitConfig ? [graphemeTarget] : []),
-        "src/audit/audit-config.test.ts",
         libraryTarget,
         workerQuiescenceTarget,
-        "src/node-host/node-worker-workspace-processes.test.ts",
         workerClosingWindowTarget,
-        "src/worker/worker-deploy-entry.test.ts",
-      ].toSorted();
-      const includePatterns = [...bunFiles, ...nodeFiles];
+      ];
+      const includePatterns = [...bunFiles, nodeFile];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
         runShardPlans(
@@ -917,35 +906,29 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ),
       ).resolves.toBe(0);
       expect(seen).toEqual([
-        ...(nodeFiles.length ? [{ runtime: "node", includes: nodeFiles }] : []),
+        { runtime: "node", includes: [nodeFile] },
         { runtime: "bun", includes: bunFiles },
       ]);
       expect(new Set(seen.flatMap(({ includes }) => includes))).toEqual(new Set(includePatterns));
       for (const targets of [bunFiles, ...bunFiles.map((file) => [file])]) {
         expect(resolveCiTestRuntimeSelections({ targets }, policy)).toEqual([{ runtime: "bun" }]);
       }
-      for (const nodeFile of nodeFiles) {
-        expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
-          { runtime: "node" },
-        ]);
-      }
+      expect(resolveCiTestRuntimeSelections({ targets: [nodeFile] }, policy)).toEqual([
+        { runtime: "node" },
+      ]);
       const full = resolveCiTestRuntimeSelections({ configs: [config] }, policy);
       expect(full).toEqual([
-        ...(nodeFiles.length
-          ? [{ runtime: "node", includePatterns: expect.arrayContaining([...nodeFiles]) }]
-          : []),
-        { runtime: "bun", includePatterns: expect.arrayContaining(bunFiles) },
+        { runtime: "node", includePatterns: expect.arrayContaining([nodeFile]) },
+        { runtime: "bun", includePatterns: bunFiles },
       ]);
-      const nodeIncludes = full.find((entry) => entry.runtime === "node")?.includePatterns ?? [];
-      const bunIncludes = full.find((entry) => entry.runtime === "bun")?.includePatterns ?? [];
       for (const file of bunFiles) {
-        expect(nodeIncludes).not.toContain(file);
+        expect(full[0]?.includePatterns).not.toContain(file);
       }
-      expect(nodeIncludes).not.toContain(bunTarget);
+      expect(full[0]?.includePatterns).not.toContain(bunTarget);
       if (config === unitSrcConfig) {
-        expect(bunIncludes.every((file) => file.startsWith("src/"))).toBe(true);
+        expect(full[0]?.includePatterns?.every((file) => file.startsWith("src/"))).toBe(true);
         expect(
-          bunIncludes.some(
+          full[0]?.includePatterns?.some(
             (file) => file.startsWith("src/acp/") || file.startsWith("src/security/"),
           ),
         ).toBe(false);
@@ -963,15 +946,6 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   );
 
   it.each([
-    {
-      config: "test/vitest/vitest.commands.config.ts",
-      ownerIncludePatterns: ["src/commands/**/*.test.ts"],
-      targets: [
-        "src/commands/doctor-sqlite-nocow.test.ts",
-        "src/commands/doctor-config-preflight.process.test.ts",
-      ],
-      otherOwner: "src/commands/doctor-security.test.ts",
-    },
     {
       config: "test/vitest/vitest.gateway-methods.config.ts",
       ownerIncludePatterns: ["src/gateway/server-methods/**/*.test.ts"],

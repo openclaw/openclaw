@@ -83,8 +83,6 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext) {
 }
 
 export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    isGradiumProviderConfigured(providerConfig);
   return {
     id: "gradium",
     label: "Gradium",
@@ -93,9 +91,7 @@ export function buildGradiumSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeGradiumProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => GRADIUM_VOICES.map((v) => ({ id: v.id, name: v.name })),
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) => isGradiumProviderConfigured(providerConfig),
     synthesize: async (req) => {
       const wantsVoiceNote = req.target === "voice-note";
       const outputFormat = wantsVoiceNote ? "opus" : "wav";

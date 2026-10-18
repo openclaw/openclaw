@@ -88,7 +88,8 @@ suite.define(() => {
       await refreshDetails.waitFor({ state: "visible" });
       // The popup's opening scale animation can move this small target away
       // from a stationary pointer before the tooltip's hover delay completes.
-      await picker.locator("[data-anchored-overlay]").evaluate(async (surface) => {
+      await picker.locator("wa-popup[data-anchored-overlay]").evaluate(async (popup) => {
+        const surface = popup.shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
         await Promise.all(surface.getAnimations().map((animation) => animation.finished));
       });
       await refreshDetails.hover();
@@ -548,11 +549,11 @@ suite.define(() => {
 
   it.each(
     ["chat", "new"].flatMap((route) =>
-      [false, true].map((hoverEffort) => ({ route, hoverEffort })),
+      [false, true].map((tooltipOpen) => ({ route, tooltipOpen })),
     ),
   )(
-    "keeps independent model and effort controls within the $route composer (hover effort: $hoverEffort)",
-    async ({ route, hoverEffort }) => {
+    "keeps independent model and effort controls within the $route composer (tooltip open: $tooltipOpen)",
+    async ({ route, tooltipOpen }) => {
       await suite.withPage({ viewport: { width: 393, height: 852 } }, async ({ page }) => {
         const longName =
           "Long catalog display name for a model with a very large context window and detailed reasoning capabilities";
@@ -683,7 +684,7 @@ suite.define(() => {
             : undefined;
           if (artifactDir && [320, 393, 560, 1280].includes(width)) {
             await page.screenshot({
-              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${hoverEffort}.png`,
+              path: `${artifactDir}/${route}-model-effort-${width}-tooltip-${tooltipOpen}.png`,
               animations: "disabled",
             });
           }
@@ -724,13 +725,19 @@ suite.define(() => {
         await slider.press("End");
         await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("high");
         expect(await needleAngle()).toBe(120);
-        // The expanded picker suppresses its trigger hint while owning Escape.
+        // The pointer can remain over the changing effort label during slider input.
+        // Establish whether the hover hint or the picker owns this Escape.
         await slider.hover();
         const openTooltips = page.locator("openclaw-tooltip[open]");
         await expect.poll(() => openTooltips.count()).toBe(0);
         expect(await slider.evaluate((node) => node === document.activeElement)).toBe(true);
-        if (hoverEffort) {
+        if (tooltipOpen) {
           await effort.hover();
+          await expect.poll(() => openTooltips.count()).toBe(1);
+          await expect
+            .poll(() => openTooltips.locator(".tooltip-content").textContent())
+            .toBe("High");
+          await page.keyboard.press("Escape");
           await expect.poll(() => openTooltips.count()).toBe(0);
           expect(await slider.isVisible()).toBe(true);
           expect(await slider.inputValue()).toBe("1");
@@ -780,7 +787,7 @@ suite.define(() => {
             : undefined;
           if (artifactDir) {
             await page.screenshot({
-              path: `${artifactDir}/chat-model-effort-split-tooltip-${hoverEffort}.png`,
+              path: `${artifactDir}/chat-model-effort-split-tooltip-${tooltipOpen}.png`,
               animations: "disabled",
             });
           }

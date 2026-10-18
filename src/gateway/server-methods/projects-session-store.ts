@@ -74,10 +74,9 @@ export function loadProjectSessionStore(
     { metadataPrepared: true, ordered: true },
   );
   const paths = projection.state.scope({}).paths;
-  const selectedEntries = selection.entries("all");
-  const targets = new Map(selectedEntries.map(([key]) => [key, selection.getTarget(key)!]));
+  const targets = new Map(selection.entries.map(([key]) => [key, selection.getTarget(key)!]));
   // Stable locale-equal recency ties retain physical-store and SQLite binary key order.
-  const entries = selectedEntries
+  const entries = selection.entries
     .map(([key, entry]) => ({
       key,
       entry,

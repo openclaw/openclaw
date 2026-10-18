@@ -189,7 +189,6 @@ function prepareGitHubToolEnvironmentForIdentity(
     localGitConfigParameters: AGENT_GIT_CONFIG_PARAMETERS,
     excludedStoreNames: Object.freeze(excludedStoreNames),
     managedLocalIdentity,
-    ...(managedLocalIdentity ? { hostExecutionRequired: true as const } : {}),
   });
 }
 
@@ -487,16 +486,17 @@ async function prepareSharedGitHubIdentity(
     allowAnonymous?: boolean;
     allowStale?: boolean;
   },
-  identity: ResolvedGitHubToolIdentity,
   readNativeToken = readNativeGitHubToken,
   host = resolveGitHubHost(),
   apiBaseUrl = resolveGitHubApiBaseUrl(),
 ) {
+  const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
   const currentEnvironment = (): NodeJS.ProcessEnv => ({
     ...githubIdentityProbeEnvironment(params, identity),
     GH_PROMPT_DISABLED: "1",
   });
+  const env = currentEnvironment();
   if (managed && (host !== GITHUB_HOST || apiBaseUrl !== resolveConfiguredGitHubApiBaseUrl())) {
     const error = new GitHubIdentityError("unavailable");
     error.message =
@@ -524,12 +524,15 @@ async function prepareSharedGitHubIdentity(
     if (probe.status !== "available") {
       throw new GitHubIdentityError(probe.status);
     }
-    const prepared = {
+    const prepared = Object.freeze({
       source: identity.source,
       ...(managed ? { profileId: identity.config.profileId } : {}),
       host,
       account: probe.account,
-    };
+      // Broker children and worker launches receive this fixed snapshot. Profile
+      // retirement cannot redirect an already-admitted operation.
+      env: Object.freeze(withGitHubToken(env, token)),
+    }) satisfies PreparedGitHubPublicationIdentity;
     return { prepared, token, readToken, ...(probe.stale ? { stale: true as const } : {}) };
   }, params);
 }
@@ -538,15 +541,11 @@ async function prepareSharedGitHubIdentity(
 export async function prepareGitHubPublicationIdentity(
   params: GitHubIdentityPreparation,
 ): Promise<PreparedGitHubPublicationIdentity> {
-  const identity = resolveGitHubToolIdentity(params);
-  // Capture the child environment before awaiting credentials; retirement cannot
-  // redirect an already-admitted publication to another profile.
-  const env = { ...githubIdentityProbeEnvironment(params, identity), GH_PROMPT_DISABLED: "1" };
-  const { prepared, token } = await prepareSharedGitHubIdentity(params, identity);
-  if (!prepared || token === undefined) {
+  const { prepared } = await prepareSharedGitHubIdentity(params);
+  if (!prepared) {
     throw new GitHubIdentityError("unavailable");
   }
-  return Object.freeze({ ...prepared, env: Object.freeze(withGitHubToken(env, token)) });
+  return prepared;
 }
 
 /** Options expose account facts only; publication obtains its own live credential. */
@@ -556,7 +555,6 @@ export async function prepareGitHubPublicationOptionsIdentity(
   let nativeStale = false;
   const { prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, allowStale: true },
-    resolveGitHubToolIdentity(params),
     (env, requireAbsentProof, host) =>
       readCachedNativeGitHubToken(env, requireAbsentProof, host, {
         onStale: () => {
@@ -604,7 +602,6 @@ export async function prepareGitHubReadIdentity(
   assertSelected();
   const { token, readToken, prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, ...caller },
-    selected,
     readCachedNativeGitHubToken,
     params.issuer,
     params.issuer ? resolveConfiguredGitHubApiBaseUrl() : undefined,

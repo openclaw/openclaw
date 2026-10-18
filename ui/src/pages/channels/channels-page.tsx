@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -30,6 +31,7 @@ import { projectChannels, projectRuntimeConfig } from "../../lib/reactive/domain
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectTheme } from "../../lib/reactive/theme.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { importNostrProfile, parseValidationErrors, putNostrProfile } from "./nostr-profile-ops.ts";
 import { ChannelPluginPresentationController } from "./plugin-presentation-controller.ts";
 import { createNostrProfileFormState } from "./view.nostr-profile-form.tsx";
@@ -666,7 +668,7 @@ class ChannelsPageController {
   }
 }
 
-function ChannelsPageContent(props: { host: HTMLElement; context?: ApplicationContext }) {
+export function ChannelsPage(props: { host: HTMLElement; context?: ApplicationContext }) {
   const owner = getOwner();
   const application = untrack(() => props.context) ? undefined : useApplication();
   const host = untrack(() => props.host);
@@ -701,11 +703,17 @@ function ChannelsPageContent(props: { host: HTMLElement; context?: ApplicationCo
   );
 }
 
-export function ChannelsPage(props: { context?: ApplicationContext }) {
-  let host!: HTMLElement;
-  return (
-    <openclaw-channels-page ref={(element) => (host = element)}>
-      <ChannelsPageContent host={host} context={props.context} />
-    </openclaw-channels-page>
-  );
+// Module re-evaluation can retain the shared custom-element registry.
+if (!customElements.get("openclaw-channels-page")) {
+  defineSolidBridge("openclaw-channels-page", (_props, host) => <ChannelsPage host={host} />, {
+    properties: {},
+  });
+}
+
+export function ChannelsPageBridge(props: Record<string, never>): JSX.Element {
+  // SAFETY: The registration above installs the Solid bridge's static renderer.
+  const Bridge = customElements.get("openclaw-channels-page") as CustomElementConstructor & {
+    render: (props: Record<string, never>) => JSX.Element;
+  };
+  return Bridge.render(props);
 }

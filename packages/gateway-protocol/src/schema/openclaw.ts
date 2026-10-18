@@ -463,15 +463,6 @@ export const SystemAgentSetupAuthStartParamsSchema = closedObject({
 
 export const SystemAgentSetupAuthStartResultSchema = WizardStartResultSchema;
 
-/** Enable a runtime with agent-scoped consent in the same config write. */
-export const SystemAgentSetupRuntimeStartParamsSchema = closedObject({
-  sessionId: NonEmptyString,
-  agentId: NonEmptyString,
-  runtimeId: NonEmptyString,
-  configPatch: Type.Record(Type.String(), Type.Unknown()),
-});
-export const SystemAgentSetupRuntimeStartResultSchema = WizardStartResultSchema;
-
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type SystemAgentChatParams = Static<typeof SystemAgentChatParamsSchema>;
@@ -500,11 +491,4 @@ export type SystemAgentSetupActivateStartParams = Static<
 >;
 export type SystemAgentSetupActivateStartResult = Static<
   typeof SystemAgentSetupActivateStartResultSchema
->;
-
-export type SystemAgentSetupRuntimeStartParams = Static<
-  typeof SystemAgentSetupRuntimeStartParamsSchema
->;
-export type SystemAgentSetupRuntimeStartResult = Static<
-  typeof SystemAgentSetupRuntimeStartResultSchema
 >;

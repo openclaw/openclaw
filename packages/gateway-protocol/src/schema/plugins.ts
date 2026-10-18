@@ -13,7 +13,6 @@ import {
   ControlUiLinkReaderMetadataSchema,
   ControlUiLinkReaderDescriptorSchema,
 } from "./control-ui-link-reader.js";
-import { PluginSdkDeprecationNoticeSchema } from "./plugin-compatibility.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import {
   PluginDecisionProviderStatusSchema,
@@ -135,10 +134,6 @@ export const PluginControlUiModuleSchema = closedObject({
   entryUrl: NonEmptyString,
   imports: Type.Optional(Type.Array(NonEmptyString, { maxItems: 128 })),
   uiCapabilities: Type.Optional(PluginUiCapabilitiesSchema),
-  // Host-owned runtime provenance; plugin manifests cannot opt into this delivery route.
-  bundledDistribution: Type.Optional(
-    closedObject({ packageName: NonEmptyString, packageVersion: NonEmptyString }),
-  ),
   styles: Type.Array(NonEmptyString, { maxItems: 16 }),
 });
 
@@ -279,7 +274,6 @@ export const PluginCatalogEntrySchema = closedObject({
   install: Type.Optional(PluginCatalogInstallActionSchema),
   error: Type.Optional(Type.String()),
   runtime: Type.Optional(PluginRuntimeStatusSchema),
-  compatibilityNotices: Type.Optional(Type.Array(PluginSdkDeprecationNoticeSchema)),
   /** Ordered package or registry categories; the first category is primary. */
   categories: Type.Optional(Type.Array(NonEmptyString, { minItems: 1, maxItems: 3 })),
   /** Additional browse memberships derived from enabled plugins' declared capabilities. */

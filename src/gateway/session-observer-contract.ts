@@ -10,12 +10,12 @@ export type SessionObserverCompanionSnapshot = {
 };
 
 export type SessionObserverService = {
-  /** @deprecated Await handleEventAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Await handleEventAsync. Retained during stable deprecation. */
   handleEvent: (event: SessionObserverEvent) => void;
   handleEventAsync: (event: SessionObserverEvent) => Promise<void>;
   setConnectionVisibility: (connId: string, visible: boolean) => void;
   removeConnection: (connId: string) => void;
-  /** @deprecated Await getCompanionSnapshotAsync. Final compatibility day: 2026-12-31. */
+  /** @deprecated Await getCompanionSnapshotAsync. Retained during stable deprecation. */
   getCompanionSnapshot: (sessionKey: string, agentId?: string) => SessionObserverCompanionSnapshot;
   getCompanionSnapshotAsync: (
     sessionKey: string,

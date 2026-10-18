@@ -1,40 +1,19 @@
+import { render as renderSolid, type JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
-import type {
-  ConfirmDialogChoice,
-  ConfirmDialogChoiceOptions,
-  ConfirmDialogOptions,
-} from "./confirm-dialog-types.ts";
+import type { ConfirmDialogOptions } from "./confirm-dialog-types.ts";
 import { ConfirmDialogView } from "./confirm-dialog-view.tsx";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
 
-export type {
-  ConfirmDialogChoice,
-  ConfirmDialogChoiceOptions,
-  ConfirmDialogOptions,
-  ConfirmDialogSkipPreference,
-} from "./confirm-dialog-types.ts";
+export type { ConfirmDialogOptions, ConfirmDialogSkipPreference } from "./confirm-dialog-types.ts";
 
 let confirmationActive = false;
 
-function presentConfirmDialog(
-  options: ConfirmDialogOptions & { alternativeLabel?: string },
-): Promise<ConfirmDialogChoice> {
-  if (confirmationActive) {
-    return Promise.resolve(null);
-  }
-  confirmationActive = true;
-  return withPromiseModalHost<ConfirmDialogChoice>(
-    { signal: options.signal, value: null },
+function presentConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
+  return withPromiseModalHost<boolean, JSX.Element>(
+    { signal: options.signal, value: false },
     ({ render, finish }) => render(() => createComponent(ConfirmDialogView, { options, finish })),
-  ).finally(() => {
-    confirmationActive = false;
-  });
-}
-
-export function showConfirmChoiceDialog(
-  options: ConfirmDialogChoiceOptions,
-): Promise<ConfirmDialogChoice> {
-  return presentConfirmDialog(options);
+    (content, host) => renderSolid(content, host),
+  );
 }
 
 /** Native confirms block reentrancy; reject a second request instead of replaying it later. */
@@ -44,5 +23,11 @@ export function showConfirmDialog(options: ConfirmDialogOptions): Promise<boolea
   if (options.skipPreference?.skipped && !options.requiredAcknowledgement) {
     return Promise.resolve(true);
   }
-  return presentConfirmDialog(options).then((result) => result === "confirm");
+  if (confirmationActive) {
+    return Promise.resolve(false);
+  }
+  confirmationActive = true;
+  return presentConfirmDialog(options).finally(() => {
+    confirmationActive = false;
+  });
 }

@@ -1,8 +1,7 @@
-import { createComponent } from "solid-js";
+import { html, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { ChatSessionSharing } from "../pages/chat/components/chat-session-sharing.solid.tsx";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderChatSessionSharing } from "../pages/chat/components/chat-session-sharing.ts";
 import { menuItem, mountMenu } from "../test-helpers/session-menu.ts";
 import {
   createSessionOwnerMenuHarness,
@@ -45,34 +44,28 @@ it.each(
       root = document.createElement("div");
       roots.push(root);
       document.body.append(root);
-      mountSolid(
-        () =>
-          createComponent(ChatSessionSharing, {
-            session: {
-              key: "agent:main:people",
-              kind: "direct",
-              updatedAt: 1,
-              sharingRole: "owner",
+      render(
+        html`${renderChatSessionSharing({
+          session: { key: "agent:main:people", kind: "direct", updatedAt: 1, sharingRole: "owner" },
+          state: {
+            loading: false,
+            result: {
+              sessionKey: "agent:main:people",
+              role: "owner",
+              allowedVisibilities: ["shared"],
+              members: [],
+              identities: Array.from({ length: count }, (_, i) => ({
+                type: "human" as const,
+                id: `person-${i}`,
+                label: `Person ${String(i).padStart(4, "0")}`,
+              })),
             },
-            state: {
-              loading: false,
-              result: {
-                sessionKey: "agent:main:people",
-                role: "owner",
-                allowedVisibilities: ["shared"],
-                members: [],
-                identities: Array.from({ length: count }, (_, i) => ({
-                  type: "human" as const,
-                  id: `person-${i}`,
-                  label: `Person ${String(i).padStart(4, "0")}`,
-                })),
-              },
-            },
-            onOpen: vi.fn(),
-            onVisibilityChange: vi.fn(),
-            onMemberChange: onAction,
-          }),
-        { container: root },
+          },
+          onOpen: vi.fn(),
+          onVisibilityChange: vi.fn(),
+          onMemberChange: onAction,
+        })}`,
+        root,
       );
       const trigger = page.getByRole("button", { name: "Session sharing", exact: true });
       await expect.element(trigger).toBeVisible();

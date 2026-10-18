@@ -310,11 +310,9 @@ describe("openclaw-router-outlet", () => {
   it("keeps asset recovery retryable after the reachability wait expires", async () => {
     vi.useFakeTimers();
     let loadCount = 0;
-    let finishProbe: ((response: Response) => void) | undefined;
     const fetchMock = vi.fn<typeof fetch>(
       async (_input, init) =>
-        await new Promise<Response>((resolve, reject) => {
-          finishProbe = resolve;
+        await new Promise<Response>((_resolve, reject) => {
           const signal = init?.signal;
           if (!signal) {
             return;
@@ -375,12 +373,6 @@ describe("openclaw-router-outlet", () => {
     expect(button?.disabled).toBe(false);
     expect(outlet.querySelector('[role="alert"]')).not.toBeNull();
     expect(fetchMock.mock.calls.length).toBeGreaterThan(1);
-    // Manual timeout leaves automatic recovery alive. Settle its shared probe
-    // before fake timers are removed so it cannot leak into the next document.
-    window.dispatchEvent(new Event("online"));
-    await vi.advanceTimersByTimeAsync(0);
-    finishProbe?.(new Response(null, { status: 200 }));
-    await vi.advanceTimersByTimeAsync(0);
     outlet.dispose();
     router.stop();
   });

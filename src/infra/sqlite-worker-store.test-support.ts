@@ -59,15 +59,6 @@ type Receipt = {
 };
 export type FixtureOperations = {
   append: { input: { value: string }; output: Receipt };
-  "database.domain.execute": {
-    input: {
-      command: {
-        type: "session.actor.appendTranscriptEvent" | "session.private-customer-command";
-        input: { value: string };
-      };
-    };
-    output: Receipt;
-  };
   read: { input: undefined; output: string[] };
   takeReplyOwnership: { input: undefined; output: ReplyOwnership[] };
   commitThenExit: { input: { value: string }; output: never };
@@ -207,16 +198,6 @@ function createFixtureBackend(
           db,
           query.selectFrom("entries").select("value").orderBy("id"),
         ).rows.map((row) => row.value);
-      }
-      if (command.type === "database.domain.execute") {
-        const inner = command.input.command;
-        if (inner.type === "session.private-customer-command") {
-          return runSqliteImmediateTransactionSync(db, () => {
-            append(inner.input.value);
-            throw new Error("Fixture transaction rolled back");
-          });
-        }
-        return append(inner.input.value);
       }
       const receipt = append(command.input.value);
       if (command.type === "commitThenExit") {

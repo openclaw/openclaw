@@ -8,7 +8,7 @@ import {
   validatePluginsSessionActionParams,
   validatePluginsSessionActionResult,
   validatePluginsUiDescriptorsParams,
-  type PluginsUiDescriptorsResult,
+  validatePluginsUiDescriptorsResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -49,7 +49,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         return;
       }
       const scopes = client?.connect.scopes ?? [];
-      const result: PluginsUiDescriptorsResult = {
+      const result = {
         ok: true,
         generation: getPluginRegistryVersion(getPluginRegistryForContext()),
         descriptors: listControlUiPluginDescriptors(scopes),
@@ -61,6 +61,20 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         controlUiLinkReaders: listControlUiLinkReaders(scopes, methods),
         pluginSurfaceUrls: client?.pluginSurfaceUrls ?? {},
       };
+      if (!validatePluginsUiDescriptorsResult(result)) {
+        log.warn("invalid plugins.uiDescriptors result", {
+          errors: validatePluginsUiDescriptorsResult.errors,
+        });
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `invalid plugins.uiDescriptors result: ${formatValidationErrors(validatePluginsUiDescriptorsResult.errors)}`,
+          ),
+        );
+        return;
+      }
       respond(true, result, undefined);
     },
   ),

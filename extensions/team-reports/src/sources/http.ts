@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { z } from "zod";
 
@@ -23,13 +24,20 @@ export async function wait(
   signal: AbortSignal | undefined,
   label: string,
 ): Promise<void> {
-  checkAbort(signal, label);
-  try {
-    await sleepWithAbort(ms, signal);
-  } catch (error) {
+  // Node timers overflow above 2^31-1; chunk long reset delays without polling the API.
+  const deadline = Date.now() + ms;
+  do {
     checkAbort(signal, label);
-    throw error;
-  }
+    try {
+      await sleepWithAbort(
+        Math.min(Math.max(1, deadline - Date.now()), MAX_TIMER_TIMEOUT_MS),
+        signal,
+      );
+    } catch (error) {
+      checkAbort(signal, label);
+      throw error;
+    }
+  } while (Date.now() < deadline);
   checkAbort(signal, label);
 }
 

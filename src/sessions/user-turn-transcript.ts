@@ -11,10 +11,7 @@ import {
   withSessionInputActor,
   type SessionInputActorBinding,
 } from "../config/sessions/session-input-actor.js";
-import {
-  composeSessionSourceAssertion,
-  createDynamicSessionSourceAssertion,
-} from "../config/sessions/session-source-authority.js";
+import { createDynamicSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import {
   getUserTurnTranscriptAdmissionOwner,
@@ -375,10 +372,6 @@ export function createUserTurnTranscriptRecorder(
         candidate: PersistedUserTurnMessage,
         candidateUpdateMode: UserTurnTranscriptUpdateMode,
       ) => {
-        const assertOriginalInput =
-          candidate.idempotencyKey === message?.idempotencyKey
-            ? recorder.assertOriginalInputCommit
-            : undefined;
         const persist = () =>
           persistUserTurnInput(recorder, {
             ...resolvedTarget,
@@ -390,12 +383,10 @@ export function createUserTurnTranscriptRecorder(
             expectedSessionState: options.expectedSessionState ?? params.expectedSessionState,
             updateMode: candidateUpdateMode,
             beforeMessageWrite: params.beforeMessageWrite ?? resolvedTarget.beforeMessageWrite,
-            beforeFreshMessageCommit: options.beforeFreshMessageCommit
-              ? composeSessionSourceAssertion([
-                  options.beforeFreshMessageCommit,
-                  assertOriginalInput,
-                ])
-              : assertOriginalInput,
+            beforeFreshMessageCommit:
+              candidate.idempotencyKey === message?.idempotencyKey
+                ? recorder.assertOriginalInputCommit
+                : undefined,
             onOriginalInputCommitted: notifyOriginalInputCommitted,
             onCommitted: (committed, acceptCompletion) => {
               committedInput = committed;
@@ -483,9 +474,7 @@ export function createUserTurnTranscriptRecorder(
     get message() {
       return message;
     },
-    // Runtime replay consumes the committed hook decision; persistence still resolves late media.
-    resolveMessage: async () =>
-      recorder.getPersistedMessage?.() ?? (await resolveMessageForPersistence()),
+    resolveMessage: resolveMessageForPersistence,
     assertOriginalInputCommit: params.assertOriginalInputCommit
       ? createDynamicSessionSourceAssertion(
           () =>
@@ -658,7 +647,6 @@ export function createUserTurnTranscriptRecorder(
         expectedSessionId: options?.expectedSessionId,
         expectedSessionState: options?.expectedSessionState,
         sessionLifecyclePatch: options?.sessionLifecyclePatch,
-        beforeFreshMessageCommit: options?.beforeFreshMessageCommit,
         retryIfUnpersisted: options?.retryIfUnpersisted,
       }),
     persistBlocked: async (blockedMessage, options) => {

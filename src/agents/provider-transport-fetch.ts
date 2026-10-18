@@ -204,7 +204,7 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
     return false;
   }
 
-  const retryAfterSeconds = parseRetryAfterSeconds(response.headers, Date.now(), status);
+  const retryAfterSeconds = parseRetryAfterSeconds(response.headers);
   if (retryAfterSeconds !== undefined) {
     return retryAfterSeconds > maxWaitSeconds;
   }

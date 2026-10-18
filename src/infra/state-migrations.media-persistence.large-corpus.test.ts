@@ -105,7 +105,7 @@ const CHILD_SCRIPT = String.raw`
   const trajectoryBoundary = JSON.parse(readTrajectory(64));
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
-    changes: migration.changes,
+    changeCount: migration.changes.length,
     sessions: count("session_nodes"), windows: count("session_windows"),
     events: count("transcript_events"),
     trajectoryEvents: count("trajectory_runtime_events"),
@@ -164,7 +164,7 @@ const SPARSE_EVENT_CHILD_SCRIPT = String.raw`
   ).get("sparse-${SPARSE_EVENT_SESSION_COUNT - 1}").event_json);
   process.stdout.write(JSON.stringify({
     warnings: migration.warnings,
-    changes: migration.changes,
+    changeCount: migration.changes.length,
     migrationSelects,
     transcriptMediaPath: transcript.message.__openclaw?.media?.[0]?.path,
     transcriptHasLegacyCarrier: Object.hasOwn(transcript.message, "MediaPath"),
@@ -285,10 +285,7 @@ describe("legacy media persistence large corpus", () => {
     const output = runMigration(stateDir, CHILD_SCRIPT, 256);
     expect(output).toMatchObject({
       warnings: [],
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
-      ],
+      changeCount: 1,
       sessions: SESSION_COUNT,
       windows: SESSION_COUNT,
       events: ACTIVE_SESSIONS * EVENTS_PER_SESSION,
@@ -309,7 +306,7 @@ describe("legacy media persistence large corpus", () => {
     const stateDir = tempDir.make("openclaw-media-sparse-events-");
     createSparseEventCorpus(stateDir);
     const output = runMigration(stateDir, SPARSE_EVENT_CHILD_SCRIPT) as {
-      changes: string[];
+      changeCount: number;
       migrationSelects: number;
       transcriptHasLegacyCarrier: boolean;
       transcriptMediaPath: string;
@@ -319,10 +316,7 @@ describe("legacy media persistence large corpus", () => {
     };
     expect(output).toMatchObject({
       warnings: [],
-      changes: [
-        expect.stringContaining("Saved pre-repair SQLite backup:"),
-        expect.stringContaining("1 transcript session(s), 1 trajectory row(s),"),
-      ],
+      changeCount: 1,
       transcriptMediaPath: "/media/transcript.png",
       transcriptHasLegacyCarrier: false,
       trajectoryMediaPath: "/media/trajectory.png",

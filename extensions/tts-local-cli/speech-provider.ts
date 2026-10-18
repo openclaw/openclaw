@@ -325,8 +325,6 @@ async function synthesizeCli(
 }
 
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = (ctx) =>
-    getConfig(ctx.providerConfig) !== null;
   return {
     id: "tts-local-cli",
     aliases: ["cli"],
@@ -338,9 +336,9 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
       return resolveCliProviderConfig(ctx.rawConfig);
     },
 
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured(ctx): boolean {
+      return getConfig(ctx.providerConfig) !== null;
+    },
 
     async synthesize(req) {
       const result = await synthesizeCli(

@@ -284,10 +284,6 @@ export function createSessionActorWorker(
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
-            transcriptWatermark: {
-              sessionId: previousEntry.sessionId,
-              ...before.hot.transcript.watermark,
-            },
           },
         }),
       readPredicate: (predicate: Parameters<typeof readSessionEntryPatchPredicate>[2]) =>
@@ -302,12 +298,30 @@ export function createSessionActorWorker(
   };
   const registerTranscriptRewriteOwner = (database: OpenClawAgentDatabase) =>
     registerSessionActorTranscriptRewriteOwner(database, {
-      read(opened, scope) {
+      read(opened, scope, entryId) {
         // Active actor mutations consume their working facts through the transaction kernels.
         if (readSessionActorTransactionState(opened)) {
           return undefined;
         }
-        return retainedState(opened, scope.sessionKey);
+        const current = retainedState(opened, scope.sessionKey)?.hot;
+        if (
+          current?.entry?.sessionId !== scope.sessionId ||
+          current.transcript.anchorsState !== "resident"
+        ) {
+          return undefined;
+        }
+        const anchor = current.transcript.anchors.find(
+          (candidate) => candidate.entryId === entryId,
+        );
+        return {
+          entry: {
+            sessionId: current.entry.sessionId,
+            lifecycleRevision: current.entry.lifecycleRevision,
+            activeWriterRunId: current.entry.activeWriterRunId,
+          },
+          generation: current.transcript.version.generation ?? undefined,
+          anchor: anchor && { ...anchor },
+        };
       },
       rewrite(opened, rewrite, run) {
         const before = residents.get(rewrite.sessionKey);
@@ -441,7 +455,6 @@ export function createSessionActorWorker(
           return structuredClone(before.hot);
         }
         const payloadBytes = transcriptPayloadBytes(command);
-        const diagnosticContext: Record<string, number | boolean | undefined> = { payloadBytes };
         const apply = (opened: OpenClawAgentDatabase) => {
           database = opened;
           registerSessionActorEntryPatchOwner(opened, prepareEntryPatch);
@@ -456,18 +469,7 @@ export function createSessionActorWorker(
           };
           // The writer owns both hydration and version validation. A replica miss
           // never requires a separate read command before this transaction.
-          let phaseStarted = performance.now();
-          const recordPhase = (label: string) => {
-            const now = performance.now();
-            diagnosticContext[label] = Math.round(now - phaseStarted);
-            phaseStarted = now;
-          };
-          const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
-          recordPhase("actorReadMs");
-          diagnosticContext.actorResident = before === resident;
-          diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
-          diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
             snapshot: projectSessionActorAuthority(before.hot),
@@ -514,16 +516,13 @@ export function createSessionActorWorker(
             },
           };
           return withSessionActorTransactionState(opened, working, () => {
-            phaseStarted = performance.now();
             const applied = applySessionActorPhase(command, working, borrowed);
-            recordPhase("actorApplyMs");
             const { value } = applied;
             working.hot.version = {
               epoch: before.hot.version.epoch,
               sequence: before.hot.version.sequence + 1,
             };
             working.hot = projectSessionActorHotState(working);
-            recordPhase("actorProjectionMs");
             const pendingToken = readSqliteDatabasePendingScopedWriteToken(
               opened.db,
               scopes(target, working.hot.dependencySessionIds),
@@ -564,7 +563,6 @@ export function createSessionActorWorker(
                   ? value.turn
                   : undefined;
             const serialized = serialize(accepted);
-            diagnosticContext.actorReceiptBytes = serialized.byteLength;
             if (serialized.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
               const transfer = createSqliteWorkerTransferOwner();
               const handle = transfer.start([{ kind: "outcome", serialized }].values(), {
@@ -594,7 +592,6 @@ export function createSessionActorWorker(
                   transferId: handle.id,
                 };
                 deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), receipt);
-                recordPhase("actorReceiptMs");
                 admit("commit", {
                   kind: "session-actor-admission",
                   snapshot: projectSessionActorAuthority(working.hot),
@@ -611,7 +608,6 @@ export function createSessionActorWorker(
               }
             }
             deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), accepted);
-            recordPhase("actorReceiptMs");
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),
@@ -625,7 +621,7 @@ export function createSessionActorWorker(
           `session.actor.${phase}`,
           "Session actor",
           apply,
-          diagnosticContext,
+          payloadBytes === undefined ? undefined : { payloadBytes },
         );
         observed.settled(outcome.kind);
         return outcome;

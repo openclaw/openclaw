@@ -20,14 +20,16 @@ import {
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
-import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
+import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
+  renderAttachmentPreview,
+  renderAttachmentReadStatus,
 } from "../chat/components/chat-attachments.ts";
-import { AttachmentPreview, AttachmentReadStatus } from "../chat/components/chat-attachments.tsx";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import {
@@ -484,7 +486,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           ]}
         />
         <Show when={!props.options.nativeTerminal}>
-          <ChatAttachmentInputs {...frame().attachmentProps} />
+          <LitContent value={renderChatAttachmentInputs(frame().attachmentProps)} />
         </Show>
         <SelectedHumanMentions
           text={props.options.message}
@@ -492,8 +494,10 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
           onRemove={() => props.options.onInput(props.options.message, [])}
           avatarUrls={props.options.textareaController.mentionMenu.selectedAvatarUrls}
         />
-        <AttachmentPreview {...frame().attachmentProps} readRevision={frame()} />
-        <AttachmentReadStatus pendingReads={props.options.attachmentDraft.reads.pendingReads} />
+        <LitContent value={renderAttachmentPreview(frame().attachmentProps)} />
+        <LitContent
+          value={renderAttachmentReadStatus(props.options.attachmentDraft.reads.pendingReads)}
+        />
         <div class="agent-chat__composer-lede">{props.options.dictationStatus}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">

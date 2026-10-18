@@ -36,7 +36,6 @@ import type {
   PluginRuntime,
   RuntimeGatewayRequestOptions,
 } from "../plugins/runtime/types.js";
-import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { bindInProcessSessionDeliveryGeneration } from "./in-process-session-delivery.js";
 import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
@@ -152,15 +151,6 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
     ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
     ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
-    ...(options?.signal
-      ? {
-          signal: AbortSignal.any(
-            [options.signal, scope?.signal, getAsyncWorkSignal()].filter(
-              (signal): signal is AbortSignal => signal !== undefined,
-            ),
-          ),
-        }
-      : {}),
   });
 }
 

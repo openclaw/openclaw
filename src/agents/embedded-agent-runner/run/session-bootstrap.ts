@@ -9,6 +9,7 @@ import {
 } from "../../../config/sessions.js";
 import { parseSqliteSessionFileMarker } from "../../../config/sessions/legacy-sqlite-marker.js";
 import {
+  patchSessionEntryCore,
   resolveSessionTranscriptRuntimeTarget,
   type SessionTranscriptRuntimeTarget,
 } from "../../../config/sessions/session-accessor.js";
@@ -198,22 +199,19 @@ export async function resetNoRealConversationTokenSnapshot(params: {
   }
   params.assertActive();
   try {
-    await applySessionEntryOperation(
+    await patchSessionEntryCore(
       params.sessionTarget,
-      {
-        kind: "fields",
-        patch: {
-          totalTokens: 0,
-          totalTokensFresh: true,
-          totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
-          inputTokens: undefined,
-          outputTokens: undefined,
-          cacheRead: undefined,
-          cacheWrite: undefined,
-          contextBudgetStatus: undefined,
-          updatedAt: Date.now(),
-        },
-      },
+      () => ({
+        totalTokens: 0,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        contextBudgetStatus: undefined,
+        updatedAt: Date.now(),
+      }),
       {
         skipMaintenance: true,
         takeCacheOwnership: true,

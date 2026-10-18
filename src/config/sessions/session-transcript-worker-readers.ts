@@ -192,8 +192,8 @@ export function createSessionHistoryWorkerReaders(
       const events: TranscriptEvent[] = [];
       const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
       const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
-      const parts: Uint8Array[] = [];
-      let decoder: TextDecoder | undefined;
+      let parts: string[] = [];
+      let text: { encoding: string; decoder: TextDecoder } | undefined;
       const receiveChunk = (value: unknown) => {
         if (
           !isRecord(value) ||
@@ -203,8 +203,14 @@ export function createSessionHistoryWorkerReaders(
         ) {
           throw new Error("Session history worker returned an invalid transcript chunk");
         }
-        // The worker holds one storage encoding for the entire read snapshot.
-        decoder ??= new TextDecoder(value.encoding, { ignoreBOM: true });
+        if (!text) {
+          text = {
+            encoding: value.encoding,
+            decoder: new TextDecoder(value.encoding, { ignoreBOM: true }),
+          };
+        } else if (text.encoding !== value.encoding) {
+          throw new Error("Session history worker changed transcript encoding during transfer");
+        }
         for (const frame of value.frames) {
           if (
             !isRecord(frame) ||
@@ -213,9 +219,9 @@ export function createSessionHistoryWorkerReaders(
           ) {
             throw new Error("Session history worker returned an invalid transcript frame");
           }
-          parts.push(frame.data);
+          parts.push(text.decoder.decode(frame.data, { stream: !frame.endOfEvent }));
           if (frame.endOfEvent) {
-            const json = decoder.decode(parts.length === 1 ? parts[0] : Buffer.concat(parts));
+            const json = parts.join("");
             events.push(JSON.parse(json));
             eventJson?.push(json);
             if (eventSeqs) {
@@ -224,7 +230,7 @@ export function createSessionHistoryWorkerReaders(
               }
               eventSeqs.push(frame.seq);
             }
-            parts.length = 0;
+            parts = [];
           }
         }
       };
@@ -284,6 +290,7 @@ export function createSessionHistoryWorkerReaders(
         (value) => value,
       );
     },
+    readSessionMaintenance: reader("session-maintenance-read", (value) => value),
     readProgressCard: reader("session-progress-card", (value) => value.card),
     readPendingInputHistory: reader("session-pending-input-history", (value) => value.snapshot),
     readPendingInputReceipts: reader("session-pending-input-receipts", (value) => value.receipts),

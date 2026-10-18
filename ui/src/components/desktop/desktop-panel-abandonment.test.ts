@@ -27,6 +27,9 @@ const observed: DesktopObserveResult = {
 
 function desktopRequests(result: DesktopObserveResult | Promise<DesktopObserveResult>) {
   return vi.fn(async (method: string, _params?: unknown) => {
+    if (method === "environments.list") {
+      return { environments: [desktopEnvironment] };
+    }
     if (method === "desktop.observe") {
       return result;
     }
@@ -47,12 +50,12 @@ async function openPanel(
     available: true,
     embedded: true,
     presented: true,
-    suppliedEnvironments: [desktopEnvironment],
     desktopClientFactory: () => ({ connect }),
   });
   mountPanel(panel);
-  await panel.updateComplete;
-  expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull();
+  await waitForSolid(() =>
+    expect(panel.renderRoot.querySelector(".desktop-environment button")).not.toBeNull(),
+  );
   clickPanelButton(panel);
   await waitForSolid(() =>
     expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1),

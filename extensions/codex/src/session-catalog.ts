@@ -111,31 +111,57 @@ type CatalogListOperation = ReturnType<NonNullable<SessionCatalogProvider["creat
 function withCatalogListScope(
   initialize: () => Promise<CatalogListOperation>,
 ): CatalogListOperation {
-  let initialization: Promise<CatalogListOperation> | undefined;
+  let create: typeof initialize | undefined = initialize;
   let operation: CatalogListOperation | undefined;
   let scope: ReturnType<typeof createCodexCatalogListScope> | undefined;
+  let running = false;
   let closed = false;
   let completed = false;
   return {
     async next() {
-      if (closed) {
+      if (closed || running) {
         throw new Error("Codex catalog list operation cannot advance");
       }
-      scope ??= createCodexCatalogListScope();
-      return scope.run(async () => {
-        operation ??= await (initialization ??= initialize());
-        const step = await operation.next();
-        completed ||= step.done;
-        return step;
-      });
+      running = true;
+      try {
+        scope ??= createCodexCatalogListScope();
+        return await scope.run(async () => {
+          if (create) {
+            const initializeOnce = create;
+            create = undefined;
+            operation = await initializeOnce();
+          }
+          if (!operation) {
+            throw new Error("Codex catalog list operation did not initialize");
+          }
+          const step = await operation.next();
+          completed ||= step.done;
+          return step;
+        });
+      } finally {
+        running = false;
+      }
     },
     close() {
       if (closed) {
         return;
       }
-      scope?.run(() => operation?.close());
+      if (running) {
+        throw new Error("Cannot close an active Codex catalog list step");
+      }
       closed = true;
-      scope?.finish(completed ? "resolved" : "rejected");
+      create = undefined;
+      const current = operation;
+      operation = undefined;
+      const currentScope = scope;
+      scope = undefined;
+      try {
+        if (currentScope) {
+          currentScope.run(() => current?.close());
+        }
+      } finally {
+        currentScope?.finish(completed ? "resolved" : "rejected");
+      }
     },
   };
 }

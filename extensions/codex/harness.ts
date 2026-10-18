@@ -149,7 +149,7 @@ export function createCodexAppServerAgentHarness(
     },
     authBootstrap: "harness",
     resolveIsolatedCompletionRuntime,
-    // Final synchronous authority checks remain through the 2026-12-31 compatibility cutoff.
+    // Retained only for final synchronous authority checks until the next Plugin SDK major.
     resolveSessionRuntimeOwnership: (params) => {
       assertOwnershipCurrent(params);
       const identity = sessionBindingIdentity(params);

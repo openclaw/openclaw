@@ -22,6 +22,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
+  promptPressureKeys: new Set<string>(),
   reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
@@ -32,11 +33,21 @@ const hoisted = vi.hoisted(() => ({
 vi.mock("../logger.js", () => ({
   log: { info: hoisted.info, warn: hoisted.warn },
 }));
-// mock-isolation: Control projection decisions without the runtime truncation state.
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
   reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
+  toolResultWarningDedupe: {
+    promptPressure: {
+      check: (key: string) => {
+        if (hoisted.promptPressureKeys.has(key)) {
+          return true;
+        }
+        hoisted.promptPressureKeys.add(key);
+        return false;
+      },
+    },
+  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
@@ -125,6 +136,7 @@ beforeEach(async () => {
   vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-10-09T12:00:00Z"));
   vi.spyOn(mediaTaskStatus, "buildMediaTaskRuntimeContext").mockResolvedValue(undefined);
   await resetSubagentRegistryForTests({ persist: false });
+  hoisted.promptPressureKeys.clear();
   hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
@@ -300,11 +312,11 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
   });
 
-  it.each([0, 2])("logs only actual truncation with %s changed tool results", async (count) => {
+  it("reports aggregate tool-result pressure for compact-then-truncate routing", async () => {
     hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
-      messages: count ? [...inputMessages] : inputMessages,
-      truncatedCount: count,
-      aggregateTruncatedCount: count ? 1 : 0,
+      messages: [...inputMessages],
+      truncatedCount: 2,
+      aggregateTruncatedCount: 1,
       aggregatePressureEngaged: true,
       aggregateBudgetChars: 200,
     }));
@@ -315,13 +327,9 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     const result = await prepareEmbeddedAttemptPromptContext(fixture.input);
 
     expect(result.aggregatePressureEngaged).toBe(true);
-    expect(hoisted.warn).not.toHaveBeenCalled();
-    expect(hoisted.info).toHaveBeenCalledTimes(count ? 1 : 0);
-    if (count) {
-      expect(hoisted.info).toHaveBeenCalledWith(
-        expect.stringContaining("Truncated 2 tool result(s)"),
-      );
-    }
+    expect(hoisted.warn).toHaveBeenCalledWith(
+      expect.stringContaining("aggregate tool-result pressure"),
+    );
   });
 
   it.each([4])(

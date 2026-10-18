@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
@@ -19,9 +18,10 @@ import { startGatewayServer } from "../src/gateway/server.js";
 import { captureEnv, setTestEnvValue } from "../src/test-utils/env.js";
 import { writeProbeMcpServer } from "./e2e/lib/mcp-code-mode-probe-server.ts";
 import {
-  extractMcpCodeModeRequestEvidence,
+  type McpCodeModeMentions,
   validateMcpCodeModeResult,
 } from "./e2e/lib/mcp-code-mode-validation.ts";
+import { countSessionLogMentions } from "./e2e/lib/session-log-mentions.ts";
 import {
   createBoundedResponseTooLargeError,
   readBoundedResponseText,
@@ -74,6 +74,21 @@ async function fetchJson(url: string, init: RequestInit = {}): Promise<unknown> 
       clearNodeTimeout(timeout);
     }
   }
+}
+
+async function readSessionLogMentions(stateDir: string): Promise<Record<string, number>> {
+  const sessionsDir = path.join(stateDir, "agents", "qa", "sessions");
+  return await countSessionLogMentions({
+    sessionsDir,
+    needles: {
+      apiCall: "MCP.$api",
+      apiFileList: "API.list",
+      apiFileRead: "API.read",
+      mcpNamespace: "MCP.fixture",
+      mcpTool: "MCP.fixture.lookupNote",
+      toolSearchPollution: 'catalog.search("lookup note"',
+    },
+  });
 }
 
 async function writeConfig(params: {
@@ -192,7 +207,6 @@ async function main() {
     const requestCursorBefore = readQaMockRequestCursor(
       await fetchJson(qaMockRequestCursorUrl(provider.baseUrl)),
     );
-    const attemptMarker = `mcp code mode api file qa check: ${randomUUID()}`;
     const response = await fetchJson(`http://127.0.0.1:${gatewayPort}/v1/responses`, {
       method: "POST",
       headers: {
@@ -209,7 +223,7 @@ async function main() {
             content: [
               {
                 type: "input_text",
-                text: `${attemptMarker} inspect the MCP TypeScript declaration files through API.read, call the fixture lookup_note tool for alpha, and return the note text plus what was unclear.`,
+                text: "mcp code mode api file qa check: inspect the MCP TypeScript declaration files through API.read, call the fixture lookup_note tool for alpha, and return the note text plus what was unclear.",
               },
             ],
           },
@@ -223,22 +237,31 @@ async function main() {
     )) as Array<{
       raw?: string;
       body?: { tools?: unknown[] };
+      plannedToolName?: string;
     }>;
     const firstRequest = laneRequests[0] ?? {};
-    const evidence = extractMcpCodeModeRequestEvidence(laneRequests, attemptMarker);
-    const proof = validateMcpCodeModeResult(response, evidence);
+    const mentions = await readSessionLogMentions(stateDir);
+    const plannedTools = laneRequests
+      .map((request) => request.plannedToolName)
+      .filter((name): name is string => typeof name === "string");
+    const finalText = validateMcpCodeModeResult(response, mentions as McpCodeModeMentions, {
+      plannedTools,
+      requireExec: true,
+    });
 
     const summary = {
       ok: true,
       rootDir,
       stateDir,
       gatewayUrl: `http://127.0.0.1:${gatewayPort}`,
-      ...proof,
+      finalText,
       providerRequestCount: laneRequests.length,
       providerDeclaredToolCount: Array.isArray(firstRequest.body?.tools)
         ? firstRequest.body.tools.length
         : 0,
       providerRawBytes: typeof firstRequest.raw === "string" ? firstRequest.raw.length : 0,
+      plannedTools,
+      sessionLogMentions: mentions,
     };
     process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`);
   } finally {

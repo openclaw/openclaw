@@ -175,8 +175,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       aborted: false,
     });
     const params = makeParams();
-    const entry = Object.freeze({ sessionId: "session-1", updatedAt: 1 });
-    params.session.entry = entry;
     prepareSessionParticipantInput(params.ctx, { type: "profile", id: "profile-steerer" }, 42);
     await finalizeAcceptedChatSendMessageInjection(params);
     expect(recordSessionParticipant).toHaveBeenCalledOnce();
@@ -195,8 +193,6 @@ describe("finalizeAcceptedChatSendMessageInjection", () => {
       }),
     );
     expect(updateSessionEntry).toHaveBeenCalledOnce();
-    expect(entry.updatedAt).toBe(1);
-    expect(params.session.entry?.updatedAt).toBeGreaterThan(1);
   });
 
   it("reports indeterminate question input without claiming success or falling back", async () => {

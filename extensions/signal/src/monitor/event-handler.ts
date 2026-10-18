@@ -60,7 +60,7 @@ import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtim
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
@@ -297,7 +297,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     });
 
     if (shouldLogVerbose()) {
-      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length}`);
+      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
+      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
     const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
@@ -862,13 +863,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!preparedPayload) {
       try {
         payload = JSON.parse(event.data) as SignalReceivePayload;
-      } catch {
-        deps.runtime.error?.("failed to parse event: invalid JSON");
+      } catch (err) {
+        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
         return;
       }
     }
     if (payload?.exception?.message) {
-      deps.runtime.error?.("receive exception");
+      deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
     }
     const envelope = payload?.envelope;
     if (!envelope) {
@@ -1183,9 +1184,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           } else {
             unavailableAttachmentCount += 1;
           }
-        } catch {
+        } catch (err) {
           unavailableAttachmentCount += 1;
-          deps.runtime.error?.(danger("attachment fetch failed"));
+          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
         }
       }
     }

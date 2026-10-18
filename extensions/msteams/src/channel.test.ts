@@ -74,7 +74,7 @@ describe("msteamsPlugin.security.collectWarnings", () => {
 describe("msteamsPlugin", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it.each(["teams"])(
+  it.each(["teams", "msteams"])(
     "recognizes %s-prefixed user IDs without claiming display names",
     (provider) => {
       const messaging = msteamsPlugin.messaging;
@@ -192,19 +192,34 @@ describe("msteamsPlugin", () => {
     }
   });
 
-  it("degrades an unavailable configured certificate without exposing its filesystem path", async () => {
+  it.each([
+    {
+      label: "configured certificate",
+      configuredPath: "/private/msteams-unavailable-configured.pem",
+      envPath: undefined,
+      diagnosticPath: "channels.msteams.certificatePath",
+    },
+    {
+      label: "environment certificate",
+      configuredPath: "   ",
+      envPath: "/private/msteams-unavailable-env.pem",
+      diagnosticPath: "env.MSTEAMS_CERTIFICATE_PATH",
+    },
+  ])("degrades an unavailable $label without exposing its filesystem path", async (selection) => {
     await withTempDir("msteams-certificate-precedence-", async (tempDir) => {
       const fallback = path.join(tempDir, "env-cert.pem");
       fs.writeFileSync(fallback, "available-certificate", "utf8");
       vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", fallback);
-      const configuredPath = "/private/msteams-unavailable-configured.pem";
+      if (selection.envPath) {
+        vi.stubEnv("MSTEAMS_CERTIFICATE_PATH", selection.envPath);
+      }
       const cfg: OpenClawConfig = {
         channels: {
           msteams: {
             appId: "app-id",
             tenantId: "tenant-id",
             authType: "federated",
-            certificatePath: configuredPath,
+            certificatePath: selection.configuredPath,
           },
         },
       };
@@ -217,12 +232,14 @@ describe("msteamsPlugin", () => {
           credentialDiagnostics: [
             {
               code: "CREDENTIAL_FILE_UNAVAILABLE",
-              path: "channels.msteams.certificatePath",
+              path: selection.diagnosticPath,
               reason: "not-found",
             },
           ],
         });
-        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(configuredPath);
+        expect(JSON.stringify(account.credentialDiagnostics)).not.toContain(
+          selection.envPath ?? selection.configuredPath,
+        );
         expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
         expect(plugin.config.describeAccount?.(account, cfg)).toMatchObject({
           configured: true,
@@ -243,6 +260,55 @@ describe("msteamsPlugin", () => {
       });
     });
   });
+
+  it("does not inspect an unavailable certificate when managed identity is selected", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        msteams: {
+          appId: "app-id",
+          tenantId: "tenant-id",
+          authType: "federated",
+          certificatePath: "/private/msteams-unused-missing-certificate.pem",
+          useManagedIdentity: true,
+        },
+      },
+    };
+
+    expect(msteamsPlugin.actions?.describeMessageTool?.({ cfg })?.actions).toContain("upload-file");
+    expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      tokenStatus: "available",
+    });
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "preserves the existing symlink-friendly certificate file policy",
+    async () => {
+      await withTempDir("msteams-certificate-symlink-", async (tempDir) => {
+        const certificate = path.join(tempDir, "certificate.pem");
+        const symlink = path.join(tempDir, "certificate-link.pem");
+        fs.writeFileSync(certificate, "available-certificate", "utf8");
+        fs.symlinkSync(certificate, symlink);
+        const cfg: OpenClawConfig = {
+          channels: {
+            msteams: {
+              appId: "app-id",
+              tenantId: "tenant-id",
+              authType: "federated",
+              certificatePath: symlink,
+            },
+          },
+        };
+
+        expect(msteamsPlugin.config.resolveAccount(cfg, "default")).toMatchObject({
+          configured: true,
+          tokenStatus: "available",
+        });
+      });
+    },
+  );
 
   it("registers the approval runtime before monitor startup only when native delivery is enabled", async () => {
     const monitor = monitorMSTeamsProviderMock.mockReset().mockResolvedValue({
@@ -321,7 +387,7 @@ describe("msteamsPlugin.approvalCapability", () => {
     });
   }
 
-  it.each(["system-agent"] as const)(
+  it.each(["exec", "plugin", "system-agent"] as const)(
     "authorizes only the configured owner for %s after normalizing an AAD principal",
     async (approvalKind) => {
       const allowFrom = [`MSTEAMS:USER:${ownerId.toUpperCase()}`];
@@ -356,6 +422,7 @@ const autoThread = msteamsPlugin.threading!.resolveAutoThreadId!;
 describe("Teams delivery reconciliation", () => {
   it.each([
     { conversationId: "19:channel@thread.tacv2" },
+    { receipt: { raw: [{ conversationId: "19:channel@thread.tacv2" }] } },
     { receipt: { parts: [{ raw: { conversationId: "19:channel@thread.tacv2" } }] } },
   ])("recovers the authoritative conversation from %j", (result) => {
     expect(
@@ -551,6 +618,23 @@ describe("msteams directory", () => {
 });
 
 describe("msteams session route", () => {
+  it("builds direct routes for explicit user targets", () => {
+    const route = resolveMSTeamsOutboundSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "default",
+      target: "msteams:01234567-89ab-cdef-0123-456789abcdef",
+    });
+
+    expect(route?.peer).toEqual({
+      kind: "direct",
+      id: "01234567-89ab-cdef-0123-456789abcdef",
+    });
+    expect(route?.from).toBe("msteams:01234567-89ab-cdef-0123-456789abcdef");
+    expect(route?.to).toBe("user:01234567-89ab-cdef-0123-456789abcdef");
+    expect(route?.recipientSessionExact).toBe(true);
+  });
+
   it("does not claim display-name user targets as canonical sessions", () => {
     const route = resolveMSTeamsOutboundSessionRoute({
       cfg: {},

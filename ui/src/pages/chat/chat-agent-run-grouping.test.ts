@@ -57,7 +57,7 @@ function requireFrame(
 }
 
 describe("coalesceAgentRunFrames", () => {
-  it.each(["interrupted", "silent-terminal"] as const)(
+  it.each(["interrupted", "active", "silent-terminal", "earlier-terminal"] as const)(
     "classifies a persisted tool-use tail as %s without inventing a final answer",
     (state) => {
       const runId = "run-tail";
@@ -71,15 +71,18 @@ describe("coalesceAgentRunFrames", () => {
           [userBoundary(runId), commentary, group("tool", "inspection", runId)],
           {
             messages: [
+              ...(state === "earlier-terminal" ? [terminal] : []),
               ...commentary.messages.map(({ message }) => message),
               ...(state === "silent-terminal" ? [terminal] : []),
             ],
-            activeRunId: null,
+            activeRunId: state === "active" ? runId : null,
           },
         )[1],
       );
       expect(frame.outcome).toEqual(
-        state === "interrupted" ? { kind: state } : { kind: "completed", actionOwner: null },
+        state === "interrupted" || state === "active"
+          ? { kind: state }
+          : { kind: "completed", actionOwner: null },
       );
       expect(frame.parts).toHaveLength(2);
     },
@@ -248,6 +251,23 @@ describe("coalesceAgentRunFrames", () => {
     expect(requireFrame(items[1]).parts.map((part) => part.key)).toEqual(["group:before"]);
     expect(requireFrame(items[3]).parts.map((part) => part.key)).toEqual(["group:after"]);
     expect(requireFrame(items[1]).key).not.toBe(requireFrame(items[3]).key);
+  });
+
+  it("starts a new frame at an authoritative projected turn boundary", () => {
+    const projected = group("assistant", "steer-output", "run-1", {
+      __openclaw: { id: "steer-entry", turnBoundary: true },
+    });
+    const items = coalesceAgentRunFrames([
+      userBoundary(),
+      group("assistant", "before", "run-1"),
+      projected,
+    ]);
+    const frames = items.filter(
+      (item): item is AgentRunFrameRenderItem => item.kind === "agent-run-frame",
+    );
+
+    expect(frames).toHaveLength(2);
+    expect(frames.map((frame) => frame.boundaryId)).toEqual(["send:send-1", "entry:steer-entry"]);
   });
 
   it.each([

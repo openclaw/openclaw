@@ -85,8 +85,6 @@ const replaceSessionEntryMock = vi.fn();
 export const patchSessionEntryMock = vi.fn();
 export const resolveCronSessionMock = vi.fn();
 export const logWarnMock = vi.fn();
-export const listDescendantRunsForRequesterMock =
-  vi.fn<typeof import("./run-subagent-registry.runtime.js").listDescendantRunsForRequester>();
 export const readDescendantExecutionStateMock =
   vi.fn<typeof import("./run-subagent-registry.runtime.js").readDescendantExecutionState>();
 export const pickLastNonEmptyTextFromPayloadsMock = vi.fn();
@@ -333,10 +331,8 @@ vi.mock("./run-embedded.runtime.js", () => ({
   runEmbeddedAgent: runEmbeddedAgentMock,
 }));
 
-// mock-isolation: Supply fixed descendant snapshots without opening the process-wide registry database.
 vi.mock("./run-subagent-registry.runtime.js", () => ({
   readDescendantExecutionState: readDescendantExecutionStateMock,
-  listDescendantRunsForRequester: listDescendantRunsForRequesterMock,
 }));
 
 vi.mock("../../agents/agent-bundle-mcp-tools.js", () => ({
@@ -611,7 +607,6 @@ function resetRunExecutionMocks(): void {
   runEmbeddedAgentMock.mockResolvedValue(makeDefaultEmbeddedResult());
   runCliAgentMock.mockReset();
   getCliSessionBindingMock.mockReturnValue(undefined);
-  listDescendantRunsForRequesterMock.mockReset().mockResolvedValue([]);
   readDescendantExecutionStateMock.mockReset().mockResolvedValue({
     hasFreshDescendants: false,
     hasActiveDescendants: false,

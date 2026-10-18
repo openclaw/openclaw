@@ -265,8 +265,6 @@ async function verifyDoctorRepair(root: string) {
       agentId: "main",
       sessionId: migratedSessionId,
       sessionKey: "agent:main:qa:docker-runtime-context",
-      // Doctor prepared its own process; bind this reader to the migrated fixture store.
-      storePath: databasePath,
     })) as TranscriptEntry[];
   }
   const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);

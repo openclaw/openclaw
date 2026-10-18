@@ -18,10 +18,11 @@ import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-export function DevicePermissionsPage() {
+function DevicePermissionsPageContent() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
@@ -35,7 +36,8 @@ export function DevicePermissionsPage() {
         <Show when={props.snapshot.permissions.entries.length > 0}>
           <SettingsSection title={t("configPage.deviceSettings.systemAccess")}>
             <For each={props.snapshot.permissions.entries} keyed={(entry) => entry.id}>
-              {(permission) => {
+              {(_entry, index) => {
+                const permission = () => props.snapshot.permissions.entries[index()]!;
                 const permissionTitle = () =>
                   t(`configPage.deviceSettings.permissions.${permission().id}.title`);
                 const requestableBinaryPermission = () =>
@@ -182,7 +184,7 @@ export function DevicePermissionsPage() {
     );
   }
   return (
-    <openclaw-device-permissions-page>
+    <>
       <SettingsPageHeader
         title={titleForRoute("device-permissions", t)}
         subtitle={
@@ -213,6 +215,12 @@ export function DevicePermissionsPage() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </openclaw-device-permissions-page>
+    </>
   );
 }
+
+export const DevicePermissionsPage = defineSolidBridge(
+  "openclaw-device-permissions-page",
+  DevicePermissionsPageContent,
+  { properties: {} },
+);

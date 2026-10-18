@@ -487,15 +487,7 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
         expect(signal.aborted).toBe(true);
         expect(childExited).toBe(false);
         if (send) {
-          // The relay may accept the initial write before its downstream pipe fails.
-          await send.catch((error: unknown) => {
-            expect(error).toMatchObject({ code: "EPIPE" });
-          });
-          await expect(
-            transport.send({ type: "user", data: "after pipe failure" }),
-          ).rejects.toMatchObject({
-            code: "EPIPE",
-          });
+          await expect(send).rejects.toMatchObject({ code: "EPIPE" });
         }
       } finally {
         transport.close();
@@ -571,6 +563,14 @@ describe("Claude subprocess diagnostics through the direct CLI transport", () =>
       }
     },
   );
+
+  it("keeps successful turns with stderr quiet", async () => {
+    const context = await contextForChild(PROTOCOL_CHILD);
+    const stderr = vi.spyOn(process.stderr, "write");
+    const events = await collect({ ...context, prompt: "success with stderr" });
+    expect(events).toContainEqual(expect.objectContaining({ type: "result", result: "ok" }));
+    expect(stderr).not.toHaveBeenCalled();
+  });
 
   it("keeps diagnostics isolated between live processes", async () => {
     const warm = await contextForChild(PROTOCOL_CHILD);

@@ -1,6 +1,6 @@
 import type { TranscriptUtterance } from "../../packages/gateway-protocol/src/schema/transcripts.js";
 import { executeSqliteQueryTakeFirstSync, iterateSqliteQuerySync } from "../infra/kysely-sync.js";
-import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
@@ -70,14 +70,9 @@ export async function streamTranscriptExportInWorker(
   const errors: unknown[] = [];
   let result: TranscriptExportResult = { ok: true };
   try {
-    // sqlite-allow-raw -- This owner pins one streamed read-only snapshot.
-    db.exec(
-      isPostgresSqlConnection(db) ? "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" : "BEGIN",
-    );
+    db.exec("BEGIN"); // sqlite-allow-raw -- This owner pins one streamed read-only snapshot.
     assertStateReadSchema(db, input.databasePath);
-    if (!isPostgresSqlConnection(db)) {
-      admitSqliteSchema(db);
-    }
+    admitSqliteSchema(db);
     onAdmitted();
     const iterator: Generator<string | TranscriptUtterance, TranscriptExportRead | void> =
       command.format === "library"
@@ -127,7 +122,7 @@ export async function streamTranscriptExportInWorker(
         error: { type: error.type, message: error.message, maxBytes: error.maxBytes },
       };
     } else {
-      if (!isPostgresSqlConnection(db) && isSqliteCorruptionError(error)) {
+      if (isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(db);
       }
       errors.push(error);

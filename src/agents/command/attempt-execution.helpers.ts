@@ -31,6 +31,7 @@ import {
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.claude.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { sleep } from "../../utils/sleep.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
@@ -50,16 +51,8 @@ export function resolveCommandReplyExpectation(params: {
   sessionKey?: string;
   sessionEntry?: Pick<SessionEntry, "chatType">;
   messageChannel?: string;
-  opts: Pick<
-    AgentCommandOpts,
-    "lane" | "privateCompletion" | "inputProvenance" | "replyExpectation"
-  >;
+  opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
 }): ReplyExpectation | undefined {
-  // Internal producers own whether this input owes a result. Routing is only a
-  // fallback for ordinary command requests, never a reason to override that fact.
-  if (params.opts.replyExpectation !== undefined) {
-    return params.opts.replyExpectation;
-  }
   if (
     params.opts.privateCompletion ||
     params.opts.lane === AGENT_LANE_SUBAGENT ||

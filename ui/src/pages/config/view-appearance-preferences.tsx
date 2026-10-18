@@ -234,8 +234,9 @@ export function ChatPreferencesSection(props: ConfigProps) {
               spellcheck="false"
               placeholder="48rem"
               value={messageWidth()}
-              onChange={(event) => {
-                const input = event.currentTarget;
+              onChange={(event: Event) => {
+                // SAFETY: The listener is bound directly to this input.
+                const input = event.currentTarget as HTMLInputElement;
                 const normalized = normalizeChatMessageMaxWidth(input.value);
                 if (input.value.trim() && !normalized) {
                   input.setCustomValidity(t("configView.chatPrefs.messageWidthInvalid"));
@@ -303,8 +304,9 @@ export function ChatPreferencesSection(props: ConfigProps) {
                 data-settings-follow-up-mode
                 aria-label={t("chat.followUpMode")}
                 value={followUpSelection()}
-                onChange={(event) => {
-                  const value = event.currentTarget.value;
+                onChange={(event: Event) => {
+                  // SAFETY: This change handler is bound directly to the native select.
+                  const value = (event.currentTarget as HTMLSelectElement).value;
                   props.onAppearanceChange({
                     chatFollowUpMode:
                       value === "server" ? undefined : normalizeChatFollowUpMode(value),

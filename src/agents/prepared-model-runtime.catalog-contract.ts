@@ -79,7 +79,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
-  recheckNativeLogin: (options?: { force?: boolean }) => void | Promise<void>;
+  recheckNativeLogin: () => void;
   refreshExpiredModelCatalog: () => void;
   readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
   loadFullModelCatalog: (

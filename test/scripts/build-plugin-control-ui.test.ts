@@ -15,8 +15,6 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
   );
   const manifestPath = path.join(rootDir, "openclaw.plugin.json");
   fs.writeFileSync(manifestPath, JSON.stringify({ id: "fixture" }));
-  const authoredManifest = fs.readFileSync(manifestPath, "utf8");
-  const generatedManifestPath = path.join(rootDir, "dist", "openclaw.plugin.json");
   fs.writeFileSync(
     path.join(rootDir, "browser.ts"),
     'import "./browser.css"; export const label = "Fixture";\n',
@@ -35,9 +33,8 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
     );
 
   build();
-  expect(fs.readFileSync(manifestPath, "utf8")).toBe(authoredManifest);
-  const generatedManifest = JSON.parse(fs.readFileSync(generatedManifestPath, "utf8"));
-  const { entry, styles } = generatedManifest.controlUi;
+  const publishedManifest = fs.readFileSync(manifestPath, "utf8");
+  const { entry, styles } = JSON.parse(publishedManifest).controlUi;
   const compactManifest = JSON.stringify({
     id: "fixture",
     categories: ["channels"],
@@ -47,7 +44,7 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
   const asset = fs.readFileSync(assetPath, "utf8");
   // External runtime compilation clears dist after the asset phase snapshots
   // source identity. Rebuilding must restore assets without republishing that input.
-  for (const manifest of [authoredManifest, compactManifest]) {
+  for (const manifest of [publishedManifest, compactManifest]) {
     fs.writeFileSync(manifestPath, manifest);
     const before = fs.statSync(manifestPath, { bigint: true });
     fs.rmSync(path.join(rootDir, "dist"), { recursive: true });
@@ -55,9 +52,6 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
 
     expect(fs.readFileSync(assetPath, "utf8")).toBe(asset);
     expect(fs.readFileSync(manifestPath, "utf8")).toBe(manifest);
-    expect(JSON.parse(fs.readFileSync(generatedManifestPath, "utf8")).controlUi).toEqual(
-      generatedManifest.controlUi,
-    );
     const after = fs.statSync(manifestPath, { bigint: true });
     expect({ ino: after.ino, ctimeNs: after.ctimeNs }).toEqual({
       ino: before.ino,
@@ -65,9 +59,9 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
     });
   }
 
-  // Generated publication retains the atomic writer's refusal of linked destinations.
+  // A no-op must retain the atomic writer's refusal of linked destinations.
   const linkedManifest = path.join(rootDir, "linked-manifest.json");
-  fs.renameSync(generatedManifestPath, linkedManifest);
-  fs.symlinkSync(linkedManifest, generatedManifestPath, "file");
+  fs.renameSync(manifestPath, linkedManifest);
+  fs.symlinkSync(linkedManifest, manifestPath, "file");
   expect(build).toThrow("atomic replace destination must not be a symbolic link");
 });

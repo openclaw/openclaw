@@ -37,6 +37,7 @@ import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/agent-row-chip.tsx";
 import "../../components/tooltip.ts";
+import "../../components/web-awesome.ts";
 import "../../styles/capacity-meter.css";
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;

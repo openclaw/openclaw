@@ -5,7 +5,7 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-onboard";
 
-export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-4-argon";
+export const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 const RETIRED_GOOGLE_GEMINI_MODEL_REFS = new Set([
   "gemini-3-pro",
   "gemini-3-pro-preview",

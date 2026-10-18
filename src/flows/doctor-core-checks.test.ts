@@ -461,11 +461,9 @@ describe("CORE_HEALTH_CHECKS", () => {
                 "codex-cli/gpt-5.6-sol",
                 "groq/llama3-70b-8192",
                 "groq/llama-3.3-70b-versatile",
-                "groq/openai/gpt-oss-120b",
                 "openai/not-in-the-local-catalog",
                 "google/gemini-2.5-flash",
                 "google/gemini-3.8-flash",
-                "google/not-in-the-local-catalog",
                 "google-gemini-cli/gemini-2.5-pro",
                 "openrouter/auto",
                 "openrouter/deepseek/deepseek-v4-pro",
@@ -496,19 +494,13 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.arrayContaining([
         expect.objectContaining({
           severity: "info",
-          target: "groq/llama-3.3-70b-versatile",
-          fixHint:
-            "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
-        }),
-        expect.objectContaining({
-          severity: "info",
           target: "openai/not-in-the-local-catalog",
           fixHint:
             "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
         }),
         expect.objectContaining({
           severity: "info",
-          target: "google/not-in-the-local-catalog",
+          target: "google/gemini-3.8-flash",
           fixHint:
             "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
         }),
@@ -521,13 +513,10 @@ describe("CORE_HEALTH_CHECKS", () => {
       ]),
     );
     expect(findings).not.toContainEqual(
-      expect.objectContaining({ target: "groq/openai/gpt-oss-120b" }),
+      expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
     );
     expect(findings).not.toContainEqual(
       expect.objectContaining({ target: "google/gemini-2.5-flash" }),
-    );
-    expect(findings).not.toContainEqual(
-      expect.objectContaining({ target: "google/gemini-3.8-flash" }),
     );
     // OpenRouter plans no catalog rows, so an unlisted id there is not a finding.
     for (const target of ["openrouter/openrouter/auto", "openrouter/deepseek/deepseek-v4-pro"]) {

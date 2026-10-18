@@ -6,7 +6,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { VisibleWorkSession } from "../get-reply-options.types.js";
 import { resolveAgentTurnExecutionStatus } from "./agent-runner-execution-status.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
-import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { SessionEventExecution } from "./session-event-contract.js";
 import { getReplySystemEventContext } from "./system-event-session-key.js";
 import { withVisibleWorkSessionReporter } from "./visible-work-sessions.js";
@@ -34,13 +33,7 @@ async function recordAgentTurnExecutionOutcome(
     }
   }
   const executionStatus = resolveAgentTurnExecutionStatus(result?.outcome);
-  if (
-    executionStatus !== "cancelled" &&
-    !(
-      result?.outcome.kind === "rejected" &&
-      resolveReplyOperationRunState(params.opts)?.replyCompletion?.outcome === "pending"
-    )
-  ) {
+  if (executionStatus !== "cancelled") {
     params.opts?.onAgentRunTerminalOutcome?.(executionStatus === "ok" ? "completed" : "failed");
   }
   const sourceReplyDeliveryMode =

@@ -23,21 +23,13 @@ import {
   splitSessionDiffFileText,
   type SessionDiffGapDirection,
 } from "../../../lib/chat/session-diff-gaps.ts";
-import {
-  createDiffPairingBudget,
-  pairSessionDiffLines,
-} from "../../../lib/chat/session-diff-split.ts";
 import { parseSessionDiffPatch, type ParsedFilePatch } from "../../../lib/chat/session-diff.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
 import { openEditor } from "../../../lib/editor-links.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import {
-  DiffStatChips,
-  createDiffPresentation,
-  type DiffPresentation,
-} from "./chat-diff-render.solid.tsx";
+import { DiffBlock, DiffStatChips } from "./chat-diff-render.solid.tsx";
 import {
   SessionDiffMenu,
   type SessionDiffMenuAction,
@@ -49,7 +41,7 @@ import {
   loadSessionDiffPreferences,
   saveSessionDiffPreferences,
 } from "./session-diff-preferences.ts";
-import { SessionDiffFileBody } from "./session-diff-render.tsx";
+import { SessionSplitDiff } from "./session-diff-render.tsx";
 
 export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
 export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
@@ -62,8 +54,7 @@ type SessionDiffProps = {
   openFile: ((path: string) => void) | null;
   revealFile: ((path: string) => void) | null;
 };
-type FileSource = { parsed: ParsedFilePatch | null };
-type FileView = { file: SessionDiffFile; source: FileSource };
+type FileView = { file: SessionDiffFile; parsed: ParsedFilePatch | null };
 type DiffValue = {
   owner: SessionDiffOwner | null;
   scope: SessionDiffScope;
@@ -115,18 +106,8 @@ function SessionDiffContent(props: SessionDiffProps) {
   const [pending, setPending] = createSignal(false);
   const [failure, setFailure] = createSignal<{ error: unknown } | null>(null);
   const [gapRevision, setGapRevision] = createSignal(0);
-  const pairedRows = createMemo(() => {
-    gapRevision();
-    const budget = createDiffPairingBudget();
-    return new Map(
-      (value()?.views ?? [])
-        .filter((view) => !collapsedPaths().has(view.file.path))
-        .map((view) => [view, pairSessionDiffLines(view.source.parsed?.lines ?? [], budget)]),
-    );
-  });
-  const codePresentations = new Map<string, DiffPresentation>();
-  const fileTextCache = new WeakMap<FileSource, Promise<string[] | null>>();
-  const unavailableFileText = new WeakSet<FileSource>();
+  const fileTextCache = new WeakMap<FileView, Promise<string[] | null>>();
+  const unavailableFileText = new WeakSet<FileView>();
   let generation = 0;
   const nativeGateways = nativeGatewaysCapability();
   const unsubscribe = nativeGateways?.subscribe(() => setMenu(null));
@@ -153,29 +134,13 @@ function SessionDiffContent(props: SessionDiffProps) {
       if (request !== generation) {
         return;
       }
-      const previous = untrack(value);
-      const reusable =
-        previous?.owner === owner &&
-        JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
-          ? previous.views
-          : [];
       const views = result.files.map((file) => ({
         file,
-        // Retain source/presentation identity, never an old metadata snapshot.
-        source: reusable.find(
-          (view) =>
-            view.file.path === file.path &&
-            view.file.oldPath === file.oldPath &&
-            view.file.patch === file.patch &&
-            view.file.binary === file.binary &&
-            view.file.truncated === file.truncated,
-        )?.source ?? {
-          parsed: file.patch
-            ? parseSessionDiffPatch(file.patch, (count) =>
-                t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-              )
-            : null,
-        },
+        parsed: file.patch
+          ? parseSessionDiffPatch(file.patch, (count) =>
+              t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+            )
+          : null,
       }));
       setValue({ owner, scope: requestedScope, result, views });
       const currentPaths = new Set(views.map((view) => view.file.path));
@@ -240,13 +205,6 @@ function SessionDiffContent(props: SessionDiffProps) {
   }
   function handleMenuAction(action: SessionDiffMenuAction) {
     switch (action.kind) {
-      case "collapse-code":
-      case "collapse-functions":
-        codePresentations.get(action.path)?.collapse(action.kind === "collapse-functions");
-        return;
-      case "expand-code":
-        codePresentations.get(action.path)?.expand();
-        return;
       case "collapse-all":
         setCollapsedPaths(new Set(untrack(value)?.views.map((view) => view.file.path) ?? []));
         return;
@@ -354,13 +312,13 @@ function SessionDiffContent(props: SessionDiffProps) {
       scope().scope !== "commit" &&
       Boolean(props.loadFileText) &&
       view.file.binary !== true &&
-      view.source.parsed !== null &&
-      !view.source.parsed.truncated &&
-      !unavailableFileText.has(view.source)
+      view.parsed !== null &&
+      !view.parsed.truncated &&
+      !unavailableFileText.has(view)
     );
   }
   function loadFileLines(view: FileView) {
-    const cached = fileTextCache.get(view.source);
+    const cached = fileTextCache.get(view);
     if (cached) {
       return cached;
     }
@@ -370,11 +328,11 @@ function SessionDiffContent(props: SessionDiffProps) {
           .then((text) => (text === null ? null : splitSessionDiffFileText(text)))
           .catch(() => null)
       : Promise.resolve(null);
-    fileTextCache.set(view.source, result);
+    fileTextCache.set(view, result);
     return result;
   }
   async function expandGap(view: FileView, line: DiffLine, direction: SessionDiffGapDirection) {
-    const parsed = view.source.parsed;
+    const parsed = view.parsed;
     const loader = props.loader;
     if (!parsed || !line.gap || !loader || !canExpandGaps(view)) {
       return;
@@ -395,7 +353,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     // Revalidate the patch: gap-interior edits cannot be detected from visible rows.
     // The remaining diff-to-file fetch race is accepted without shared snapshot identity.
     if (!freshFile || freshFile.patch !== view.file.patch) {
-      fileTextCache.delete(view.source);
+      fileTextCache.delete(view);
       await loadDiff(freshResult);
       return;
     }
@@ -411,7 +369,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     if (expanded) {
       parsed.lines = expanded;
     } else {
-      unavailableFileText.add(view.source);
+      unavailableFileText.add(view);
     }
     setGapRevision((revision) => revision + 1);
   }
@@ -451,37 +409,55 @@ function SessionDiffContent(props: SessionDiffProps) {
       </Show>
     );
   }
+  function FileBody(body: { view: FileView; result: SessionsDiffResult }) {
+    const lines = () => {
+      gapRevision();
+      return body.view.parsed?.lines ?? [];
+    };
+    return (
+      <Show
+        when={body.view.file.binary !== true && body.view.parsed}
+        fallback={
+          <div class="session-diff__note">
+            {t(
+              body.view.file.binary === true
+                ? "chat.sessionDiff.binaryFile"
+                : body.result.unavailableReason === "workspace_stopped"
+                  ? "chat.sessionDiff.workspaceStoppedFile"
+                  : "chat.sessionDiff.previewUnavailable",
+            )}
+          </div>
+        }
+      >
+        <Show
+          when={split()}
+          fallback={
+            <DiffBlock
+              lines={lines()}
+              renderSkip={(line) => <Gap view={body.view} line={line} />}
+              file={body.view.file}
+            />
+          }
+        >
+          <SessionSplitDiff
+            lines={lines()}
+            renderSkip={(line) => <Gap view={body.view} line={line} />}
+            file={body.view.file}
+          />
+        </Show>
+        {body.view.parsed?.truncated && (
+          <div class="session-diff__note">{t("chat.sessionDiff.truncatedFile")}</div>
+        )}
+      </Show>
+    );
+  }
   function File(fileProps: { view: FileView; result: SessionsDiffResult }) {
-    // The keyed list retains this owner by source, not refreshed metadata.
-    const source = untrack(() => fileProps.view.source);
     const file = () => fileProps.view.file;
     const collapsed = () => collapsedPaths().has(file().path);
-    const presentation = createDiffPresentation({
-      get active() {
-        return !collapsed();
-      },
-      get lines() {
-        gapRevision();
-        return source.parsed?.lines ?? [];
-      },
-      get file() {
-        return fileProps.view.file;
-      },
-      get rows() {
-        return pairedRows().get(fileProps.view) ?? [];
-      },
-    });
-    const pathKey = untrack(() => fileProps.view.file.path);
-    codePresentations.set(pathKey, presentation);
-    onCleanup(() => {
-      if (codePresentations.get(pathKey) === presentation) {
-        codePresentations.delete(pathKey);
-      }
-    });
     const path = () => splitPath(file().path);
     const intrinsicSize = () => {
       gapRevision();
-      return `auto ${Math.max(80, Math.min(12_000, (source.parsed?.lines.length ?? 2) * 19))}px`;
+      return `auto ${Math.max(80, Math.min(12_000, (fileProps.view.parsed?.lines.length ?? 2) * 19))}px`;
     };
     const statusLabel = () => FILE_STATUS_LABELS[file().status] ?? FILE_STATUS_LABELS.modified;
     return (
@@ -547,14 +523,7 @@ function SessionDiffContent(props: SessionDiffProps) {
               "contain-intrinsic-size": intrinsicSize(),
             }}
           >
-            <SessionDiffFileBody
-              file={file()}
-              parsed={source.parsed}
-              unavailableReason={fileProps.result.unavailableReason}
-              split={split()}
-              presentation={presentation}
-              renderSkip={(line) => <Gap view={fileProps.view} line={line} />}
-            />
+            <FileBody view={fileProps.view} result={fileProps.result} />
           </div>
         </Show>
       </section>
@@ -618,7 +587,6 @@ function SessionDiffContent(props: SessionDiffProps) {
               ) : (
                 <For
                   each={body.value.views}
-                  keyed={(view) => view.source}
                   fallback={
                     result().unavailableReason !== "workspace_stopped" &&
                     result().truncated !== true ? (
@@ -626,7 +594,7 @@ function SessionDiffContent(props: SessionDiffProps) {
                     ) : null
                   }
                 >
-                  {(view) => <File view={view()} result={result()} />}
+                  {(view) => <File view={view} result={result()} />}
                 </For>
               )}
               {result().truncated === true && (

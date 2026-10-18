@@ -181,7 +181,8 @@ export async function buildPreparedCompactionRuntime(
     const bootstrapTruncationNotice = buildBootstrapPromptWarningNotice(
       bootstrapBudget.bootstrapPromptWarning.lines,
     );
-    // Keep session sizing separate from the summarizer's native request window.
+    // Apply contextTokens cap to model so session runtime's auto-compaction
+    // threshold uses the effective limit, not the native context window.
     const contextTokenBudget = resolveCompactionContextTokenBudget({
       config: params.config,
       provider: contextConfigProvider,
@@ -191,7 +192,12 @@ export async function buildPreparedCompactionRuntime(
       fallbackTokenBudget: params.tokenBudget,
     });
     const modelWithAuth = applyAuthHeaderOverride(
-      applyLocalNoAuthHeaderOverride(runtimeModel, apiKeyInfo),
+      applyLocalNoAuthHeaderOverride(
+        contextTokenBudget < (runtimeModel.contextWindow ?? Infinity)
+          ? { ...runtimeModel, contextWindow: contextTokenBudget }
+          : runtimeModel,
+        apiKeyInfo,
+      ),
       // Skip header injection when runtime auth exchange produced a
       // different credential — the SDK reads the exchanged token from
       // authStorage automatically.

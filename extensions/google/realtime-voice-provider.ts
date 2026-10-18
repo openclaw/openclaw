@@ -1267,12 +1267,6 @@ async function createGoogleRealtimeBrowserSession(
 }
 
 export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
-  const resolveConfig: NonNullable<RealtimeVoiceProviderPlugin["resolveConfig"]> = ({
-    cfg,
-    rawConfig,
-  }) => normalizeProviderConfig(rawConfig, cfg);
-  const isConfigured: RealtimeVoiceProviderPlugin["isConfigured"] = ({ providerConfig }) =>
-    Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey());
   return {
     ...GOOGLE_REALTIME_VOICE_METADATA,
     capabilities: {
@@ -1292,11 +1286,9 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       supportsVideoFrames: true,
       supportsSessionResumption: true,
     },
-    // Retained for public synchronous SDK calls through 2026-12-31.
-    resolveConfig,
-    isConfigured,
-    resolveConfigAsync: async (context) => resolveConfig(context),
-    isConfiguredAsync: async (context) => isConfigured(context),
+    resolveConfig: ({ cfg, rawConfig }) => normalizeProviderConfig(rawConfig, cfg),
+    isConfigured: ({ providerConfig }) =>
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || resolveGoogleEnvApiKey()),
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || resolveGoogleEnvApiKey();

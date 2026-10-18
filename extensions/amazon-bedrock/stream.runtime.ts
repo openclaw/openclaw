@@ -80,6 +80,7 @@ import {
 } from "openclaw/plugin-sdk/provider-transport-runtime";
 import {
   asOptionalRecord,
+  isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBedrockRuntimeAuth } from "./aws-credential-refresh.js";
@@ -467,11 +468,12 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
+    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: {},
+      arguments: isRecord(startArguments) ? startArguments : {},
       partialJson: "",
       index,
     };

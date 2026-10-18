@@ -22,7 +22,19 @@ export function getPackageManifestMetadata(
   return manifest?.[MANIFEST_KEY];
 }
 
-export { controlUiSource } from "./manifest-control-ui.js";
+/** Package authoring metadata names source; the runtime manifest names only built assets. */
+export function controlUiSource(packageManifest: Record<string, unknown>): string | undefined {
+  const source = isRecord(packageManifest.openclaw)
+    ? packageManifest.openclaw.controlUi
+    : undefined;
+  if (source === undefined) {
+    return undefined;
+  }
+  if (typeof source !== "string" || !source.trim()) {
+    throw new Error("package.json openclaw.controlUi must name a browser source entrypoint.");
+  }
+  return source;
+}
 
 export function resolvePackageExtensionEntries(
   manifest: PackageManifest | undefined,

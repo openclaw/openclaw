@@ -39,6 +39,7 @@ function workspaceSelection(
 
 /** Observation retains the selected session while the existing-only shared reader runs. */
 export async function readSharedGitHubPublication(
+  kind: SharedGitHubPublicationReadInput["kind"],
   session: PublicationSessionIdentity,
   selector: SharedGitHubPublicationSelector,
 ) {
@@ -52,7 +53,7 @@ export async function readSharedGitHubPublication(
         context ? { path: context.admission.databasePath, env: context.environment } : {},
         {
           type: "githubPublication.sharedObservation",
-          input: { session, selector: capturedSelector, entry: workspaceSelection(entry) },
+          input: { kind, session, selector: capturedSelector, entry: workspaceSelection(entry) },
         },
         { current: true, preferIndependentWarmRead: true, ...(context && { context }) },
       ),

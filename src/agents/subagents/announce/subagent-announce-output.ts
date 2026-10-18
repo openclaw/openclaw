@@ -275,7 +275,7 @@ export async function readChildCompletionFindings(
     children.map(async (observed) => {
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
-      if (!child) {
+      if (!child || !prepared.isCurrent()) {
         throw new SubagentAnnouncePreparationConflictError(
           "A child result changed while preparing the completion batch.",
         );
@@ -291,7 +291,17 @@ export async function readChildCompletionFindings(
   }
   return {
     text: buildChildCompletionFindings(
-      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
+      results.map(({ child, text }) => ({
+        childSessionKey: child.childSessionKey,
+        task: child.task,
+        taskName: child.taskName,
+        label: child.label,
+        createdAt: child.createdAt,
+        endedReason: child.endedReason,
+        execution: child.execution,
+        completion: child.completion,
+        announceResult: text,
+      })),
     ),
     isCurrent,
   };

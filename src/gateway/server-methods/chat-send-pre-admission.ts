@@ -187,17 +187,17 @@ export function resolveChatSendRequestConflict(
   ) {
     return conflict(true);
   }
-  const ownsPendingReservation =
+  const retryEntries =
     ownPendingAttemptId !== undefined &&
     readPreRegisteredRun({
       key: session.pendingChatSendKey,
       entry: entries[1],
       keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
-    })?.payload.attemptId === ownPendingAttemptId;
-  const retryEntries = ownsPendingReservation ? entries.slice(0, 1) : entries;
+    })?.payload.attemptId === ownPendingAttemptId
+      ? entries.slice(0, 1)
+      : entries;
   if (
     !comparison &&
-    request.requestIdentity !== undefined &&
     retryEntries.some((entry) => entry?.requestIdentity === request.requestIdentity)
   ) {
     return undefined;
@@ -207,7 +207,7 @@ export function resolveChatSendRequestConflict(
     sameDurableSource ||
     hasRestartRecoveryTerminalRun(session.entry, session.clientRunId) ||
     context.chatRunState.hasAbortMarker(session.clientRunId) ||
-    (!ownsPendingReservation && context.chatAbortControllers.has(session.clientRunId)) ||
+    context.chatAbortControllers.has(session.clientRunId) ||
     context.chatQueuedTurns?.has(session.clientRunId);
   if (!knownRetry) {
     return undefined;
@@ -639,8 +639,7 @@ export async function runChatSendPreAdmission(
       respondChatSendAdmissionError(error, respond);
       return false;
     }
-    // Reconciliation yields while other session writes may still be publishing.
-    await consumeChatSendCurrent(params, () => undefined);
+    params.assertCurrent?.();
   }
 
   const durableClaim = await (preparedClaim ?? resolveClaim(durableEntry, warnRecovery));

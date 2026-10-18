@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  ProjectsCheckoutOptionsResult,
-  ProjectsListResult,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import type { ProjectsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -25,29 +22,18 @@ describe("DraftSubmissionFlow submit gates", () => {
   it.each(["registered", "cloned"] as const)(
     "submits a guest's path-redacted %s project as an isolated worktree",
     async (source) => {
-      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       const fixture = createDraftFixture({
         scopes: ["operator.sessions.read", "operator.sessions.write"],
-        methods: [
-          "sessions.create",
-          "projects.list",
-          "projects.checkoutOptions",
-          "worktrees.branches",
-        ],
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
         selfUser: { id: "guest" },
-        request: (method) => {
+        request: async (method) => {
           if (method === "projects.list") {
-            return Promise.resolve({
-              projects: [{ id: "registered", displayName: "Registered Project", source }],
-            });
-          }
-          if (method === "projects.checkoutOptions") {
-            return availability.promise;
+            return { projects: [{ id: "registered", displayName: "Registered Project", source }] };
           }
           if (method === "worktrees.branches") {
-            return Promise.reject(new Error("missing scope: operator.write"));
+            throw new Error("missing scope: operator.write");
           }
-          return Promise.resolve({});
+          return {};
         },
       });
       const { place, flow, context, request } = fixture;
@@ -55,9 +41,7 @@ describe("DraftSubmissionFlow submit gates", () => {
       place.selectProjectId("registered");
       flow.setMessage("Create an isolated change");
       expect(place.checkoutVisible).toBe(true);
-      expect(flow.canSubmit()).toBe(false);
-      availability.resolve({ current: false, worktree: true });
-      await availability.promise;
+      place.selectWorktree(true);
       expect(place.worktree).toBe(true);
       expect(flow.submitBlock()).toBeUndefined();
       vi.mocked(context.sessions.createResult).mockRejectedValueOnce(
@@ -143,21 +127,13 @@ describe("DraftSubmissionFlow submit gates", () => {
         projectId: "registered",
       });
       const discovery = createDeferred<ProjectsListResult>();
-      const availability = createDeferred<ProjectsCheckoutOptionsResult>();
       let projects = discovery.promise;
       const { place, flow, context } = createDraftFixture({
-        methods: [
-          "sessions.create",
-          "projects.list",
-          "projects.checkoutOptions",
-          "worktrees.branches",
-        ],
+        methods: ["sessions.create", "projects.list", "worktrees.branches"],
         request: (method) =>
           method === "projects.list"
             ? projects
-            : method === "projects.checkoutOptions"
-              ? availability.promise
-              : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
+            : Promise.resolve({ repositoryStatus: "not_git", branches: [] }),
       });
       const read = place.browser.refreshProjects();
       flow.setMessage("work in the saved project");
@@ -184,8 +160,6 @@ describe("DraftSubmissionFlow submit gates", () => {
         });
         await place.browser.refreshProjects();
         place.restorePreferenceSelections();
-        availability.resolve({ current: true, worktree: true });
-        await availability.promise;
       }
       expect(flow.canSubmit()).toBe(true);
       await flow.submit();

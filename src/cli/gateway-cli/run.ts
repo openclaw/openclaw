@@ -883,8 +883,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       completeBoot,
       onProcessResourcesSettled: hooks.onProcessResourcesSettled,
       onRestartStartupFailure: triageStartupFailure,
-      start: async (startOptions = {}) => {
-        const { requestHotReloadRecovery, ...startupOptions } = startOptions;
+      start: async ({ requestHotReloadRecovery, ...startupOptions } = {}) => {
         const snapshotPreparation = await import("../../config/io.snapshot-preparation.js");
         const startupConfigSnapshotReadForThisStart = startupConfigSnapshotReadForNextStart;
         startupConfigSnapshotReadForNextStart = undefined;

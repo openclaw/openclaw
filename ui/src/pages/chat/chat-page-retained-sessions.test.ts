@@ -609,7 +609,6 @@ describe("chat page retained sessions", () => {
       await settleChatPage(page);
       expect(paneB?.routeFace).toBe(targetFace);
       expect(paneB?.dashboardExpanded).toBe(true);
-      expect(paneFor("agent:main:b")).toBe(paneB);
 
       const intent = navigationIntent("agent:main:b", targetFace);
       window.dispatchEvent(intent);
@@ -651,8 +650,6 @@ describe("chat page retained sessions", () => {
       expect(paneB?.active).toBe(true);
       expect(paneB?.presented).toBe(true);
       expect(paneB?.hasAttribute("inert")).toBe(false);
-      expect(paneB?.routeFace).toBe(targetFace);
-      expect(paneB?.dashboardExpanded).toBe(false);
     },
   );
 

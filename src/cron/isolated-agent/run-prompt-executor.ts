@@ -42,7 +42,6 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
@@ -88,7 +87,6 @@ export function createCronPromptExecutor(
     onPromptCompleted: (run: CronCompletedPromptRun) => void;
   },
 ) {
-  const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
     params.modelFallbacksOverride ??
     resolveCronFallbacksOverride({
@@ -165,18 +163,6 @@ export function createCronPromptExecutor(
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
-    using inferenceLease = new DisposableStack();
-    const binding = params.job.inferenceBinding;
-    const inferenceAuthorization = binding
-      ? await acquireCronInferenceAuthorization({
-          binding,
-          cfg: params.cfgWithAgentDefaults,
-          agentDir: params.agentDir,
-        })
-      : undefined;
-    if (inferenceAuthorization) {
-      inferenceLease.defer(() => inferenceAuthorization.dispose());
-    }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
     // A retry can fail during preparation, before any backend start callback.
@@ -238,7 +224,6 @@ export function createCronPromptExecutor(
     }
     const { modelResolve, currentChannelId } = await prepareCronModelResolveInput({
       ...params,
-      trigger,
       prompt: promptText,
       messageChannel,
     });
@@ -366,12 +351,6 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (binding && (providerOverride !== binding.provider || cliExecution)) {
-          throw new Error(
-            "Automation candidate is incompatible with its recorded inference account and route.",
-          );
-        }
-        inferenceAuthorization?.assertCurrent();
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
@@ -421,7 +400,7 @@ export function createCronPromptExecutor(
             sessionKey: params.runSessionKey,
             sessionTarget,
             agentId: params.agentId,
-            trigger,
+            trigger: "cron",
             jobId: params.job.id,
             messageActionTurnCapability: cronAdmission.messageActionTurnCapability,
             config: params.cfgWithAgentDefaults,
@@ -429,7 +408,6 @@ export function createCronPromptExecutor(
             finalizePromptForResolvedTools,
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
-            thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
@@ -448,7 +426,7 @@ export function createCronPromptExecutor(
             bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
-            fastMode: fastModeState.requestMode,
+            fastMode: fastModeState.mode,
             fastModeAutoOnSeconds: fastModeState.fastAutoOnSeconds,
             fastModeStartedAtMs,
             fastModeAutoProgressState,
@@ -505,11 +483,6 @@ export function createCronPromptExecutor(
                         : undefined,
                     })
                   : undefined;
-                if (trigger === "cron" && !binding && authProfileId) {
-                  throw new Error(
-                    "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-                  );
-                }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
                     ? cliSessionBinding
@@ -531,7 +504,6 @@ export function createCronPromptExecutor(
                   ),
                   provider: executionProvider,
                   authProfileId,
-                  nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
                   cliSessionBindingFacts: {
@@ -571,7 +543,7 @@ export function createCronPromptExecutor(
               {
                 preparedRunAdmission: cronAdmission.preparedRunAdmission,
                 abortSignal: cliAbortSignal,
-                trigger,
+                trigger: "cron",
                 isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
               },
             );
@@ -617,28 +589,10 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
-          ...(binding && inferenceAuthorization
-            ? {
-                authProfileBinding: {
-                  profileId: binding.profileId,
-                  authRequirement: binding.authRequirement,
-                  assertCurrent: inferenceAuthorization.assertCurrent,
-                  revalidate: inferenceAuthorization.revalidate,
-                },
-                allowAuthProfileFallback: false,
-                onSuccessfulAuthProfile: (profileId: string | undefined) => {
-                  if (profileId !== binding.profileId) {
-                    throw new Error("Automation inference account changed during execution.");
-                  }
-                },
-              }
-            : {}),
-          authProfileIdSource:
-            binding?.source ??
-            (params.liveSelection.authProfileId
-              ? params.liveSelection.authProfileIdSource
-              : undefined),
+          authProfileId: params.liveSelection.authProfileId,
+          authProfileIdSource: params.liveSelection.authProfileId
+            ? params.liveSelection.authProfileIdSource
+            : undefined,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

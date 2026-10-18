@@ -380,7 +380,7 @@ suite.define(() => {
           });
           const failure = await installChunkFailure(
             page,
-            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
+            controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
             { manualProbe },
           );
           await installMockGateway(page);
@@ -496,7 +496,7 @@ suite.define(() => {
       }
       const failure = await installChunkFailure(
         page,
-        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.ts"),
       );
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
@@ -891,12 +891,7 @@ suite.define(() => {
     );
   });
 
-  it("recovers the native titlebar visibly after its chunk fails", async ({ onTestFinished }) => {
-    let releaseProbe = () => {};
-    const manualProbe = new Promise<void>((resolve) => {
-      releaseProbe = resolve;
-    });
-    onTestFinished(releaseProbe);
+  it("recovers the native titlebar visibly after its chunk fails", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -909,7 +904,6 @@ suite.define(() => {
         const failure = await installChunkFailure(
           page,
           controlUiE2eBuiltModuleRequest(nativeTitlebarModule),
-          { manualProbe },
         );
         await installMockGateway(page, {
           featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
@@ -920,8 +914,7 @@ suite.define(() => {
         expect(response?.status()).toBe(200);
         await page.locator(".sidebar-rail").waitFor({ state: "attached" });
         const error = await expectRealChunkFailure(page, "openclaw-macos-titlebar-controls");
-        // Automatic recovery may probe again after its cooldown; keep success held until Retry.
-        await expect.poll(failure.headCount).toBeGreaterThanOrEqual(1);
+        await expect.poll(failure.headCount).toBe(1);
         expect(failure.chunkRequestCount()).toBe(1);
         if (railProofDir) {
           await page.screenshot({
@@ -929,10 +922,7 @@ suite.define(() => {
           });
         }
 
-        const reloaded = page.waitForEvent("domcontentloaded");
-        await error.getByRole("button", { name: "Retry", exact: true }).click();
-        releaseProbe();
-        await reloaded;
+        await retryThroughReload(page, error);
         const toolbar = page.locator(".macos-titlebar-controls");
         await toolbar.waitFor({ state: "visible" });
         await page.locator(".sidebar-session-toolbar__collapse").click();

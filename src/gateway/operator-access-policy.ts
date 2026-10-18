@@ -280,7 +280,6 @@ export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
-  retained?: PluginGatewayAccessAuthority,
 ): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -305,14 +304,13 @@ export function resumeGatewayOperatorAccessGrant(
     }
     let authority: PluginGatewayAccessAuthority | undefined;
     try {
-      // The admitted authority owns live grant checks; resuming again creates a second owner.
-      authority =
-        retained ??
-        policy.resume({
-          ...context,
-          grantId: grant.grantId,
-          requiredByRole: requiredPlugin === grant.pluginId,
-        });
+      authority = policy.resume({
+        ...context,
+        grantId: grant.grantId,
+        requiredByRole: requiredPlugin === grant.pluginId,
+      });
+      authority?.signal.throwIfAborted();
+      authority?.assertCurrent();
     } catch {
       // Startup and unavailable observations are not evidence that a grant ended.
       throw new GatewayOperatorAccessUnavailableError();
@@ -336,13 +334,6 @@ export function resumeGatewayOperatorAccessGrant(
       // A newly applicable policy needs a fresh request bound to that dependency.
       throw new GatewayOperatorAccessDeniedError();
     }
-  }
-  try {
-    // Other policies can synchronously invalidate the original grant without aborting its signal.
-    resumed?.signal.throwIfAborted();
-    resumed?.assertCurrent();
-  } catch {
-    throw new GatewayOperatorAccessUnavailableError();
   }
   return resumed;
 }

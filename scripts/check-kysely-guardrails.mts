@@ -74,8 +74,6 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-agent-db-session-migrations.ts",
     "src/state/openclaw-agent-db-session-provenance.ts",
     "src/state/openclaw-agent-db.ts",
-    // The outbox rebuild preserves historical rowids and stored schema-object SQL.
-    "src/state/openclaw-agent-outbox-sequence-migration.ts",
     // Versioned payload rebuild preserves native bytes and 64-bit physical rowids.
     "src/state/openclaw-agent-transcript-payload-migration.ts",
     "src/state/openclaw-agent-transcript-fts-schema.ts",
@@ -83,7 +81,6 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-delivery-queue-backfill.ts",
     "src/state/openclaw-state-db-legacy-backfills.ts",
     "src/state/openclaw-state-db-maintenance.ts",
-    "src/state/openclaw-state-db-meeting-chronology-migration.ts",
     "src/state/openclaw-state-db-operator-approval-migration.ts",
     "src/state/openclaw-state-db-schema-additive.ts",
     "src/state/openclaw-state-db-schema-helpers.ts",
@@ -104,8 +101,6 @@ const rawSqliteAllowPathGroups = {
   "backup snapshot maintenance": [
     "src/commands/backup-verify.ts",
     "src/infra/backup-create.ts",
-    // The scoped archive preserves native cell types, rowids, and SQLite schema SQL.
-    "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
   ],

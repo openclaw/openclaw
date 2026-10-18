@@ -16,10 +16,7 @@ const modelCaptures = new WeakMap<
   WeakMap<object, WeakMap<object, Promise<ModelDefinitionConfig[]>>>
 >();
 
-type NativeAvailability = {
-  expiresAt: number;
-  pending: ReturnType<typeof probeClaudeCliAuthStatus>;
-};
+type NativeAvailability = ReturnType<typeof probeClaudeCliAuthStatus>;
 const availability = new WeakMap<object, WeakMap<object, WeakMap<object, NativeAvailability>>>();
 
 async function prepareClaudeCliAuth({
@@ -39,18 +36,11 @@ async function prepareClaudeCliAuth({
   environments.set(env, captures);
   // Native login is independent of workspace; fresh captures and cancellation own their probes.
   const owner = signal ?? config;
-  const now = Date.now();
-  let capture = captures.get(owner);
-  if (!capture || capture.expiresAt <= now) {
-    capture = {
-      expiresAt: now + 60_000,
-      pending: probeClaudeCliAuthStatus({ env, signal }),
-    };
-    captures.set(owner, capture);
-  }
-  const result = await capture.pending;
+  const pending = captures.get(owner) ?? probeClaudeCliAuthStatus({ env, signal });
+  captures.set(owner, pending);
+  const result = await pending;
   signal?.throwIfAborted();
-  return result.status !== "missing"
+  return result.status === "available"
     ? {
         apiKey: CLAUDE_CLI_NATIVE_AUTH_MARKER,
         source: "Claude CLI native auth",

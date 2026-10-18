@@ -49,14 +49,7 @@ const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
 const targets =
   forwarded.length && !forwarded[0].startsWith("-")
     ? []
-    : [
-        "extensions/workboard",
-        "extensions/logbook/src/postgres-store.test.ts",
-        "src/infra/postgres-sync",
-        "src/infra/database-engine",
-        "src/state/openclaw-state-db.postgres.test.ts",
-        "src/transcripts/meeting-chronology.postgres.test.ts",
-      ];
+    : ["extensions/workboard", "src/infra/postgres-sync", "src/infra/database-engine"];
 const child = spawn(
   process.execPath,
   [

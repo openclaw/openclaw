@@ -22,8 +22,6 @@ export type RunCronAgentTurnParams = {
   cfg: OpenClawConfig;
   deps: CliDeps;
   job: CronStoredJob;
-  /** Trusted caller classification; stored jobs default to cron, not their payload or audit ingress. */
-  trigger?: "cron" | "event";
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   message: string;
   abortSignal?: AbortSignal;

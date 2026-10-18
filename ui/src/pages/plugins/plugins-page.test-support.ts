@@ -1,6 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createSignal, flush } from "solid-js";
-import { onTestFinished, vi } from "vitest";
+import { vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   ApplicationContext,
@@ -15,7 +15,6 @@ import type {
   PluginListResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { ControlUiPluginRuntime } from "../../plugins/control-ui-runtime.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid, cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
@@ -379,18 +378,14 @@ export function createContext(
     () => gateway.snapshot.client,
   ),
 ): ApplicationContext {
-  const plugins = new ControlUiPluginRuntime(() => context);
-  onTestFinished(() => plugins.dispose());
-  const context = {
+  return {
     gateway,
-    plugins,
     basePath: "",
     resourceBasePath: "",
     runtimeConfig: harness.runtimeConfig,
     navigate: vi.fn(),
     replace: vi.fn(),
   } as unknown as ApplicationContext;
-  return context;
 }
 
 export async function settlePlugins(): Promise<boolean> {

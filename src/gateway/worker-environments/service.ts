@@ -72,7 +72,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
   let reconcileInFlight: Promise<void> | undefined;
   let serviceStarted = false;
   let unsubscribeSessionIdentityMutation: (() => void) | undefined;
-  const unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
+  let unsubscribeTurnClaimClosed = options.placementStore?.registerTurnClaimClosedHandler(
     (claim) => {
       retainInferenceCancellation(inference.cancelClaim(claim));
     },
@@ -134,8 +134,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     run: (signal: AbortSignal) => Promise<T>,
   ): Promise<T> => {
     const controller = new AbortController();
-    const signal = AbortSignal.any([scope.signal, controller.signal]);
-    const operation = Promise.resolve().then(() => run(signal));
+    const operation = Promise.resolve().then(() => run(controller.signal));
     try {
       return await withTimeout(
         operation,
@@ -192,7 +191,6 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
 
   const providerLifecycle = createWorkerProviderLifecycle({
     ...options,
-    ownerSignal: scope.signal,
     now,
     store,
     prepareInstallation,
@@ -432,10 +430,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     void reconcileOnce().catch(() => warn("Worker environment startup reconcile failed"));
   };
 
-  const beginClose = () => {
-    if (stopping) {
-      return;
-    }
+  const stop = async () => {
+    const failures: unknown[] = [];
     stopping = true;
     providerLifecycle.clearDedicatedNodeLeases();
     sessionAttachments.cancelSessionAttachmentCreations();
@@ -443,12 +439,9 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     scope.beginClose();
     options.stopNodeEnrollmentWaits?.();
     unsubscribeSessionIdentityMutation?.();
+    unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
-  };
-
-  const stop = async () => {
-    const failures: unknown[] = [];
-    beginClose();
+    unsubscribeTurnClaimClosed = undefined;
     await scope.stop();
     // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
     // inference or tunnel teardown can invalidate its closure-bound placement authority.
@@ -728,7 +721,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         options.closeWorkerPortals?.(environmentId, ownerEpoch),
       ]);
     },
-    beginClose,
+    stopNodeEnrollmentWaits: options.stopNodeEnrollmentWaits,
     installReconcileEnvironmentGuard,
     reconcileEnvironment,
     reconcileOnce,

@@ -53,7 +53,7 @@ type HttpStream = StreamBase & {
 type SocketStream = StreamBase & {
   kind: "ws";
   socket?: GatewayIngressSocketV1;
-  partial?: { kind: "text" | "binary"; bytes: Buffer; length: number };
+  partial?: { kind: "text" | "binary"; bytes: Buffer };
   sending: Promise<void>;
 };
 type Stream = HttpStream | SocketStream;
@@ -460,31 +460,15 @@ export class UiTunnel {
     if (stream.partial && stream.partial.kind !== kind) {
       invalid("WebSocket fragments must use the same data type.");
     }
-    const length = (stream.partial?.length ?? 0) + bytes.byteLength;
-    const maxBytes = 25 * 1024 * 1024;
-    if (length > maxBytes) {
+    if ((stream.partial?.bytes.byteLength ?? 0) + bytes.byteLength > 25 * 1024 * 1024) {
       throw new UiTunnelError("limit_exceeded", "WebSocket messages must not exceed 25 MiB.");
     }
-    const partial = stream.partial ?? { kind, bytes, length };
-    if (stream.partial) {
-      if (length > partial.bytes.byteLength) {
-        // Geometric growth avoids recopying every prefix, with constant metadata
-        // even for empty or tiny fragments and capacity bounded by the message limit.
-        const grown = Buffer.allocUnsafe(
-          Math.min(maxBytes, Math.max(length, partial.bytes.byteLength * 2)),
-        );
-        partial.bytes.copy(grown, 0, 0, partial.length);
-        partial.bytes = grown;
-      }
-      bytes.copy(partial.bytes, partial.length);
-      partial.length = length;
-    }
-    stream.partial = partial;
+    const complete = stream.partial ? Buffer.concat([stream.partial.bytes, bytes]) : bytes;
+    stream.partial = { kind, bytes: complete };
     if (more) {
       return;
     }
     stream.partial = undefined;
-    const complete = partial.bytes.subarray(0, partial.length);
     const message: GatewayIngressMessage =
       kind === "text" ? { kind, text: complete.toString("utf8") } : { kind, bytes: complete };
     stream.sending = stream.sending.then(async () => {

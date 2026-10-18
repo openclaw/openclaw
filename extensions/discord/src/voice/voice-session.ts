@@ -57,8 +57,6 @@ export class DiscordVoiceSessions {
       cfg: OpenClawConfig;
       client: Client;
       destroyed: () => boolean;
-      signal: AbortSignal;
-      isSessionGenerationCurrent: (entry: VoiceSessionEntry) => boolean;
       getTranscripts: (entry: {
         guildId: string;
         channelId: string;
@@ -168,10 +166,7 @@ export class DiscordVoiceSessions {
     }
     if (existing) {
       logVoiceVerbose(`join: replacing existing session for guild ${guildId}`);
-      await this.leave(
-        { guildId },
-        { preserveFollowState: options?.preserveFollowState, disposition: "abort" },
-      );
+      await this.leave({ guildId }, { preserveFollowState: options?.preserveFollowState });
     }
 
     const resolved = await this.resolveChannel(params);
@@ -276,10 +271,7 @@ export class DiscordVoiceSessions {
     );
 
     let stopCompletion: Promise<void> | undefined;
-    const stopEntry = (
-      reason: string,
-      disposition: "abort" | "text-fallback" = "abort",
-    ): void | Promise<void> => {
+    const stopEntry = (reason: string): void | Promise<void> => {
       if (entry.sessionLifecycle.status === "stopped") {
         return stopCompletion;
       }
@@ -301,7 +293,7 @@ export class DiscordVoiceSessions {
       let realtimeCompletion: void | Promise<void> = undefined;
       try {
         if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
-          realtimeCompletion = realtimeLifecycle.instance.close(disposition);
+          realtimeCompletion = realtimeLifecycle.instance.close();
         }
       } catch (error) {
         logger.warn(`discord voice: realtime close failed: ${formatErrorMessage(error)}`);
@@ -361,8 +353,8 @@ export class DiscordVoiceSessions {
         decryptRecoveryInFlight: false,
       },
       realtimeLifecycle: { status: "inactive", generation: 0 },
-      stop(reason, disposition) {
-        return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`, disposition);
+      stop(reason) {
+        return stopEntry(reason ?? `stop guild ${guildId} channel ${channelId}`);
       },
     };
 
@@ -376,7 +368,7 @@ export class DiscordVoiceSessions {
       }
     };
     const destroyedHandler = () => {
-      void stopEntry("audio worker stopped", "text-fallback");
+      void stopEntry("audio worker stopped");
     };
     audio.on("stopped", destroyedHandler);
     if (!entry.captureOnly && isDiscordRealtimeVoiceMode(voiceMode)) {
@@ -424,7 +416,7 @@ export class DiscordVoiceSessions {
 
   async leave(
     params: { guildId: string; channelId?: string },
-    options?: { preserveFollowState?: boolean; disposition?: "abort" | "text-fallback" },
+    options?: { preserveFollowState?: boolean },
   ): Promise<VoiceOperationResult> {
     const guildId = params.guildId.trim();
     logVoiceVerbose(`leave requested: guild ${guildId} channel ${params.channelId ?? "current"}`);
@@ -435,7 +427,7 @@ export class DiscordVoiceSessions {
     if (params.channelId && params.channelId !== entry.channelId) {
       return { ok: false, message: "Not connected to that voice channel." };
     }
-    const stopped = entry.stop(undefined, options?.disposition ?? "text-fallback");
+    const stopped = entry.stop();
     if (!entry.receiveRecovery.decryptRecoveryInFlight) {
       this.params.receive.daveRecoveryAttempts.delete(guildId);
     }
@@ -502,36 +494,6 @@ export class DiscordVoiceSessions {
         }
       },
       runAgentTurn: (turn) => this.params.receive.runDiscordRealtimeAgentTurn({ ...turn, entry }),
-      deliverText: async (turn, text, signal) => {
-        try {
-          const context = await this.params.receive.resolveDiscordVoiceIngressContext(
-            entry,
-            turn.userId,
-          );
-          const assertCurrent = () => {
-            signal.throwIfAborted();
-            if (
-              !this.params.isSessionGenerationCurrent(entry) ||
-              !context ||
-              context.isCurrent?.() === false ||
-              context.senderIsOwner !== turn.context.senderIsOwner
-            ) {
-              throw new Error("Discord voice reply authorization is no longer current");
-            }
-          };
-          assertCurrent();
-          const { sendMessageDiscord } = await import("../send.outbound.js");
-          await sendMessageDiscord(`channel:${entry.channelId}`, text, {
-            cfg: this.params.cfg,
-            accountId: this.params.accountId,
-            assertPlatformSendAuthorized: assertCurrent,
-          });
-        } catch (error) {
-          logger.warn(
-            `discord voice: text fallback dropped guild=${entry.guildId} channel=${entry.channelId}: ${formatErrorMessage(error)}`,
-          );
-        }
-      },
       resolveSpeakerContext: (userId) =>
         this.params.receive.resolveDiscordVoiceIngressContext(entry, userId),
     });

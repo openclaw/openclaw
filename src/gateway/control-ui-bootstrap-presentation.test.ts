@@ -14,14 +14,6 @@ describe("Control UI model defaults bootstrap", () => {
   );
 });
 
-it.each([undefined, false, true])("projects composer inference opt-in: %s", (enabled) => {
-  expect(
-    resolveControlUiBootstrapPresentation({
-      gateway: { controlUi: { experimental: { composerPredictions: { enabled } } } },
-    }).composerPredictionsEnabled,
-  ).toBe(enabled === true);
-});
-
 it.each([undefined, false, true])(
   "projects the bubble lab only when enabled: %s",
   (chatBubbles) => {

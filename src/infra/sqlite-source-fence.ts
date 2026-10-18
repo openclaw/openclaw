@@ -7,7 +7,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runWithSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { withSqlitePostCommitPublications } from "./sqlite-post-commit.js";
-import { currentSqliteOperationTiming } from "./sqlite-reader-lifecycle.js";
 import {
   SOURCE_FENCE_ACCEPTED,
   SOURCE_FENCE_READY,
@@ -202,10 +201,6 @@ export async function runSqliteSourceFence<T>(
                 for (const source of ordered) {
                   runWithSqliteBusyTimeout(source.database, 0, () => {
                     source.database.exec("BEGIN IMMEDIATE");
-                    const timing = currentSqliteOperationTiming();
-                    if (timing) {
-                      timing.transactions.count += 1;
-                    }
                     reservations.push(source);
                   });
                 }

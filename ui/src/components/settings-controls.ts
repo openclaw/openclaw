@@ -79,11 +79,7 @@ export function settingsSwitchKeyDown(event: KeyboardEvent, props: SettingsToggl
 }
 
 export function settingsToggleRowClick(event: MouseEvent, props: SettingsToggleControl) {
-  // Links, buttons, and fields in the row own their clicks; only plain row area toggles.
-  if (
-    event.target instanceof Element &&
-    event.target.closest(".settings-toggle, a, button, input, select, textarea")
-  ) {
+  if (event.target instanceof Element && event.target.closest(".settings-toggle")) {
     return;
   }
   // SAFETY: Both renderers bind this listener directly to the settings row div.

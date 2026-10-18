@@ -31,7 +31,6 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeUiSettings } from "../../test-helpers/settings-node.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
   getChatAttachmentDataUrl,
@@ -497,6 +496,7 @@ function createChatModelControlsProps(state: ChatHeaderTestState): ChatModelCont
   );
   return {
     activeRunId: state.chatRunId,
+    activeRunSessionKey: state.chatRunId ? state.sessionKey : undefined,
     connected: state.connected,
     gatewayAvailable: Boolean(state.client),
     loading: state.chatLoading,
@@ -3198,23 +3198,20 @@ describe("chat attachment picker", () => {
     }
   });
 
-  it("opens the scoped file input from the attachment menu", async () => {
+  it("opens the scoped file input from the attachment menu", () => {
     const container = renderChatView();
     const input = requireAttachmentInput(
       container,
       ".agent-chat__file-input",
       "attachment file input",
     );
-    const attachButton = await getAttachmentMenuOption(
-      container,
-      t("chat.composer.attachFileOption"),
-    );
+    const attachButton = getAttachmentMenuOption(container, t("chat.composer.attachFileOption"));
     const clickInput = vi.spyOn(input, "click").mockImplementation(() => undefined);
 
     expect(attachButton).toBeInstanceOf(HTMLElement);
     selectAttachmentMenuOption(attachButton);
 
-    await waitForSolid(() => expect(clickInput).toHaveBeenCalledTimes(1));
+    expect(clickInput).toHaveBeenCalledTimes(1);
   });
 
   it("opens the scoped camera dialog instead of a file picker and attaches its photo", async () => {
@@ -3224,12 +3221,12 @@ describe("chat attachment picker", () => {
     if (!camera) {
       throw new Error("Missing camera capture dialog");
     }
-    const cameraButton = await getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
+    const cameraButton = getAttachmentMenuOption(container, t("chat.composer.takePhoto"));
     const show = vi.spyOn(camera, "show").mockImplementation(() => undefined);
     const fileClick = vi.spyOn(HTMLInputElement.prototype, "click");
     expect(container.querySelector(".agent-chat__camera-input")).not.toBeNull();
     selectAttachmentMenuOption(cameraButton);
-    await waitForSolid(() => expect(show).toHaveBeenCalledOnce());
+    expect(show).toHaveBeenCalledOnce();
     expect(fileClick).not.toHaveBeenCalled();
 
     const photo = new File(["photo"], "camera.jpg", { type: "image/jpeg" });
@@ -4106,9 +4103,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(search!.value).toBe("claude");
 
-    const nestedPicker = document.createElement("div");
-    nestedPicker.setAttribute("role", "menu");
-    nestedPicker.setAttribute("popover", "manual");
+    const nestedPicker = document.createElement("wa-dropdown");
     const nestedTrigger = document.createElement("button");
     nestedPicker.append(nestedTrigger);
     details!.append(nestedPicker);

@@ -439,18 +439,13 @@ describe("agents tools panel (browser)", () => {
     expect(cancel?.disabled).toBe(true);
   });
 
-  it("enables the fallback setup helper without selecting Full", async () => {
+  it("shows fallback warning when runtime catalog fails", async () => {
     const container = document.createElement("div");
-    const onOverridesChange = vi.fn();
-    const onProfileChange = vi.fn();
     mountSolid(
       AgentTools,
       createBaseParams({
-        configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
         toolsCatalogError: "unavailable",
         toolsCatalogResult: null,
-        onOverridesChange,
-        onProfileChange,
       }),
       container,
     );
@@ -459,6 +454,24 @@ describe("agents tools panel (browser)", () => {
     expect(container.querySelector(".callout.info")?.textContent?.trim()).toBe(
       "Could not load runtime tool catalog. Showing built-in fallback list instead.",
     );
+  });
+
+  it("enables the fallback setup helper without selecting Full", async () => {
+    const container = document.createElement("div");
+    const onOverridesChange = vi.fn();
+    const onProfileChange = vi.fn();
+    mountSolid(
+      AgentTools,
+      createBaseParams({
+        configForm: { agents: { entries: { main: { tools: { profile: "coding" } } } } },
+        toolsCatalogResult: null,
+        onOverridesChange,
+        onProfileChange,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
     expect(container.textContent).toContain(
       "Full selects tools; it does not grant Full Access execution permissions.",
     );

@@ -9,7 +9,6 @@ export async function runVitestShutdownCommand({
   maxBytes = 2 * 1024 * 1024,
   signal,
   workerRun,
-  nodeArgs = [],
   ...options
 }: Pick<
   Parameters<typeof runManagedCommand>[0],
@@ -18,7 +17,6 @@ export async function runVitestShutdownCommand({
   bin?: string;
   maxBytes?: number;
   workerRun?: VitestWorkerRun;
-  nodeArgs?: string[];
 }) {
   const stdout = createBoundedChildOutput(maxBytes);
   const stderr = createBoundedChildOutput(maxBytes);
@@ -30,18 +28,15 @@ export async function runVitestShutdownCommand({
     const code = await runManagedCommand({
       ...options,
       bin: options.bin ?? process.execPath,
-      args: [
-        ...nodeArgs,
-        ...(workerRun
-          ? [
-              fileURLToPath(
-                new URL("../../scripts/lib/vitest-worker-bootstrap.mts", import.meta.url),
-              ),
-              workerRun.descriptor.directory,
-              ...(options.args ?? []),
-            ]
-          : (options.args ?? [])),
-      ],
+      args: workerRun
+        ? [
+            fileURLToPath(
+              new URL("../../scripts/lib/vitest-worker-bootstrap.mts", import.meta.url),
+            ),
+            workerRun.descriptor.directory,
+            ...(options.args ?? []),
+          ]
+        : options.args,
       shell: false,
       stdio: workerRun ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
       requireProcessTreeExit: process.platform !== "win32",
@@ -82,13 +77,7 @@ export async function runVitestShutdownCommand({
       stderr: stderr.text(),
     });
     if (borrowerCompletion) {
-      // Managed timeout/abort reject only after positive termination; cleanup
-      // failures stay primary and must retain their borrowed generation.
-      if (aborted || (cause instanceof Error && "code" in cause && cause.code === "ETIMEDOUT")) {
-        workerCompletion?.resolve(1);
-      } else {
-        workerCompletion?.reject(error);
-      }
+      workerCompletion?.reject(error);
       await Promise.allSettled([borrowerCompletion]);
     }
     throw error;

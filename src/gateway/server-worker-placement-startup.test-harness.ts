@@ -91,7 +91,10 @@ vi.mock(
       >();
     return {
       ...actual,
-      prepareWorkerPlacementSessionRuntime: async () => moveDestinationMocks.resolveSessionRuntime,
+      prepareWorkerPlacementSessionRuntime: async () => ({
+        read: moveDestinationMocks.resolveSessionRuntime,
+        [Symbol.dispose]: () => {},
+      }),
     };
   },
 );

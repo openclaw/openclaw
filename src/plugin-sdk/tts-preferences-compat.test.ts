@@ -2,7 +2,6 @@ import { expectTypeOf, it } from "vitest";
 import type { resolveTtsPrefsPath as resolveAgentTtsPrefsPath } from "./agent-runtime.js";
 import type { OpenClawConfig } from "./config-contracts.js";
 import type { ReplyPayload } from "./reply-payload.js";
-import type { PluginRuntime } from "./runtime-store.js";
 import type {
   buildTtsSystemPromptHint,
   buildTtsSystemPromptHintAsync,
@@ -25,12 +24,6 @@ it("retains the TTS call signatures from the released Plugin SDK", () => {
   >();
   expectTypeOf<typeof buildTtsSystemPromptHintAsync>().returns.resolves.toEqualTypeOf<
     ReturnType<typeof buildTtsSystemPromptHint>
-  >();
-  expectTypeOf<PluginRuntime["tts"]["buildSystemPromptHintAsync"]>().toEqualTypeOf<
-    typeof buildTtsSystemPromptHintAsync | undefined
-  >();
-  expectTypeOf<Omit<PluginRuntime["tts"], "buildSystemPromptHintAsync">>().toExtend<
-    PluginRuntime["tts"]
   >();
   expectTypeOf<typeof buildTtsSystemPromptHint>().toExtend<
     (

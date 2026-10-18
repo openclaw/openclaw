@@ -369,7 +369,6 @@ const ConfigUiHintSchema = closedObject({
   advanced: Type.Optional(Type.Boolean()),
   sensitive: Type.Optional(Type.Boolean()),
   placeholder: Type.Optional(Type.String()),
-  multiline: Type.Optional(Type.Boolean()),
   presentation: Type.Optional(Type.Literal("phone-number")),
   itemTemplate: Type.Optional(Type.Unknown()),
 });

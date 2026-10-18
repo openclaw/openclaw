@@ -69,7 +69,7 @@ export function deleteWorkboardBoard(
             </div>
           </div>
           {view().error ? <div role="alert">{view().error}</div> : null}
-          <openclaw-modal-actions class="exec-approval-actions">
+          <div class="exec-approval-actions">
             <button
               class="btn danger"
               type="button"
@@ -83,7 +83,7 @@ export function deleteWorkboardBoard(
             <button class="btn" type="button" autofocus disabled={view().busy} onClick={finish}>
               {t("common.cancel")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </div>
       ),
       content,

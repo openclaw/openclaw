@@ -63,13 +63,16 @@ export class AppearanceBackgroundController {
   private messageValue: { kind: "error" | "status"; text: string } | null = null;
   private imageUrlValue: string | null = null;
   private canvasPreviewValue = false;
-  private metadata:
-    | (BackgroundScope & {
-        revision: number;
-        snapshot: BackgroundSnapshot;
-      })
-    | null = null;
+  private metadata: {
+    value: {
+      client: GatewayBrowserClient;
+      profileId: string;
+      revision: number;
+      snapshot: BackgroundSnapshot;
+    } | null;
+  } = { value: null };
   private metadataAbort: AbortController | undefined;
+  private metadataGeneration = 0;
   private metadataKey: readonly unknown[] = [];
 
   constructor(private readonly publish: () => void) {}
@@ -133,7 +136,8 @@ export class AppearanceBackgroundController {
     this.retireMutation();
     this.releasePreview();
     this.metadataAbort?.abort();
-    this.metadata = null;
+    this.metadataGeneration += 1;
+    this.metadata.value = null;
     this.metadataKey = [];
     this.context = context;
     if (!context) {
@@ -148,7 +152,7 @@ export class AppearanceBackgroundController {
       context.gateway.subscribe(() => {
         if (
           (this.mutationScope && !this.owns(this.mutationScope)) ||
-          (this.metadata && !this.owns(this.metadata))
+          (this.metadata.value && !this.owns(this.metadata.value))
         ) {
           this.retireMutation();
         }
@@ -202,10 +206,11 @@ export class AppearanceBackgroundController {
 
   private async readMetadata() {
     this.metadataAbort?.abort();
+    const generation = ++this.metadataGeneration;
     const scope = this.scope();
     const revision = this.metadataRevision;
     if (!scope) {
-      this.metadata = null;
+      this.metadata.value = null;
       return;
     }
     const controller = new AbortController();
@@ -216,13 +221,18 @@ export class AppearanceBackgroundController {
         {},
         { signal: controller.signal },
       );
-      if (!this.owns(scope) || controller.signal.aborted) {
+      if (!this.owns(scope) || generation !== this.metadataGeneration) {
         return;
       }
-      this.metadata = result.status === "ok" ? { ...scope, revision, snapshot: result } : null;
+      this.metadata.value =
+        result.status === "ok" ? { ...scope, revision, snapshot: result } : null;
       this.publish();
     } catch (error) {
-      if (this.owns(scope) && !controller.signal.aborted) {
+      if (
+        this.owns(scope) &&
+        generation === this.metadataGeneration &&
+        !controller.signal.aborted
+      ) {
         this.message = { kind: "error", text: formatUiError(error) };
       }
     }
@@ -240,6 +250,7 @@ export class AppearanceBackgroundController {
     gatewayUrl: string;
   } | null = null;
   private metadataRevision = 0;
+  private mutationGeneration = 0;
   private mutationScope: BackgroundScope | null = null;
   private preview: { identity: string; controller: AbortController } | null = null;
   private scope(): BackgroundScope | null {
@@ -257,7 +268,7 @@ export class AppearanceBackgroundController {
   }
 
   private get snapshot(): BackgroundSnapshot | null {
-    const value = this.metadata;
+    const value = this.metadata.value;
     return value && value.revision === this.metadataRevision && this.owns(value)
       ? value.snapshot
       : null;
@@ -356,6 +367,7 @@ export class AppearanceBackgroundController {
       stop();
     }
     this.metadataAbort?.abort();
+    this.metadataGeneration += 1;
     if (!wasConnected) {
       return;
     }
@@ -365,6 +377,7 @@ export class AppearanceBackgroundController {
   }
 
   private retireMutation() {
+    this.mutationGeneration += 1;
     this.mutationScope = null;
     this.busy = false;
     this.message = null;
@@ -557,6 +570,7 @@ export class AppearanceBackgroundController {
       return;
     }
     this.dismissCanvasPreview();
+    const generation = ++this.mutationGeneration;
     this.mutationScope = scope;
     this.busy = true;
     this.message = {
@@ -567,7 +581,7 @@ export class AppearanceBackgroundController {
           : "configView.appearance.background.removing",
       ),
     };
-    const isCurrent = () => this.owns(scope) && this.mutationScope === scope;
+    const isCurrent = () => this.owns(scope) && this.mutationGeneration === generation;
     try {
       const imageBase64 = file ? await readFileBase64(file) : undefined;
       if (!isCurrent()) {

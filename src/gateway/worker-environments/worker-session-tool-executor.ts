@@ -175,10 +175,11 @@ export function createWorkerSessionToolExecutor(
     ) {
       throw new Error("Worker source environment changed before child spawn");
     }
-    const toolRuntime = getWorkerTurnToolSurface(operation.identity);
-    const surface = await toolRuntime?.getSurface(operation.identity);
+    const surface = await getWorkerTurnToolSurface(operation.identity)?.getSurface(
+      operation.identity,
+    );
     assertSource();
-    if (!surface || !toolRuntime) {
+    if (!surface) {
       throw new Error("Worker tool surface is unavailable");
     }
     const authorizedTools = surface.tools
@@ -186,12 +187,6 @@ export function createWorkerSessionToolExecutor(
       .filter((name) =>
         params.placements.isWorkerTurnToolAuthorized(operation.source.turnClaim, name),
       );
-    // The child has its own workspace; this private capture passed the same
-    // policies and prompt limits without granting the parent a callable tool.
-    const inheritedPublicationTool = toolRuntime.getInheritedPublicationToolName();
-    if (inheritedPublicationTool) {
-      authorizedTools.push(inheritedPublicationTool);
-    }
     const gatewayCall: InProcessGatewayCaller = async <T = Record<string, unknown>>(
       method: string,
       requestParams: Record<string, unknown>,

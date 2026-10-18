@@ -320,7 +320,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     ];
     const finalized = await normalizeReplyMedia({ cfg, payloads: [payload] });
     expect(finalized?.mediaUrls).toEqual(preparedMediaUrls);
-    const { assistantContent, mediaBySource } = await buildAssistantReplyContent({
+    const { assistantContent } = await buildAssistantReplyContent({
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
       payloads: finalized ? [finalized] : [],
@@ -329,10 +329,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(assistantContent?.filter((block) => block.type === "text")).toEqual([
       { type: "text", text: "Artifacts ready" },
     ]);
-    expect(mediaBySource?.get(documentPath)).toEqual([
-      expect.objectContaining({ type: "attachment" }),
-    ]);
-    expect(mediaBySource?.get(audioPath)).toEqual([expect.objectContaining({ type: "audio" })]);
     expect(assistantContent?.filter((block) => block.type === "attachment_error")).toEqual([
       {
         type: "attachment_error",

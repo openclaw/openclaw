@@ -890,15 +890,10 @@ suite.define(() => {
     await gateway.deferNext("sessions.github.publish");
     await page.getByRole("button", { name: "Publish PR" }).click();
     await gateway.waitForRequest("sessions.github.publish");
-    const previousSubscriptions = (
-      await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)
-    ).length;
+    const previousConnects = (await gateway.getRequests("connect")).length;
     await gateway.setOperatorScopes(["operator.read"]);
     await gateway.closeLatest();
-    // The new subscription proves the replacement handshake has been applied.
-    await gateway.waitForRequest(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
-      after: previousSubscriptions,
-    });
+    await gateway.waitForRequest("connect", { after: previousConnects });
     await showPublicationBranch(gateway);
     await openDetailsPullRequests(page);
     await expect

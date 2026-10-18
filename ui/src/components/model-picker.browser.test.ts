@@ -1,24 +1,15 @@
-import { nothing, render } from "lit";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { render } from "lit";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
 import { renderModelPicker } from "./model-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
-function createFixtureContainer() {
-  const container = document.createElement("div");
-  document.body.append(container);
-  onTestFinished(() => {
-    // Removing DOM alone does not retire Lit directives and their Solid roots.
-    render(nothing, container);
-    container.remove();
-  });
-  return container;
-}
+afterEach(() => document.body.replaceChildren());
 
 describe("renderModelPicker", () => {
   it("shows a late selected model first without dropping the rest of a large catalog", async () => {
-    const container = createFixtureContainer();
+    const container = document.createElement("div");
     render(
       renderModelPicker({
         label: "Model",
@@ -43,7 +34,7 @@ describe("renderModelPicker", () => {
   });
 
   it("renders provider details and caller sentinels while preserving an unknown current model", async () => {
-    const container = createFixtureContainer();
+    const container = document.createElement("div");
     render(
       renderModelPicker({
         label: "Model",
@@ -77,7 +68,7 @@ describe("renderModelPicker", () => {
   });
 
   it("reveals free-form entry without leaking its internal option value", async () => {
-    const container = createFixtureContainer();
+    const container = document.createElement("div");
     const onChange = vi.fn();
     render(
       renderModelPicker({
@@ -111,7 +102,7 @@ describe("renderModelPicker", () => {
   });
 
   it("does not show a raw model reference when a model option receives pointer hover", async () => {
-    const host = createFixtureContainer();
+    const host = document.createElement("div");
     const onChange = vi.fn();
     const dispose = installTitleTooltips(document);
     try {
@@ -157,6 +148,7 @@ describe("renderModelPicker", () => {
       expect(onChange).toHaveBeenCalledExactlyOnceWith("openai/fixture-beta");
     } finally {
       dispose();
+      host.remove();
     }
   });
 });

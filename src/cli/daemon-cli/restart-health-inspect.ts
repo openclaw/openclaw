@@ -29,7 +29,6 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
-  requireChannelHealth?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -78,10 +77,9 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe =
-    Boolean(expectedVersion || expectedBuildId) ||
-    params.requirePluginHealth === false ||
-    params.requireChannelHealth === false;
+  const requiresGatewayProbe = Boolean(
+    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
+  );
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>
@@ -234,6 +232,5 @@ export async function inspectGatewayRestart(params: {
     expectedVersion,
     expectedBuildId,
     params.requirePluginHealth !== false,
-    params.requireChannelHealth !== false,
   );
 }

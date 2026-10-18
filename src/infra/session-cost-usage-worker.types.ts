@@ -47,15 +47,10 @@ export type UsageCostWorkerOperation =
   | {
       kind: "sessions";
       pricingFingerprint: string;
-      sessions: Array<{
-        sessionId?: string;
-        sessionFile: string;
-        transcriptFile?: UsageCostTranscriptFile;
-      }>;
+      sessions: Array<{ sessionId?: string; sessionFile: string }>;
       startMs?: number;
       endMs?: number;
       includeUntimestamped?: boolean;
-      reportBudgetBytes?: number;
       dayBucket: UsageDailyBucket;
     }
   | {
@@ -84,11 +79,7 @@ export type UsageCostPendingFile = { sessionFile: string; rollupId: string };
 export type UsageCostWorkerResult =
   | {
       kind: "inventory";
-      files: Array<
-        Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs"> & {
-          transcriptFile?: UsageCostTranscriptFile;
-        }
-      >;
+      files: Array<Pick<UsageCostTranscriptFile, "kind" | "sourcePath" | "sessionId" | "mtimeMs">>;
     }
   | { kind: "summary"; summary: CostUsageSummary; invalidRows: SessionCostUsageRollupRow[] }
   | {
@@ -97,7 +88,6 @@ export type UsageCostWorkerResult =
       cacheStatus: UsageCacheStatus;
       staleSessionFiles: string[];
       invalidRows: SessionCostUsageRollupRow[];
-      remainingReportBytes?: number;
     }
   | { kind: "refresh"; changed: boolean; remainingFiles?: UsageCostPendingFile[] };
 

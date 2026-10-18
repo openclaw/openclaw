@@ -5,7 +5,6 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { loadGatewayTlsServerRuntime } from "../infra/tls/gateway.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
@@ -125,11 +124,6 @@ export async function prepareGatewayKernelState(params: {
     getPluginRegistry: () => pluginRuntime.registry,
     hostDesktopService,
   });
-  await startupTrace.measure("device-identity", () =>
-    loadOrCreateProcessDeviceIdentityAsync().catch(() => {
-      // Chat fingerprints are optional; admission owns the bounded unavailability warning.
-    }),
-  );
   const workerEnvironmentRuntime = workerEnvironmentStartup
     ? await startupTrace.measure("worker-environments.runtime-imports", async () => {
         const workerModule = await import("./server-worker-environment-startup.js");
@@ -200,29 +194,31 @@ export async function prepareGatewayKernelState(params: {
             gatewayNamespace: nodeWorkerGatewayNamespace,
             nodeWorkerBundleRetention,
             getSessionChangeContext: () => pluginGatewayContext.current,
-            persistAbandonedPartial: async (request) => {
+            persistAbandonedPartial: async ({ sessionId, sessionKey, agentId, runId }) => {
               // Placement runtime starts before chat state exists; callers run only after startup.
-              const partial = connectionState.chatRunState.resolveBuffer(request.runId, {
-                final: true,
-              });
+              const partial = connectionState.chatRunState.resolveBuffer(runId, { final: true });
               const text = partial.displayText ?? partial.text;
-              if (!text.trim() && !request.missingToolResultText) {
+              if (!text.trim()) {
                 return;
               }
-              const transcript =
-                await import("./server-methods/chat-transcript-persistence.runtime.js");
-              await transcript.persistAbortedPartials({
+              const {
+                captureAbortedPartial,
+                persistAbortedPartials,
+                prepareChatAbortSessionSnapshot,
+              } = await import("./server-methods/chat-transcript-persistence.runtime.js");
+              await persistAbortedPartials({
                 context: { logGateway: log },
-                missingToolResultText: request.missingToolResultText,
                 snapshots: [
-                  transcript.captureAbortedPartial({
-                    ...request,
+                  captureAbortedPartial({
+                    sessionKey,
+                    sessionId,
+                    runId,
                     text,
                     abortOrigin: "placement-abandon",
-                    session: await transcript.prepareChatAbortSessionSnapshot({
+                    session: await prepareChatAbortSessionSnapshot({
                       cfg: getCommittedRuntimeConfig(),
-                      key: request.sessionKey,
-                      agentId: request.agentId,
+                      key: sessionKey,
+                      agentId,
                     }),
                   }),
                 ],

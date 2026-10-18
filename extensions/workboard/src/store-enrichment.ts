@@ -168,7 +168,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
       try {
         const updated = await this.withMutationAuthority(
           async () =>
-            this.updateCard(existing, {
+            this.updateCard(await this.requireCard(id), {
               metadata: {
                 ...clearDiagnostics(existing.metadata, ["missing_proof"]),
                 attachments: [...(existing.metadata?.attachments ?? []), attachment].slice(
@@ -199,7 +199,8 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
 
   async getAttachment(id: string): Promise<PersistedWorkboardAttachment | undefined> {
     const attachmentId = id.trim();
-    return await this.attachmentStore.lookup(attachmentId);
+    const entry = await this.attachmentStore.lookup(attachmentId);
+    return entry?.version === 1 ? entry : undefined;
   }
 
   async deleteAttachment(
@@ -215,7 +216,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
         throw new Error(`attachment not found: ${attachmentId}`);
       }
       await this.attachmentStore.delete(attachmentId);
-      return await this.updateCard(existing, {
+      return await this.updateCard(await this.requireCard(cardId), {
         metadata: {
           ...existing.metadata,
           attachments: attachments.filter((attachment) => attachment.id !== attachmentId),
@@ -267,7 +268,7 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
           : {}),
         ...(runId || cardRunId(card) ? { runId: runId ?? cardRunId(card) } : {}),
       });
-      return await this.updateCard(card, {
+      return await this.updateCard(await this.requireCard(card.id), {
         ...finished,
         status: card.status === "done" ? card.status : "blocked",
         metadata: {

@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, Show } from "solid-js";
+import { createMemo } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -30,7 +30,8 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { LibraryPinRead } from "../skills/library-detail.tsx";
+import { LitContent } from "../../lit/solid-content.tsx";
+import { renderLibraryPinRead } from "../skills/library-detail.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -400,11 +401,11 @@ export class ChatComposerCapabilityHost {
       onSubmit: (form: McpServerForm) => {
         void this.submitAddServer(context, state, session, form);
       },
-      library: this.library.read
-        ? {
+      libraryContent: this.library.read
+        ? renderLibraryPinRead({
             read: this.library.read,
             file: this.library.selectedFile,
-            onFile: (file: string) => {
+            onFile: (file) => {
               this.library.selectedFile = file;
               this.notify();
             },
@@ -412,7 +413,7 @@ export class ChatComposerCapabilityHost {
               this.library.closeRead();
               this.notify();
             },
-          }
+          })
         : null,
     };
   }
@@ -594,7 +595,7 @@ export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialo
   return (
     <>
       <ComposerAddServerDialog {...view()} />
-      <Show when={view().library}>{(library) => <LibraryPinRead {...library()} />}</Show>
+      <LitContent value={view().libraryContent} />
     </>
   );
 }

@@ -321,10 +321,7 @@ describe("chat source previews", () => {
   it("bounds previews and excerpt text while preserving Unicode", () => {
     const longPage = fetched();
     longPage.text = wrap(
-      "# Heading\n\n" +
-        "> A quoted paragraph with enough detail but nested outside the main page prose.\n\n" +
-        "Short navigation.\n\n" +
-        "A useful **opening paragraph** with enough detail to preview the fetched document.\n\n" +
+      "A useful opening paragraph with enough detail to preview the fetched document.\n\n" +
         "More article content. ".repeat(2000),
       "Web Fetch",
     );

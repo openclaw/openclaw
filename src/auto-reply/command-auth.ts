@@ -534,7 +534,7 @@ function resolveCommandAuthorizationState(
   };
 }
 
-/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlists. Supported through 2026-12-31. */
+/** @deprecated Await resolveCommandAuthorizationAsync for worker-owned channel allowlist preparation. */
 export function resolveCommandAuthorization(
   params: CommandAuthorizationParams,
 ): CommandAuthorization {

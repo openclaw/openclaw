@@ -14,10 +14,6 @@ import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-// First dispatch lazily loads these modules; keep cold compilation outside the test deadline.
-import "./agent-turn/agent-request-preflight.js";
-import "./agent-turn/agent-turn-service.js";
-import "./agent-turn/principal.js";
 import { APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -107,11 +103,7 @@ describe("createGatewayInstanceRuntime", () => {
 
     await expect(
       runtime.recovery.dispatchAgent({ message: "test", idempotencyKey: "run-unavailable" }),
-    ).rejects.toMatchObject({
-      message: expect.stringContaining("Gateway instance dispatch unavailable"),
-      code: "UNAVAILABLE",
-      retryable: true,
-    });
+    ).rejects.toThrow("Gateway instance dispatch unavailable");
     available = true;
     await expect(runtime.recovery.waitForAgent({ runId: "run-1", timeoutMs: 0 })).resolves.toEqual({
       runId: "run-1",
@@ -163,11 +155,9 @@ describe("createGatewayInstanceRuntime", () => {
     preparing.resolve(undefined);
     await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
-    await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toMatchObject({
-      message: expect.stringContaining("Gateway instance dispatch unavailable"),
-      code: "UNAVAILABLE",
-      retryable: false,
-    });
+    await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
+      "Gateway instance dispatch unavailable",
+    );
     await expect(
       retainedFacade.dispatch({ message: "stale completion", idempotencyKey: "closed-host" }),
     ).rejects.toThrow("Gateway instance dispatch unavailable");

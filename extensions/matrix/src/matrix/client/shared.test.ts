@@ -497,8 +497,7 @@ describe("shared Matrix client generations", () => {
     const firstClient = createMockClient("first");
     const replacementClient = createMockClient("replacement");
     let startupSignal: AbortSignal | undefined;
-    firstClient.start.mockImplementation((options = {}) => {
-      const { abortSignal } = options;
+    firstClient.start.mockImplementation(({ abortSignal } = {}) => {
       startupSignal = abortSignal;
       return start.promise;
     });

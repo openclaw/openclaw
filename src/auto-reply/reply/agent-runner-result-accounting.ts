@@ -296,7 +296,14 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
         toModel: fallbackTransition.selectedModelRef,
         assertCurrent() {
           operation?.abortSignal.throwIfAborted();
-          completion.assertCurrent();
+          const current = completion.assertCurrent();
+          if (
+            !current ||
+            !selectionUnchanged(current) ||
+            current.fallbackNotice?.activeModel !== fromModel
+          ) {
+            throw new Error("Model restoration source changed before commit");
+          }
         },
       });
       if (!recorded) {

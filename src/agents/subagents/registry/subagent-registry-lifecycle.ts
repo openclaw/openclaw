@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import pLimit from "p-limit";
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import {
@@ -84,6 +85,33 @@ const ownsSessionEffects = (entry: SubagentRunRecord): boolean =>
   entry.pauseReason !== "sessions_yield" &&
   entry.execution.suppressSessionEffects !== true;
 
+function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
+  const execution = entry.execution;
+  const outcome = execution.outcome;
+  const completion = entry.completion;
+  return [
+    execution.status,
+    execution.startedAt,
+    execution.endedAt,
+    outcome?.status,
+    outcome?.status === "error" ? outcome.error : undefined,
+    outcome?.startedAt,
+    outcome?.endedAt,
+    outcome?.elapsedMs,
+    execution.interruptionReason,
+    execution.suppressSessionEffects,
+    entry.pauseReason,
+    entry.endedReason,
+    entry.killIntent,
+    entry.killReconciliation?.killedAt,
+    entry.killReconciliation?.supersededAt,
+    entry.killReconciliation?.suppressTaskDelivery,
+    completion?.resultText,
+    completion?.capturedAt,
+    completion?.terminalReply,
+  ];
+}
+
 export class SubagentLifecycleController {
   readonly pendingRequesterSettleWakeCommits = new Map<object, PendingRequesterSettleWakeCommit>();
   readonly scheduledResumeTimers = new Map<object, ReturnType<typeof setTimeout>>();
@@ -97,6 +125,8 @@ export class SubagentLifecycleController {
   >();
   readonly scheduledRequesterSettleWakeTimers = new Map<string, ScheduledRequesterSettleWake>();
   private readonly terminalCompletionLocks = new Map<object, Promise<void>>();
+  private readonly terminalGenerations = new WeakMap<object, number>();
+  private readonly terminalPublications = new WeakMap<object, readonly unknown[]>();
   private readonly terminalSessionEffects = new WeakMap<object, SubagentSessionEffects>();
   private readonly cleanupGenerations = new WeakMap<object, number>();
   readonly progressEndedEntries = new WeakSet<object>();
@@ -142,6 +172,13 @@ export class SubagentLifecycleController {
         this.runtimeRuns.set(identity, current);
       }
       const pending = this.pendingRequesterSettleWakeCommits.get(identity);
+      if (
+        current &&
+        getSubagentRunRuntimeKey(current) === identity &&
+        this.terminalPublications.has(identity)
+      ) {
+        this.bumpTerminalGeneration(current);
+      }
       if (
         (current && getSubagentRunRuntimeKey(current) === identity) ||
         this.terminalEffectUsers.has(identity) ||
@@ -360,17 +397,27 @@ export class SubagentLifecycleController {
   isEndedHookOwnerCurrent = (entry: SubagentRunRecord): boolean =>
     this.isCleanupOwnerCurrent(entry) && !this.newerGenerationOwnsSession(entry);
 
-  isTerminalExecutionCurrent = (entry: SubagentRunRecord): boolean => {
+  bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged = false): number {
+    const identity = this.trackRun(entry);
+    const previous = this.terminalGenerations.get(identity) ?? 0;
+    const publication = terminalPublication(entry);
+    const changed = !isDeepStrictEqual(this.terminalPublications.get(identity), publication);
+    const generation = changed || bindingChanged || previous === 0 ? previous + 1 : previous;
+    this.terminalGenerations.set(identity, generation);
+    this.terminalPublications.set(identity, publication);
+    return generation;
+  }
+
+  isTerminalCallbackCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
-    // Same-outcome metadata updates are best-effort; actual cancellation/replacement still wins.
     return (
       current !== undefined &&
-      current.execution.status === "terminal" &&
       current.pauseReason !== "sessions_yield" &&
-      !current.killIntent &&
-      current.endedReason === entry.endedReason &&
-      current.execution.outcome?.status === entry.execution.outcome?.status &&
-      current.execution.outcome?.error === entry.execution.outcome?.error
+      this.terminalGenerations.get(getSubagentRunRuntimeKey(entry)) === generation &&
+      isDeepStrictEqual(
+        this.terminalPublications.get(getSubagentRunRuntimeKey(entry)),
+        terminalPublication(current),
+      )
     );
   };
   incrementCleanupFailureCount(entry: SubagentRunRecord): number {

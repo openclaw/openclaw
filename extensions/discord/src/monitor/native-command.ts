@@ -374,7 +374,6 @@ async function dispatchDiscordCommandInteraction(
   const effectiveRoute = routeState.effectiveRoute;
   const { ctxPayload, sessionKey, commandTargetSessionKey } =
     await buildDiscordNativeInteractionContext({
-      cfg,
       buildContext,
       interaction,
       channelContext,

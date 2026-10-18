@@ -42,13 +42,8 @@ export function idempotentSessionCreate(handler: GatewayRequestHandler): Gateway
       );
       return;
     }
-    // Hosted tools retain a live operator source without impersonating a human connection.
-    const operatorAuthority = request.client?.internal?.operatorRunAuthority;
-    operatorAuthority?.assertCurrent();
     const principal =
-      request.client?.authenticatedUserProfile?.profileId ??
-      request.client?.authenticatedUserId ??
-      operatorAuthority?.profileId;
+      request.client?.authenticatedUserProfile?.profileId ?? request.client?.authenticatedUserId;
     const deviceId = request.client?.connect.device?.id?.trim();
     if (!principal && !deviceId) {
       respond(

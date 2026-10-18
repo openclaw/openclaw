@@ -272,19 +272,12 @@ describe("registerMxcPlugin", () => {
     const { registry } = createPluginRegistryFixture();
     const record = createPluginRecord({ id: "mxc" });
     registry.registry.plugins.push(record);
-    const api = registry.createApi(record, { config: {}, pluginConfig: {} });
-    const retired = Promise.withResolvers<void>();
-    registerMxcPlugin(api);
-    api.lifecycle.registerRuntimeLifecycle({
-      id: "mxc-test-retirement-observer",
-      cleanup: () => retired.resolve(),
-    });
+    registerMxcPlugin(registry.createApi(record, { config: {}, pluginConfig: {} }));
     try {
       expect(readBackend().factory).toEqual(expect.any(Function));
       setActivePluginRegistry(registry.registry);
       setActivePluginRegistry(createEmptyPluginRegistry());
-      await retired.promise;
-      expect(readBackend()).toEqual(original);
+      await expect.poll(readBackend).toEqual(original);
     } finally {
       await expect(disposePluginRegistryInstances(registry.registry)).resolves.toMatchObject({
         failures: [],

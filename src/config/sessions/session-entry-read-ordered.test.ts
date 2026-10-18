@@ -82,10 +82,7 @@ it("retains exact reads without dispatch, isolates agent stores, and evicts the 
       requests.clear();
       const repeated = await read([keys[0]!]);
       expect(repeated.entries[0]?.entry.sessionId).toBe("entry-0");
-      expect(() => {
-        repeated.entries[0]!.entry.sessionId = "caller-mutated";
-      }).toThrow(TypeError);
-      expect((await read([keys[0]!])).entries[0]?.entry).toBe(repeated.entries[0]?.entry);
+      repeated.entries[0]!.entry.sessionId = "caller-mutated";
       expect((await read([keys[0]!])).entries[0]?.entry.sessionId).toBe("entry-0");
       expect((await readOther()).entries[0]?.entry.sessionId).toBe("other-store");
       expect(requests.count()).toBe(0);

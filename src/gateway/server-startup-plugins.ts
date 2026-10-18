@@ -3,7 +3,6 @@ import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js"
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessageWithCode } from "../infra/errors.js";
 import {
   collectConfiguredMemoryEmbeddingStartupProviderOwners,
   collectRegisteredEmbeddingProviderIds,
@@ -128,9 +127,7 @@ export async function runGatewayPostReadyStartupMaintenance(params: {
         await measureStartup(params.startupTrace, `startup.maintenance.${name}`, run);
       } catch (error) {
         if (!params.signal.aborted) {
-          params.log.warn(
-            `Gateway post-ready ${name} maintenance failed: ${formatErrorMessageWithCode(error)}`,
-          );
+          params.log.warn(`Gateway post-ready ${name} maintenance failed: ${String(error)}`);
         }
       }
     }),

@@ -262,10 +262,8 @@ function assertSandboxSessionSecretOwnerAvailable(
 async function prepareSandboxWorkspaceSelection(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
-  guard?: WorkspaceStateGuard,
 ) {
   const { rawSessionKey, runtime } = resolved;
-  const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -275,16 +273,8 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: operatorAuthority?.signal,
+        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
         assertCurrent: params.assertCurrent,
-        assertHost: () => {
-          guard?.assertHost?.();
-          if (params.admittedRunContext) {
-            operatorAuthority?.assertCurrent();
-          } else {
-            params.assertCurrent?.();
-          }
-        },
       })
     : undefined;
   try {
@@ -320,7 +310,7 @@ async function resolveProvisionedSandboxContext(
   resolved: ResolvedSandboxSession,
   guard?: WorkspaceStateGuard,
 ): Promise<SandboxContext> {
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved, guard);
+  const selected = await prepareSandboxWorkspaceSelection(params, resolved);
   try {
     params.assertCurrent?.();
     const { rawSessionKey, runtime, cfg, localWorkspace } = selected;

@@ -7,7 +7,6 @@ import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoin
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { runWithSqliteDatabaseAdmissionTurn } from "../../infra/sqlite-database-admission-turn.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
-import { recordWorkerMessage, observeWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -49,6 +48,9 @@ const runtime = resolveGlobalSingleton<ReconcileRuntime>(
 export type SessionTranscriptReconcileOperation = {
   signal: AbortSignal;
   shouldYield(): boolean;
+  retainLeaseForCleanup(
+    lease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
+  ): void;
   startTask(
     input: SessionTranscriptReconcileWorkerInput,
   ): ReturnType<typeof startReconcileWorkerTask>;
@@ -58,7 +60,7 @@ export function isSessionTranscriptReconcileWorkerPoolClosing(): boolean {
   return runtime.stopped;
 }
 
-/** Track the complete owner, including parent writes and native lease release. */
+/** Track the complete owner, including parent writes and independent lease recovery. */
 export function runSessionTranscriptReconcileOperation<T>(
   run: (operation: SessionTranscriptReconcileOperation) => Promise<T>,
   owner?: { agentId: string; path: string },
@@ -72,12 +74,15 @@ export function runSessionTranscriptReconcileOperation<T>(
     controller.abort(signal.reason);
   }
   const abort = signal && addAbortListener(signal, () => controller.abort(signal.reason));
+  let cleanupLease: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }> | undefined;
   let unregister: (() => void) | undefined;
   const completion = createDeferredCore<T>();
   const promise = completion.promise.finally(() => {
     abort?.[Symbol.dispose]();
     runtime.operations.delete(promise);
-    unregister?.();
+    if (!cleanupLease) {
+      unregister?.();
+    }
   });
   runtime.operations.set(promise, controller);
   try {
@@ -86,18 +91,29 @@ export function runSessionTranscriptReconcileOperation<T>(
       registerOpenClawAgentDatabaseAsyncResource({
         ...owner,
         revoke: () => controller.abort(new Error("Session transcript reconciliation was revoked")),
-        // Failed indexing is advisory; unreleased durable leases still prevent deletion.
-        close: () =>
-          promise.then(
-            () => undefined,
-            () => undefined,
-          ),
+        close() {
+          // Failed projection work is advisory; an unsettled native lease retains custody.
+          const closing = promise
+            .catch(() => {})
+            .then(async () => {
+              if (cleanupLease) {
+                await releaseReconcileWorkerLease(cleanupLease);
+                cleanupLease = undefined;
+                unregister?.();
+              }
+            });
+          runtime.operations.set(closing, controller);
+          return closing.finally(() => runtime.operations.delete(closing));
+        },
       });
     completion.resolve(
       run({
         signal: controller.signal,
         // Give another agent a turn after one session, without another admission queue.
         shouldYield: () => runtime.operations.size > 1,
+        retainLeaseForCleanup: (lease) => {
+          cleanupLease ??= lease;
+        },
         startTask: (input) => {
           // Native exit may require a release task after the agent owner revokes new work.
           if (input.mode === "release") {
@@ -140,7 +156,6 @@ export async function finishSessionTranscriptReconcileTask<T>({
     await handlingMessage;
     if (terminalReceived) {
       worker.postMessage({ type: "release" }, []);
-      recordWorkerMessage("lifecycle", "to_worker");
     }
     const plannerRelease = await task.leaseRelease;
     let cleanup = plannerRelease;
@@ -170,7 +185,13 @@ export async function finishSessionTranscriptReconcileTask<T>({
       `Transcript lease cleanup incomplete; restart OpenClaw before deleting this agent: ${toStringifiedError(error).message}`,
       { cause: error },
     );
-    // If native cleanup itself fails, its durable lease requires restart/Doctor; do not replay it.
+    operation.retainLeaseForCleanup({
+      mode: "release",
+      leaseId: input.leaseId,
+      path: input.path,
+      stateDir: input.stateDir,
+      externallySupervised: input.externallySupervised,
+    });
     throw outcome.ok
       ? failure
       : new AggregateError([outcome.error, failure], failure.message, { cause: failure });
@@ -185,6 +206,21 @@ export async function finishSessionTranscriptReconcileTask<T>({
     throw plannerFailure;
   }
   return outcome.value;
+}
+
+async function releaseReconcileWorkerLease(
+  input: Extract<SessionTranscriptReconcileWorkerInput, { mode: "release" }>,
+): Promise<void> {
+  const task = await startReconcileWorkerTask(input);
+  try {
+    const cleanup = await task.leaseRelease;
+    if (cleanup.failure) {
+      throw cleanup.failure;
+    }
+  } finally {
+    task.port.close();
+    task.port.removeAllListeners();
+  }
 }
 
 /** Close admission first; accepted owners may still dispatch their lease-release tasks. */
@@ -274,12 +310,6 @@ async function startReconcileWorkerTask(
   let releaseFailed = false;
   let failure: Error | undefined;
   port.on("message", (message: SessionTranscriptReconcileWorkerMessage) => {
-    observeWorkerMessage(
-      message,
-      "from_worker",
-      "sqlite_reply",
-      message.type === "fts-chunk" ? message.chunk.textBytes.byteLength : undefined,
-    );
     if (message.type === "lease-released") {
       released = true;
     } else if (message.type === "lease-release-failed") {

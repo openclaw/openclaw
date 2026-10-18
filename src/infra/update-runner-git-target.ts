@@ -393,7 +393,8 @@ export async function readBranchName(
   const result = await runCommand(["git", "-C", root, "rev-parse", "--abbrev-ref", "HEAD"], {
     timeoutMs,
   }).catch(() => null);
-  return result?.code === 0 ? result.stdout.trim() || null : null;
+  const branch = result?.code === 0 ? result.stdout.trim() : "";
+  return branch || null;
 }
 
 async function resolveChannelTag(
@@ -524,14 +525,6 @@ export async function fetchGitUpdateTarget(params: {
       : targetRef && !isFullGitObjectId(targetRef)
         ? remotes.filter((candidate) => candidate === "origin")
         : remotes;
-  const fetchConfigKey = `remote.${devSource?.remote}.fetch`;
-  const exclusions = devSource
-    ? await runStep(step("git-config-update-upstream", "config", "--get-all", fetchConfigKey))
-    : undefined;
-  if (exclusions && isFailedUpdateStep(exclusions) && exclusions.exitCode !== 1) {
-    return result(false);
-  }
-  const negatives = (exclusions?.stdoutTail ?? "").split("\n").filter((ref) => ref.startsWith("^"));
   for (const fetchRemote of fetchRemotes) {
     if (fetchRemote === ".") {
       continue;
@@ -540,11 +533,9 @@ export async function fetchGitUpdateTarget(params: {
       authority ? name : `${name}:${fetchRemote}`,
       "fetch",
       fetchRemote,
-      devSource ? "--no-prune" : "--prune",
+      "--prune",
       "--no-tags",
       "--no-prune-tags",
-      // Keep configured refs literal; an option-shaped source could fetch all branches.
-      ...(devSource ? ["--no-recurse-submodules", "--", devSource.mergeRef, ...negatives] : []),
     );
     const fetchOutcome = await runClassifiedGitStep(options, (fetch) => {
       const interrupted =
@@ -570,12 +561,7 @@ export async function fetchGitUpdateTarget(params: {
     }
   }
   if (channel === "dev") {
-    // FETCH_HEAD proves freshness; an excluded source can otherwise look current.
-    const fetched =
-      devSource && devSource.remote !== "."
-        ? await runStep(step("git-resolve-target", "rev-parse", "--verify", "FETCH_HEAD^{commit}"))
-        : undefined;
-    return result(!fetched || !isFailedUpdateStep(fetched));
+    return result(true);
   }
   if (!tagRemote) {
     steps.push({

@@ -1,4 +1,3 @@
-import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
 /**
@@ -27,6 +26,7 @@ import {
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
+import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
@@ -55,7 +55,6 @@ import {
   runAgentHarnessLifecycleAttempt,
   runAgentHarnessLifecycleFinalization,
 } from "./lifecycle.js";
-import { withoutPluginHarnessPrivateState } from "./plugin-private-state.js";
 import {
   buildAgentHarnessSelectionDecision,
   resolveAgentHarnessSelectionDecision,
@@ -231,7 +230,6 @@ export async function runAgentHarnessAttempt(
   const nativeOwnsModel = nativeSessionRuntime?.auth === "native";
   const nativeModelPolicySupported = harness.nativeModelPolicySupport === "exact";
   assertHarnessModelPolicySupport(harness, params);
-  let nativePermissionsConsented = false;
   const runPreparedAttempt = async (
     prepared: Parameters<typeof runAgentHarnessLifecycleAttempt>[1],
   ) => {
@@ -267,23 +265,6 @@ export async function runAgentHarnessAttempt(
                 : modelExecution.signal,
             }
           : prepared,
-        async (attempt) => {
-          if (harness.executionEnvironment === "host-only") {
-            // Prepared turns can outlive agent consent; the live config owner
-            // must still authorize native work after all asynchronous setup.
-            const currentConsent = await assertAgentHarnessExecutionEnvironment(harness, {
-              ...params,
-              config: readRuntimeConfig(),
-            });
-            if (nativePermissionsConsented && !currentConsent) {
-              throw new AgentHarnessPreflightError(
-                "Native runtime consent was revoked before dispatch. Review this chat's permissions before retrying.",
-              );
-            }
-          }
-          attempt.hostCapabilities?.assertActive();
-          return harness.runAttempt(attempt);
-        },
       );
       await nativeSessionRuntime?.assertCurrent();
       modelExecution?.assertCurrent();
@@ -385,7 +366,10 @@ export async function runAgentHarnessAttempt(
         const hostOpenClawAuthority =
           isHostScopedAgentToolActive("openclaw") &&
           isSystemAgentOnlyAllowlist(pluginAttempt.params.toolsAllow);
-        nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(harness, params);
+        const nativePermissionsConsented = await assertAgentHarnessExecutionEnvironment(
+          harness,
+          params,
+        );
         const preparedParams = selection.builtIn
           ? pluginAttempt.params
           : await preparePluginHarnessParams(
@@ -637,6 +621,34 @@ function prepareHarnessFinalizationParams(
       ? unwrapSecretSentinelsForProviderEgress(pluginParams.resolvedApiKey, boundary)
       : pluginParams.resolvedApiKey,
   };
+}
+
+function withoutPluginHarnessPrivateState(
+  params: EmbeddedRunAttemptInternalParams,
+): Omit<import("./types.js").AgentHarnessAttemptParamsV2, "hostCapabilities"> {
+  // Keep mutable host-owned state behind one projection for every plugin handoff;
+  // separate projections can drift and expose authority on less common operations.
+  const {
+    admittedRunContext: _admittedRunContext,
+    runtimePluginToolGrant: _runtimePluginToolGrant,
+    assistantErrorTranscript: _assistantErrorTranscript,
+    compactionCountOwner: _compactionCountOwner,
+    completionCheck: _completionCheck,
+    preparedSessionTarget: _preparedSessionTarget,
+    onContextAccountingEvent: _onContextAccountingEvent,
+    onCompactionRequestBudget: _onCompactionRequestBudget,
+    contextEngineLogicalTurnLease: _contextEngineLogicalTurnLease,
+    hostCapabilities: _hostCapabilities,
+    onContextEngineTurnCandidate: _onContextEngineTurnCandidate,
+    trajectoryRecorder: _trajectoryRecorder,
+    inputAttachmentMedia: _inputAttachmentMedia,
+    supportsTurnScopedToolRestrictions: _supportsTurnScopedToolRestrictions,
+    __openclawSourceReplyDeliveryRuntime: _sourceReplyDeliveryRuntime,
+    ...pluginParams
+  } = params as EmbeddedRunAttemptInternalParams & {
+    __openclawSourceReplyDeliveryRuntime?: unknown;
+  };
+  return pluginParams;
 }
 
 async function preparePluginHarnessParams(

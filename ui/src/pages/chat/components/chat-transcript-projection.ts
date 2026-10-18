@@ -8,7 +8,6 @@ import { channelSenderAvatarMemoKey } from "../../../lib/chat/channel-sender-ava
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { localParticipantIdentityKey } from "../../../lib/chat/sender-label.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
 import { messageRecoveryKey, resolveSourceMessageId } from "../chat-message-recovery.ts";
 import { resolveTurnRecap } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
@@ -60,7 +59,7 @@ import { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.t
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 import { renderChatTypingIndicator } from "./chat-typing-indicator.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { TurnRecapRow } from "./chat-working-indicator.tsx";
+import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-subagent-activity-live.ts";
 
 type ChatRenderItem = ReturnType<typeof coalesceAgentRunFrames>[number];
@@ -122,7 +121,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     showToolCalls: props.showToolCalls,
     persistCommentary: props.persistCommentary,
     runWorking: Boolean(props.runWorking),
-    runFinalizing: props.runFinalizing,
     runActive: Boolean(props.runActive),
     subagentWait: subagents.placedWait,
     questionPrompts: props.questionPrompts,
@@ -253,7 +251,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     agentId: props.currentAgentId,
     gatewayClient: props.gatewayClient,
     indicator: workingIndicator,
-    activeRunId: props.runActive ? props.runId : undefined,
     row: activeSession,
     usageByRun: props.runUsageById,
   });
@@ -390,7 +387,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
       userAvatar: props.userAvatar ?? null,
       channelAvatar: props.channelAvatar,
       onRetryQueuedMessage: props.onRetryQueuedMessage,
-      connected: props.connected,
       onDiscardQueuedMessage: props.onDiscardQueuedMessage,
       queuedMessageAction: props.queuedMessageAction,
       personActivity: props.personActivity,
@@ -533,7 +529,7 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     appendContent("realtime-talk", realtimeConversation);
   }
   if (turnRecap !== null && !recapAttached && !isEmpty && !showLoadingSkeleton) {
-    appendContent("turn-recap", solidContent(TurnRecapRow, { recap: turnRecap }));
+    appendContent("turn-recap", renderTurnRecapRow(turnRecap));
   }
   if (subagents.wait && !subagents.placedWait && !searchFiltering) {
     appendContent(
@@ -601,10 +597,10 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     activityRunId,
     activityGroupKey,
     Boolean(props.runWorking),
-    Boolean(props.runFinalizing),
     props.startupLabel,
     props.retryAt,
     props.onRetryRun,
+    props.onChangeFailureModel,
     props.failureActionsRunId,
     Boolean(props.waitingApproval),
     props.questionPrompts,
@@ -643,7 +639,6 @@ export function projectChatTranscript(props: ChatThreadProps, transcript: ChatTr
     Boolean(props.onReact),
     Boolean(props.asyncQuestions?.submit),
     Boolean(props.onRetryQueuedMessage),
-    props.connected,
     Boolean(props.onDiscardQueuedMessage),
     props.queuedMessageAction?.id,
     props.queuedMessageAction?.label,

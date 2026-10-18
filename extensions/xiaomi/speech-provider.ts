@@ -221,8 +221,6 @@ async function xiaomiTTS(params: {
 }
 
 export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
-  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
-    Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey);
   return {
     id: "xiaomi",
     label: "Xiaomi MiMo",
@@ -234,9 +232,8 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
     resolveConfig: ({ rawConfig }) => normalizeXiaomiTtsProviderConfig(rawConfig),
     parseDirectiveToken,
     listVoices: async () => XIAOMI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) =>
+      Boolean(resolveXiaomiTtsProviderConfig(providerConfig).apiKey),
     synthesize: async (req) => {
       const config = resolveXiaomiTtsProviderConfig(req.providerConfig);
       const overrides = readXiaomiTtsOptions(req.providerOverrides);

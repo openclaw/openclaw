@@ -10,6 +10,7 @@ import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import type { OpenClawPluginApi, OpenClawPluginService } from "../api.js";
 import { sessionMatchesColumn, sessionsBoardFallback } from "./sessions-board-rules.js";
 import type { WorkboardBoardStore } from "./store-boards.js";
+import { freezeCardList } from "./store-read.js";
 
 type Gateway = Pick<
   OpenClawPluginApi["runtime"]["gateway"],
@@ -223,7 +224,7 @@ function createOwner(
       const match = known
         ? board.sessions.columns.find((column) => sessionMatchesColumn(ruleFacts, column))
         : undefined;
-      const placed = {
+      const placed = Object.freeze({
         ...facts,
         columnId: pinned ? pin.columnId : (match ?? fallback).id,
         source: pinned ? ("operator" as const) : ("state" as const),
@@ -234,7 +235,7 @@ function createOwner(
             : match
               ? "Matched column rules"
               : "fallback",
-      };
+      });
       sessions.push(placed);
       resolved.set(key, { ...cached, pin, row: placed });
     }
@@ -254,6 +255,7 @@ function createOwner(
         `Pull-request facts for ${count} ${count === 1 ? "session" : "sessions"} are ${reason}.`,
       );
     }
+    Object.freeze(sessions);
     return {
       complete: unavailable.size === 0 && !source.missingSessionKeys?.length,
       facts: resolved,
@@ -281,13 +283,18 @@ function createOwner(
     const admittedRevision = revision;
     let boardRead = boards.get(id);
     if (!boardRead) {
-      boardRead = params.store.getSessionsBoard(id);
+      boardRead = params.store.getSessionsBoard(id).then((board) => {
+        freezeCardList(board);
+        return board;
+      });
       if (boards.size >= 64) {
         boards.delete(boards.keys().next().value!);
       }
       boards.set(id, boardRead);
       void boardRead.catch(() => {
-        boards.delete(id);
+        if (boards.get(id) === boardRead) {
+          boards.delete(id);
+        }
       });
     }
     const board = await boardRead;
@@ -335,10 +342,10 @@ function createOwner(
               prepared.expires,
             );
             prepared.facts = complete ? facts : undefined;
-            const snapshot = {
+            const snapshot = Object.freeze({
               ...result,
-              revision: { ...admittedRevision, boardId: id, scope: randomUUID() },
-            };
+              revision: Object.freeze({ ...admittedRevision, boardId: id, scope: randomUUID() }),
+            });
             return { snapshot, complete };
           }),
         };
@@ -351,12 +358,17 @@ function createOwner(
       try {
         const { snapshot, complete } = await projection.read;
         assertReadCurrent();
-        if (!complete || params.store.sessionsRevision !== admittedRevision) {
+        if (
+          (!complete || params.store.sessionsRevision !== admittedRevision) &&
+          projections.get(key) === projection
+        ) {
           projections.delete(key);
         }
         return snapshot;
       } catch (error) {
-        projections.delete(key);
+        if (projections.get(key) === projection) {
+          projections.delete(key);
+        }
         assertReadCurrent();
         throw error;
       }

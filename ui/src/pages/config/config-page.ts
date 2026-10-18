@@ -55,6 +55,7 @@ import {
   realtimeTalkDeviceIssueMessage,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
+import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
@@ -450,7 +451,7 @@ export class ConfigPageController {
       if (abort.signal.aborted) {
         return;
       }
-      if (isMissingOperatorReadScopeError(error)) {
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
       }

@@ -274,8 +274,6 @@ export type ReplyPayloadMetadata = {
   assistantTranscriptOwned?: boolean;
   /** Exact decoration added by normalization, not model-authored text. */
   responsePrefix?: string;
-  /** Exact usage footer appended by the host. */
-  responseUsageLine?: string;
   /** Exact channel/account transform owner that already accepted this payload. */
   channelReplyTransformOwner?: object;
   /** Exact dispatcher that already ran its full normalization before side effects. */

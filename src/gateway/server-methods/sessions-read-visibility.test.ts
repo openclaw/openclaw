@@ -120,7 +120,7 @@ test.each([
       { agentId: "research", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: 42,
         displayName: "Research transcript title",
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: ownerId },
@@ -214,8 +214,7 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        // Post-write age-retention maintenance archives expired rows out of default lists.
-        updatedAt: Date.now(),
+        updatedAt: 42,
         createdActor: { type: "human", source: "profile", id: actorId },
         visibility: "shared",
       },
@@ -291,7 +290,7 @@ test.each(["research", "ops"] as const)(
         { agentId, sessionKey: "global", storePath },
         {
           sessionId,
-          updatedAt: Date.now(),
+          updatedAt: 42,
           createdActor: { type: "human", source: "profile", id: profiles[agentId] },
           visibility: "shared",
         },
@@ -333,7 +332,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
     { agentId: "main", sessionKey, storePath },
     {
       sessionId,
-      updatedAt: Date.now(),
+      updatedAt: 42,
       createdActor: { type: "human", source: "profile", id: ownerId },
       visibility: "draft",
     },
@@ -527,7 +526,7 @@ test("sessions.describe preserves caller roles and sessions.get hides foreign dr
       { agentId: "main", sessionKey, storePath },
       {
         sessionId,
-        updatedAt: Date.now(),
+        updatedAt: 42,
         createdActor: { type: "human", source: "profile", id: ownerId },
         visibility: "shared",
       },

@@ -50,19 +50,21 @@ export async function handlePluginThemeArtHttpRequest(
     !request.value ||
     !themeId ||
     !THEME_LOCAL_ID_PATTERN.test(themeId) ||
-    (kind !== "icon" && kind !== "hat" && kind !== "critter" && kind !== "background") ||
+    (kind !== "icon" && kind !== "hat" && kind !== "critter") ||
     !artId ||
     !THEME_ARTWORK_ID_PATTERN.test(artId)
   ) {
     respondNotFound(res);
     return true;
   }
-  const artwork = resolvePluginThemeArtwork(request.value, themeId, kind, artId);
-  const image = artwork && (await resolveHttpImageRepresentation(artwork.sourceName, artwork.body));
-  if (!artwork || !image) {
+  const svg = resolvePluginThemeArtwork(request.value, themeId, kind, artId);
+  const image = svg
+    ? await resolveHttpImageRepresentation("theme-art.svg", Buffer.from(svg, "utf8"))
+    : undefined;
+  if (!image) {
     respondNotFound(res);
     return true;
   }
-  sendHttpImageResponse({ req, res, image, filename: `plugin-${artwork.sourceName}` });
+  sendHttpImageResponse({ req, res, image, filename: "plugin-theme-art.svg" });
   return true;
 }

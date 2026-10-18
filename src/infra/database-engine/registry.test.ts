@@ -8,11 +8,11 @@ describe("database engine selection", () => {
     );
   });
 
-  it("registers PostgreSQL support for Workboard and Logbook", () => {
+  it("registers PostgreSQL support only for Workboard", () => {
     expect(
       listDatabaseEngineStores()
         .filter((store) => store.postgres)
         .map((store) => store.id),
-    ).toEqual(["workboard", "logbook"]);
+    ).toEqual(["workboard"]);
   });
 });

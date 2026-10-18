@@ -13,7 +13,6 @@ import {
   applySessionMessageRewrite,
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
-import { readSessionTranscriptAnchorFactsInDatabase } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionMessageRewriteSelection } from "./session-transcript-mutation.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
 
@@ -46,10 +45,8 @@ function fixture(f: Fixture, pretty = false) {
     appendTranscriptEventInTransaction(f.database, f.scope, header);
     appendTranscriptEventInTransaction(f.database, f.scope, question, { eventJson });
   });
-  f.read();
-  const anchor = readSessionTranscriptAnchorFactsInDatabase(f.database, f.scope, {
-    entryIds: [question.id],
-  }).anchors[0];
+  const hot = f.read();
+  const anchor = hot.transcript.anchors.find((candidate) => candidate.entryId === question.id);
   assert(anchor);
   const selection: SessionMessageRewriteSelection = {
     scope: f.scope,
@@ -104,13 +101,13 @@ it("reuses resident metadata while preserving exact payload bytes and observing 
         messageId: question.id,
         message: firstMessage,
       });
-      expect(sql.counts).toEqual({ payload: 1, other: 0 });
+      expect(sql.counts).toEqual({ payload: 2, other: 0 });
 
       const second = rewrite.prepare();
       expect(second.event.message).toEqual(firstMessage);
       expect(second.eventJson).toBe(JSON.stringify({ ...question, message: firstMessage }));
       expect(rewrite.commit(second, finalMessage).result?.message).toEqual(finalMessage);
-      expect(sql.counts).toEqual({ payload: 2, other: 0 });
+      expect(sql.counts).toEqual({ payload: 4, other: 0 });
     } finally {
       sql.restore();
     }

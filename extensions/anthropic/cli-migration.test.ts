@@ -139,6 +139,49 @@ function createProviderAuthMethodNonInteractiveContext(
 }
 
 describe("anthropic cli migration", () => {
+  it("keeps anthropic defaults and selects the claude-cli runtime", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": { alias: "Opus" },
+            "anthropic/claude-opus-4-6": { alias: "Opus" },
+            "openai/gpt-5.2": {},
+          },
+        },
+      },
+    });
+
+    expect(result.profiles).toStrictEqual([]);
+    expect(result.defaultModel).toBe("anthropic/claude-opus-4-7");
+    expect(result.configPatch).toEqual({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic/claude-opus-4-7",
+            fallbacks: ["anthropic/claude-opus-4-6", "openai/gpt-5.2"],
+          },
+          models: {
+            "anthropic/claude-opus-4-7": {
+              alias: "Opus",
+              agentRuntime: { id: "claude-cli" },
+            },
+            "anthropic/claude-opus-4-6": {
+              alias: "Opus",
+              agentRuntime: { id: "claude-cli" },
+            },
+            "openai/gpt-5.2": {},
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
+  });
+
   it("keeps unknown Anthropic refs raw while still selecting Claude CLI", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
@@ -161,6 +204,32 @@ describe("anthropic cli migration", () => {
     expect(defaults?.models?.["anthropic/claude-opus-5-0"]).toBeUndefined();
   });
 
+  it("adds a Claude CLI default when no anthropic default is present", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.2" },
+          models: {
+            "openai/gpt-5.2": {},
+          },
+        },
+      },
+    });
+
+    expect(result.defaultModel).toBe("anthropic/claude-opus-5-5");
+    expect(result.configPatch).toEqual({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-5.2": {},
+            "anthropic/claude-opus-5-5": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
+  });
+
   it("does not treat bare non-Claude model refs as Anthropic", () => {
     const result = buildAnthropicCliMigrationResult({
       agents: {
@@ -176,6 +245,31 @@ describe("anthropic cli migration", () => {
     expect(result.defaultModel).toBe("anthropic/claude-opus-5-5");
     expect(result.configPatch?.agents?.defaults?.model).toBeUndefined();
     expect(result.configPatch?.agents?.defaults?.models?.["anthropic/gpt-5.2"]).toBeUndefined();
+  });
+
+  it("migrates an older configured model without adding static membership", () => {
+    const result = buildAnthropicCliMigrationResult({
+      agents: {
+        defaults: {
+          model: { primary: "claude-cli/claude-opus-4-7" },
+          models: {
+            "claude-cli/claude-opus-4-7": {},
+          },
+        },
+      },
+    });
+
+    expect(result.configPatch).toEqual({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
   });
 
   it("writes migrated refs as own entries without invoking an inherited setter", () => {
@@ -254,22 +348,41 @@ describe("anthropic cli migration", () => {
     expect(defaults.models?.["anthropic/*"]).toEqual({ agentRuntime: { id: "openclaw" } });
   });
 
-  it("registered cli auth reports a timeout with a retry step, not a logout", async () => {
-    const actual = await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
-    probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
-    runUtf8CommandWithTimeout.mockResolvedValue({
-      code: null,
-      termination: "timeout",
-      stdout: JSON.stringify({ loggedIn: true }),
-    });
+  it("registered cli auth tells users to run claude auth login when local auth is missing", async () => {
+    probeClaudeCliAuthStatus.mockReturnValue({ status: "missing" });
     const method = await resolveAnthropicCliAuthMethod();
-    const result = method.run(createProviderAuthContext());
 
-    await expect(result).rejects.toThrow(
-      "Could not verify the installed Claude CLI login within 10 s.\n" +
-        "Run claude auth status --json, then retry this setup.",
+    await expect(method.run(createProviderAuthContext())).rejects.toThrow(
+      [
+        "Claude CLI is not authenticated on this host.",
+        "Run claude auth login first, then re-run this setup.",
+      ].join("\n"),
     );
   });
+
+  it.each(["interactive", "non-interactive"])(
+    "registered %s cli auth reports a timeout with a retry step, not a logout",
+    async (mode) => {
+      const actual =
+        await vi.importActual<typeof import("./cli-auth-seam.js")>("./cli-auth-seam.js");
+      probeClaudeCliAuthStatus.mockImplementation(actual.probeClaudeCliAuthStatus);
+      runUtf8CommandWithTimeout.mockResolvedValue({
+        code: null,
+        termination: "timeout",
+        stdout: JSON.stringify({ loggedIn: true }),
+      });
+      const method = await resolveAnthropicCliAuthMethod();
+      const result =
+        mode === "interactive"
+          ? method.run(createProviderAuthContext())
+          : method.runNonInteractive!(createProviderAuthMethodNonInteractiveContext());
+
+      await expect(result).rejects.toThrow(
+        "Could not verify the installed Claude CLI login within 10 s.\n" +
+          "Run claude auth status --json, then retry this setup.",
+      );
+    },
+  );
 
   it.each(["string", "legacy-collision"] as const)(
     "registered CLI setup preserves authored primary and fallback aliases (%s model)",
@@ -296,7 +409,6 @@ describe("anthropic cli migration", () => {
         },
       };
       const interactive = await method.run(createProviderAuthContext(config));
-      expect(interactive.profiles).toEqual([]);
       const nonInteractive = await method.runNonInteractive!(
         createProviderAuthMethodNonInteractiveContext(config),
       );
@@ -455,19 +567,25 @@ describe("anthropic cli migration", () => {
     expect(ctx.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("registered non-interactive cli auth reports an unreadable probe", async () => {
-    probeClaudeCliAuthStatus.mockReturnValue({ status: "unreadable" });
-    const method = await resolveAnthropicCliAuthMethod();
-    const ctx = createProviderAuthMethodNonInteractiveContext();
+  it.each(["interactive", "non-interactive"])(
+    "registered %s cli auth reports an unreadable probe",
+    async (mode) => {
+      probeClaudeCliAuthStatus.mockReturnValue({ status: "unreadable" });
+      const method = await resolveAnthropicCliAuthMethod();
+      const ctx = createProviderAuthMethodNonInteractiveContext();
 
-    const result = method.runNonInteractive!(ctx);
-    await expect(result).rejects.toThrow(
-      [
-        "Could not verify the installed Claude CLI login.",
-        "Run claude auth status --json, then retry this setup.",
-      ].join("\n"),
-    );
-    expect(ctx.runtime.error).not.toHaveBeenCalled();
-    expect(ctx.runtime.exit).not.toHaveBeenCalled();
-  });
+      const result =
+        mode === "interactive"
+          ? method.run(createProviderAuthContext())
+          : method.runNonInteractive!(ctx);
+      await expect(result).rejects.toThrow(
+        [
+          "Could not verify the installed Claude CLI login.",
+          "Run claude auth status --json, then retry this setup.",
+        ].join("\n"),
+      );
+      expect(ctx.runtime.error).not.toHaveBeenCalled();
+      expect(ctx.runtime.exit).not.toHaveBeenCalled();
+    },
+  );
 });

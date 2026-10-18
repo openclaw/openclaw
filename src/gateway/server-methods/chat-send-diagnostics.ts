@@ -1,6 +1,5 @@
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
-import { createPhaseTimings } from "./phase-timings.js";
 
 const PHASES = [
   "authority",
@@ -19,6 +18,11 @@ const PHASES = [
   "dispatch",
 ] as const;
 type ChatSendPhase = (typeof PHASES)[number] | `detail.${string}`;
+type PhaseScope = {
+  mark: (phase?: ChatSendPhase) => void;
+  finish: () => void;
+  [Symbol.dispose]: () => void;
+};
 type PostAckStage = "startup" | "steer" | "queued";
 
 export type ChatSendDiagnostics = ReturnType<typeof startChatSendDiagnostics>;
@@ -42,8 +46,8 @@ export function readChatSendDiagnostics(request: object): ChatSendDiagnostics | 
 /** Request-owned totals; nested and parallel phases can overlap. */
 export function startChatSendDiagnostics(log: { info(message: string): void }) {
   const emit = createQueuedDiagnosticPhaseEmitter();
-  const timing = createPhaseTimings<ChatSendPhase>();
-  const { totals } = timing;
+  const totals = new Map<ChatSendPhase, number>();
+  const active = new Set<(now: number) => void>();
   let stage: "request" | PostAckStage = "request";
   let startedAt = performance.now();
   let acknowledgedMs: number | undefined;
@@ -51,7 +55,9 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
 
   const report = () => {
     const now = performance.now();
-    timing.flush(now);
+    for (const flush of active) {
+      flush(now);
+    }
     const elapsedMs = now - startedAt;
     const endedAt = Date.now();
     try {
@@ -100,10 +106,39 @@ export function startChatSendDiagnostics(log: { info(message: string): void }) {
       }
       report();
       finished = true;
-      timing.close();
+      active.clear();
     }
   };
-  const scope = (phase: ChatSendPhase) => (finished ? undefined : timing.scope(phase));
+  const scope = (initialPhase: ChatSendPhase): PhaseScope | undefined => {
+    if (finished) {
+      return undefined;
+    }
+    let phase: ChatSendPhase | undefined = initialPhase;
+    let phaseStartedAt = performance.now();
+    const flush = (now: number) => {
+      if (phase) {
+        totals.set(phase, (totals.get(phase) ?? 0) + now - phaseStartedAt);
+      }
+      phaseStartedAt = now;
+    };
+    active.add(flush);
+    const phaseScope: PhaseScope = {
+      mark(nextPhase) {
+        if (active.has(flush)) {
+          flush(performance.now());
+          phase = nextPhase;
+        }
+      },
+      finish() {
+        phaseScope.mark();
+        active.delete(flush);
+      },
+      [Symbol.dispose]() {
+        phaseScope.finish();
+      },
+    };
+    return phaseScope;
+  };
   return {
     scope,
     observeSpan: (name: string, attributes: Record<string, unknown> | undefined) => {

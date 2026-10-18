@@ -154,10 +154,6 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
     nextMessage.display = false;
   }
   const runtimeMeta = { ...nextMessage["__openclaw"] };
-  delete runtimeMeta.chatRequestIdentity;
-  if (typeof preparedMeta?.chatRequestIdentity === "string") {
-    runtimeMeta.chatRequestIdentity = preparedMeta.chatRequestIdentity;
-  }
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -229,7 +225,6 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     typeof originalIdempotencyKey === "string" ? originalIdempotencyKey : undefined;
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
-  const chatRequestIdentity = originalMeta?.chatRequestIdentity;
   const originalContent =
     originalMeta?.humanMentions === undefined && originalMeta?.workContext === undefined
       ? undefined
@@ -275,7 +270,6 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   };
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
-    ...(typeof chatRequestIdentity === "string" ? { chatRequestIdentity } : {}),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyToPreview ? { replyToPreview } : {}),

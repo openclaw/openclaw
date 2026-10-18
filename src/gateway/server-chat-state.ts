@@ -88,7 +88,7 @@ type PendingLiveTextFlush = {
 
 type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
 
-type ChatRunRecord = assistantText.ChatRunBufferState & {
+export type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
   buffer?: string;

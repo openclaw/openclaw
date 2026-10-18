@@ -5,9 +5,8 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import {
   repairCanonicalSqliteIndexes,
-  verifyAndRepairCanonicalSqliteIndexSteps,
+  verifyAndRepairCanonicalSqliteIndexes,
 } from "./sqlite-index-schema.js";
-import { runSqliteIntegrityOperationSync } from "./sqlite-integrity.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE records (
@@ -291,9 +290,7 @@ describe("repairCanonicalSqliteIndexes", () => {
       ).toEqual([]);
 
       expect(() =>
-        runSqliteIntegrityOperationSync(
-          verifyAndRepairCanonicalSqliteIndexSteps(db, "test database", CANONICAL_SCHEMA),
-        ),
+        verifyAndRepairCanonicalSqliteIndexes(db, "test database", CANONICAL_SCHEMA),
       ).toThrow(/integrity_check failed.*openclaw doctor --fix/iu);
       expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).not.toBe("ok");
     } finally {

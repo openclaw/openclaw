@@ -1,34 +1,39 @@
 /** Locked auth profile writes and attempt-scoped compensation. */
-import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { replaceAuthProfileAuthorization } from "./authorization-lifetime.js";
 import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { withOAuthProfileLock, withOAuthProfileLocks } from "./oauth-profile-lock.js";
 import { isOAuthRefreshFence, isSameOAuthRefreshGeneration } from "./oauth-refresh-marker.js";
-import { prepareSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
-import { mergePersistedAuthProfileState } from "./persisted.js";
-import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
-import { prepareAgentAuthProfileRowsRead, readSharedAuthProfileRows } from "./sqlite-read.js";
-import { resolveAuthProfileDatabasePath, resolveAuthProfileDatabaseOwnerId } from "./sqlite.js";
 import {
-  findPersistedAuthProfileCredentialAsync,
-  updateAuthProfileStoreWithLock,
-} from "./store-runtime.js";
-import { watchAuthProfileNativeCommits } from "./store-update-commit.js";
+  getPreparedSharedAuthStoreOwnership,
+  prepareSharedAuthStoreOwnership,
+} from "./path-resolve.js";
+import { loadPersistedAuthProfileStore, loadPersistedSharedAuthProfileStore } from "./persisted.js";
+import { updateAuthProfileStoreWithLock } from "./store-runtime.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import { runAuthProfileStoreUpdate } from "./store-update.js";
-import { getScopedAuthProfileEnv, resolveRuntimeAuthProfileAgentDir } from "./store.js";
+import { findPersistedAuthProfileCredential, getScopedAuthProfileEnv } from "./store.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
   OAuthCredential,
   PreparedAuthProfileStoreOwner,
 } from "./types.js";
-import { reserveAuthProfileUsagePreparation } from "./usage-lifecycle.js";
 import { resetAuthProfileFailureState } from "./usage-state.js";
+
+function loadAuthProfileWriteTarget(params: {
+  agentDir?: string;
+  stateDir?: string;
+}): AuthProfileStore | null {
+  if (params.agentDir || !params.stateDir) {
+    return loadPersistedAuthProfileStore(params.agentDir);
+  }
+  return loadPersistedSharedAuthProfileStore({
+    ...process.env,
+    OPENCLAW_STATE_DIR: params.stateDir,
+    OPENCLAW_AGENT_DIR: undefined,
+  });
+}
 
 function resolveAuthProfileWriteEnv(params: { stateDir?: string }): NodeJS.ProcessEnv {
   return params.stateDir
@@ -36,95 +41,35 @@ function resolveAuthProfileWriteEnv(params: { stateDir?: string }): NodeJS.Proce
     : (getScopedAuthProfileEnv() ?? process.env);
 }
 
-async function loadAuthProfileWriteAuthorities(
+function loadAuthProfileWriteAuthorities(
   params: { agentDir?: string; stateDir?: string },
   profileIds: readonly string[],
-): Promise<ReadonlyMap<string, AuthProfileCredential | undefined>> {
+): ReadonlyMap<string, AuthProfileCredential | undefined> {
   if (profileIds.length === 0) {
     return new Map();
   }
-  const env = resolveAuthProfileWriteEnv(params);
-  const sharedEnv = params.stateDir
-    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir, OPENCLAW_AGENT_DIR: undefined }
-    : process.env;
-  const fallbackDirs =
-    params.agentDir && !params.stateDir
-      ? [resolveRuntimeAuthProfileAgentDir(params.agentDir), resolveRuntimeAuthProfileAgentDir()]
-      : [];
-  // Include both possible shared owners before cold ownership discovery can yield.
-  const paths = [
-    ...new Set([
-      ...[env, sharedEnv].flatMap((sourceEnv) => [
-        resolveOpenClawStateSqlitePath(sourceEnv),
-        resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(sourceEnv)),
-      ]),
-      ...[params.agentDir, ...fallbackDirs].flatMap((dir) =>
-        dir ? [resolveAuthProfileDatabasePath(dir)] : [],
-      ),
-    ]),
-  ];
-  const reservation = reserveAuthProfileUsagePreparation(paths);
-  const watches = paths.map((databasePath) => {
-    const watch = watchAuthProfileNativeCommits(databasePath);
-    return { dispose: () => watch.dispose(), unchanged: watch.capture() };
-  });
-  try {
-    await reservation.ready;
-    await prepareSharedAuthStoreOwnership(env);
-    await prepareSharedAuthStoreOwnership(sharedEnv);
-    const readStore = async (agentDir?: string) => {
-      const databasePath = agentDir
-        ? resolveAuthProfileDatabasePath(agentDir)
-        : resolveSharedAuthStorePath(sharedEnv);
-      const reader =
-        !agentDir && databasePath === resolveOpenClawStateSqlitePath(sharedEnv)
-          ? undefined
-          : prepareAgentAuthProfileRowsRead({
-              databasePath,
-              agentId: resolveAuthProfileDatabaseOwnerId(path.dirname(databasePath)),
-              env: sharedEnv,
-            });
-      try {
-        const rows = reader
-          ? await reader.read()
-          : await readSharedAuthProfileRows(captureOpenClawStateWorkerContext({ env: sharedEnv }));
-        return mergePersistedAuthProfileState(
-          rows.store.status === "readable" ? rows.store.raw : null,
-          () => (rows.state.status === "readable" ? rows.state.raw : null),
-        );
-      } finally {
-        await reader?.dispose();
-      }
-    };
-    const target = await readStore(params.agentDir);
-    const observed = new Map(profileIds.map((id) => [id, target?.profiles[id]]));
-    const missingIds = profileIds.filter((id) => !observed.get(id));
-    if (params.agentDir && missingIds.length > 0) {
-      if (params.stateDir) {
-        const shared = await readStore();
-        for (const id of missingIds) {
-          observed.set(id, shared?.profiles[id]);
-        }
-      } else {
-        for (const profileId of missingIds) {
-          observed.set(
-            profileId,
-            await findPersistedAuthProfileCredentialAsync({
-              agentDir: params.agentDir,
-              profileId,
-            }),
-          );
-        }
-      }
+  const target = loadAuthProfileWriteTarget(params);
+  const missingIds = profileIds.filter((profileId) => !target?.profiles[profileId]);
+  let inherited: ReadonlyMap<string, AuthProfileCredential | undefined> | undefined;
+  if (params.agentDir && missingIds.length > 0) {
+    if (params.stateDir) {
+      const shared = loadAuthProfileWriteTarget({ stateDir: params.stateDir });
+      inherited = new Map(missingIds.map((profileId) => [profileId, shared?.profiles[profileId]]));
+    } else {
+      inherited = new Map(
+        missingIds.map((profileId) => [
+          profileId,
+          findPersistedAuthProfileCredential({ agentDir: params.agentDir, profileId }),
+        ]),
+      );
     }
-    // A rare concurrent legacy sync commit makes admission unknown: refuse conservatively, retryably.
-    return watches.every((watch) => watch.unchanged()) ? observed : new Map();
-  } finally {
-    for (const watch of watches) {
-      watch.dispose();
-    }
-    reservation.release();
   }
+  return new Map(
+    profileIds.map((profileId) => [
+      profileId,
+      target?.profiles[profileId] ?? inherited?.get(profileId),
+    ]),
+  );
 }
 
 function needsOAuthRefreshAuthority(
@@ -228,11 +173,13 @@ export async function persistAuthProfileBatch(
   const authorityProfileIds = [...profiles.entries()]
     .filter(([, entry]) => needsOAuthRefreshAuthority(entry.credential))
     .map(([profileId]) => profileId);
+  const env = resolveAuthProfileWriteEnv(params);
+  if (authorityProfileIds.length > 0 && !getPreparedSharedAuthStoreOwnership(env)) {
+    await prepareSharedAuthStoreOwnership(env);
+  }
+  const readAuthorities = () => loadAuthProfileWriteAuthorities(params, authorityProfileIds);
   // Capture before the lock wait so a queued batch cannot restore a consumed OAuth generation.
-  const observedProfiles =
-    authorityProfileIds.length > 0
-      ? await loadAuthProfileWriteAuthorities(params, authorityProfileIds)
-      : new Map<string, AuthProfileCredential | undefined>();
+  const observedProfiles = readAuthorities();
 
   return await withOAuthProfileLocks(
     [...profiles.entries()].flatMap(([profileId, entry]) =>
@@ -276,7 +223,7 @@ export async function persistAuthProfileBatch(
               );
             }
             previousProfiles.set(profileId, next.profiles[profileId]);
-            next.profiles[profileId] = replaceAuthProfileAuthorization(entry.credential);
+            next.profiles[profileId] = entry.credential;
             const existingStats = next.usageStats?.[profileId];
             if (params.resetFailureState && existingStats) {
               next.usageStats![profileId] = resetAuthProfileFailureState(existingStats);
@@ -433,8 +380,11 @@ export async function upsertAuthProfileWithLock(
   params: AuthProfileUpsertParams,
 ): Promise<AuthProfileStore | null> {
   const credential = normalizeAuthProfileCredential(params.credential);
+  if (needsOAuthRefreshAuthority(credential)) {
+    await prepareSharedAuthStoreOwnership(resolveAuthProfileWriteEnv(params));
+  }
   const observed = needsOAuthRefreshAuthority(credential)
-    ? (await loadAuthProfileWriteAuthorities(params, [params.profileId])).get(params.profileId)
+    ? loadAuthProfileWriteAuthorities(params, [params.profileId]).get(params.profileId)
     : undefined;
   let rejectedFencedGeneration = false;
   const update = async () => {
@@ -476,12 +426,9 @@ export async function upsertAuthProfileWithLock(
           normalizeProviderId(existing.provider) === normalizeProviderId(credential.provider)
         ) {
           const { key: _key, keyRef: _keyRef, ...metadata } = existing;
-          store.profiles[params.profileId] = replaceAuthProfileAuthorization({
-            ...metadata,
-            ...credential,
-          });
+          store.profiles[params.profileId] = { ...metadata, ...credential };
         } else {
-          store.profiles[params.profileId] = replaceAuthProfileAuthorization(credential);
+          store.profiles[params.profileId] = credential;
         }
         const existingStats = store.usageStats?.[params.profileId];
         if (params.resetFailureState && store.usageStats && existingStats) {

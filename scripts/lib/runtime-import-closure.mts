@@ -173,8 +173,7 @@ export function createRuntimeImportGraph(
                 target: "esnext",
                 tsconfigRaw: transformConfig,
               }).code;
-          using retainedSource = parser.createSourceFile(file, sourceText);
-          const source = retainedSource.sourceFile;
+          const source = parser.createSourceFile(file, sourceText);
           const selected: ImportReference[] = [];
           visitModuleSpecifiers(
             source,

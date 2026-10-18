@@ -4,11 +4,7 @@ import { mergeVitestPretestBuildModes } from "./vitest-build-prerequisites.mts";
 import { VITEST_PRETEST_BUILD_SECONDS } from "./vitest-shard-metadata.mts";
 
 const FIXED_JOB_SECONDS = 60;
-const MAX_PACKED_JOB_SECONDS = {
-  native: 360,
-  "main-validation": 480,
-  "hosted-hourly": 720,
-} as const;
+const MAX_PACKED_JOB_SECONDS = { native: 360, "hosted-hourly": 720 } as const;
 
 // Complete serial BS8/two-worker child observations from 35702479645,
 // 35702772380, 35707408465 and native Testbox run 35722202780.
@@ -181,7 +177,7 @@ export function rebalanceMeasuredSerialJobs(
   jobs: CompactNodeTestShard[],
   options: {
     runner: string;
-    profile?: "native" | "main-validation" | "hosted-hourly";
+    profile?: "native" | "hosted-hourly";
     estimateGroup: (group: NodeTestShardGroup) => { seconds: number; complete: boolean };
     canShare: (groups: NodeTestShardGroup[]) => boolean;
     testSecondsLimit?: (groups: NodeTestShardGroup[]) => number;

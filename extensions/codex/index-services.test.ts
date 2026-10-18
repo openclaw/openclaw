@@ -15,13 +15,7 @@ function registerServices(pluginConfig: Record<string, unknown>) {
       id: "codex",
       config,
       pluginConfig,
-      runtime: createPluginRuntimeMock({
-        config: {
-          current: () => {
-            throw new Error("Runtime config is not prepared");
-          },
-        },
-      }),
+      runtime: createPluginRuntimeMock({ config: { current: () => config } }),
       registerService,
     }),
   );

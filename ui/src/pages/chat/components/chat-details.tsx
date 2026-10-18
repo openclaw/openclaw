@@ -56,12 +56,7 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
         return;
       }
       const viewport = window.visualViewport;
-      // A desktop-open inspector can survive a mobile resize without an opener.
-      // Keep the persistent Panels header reachable in that case too.
-      const headerBottom = mobile
-        ? pane?.querySelector(".sidebar-region__header")?.getBoundingClientRect().bottom
-        : undefined;
-      const minimumTop = Math.max((headerBottom ?? bounds.top) + 8, (viewport?.offsetTop ?? 0) + 8);
+      const minimumTop = Math.max(bounds.top + 8, (viewport?.offsetTop ?? 0) + 8);
       const left = Math.max(bounds.left + 8, (viewport?.offsetLeft ?? 0) + 8);
       const right = Math.min(
         bounds.right - 8,
@@ -74,12 +69,11 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
           (viewport?.offsetTop ?? 0) + (viewport?.height ?? window.innerHeight),
         ) - 8;
       const triggerBounds = focusSource(mobile)?.getBoundingClientRect();
-      // The header is already above the frame: keep one gap below the trigger,
-      // rather than adding its height to the conversation top a second time.
-      const top = Math.max(
-        minimumTop,
-        Math.min((triggerBounds?.bottom ?? minimumTop) + 6, bottom - 120),
-      );
+      // Retain the gutter clearance when the trigger sits above the conversation.
+      const triggerBottom = triggerBounds
+        ? Math.max(triggerBounds.bottom, minimumTop + triggerBounds.height)
+        : minimumTop + 28;
+      const top = Math.max(minimumTop, Math.min(triggerBottom + 6, bottom - 120));
       const width = mobile ? right - left : Math.min(DETAILS_WIDTH, right - left);
       panel.style.left = `${Math.max(left, right - width)}px`;
       panel.style.top = `${top}px`;
@@ -252,34 +246,22 @@ export const ChatDetails = defineSolidBridge<Props, Methods>(
             role={docked() ? "complementary" : "dialog"}
             aria-label={t("chat.sessionDetails.title")}
           >
-            <Show when={props.mobile}>
-              <div class="chat-details__toolbar">
-                <span>{t("chat.sessionDetails.title")}</span>
-                <button
-                  type="button"
-                  aria-label={t("chat.sessionDetails.close")}
-                  onClick={() => close(true)}
-                >
-                  <Icon name="x" />
-                </button>
-              </div>
-            </Show>
+            <div class="chat-details__toolbar">
+              <span>{t("chat.sessionDetails.title")}</span>
+              <button
+                type="button"
+                aria-label={t("chat.sessionDetails.close")}
+                onClick={() => close(true)}
+              >
+                <Icon name="x" />
+              </button>
+            </div>
             <Show when={scope()} keyed>
               {(_scope) => (
                 <>
-                  <ChatDetailsSession
-                    props={props.props}
-                    presented={props.presented && opened()}
-                    dismissed={intent() === "closed"}
-                  />
+                  <ChatDetailsSession props={props.props} presented={props.presented && opened()} />
                   <Show when={props.props?.progressCard || props.props?.progressCardInitialLoading}>
                     <ChatDetailsProgress
-                      onHideProgress={() => {
-                        // The top-layer inspector must not cover the Undo toast.
-                        if (!docked()) {
-                          close(true);
-                        }
-                      }}
                       menuRef={(menu) => {
                         progressMenu = menu;
                       }}

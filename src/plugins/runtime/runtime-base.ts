@@ -1,9 +1,8 @@
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
-import { getRuntimeConfig } from "../../config/io.runtime.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createRuntimeConfig } from "./runtime-config.js";
 import { createRuntimeSystem } from "./runtime-system.js";
-import type { PluginRuntimeBase, PluginRuntime } from "./types.js";
+import type { PluginRuntime } from "./types.js";
 
 function unavailable(method: string): () => never {
   return () => {
@@ -12,10 +11,12 @@ function unavailable(method: string): () => never {
 }
 
 /** Host-owned facades survive later path-loaded runtime materialization unchanged. */
-export function createRuntimeBase(): PluginRuntimeBase {
+export function createRuntimeBase(): Pick<
+  PluginRuntime,
+  "capabilities" | "config" | "state" | "system"
+> {
   let system: PluginRuntime["system"] | undefined;
   return {
-    getConfig: getRuntimeConfig,
     capabilities: Object.freeze([GATEWAY_SERVER_CAPS.SENDER_RESTRICTED_HIDDEN_HELPERS]),
     config: createRuntimeConfig(),
     // Only the registry proxy grants storage, never the base runtime directly.

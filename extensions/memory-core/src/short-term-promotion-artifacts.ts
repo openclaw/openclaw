@@ -1,4 +1,3 @@
-import path from "node:path";
 import {
   deriveConceptTags,
   summarizeConceptTagScriptCoverage,
@@ -16,15 +15,11 @@ import {
   resolveLockPath,
   withMemoryWorkspaceLock,
 } from "./memory-workspace-lock.js";
-import {
-  filterLiveShortTermRecallEntries,
-  resolveShortTermSourcePathCandidates,
-} from "./short-term-promotion-record.js";
+import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
   readPhaseSignalStore,
   readShortTermStore,
   readStore,
-  pruneShortTermStore,
   resolveStorePath,
   writePhaseSignalStore,
   writeStore,
@@ -46,29 +41,6 @@ import {
 
 export { resolveStorePath as resolveShortTermRecallStorePath } from "./short-term-promotion-store.js";
 export { resolveLockPath as resolveShortTermRecallLockPath } from "./memory-workspace-lock.js";
-
-export async function pruneArchivedShortTermRecallEntries(
-  workspaceDir: string,
-  sourcePath: string,
-): Promise<void> {
-  const nowIso = new Date().toISOString();
-  const store = normalizeShortTermRecallStore(
-    await readShortTermStore(workspaceDir, "recall", nowIso),
-    nowIso,
-  );
-  const entries = Object.values(store.entries).filter((entry) =>
-    resolveShortTermSourcePathCandidates(workspaceDir, entry.path).some(
-      (candidate) => candidate === sourcePath || candidate.startsWith(`${sourcePath}${path.sep}`),
-    ),
-  );
-  const live = new Set(
-    (await filterLiveShortTermRecallEntries({ workspaceDir, entries })).map((entry) => entry.key),
-  );
-  await pruneShortTermStore(
-    workspaceDir,
-    entries.filter((entry) => !live.has(entry.key)).map((entry) => entry.key),
-  );
-}
 
 async function inspectStaleShortTermLock(workspaceDir: string, repair: boolean): Promise<boolean> {
   const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
@@ -211,7 +183,13 @@ export async function repairShortTermPromotionArtifacts(params: {
       removedOverflowEntries = enforceShortTermRecallStoreRetention(store);
       if (removedInvalidEntries > 0 || before !== JSON.stringify(store.entries)) {
         if (removedDanglingEntries > 0) {
-          await pruneShortTermStore(workspaceDir, danglingEntryKeys);
+          const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+          for (const key of danglingEntryKeys) {
+            delete phaseSignals.entries[key];
+          }
+          phaseSignals.updatedAt = nowIso;
+          // Remove derived signals first so a later recall write failure stays retryable.
+          await writePhaseSignalStore(workspaceDir, phaseSignals);
         }
         await writeStore(workspaceDir, {
           ...store,

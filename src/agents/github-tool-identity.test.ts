@@ -391,7 +391,7 @@ describe("GitHub tool identity", () => {
     },
   );
 
-  it("captures a frozen managed publication child environment without ambient tokens", async () => {
+  it("removes ambient tokens from the actual managed publication child environment", async () => {
     const root = tempDirs.make("openclaw-github-publication-env-");
     const profileId = "ghp_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     const env = {
@@ -399,7 +399,6 @@ describe("GitHub tool identity", () => {
       GH_TOKEN: "ambient-primary",
       GITHUB_TOKEN: "ambient-fallback",
       PREVIEW_SERVICE_TOKEN: "preview-only",
-      GIT_EDITOR: "synthetic-before-preparation",
     };
     const profileDir = resolveManagedGitHubProfileDir({
       agentId: "main",
@@ -408,7 +407,7 @@ describe("GitHub tool identity", () => {
       env,
     });
     await writeProfile(profileDir, "managed-publication-token");
-    const preparing = prepareGitHubPublicationIdentity({
+    const identity = await prepareGitHubPublicationIdentity({
       config: {
         tools: { github: { profileId } },
         gateway: { controlUi: { github: { token: "resolved-preview-token" } } },
@@ -426,8 +425,6 @@ describe("GitHub tool identity", () => {
       agentId: "main",
       env,
     });
-    env.GIT_EDITOR = "synthetic-after-preparation";
-    const identity = await preparing;
     const childEnv = resolveCommandEnv({
       argv: ["gh", "api", "user"],
       baseEnv: env,
@@ -435,7 +432,6 @@ describe("GitHub tool identity", () => {
     });
 
     expect(identity.env).toMatchObject({
-      GIT_EDITOR: "synthetic-before-preparation",
       GH_CONFIG_DIR: profileDir,
       GH_TOKEN: "managed-publication-token",
       GH_ENTERPRISE_TOKEN: "managed-publication-token",
@@ -443,8 +439,6 @@ describe("GitHub tool identity", () => {
       GITHUB_ENTERPRISE_TOKEN: undefined,
       PREVIEW_SERVICE_TOKEN: undefined,
     });
-    expect(Object.isFrozen(identity)).toBe(true);
-    expect(Object.isFrozen(identity.env)).toBe(true);
     expect(childEnv.GH_TOKEN).toBe("managed-publication-token");
     expect(childEnv.GH_ENTERPRISE_TOKEN).toBe("managed-publication-token");
     expect(childEnv.GITHUB_TOKEN).toBeUndefined();

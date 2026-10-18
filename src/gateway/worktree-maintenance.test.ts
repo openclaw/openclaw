@@ -126,13 +126,6 @@ describe("worktree maintenance owner", () => {
         const progress = completedResult();
         for (let index = 1; index <= batchSize + 1; index++) {
           progress.protectedCount = index;
-          progress.gitMaintenance = {
-            repoRoot: "/synthetic/project",
-            stage: "packs",
-            packsBefore: 8800,
-            packsAfter: 7777,
-          };
-          progress.packsRemoved = 1023;
           if (index === batchSize) {
             clock.setTime(elapsedMs);
             paused.resolve();
@@ -154,13 +147,6 @@ describe("worktree maintenance owner", () => {
         expect(owner.request({ jobId: receipt.jobId })).toMatchObject({
           state: "running",
           protectedCount: batchSize,
-          gitMaintenance: {
-            repoRoot: "/synthetic/project",
-            stage: "packs",
-            packsBefore: 8800,
-            packsAfter: 7777,
-          },
-          packsRemoved: 1023,
         });
         expect(owner.request().jobId).toBe(receipt.jobId);
         expect(gc).toHaveBeenCalledOnce();
@@ -178,8 +164,6 @@ describe("worktree maintenance owner", () => {
         expect(onComplete).toHaveBeenCalledOnce();
         expect(onError).not.toHaveBeenCalled();
         completed.removed.push("client-only");
-        completed.gitMaintenance!.packsAfter = 0;
-        expect(owner.request({ jobId: receipt.jobId }).gitMaintenance?.packsAfter).toBe(7777);
         expect(owner.request({ jobId: receipt.jobId }).removed).toEqual([]);
       } finally {
         await owner.stop();

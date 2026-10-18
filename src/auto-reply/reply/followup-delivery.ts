@@ -33,7 +33,6 @@ import {
 } from "./agent-runner-failure-reply.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { appendUsageLine, resolveResponseUsageLine } from "./agent-runner-usage-line.js";
-import { deliverBlockReply } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -355,8 +354,7 @@ async function sendFollowupPayloads(params: {
   kind: ReplyDispatchKind;
   mirror?: boolean;
   resolved?: { provider: string; model: string };
-  onObservedReplyDelivery?: () => Promise<void> | void;
-}): Promise<FollowupDeliveryResult> {
+}): Promise<ReplyPayload[]> {
   const { turn, defaults } = params;
   const { originatingChannel, originatingTo } = turn.queued;
   const originRoutable = Boolean(isRoutableChannel(originatingChannel) && originatingTo);
@@ -374,12 +372,12 @@ async function sendFollowupPayloads(params: {
         getReplyPayloadMetadata(payload)?.deliverDespiteSourceReplySuppression === true),
   );
   if (payloads.length === 0) {
-    return { kind: "completed", payloads: [] };
+    return [];
   }
   const sourceDisposition = turn.queued.queuedFollowupReplyDisposition;
   if (sourceDisposition?.kind === "drop") {
     logVerbose(`followup queue: source delivery dropped (${sourceDisposition.reason})`);
-    return { kind: "completed", payloads: [] };
+    return [];
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
   if (turn.queued.run.internalEventExecution) {
@@ -395,7 +393,7 @@ async function sendFollowupPayloads(params: {
         completion: { kind: "progress" },
       });
     }
-    return { kind: "completed", payloads };
+    return payloads;
   }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
@@ -403,7 +401,7 @@ async function sendFollowupPayloads(params: {
     defaultRuntime.error?.(
       "followup queue: completed with payloads but no origin route or visible dispatcher is available",
     );
-    return { kind: "completed", payloads: [] };
+    return [];
   }
   const typing = createTypingSignaler({
     typing: defaults.typing,
@@ -412,20 +410,11 @@ async function sendFollowupPayloads(params: {
   });
   const crossChannelFailures: ReplyPayload[] = [];
   const queuedPayloads: ReplyPayload[] = [];
-  let pending = false;
   const dispatchPayload = async (payload: ReplyPayload) => {
     if (deliverQueuedBatch) {
       queuedPayloads.push(payload);
-    } else if (fallbackDispatcher) {
-      const delivery = await deliverBlockReply(() => fallbackDispatcher(payload));
-      pending ||= delivery.pending === true || delivery.outcome === "recovery-owned";
-      if (
-        delivery.outcome === "delivered" &&
-        !delivery.pending &&
-        (!originRoutable || sameChannelOrigin)
-      ) {
-        await params.onObservedReplyDelivery?.();
-      }
+    } else {
+      await fallbackDispatcher?.(payload);
     }
   };
   let deliveredCrossChannelOrigin = false;
@@ -487,7 +476,6 @@ async function sendFollowupPayloads(params: {
         runId: params.runId,
       });
       if (!result.delivered && (result.queueCustody === "held" || result.ambiguous)) {
-        pending = true;
         logVerbose(
           `followup queue: route-reply remains pending: ${result.error ?? "unconfirmed delivery"}`,
         );
@@ -504,7 +492,6 @@ async function sendFollowupPayloads(params: {
           defaultRuntime.error?.(`followup queue: route-reply failed: ${routeError}`);
         }
       } else if (result.delivered) {
-        await params.onObservedReplyDelivery?.();
         if (!result.ok) {
           logVerbose(
             `followup queue: route-reply partially failed after delivery: ${
@@ -539,11 +526,11 @@ async function sendFollowupPayloads(params: {
       completion: { kind: "progress" },
     });
   }
-  return { kind: pending ? "pending" : "completed", payloads: queuedPayloads };
+  return queuedPayloads;
 }
 
 export type FollowupDeliveryResult =
-  | { kind: "completed" | "pending"; payloads: ReplyPayload[] }
+  | { kind: "completed"; payloads: ReplyPayload[] }
   | { kind: "source-retry" };
 
 export async function deliverFollowupDecision(params: {
@@ -553,7 +540,6 @@ export async function deliverFollowupDecision(params: {
   runId: string;
   runFollowup: (run: FollowupRun) => Promise<void>;
   kind?: ReplyDispatchKind;
-  onObservedReplyDelivery?: () => Promise<void> | void;
 }): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
@@ -608,7 +594,7 @@ export async function deliverFollowupDecision(params: {
   } else {
     payloads = decision.payloads;
   }
-  return await sendFollowupPayloads({
+  const delivered = await sendFollowupPayloads({
     payloads,
     turn,
     defaults,
@@ -617,6 +603,6 @@ export async function deliverFollowupDecision(params: {
     mirror:
       decision.kind === "deliver" && params.kind && params.kind !== "final" ? false : undefined,
     resolved: decision.resolved,
-    onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
+  return { kind: "completed", payloads: delivered };
 }

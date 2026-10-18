@@ -103,25 +103,39 @@ export function ShellLazyOverlays(props: {
         when={paletteLoading()}
         fallback={
           <Show
-            when={pendingDebug() && state().debugRenderer}
+            when={pendingDebug()}
             fallback={
-              <Show when={!pendingDebug() || state().debugFrameFailed}>
-                <LitRouteHost
-                  renderValue={() => {
-                    state();
-                    return renderLazyElementModal(props.host.lazyCustomElements);
-                  }}
-                />
-              </Show>
+              <LitRouteHost
+                renderValue={() => {
+                  state();
+                  return renderLazyElementModal(props.host.lazyCustomElements);
+                }}
+              />
             }
           >
-            {(renderer) => (
-              <Dynamic
-                component={renderer()}
-                host={props.host}
-                state={pendingDebug()!}
-                mode={state().debugMode}
-              />
+            {(pending) => (
+              <Show
+                when={state().debugRenderer}
+                fallback={
+                  <Show when={state().debugFrameFailed}>
+                    <LitRouteHost
+                      renderValue={() => {
+                        state();
+                        return renderLazyElementModal(props.host.lazyCustomElements);
+                      }}
+                    />
+                  </Show>
+                }
+              >
+                {(renderer) => (
+                  <Dynamic
+                    component={renderer()}
+                    host={props.host}
+                    state={pending()}
+                    mode={state().debugMode}
+                  />
+                )}
+              </Show>
             )}
           </Show>
         }

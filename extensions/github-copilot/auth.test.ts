@@ -69,10 +69,15 @@ describe("resolveFirstGithubToken", () => {
 
   it.each([
     {
-      label: "provider keys are matched case-insensitively",
-      providerKey: " GITHUB-COPILOT ",
+      label: "stored account order overrides configured order",
       configuredOrder: ["github-copilot:first"],
       storedOrder: ["github-copilot:preferred"],
+      expectedToken: "preferred-token",
+    },
+    {
+      label: "provider keys are matched case-insensitively",
+      providerKey: " GITHUB-COPILOT ",
+      configuredOrder: ["github-copilot:preferred"],
       expectedToken: "preferred-token",
     },
     {

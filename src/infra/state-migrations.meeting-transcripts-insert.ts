@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   deriveMeetingTranscriptSessionColumns,
@@ -64,7 +63,6 @@ export function insertMeetingTranscriptSnapshots(params: {
           db.insertInto("meeting_transcript_sessions").values({
             session_id: snapshot.session.sessionId,
             started_at: snapshot.session.startedAt,
-            started_at_ms: parseDateStringTimestampMs(snapshot.session.startedAt) ?? null,
             selector: transcriptSessionSelector(snapshot.session),
             export_key: transcriptSessionExportKey(snapshot.session),
             session_slug: safeTranscriptPathSegment(snapshot.session.sessionId),

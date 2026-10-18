@@ -320,7 +320,6 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
     });
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
-      prepareCapture: async () => {},
       warn: (message) => {
         throw new Error(message);
       },

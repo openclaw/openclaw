@@ -4,7 +4,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { recordClientPresenceActivity } from "../server/client-presence.js";
@@ -38,7 +37,6 @@ function createMockContext() {
 
 describe("chat.send error broadcast", () => {
   it("rejects a claimed leaf for a session that has not materialized", async () => {
-    await loadOrCreateProcessDeviceIdentityAsync();
     const ctx = createMockContext();
     const respond = vi.fn();
 
@@ -73,7 +71,6 @@ describe("chat.send error broadcast", () => {
     "records new admission activity only if the socket remains live (closed=%s)",
     async (closedDuringAdmission) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        await loadOrCreateProcessDeviceIdentityAsync();
         const ctx = createMockContext();
         const client: GatewayWsClient = {
           connId: "activity-send",
@@ -187,7 +184,6 @@ describe("chat.send error broadcast", () => {
   });
 
   it("scopes selected-agent global errors to the linked agent", async () => {
-    await loadOrCreateProcessDeviceIdentityAsync();
     const ctx = createMockContext();
     const respond = vi.fn();
 

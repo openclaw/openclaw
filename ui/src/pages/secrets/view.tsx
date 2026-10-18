@@ -1,7 +1,7 @@
-import { For, Show } from "solid-js";
+import { For, Show, createEffect, createSignal } from "solid-js";
 import type { SecretStoreEntry } from "../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Menu } from "../../components/solid/menu.tsx";
+import { Menu, type MenuHandle } from "../../components/solid/menu.tsx";
 import "../../components/modal-dialog.ts";
 import {
   DocsLink,
@@ -106,6 +106,11 @@ function updatedLabel(entry: SecretStoreEntry): string {
 }
 
 function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry }) {
+  const [menu, setMenu] = createSignal<MenuHandle>();
+  createEffect(
+    () => [menu()?.overlay.trigger, t("secretsStore.actions")] as const,
+    ([trigger, title]) => trigger?.setAttribute("title", title),
+  );
   return (
     <Show when={props.view.canSet || props.view.canDelete}>
       <Menu
@@ -114,7 +119,7 @@ function EntryMenu(props: { view: SecretsStoreViewProps; entry: SecretStoreEntry
         placement="bottom-end"
         label={`${t("secretsStore.actions")}: ${props.entry.name}`}
         triggerClass="btn btn--sm btn--ghost secrets-store__menu-trigger"
-        triggerAttributes={{ title: t("secretsStore.actions") }}
+        ref={setMenu}
         trigger={<Icon name="moreHorizontal" />}
         disabled={props.view.busy}
         items={[
@@ -280,7 +285,7 @@ function SecretDialog(props: {
             {props.view.formError}
           </div>
         </Show>
-        <openclaw-modal-actions class="secrets-store-dialog__actions">
+        <div class="secrets-store-dialog__actions">
           <button
             class="btn primary"
             type="submit"
@@ -297,7 +302,7 @@ function SecretDialog(props: {
           <button class="btn" type="button" disabled={props.view.busy} onClick={close}>
             {t("common.cancel")}
           </button>
-        </openclaw-modal-actions>
+        </div>
       </form>
     </openclaw-modal-dialog>
   );

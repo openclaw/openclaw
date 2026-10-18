@@ -9,7 +9,6 @@ import {
   enrichAssistantTranscriptMediaForRun,
   publishAssistantTranscriptRewrite,
 } from "../../gateway/server-methods/chat-transcript-persistence.js";
-import { runWithSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -28,13 +27,12 @@ import {
   rewriteAssistantTranscriptMessageForRun,
   rewriteTranscriptMessageAtAnchor,
 } from "./session-accessor.transcript.js";
-import { bindSessionWorkerBackend } from "./session-entry-patch.worker.js";
+import { createSessionWorkerOperationContext } from "./session-entry-patch.worker.js";
 import { rewritePreparedTranscriptMessageAtAnchor } from "./session-message-rewrite.js";
 import {
   applySessionMessageRewrite,
   prepareSessionMessageRewrite,
 } from "./session-message-rewrite.worker.js";
-import type { SessionMessageRewriteCommitted } from "./session-transcript-mutation.types.js";
 import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWrites,
@@ -83,8 +81,8 @@ function fixture(agentId = "main", storePath?: string) {
   };
 }
 
-it("commits the exact prepared rewrite without rereading its payload or generation", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("returns the exact committed rewrite generation without selecting it again", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = fixture();
     const selection = {
       scope: resolveSqliteTranscriptScope(f.scope),
@@ -92,39 +90,28 @@ it("commits the exact prepared rewrite without rereading its payload or generati
     };
     const expected = prepareSessionMessageRewrite(selection, { open: () => f.database });
     assert(expected);
-    const backend = runWithSqliteWorkerStateContext(
-      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
-      () =>
-        bindSessionWorkerBackend<{
-          rewrite: { input: null; output: SessionMessageRewriteCommitted };
-        }>(
-          { agentId: "main" },
-          { database: f.database.db, databasePath: f.database.path, admit() {} },
-          "Rewrite fixture",
-          (context) => () =>
-            applySessionMessageRewrite(
-              { ...selection, expected, message: { role: "user", content: "rewritten" } },
-              context,
-              (_database, candidate) => candidate,
-            ),
-        ),
-    );
-    const sql = trackSqliteStatementExecutions(f.database.db, ["generation", "payload"], (query) =>
+    const sql = trackSqliteStatementExecutions(f.database.db, ["generation"], (query) =>
       query.startsWith('select "generation" from "transcript_rewrite_watermarks"')
         ? "generation"
-        : query.startsWith("select ") && query.includes('as "event_json" from "transcript_events"')
-          ? "payload"
-          : null,
+        : null,
     );
     let committedGeneration: string | undefined;
     try {
-      const result = backend.execute({ type: "rewrite", input: null });
+      const result = applySessionMessageRewrite(
+        { ...selection, expected, message: { role: "user", content: "rewritten" } },
+        createSessionWorkerOperationContext(
+          f.database,
+          { agentId: "main", path: f.database.path },
+          { admit() {} },
+          "Rewrite fixture",
+        ),
+        (_database, candidate) => candidate,
+      );
       committedGeneration = result.result?.generation;
       expect(committedGeneration).toEqual(expect.any(String));
-      expect(sql.counts).toEqual({ generation: 0, payload: 0 });
+      expect(sql.counts.generation).toBe(0);
     } finally {
       sql.restore();
-      await backend.close();
     }
     expect(
       f.database.db
@@ -183,58 +170,51 @@ it.each([
   },
 );
 
-it.each([
-  { change: "payload", replace: true },
-  { change: "lifecycle", replace: true },
-  { change: "payload", replace: false },
-] as const)(
-  "settles a prepared rewrite after a $change change (replacement: $replace)",
-  async ({ change, replace }) => {
+it.each(["payload", "lifecycle"] as const)(
+  "refuses a stale %s after preparation with the original error class",
+  async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const f = fixture();
       const source = f.rows().find((row) => JSON.parse(row.eventJson).id === "admission")!;
-      const rewrite = rewritePreparedTranscriptMessageAtAnchor(
-        f.anchor,
-        (message) => {
-          if (!isRecord(message)) {
-            throw new Error("invalid fixture message");
-          }
-          if (change === "lifecycle") {
-            replaceSessionEntrySync(f.scope, {
-              sessionId: f.scope.sessionId,
-              updatedAt: 2,
-              lifecycleRevision: "successor",
-            });
-          } else {
-            runOpenClawAgentWriteTransaction(
-              (database) => {
-                rewriteSqliteTranscriptEventRowsInTransaction(
-                  database,
-                  resolveSqliteTranscriptScope(f.scope),
-                  [
-                    {
-                      seq: source.seq,
-                      expectedEventJson: source.eventJson,
-                      event: {
-                        ...JSON.parse(source.eventJson),
-                        message: { ...message, content: "successor" },
+      await expect(
+        rewritePreparedTranscriptMessageAtAnchor(
+          f.anchor,
+          (message) => {
+            if (!isRecord(message)) {
+              throw new Error("invalid fixture message");
+            }
+            if (change === "lifecycle") {
+              replaceSessionEntrySync(f.scope, {
+                sessionId: f.scope.sessionId,
+                updatedAt: 2,
+                lifecycleRevision: "successor",
+              });
+            } else {
+              runOpenClawAgentWriteTransaction(
+                (database) => {
+                  rewriteSqliteTranscriptEventRowsInTransaction(
+                    database,
+                    resolveSqliteTranscriptScope(f.scope),
+                    [
+                      {
+                        seq: source.seq,
+                        expectedEventJson: source.eventJson,
+                        event: {
+                          ...JSON.parse(source.eventJson),
+                          message: { ...message, content: "successor" },
+                        },
                       },
-                    },
-                  ],
-                );
-              },
-              { agentId: "main", path: f.database.path },
-            );
-          }
-          return replace ? { ...message, content: "stale replacement" } : undefined;
-        },
-        { expectedEntry: { lifecycleRevision: null } },
-      );
-      if (replace) {
-        await expect(rewrite).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
-      } else {
-        await expect(rewrite).resolves.toBeNull();
-      }
+                    ],
+                  );
+                },
+                { agentId: "main", path: f.database.path },
+              );
+            }
+            return { ...message, content: "stale replacement" };
+          },
+          { expectedEntry: { lifecycleRevision: null } },
+        ),
+      ).rejects.toBeInstanceOf(SessionTranscriptWriterClaimReboundError);
       const current = f.rows().find((row) => row.seq === source.seq)!;
       expect(JSON.parse(current.eventJson).message.content).toBe(
         change === "payload" ? "successor" : "original",

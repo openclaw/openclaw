@@ -711,15 +711,51 @@ describe("cron controller", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
+  it("submits cron.add after cloning", async () => {
+    const request = createCronRequest("job-new");
+    const sourceJob = createCronJob({
+      id: "job-1",
+      name: "Daily ping",
+      agentId: "writer",
+      schedule: { kind: "cron", expr: "0 9 * * *" },
+      sessionTarget: "main",
+      payload: { kind: "systemEvent", text: "ping" },
+    });
+    const state = createStateWithRequest(request, {
+      cronJobs: [sourceJob],
+      cronAgentId: "main",
+    });
+
+    startCronEdit(state, sourceJob);
+    startCronClone(state, sourceJob);
+    await addCronJob(state);
+
+    const addCall = findRequestCall(request.mock.calls, "cron.add");
+    const updateCall = request.mock.calls.find(([method]) => method === "cron.update");
+    expect(updateCall).toBeUndefined();
+    expect(addCall[1]).toEqual(
+      expect.objectContaining({ name: "Daily ping copy", agentId: "writer" }),
+    );
+  });
+
   it.each([
     {
       name: "deny all",
       policy: {
         toolsAllow: [],
-        toolsAllowIsDefault: true,
         fallbacks: [],
         allowUnsafeExternalContent: false,
         lightContext: false,
+      },
+    },
+    {
+      name: "restricted default",
+      policy: {
+        toolsAllow: ["read"],
+        toolsAllowIsDefault: true,
+        fallbacks: ["openai/gpt-5.5"],
+        allowUnsafeExternalContent: true,
+        lightContext: true,
       },
     },
   ] satisfies Array<{
@@ -729,19 +765,14 @@ describe("cron controller", () => {
     const source = createCronJob({
       id: "source",
       name: "Policy source",
-      agentId: "writer",
       payload: { kind: "agentTurn", message: "Synthetic task", ...policy },
     });
     const original = structuredClone(source);
     const request = createCronRequest("clone");
-    const state = createStateWithRequest(request, { cronJobs: [source], cronAgentId: "main" });
-    startCronEdit(state, source);
+    const state = createStateWithRequest(request, { cronJobs: [source] });
     startCronClone(state, source);
     expect(await addCronJob(state)).toEqual({ saved: true, jobId: "clone" });
     const submitted = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
-    expect(submitted.name).toBe("Policy source copy");
-    expect(submitted.agentId).toBe("writer");
-    expect(request.mock.calls.some(([method]) => method === "cron.update")).toBe(false);
     const expected: Extract<CronJob["payload"], { kind: "agentTurn" }> = {
       kind: "agentTurn",
       message: "Synthetic task",

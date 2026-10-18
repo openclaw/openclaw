@@ -154,7 +154,9 @@ describe("SQLite worker store", () => {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "transactionCount", "value"]));
+        expect(inlineReplies).toEqual(
+          values.map(() => ["databaseAdmissions", "id", "ok", "value"]),
+        );
         requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },

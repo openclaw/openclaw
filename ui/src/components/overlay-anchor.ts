@@ -126,12 +126,6 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
     }
   };
   const schedule = () => {
-    const binding = current();
-    // CSS follows same-root anchors; only a cross-root proxy needs frame sampling.
-    if (!presented || !binding?.anchor || !crossRoot(binding)) {
-      stop();
-      return;
-    }
     if (!win || frame !== undefined) {
       return;
     }
@@ -152,7 +146,9 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       }
       bindings.push(binding);
       apply();
-      schedule();
+      if (presented) {
+        schedule();
+      }
     },
     remove(binding) {
       const index = bindings.indexOf(binding);
@@ -161,7 +157,6 @@ function createSurfaceAnchor(surface: HTMLElement): SurfaceAnchor {
       }
       if (bindings.length) {
         apply();
-        schedule();
         return;
       }
       stop();

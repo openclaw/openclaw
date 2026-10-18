@@ -120,8 +120,8 @@ suite.define(() => {
       expect(firstConnect.params).toMatchObject({ client: { buildId: "e2e" } });
       await page.waitForFunction(
         () =>
-          JSON.parse(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ?? "null")
-            ?.buildId === "replacement-build",
+          sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId") ===
+          "replacement-build",
       );
       await page.getByText("Server updated", { exact: true }).waitFor();
 

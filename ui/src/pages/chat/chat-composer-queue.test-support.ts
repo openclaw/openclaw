@@ -1,6 +1,6 @@
-import { solidContent } from "../../lit/solid-content.tsx";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 
 export function renderChatQueue(props: Parameters<typeof renderChatQueueSolid>[0]) {
-  return solidContent(renderChatQueueSolid, props);
+  return solidTemplate(renderChatQueueSolid, props);
 }

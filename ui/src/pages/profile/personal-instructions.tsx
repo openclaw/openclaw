@@ -11,6 +11,7 @@ import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-perso
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 
 registerEnglishCatalog(registerPersonalInstructionsEnglish);
@@ -201,7 +202,7 @@ class PersonalInstructionsState {
   }
 }
 
-export function PersonalInstructions(props: { hidden?: boolean }) {
+function PersonalInstructionsContent() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new PersonalInstructionsState(context, () => setRevision((value) => value + 1));
@@ -223,96 +224,98 @@ export function PersonalInstructions(props: { hidden?: boolean }) {
   });
 
   return (
-    <openclaw-personal-instructions hidden={props.hidden}>
-      <Show when={view().multipleProfiles}>
-        <div id={PROFILE_SETTINGS_TARGET_IDS.personalInstructions}>
-          <SettingsSection
-            title={t("profilePage.personalInstructions.title")}
-            description={t("profilePage.personalInstructions.description")}
+    <Show when={view().multipleProfiles}>
+      <div id={PROFILE_SETTINGS_TARGET_IDS.personalInstructions}>
+        <SettingsSection
+          title={t("profilePage.personalInstructions.title")}
+          description={t("profilePage.personalInstructions.description")}
+        >
+          <Show
+            when={view().available}
+            fallback={<SettingsEmpty message={t("profilePage.personalInstructions.signIn")} />}
           >
             <Show
-              when={view().available}
-              fallback={<SettingsEmpty message={t("profilePage.personalInstructions.signIn")} />}
+              when={view().agents.length}
+              fallback={<SettingsEmpty message={t("profilePage.personalInstructions.noAgents")} />}
             >
-              <Show
-                when={view().agents.length}
-                fallback={
-                  <SettingsEmpty message={t("profilePage.personalInstructions.noAgents")} />
-                }
+              <div
+                class="personal-instructions"
+                aria-busy={view().busy !== null ? "true" : "false"}
               >
-                <div
-                  class="personal-instructions"
-                  aria-busy={view().busy !== null ? "true" : "false"}
-                >
-                  <Show when={view().file}>
-                    <textarea
-                      id="personal-instructions-content"
-                      class="settings-input personal-instructions__editor"
-                      rows={7}
-                      value={view().draft}
-                      disabled={view().busy !== null}
-                      aria-label={t("profilePage.personalInstructions.title")}
-                      aria-describedby="personal-instructions-guidance"
-                      onInput={(event) => {
-                        state.draft = event.currentTarget.value;
-                        state.saved = false;
-                        state.publish();
-                      }}
-                    />
-                    <div id="personal-instructions-guidance" class="settings-row__desc">
-                      {t("profilePage.personalInstructions.guidance", {
-                        count: String(view().draft.length),
-                      })}
-                      {view().file?.missing
-                        ? ` ${t("profilePage.personalInstructions.missing")}`
-                        : null}
-                    </div>
-                    <Show when={view().draft.length > 4000}>
-                      <div role="alert">{t("profilePage.personalInstructions.tooLong")}</div>
-                    </Show>
+                <Show when={view().file}>
+                  <textarea
+                    id="personal-instructions-content"
+                    class="settings-input personal-instructions__editor"
+                    rows={7}
+                    value={view().draft}
+                    disabled={view().busy !== null}
+                    aria-label={t("profilePage.personalInstructions.title")}
+                    aria-describedby="personal-instructions-guidance"
+                    onInput={(event) => {
+                      state.draft = event.currentTarget.value;
+                      state.saved = false;
+                      state.publish();
+                    }}
+                  />
+                  <div id="personal-instructions-guidance" class="settings-row__desc">
+                    {t("profilePage.personalInstructions.guidance", {
+                      count: String(view().draft.length),
+                    })}
+                    {view().file?.missing
+                      ? ` ${t("profilePage.personalInstructions.missing")}`
+                      : null}
+                  </div>
+                  <Show when={view().draft.length > 4000}>
+                    <div role="alert">{t("profilePage.personalInstructions.tooLong")}</div>
                   </Show>
+                </Show>
+                <Show when={view().error}>
+                  <div class="personal-instructions__error" role="alert">
+                    {view().error} {t("profilePage.personalInstructions.failureHint")}
+                  </div>
+                </Show>
+                <div class="personal-instructions__actions">
+                  <button
+                    class="btn"
+                    disabled={
+                      !view().file ||
+                      !view().dirty ||
+                      view().busy !== null ||
+                      view().draft.length > 4000 ||
+                      !view().agents.some((agent) => agent.id === view().agentId)
+                    }
+                    onClick={() => void state.save()}
+                  >
+                    {view().busy === "save" ? t("common.saving") : t("common.save")}
+                  </button>
                   <Show when={view().error}>
-                    <div class="personal-instructions__error" role="alert">
-                      {view().error} {t("profilePage.personalInstructions.failureHint")}
-                    </div>
-                  </Show>
-                  <div class="personal-instructions__actions">
                     <button
                       class="btn"
-                      disabled={
-                        !view().file ||
-                        !view().dirty ||
-                        view().busy !== null ||
-                        view().draft.length > 4000 ||
-                        !view().agents.some((agent) => agent.id === view().agentId)
-                      }
-                      onClick={() => void state.save()}
+                      disabled={view().busy !== null}
+                      onClick={() => state.reload()}
                     >
-                      {view().busy === "save" ? t("common.saving") : t("common.save")}
+                      {t("profilePage.personalInstructions.reload")}
                     </button>
-                    <Show when={view().error}>
-                      <button
-                        class="btn"
-                        disabled={view().busy !== null}
-                        onClick={() => state.reload()}
-                      >
-                        {t("profilePage.personalInstructions.reload")}
-                      </button>
-                    </Show>
-                    <span class="settings-row__desc" role="status">
-                      {view().dirty
-                        ? t("profilePage.personalInstructions.dirty")
-                        : view().saved
-                          ? t("profilePage.personalInstructions.saved")
-                          : null}
-                    </span>
-                  </div>
+                  </Show>
+                  <span class="settings-row__desc" role="status">
+                    {view().dirty
+                      ? t("profilePage.personalInstructions.dirty")
+                      : view().saved
+                        ? t("profilePage.personalInstructions.saved")
+                        : null}
+                  </span>
                 </div>
-              </Show>
+              </div>
             </Show>
-          </SettingsSection>
-        </div>
-      </Show>
-    </openclaw-personal-instructions>
+          </Show>
+        </SettingsSection>
+      </div>
+    </Show>
   );
 }
+
+export const PersonalInstructions = defineSolidBridge(
+  "openclaw-personal-instructions",
+  PersonalInstructionsContent,
+  { properties: {} },
+);

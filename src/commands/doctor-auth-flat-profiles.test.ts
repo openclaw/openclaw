@@ -34,7 +34,6 @@ import {
   loadSessionEntry,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { markCanonicalSessionValidationPending } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   detectSharedAuthStoreMigration,
@@ -44,7 +43,6 @@ import { writeConfigMachineState } from "../state/config-machine-state-write.js"
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -1750,19 +1748,14 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         model: "gpt-5.5",
       },
     );
-    const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
-    const database = openOpenClawAgentDatabase({
-      agentId: "main",
-      env: state.env,
-      path: sqlitePath,
-    });
-    database.db
-      .prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
-      .run(sessionKey);
-    // Offline imports revoke shared readiness through the admitted owner before releasing custody.
-    markCanonicalSessionValidationPending(database, [sessionKey]);
     await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
+    const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const database = new DatabaseSync(sqlitePath);
+    database
+      .prepare("UPDATE session_nodes SET entry_valid = 0 WHERE session_key = ?")
+      .run(sessionKey);
+    database.close();
     expect(() =>
       listSessionEntriesReadOnly({ storePath, agentId: "main", env: state.env }),
     ).toThrow("invalid persisted session row requires repair");

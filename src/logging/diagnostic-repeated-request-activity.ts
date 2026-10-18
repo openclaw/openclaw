@@ -1,4 +1,4 @@
-import { resolveCurrentDiagnosticRun } from "./diagnostic-embedded-run-index.js";
+import { resolveCurrentDiagnosticRunId } from "./diagnostic-embedded-run-index.js";
 
 // The first retry starts the clock; one long initial request is not a loop.
 // Later retries share that clock until semantic progress or owner teardown.
@@ -24,7 +24,7 @@ export function recordRepeatedRequestObservation(
   if (params.observationUnit === "turn") {
     return;
   }
-  const currentOwnerRunId = resolveCurrentDiagnosticRun(owners)?.runId;
+  const currentOwnerRunId = resolveCurrentDiagnosticRunId(owners);
   const runId = params.runId?.trim();
   if (currentOwnerRunId === undefined || !runId || currentOwnerRunId !== runId) {
     return;

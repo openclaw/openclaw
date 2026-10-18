@@ -233,6 +233,7 @@ export function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean
     !health.versionMismatch &&
     !health.buildIdMismatch &&
     !health.activatedPluginErrors?.length &&
+    !health.channelProbeErrors?.length &&
     health.staleGatewayPids.length === 0
   );
 }
@@ -275,7 +276,6 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     expectedVersion: params.expectedVersion,
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: params.requirePluginHealth ?? false,
-    requireChannelHealth: false,
     env: params.serviceEnv,
     signal: deadline.signal,
     deadline,
@@ -354,6 +354,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
           health.versionMismatch ||
           health.buildIdMismatch ||
           health.activatedPluginErrors?.length ||
+          health.channelProbeErrors?.length ||
           health.staleGatewayPids.length > 0)
       ) {
         return { health, readyz: false, http: undefined, launchAgentRecovery };

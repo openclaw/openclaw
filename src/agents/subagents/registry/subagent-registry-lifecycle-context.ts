@@ -65,7 +65,8 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
   acquireTerminalCompletionLock(runId: string): Promise<() => void>;
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
-  isTerminalExecutionCurrent(entry: SubagentRunRecord): boolean;
+  bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged?: boolean): number;
+  isTerminalCallbackCurrent(entry: SubagentRunRecord, generation: number): boolean;
   startSubagentAnnounceCleanupFlow(entry: SubagentRunRecord): boolean;
 }
 

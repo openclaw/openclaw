@@ -151,13 +151,6 @@ export function buildMistralRealtimeTranscriptionProvider({
   PluginCapabilityCatalogContext,
   "createRealtimeTranscriptionWebSocketSession"
 >): RealtimeTranscriptionProviderPlugin {
-  const isConfigured: NonNullable<RealtimeTranscriptionProviderPlugin["isConfigured"]> = ({
-    providerConfig,
-  }) =>
-    Boolean(
-      normalizeProviderConfig(providerConfig).apiKey ||
-      normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
-    );
   return {
     id: "mistral",
     label: "Mistral Realtime Transcription",
@@ -165,9 +158,11 @@ export function buildMistralRealtimeTranscriptionProvider({
     defaultModel: MISTRAL_REALTIME_DEFAULT_MODEL,
     autoSelectOrder: 45,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    // Retained for synchronous SDK consumers through 2026-12-31.
-    isConfigured,
-    isConfiguredAsync: async (ctx) => isConfigured(ctx),
+    isConfigured: ({ providerConfig }) =>
+      Boolean(
+        normalizeProviderConfig(providerConfig).apiKey ||
+        normalizeMistralApiKey(process.env.MISTRAL_API_KEY),
+      ),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const apiKey = config.apiKey || normalizeMistralApiKey(process.env.MISTRAL_API_KEY);

@@ -19,7 +19,7 @@ import {
 } from "./crabbox-worker-warm-image-store.js";
 
 export const CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID = "crabbox/cloud-worker-profiles";
-const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
+export const CRABBOX_SETUP_SECRETS_CHECK_ID = "crabbox/setup-secrets";
 const CRABBOX_WARM_IMAGES_CHECK_ID = "crabbox/warm-images";
 
 export type CrabboxDoctorRegistrationHost = {
@@ -44,29 +44,13 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
   return {
     id: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
     kind: "plugin",
-    description: "Verify configured Crabbox cloud worker and sandbox binaries before use.",
+    description: "Verify configured Crabbox cloud worker profiles before dispatch.",
     source: "crabbox",
     async detect(ctx) {
-      const targets = Object.entries(ctx.cfg.cloudWorkers?.profiles ?? {})
-        .filter(
-          ([, profile]) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID,
-        )
-        .map(([profileId, profile]) => ({
-          id: profileId,
-          label: `Cloud worker profile "${profileId}"`,
-          settings: readRecord(profile.settings),
-          ocPath: `cloudWorkers.profiles.${profileId}.settings.binary`,
-        }));
-      const sandbox = readRecord(readRecord(ctx.cfg.plugins?.entries?.crabbox?.config)?.sandbox);
-      if (sandbox) {
-        targets.push({
-          id: "sandbox",
-          label: "Crabbox sandbox",
-          settings: sandbox,
-          ocPath: "plugins.entries.crabbox.config.sandbox.binary",
-        });
-      }
-      if (targets.length === 0) {
+      const profiles = Object.entries(ctx.cfg.cloudWorkers?.profiles ?? {}).filter(
+        ([, profile]) => profile.provider.trim().toLowerCase() === CRABBOX_WORKER_PROVIDER_ID,
+      );
+      if (profiles.length === 0) {
         return [];
       }
       const probes = new Map<string, ReturnType<typeof managedBinary.probeCrabboxVersion>>();
@@ -80,8 +64,8 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
       };
       let managed: ReturnType<typeof managedBinary.findManagedCrabboxBinary> | undefined;
       const findings: HealthFinding[] = [];
-      for (const target of targets) {
-        const explicitBinary = nonEmptyString(target.settings?.binary);
+      for (const [profileId, profile] of profiles) {
+        const explicitBinary = nonEmptyString(readRecord(profile.settings)?.binary);
         const binary = findCrabboxBinary({
           ...(explicitBinary ? { explicit: explicitBinary } : {}),
           openclawRoot,
@@ -101,7 +85,7 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
             checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
             severity: "warning",
             source: "crabbox",
-            target: target.id,
+            target: profileId,
             message: error instanceof Error ? error.message : "Crabbox host is unsupported",
           });
           continue;
@@ -115,12 +99,12 @@ function createCrabboxCloudWorkerProfileCheck(openclawRoot: string): HealthCheck
           checkId: CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
           severity: "warning",
           source: "crabbox",
-          message: `${target.label} ${reason}. OpenClaw will install its managed Crabbox before use.`,
+          message: `Cloud worker profile "${profileId}" ${reason}. OpenClaw will install its managed Crabbox before use.`,
           ...((binary ?? explicitBinary) ? { path: binary ?? explicitBinary } : {}),
-          ocPath: target.ocPath,
-          target: target.id,
+          ocPath: `cloudWorkers.profiles.${profileId}.settings.binary`,
+          target: profileId,
           requirement: `Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer`,
-          fixHint: `Run \`openclaw doctor --fix\` to install the managed Crabbox now, or provision Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer using \`${target.ocPath}\`. The existing executable and configuration are preserved.`,
+          fixHint: `Run \`openclaw doctor --fix\` to install the managed Crabbox now, or provision Crabbox ${managedBinary.CRABBOX_MIN_VERSION} or newer using \`cloudWorkers.profiles.${profileId}.settings.binary\`. The existing executable and profile configuration are preserved.`,
         });
       }
       return findings;

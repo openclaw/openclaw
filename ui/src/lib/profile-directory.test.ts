@@ -18,7 +18,7 @@ const photo = {
   githubIdentity: null,
 };
 
-it("shares directory reads, resolves merged identities, and advertises uploaded and email-backed photos", async () => {
+it("shares directory reads, resolves merged identities, and advertises only existing photos", async () => {
   const reply = createDeferred<UsersListResult>();
   const request = vi.fn(() => reply.promise);
   const fixture = createApplicationGateway();
@@ -38,7 +38,6 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
     profiles: [
       photo,
       { ...photo, id: "absent", hasAvatar: false },
-      { ...photo, id: "gravatar", hasAvatar: false, emails: ["vince@example.com"] },
       { ...photo, id: "old", mergedInto: "photo", hasAvatar: false },
       { ...photo, id: "cycle", mergedInto: "cycle" },
     ],
@@ -47,7 +46,6 @@ it("shares directory reads, resolves merged identities, and advertises uploaded 
   expect(profileAvatarUrl(directory.get("photo"))).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("old"))).toBe("/api/users/photo/avatar?v=7");
   expect(profileAvatarUrl(directory.get("absent"))).toBeUndefined();
-  expect(profileAvatarUrl(directory.get("gravatar"))).toBe("/api/users/gravatar/avatar?v=7");
   expect(profileAvatarUrl(directory.get("unknown"))).toBeUndefined();
   expect(directory.get("cycle")).toBeUndefined();
   first();

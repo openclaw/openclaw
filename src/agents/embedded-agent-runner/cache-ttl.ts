@@ -2,7 +2,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isAnthropicFamilyCacheTtlEligible } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import {
+  isAnthropicFamilyCacheTtlEligible,
+  isAnthropicModelRef,
+} from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { resolveProviderCacheTtlEligibility } from "../../plugins/provider-runtime.js";
 import type { ProviderCacheTtlEligibilityContext } from "../../plugins/provider-transport.types.js";
 import { isGooglePromptCacheEligible } from "./prompt-cache-retention.js";
@@ -52,7 +55,7 @@ export function isCacheTtlEligibleProvider(
       modelId: normalizedModelId,
       modelApi,
     }) ||
-    (normalizedProvider === "kilocode" && normalizedModelId.startsWith("anthropic/")) ||
+    (normalizedProvider === "kilocode" && isAnthropicModelRef(normalizedModelId)) ||
     isGooglePromptCacheEligible({ modelApi, modelId: normalizedModelId })
   );
 }

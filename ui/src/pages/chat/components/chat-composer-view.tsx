@@ -10,10 +10,14 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
-import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
-import { handleChatAttachmentPaste } from "./chat-attachments.ts";
-import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
+import { renderChatAttachmentInputs } from "./chat-attachment-inputs.ts";
+import {
+  handleChatAttachmentPaste,
+  renderAttachmentPreview,
+  renderAttachmentReadStatus,
+} from "./chat-attachments.ts";
 import { ContextNotice } from "./chat-composer-context.tsx";
+import { hasComposerContent } from "./chat-composer-controls.ts";
 import {
   renderChatAbortActionSolid,
   renderChatPrimaryActionsSolid as ChatPrimaryActions,
@@ -23,7 +27,7 @@ import { focusComposerFromChrome, paneDomId } from "./chat-composer-dom.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { GoalComposerMode } from "./chat-composer-goal-mode.tsx";
-import { hasComposerContent, LitContent } from "./chat-composer-interop.tsx";
+import { LitContent } from "./chat-composer-interop.tsx";
 import { HumanMentionMenuView } from "./chat-composer-mention-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
@@ -45,7 +49,7 @@ import {
   markPointerOpenedChatComposerDropdown,
   restorePointerOpenedChatComposerTrigger,
 } from "./chat-picker-overlay.ts";
-import { ChatVoiceStatus } from "./chat-voice-activity.tsx";
+import { renderChatVoiceStatus } from "./chat-voice-activity.ts";
 
 type ChatComposerViewContext = ReturnType<typeof createChatComposerContext>;
 
@@ -54,6 +58,11 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
 
   const activeSession = createMemo(() => props.selectedSession);
   const composerControls = createMemo(() => props.composerControls ?? undefined);
+  const attachmentPreview = createMemo(() => {
+    // Read entries mutate without replacing the lifecycle or attachment array.
+    void context.attachmentReadRevision;
+    return renderAttachmentPreview(props);
+  });
   const composerLeadControl = (
     <Show when={props.permissionPicker}>{(picker) => <ChatPermissionPicker {...picker()} />}</Show>
   );
@@ -145,19 +154,23 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
   const composerAlerts = createMemo(() =>
     showComposerInput() ? (
       <>
-        <ChatVoiceStatus
-          status={props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus}
-          detail={props.realtimeTalkDetail}
-          onUseSystemDefaultMicrophone={props.onUseSystemDefaultMicrophone}
-          onDismissError={
-            props.realtimeTalkCameraError ? undefined : props.onDismissRealtimeTalkError
-          }
+        <LitContent
+          value={renderChatVoiceStatus({
+            status: props.realtimeTalkCameraError ? "error" : props.realtimeTalkStatus,
+            detail: props.realtimeTalkDetail,
+            onUseSystemDefaultMicrophone: props.onUseSystemDefaultMicrophone,
+            onDismissError: props.realtimeTalkCameraError
+              ? undefined
+              : props.onDismissRealtimeTalkError,
+          })}
         />
         {props.realtimeTalkInputNotice ? (
-          <ChatVoiceStatus
-            status="error"
-            detail={props.realtimeTalkInputNotice}
-            onDismissError={props.onDismissRealtimeTalkInputNotice}
+          <LitContent
+            value={renderChatVoiceStatus({
+              status: "error",
+              detail: props.realtimeTalkInputNotice,
+              onDismissError: props.onDismissRealtimeTalkInputNotice,
+            })}
           />
         ) : undefined}
       </>
@@ -336,17 +349,19 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     ></openclaw-mcp-app-context-strip>
                   </>
                 )}
-                <AttachmentPreview {...props} readRevision={context.attachmentReadRevision} />
-                <AttachmentReadStatus
-                  pendingReads={
-                    props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0
-                  }
+                <LitContent value={attachmentPreview()} />
+                <LitContent
+                  value={renderAttachmentReadStatus(
+                    props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0,
+                  )}
                 />
                 {renderComposerDictationStatusSolid(context.dictation)}
-                <ChatAttachmentInputs
-                  {...props}
-                  disabled={!context.canCompose}
-                  cameraActive={context.showComposer && props.cameraActive !== false}
+                <LitContent
+                  value={renderChatAttachmentInputs({
+                    ...props,
+                    disabled: !context.canCompose,
+                    cameraActive: context.showComposer && props.cameraActive !== false,
+                  })}
                 />
                 {props.realtimeTalkVideoStream ? (
                   <>
@@ -390,10 +405,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
               </div>
 
               <div class="agent-chat__composer-input-row">
-                <div
-                  class="agent-chat__composer-combobox"
-                  data-prediction={context.predictionText ? "true" : undefined}
-                >
+                <div class="agent-chat__composer-combobox">
                   <Show when={context.draftKey} keyed>
                     {(scopeKey) => (
                       <ComposerTextarea
@@ -406,37 +418,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     )}
                   </Show>
                   <span class="agent-chat__composer-placeholder" aria-hidden="true">
-                    {context.dictation?.active || context.predictionText ? "" : placeholder()}
-                  </span>
-                  <Show when={context.predictionText}>
-                    <span class="agent-chat__composer-prediction" aria-hidden="true">
-                      {context.predictionText}
-                    </span>
-                    <div class="agent-chat__composer-prediction-actions">
-                      <button
-                        type="button"
-                        aria-label={t("chat.composer.usePrediction")}
-                        aria-keyshortcuts="Tab"
-                        onClick={() => context.acceptPrediction()}
-                      >
-                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
-                        {t("chat.composer.usePrediction")}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => context.dismissPrediction()}
-                        aria-label={t("chat.composer.dismissPrediction")}
-                      >
-                        {t("chat.composer.dismissPrediction")}
-                      </button>
-                    </div>
-                  </Show>
-                  <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
-                    {context.predictionText
-                      ? t("chat.composer.predictionAvailable", {
-                          text: context.predictionText,
-                        })
-                      : ""}
+                    {context.dictation?.active ? "" : placeholder()}
                   </span>
                   <span
                     id={slashMenuAnnouncementId()}
@@ -591,7 +573,6 @@ function ComposerTextarea(view: {
         if (event.target !== context.state.composerTextarea || context.draftKey !== view.scopeKey) {
           return;
         }
-        context.dismissPrediction();
         const emojiWasOpen = context.state.emojiMenu.open;
         context.state.mentionMenu.close();
         context.state.emojiMenu.close();

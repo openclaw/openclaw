@@ -45,6 +45,7 @@ import { isPreparedModelCatalogFull } from "../../agents/prepared-model-runtime.
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { createThinkingCatalogResolver } from "../../auto-reply/thinking.js";
 import { getRuntimeConfigSourceSnapshot } from "../../config/config.js";
+import { resolveRuntimeModelConfigCacheKey } from "../../config/runtime-snapshot.js";
 import { resolveProviderModelCatalogId } from "../../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { withCurrentReadAuthority } from "../../shared/current-read-authority.js";
@@ -108,7 +109,9 @@ async function prepareOwnedModelsListResult({
   authority,
   sessionEntry,
   useRequesterDefaults,
+  currentConfig,
   publishedOwner,
+  requestConfig,
   profiles,
   view,
   refresh,
@@ -125,9 +128,12 @@ async function prepareOwnedModelsListResult({
   preparedPluginRegistry,
 }: ModelsListOwner): Promise<PreparedModelsListResult> {
   const preparedOwnerIsCurrent = preparedProjectionOwner?.isCurrent;
-  // Mid-read config changes are best effort; prepared catalog and account authority still apply.
+  const configKey = resolveRuntimeModelConfigCacheKey(requestConfig);
+  // Native readiness belongs to the prepared generation, even across config publication.
   const isCurrent = () =>
-    preparedOwnerIsCurrent?.() === true && publicationScope?.isCurrent?.() !== false;
+    resolveRuntimeModelConfigCacheKey(currentConfig()) === configKey &&
+    preparedOwnerIsCurrent?.() === true &&
+    publicationScope?.isCurrent?.() !== false;
   if (!metadataSnapshot || !preparedAuthStore) {
     throw new Error("Gateway model catalog owner omitted prepared metadata or auth state");
   }
@@ -225,7 +231,10 @@ async function prepareOwnedModelsListResult({
     ...preparedCatalog.catalog,
     ...projector.snapshot.entries,
   ]);
-  const { evaluateNative } = projector;
+  const evaluateNative: typeof projector.evaluateNative = (entry, host, runtimeId) => {
+    const native = projector.evaluateNative(entry, host, runtimeId);
+    return native !== host && !isCurrent() ? { ...native, availability: false } : native;
+  };
   const { normalizeProvider, providerFilter, matchesProvider } = createModelsListProviderFilter({
     config: cfg,
     metadataSnapshot,

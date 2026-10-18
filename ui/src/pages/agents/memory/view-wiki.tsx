@@ -136,6 +136,13 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
                     {current().page.path} {updatedAtLabel()}
                   </div>
                 </div>
+                <button
+                  type="button"
+                  class="btn btn--subtle btn--sm"
+                  onClick={() => closeWikiPreview(props)}
+                >
+                  {t("dreaming.wiki.close")}
+                </button>
               </div>
               <div class="dreams-diary__preview-body">
                 {current().loading ? (
@@ -157,15 +164,6 @@ export function renderWikiPreviewOverlay(props: DreamingProps) {
                   </>
                 )}
               </div>
-              <openclaw-modal-actions class="dreams-diary__preview-footer">
-                <button
-                  type="button"
-                  class="btn btn--subtle btn--sm"
-                  onClick={() => closeWikiPreview(props)}
-                >
-                  {t("dreaming.wiki.close")}
-                </button>
-              </openclaw-modal-actions>
             </div>
           </openclaw-modal-dialog>
         );

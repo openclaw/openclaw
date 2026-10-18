@@ -5,7 +5,6 @@ import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "../agents/ag
 import type { SetupRuntimeCredential } from "../agents/auth-profiles/setup-access.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
-import { findModelInCatalog, loadManifestModelCatalog } from "../agents/model-catalog.js";
 import {
   ANTHROPIC_API_DEFAULT_MODEL_REF,
   CLAUDE_CLI_DEFAULT_MODEL_REF,
@@ -22,7 +21,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { formatErrorMessage } from "../infra/errors.js";
 import { stripPendingPluginInstallRecords } from "../plugins/install-record-commit.js";
 import { createPluginCache } from "../plugins/plugin-cache.js";
-import type { PluginCache } from "../plugins/plugin-cache.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveUserPath } from "../utils.js";
 import { WizardCancelledError, WizardNavigationError } from "../wizard/prompts.js";
@@ -64,12 +64,7 @@ import {
   stageProviderAutoCandidate,
   stageSavedAuthCandidate,
 } from "./setup-inference-credentials.js";
-import {
-  prepareSetupNativeRuntimeConsent,
-  prepareSetupVerificationGeneration,
-  verifySetupHarness,
-  type SetupHarnessVerification,
-} from "./setup-inference-harness.js";
+import { verifySetupHarness, type SetupHarnessVerification } from "./setup-inference-harness.js";
 import {
   commitSetupInferenceActivation,
   captureSetupInferenceFileUndo,
@@ -77,10 +72,10 @@ import {
   type SetupInferenceConfigTarget,
 } from "./setup-inference-transition.js";
 import {
+  loadSetupInferencePluginGeneration,
   revalidateStableSetupInferenceOwner,
   runSetupInferenceTurn,
 } from "./setup-inference-turn.js";
-import type { SetupInferencePluginGeneration } from "./setup-inference-turn.js";
 import { createSystemAgentModelSelectionUpdater } from "./setup-model-selection.js";
 import {
   applySetupNativeSessionCatalogPreference,
@@ -307,11 +302,8 @@ async function activateCandidate(
   if ("error" in staged) {
     return failure({ ok: false, status: "unavailable", error: staged.error });
   }
-  await using cache = createPluginCache();
-  const prepared = await prepareSetupNativeRuntimeConsent(ctx, staged, cache);
-  staged.config = prepared.config;
   const verify = (runtimeCredential?: SetupRuntimeCredential) =>
-    verifyAndActivateCandidate(ctx, staged, failure, cache, prepared.generation, runtimeCredential);
+    verifyAndActivateCandidate(ctx, staged, failure, runtimeCredential);
   if (!staged.authProfileId) {
     return await verify();
   }
@@ -330,8 +322,6 @@ async function verifyAndActivateCandidate(
   failure: (
     result: Extract<ActivateSetupInferenceResult, { ok: false }>,
   ) => ActivateSetupInferenceResult,
-  cache: PluginCache,
-  preparedGeneration: SetupInferencePluginGeneration | undefined,
   runtimeCredential?: SetupRuntimeCredential,
 ): Promise<ActivateSetupInferenceResult> {
   const { params, deps, snapshot, cfg, routeAgentId } = ctx;
@@ -387,13 +377,29 @@ async function verifyAndActivateCandidate(
   // Verify the candidate's route without persisting a new primary model for access-only sign-in.
   const candidateRouteConfig = (config: OpenClawConfig) =>
     params.selectModel === false ? selectModel(config, config) : config;
-  const { generation, metadata } = await prepareSetupVerificationGeneration(
-    ctx,
-    staged,
-    candidate,
-    cache,
-    preparedGeneration,
-  );
+  const resolveMetadata = deps.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync;
+  await using cache = createPluginCache();
+  const generation =
+    staged.pendingPluginInstalls && Object.keys(staged.pendingPluginInstalls).length > 0
+      ? await withPluginLifecycleLease({ signal: params.signal }, async () =>
+          loadSetupInferencePluginGeneration({
+            cache,
+            config: candidate,
+            workspaceDir: ctx.workspace,
+            selection: {
+              provider: parseInferenceRef(staged.modelRef).provider,
+              modelId: parseInferenceRef(staged.modelRef).model,
+              runtime: staged.agentRuntimeId ?? "openclaw",
+              agentId: routeAgentId,
+            },
+            pendingPluginInstalls: staged.pendingPluginInstalls,
+            resolvePluginMetadataSnapshot: resolveMetadata,
+          }),
+        )
+      : undefined;
+  const metadata =
+    generation?.metadataSnapshot ??
+    (await resolveMetadata({ config: candidate, workspaceDir: ctx.workspace, env: process.env }));
   const routeDeps = {
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     pluginMetadataPlugins: metadata.plugins,
@@ -451,7 +457,6 @@ async function verifyAndActivateCandidate(
         route,
         deps,
         cache,
-        generation,
         signal: params.signal,
         assertCurrent: () => throwIfSetupInferenceCancelled(params),
       });
@@ -673,15 +678,9 @@ async function verifyAndActivateCandidate(
       lines.push(warning);
     }
   }
-  const modelName = findModelInCatalog(
-    loadManifestModelCatalog({ config: candidate, metadataSnapshot: metadata }),
-    route.provider,
-    route.model,
-  )?.name;
   return {
     ok: true,
     modelRef: staged.modelRef,
-    ...(modelName ? { modelName } : {}),
     ...(staged.modelTarget ? { modelTarget: staged.modelTarget } : {}),
     latencyMs: verification.latencyMs,
     lines,

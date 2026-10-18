@@ -17,12 +17,11 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { projectGateway } from "../lib/reactive/application.ts";
-import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
@@ -38,6 +37,7 @@ import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-pre
 import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
+  teamOnlineExpanded: boolean;
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
@@ -76,7 +76,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
     host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId()
       ? host.sidebarSnapshot.brand
       : null;
-  const menuUnread = createMemo(() => host.otherAgentsHaveUnread());
+  const menuUnread = createMemo(() =>
+    cardAgents().some((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return agentId !== cardAgentId() && host.agentUnreadCount(agentId) > 0;
+    }),
+  );
   const cardName = createMemo(() => {
     const agent = cardAgent();
     return cached()?.name ?? (agent ? normalizeAgentLabel(agent, cardIdentity()) : "");
@@ -192,18 +197,22 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event) => {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+          onPointerMove={(event: PointerEvent) => {
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+            }
           }}
           onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
           onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event) => {
+          onClick={(event: MouseEvent) => {
             event.stopPropagation();
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
           }}
-          onContextMenu={(event) => {
+          onContextMenu={(event: MouseEvent) => {
             event.preventDefault();
-            if (!menuOpen()) {
+            if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
               host.sidebarMenus.toggleAgentMenu(event.currentTarget);
             }
           }}
@@ -213,7 +222,9 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
               aria-hidden="true"
             >
-              {branding().brandIcon === "mark" ? (
+              {branding().brandIcon === "claw" ? (
+                <Icon name="lobster" />
+              ) : branding().brandIcon === "mark" ? (
                 <Icon name="mark" />
               ) : (
                 <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
@@ -248,15 +259,12 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
 }
 
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Element {
-  const context = useApplication();
-  const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const connectionStatus = () => host.connectionStatus;
-  const selfUser = createMemo(() => {
-    profileGateway.read();
-    const gateway = host.sessionDataContext?.gateway;
-    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
-  });
+  const selfUser = () =>
+    host.sessionDataContext
+      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
+      : null;
   const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -465,21 +473,30 @@ export function renderAppSidebarPluginTab(
     return isRouteId(route) ? route : null;
   });
   const location = createMemo(() => pluginTabLocation(tab(), host.basePath));
-  const iconName = createMemo(() => {
-    const icon = tab().icon;
-    return icon && Object.hasOwn(iconData, icon)
-      ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
-      : "plug";
+  const link = renderSidebarNavLink({
+    get href() {
+      return `${location().pathname}${location().search}`;
+    },
+    get icon() {
+      const icon = tab().icon;
+      return (
+        <Icon
+          name={
+            icon && Object.hasOwn(iconData, icon)
+              ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
+              : "plug"
+          }
+        />
+      );
+    },
+    get label() {
+      return tab().label;
+    },
+    get active() {
+      return host.activeRouteId === "plugin" && host.activePluginTabId === key();
+    },
+    onNavigate: () => host.onNavigate?.("plugin", location()),
   });
-  const link = (
-    <SidebarNavLink
-      href={`${location().pathname}${location().search}`}
-      icon={<Icon name={iconName()} />}
-      label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
-      onNavigate={() => host.onNavigate?.("plugin", location())}
-    />
-  );
   return (
     <Show when={routeId()} fallback={link}>
       {(route) => host.sidebarMenus.renderRoute(route())}

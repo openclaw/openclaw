@@ -266,6 +266,13 @@ it.each<{
   distance: string | null;
 }>([
   { version: null, cachedBehind: 3, distance: "3 commits behind" },
+  { version: "2026.8.1", cachedBehind: 246, distance: "246 commits behind" },
+  {
+    version: "2026.8.1",
+    cachedBehind: 1,
+    git: { status: "behind", commitsBehind: 50 },
+    distance: "50 commits behind",
+  },
   {
     version: "2026.8.1",
     cachedBehind: 246,
@@ -284,6 +291,12 @@ it.each<{
     distance: "50 commits behind",
   },
   { version: "2026.9.3", cachedBehind: 246, git: { status: "current" }, distance: null },
+  {
+    version: "2026.9.3",
+    cachedBehind: 246,
+    git: { status: "ahead", commitsAhead: 1 },
+    distance: null,
+  },
 ])(
   "formats the git target from its current comparison: %j",
   async ({ version, cachedBehind, git, distance }) => {
@@ -473,6 +486,7 @@ it.each(["existing", "started", "initial"] as const)(
 );
 
 it.each([
+  { name: "an empty snapshot", failure: null },
   {
     name: "a retained failure",
     failure: "The update failed at install: ENOSPC: no space left on device, write.",
@@ -509,6 +523,8 @@ it.each([
     recovery: false,
     watch: true,
   },
+  { status: "skipped", reason: "container-image-install", recovery: false, watch: true },
+  { status: "skipped", reason: "already-current", recovery: false, watch: true },
   { status: "skipped", reason: "dirty", recovery: true, watch: true },
   { status: "failed", reason: "build-failed", recovery: true, watch: true },
 ] as const)(
@@ -544,6 +560,8 @@ it.each([
 it.each([
   { status: "running", entry: "existing" },
   { status: "failed", entry: "existing" },
+  { status: "succeeded", entry: "existing" },
+  { status: "skipped", entry: "existing" },
   { status: "running", entry: "started" },
 ] as const)(
   "keeps the $status report and exposes read recovery for a $entry run",
@@ -552,7 +570,12 @@ it.each([
       status,
       phase: status === "running" ? "verifying" : "finished",
       finishedAtMs: status === "running" ? null : 4_000,
-      reason: status === "failed" ? "build-failed" : null,
+      reason:
+        status === "failed"
+          ? "build-failed"
+          : status === "skipped"
+            ? "external-supervisor-update-required"
+            : null,
     });
     let admitted = entry === "existing";
     let rejectRunReads = false;
@@ -602,8 +625,6 @@ it.each([
         await flushMicrotasks();
         await operation;
       }
-      const retainedView = modal.querySelector(".update-run-view");
-      expect(retainedView).not.toBeNull();
       // Reconnect the same target before exercising recovery from its retained report.
       harness.update({ phase: "reconnecting", selfUser: undefined });
       harness.update({ phase: "connected", selfUser: undefined });
@@ -612,18 +633,10 @@ it.each([
       rejectRunReads = true;
       harness.emitEvent("update.run.changed", { ...run, updatedAtMs: run.updatedAtMs + 1 });
       await flushMicrotasks();
+      const view = modal.querySelector<HTMLElement & { run: unknown }>("openclaw-update-run-view")!;
       flush();
-      const view = modal.querySelector(".update-run-view")!;
       expect(modal.textContent).toContain("Run status read failed");
-      expect(view).toBe(retainedView);
-      expect(view.getAttribute("data-run-id")).toBe(run.runId);
-      expect(view.getAttribute("data-run-status")).toBe(status);
-      expect(view.querySelector("h3")?.textContent).toContain(
-        status === "running"
-          ? "OpenClaw update in progress: verifying"
-          : `OpenClaw update ${status}`,
-      );
-      const reportText = view.textContent;
+      expect(view.run).toEqual(run);
       const check = findButton("Check status");
       expect(check.disabled).toBe(false);
       if (status !== "failed") {
@@ -654,8 +667,7 @@ it.each([
       flush();
       expect(modal.textContent).not.toContain("Run status read failed");
       expect(modal.querySelector('[role="status"]')?.textContent).toContain("Status refreshed.");
-      expect(modal.querySelector(".update-run-view")).toBe(view);
-      expect(view.textContent).toBe(reportText);
+      expect(view.run).toEqual(run);
       expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
@@ -667,15 +679,13 @@ it.each([
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
       expect(findButton("Check status").disabled).toBe(false);
-      expect(modal.querySelector(".update-run-view")).toBe(view);
-      expect(view.textContent).toBe(reportText);
+      expect(view.run).toEqual(run);
       statusResponse = Promise.resolve();
       findButton("Check status").click();
       await statusOperation;
       flush();
       expect(modal.textContent).not.toContain("Could not check for updates");
-      expect(modal.querySelector(".update-run-view")).toBe(view);
-      expect(view.textContent).toBe(reportText);
+      expect(view.run).toEqual(run);
       harness.update({ phase: "connecting", client: null });
       await flushMicrotasks();
       expect(findButton("Check status").disabled).toBe(true);

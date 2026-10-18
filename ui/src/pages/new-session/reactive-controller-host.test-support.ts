@@ -1,8 +1,8 @@
-import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 
-export class TestReactiveControllerHost implements SolidControllerHost {
+export class TestReactiveControllerHost implements ReactiveControllerHost {
   readonly updateComplete = Promise.resolve(true);
-  addController(_controller: SolidController) {}
-  removeController(_controller: SolidController) {}
+  addController(_controller: ReactiveController) {}
+  removeController(_controller: ReactiveController) {}
   requestUpdate() {}
 }

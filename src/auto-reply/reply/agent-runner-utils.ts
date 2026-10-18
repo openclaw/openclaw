@@ -231,7 +231,7 @@ export function resolveRunFastModeForFallbackCandidate(params: {
     sessionEntry: params.sessionEntry,
   });
   return {
-    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.requestMode,
+    fastMode: params.run.fastModeOverride ? params.run.fastMode : state.mode,
     fastModeAutoOnSeconds: params.run.fastModeAutoOnSecondsOverride
       ? params.run.fastModeAutoOnSeconds
       : state.fastAutoOnSeconds,
@@ -513,7 +513,6 @@ export async function buildEmbeddedRunExecutionParams(params: {
     modelFallbacksOverride,
     ...authProfile,
     thinkLevel: snapshot.run.thinkLevel,
-    thinkingExplicit: snapshot.run.thinkingExplicit,
     fastMode: snapshot.run.fastMode,
     fastModeAutoOnSeconds: snapshot.run.fastModeAutoOnSeconds,
     verboseLevel: snapshot.run.verboseLevel,

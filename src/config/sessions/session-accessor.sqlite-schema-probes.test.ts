@@ -260,32 +260,27 @@ it.each<{
 }>(
   (
     [
-      { cronRetention: { limit: 32 } },
-      { cronRetention: { limit: 1, afterSessionKey: "agent:main:cron:job:run:old" } },
+      { cronRetention: true },
       { expiredCronRuns: { agentId: "main", updatedBefore: 2 } },
       { expiredCronRuns: { agentId: "main", updatedBefore: 0 } },
     ] satisfies SessionEntryListScope[]
   ).map((scope) => ({
     scope,
-    fullKeys:
-      scope.cronRetention?.limit === 1
-        ? ["agent:main:cron:job:run:recent"]
-        : scope.cronRetention
-          ? [
-              "agent:main:cron:job:run:old",
-              "agent:main:cron:job:run:recent",
-              "agent:other:cron:job:run:old",
-            ]
-          : scope.expiredCronRuns?.updatedBefore === 2
-            ? ["agent:main:cron:job:run:old"]
-            : [],
+    fullKeys: scope.cronRetention
+      ? [
+          "agent:main:cron:job:run:old",
+          "agent:main:cron:job:run:recent",
+          "agent:other:cron:job:run:old",
+        ]
+      : scope.expiredCronRuns?.updatedBefore === 2
+        ? ["agent:main:cron:job:run:old"]
+        : [],
   })),
 )(
   "loads only selected cold snapshots outside the retention transaction: $scope",
   ({ scope, fullKeys }) => {
     const { database, options, read } = fixture(listSessionEntriesReadOnly);
     const saved = { prompt: "cron saved snapshot", skills: [] };
-    const usageFamilySessionIds = Array.from({ length: 1024 }, (_, i) => `previous-run-${i}`);
     runOpenClawAgentWriteTransaction((db) => {
       for (const [sessionKey, updatedAt] of [
         ["agent:main:cron:job:run:old", 1],
@@ -296,20 +291,15 @@ it.each<{
           sessionId: sessionKey,
           updatedAt,
           skillsSnapshot: saved,
-          usageFamilySessionIds,
         });
       }
     }, options);
     read();
     const materialized: string[] = [];
-    let hotPayloadBytes = 0;
     const prepare = database.db.prepare.bind(database.db);
     vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
       const statement = prepare(sql);
       const observe = (row: Record<string, unknown>) => {
-        if (typeof row.entry_json === "string") {
-          hotPayloadBytes += Buffer.byteLength(row.entry_json);
-        }
         if (typeof row.skills_snapshot_json === "string") {
           materialized.push(String(row.session_key));
         }
@@ -354,12 +344,6 @@ it.each<{
       expect(entry.skillsSnapshot).toEqual(saved);
     }
     expect(entries.map(({ sessionKey }) => sessionKey)).toEqual(fullKeys);
-    if (scope.cronRetention?.limit === 1) {
-      // One page can read its hot payload twice, but must not hydrate its bloated siblings.
-      expect(hotPayloadBytes).toBeLessThan(
-        3 * Buffer.byteLength(JSON.stringify(usageFamilySessionIds)),
-      );
-    }
   },
 );
 

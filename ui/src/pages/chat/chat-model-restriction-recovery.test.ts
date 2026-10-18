@@ -40,9 +40,6 @@ function fixture(
     repeatRefusal?: boolean;
     unbound?: boolean;
     materializedSessionId?: string;
-    remembered?: boolean;
-    sessionKey?: string;
-    rememberedAgentId?: string;
   } = {},
 ) {
   if (options.send) {
@@ -52,7 +49,6 @@ function fixture(
     vi.stubGlobal("requestAnimationFrame", () => 1);
     vi.stubGlobal("cancelAnimationFrame", () => undefined);
   }
-  const sessionKey = options.sessionKey ?? "global";
   const result = createSessionsListResult({
     model: "original",
     modelProvider: "fixture",
@@ -60,7 +56,7 @@ function fixture(
   });
   result.sessions[0] = {
     ...result.sessions[0],
-    key: sessionKey,
+    key: "global",
     kind: "direct",
     updatedAt: 1,
     sessionId: options.materializedSessionId ?? recovery.sessionId,
@@ -81,13 +77,13 @@ function fixture(
   let sends = 0;
   const receipt: SessionsPatchResult = {
     ok: true,
-    key: sessionKey,
+    key: "global",
     path: "",
     entry: { sessionId: recovery.sessionId, permissionMode: "full", updatedAt: 2 },
     resolved: { model: options.unbound ? "original" : "selected", modelProvider: "fixture" },
   };
   const host = makeChatHost({
-    sessionKey,
+    sessionKey: "global",
     assistantAgentId: "selected-agent",
     agentsList: { defaultId: "main", scope: "global", agents: [{ id: "selected-agent" }] },
     hello: sessionMutationGatewayHello(options.scopes),
@@ -96,18 +92,6 @@ function fixture(
     currentSessionId: options.unbound ? undefined : recovery.sessionId,
     requestHandlers: {
       "sessions.list": () => (materialized ? result : initialResult),
-      "config.get": () => ({
-        hash: "config-revision",
-        config: {
-          agents: {
-            entries: {
-              [options.rememberedAgentId ?? "selected-agent"]: {
-                nativeRuntimeConsent: options.remembered ? ["opencode"] : [],
-              },
-            },
-          },
-        },
-      }),
       "sessions.patch": () => {
         patches += 1;
         if (patches === 1 && !options.send) {
@@ -206,7 +190,7 @@ it.each([false, true])(
     });
     expect(
       host.request.mock.calls.some(
-        ([method]) => method === "chat.send" || method === "config.patch",
+        ([method]) => method === "chat.send" || method.startsWith("config."),
       ),
     ).toBe(false);
     expect(host.chatMessage).toBe("Keep this draft; never replay it");
@@ -215,45 +199,6 @@ it.each([false, true])(
     );
   },
 );
-
-it.each([
-  { sessionKey: "global", rememberedAgentId: "selected-agent" },
-  { sessionKey: "agent:selected-agent:chat", rememberedAgentId: "selected-agent" },
-  { sessionKey: "agent:other-agent:chat", rememberedAgentId: "other-agent" },
-])(
-  "uses the owning agent's remembered permissions for $sessionKey without prompting",
-  async ({ sessionKey, rememberedAgentId }) => {
-    const { host } = fixture({ remembered: true, sessionKey, rememberedAgentId });
-    await expect(switchChatModel(host, "fixture/selected", sessionKey, "opencode")).resolves.toBe(
-      true,
-    );
-    expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-    const patches = requestCalls(host.request, "sessions.patch");
-    expect(patches[1]?.[1]).toMatchObject({
-      key: sessionKey,
-      agentRuntime: "opencode",
-      permissionMode: "full",
-      sandboxMode: "off",
-    });
-    expect(patches[1]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
-    expect(requestCalls(host.request, "config.patch")).toHaveLength(0);
-  },
-);
-
-it("requires confirmation when only the UI-selected agent remembers consent", async () => {
-  const sessionKey = "agent:other-agent:chat";
-  const { host } = fixture({
-    remembered: true,
-    sessionKey,
-    rememberedAgentId: "selected-agent",
-  });
-  const selection = switchChatModel(host, "fixture/selected", sessionKey, "opencode");
-  const modal = await dialog();
-  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-  click(modal, "Cancel");
-  await expect(selection).resolves.toBe(false);
-  expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-});
 
 it.each([
   {
@@ -382,18 +327,6 @@ it("does not open a late refusal on a replacement connection", async () => {
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
   expect(host.chatError ?? null).toBeNull();
   expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-});
-
-it("retries a first turn using remembered consent without repinning its model", async () => {
-  const { host } = fixture({ send: true, remembered: true });
-  await handleSendChat(host);
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
-  const patches = requestCalls(host.request, "sessions.patch");
-  expect(patches).toHaveLength(1);
-  expect(patches[0]?.[1]).toMatchObject({ permissionMode: "full", sandboxMode: "off" });
-  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
-  expect(patches[0]?.[1]).not.toHaveProperty("model");
-  expect(patches[0]?.[1]).not.toHaveProperty("nativeRuntimeConsent");
 });
 
 it.each(["repeated refusal", "newer draft", "unbound session"] as const)(

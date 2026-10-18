@@ -60,7 +60,7 @@ describe("personal navigation rail", () => {
       [...sidebar.querySelectorAll("[data-navigation-view]")].map((button) =>
         button.getAttribute("aria-label"),
       ),
-    ).toEqual(["Pages", "Sessions", "Users"]);
+    ).toEqual(["Pages", "Sessions", "Online"]);
     const frame = sidebar.querySelector("aside.sidebar")!;
     const bottom = sidebar.querySelector(".sidebar-rail__bottom")!;
     expect(bottom.querySelector(".sidebar-footer-bar__home")).not.toBeNull();
@@ -410,8 +410,6 @@ describe("personal navigation rail", () => {
     await select("online");
     expect(sidebar.navigationView).toBe("online");
     expect(sidebar.navigationCollapsed).toBe(false);
-    await select("online");
-    expect(sidebar.navigationCollapsed).toBe(false);
     expect(toggle).toHaveBeenCalledTimes(4);
   });
 
@@ -527,6 +525,14 @@ describe("personal navigation rail", () => {
     };
     await sidebar.updateComplete;
     const transfer = createDataTransferStub();
+    const collapse = sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-online .sidebar-session-group-toggle",
+    )!;
+    collapse.click();
+    await sidebar.updateComplete;
+    expect(sidebar.querySelector(".sidebar-online__row")).toBeNull();
+    collapse.click();
+    await sidebar.updateComplete;
     drag(sidebar.querySelector(".sidebar-online__row")!, "dragstart", transfer);
     drag(sidebar.querySelector(".sidebar-rail__pins")!, "drop", transfer);
     await sidebar.updateComplete;

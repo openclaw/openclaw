@@ -1,16 +1,16 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
-import type { SolidController, SolidControllerHost } from "./solid-controller-host.ts";
 
-export class TestHost implements SolidControllerHost {
-  readonly controllers: SolidController[] = [];
+export class TestHost implements ReactiveControllerHost {
+  readonly controllers: ReactiveController[] = [];
   readonly requestUpdate = vi.fn();
   readonly updateComplete = Promise.resolve(true);
 
-  addController(controller: SolidController): void {
+  addController(controller: ReactiveController): void {
     this.controllers.push(controller);
   }
 
-  removeController(controller: SolidController): void {
+  removeController(controller: ReactiveController): void {
     const index = this.controllers.indexOf(controller);
     if (index !== -1) {
       this.controllers.splice(index, 1);

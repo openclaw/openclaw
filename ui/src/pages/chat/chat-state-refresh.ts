@@ -435,10 +435,14 @@ async function loadChatModelCatalog(
         const fresh = peekModelCatalog(binding.client, binding.scope);
         if (fresh || ownsRequest()) {
           applyCachedChatModelCatalog(host, binding);
-          return (
+          const accepted =
             Boolean(fresh) ||
-            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result
-          );
+            peekModelCatalog(binding.client, binding.scope, { allowStale: true }) === result;
+          if (!accepted && ownsRequest()) {
+            binding.catalogRequest = undefined;
+            return loadChatModelCatalog(host, binding);
+          }
+          return accepted;
         }
         return false;
       },

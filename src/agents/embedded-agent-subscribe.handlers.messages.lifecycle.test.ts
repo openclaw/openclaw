@@ -255,7 +255,8 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({ enforceFinalTag: true, onAgentEvent, onBlockReply });
     await endMessage(ctx, {
       message: {
-        ...textMessage("Hello world"),
+        role: "assistant",
+        content: "Hello world",
         usage: { input: 10, output: 5, total: 15 },
       },
     });

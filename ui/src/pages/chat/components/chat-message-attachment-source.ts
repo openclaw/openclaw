@@ -175,7 +175,7 @@ function resolveManagedAttachmentAvailability(
   if (!current) {
     setManagedAttachmentAvailability(resource, { status: "checking" });
   }
-  resource.pending = Promise.resolve()
+  const pending = Promise.resolve()
     .then(async () => {
       let availability: ManagedAttachmentAvailability;
       try {
@@ -230,9 +230,12 @@ function resolveManagedAttachmentAvailability(
       return setManagedAttachmentAvailability(resource, availability);
     })
     .finally(() => {
-      resource.pending = undefined;
+      if (resource.pending === pending) {
+        resource.pending = undefined;
+      }
       notifyChatMediaResourceSubscribers(resource);
     });
+  resource.pending = pending;
   if (current) {
     setManagedAttachmentAvailability(resource, current, true);
   }

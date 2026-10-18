@@ -505,7 +505,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
-      thinkingExplicit: params.thinkingExplicit,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -519,9 +518,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           sessionEntry: preparedSessionState.sessionEntry,
         });
         return {
-          fastMode: params.resolvedFastModeOverride
-            ? params.resolvedFastMode
-            : fastModeState.requestMode,
+          fastMode: params.resolvedFastMode ?? fastModeState.mode,
           fastModeAutoOnSeconds:
             params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
           ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),

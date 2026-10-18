@@ -185,8 +185,7 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
   resolveBundledProviderPolicySurface: mocks.resolveProviderPolicySurface,
 }));
 
-vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./prepared-model-catalog-worker.js")>()),
+vi.mock("./prepared-model-catalog-worker.js", () => ({
   createPreparedModelCatalogWorker: ({
     agentFacts,
   }: Parameters<
@@ -204,6 +203,7 @@ vi.mock("./prepared-model-catalog-worker.js", async (importOriginal) => ({
         modelCatalog: catalog,
         runtimeModels: new Map(),
         providerExpiries: new Map(),
+        hookRows: new Map(),
         configuredRuntimeModels: agentFacts.configuredRuntimeModels,
       };
     },

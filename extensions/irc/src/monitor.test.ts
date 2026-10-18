@@ -23,8 +23,6 @@ type DisconnectingIrcServer = {
   port: number;
   lines: string[];
   connectionCount: number;
-  joined: Promise<void>;
-  rejoined: Promise<void>;
   disconnectFirst(): void;
   close(): Promise<void>;
 };
@@ -102,8 +100,6 @@ function observeReconnect() {
 
 async function startDisconnectingIrcServer(loginError?: string): Promise<DisconnectingIrcServer> {
   const lines: string[] = [];
-  const joined = createDeferred<void>();
-  const rejoined = createDeferred<void>();
   let connectionCount = 0;
   let firstSocket: net.Socket;
   const server = await startIrcTestServer((socket) => {
@@ -113,9 +109,6 @@ async function startDisconnectingIrcServer(loginError?: string): Promise<Disconn
     }
     onIrcTestLine(socket, (line) => {
       lines.push(line);
-      if (line === "JOIN #openclaw") {
-        (connectionNumber === 1 ? joined : rejoined).resolve();
-      }
       if (line.startsWith("USER ")) {
         if (connectionNumber === 2) {
           if (loginError) {
@@ -132,8 +125,6 @@ async function startDisconnectingIrcServer(loginError?: string): Promise<Disconn
   return {
     ...server,
     lines,
-    joined: joined.promise,
-    rejoined: rejoined.promise,
     disconnectFirst: () => firstSocket.destroy(),
     get connectionCount() {
       return connectionCount;
@@ -456,25 +447,12 @@ describe("irc monitor reconnect", () => {
   });
 
   it.for([
-    {
-      failure: "a closed socket",
-      silent: false,
-      loginError: undefined,
-      error: "closed before ready",
-    },
-    { failure: "a rejected login", silent: false, loginError: "464", error: "login failed (464)" },
-    {
-      failure: "a silent socket",
-      silent: true,
-      loginError: undefined,
-      error: "closed before ready",
-    },
+    { failure: "a closed socket", loginError: undefined, error: "closed before ready" },
+    { failure: "a rejected login", loginError: "464", error: "login failed (464)" },
   ])(
     "reports disconnected status and recovers after $failure",
-    async ({ loginError, error, silent }, { signal }) => {
-      vi.useFakeTimers({
-        toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
-      });
+    async ({ loginError, error }, { signal }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
       onTestFinished(() => {
         vi.useRealTimers();
       });
@@ -506,12 +484,7 @@ describe("irc monitor reconnect", () => {
 
         try {
           monitor = await monitorIrcProvider({ config, ingressQueue, statusSink });
-          await withinTest(server.joined, signal);
-          if (silent) {
-            await vi.advanceTimersByTimeAsync(240_000);
-          } else {
-            server.disconnectFirst();
-          }
+          server.disconnectFirst();
           await withinTest(disconnected.promise, signal);
           expect(status).toMatchObject({
             running: true,
@@ -531,13 +504,7 @@ describe("irc monitor reconnect", () => {
           });
           await vi.advanceTimersByTimeAsync(2_400);
           await withinTest(reconnected.promise, signal);
-          await withinTest(server.rejoined, signal);
           expect(status).toMatchObject({ running: true, connected: true, lastError: null });
-          expect(server.connectionCount).toBe(3);
-          expect(server.lines.filter((line) => line === "JOIN #openclaw")).toHaveLength(2);
-          await monitor.stop();
-          await vi.advanceTimersByTimeAsync(240_000);
-          expect(server.connectionCount).toBe(3);
         } finally {
           if (monitor) {
             await monitor.stop();

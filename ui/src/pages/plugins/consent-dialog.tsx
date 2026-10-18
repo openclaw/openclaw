@@ -510,7 +510,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         ) : (
           <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
         )}
-        <openclaw-modal-actions class="plugins-consent__actions">
+        <footer class="plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"
@@ -521,7 +521,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           <ReasonedDisabledControl reason={props.mutationBlockedReason}>
             {confirm}
           </ReasonedDisabledControl>
-        </openclaw-modal-actions>
+        </footer>
       </section>
     </openclaw-modal-dialog>
   );

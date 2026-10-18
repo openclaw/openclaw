@@ -99,7 +99,7 @@ suite.define(() => {
       await page.locator(".agent-chat__composer-combobox textarea").waitFor();
       expect(await page.locator(".header-new-session").count()).toBe(0);
       await capture("chat");
-      await page.locator(".chat-pane__nav-toggle").tap();
+      await page.locator(".chat-pane__nav-toggle").click();
       await waitForMobileSidebarDrawerOpen(page);
       const create = page.getByRole("link", { name: "New conversation", exact: true });
       await create.waitFor();
@@ -181,17 +181,14 @@ suite.define(() => {
         expect(
           await page.getByRole("link", { name: "New conversation", exact: true }).count(),
         ).toBe(0);
-        // Mouse hover can reveal the sliding drawer's tooltip, which owns the first Escape.
         await page
           .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
           .first()
-          .tap();
+          .click();
         await waitForMobileSidebarDrawerOpen(page);
         expect(await page.locator(".header-new-session:visible").count()).toBe(0);
         expect(await action.count()).toBe(1);
         if (route === "new") {
-          // The drawer moves focus after rendering; Escape must not reach the departing text field.
-          await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();
           await page.keyboard.press("Escape");
           await page.locator(".shell--nav-drawer-open").waitFor({ state: "detached" });
         }
@@ -204,7 +201,7 @@ suite.define(() => {
             .evaluateAll((links) => links.map((link) => link.getAttribute("href"))),
         ).toEqual(["/new?agent=research", "/new?agent=writer"]);
         await capture("agent-menu");
-        await menu.locator('[role="menuitem"][data-value="writer"]').tap();
+        await menu.locator('[role="menuitem"][data-value="writer"]').click();
         await waitForControlUiRoute(page, { routeId: "new-session", search: "?agent=writer" });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       });
@@ -230,7 +227,7 @@ suite.define(() => {
             : suite.server.baseUrl + "new?agent=research",
         );
         if (state === "denied") {
-          await page.locator(".chat-pane__nav-toggle").tap();
+          await page.locator(".chat-pane__nav-toggle").click();
           await waitForMobileSidebarDrawerOpen(page);
         }
         const create = page.locator(

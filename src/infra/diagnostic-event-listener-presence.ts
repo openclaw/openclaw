@@ -1,6 +1,5 @@
 /** Process-wide listener counts used to avoid telemetry work without consumers. */
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { notifyListeners } from "../shared/listeners.js";
 
 const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
@@ -9,7 +8,6 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY = Symbol.for(
 type DiagnosticEventListenerPresence = {
   broadInterestCount: number;
   eventInterestDeltas: Map<string, number>;
-  interestListeners: Map<string, Set<() => void>>;
   marker: symbol;
   internalCount: number;
   trustedCount: number;
@@ -21,7 +19,6 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
     () => ({
       broadInterestCount: 0,
       eventInterestDeltas: new Map(),
-      interestListeners: new Map(),
       marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
       internalCount: 0,
       trustedCount: 0,
@@ -29,7 +26,6 @@ function getDiagnosticEventListenerPresence(): DiagnosticEventListenerPresence {
   );
   state.broadInterestCount ??= 0;
   state.eventInterestDeltas ??= new Map();
-  state.interestListeners ??= new Map();
   return state;
 }
 
@@ -70,9 +66,6 @@ export function updateInternalDiagnosticEventInterest(
   delta: 1 | -1,
 ): void {
   const state = getDiagnosticEventListenerPresence();
-  const previouslyUninterested = [...state.interestListeners].filter(
-    ([type]) => !hasInternalDiagnosticEventInterest(type),
-  );
   const usesIncludeList = Boolean(interest?.include);
   if (!usesIncludeList) {
     state.broadInterestCount += delta;
@@ -83,23 +76,6 @@ export function updateInternalDiagnosticEventInterest(
       updateEventInterestDelta(state, type, usesIncludeList ? delta : -delta);
     }
   }
-  for (const [type, listeners] of previouslyUninterested) {
-    if (hasInternalDiagnosticEventInterest(type)) {
-      notifyListeners(listeners, undefined);
-    }
-  }
-}
-
-export function onInternalDiagnosticEventInterest(type: string, listener: () => void): () => void {
-  const state = getDiagnosticEventListenerPresence();
-  const listeners = state.interestListeners.get(type) ?? new Set<() => void>();
-  state.interestListeners.set(type, listeners);
-  listeners.add(listener);
-  return () => {
-    if (listeners.delete(listener) && listeners.size === 0) {
-      state.interestListeners.delete(type);
-    }
-  };
 }
 
 export function hasInternalDiagnosticEventInterest(type: string): boolean {

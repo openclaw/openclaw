@@ -1,3 +1,4 @@
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -42,20 +43,20 @@ suite.define(() => {
         const beforeMenu = (await composer.boundingBox())!;
         const openingVisibility = page.evaluate(
           () =>
-            new Promise<boolean>((resolve) => {
+            new Promise<string>((resolve) => {
               const observer = new MutationObserver(() => {
                 const popup = document.querySelector(".emoji-menu-popup");
                 const openingMenu = popup?.querySelector<HTMLElement>(".emoji-menu");
-                if (openingMenu && popup && !popup.matches(":popover-open")) {
+                if (openingMenu && popup && !popup.hasAttribute("data-current-placement")) {
                   observer.disconnect();
-                  resolve(popup.checkVisibility({ checkVisibilityCSS: true }));
+                  resolve(getComputedStyle(popup).visibility);
                 }
               });
               observer.observe(document.body, { childList: true, subtree: true });
             }),
         );
         await composer.pressSequentially(":smi");
-        expect(await openingVisibility).toBe(false);
+        expect(await openingVisibility).toBe("hidden");
         const menu = page.getByRole("listbox", { name: /emoji/i });
         await menu.waitFor({ state: "visible" });
         expect(await menu.getByRole("option").count()).toBeGreaterThan(1);
@@ -96,16 +97,8 @@ suite.define(() => {
           .toBeLessThan(3);
         expect((await menu.boundingBox())!.width).toBeLessThanOrEqual(302);
         const anchor = await page
-          .locator(".emoji-menu-popup")
-          .evaluateHandle((popup: HTMLElement) => {
-            const anchorName = popup.style.getPropertyValue("position-anchor");
-            return [...document.querySelectorAll<HTMLElement>("[style]")].find((element) =>
-              element.style
-                .getPropertyValue("anchor-name")
-                .split(",")
-                .some((name) => name.trim() === anchorName),
-            );
-          });
+          .locator("wa-popup.emoji-menu-popup")
+          .evaluateHandle((popup: WaPopup) => popup.anchor);
         await composer.press("ArrowDown");
         await composer.press("ArrowUp");
         expect(

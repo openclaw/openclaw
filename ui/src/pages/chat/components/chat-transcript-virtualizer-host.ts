@@ -425,7 +425,9 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     presented: PresentationValue = true,
     applicationContext?: ApplicationContext,
   ): HTMLDivElement {
-    this.offsetState.renderedTouchActive = this.offsetState.touchActive;
+    this.offsetState.renderedScrollState = this.offsetState.renderState(
+      this.scrollElement !== null && this.endAnchor.atEnd,
+    );
     // Keep old geometry during the gesture, while still virtualizing that old
     // row model as the reader moves. Only the history insertion is held back.
     if (

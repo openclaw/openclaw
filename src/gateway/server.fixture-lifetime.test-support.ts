@@ -202,8 +202,8 @@ const scenario = ${JSON.stringify(scenario)};
 const takeHooks = () => Object.fromEntries(
   Object.entries(hooks).map(([name, callbacks]) => [name, callbacks.splice(0)]),
 );
-async function runHooks(callbacks, context) {
-  for (const callback of callbacks) await callback(context);
+async function runHooks(callbacks) {
+  for (const callback of callbacks) await callback();
 }
 function containsError(error, expected) {
   return expected !== undefined && (error === expected || (error instanceof Error && (
@@ -227,7 +227,7 @@ function closeOwned(server) {
   }) : Promise.resolve();
 }
 
-test("observes startup cleanup ownership through fixture teardown", async (context) => {
+test("observes startup cleanup ownership through fixture teardown", async () => {
   const originals = [];
   const own = promise => { originals.push(promise); return promise; };
   const restorers = [];
@@ -245,7 +245,7 @@ test("observes startup cleanup ownership through fixture teardown", async (conte
     gateway.installGatewayTestHooks({ scope: "suite" });
     const fixture = takeHooks();
     await own(runHooks(fixture.setup));
-    await own(runHooks(fixture.reset, context));
+    await own(runHooks(fixture.reset));
     const home = process.env.HOME;
     const state = process.env.OPENCLAW_STATE_DIR;
     if (!home || !state) throw new Error("expected isolated Gateway fixture selectors");
@@ -358,7 +358,7 @@ test("observes startup cleanup ownership through fixture teardown", async (conte
     const beforeCleanup = readState();
     const fixtureRelease = await observe(() => lifetimeModule.gatewayFixtureLifetime.assertReleased());
     // Expected owner refusals are asserted by the outer test, not unhandled suite-hook failures.
-    const afterEach = await observe(() => runHooks(fixture.afterEach, context));
+    const afterEach = await observe(() => runHooks(fixture.afterEach));
     const cleanup = await observe(() => runHooks(fixture.cleanup.toReversed()));
     const afterCleanup = readState();
     const homeRestored = process.env.HOME === homeBefore;

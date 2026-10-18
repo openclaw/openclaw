@@ -10,12 +10,12 @@ import { resolveCronDeliveryMode } from "../delivery-defaults.js";
 import { assertCronJobStateTimestamps } from "../persisted-shape.js";
 import type { CronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { normalizeCronScriptPayload } from "../script-payload.js";
-import { createCronSourceIdentity } from "../source-schedule.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../stagger.js";
 import {
   assertCanonicalCronDeliveryMode,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
+import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import { applyDefaultCronToolsAllow, cronJobUsesToolRuntime } from "../tools-allow.js";
 import type {
   CronDelivery,
@@ -46,7 +46,7 @@ import {
   assertMainSessionAgentId,
   assertPacingSupport,
   assertScriptPayloadSupport,
-  assertExternalSourceScheduleSupport,
+  assertStreamScheduleSupport,
   assertSupportedJobSpec,
   assertTriggerSupport,
 } from "./jobs-validation.js";
@@ -149,11 +149,10 @@ function validateFullJob(
       : context.kind === "patch"
         ? context.patch.payload?.kind === "script"
         : context.input.payload.kind === "script";
-  const sourceTouched =
+  const streamTouched =
     context.kind !== "patch" ||
     context.patch.enabled === true ||
-    context.patch.schedule?.kind === "stream" ||
-    context.patch.schedule?.kind === "event";
+    context.patch.schedule?.kind === "stream";
   const validateCapabilities = () => {
     assertTriggerSupport(job, {
       cronConfig,
@@ -164,7 +163,7 @@ function validateFullJob(
       requireEnabled: scriptTouched,
       ...(context.kind === "patch" ? { validateSyntax: context.patch.payload !== undefined } : {}),
     });
-    assertExternalSourceScheduleSupport(job, { cronConfig, requireEnabled: sourceTouched });
+    assertStreamScheduleSupport(job, { cronConfig, requireEnabled: streamTouched });
   };
   if (context.kind === "declarative") {
     validateCapabilities();
@@ -225,8 +224,6 @@ export function createJob(
   delete initialState.scheduleActivatedAtMs;
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
-  delete initialState.sourceIdentity;
-  delete initialState.streamSourceIdentity;
   assertCronJobStateTimestamps(initialState);
   const job: CronStoredJob = {
     id,
@@ -263,10 +260,8 @@ export function createJob(
     state: {
       ...initialState,
       ...(schedule.kind === "stream"
-        ? { streamSourceIdentity: createCronSourceIdentity() }
-        : schedule.kind === "event"
-          ? { sourceIdentity: createCronSourceIdentity() }
-          : {}),
+        ? { streamSourceIdentity: createCronStreamSourceIdentity() }
+        : {}),
     },
   };
   // New trusted jobs are explicit by construction. Agent-runtime callers are
@@ -424,8 +419,6 @@ export function applyJobPatch(
     delete statePatch.scheduleActivatedAtMs;
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
-    delete statePatch.sourceIdentity;
-    delete statePatch.streamSourceIdentity;
     assertCronJobStateTimestamps(statePatch);
     job.state = { ...job.state, ...statePatch };
   }

@@ -9,6 +9,7 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
+  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -48,6 +49,7 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
+  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -289,7 +291,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const host = resolveHostForParams(params);
+      const target = resolveExecTarget({
+        configuredTarget: defaults?.host,
+        requestedTarget: requireValidExecTarget(params.host),
+        elevatedRequested,
+        sandboxAvailable: Boolean(defaults?.sandbox),
+        sandboxRequired: defaults?.sandboxRequired,
+      });
+      const host = target.effectiveHost;
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -346,7 +355,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (host === "sandbox" && !sandbox) {
+      if (target.selectedTarget === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",

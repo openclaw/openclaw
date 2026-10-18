@@ -27,7 +27,6 @@ export type ModelCatalogInvalidation = "clear" | "refresh";
 
 export function modelCatalogEventInvalidation(
   event: Pick<GatewayEventFrame, "event" | "payload">,
-  scope?: ModelCatalogReadScope,
 ): ModelCatalogInvalidation | undefined {
   if (event.event === "config.changed") {
     return "refresh";
@@ -36,10 +35,7 @@ export function modelCatalogEventInvalidation(
     const payload = asNullableRecord(event.payload);
     return payload?.modelSelectionChanged === true
       ? "clear"
-      : payload?.modelCatalogChanged === false ||
-          (scope?.agentId !== undefined &&
-            typeof payload?.agentId === "string" &&
-            scope.agentId.trim() !== payload.agentId.trim())
+      : payload?.modelCatalogChanged === false
         ? undefined
         : "refresh";
   }

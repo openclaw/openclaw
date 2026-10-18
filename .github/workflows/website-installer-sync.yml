@@ -250,7 +250,6 @@ jobs:
           if [[ "$INSTALL_USER" == "root" ]]; then
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
@@ -260,11 +259,10 @@ jobs:
           else
             timeout --kill-after=30s 20m docker run --rm -i \
               -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-              -v "$RUNNER_TEMP/fedora-dnf:/var/log" \
               fedora:44 \
               bash -s <<'CONTAINER'
           set -euo pipefail
-          rpm -q sudo shadow-utils >/dev/null 2>&1 || dnf install -y -q sudo shadow-utils
+          dnf install -y -q sudo shadow-utils
           useradd --create-home --shell /bin/bash installer
           printf '%s\n' 'installer ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/installer
           chmod 0440 /etc/sudoers.d/installer
@@ -280,13 +278,6 @@ jobs:
           echo "ok: Fedora non-root install and PATH persistence verified"
           USER
           CONTAINER
-          fi
-
-      - name: Fedora package-manager diagnostics
-        if: failure()
-        run: |
-          if sudo test -f "$RUNNER_TEMP/fedora-dnf/dnf5.log"; then
-            sudo tail -n 200 "$RUNNER_TEMP/fedora-dnf/dnf5.log"
           fi
 
   macos-installer:

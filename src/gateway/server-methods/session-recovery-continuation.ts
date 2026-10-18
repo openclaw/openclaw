@@ -27,7 +27,6 @@ export async function launchSessionRecoveryContinuation(params: {
 }): Promise<SessionRecoveryContinuationOutcome> {
   let outcome: SessionRecoveryContinuationOutcome | undefined;
   try {
-    params.commitGuard?.();
     const destination = await resolveSessionMutationAuthorizationAsync({
       client: params.client,
       context: params.context,

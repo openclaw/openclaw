@@ -198,7 +198,6 @@ function transcriptSafeErrorMessage(
     256,
   );
   replacement.usage = structuredClone(message.usage);
-  replacement.retryAfterMs = message.retryAfterMs;
   return replacement;
 }
 
@@ -271,7 +270,6 @@ export function createWorkerInferenceStreamAdapter(
       error: unknown,
       reason: "aborted" | "error",
       usage?: AssistantMessage["usage"],
-      retryAfterMs?: number | null,
     ) => {
       if (settled) {
         return;
@@ -279,7 +277,6 @@ export function createWorkerInferenceStreamAdapter(
       settled = true;
       partial.stopReason = reason;
       partial.errorMessage = error instanceof Error ? error.message : String(error);
-      partial.retryAfterMs = retryAfterMs;
       if (usage) {
         partial.usage = structuredClone(usage);
       }
@@ -371,7 +368,6 @@ export function createWorkerInferenceStreamAdapter(
           outcome.message,
           outcome.reason === "cancelled" ? "aborted" : "error",
           outcome.usage,
-          outcome.retryAfterMs,
         );
       })
       .catch(fail)

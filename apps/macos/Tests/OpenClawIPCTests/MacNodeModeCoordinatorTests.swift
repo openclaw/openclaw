@@ -401,7 +401,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(degraded?.label == "Mac node degraded — worker exited: schema mismatch")
         #expect(degraded?.diagnostic == nil)
         #expect(degraded?.isDegraded == true)
-        #expect(degraded?.recoveryAction == nil)
 
         let unavailable = MacNodeChannelState
             .unavailable(reason: "state database uses newer schema version 10\nTry: openclaw doctor")
@@ -409,25 +408,6 @@ struct MacNodeModeCoordinatorTests {
         #expect(unavailable?.label == "Mac node unavailable — state database uses newer schema version 10")
         #expect(unavailable?.diagnostic == nil)
         #expect(unavailable?.isDegraded == false)
-        #expect(unavailable?.recoveryAction == nil)
-    }
-
-    @Test func `newer state schema exposes app update recovery from native node status`() throws {
-        let diagnostic = "OpenClaw state database /state/state.db uses newer schema version 18; " +
-            "this build supports 17."
-        let line = try #require(MacNodeChannelState.connected(
-            workerUnavailableReason: "worker exited with status exited(1)",
-            diagnostic: diagnostic).operatorStatusLine)
-
-        #expect(line.label == "Mac node degraded — update the OpenClaw app: its worker supports schema 17, " +
-            "but shared state requires schema 18")
-        #expect(line.recoveryAction == .checkForUpdates)
-        #expect(line.diagnostic == diagnostic)
-
-        let unrelated = try #require(MacNodeChannelState.connected(
-            workerUnavailableReason: "worker exited with status exited(1)",
-            diagnostic: "worker could not initialize").operatorStatusLine)
-        #expect(unrelated.recoveryAction == nil)
     }
 
     @Test func `worker stderr never becomes part of the operator status headline`() throws {
@@ -443,7 +423,6 @@ struct MacNodeModeCoordinatorTests {
             #expect(line.label.contains(reason))
             #expect(!line.label.contains(diagnostic))
             #expect(line.diagnostic == diagnostic)
-            #expect(line.recoveryAction == nil)
         }
     }
 
@@ -945,17 +924,17 @@ extension MacNodeModeCoordinatorTests {
         ]
         #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericPluginEnable))
 
-        let numericCatalogEnable: [String: Any] = [
+        let numericNestedEnable: [String: Any] = [
             "plugins": [
                 "entries": [
                     "codex": [
                         "enabled": true,
-                        "config": ["sessionCatalog": ["enabled": NSNumber(value: 1)]],
+                        "config": ["supervision": ["enabled": NSNumber(value: 1)]],
                     ],
                 ],
             ],
         ]
-        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericCatalogEnable))
+        #expect(!MacNodeCodexThreadCatalog.shouldAdvertise(root: numericNestedEnable))
 
         let numericGlobalEnable: [String: Any] = [
             "plugins": [

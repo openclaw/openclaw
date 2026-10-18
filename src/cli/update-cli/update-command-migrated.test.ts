@@ -32,18 +32,13 @@ import {
 } from "../../infra/update-run-ledger.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { completeAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../../state/openclaw-state-db.js";
-import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
 import { prepareCandidateAuthorityRuntime } from "./update-command-candidate-authority.test-support.js";
@@ -123,8 +118,6 @@ it.each([
   { agentId: "main", changed: "shared", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "agent", blocked: "state-migrated-no-rollback" },
   { agentId: "main", changed: "incomplete", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "retained", blocked: "state-migrated-no-rollback" },
-  { agentId: "main", changed: "pending", blocked: "state-migrated-no-rollback" },
 ])(
   "classifies activation after first-use database creation (agent=$agentId, changed=$changed)",
   async ({ agentId, changed, blocked }) => {
@@ -168,37 +161,6 @@ it.each([
       { agentId, env },
     );
     closeOpenClawAgentDatabasesForTest();
-    let retainedPath: string | undefined;
-    let retainedBytes: Buffer | undefined;
-    if (changed === "retained" || changed === "pending") {
-      const agentDir = path.join(stateDir, "agents", "retired", "agent");
-      retainedPath = path.join(agentDir, "openclaw-agent.sqlite");
-      await fs.mkdir(agentDir, { recursive: true });
-      const db = new DatabaseSync(retainedPath);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
-      db.close();
-      retainedBytes = await fs.readFile(retainedPath);
-      beginAgentDeletionJournal(
-        {
-          agentId: "retired",
-          operationId: "delete-retired",
-          agentDir,
-          workspaceDir: path.join(stateDir, "workspace-retired"),
-          sessionsDir: path.join(stateDir, "agents", "retired", "sessions"),
-          deleteFiles: false,
-        },
-        { env },
-      );
-      if (changed === "retained") {
-        runOpenClawStateWriteTransaction(
-          (database) =>
-            completeAgentDeletionJournalInDatabase(database, "retired", "delete-retired"),
-          { env },
-        );
-      }
-      // The candidate also advances shared state: the old parent cannot reopen it.
-      shared.db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-    }
     if (changed === "shared" || changed === "agent") {
       const db = new DatabaseSync(changed === "shared" ? shared.path : agentPath);
       try {
@@ -223,9 +185,7 @@ it.each([
           root: candidateRoot,
           schemaVersions,
           candidateSchemaVersions: {
-            state:
-              OPENCLAW_STATE_SCHEMA_VERSION +
-              Number(changed === "shared" || changed === "retained" || changed === "pending"),
+            state: OPENCLAW_STATE_SCHEMA_VERSION + Number(changed === "shared"),
             agent: OPENCLAW_AGENT_SCHEMA_VERSION + Number(changed === "incomplete"),
           },
           config: {},
@@ -233,22 +193,17 @@ it.each([
         }),
       ),
     ).resolves.toBe(blocked);
-    if (changed === "incomplete" || changed === "pending") {
+    if (changed === "incomplete") {
       expect(result).toMatchObject({
         status: "error",
         reason: "openclaw doctor",
         steps: [
           expect.objectContaining({
             exitCode: 1,
-            stderrTail: expect.stringContaining(retainedPath ?? agentPath),
+            stderrTail: expect.stringContaining(agentPath),
           }),
         ],
       });
-    } else if (changed === "retained") {
-      expect(result).toMatchObject({ status: "ok", steps: [] });
-    }
-    if (retainedPath) {
-      expect(await fs.readFile(retainedPath)).toEqual(retainedBytes);
     }
   },
 );
