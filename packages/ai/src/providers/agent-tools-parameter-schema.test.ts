@@ -2,36 +2,39 @@ import { validateToolCall } from "@openclaw/llm-core/validation";
 import { Type, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { describe, expect, it } from "vitest";
-import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
+import { normalizeToolParameterSchema as normalize } from "./agent-tools-parameter-schema.js";
 import { convertResponsesToolPayload } from "./openai-responses-tools.js";
 import { normalizeOpenAIStrictCompatSchema } from "./openai-tool-schema-compat.js";
 import { projectRuntimeToolInputSchema } from "./tool-schema-json-projection.js";
 
-const detail = {
-  type: "object",
-  properties: Object.fromEntries(
+const openai = { modelProvider: "openai" };
+const object = (properties: Record<string, unknown>) => ({ type: "object", properties });
+const reference = (name: string, table = "$defs") => ({ $ref: `#/${table}/${name}` });
+function defined(name: string, definitions: unknown, table = "$defs", target = name) {
+  return { ...object({ [name]: reference(target, table) }), [table]: definitions };
+}
+function validate(parameters: TSchema, args: Record<string, unknown>) {
+  return validateToolCall([{ name: "probe", description: "", parameters }], {
+    type: "toolCall",
+    id: "call",
+    name: "probe",
+    arguments: args,
+  });
+}
+function closed(properties: Record<string, unknown>, required = Object.keys(properties)) {
+  return { ...object(properties), required, additionalProperties: false };
+}
+const detail = closed(
+  Object.fromEntries(
     Array.from({ length: 50 }, (_, index) => [`field_${index}`, { type: "string" }]),
   ),
-  required: ["field_0"],
-  additionalProperties: false,
-};
+  ["field_0"],
+);
+const variants = ["page", "claim", "relationship"].map((kind) =>
+  closed({ kind: { const: kind }, input: reference("input") }),
+);
 const batch = {
-  type: "object",
-  properties: {
-    items: {
-      type: "array",
-      items: {
-        anyOf: ["page", "claim", "relationship"].map((kind) => ({
-          type: "object",
-          properties: { kind: { const: kind }, input: { $ref: "#/$defs/input" } },
-          required: ["kind", "input"],
-          additionalProperties: false,
-        })),
-      },
-    },
-  },
-  required: ["items"],
-  additionalProperties: false,
+  ...closed({ items: { type: "array", items: { anyOf: variants } } }),
   $defs: { input: detail },
 };
 
@@ -52,7 +55,7 @@ describe("compact OpenAI tool references", () => {
         },
       },
     };
-    const parameters = normalizeToolParameterSchema(schema, { modelProvider: "openai" });
+    const parameters = normalize(schema, openai);
     const before = structuredClone(parameters);
     const args = {
       tags: '["a","b"]',
@@ -60,14 +63,7 @@ describe("compact OpenAI tool references", () => {
       settings: '{"enabled":"false","count":"3"}',
     };
     const input = structuredClone(args);
-    expect(
-      validateToolCall([{ name: "reference_probe", description: "", parameters }], {
-        type: "toolCall",
-        id: "reference-call",
-        name: "reference_probe",
-        arguments: args,
-      }),
-    ).toEqual({
+    expect(validate(parameters, args)).toEqual({
       tags: ["a", "b"],
       records: [{ enabled: true, count: 2 }],
       settings: { enabled: false, count: 3 },
@@ -87,73 +83,59 @@ describe("compact OpenAI tool references", () => {
         required: ["count"],
         ...(shape === "nested definition table" ? { $defs: { unused: { type: "string" } } } : {}),
       };
-      const parameters = normalizeToolParameterSchema(
+      const parameters = normalize(
         {
-          type: "object",
-          properties: { settings: { $ref: "#/$defs/settings" } },
-          $defs: { settings },
+          ...defined("settings", { settings }),
           ...(shape === "root identifier" ? { $id: "https://example.invalid/tool" } : {}),
         },
-        { modelProvider: "openai" },
+        openai,
       );
       expect(JSON.stringify(parameters)).not.toContain('"$ref"');
-      expect(
-        validateToolCall([{ name: "fallback_probe", description: "", parameters }], {
-          type: "toolCall",
-          id: "fallback-call",
-          name: "fallback_probe",
-          arguments: { settings: '{"count":"2"}' },
-        }),
-      ).toEqual({ settings: { count: 2 } });
+      expect(validate(parameters, { settings: '{"count":"2"}' })).toEqual({
+        settings: { count: 2 },
+      });
     },
   );
 
   it("inlines malformed and encoded references and removes unused definitions", () => {
-    const value = { type: "object", properties: { limit: { type: "number" } } };
-    const cases = [
-      ...["$defs", "definitions"].map((key) => ({
-        schema: {
-          type: "object",
-          properties: { value: { $ref: `#/${key}/0` } },
-          [key]: [{ type: "string" }],
-        },
-        options: { modelProvider: "openai" },
-        expected: { type: "object", properties: { value: { type: "string" } } },
-      })),
-      {
-        schema: {
-          type: "object",
-          properties: { value: { type: "string" } },
+    const value = object({ limit: { type: "number" } });
+    const stringValue = object({ value: { type: "string" } });
+    for (const table of ["$defs", "definitions"]) {
+      expect(normalize(defined("value", [{ type: "string" }], table, "0"), openai)).toEqual(
+        stringValue,
+      );
+    }
+    expect(
+      normalize(
+        {
+          ...object({ value: { type: "string" } }),
           $defs: {
-            unused: { type: "object", properties: { next: { $ref: "#/$defs/large" } } },
+            unused: object({ next: reference("large") }),
             large: { ...detail, description: "Unused definition".repeat(400) },
           },
         },
-        options: { modelProvider: "openai" },
-        expected: { type: "object", properties: { value: { type: "string" } } },
-      },
-      ...[
-        { modelProvider: "google", modelId: "gemini-2.5-pro" },
-        { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
-      ].flatMap((options) =>
-        [
-          "#/definitions/Partial<Filter>",
-          "#/definitions/Partial%3CFilter%3E",
-          "#%2Fdefinitions%2FPartial%3CFilter%3E",
-        ].map((ref) => ({
-          schema: {
-            type: "object",
-            properties: { filter: { $ref: ref } },
-            required: ["filter"],
-            definitions: { "Partial<Filter>": value },
-          },
-          options,
-          expected: { type: "object", properties: { filter: value }, required: ["filter"] },
-        })),
+        openai,
       ),
-    ];
-    for (const { schema, options, expected } of cases) {
-      expect(normalizeToolParameterSchema(schema, options)).toEqual(expected);
+    ).toEqual(stringValue);
+    for (const options of [
+      { modelProvider: "google", modelId: "gemini-2.5-pro" },
+      { modelProvider: "anthropic", modelId: "claude-sonnet-4-6" },
+    ]) {
+      for (const ref of [
+        "#/definitions/Partial<Filter>",
+        "#/definitions/Partial%3CFilter%3E",
+        "#%2Fdefinitions%2FPartial%3CFilter%3E",
+      ]) {
+        const schema = {
+          ...object({ filter: { $ref: ref } }),
+          required: ["filter"],
+          definitions: { "Partial<Filter>": value },
+        };
+        expect(normalize(schema, options)).toEqual({
+          ...object({ filter: value }),
+          required: ["filter"],
+        });
+      }
     }
   });
 
@@ -165,7 +147,7 @@ describe("compact OpenAI tool references", () => {
       additionalProperties: false,
       $defs: { value: { type: "string", maxLength: 10 } },
     };
-    const normalized = normalizeToolParameterSchema(schema, { modelProvider: "openai" });
+    const normalized = normalize(schema, openai);
     expect(normalized).toHaveProperty("properties.value.$ref", "#/$defs/value");
     const [tool] = convertResponsesToolPayload(
       [
@@ -190,14 +172,14 @@ describe("compact OpenAI tool references", () => {
 
   it("keeps batch types through shared normalization and Codex projection", () => {
     // Inlining crosses Codex's 5,000-byte limit and erases item types.
-    expect(JSON.stringify(normalizeToolParameterSchema(batch)).length).toBeGreaterThan(5000);
-    const normalized = normalizeToolParameterSchema(batch, { modelProvider: "openai" });
+    expect(JSON.stringify(normalize(batch)).length).toBeGreaterThan(5000);
+    const normalized = normalize(batch, openai);
     const projected = projectRuntimeToolInputSchema(normalizeOpenAIStrictCompatSchema(normalized));
     expect(projected.violations).toEqual([]);
     expect(projected.schema).toMatchObject(batch);
     expect(JSON.stringify(projected.schema).length).toBeLessThan(5000);
     expect(batch.$defs.input).toBe(detail);
-    expect(normalizeToolParameterSchema(batch, { modelProvider: "openai" })).toBe(normalized);
+    expect(normalize(batch, openai)).toBe(normalized);
   });
 
   it.each([
@@ -208,7 +190,7 @@ describe("compact OpenAI tool references", () => {
     { modelProvider: "openai", modelCompat: { unsupportedToolSchemaKeywords: ["$ref"] } },
     { modelProvider: "openai", modelCompat: { unsupportedToolSchemaKeywords: ["$defs"] } },
   ])("keeps provider fallback: %j", (options) => {
-    const normalized = normalizeToolParameterSchema(batch, options);
+    const normalized = normalize(batch, options);
     expect(normalized).not.toHaveProperty("$defs");
     expect(JSON.stringify(normalized)).not.toContain('"$ref"');
   });
@@ -219,7 +201,7 @@ describe("compact OpenAI tool references", () => {
       properties: { ...batch.properties, extra: { $ref: "#/components/schemas/Extra" } },
       components: { schemas: { Extra: { type: "string" } } },
     };
-    const normalized = normalizeToolParameterSchema(schema, { modelProvider: "openai" });
+    const normalized = normalize(schema, openai);
     expect(normalized).not.toHaveProperty("components");
     expect(normalized).toHaveProperty("properties.extra.type", "string");
     expect(JSON.stringify(normalized)).not.toContain('"$ref"');
@@ -227,19 +209,21 @@ describe("compact OpenAI tool references", () => {
 
   it("preserves ref siblings, legacy definitions, and recursive refs", () => {
     const schema = {
-      type: "object",
-      properties: { node: { $ref: "#/definitions/node", description: "Root", maxProperties: 2 } },
-      definitions: {
-        node: {
-          type: "object",
-          properties: {
-            next: { $ref: "#/definitions/node" },
+      ...defined(
+        "node",
+        {
+          node: object({
+            next: reference("node", "definitions"),
             label: { type: "string", nullable: true },
-          },
+          }),
         },
+        "definitions",
+      ),
+      properties: {
+        node: { ...reference("node", "definitions"), description: "Root", maxProperties: 2 },
       },
     };
-    const normalized = normalizeToolParameterSchema(schema, { modelProvider: "openai" });
+    const normalized = normalize(schema, openai);
     expect(normalized).toHaveProperty("properties.node", schema.properties.node);
     expect(normalized).toHaveProperty("definitions.node.properties.next", {
       $ref: "#/definitions/node",
@@ -264,122 +248,108 @@ describe("compact OpenAI tool references", () => {
       });
     }
     for (const schema of schemas) {
-      expect(normalizeToolParameterSchema(schema, { modelProvider: "openai" })).toEqual(
-        normalizeToolParameterSchema(schema),
-      );
+      expect(normalize(schema, openai)).toEqual(normalize(schema));
     }
   });
 });
 
 describe("root unions with preset and custom strings", () => {
-  const presets = Type.Object({
-    action: Type.Literal("preset"),
-    value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]),
-  });
+  const presetNames = Type.Union([Type.Literal("compact"), Type.Literal("wide")]);
+  const presets = Type.Object({ action: Type.Literal("preset"), value: presetNames });
   const custom = Type.Object({ action: Type.Literal("custom"), value: Type.String() });
-
+  const union = (branches: TSchema[], keyword = "anyOf") => ({
+    type: "object",
+    [keyword]: Type.Union(branches).anyOf,
+  });
+  const values = (...alternatives: TSchema[]) =>
+    Type.Union(alternatives.map((value) => Type.Object({ value })));
+  function check(
+    schema: TSchema | Record<string, unknown>,
+    accepted: unknown[],
+    rejected: unknown[] = [],
+    modelProvider?: string,
+  ) {
+    const normalized = normalize(schema, { modelProvider });
+    const validator = Compile(normalized);
+    for (const input of accepted) {
+      expect(Compile(schema).Check(input)).toBe(true);
+      expect(validator.Check(input)).toBe(true);
+    }
+    for (const input of rejected) {
+      expect(validator.Check(input)).toBe(false);
+    }
+    return normalized;
+  }
   it.each([
-    { keyword: "anyOf", modelProvider: "openai" },
-    { keyword: "oneOf", modelProvider: "openai" },
-    { keyword: "anyOf", modelProvider: "google" },
-    { keyword: "oneOf", modelProvider: "google" },
-  ])("keeps custom strings for $modelProvider $keyword", ({ keyword, modelProvider }) => {
+    ["anyOf", "openai"],
+    ["oneOf", "openai"],
+    ["anyOf", "google"],
+    ["oneOf", "google"],
+  ])("keeps custom strings for %s with %s", (keyword, provider) => {
     for (const branches of [
       [presets, custom],
       [custom, presets],
     ]) {
-      const schema = { type: "object", [keyword]: Type.Union(branches).anyOf };
+      const schema = union(branches, keyword);
       const original = structuredClone(schema);
-      const normalized = normalizeToolParameterSchema(schema, { modelProvider });
-      const validator = Compile(normalized);
-      for (const input of [
-        { action: "preset", value: "compact" },
-        { action: "preset", value: "wide" },
-        { action: "custom", value: "customer-layout" },
-      ]) {
-        expect(Compile(schema).Check(input)).toBe(true);
-        expect(validator.Check(input)).toBe(true);
-      }
-      expect(validator.Check({ action: "unknown", value: "compact" })).toBe(false);
-      expect(validator.Check({ action: "custom", value: 42 })).toBe(false);
+      check(
+        schema,
+        [
+          { action: "preset", value: "compact" },
+          { action: "preset", value: "wide" },
+          { action: "custom", value: "customer-layout" },
+        ],
+        [
+          { action: "unknown", value: "compact" },
+          { action: "custom", value: 42 },
+        ],
+        provider,
+      );
       expect(schema).toEqual(original);
     }
   });
-
   it("preserves root-union constraints, alternative types, and annotations", () => {
-    const values = (...alternatives: TSchema[]) =>
-      Type.Union(alternatives.map((value) => Type.Object({ value })));
-    const cases: Array<{
-      schema: TSchema | Record<string, unknown>;
-      modelProvider?: string;
-      accepted: unknown[];
-      rejected?: unknown[];
-      valueSchema?: Record<string, unknown>;
-    }> = [
-      {
-        schema: {
-          type: "object",
-          properties: { value: Type.Union([Type.Literal("compact"), Type.Literal("wide")]) },
-          anyOf: Type.Union([presets, custom]).anyOf,
-        },
-        accepted: [{ action: "custom", value: "compact" }],
-        rejected: [{ action: "custom", value: "customer-layout" }],
-      },
-      ...[
-        Type.String({ pattern: "^custom-" }),
-        Type.String({ minLength: 20 }),
-        Type.Number(),
-      ].flatMap((value) =>
-        [
-          [presets, Type.Object({ action: Type.Literal("custom"), value })],
-          [Type.Object({ action: Type.Literal("custom"), value }), presets],
-        ].map((branches) => ({
-          schema: { type: "object", anyOf: Type.Union(branches).anyOf },
-          modelProvider: "google",
-          accepted: [{ action: "preset", value: "compact" }],
-        })),
-      ),
-      {
-        schema: values(
-          Type.Literal("compact", { description: "Layout name" }),
-          Type.String({ description: "Custom name", default: "custom", examples: ["custom"] }),
-          Type.Literal("wide"),
-        ),
-        accepted: [{ value: "customer-layout" }],
-        valueSchema: {
-          type: "string",
-          description: "Layout name",
-          default: "custom",
-          examples: ["custom"],
-        },
-      },
-      { schema: values(Type.Literal(42), Type.String()), accepted: [{ value: 42 }] },
-      {
-        schema: values(Type.Literal("compact"), Type.String(), Type.Literal(42)),
-        accepted: [{ value: "compact" }, { value: 42 }],
-      },
-      {
-        schema: values(
-          Type.Union([Type.Literal("compact"), Type.Literal("wide")]),
-          Type.Union([Type.Literal("custom"), Type.Literal("compact")]),
-        ),
-        accepted: ["compact", "wide", "custom"].map((value) => ({ value })),
-        rejected: [{ value: "unknown" }],
-      },
-    ];
-    for (const { schema, modelProvider, accepted, rejected = [], valueSchema } of cases) {
-      const normalized = normalizeToolParameterSchema(schema, { modelProvider });
-      const validator = Compile(normalized);
-      for (const input of accepted) {
-        expect(Compile(schema).Check(input)).toBe(true);
-        expect(validator.Check(input)).toBe(true);
-      }
-      for (const input of rejected) {
-        expect(validator.Check(input)).toBe(false);
-      }
-      if (valueSchema) {
-        expect(normalized).toHaveProperty("properties.value", valueSchema);
+    check(
+      { ...union([presets, custom]), properties: { value: presetNames } },
+      [{ action: "custom", value: "compact" }],
+      [{ action: "custom", value: "customer-layout" }],
+    );
+    for (const value of [
+      Type.String({ pattern: "^custom-" }),
+      Type.String({ minLength: 20 }),
+      Type.Number(),
+    ]) {
+      const constrained = Type.Object({ action: Type.Literal("custom"), value });
+      for (const branches of [
+        [presets, constrained],
+        [constrained, presets],
+      ]) {
+        check(union(branches), [{ action: "preset", value: "compact" }], [], "google");
       }
     }
+    const annotated = check(
+      values(
+        Type.Literal("compact", { description: "Layout name" }),
+        Type.String({ description: "Custom name", default: "custom", examples: ["custom"] }),
+        Type.Literal("wide"),
+      ),
+      [{ value: "customer-layout" }],
+    );
+    expect(annotated).toHaveProperty("properties.value", {
+      type: "string",
+      description: "Layout name",
+      default: "custom",
+      examples: ["custom"],
+    });
+    check(values(Type.Literal(42), Type.String()), [{ value: 42 }]);
+    check(values(Type.Literal("compact"), Type.String(), Type.Literal(42)), [
+      { value: "compact" },
+      { value: 42 },
+    ]);
+    check(
+      values(presetNames, Type.Union([Type.Literal("custom"), Type.Literal("compact")])),
+      ["compact", "wide", "custom"].map((value) => ({ value })),
+      [{ value: "unknown" }],
+    );
   });
 });

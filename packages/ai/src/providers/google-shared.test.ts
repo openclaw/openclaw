@@ -3,22 +3,21 @@ import { describe, expect, it, vi } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
-import type { AssistantMessage, Context, Model } from "../types.js";
+import type { AssistantMessage, AssistantMessageEvent, Context, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import { normalizeToolParameterSchema } from "./agent-tools-parameter-schema.js";
 import { convertGoogleTools, projectGoogleMessages } from "./google-messages.js";
 import {
-  buildGoogleGenerateContentParams,
-  buildGoogleSimpleThinking,
-  runGoogleGenerateContentLifecycle,
+  buildGoogleGenerateContentParams as buildParams,
+  buildGoogleSimpleThinking as buildThinking,
+  runGoogleGenerateContentLifecycle as runLifecycle,
+  type GoogleGenerateContentClient,
 } from "./google-shared.js";
 import {
   convertMessages,
-  expectConvertedRoles,
   getFirstToolParameters,
-  makeGeminiCliAssistantMessage,
   makeGeminiCliModel,
   makeGoogleAssistantMessage,
   makeModel,
@@ -30,10 +29,8 @@ const model: Model<"google-generative-ai"> = {
   reasoning: true,
   cost: { input: 1, output: 2, cacheRead: 0.25, cacheWrite: 0 },
 };
-const thinkingConfig = (
-  target: typeof model,
-  thinking: Parameters<typeof buildGoogleGenerateContentParams>[2],
-) => buildGoogleGenerateContentParams(target, { messages: [] }, thinking).config?.thinkingConfig;
+const thinkingConfig = (target: typeof model, thinking: Parameters<typeof buildParams>[2]) =>
+  buildParams(target, { messages: [] }, thinking).config?.thinkingConfig;
 const textPart = (text: string, thoughtSignature?: string): Part => ({
   text,
   ...(thoughtSignature && { thoughtSignature }),
@@ -55,7 +52,7 @@ const thoughtOutput = (thinking: string, thinkingSignature?: string) => ({
 const signature1 = "c2lnXzE=";
 const signature2 = "c2lnXzI=";
 
-describe("buildGoogleSimpleThinking", () => {
+describe("buildThinking", () => {
   it.each([
     ["minimal", { includeThoughts: true, thinkingLevel: "LOW" }],
     ["low", { includeThoughts: true, thinkingLevel: "LOW" }],
@@ -65,7 +62,7 @@ describe("buildGoogleSimpleThinking", () => {
     ["off", { thinkingLevel: "LOW" }],
   ] as const)("serializes Gemini 4 %s without a thinking budget", (reasoning, expected) => {
     const target = { ...model, id: "gemini-4-argon" };
-    const thinking = buildGoogleSimpleThinking(target, { reasoning });
+    const thinking = buildThinking(target, { reasoning });
     expect(thinkingConfig(target, { thinking })).toEqual(expected);
   });
 
@@ -75,7 +72,7 @@ describe("buildGoogleSimpleThinking", () => {
     ["gemini-3.7-flash", "LOW"],
   ])("uses the supported thinking floor for %s", (id, level) => {
     const target = { ...model, id };
-    const thinking = buildGoogleSimpleThinking(target, { reasoning: "minimal" });
+    const thinking = buildThinking(target, { reasoning: "minimal" });
     expect(thinking).toEqual({ enabled: true, level });
     expect(thinkingConfig(target, { thinking })).toEqual({
       includeThoughts: true,
@@ -93,20 +90,16 @@ describe("buildGoogleSimpleThinking", () => {
     },
   ])("preserves adaptive and disabled thinking for $id", ({ id, enabled, disabled }) => {
     const target = { ...model, id };
-    expect(buildGoogleSimpleThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
+    expect(buildThinking(target, { reasoning: "adaptive" } as never)).toEqual(enabled);
     expect(thinkingConfig(target, disabledThinking)).toEqual(disabled);
   });
 
   it("keeps thinking disabled when low clamps to off for a non-reasoning model", () => {
-    expect(buildGoogleSimpleThinking({ ...model, reasoning: false }, { reasoning: "low" })).toEqual(
-      { enabled: false },
-    );
+    expect(buildThinking({ ...model, reasoning: false }, { reasoning: "low" })).toEqual({
+      enabled: false,
+    });
   });
 });
-
-async function* chunks(items: GenerateContentResponse[]) {
-  yield* items;
-}
 
 function response({
   parts,
@@ -134,8 +127,8 @@ function response({
   );
 }
 
-function finished(parts: Part[], finishReason = FinishReason.STOP) {
-  return response({ parts, finishReason });
+function finished(parts: Part[], finishReason = FinishReason.STOP, finishMessage?: string) {
+  return response({ parts, finishReason, finishMessage });
 }
 
 function lookupPart(args: Record<string, unknown> = {}, thoughtSignature?: string): Part {
@@ -155,21 +148,10 @@ function toolCall(args: Record<string, unknown> = {}, signature?: string, id = "
   };
 }
 
-type StreamEvent = {
-  type: string;
-  delta?: string;
-  reason?: string;
-  partial?: AssistantMessage;
-  contentIndex?: number;
-};
-
-type GoogleLifecycleParams = Parameters<typeof runGoogleGenerateContentLifecycle>[0];
-type GoogleGenerateContentStream = ReturnType<
-  GoogleLifecycleParams["createClient"]
->["models"]["generateContentStream"];
+type GoogleLifecycleParams = Parameters<typeof runLifecycle>[0];
 type GoogleFixtureOptions = {
   options?: GoogleLifecycleParams["options"];
-  generateContentStream?: GoogleGenerateContentStream;
+  generateContentStream?: GoogleGenerateContentClient["models"]["generateContentStream"];
 };
 
 async function runFixture(
@@ -178,28 +160,29 @@ async function runFixture(
 ) {
   const output = createAssistantOutput(model);
   const stream = new AssistantMessageEventStream();
-  const events: StreamEvent[] = [];
+  const events: AssistantMessageEvent[] = [];
+  const generateContentStream =
+    fixture.generateContentStream ??
+    async function* () {
+      yield* responses;
+    };
   const collect = (async () => {
     for await (const event of stream) {
       events.push(event);
     }
   })();
 
-  await runGoogleGenerateContentLifecycle({
+  await runLifecycle({
     stream,
     model,
     output,
     options: fixture.options,
-    createClient: () => ({
-      models: {
-        generateContentStream: fixture.generateContentStream ?? (async () => chunks(responses)),
-      },
-    }),
+    createClient: () => ({ models: { generateContentStream } }),
     buildParams: () => ({ model: model.id, contents: [] }),
     nextToolCallId: (name) => `generated-${name}`,
   });
   await collect;
-  return { output, stream, events, result: await stream.result() };
+  return { output, events, result: await stream.result() };
 }
 
 describe("Google stream projection", () => {
@@ -270,47 +253,48 @@ describe("Google stream projection", () => {
         finishReason: FinishReason.STOP,
       }),
     ]);
-    expect(result.stopReason).toBe("stop");
-    expect(result.responseModel).toBe("gemini-test-002");
+    expect(result).toMatchObject({ stopReason: "stop", responseModel: "gemini-test-002" });
   });
 
-  it("retains prompt, cache, and tool-token facts across sparse Google usage chunks", async () => {
-    const { output } = await runFixture([
-      response({
-        usageMetadata: {
-          promptTokenCount: 100,
-          cachedContentTokenCount: 40,
-          toolUsePromptTokenCount: 6,
-          candidatesTokenCount: 1,
-          totalTokenCount: 107,
-        },
-      }),
-      response({
-        finishReason: FinishReason.STOP,
-        usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
-      }),
-    ]);
-    expect(output.usage).toMatchObject({ input: 66, output: 15, cacheRead: 40, totalTokens: 121 });
-  });
-
-  it("never reports negative input when Google only provides sparse cached-token facts", async () => {
-    const { output } = await runFixture([
-      response({
-        finishReason: FinishReason.STOP,
-        usageMetadata: { cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 },
-      }),
-    ]);
-    expect(output.usage).toMatchObject({ input: 6, cacheRead: 40 });
+  it.each([
+    {
+      name: "retains prompt, cache, and tool-token facts across sparse chunks",
+      responses: [
+        response({
+          usageMetadata: {
+            promptTokenCount: 100,
+            cachedContentTokenCount: 40,
+            toolUsePromptTokenCount: 6,
+            candidatesTokenCount: 1,
+            totalTokenCount: 107,
+          },
+        }),
+        response({
+          finishReason: FinishReason.STOP,
+          usageMetadata: { candidatesTokenCount: 12, thoughtsTokenCount: 3 },
+        }),
+      ],
+      usage: { input: 66, output: 15, cacheRead: 40, totalTokens: 121 },
+    },
+    {
+      name: "never reports negative input for sparse cached-token facts",
+      responses: [
+        response({
+          finishReason: FinishReason.STOP,
+          usageMetadata: { cachedContentTokenCount: 40, toolUsePromptTokenCount: 6 },
+        }),
+      ],
+      usage: { input: 6, cacheRead: 40 },
+    },
+  ])("$name", async ({ responses, usage }) => {
+    expect((await runFixture(responses)).output.usage).toMatchObject(usage);
   });
 
   it.each([FinishReason.MAX_TOKENS, FinishReason.CONTINUATION])(
     "preserves %s when the partial response contains a function call",
     async (finishReason) => {
       const { output, events } = await runFixture([
-        response({
-          parts: [{ functionCall: { name: "lookup", args: { query: "cats" } } }],
-          finishReason,
-        }),
+        finished([{ functionCall: { name: "lookup", args: { query: "cats" } } }], finishReason),
       ]);
       expect(events.find((event) => event.type === "done")?.reason).toBe("length");
       expect(output.stopReason).toBe("length");
@@ -397,7 +381,7 @@ describe("Google stream projection", () => {
   });
 });
 
-describe("runGoogleGenerateContentLifecycle", () => {
+describe("runLifecycle", () => {
   it("closes an unread SDK stream without waiting when acceptance fails", async () => {
     const close = vi.fn(() => new Promise<IteratorResult<GenerateContentResponse>>(() => {}));
     const googleStream = {
@@ -424,10 +408,7 @@ describe("runGoogleGenerateContentLifecycle", () => {
 
   it("keeps an unspecified Google finish reason nonterminal", async () => {
     const { result } = await runFixture([
-      response({
-        parts: [{ text: "partial output" }],
-        finishReason: FinishReason.FINISH_REASON_UNSPECIFIED,
-      }),
+      finished([{ text: "partial output" }], FinishReason.FINISH_REASON_UNSPECIFIED),
     ]);
     expect(result).toMatchObject({
       stopReason: "error",
@@ -439,11 +420,11 @@ describe("runGoogleGenerateContentLifecycle", () => {
 
   it("closes partial text before reporting a failed candidate", async () => {
     const { events, result } = await runFixture([
-      response({
-        parts: [{ text: "partial output" }],
-        finishReason: FinishReason.SAFETY,
-        finishMessage: "Provider rejected the generated response",
-      }),
+      finished(
+        [{ text: "partial output" }],
+        FinishReason.SAFETY,
+        "Provider rejected the generated response",
+      ),
     ]);
     expect(events.map((event) => event.type)).toEqual(
       "start text_start text_delta text_end error".split(" "),
@@ -465,10 +446,7 @@ describe("runGoogleGenerateContentLifecycle", () => {
       options: { signal: controller.signal },
       generateContentStream: async () => ({
         async *[Symbol.asyncIterator]() {
-          yield response({
-            parts: [{ text: "partial output" }],
-            finishReason: FinishReason.SAFETY,
-          });
+          yield finished([{ text: "partial output" }], FinishReason.SAFETY);
           controller.abort(abortReason);
         },
       }),
@@ -516,9 +494,9 @@ describe("runGoogleGenerateContentLifecycle", () => {
   });
 });
 
-describe("buildGoogleGenerateContentParams", () => {
+describe("buildParams", () => {
   it("forwards stop sequences to Google generation config", () => {
-    const params = buildGoogleGenerateContentParams(
+    const params = buildParams(
       model,
       { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
       { stop: ["STOP"] },
@@ -527,7 +505,7 @@ describe("buildGoogleGenerateContentParams", () => {
   });
 
   it("strips the internal cache boundary marker from systemInstruction", () => {
-    const params = buildGoogleGenerateContentParams(model, {
+    const params = buildParams(model, {
       systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
       messages: [{ role: "user", content: "hello", timestamp: 0 }],
     });
@@ -544,8 +522,14 @@ const convertMessagesForTest = convertMessages as unknown as (
 const conversionModel = makeModel("gemini-3-flash");
 const call = { type: "toolCall" as const, id: "call_1", name: "lookup", arguments: {} };
 const result = makeTextToolResult("call_1", "lookup", "ok", false, 0);
-const convert = (messages: Context["messages"]) =>
-  convertMessagesForTest(conversionModel, { messages });
+const convert = (messages: Context["messages"], target: GoogleSharedTestModel = conversionModel) =>
+  convertMessagesForTest(target, { messages });
+function assistant(
+  content: AssistantMessage["content"],
+  target: GoogleSharedTestModel = conversionModel,
+) {
+  return { ...createAssistantOutput(target), content, timestamp: 0 };
+}
 
 describe("Google tool declarations", () => {
   it("omits optional metadata from normalized Gemini function declarations", () => {
@@ -574,28 +558,24 @@ describe("Google message conversion", () => {
     const args = { first: 1, nested: { alpha: 2, beta: 3 } };
     const reordered = { nested: { beta: 3, alpha: 2 }, first: 1 };
     const originalBytes = JSON.stringify([args, reordered]);
-    const turn = (content: AssistantMessage["content"]) => ({
-      ...createAssistantOutput(conversionModel),
-      content,
-    });
     const contents = projectGoogleMessages({
       model: conversionModel,
       replay: "managed",
       requiresToolCallSignature: true,
       messages: [
-        turn([
+        assistant([
           { ...call, arguments: args, thoughtSignature: signature1 },
           { ...call, arguments: reordered },
         ]),
         result,
         result,
-        turn([
+        assistant([
           { ...call, arguments: args, thoughtSignature: signature2 },
           { ...call, arguments: reordered },
         ]),
         result,
         result,
-        turn([{ ...call, arguments: reordered }]),
+        assistant([{ ...call, arguments: reordered }]),
         result,
       ],
     });
@@ -624,9 +604,7 @@ describe("Google message conversion", () => {
         makeGoogleAssistantMessage(conversionModel.id, [{ ...call, arguments: "{not valid json" }]),
       ],
     } as Context;
-    expect(
-      convertMessagesForTest(conversionModel, context)[0]?.parts?.[0]?.functionCall?.args,
-    ).toEqual({});
+    expect(convert(context.messages)[0]?.parts?.[0]?.functionCall?.args).toEqual({});
   });
 
   it.each([
@@ -637,7 +615,7 @@ describe("Google message conversion", () => {
     { label: "empty user parts", messages: [{ role: "user", content: [] }] },
     {
       label: "blank assistant history",
-      messages: [makeGoogleAssistantMessage(conversionModel.id, [{ type: "text", text: "   " }])],
+      messages: [assistant([{ type: "text", text: "   " }])],
     },
   ])("keeps $label valid for the Google SDK", ({ messages }) => {
     expect(convert(messages as Context["messages"])).toEqual([
@@ -647,8 +625,8 @@ describe("Google message conversion", () => {
 
   it("does not replay an earlier signature across a foreign route", () => {
     const contents = convert([
-      makeGoogleAssistantMessage(conversionModel.id, [{ ...call, thoughtSignature: "c2lnbmVk" }]),
-      { ...makeGoogleAssistantMessage(conversionModel.id, [call]), api: "google-vertex" },
+      assistant([{ ...call, thoughtSignature: "c2lnbmVk" }]),
+      { ...assistant([call]), api: "google-vertex" },
     ] as Context["messages"]);
     expect(
       contents
@@ -660,12 +638,10 @@ describe("Google message conversion", () => {
 
   it("strips call and response IDs for google-gemini-cli", () => {
     const target = makeGeminiCliModel(conversionModel.id);
-    const contents = convertMessagesForTest(target, {
-      messages: [
-        makeGeminiCliAssistantMessage(target.id, [{ ...call, thoughtSignature: "dGVzdA==" }]),
-        result,
-      ],
-    } as Context);
+    const contents = convert(
+      [assistant([{ ...call, thoughtSignature: "dGVzdA==" }], target), result],
+      target,
+    );
     const parts = contents.flatMap((content) => content.parts ?? []);
     expect(parts.find((part) => part.functionCall)?.functionCall).toEqual({
       name: "lookup",
@@ -678,14 +654,12 @@ describe("Google message conversion", () => {
   });
 
   it("omits payload-less tool images without media placeholders", () => {
-    const contents = convertMessagesForTest(conversionModel, {
-      messages: [
-        {
-          ...result,
-          content: [{ type: "image", mimeType: "image/png", data: "" }],
-        },
-      ],
-    });
+    const contents = convert([
+      {
+        ...result,
+        content: [{ type: "image", mimeType: "image/png", data: "" }],
+      },
+    ]);
     const serialized = JSON.stringify(contents);
     expect(serialized).toContain('"output":""');
     expect(serialized).not.toContain("inlineData");
@@ -698,19 +672,22 @@ describe("Google message conversion", () => {
   ])("keeps parallel image results in the supported location for $id", ({ id, deferred }) => {
     const target: ReturnType<typeof makeModel> = { ...makeModel(id), input: ["text", "image"] };
     const image = { inlineData: { mimeType: "image/png", data: "AAAA" } };
-    const contents = convertMessagesForTest(target, {
-      messages: [
+    const contents = convert(
+      [
         { role: "user", content: "Screenshot the page and check the weather.", timestamp: 0 },
-        makeGoogleAssistantMessage(id, [
-          { ...call, name: "screenshot" },
-          { ...call, id: "call_2", name: "weather" },
-        ]),
+        assistant(
+          [
+            { ...call, name: "screenshot" },
+            { ...call, id: "call_2", name: "weather" },
+          ],
+          target,
+        ),
         { ...result, toolName: "screenshot", content: [{ type: "image", ...image.inlineData }] },
         makeTextToolResult("call_2", "weather", "Sunny, 21C", false, 0),
       ],
-    } as Context);
-    expectConvertedRoles(
-      contents,
+      target,
+    );
+    expect(contents.map((entry) => entry.role)).toEqual(
       deferred ? ["user", "model", "user", "user"] : ["user", "model", "user"],
     );
     expect(contents[2]?.parts?.map((part) => part.functionResponse?.name)).toEqual([

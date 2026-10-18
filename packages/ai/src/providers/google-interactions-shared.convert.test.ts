@@ -13,6 +13,18 @@ const model = {
   api: "google-interactions",
 } satisfies Model<"google-interactions">;
 const text = (value: string) => ({ type: "text" as const, text: value });
+const toolCall = (
+  id: string,
+  name: string,
+  args: Record<string, unknown>,
+  thoughtSignature?: string,
+) => ({
+  type: "toolCall" as const,
+  id,
+  name,
+  arguments: args,
+  thoughtSignature,
+});
 const user = (content: UserMessage["content"]): UserMessage => ({
   role: "user",
   content,
@@ -94,15 +106,7 @@ describe("buildGoogleInteractionsParams", () => {
     expect(
       params([
         user("Weather in Tokyo?"),
-        assistant([
-          {
-            type: "toolCall",
-            id: "call_123",
-            name: "getWeather",
-            arguments: { city: "Tokyo" },
-            thoughtSignature: "sig_tool_call_token==",
-          },
-        ]),
+        assistant([toolCall("call_123", "getWeather", { city: "Tokyo" }, "sig_tool_call_token==")]),
       ]).input,
     ).toEqual([
       step("user_input", "Weather in Tokyo?"),
@@ -189,13 +193,7 @@ describe("buildGoogleInteractionsParams", () => {
             thinking: "Reasoning from the old transport",
             thinkingSignature: "incompatible-signature",
           },
-          {
-            type: "toolCall",
-            id: "call_legacy",
-            name: "lookup",
-            arguments: { query: "value" },
-            thoughtSignature: "incompatible-tool-signature",
-          },
+          toolCall("call_legacy", "lookup", { query: "value" }, "incompatible-tool-signature"),
         ],
         { api: "google-generative-ai" },
       ),
@@ -224,9 +222,7 @@ describe("buildGoogleInteractionsParams", () => {
     const converted = params(
       [
         user("Read the file"),
-        assistant([
-          { type: "toolCall", id: "call_read_1", name: "read", arguments: { path: "test.png" } },
-        ]),
+        assistant([toolCall("call_read_1", "read", { path: "test.png" })]),
         result,
       ],
       {},

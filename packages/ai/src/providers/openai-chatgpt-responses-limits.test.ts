@@ -22,6 +22,27 @@ function mockResponse(body: ReadableStream<Uint8Array>, init: ResponseInit = {})
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
 }
+function repeatedBody(chunk: Uint8Array, onCancel?: () => Promise<void>) {
+  const state: { pullCount: number; canceled: boolean; cancelReason?: unknown } = {
+    pullCount: 0,
+    canceled: false,
+  };
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (++state.pullCount > 32) {
+        controller.close();
+      } else {
+        controller.enqueue(chunk);
+      }
+    },
+    cancel(reason) {
+      state.canceled = true;
+      state.cancelReason = reason;
+      return onCancel?.();
+    },
+  });
+  return { body, state };
+}
 
 afterEach(() => {
   closeOpenAICodexWebSocketSessions();
@@ -37,27 +58,11 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
     vi.useFakeTimers();
     const cancellation = Promise.withResolvers<void>();
     const byteLimit = 16 * 1024;
-    const totalChunks = 32;
     const prefix = "usage limit ";
     const chunk = new TextEncoder().encode(
       `${prefix}${"x".repeat(byteLimit - prefix.length - 2)}😀tail`,
     );
-    let pullCount = 0;
-    let canceled = false;
-    const overflowing = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pullCount += 1;
-        if (pullCount > totalChunks) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-        return cancellation.promise;
-      },
-    });
+    const { body: overflowing, state } = repeatedBody(chunk, () => cancellation.promise);
     const fetchMock = mockResponse(overflowing, { status: 400, statusText: "Bad Request" });
 
     let result: AssistantMessage | undefined;
@@ -73,10 +78,10 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
       expect(result?.errorMessage).not.toContain("�");
       expect(result?.errorMessage).not.toContain("tail");
       expect(result?.errorMessage?.length).toBeLessThanOrEqual(byteLimit);
-      expect(canceled).toBe(true);
+      expect(state.canceled).toBe(true);
       expect(overflowing.locked).toBe(false);
-      expect(pullCount).toBeGreaterThanOrEqual(1);
-      expect(pullCount).toBeLessThanOrEqual(3);
+      expect(state.pullCount).toBeGreaterThanOrEqual(1);
+      expect(state.pullCount).toBeLessThanOrEqual(3);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     } finally {
       // Drain the fixture even on the baseline, whose outcome still awaits cancellation.
@@ -162,22 +167,7 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
     // 1 MiB chunks with no frame boundary; the pending-frame bound is 16 MiB so
     // the reader cancels well before draining the full 32 MiB body.
     const chunkBytes = 1024 * 1024;
-    const totalChunks = 32;
-    let pullCount = 0;
-    let cancelReason: unknown;
-    const overflowing = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pullCount += 1;
-        if (pullCount > totalChunks) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(new Uint8Array(chunkBytes));
-      },
-      cancel(reason) {
-        cancelReason = reason;
-      },
-    });
+    const { body: overflowing, state } = repeatedBody(new Uint8Array(chunkBytes));
     const fetchMock = mockResponse(overflowing, {
       status: 200,
       headers: { "content-type": "text/event-stream" },
@@ -188,9 +178,9 @@ describe("OpenAI ChatGPT Responses resource limits", () => {
     expect(result.errorMessage).toMatch(
       /OpenAI ChatGPT Responses SSE frame exceeded 16777216 bytes/,
     );
-    expect(cancelReason).toBeInstanceOf(Error);
-    expect(pullCount).toBeGreaterThanOrEqual(17);
-    expect(pullCount).toBeLessThanOrEqual(20);
+    expect(state.cancelReason).toBeInstanceOf(Error);
+    expect(state.pullCount).toBeGreaterThanOrEqual(17);
+    expect(state.pullCount).toBeLessThanOrEqual(20);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

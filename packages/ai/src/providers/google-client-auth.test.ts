@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
+import { makeProviderModel } from "./provider-model.test-support.js";
 
 const googleMockState = vi.hoisted(() => ({ configs: [] as unknown[], requests: [] as unknown[] }));
 
@@ -36,18 +37,11 @@ const context = {
 const sentinel = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
 const budget2048 = { includeThoughts: true, thinkingBudget: 2048 };
 
-const googleModel = {
-  id: "gemini-3-flash-preview",
+const googleModel = makeProviderModel("google-generative-ai", "google", "gemini-3-flash-preview", {
   name: "Gemini 3 Flash Preview",
-  api: "google-generative-ai",
-  provider: "google",
   baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1_000_000,
-  maxTokens: 8192,
-} satisfies Model<"google-generative-ai">;
+});
 const vertexModel = {
   ...googleModel,
   api: "google-vertex",

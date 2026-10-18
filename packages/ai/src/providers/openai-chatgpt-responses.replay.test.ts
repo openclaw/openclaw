@@ -2,6 +2,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { Context } from "../types.js";
 import {
   closeOpenAICodexWebSocketSessions,
@@ -98,14 +99,7 @@ describe("ChatGPT Responses rejected continuation", () => {
           messages: [
             ...simpleContext.messages,
             first,
-            {
-              role: "toolResult",
-              toolCallId: call.id,
-              toolName: call.name,
-              content: [{ type: "text", text: "completed read result" }],
-              isError: false,
-              timestamp: 2,
-            },
+            makeTextToolResult(call.id, call.name, "completed read result", false, 2),
           ],
         };
         const result = await run(context);
