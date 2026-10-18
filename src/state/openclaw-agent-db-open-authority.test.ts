@@ -69,12 +69,9 @@ function withNative<T>(
   run: (db: ReturnType<typeof openNodeSqliteDatabase>) => T,
   readOnly = false,
 ) {
-  const database = openNodeSqliteDatabase(pathname, { readOnly });
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
+  using database = openNodeSqliteDatabase(pathname, { readOnly });
+
+  return run(database);
 }
 
 function indexSql(pathname: string) {

@@ -82,12 +82,9 @@ function withDatabase<T>(
   run: (database: ReturnType<typeof sqlite.openNodeSqliteDatabase>) => T,
   readOnly = false,
 ) {
-  const database = sqlite.openNodeSqliteDatabase(pathname, { readOnly });
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
+  using database = sqlite.openNodeSqliteDatabase(pathname, { readOnly });
+
+  return run(database);
 }
 
 function readIndexState(pathname: string) {

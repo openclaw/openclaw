@@ -20,7 +20,7 @@ import {
 } from "./openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
 
-const logger = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
+const logger = vi.hoisted(() => ({ warn: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
   return {
@@ -40,7 +40,6 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   cleanupTempDirs(tempDirs);
   logger.warn.mockClear();
-  logger.info.mockClear();
 });
 
 function createTimedOpen(indexRepairMs = 0) {

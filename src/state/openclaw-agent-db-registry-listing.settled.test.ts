@@ -126,47 +126,45 @@ it("reuses registry admission across writes and unrelated pending migrations", (
               ? "auditSchema"
               : null,
   );
-  try {
-    expect(read(true)).toEqual([]);
-    expect(read()).toEqual([]);
-    expect(probes.counts).toMatchObject({
-      registryPrimaryKey: 0,
-      legacyWatches: 0,
-      auditSchema: 0,
-      registryCatalog: 0,
-    });
-    db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
-      VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
-    const expectedRows = [
-      {
-        agentId: "worker",
-        path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/openclaw-agent.sqlite"),
-        schemaVersion: 1,
-        lastSeenAt: 10,
-        sizeBytes: null,
-      },
-    ];
-    expect(read()).toEqual(expectedRows);
-    expect(read(true)).toEqual(expectedRows);
-    expect(probes.counts).toMatchObject({
-      registryPrimaryKey: 0,
-      legacyWatches: 0,
-      registryCatalog: 0,
-    });
+  using _ = { [Symbol.dispose]: () => probes.restore() };
 
-    db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
-    expect(read(true)).toEqual(expectedRows);
-    expect(probes.counts.registryPrimaryKey).toBe(1);
-    expect(read()).toEqual(expectedRows);
-    expect(probes.counts.registryPrimaryKey).toBe(2);
-    db.exec(`DROP TABLE agent_databases;
+  expect(read(true)).toEqual([]);
+  expect(read()).toEqual([]);
+  expect(probes.counts).toMatchObject({
+    registryPrimaryKey: 0,
+    legacyWatches: 0,
+    auditSchema: 0,
+    registryCatalog: 0,
+  });
+  db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
+      VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
+  const expectedRows = [
+    {
+      agentId: "worker",
+      path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/openclaw-agent.sqlite"),
+      schemaVersion: 1,
+      lastSeenAt: 10,
+      sizeBytes: null,
+    },
+  ];
+  expect(read()).toEqual(expectedRows);
+  expect(read(true)).toEqual(expectedRows);
+  expect(probes.counts).toMatchObject({
+    registryPrimaryKey: 0,
+    legacyWatches: 0,
+    registryCatalog: 0,
+  });
+
+  db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
+  expect(read(true)).toEqual(expectedRows);
+  expect(probes.counts.registryPrimaryKey).toBe(1);
+  expect(read()).toEqual(expectedRows);
+  expect(probes.counts.registryPrimaryKey).toBe(2);
+  db.exec(`DROP TABLE agent_databases;
       CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
         last_seen_at INTEGER, size_bytes INTEGER)`);
-    expect(() => read(true)).toThrow("unsupported agent database registry schema");
-    expect(() => read()).toThrow("unsupported agent database registry schema");
-  } finally {
-    probes.restore();
-  }
+  expect(() => read(true)).toThrow("unsupported agent database registry schema");
+  expect(() => read()).toThrow("unsupported agent database registry schema");
 });
 
 it("refuses a pending migration that changes agent database registry paths", () => {
@@ -191,11 +189,10 @@ it("keeps registry reads independent of audit contract drift after replacement s
     db.close();
     const replacementPath = `${options.path}.replacement`;
     fs.copyFileSync(options.path, replacementPath);
-    const replacement = new DatabaseSync(replacementPath);
-    try {
+    {
+      using replacement = new DatabaseSync(replacementPath);
+
       replacement.exec(sql);
-    } finally {
-      replacement.close();
     }
     fs.renameSync(replacementPath, options.path);
     db = openNodeSqliteDatabase(options.path);

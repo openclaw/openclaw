@@ -64,16 +64,23 @@ const stamp = (value: number) =>
   owner.db.prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'").run(value);
 
 describe("committed agent database reads", () => {
-  it("reuses a separate reader while observing committed changes between writer transactions", async () => {
+  it("reuses a separate reader across nested reads and committed writer transactions", async () => {
     stamp(101);
     const reader = transaction(() => {
       stamp(202);
       const first = read();
       expect(first).toMatchObject({ stamp: 101, db: { isOpen: true } });
       expect(first.db).not.toBe(owner.db);
-      const second = read();
-      expect(second.db).toBe(first.db);
-      expect(second.stamp).toBe(101);
+      const second = readAgentDb(({ db }) => {
+        expect(db).toBe(first.db);
+        const nested = read();
+        expect(nested.db).not.toBe(owner.db);
+        expect(nested.stamp).toBe(101);
+        expect(db.isOpen).toBe(true);
+        return db.prepare(stampQuery).get()?.updated_at;
+      }, options);
+      expect(second).toEqual({ found: true, value: 101 });
+      expect(read().db).toBe(first.db);
       expect(owner.db.isTransaction).toBe(true);
       return first.db;
     });
@@ -117,11 +124,10 @@ describe("committed agent database reads", () => {
       expect(closeAgentDb(databasePath)).toBe(true);
       fs.copyFileSync(databasePath, `${databasePath}.replacement`);
       fs.renameSync(`${databasePath}.replacement`, databasePath);
-      const writer = new DatabaseSync(databasePath);
-      try {
+      {
+        using writer = new DatabaseSync(databasePath);
+
         writer.exec(`BEGIN IMMEDIATE; PRAGMA user_version = ${version}; COMMIT;`);
-      } finally {
-        writer.close();
       }
       expect(readReplacement).toThrow(expect.objectContaining(expectedError));
       expect(admitted).toBe(false);
@@ -163,23 +169,6 @@ describe("committed agent database reads", () => {
       expect(read().stamp).toBe(101);
     },
   );
-
-  it("keeps committed reads available through nested callbacks", async () => {
-    stamp(101);
-    transaction(() => {
-      const retained = read().db;
-      const result = readAgentDb(({ db }) => {
-        expect(db).toBe(retained);
-        const nested = read();
-        expect(nested.db).not.toBe(owner.db);
-        expect(nested.stamp).toBe(101);
-        expect(db.isOpen).toBe(true);
-        return db.prepare(stampQuery).get()?.updated_at;
-      }, options);
-      expect(result).toEqual({ found: true, value: 101 });
-      expect(read().db).toBe(retained);
-    });
-  });
 
   it.each([false, true])(
     "closes a leaked reader transaction when the callback throws=%s",

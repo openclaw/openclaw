@@ -82,91 +82,59 @@ function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[
 }
 
 it.each([false, true])(
-  "reuses admitted metadata and reads in-process writes without probes (snapshot=%s)",
+  "reuses admission while reads observe committed writes with snapshot=%s",
   async (snapshot) => {
     const { options, path } = await closedDatabase();
     const scope = newScope();
-    const writer = nodeSqlite.openNodeSqliteDatabase(path);
-    try {
-      scope.run({ agentId: "main", path }, () => {
-        readAgentDb(({ db }) => {
-          const query = getNodeSqliteKysely<{
-            schema_meta: { meta_key: string; updated_at: number };
-          }>(db)
-            .selectFrom("schema_meta")
-            .select("updated_at")
-            .where("meta_key", "=", "primary");
-          const prepare = vi.spyOn(db, "prepare");
-          const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
-          try {
-            writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
-            for (let stamp = 1; stamp <= 20; stamp++) {
-              writer
-                .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
-                .run(stamp);
-              for (let read = 0; read < 2; read++) {
-                expect(
-                  readAgentDb(
-                    (database) =>
-                      runRead(
-                        database.db,
-                        () => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
-                      ),
-                    options,
-                    { snapshot },
-                  ),
-                ).toEqual({ found: true, value: stamp });
-              }
-            }
-            const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
-            expect(preparations.length).toBeLessThanOrEqual(2);
+    using writer = nodeSqlite.openNodeSqliteDatabase(path);
+
+    scope.run({ agentId: "main", path }, () => {
+      readAgentDb(({ db: admittedDb }) => {
+        const query = getNodeSqliteKysely<{
+          schema_meta: { meta_key: string; updated_at: number };
+        }>(admittedDb)
+          .selectFrom("schema_meta")
+          .select("updated_at")
+          .where("meta_key", "=", "primary");
+        const prepare = vi.spyOn(admittedDb, "prepare");
+        const observation = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+        try {
+          writer.exec("UPDATE schema_meta SET role = 'state' WHERE meta_key = 'primary'");
+          const stampValue = (db: EngineConnection) =>
+            executeSqliteQueryTakeFirstSync(db, query)?.updated_at;
+          const read = <T>(run: (db: EngineConnection) => T) =>
+            readAgentDb(({ db }) => runRead(db, () => run(db)), options, { snapshot });
+          const writeStamp = writer.prepare(
+            "UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'",
+          );
+          for (let stamp = 1; stamp <= 20; stamp++) {
+            writeStamp.run(stamp);
             expect(
-              observation.queries.filter((sql) =>
-                /sqlite_schema|sqlite_master|PRAGMA\s+(?:data_version|user_version|schema_version|integrity_check|foreign_key_check)|FROM main\.pragma_data_version\(\)|^SELECT role, schema_version, agent_id/iu.test(
-                  sql,
-                ),
-              ),
-            ).toEqual([]);
-          } finally {
-            observation.restore();
-            prepare.mockRestore();
+              read((db) => {
+                expect(stampValue(db)).toBe(stamp);
+                writeStamp.run(stamp + 100);
+                return stampValue(db);
+              }),
+            ).toEqual({ found: true, value: snapshot ? stamp : stamp + 100 });
+            expect(read(stampValue)).toEqual({ found: true, value: stamp + 100 });
           }
-        }, options);
-      });
-    } finally {
-      writer.close();
-    }
+          const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
+          expect(preparations.length).toBeLessThanOrEqual(2);
+          expect(
+            observation.queries.filter((sql) =>
+              /sqlite_schema|sqlite_master|PRAGMA\s+(?:data_version|user_version|schema_version|integrity_check|foreign_key_check)|FROM main\.pragma_data_version\(\)|^SELECT role, schema_version, agent_id/iu.test(
+                sql,
+              ),
+            ),
+          ).toEqual([]);
+        } finally {
+          observation.restore();
+          prepare.mockRestore();
+        }
+      }, options);
+    });
   },
 );
-
-it("keeps a multi-statement snapshot stable until the next read after an in-process write", async () => {
-  const { options, path } = await closedDatabase();
-  const scope = newScope();
-  const writer = nodeSqlite.openNodeSqliteDatabase(path);
-  const readStamp = (db: EngineConnection) =>
-    db.prepare("SELECT updated_at FROM schema_meta WHERE meta_key = 'primary'").get()?.updated_at;
-  writer.exec("UPDATE schema_meta SET updated_at = 1 WHERE meta_key = 'primary'");
-  try {
-    scope.run({ agentId: "main", path }, () => {
-      const read = () => readAgentDb(({ db }) => readStamp(db), options, { snapshot: true });
-      expect(read()).toEqual({ found: true, value: 1 });
-      expect(
-        readAgentDb(
-          ({ db }) => {
-            expect(readStamp(db)).toBe(1);
-            writer.exec("UPDATE schema_meta SET updated_at = 2 WHERE meta_key = 'primary'");
-            return readStamp(db);
-          },
-          options,
-          { snapshot: true },
-        ),
-      ).toEqual({ found: true, value: 1 });
-      expect(read()).toEqual({ found: true, value: 2 });
-    });
-  } finally {
-    writer.close();
-  }
-});
 
 it("keeps one connection while nested reads retain independent committed snapshots", async () => {
   const { options, path } = await closedDatabase();
@@ -213,6 +181,7 @@ it("keeps one connection while nested reads retain independent committed snapsho
   } finally {
     writer.close();
   }
+  scope.close();
   expect(retained?.isOpen).toBe(false);
 });
 
@@ -446,22 +415,20 @@ it("loads canonical proof before fresh full selections without trusting a copied
           (sql) =>
             sql.includes("retained_window") && !/\bwhere\b/iu.test(sql) ? "inventory" : null,
         );
-        try {
-          const result = readExactSessionEntriesWithLifecycle({
-            kind: "session-exact-entries",
-            database: target,
-            env,
-            projection: "full",
-            selection: { kind: "session-id", sessionId: "receipt-session" },
-          });
-          expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
-          if (pathname === database.path) {
-            expect(queries.rowCounts.inventory).toBe(0);
-          } else {
-            expect(queries.rowCounts.inventory).toBeGreaterThan(0);
-          }
-        } finally {
-          queries.restore();
+        using _ = { [Symbol.dispose]: () => queries.restore() };
+
+        const result = readExactSessionEntriesWithLifecycle({
+          kind: "session-exact-entries",
+          database: target,
+          env,
+          projection: "full",
+          selection: { kind: "session-id", sessionId: "receipt-session" },
+        });
+        expect(result.entries[0]?.entry.sessionId).toBe("receipt-session");
+        if (pathname === database.path) {
+          expect(queries.rowCounts.inventory).toBe(0);
+        } else {
+          expect(queries.rowCounts.inventory).toBeGreaterThan(0);
         }
       });
     } finally {

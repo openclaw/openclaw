@@ -43,8 +43,7 @@ function registry(options: ReturnType<typeof fixture>) {
   return listOpenClawRegisteredAgentDatabases({ env: options.env });
 }
 
-function aliasedFixture() {
-  const options = fixture();
+function aliasedFixture(options = fixture()) {
   const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
   const directory = path.dirname(options.path);
   fs.mkdirSync(directory, { recursive: true });
@@ -124,16 +123,14 @@ it("rejects a file replacement during registry removal publication", async () =>
     fs.copyFileSync(retiredPath, options.path, fs.constants.COPYFILE_EXCL);
     replacementInode = fs.statSync(options.path, { bigint: true }).ino;
   });
-  try {
-    await expect(dispose(options)).rejects.toThrow("SQLite database file identity changed");
-    expect(native.db.isOpen).toBe(false);
-    expect(replacementInode).toBeDefined();
-    expect(replacementInode).not.toBe(originalInode);
-    expect(fs.statSync(options.path, { bigint: true }).ino).toBe(replacementInode);
-    expect(registry(options)).toEqual([]);
-  } finally {
-    unsubscribe();
-  }
+  using _ = { [Symbol.dispose]: () => unsubscribe() };
+
+  await expect(dispose(options)).rejects.toThrow("SQLite database file identity changed");
+  expect(native.db.isOpen).toBe(false);
+  expect(replacementInode).toBeDefined();
+  expect(replacementInode).not.toBe(originalInode);
+  expect(fs.statSync(options.path, { bigint: true }).ino).toBe(replacementInode);
+  expect(registry(options)).toEqual([]);
 });
 
 it.runIf(process.platform !== "win32")(
@@ -163,11 +160,11 @@ it("disposes a worker-created database through its registry owner without host d
     await execution.release();
     expect(registry(options)).toHaveLength(2);
     const sql = observeHostDataSql();
-    try {
+    {
+      using _ = { [Symbol.dispose]: () => sql.restore() };
+
       await expect(dispose(options)).resolves.toBe(true);
       expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
     }
     expect(registry(options)).toEqual([
       expect.objectContaining({ agentId: "sibling", path: siblingOptions.path }),
@@ -178,43 +175,34 @@ it("disposes a worker-created database through its registry owner without host d
   }
 });
 
-it("disposes a registered native alias and its canonical worker together", async () => {
-  const { options, aliased } = aliasedFixture();
-  const native = openOpenClawAgentDatabase(aliased);
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  try {
-    await execution.prepare(source());
-    expect(registry(options)).toEqual([expect.objectContaining({ path: aliased.path })]);
-    await expect(dispose(aliased)).resolves.toBe(true);
-    expect(native.db.isOpen).toBe(false);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-    expect(registry(options)).toEqual([]);
-  } finally {
-    await execution.release();
-  }
-});
-
-it("drains an unregistered worker through an alias first seen during disposal", async () => {
-  const root = fixture();
-  const options = {
-    ...root,
-    path: path.join(root.env.OPENCLAW_STATE_DIR, "imports", "archive.sqlite"),
-  };
-  const execution = captureOpenClawAgentDatabaseExecution(options);
-  try {
-    await execution.prepare(source());
-    expect(registry(options)).toEqual([]);
-    const aliasDir = path.join(root.env.OPENCLAW_STATE_DIR, "archive-alias");
-    fs.symlinkSync(
-      path.dirname(options.path),
-      aliasDir,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    await expect(
-      dispose({ ...options, path: path.join(aliasDir, "archive.sqlite") }),
-    ).resolves.toBe(false);
-    expect(() => execution.assertCurrent()).toThrow(/closed/);
-  } finally {
-    await execution.release();
-  }
-});
+it.each(["registered", "unregistered"] as const)(
+  "drains a %s worker through its native or newly discovered alias",
+  async (kind) => {
+    const root = fixture();
+    const registered = kind === "registered";
+    const options = registered
+      ? root
+      : {
+          ...root,
+          path: path.join(root.env.OPENCLAW_STATE_DIR, "imports", "archive.sqlite"),
+        };
+    let aliased = registered ? aliasedFixture(options).aliased : undefined;
+    const native = aliased && openOpenClawAgentDatabase(aliased);
+    const execution = captureOpenClawAgentDatabaseExecution(options);
+    try {
+      await execution.prepare(source());
+      expect(registry(options)).toEqual(
+        registered ? [expect.objectContaining({ path: aliased?.path })] : [],
+      );
+      aliased ??= aliasedFixture(options).aliased;
+      await expect(dispose(aliased)).resolves.toBe(registered);
+      if (native) {
+        expect(native.db.isOpen).toBe(false);
+      }
+      expect(() => execution.assertCurrent()).toThrow(/closed/);
+      expect(registry(options)).toEqual([]);
+    } finally {
+      await execution.release();
+    }
+  },
+);
