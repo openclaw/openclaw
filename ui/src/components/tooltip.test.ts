@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
-import { createComponent } from "solid-js";
+import { html } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installTestLinkReader } from "../test-helpers/link-reader.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderKbd } from "./kbd.ts";
 import { linkReaderHovercardBootstrap } from "./link-reader-hovercard-registration.ts";
 import { createPortaledHovercard, PortaledHovercardController } from "./portaled-hovercard.ts";
-import { Kbd } from "./solid/kbd.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 import {
   createTooltip,
@@ -21,7 +20,6 @@ import {
   settleTooltip,
   type TooltipElement,
 } from "./tooltip.test-support.ts";
-import { focusWithoutTooltip } from "./tooltip.ts";
 
 // Keep renderer-specific readiness and content lookup at the fixture boundary.
 function commitTooltip(tooltip: TooltipElement) {
@@ -73,22 +71,6 @@ describe("openclaw-tooltip", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([true, false])(
-    "preserves focus options without opening a tooltip (wrapped=%s)",
-    async (wrapped) => {
-      const { tooltip, trigger } = createTooltip("Navigation action");
-      document.body.append(wrapped ? tooltip : trigger);
-      if (wrapped) {
-        await commitTooltip(tooltip);
-      }
-      const focus = vi.spyOn(trigger, "focus");
-      focusWithoutTooltip(trigger, { preventScroll: true });
-      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
-      expect(document.activeElement).toBe(trigger);
-      await expectOpenCount(0);
-    },
-  );
-
   it.each([
     [undefined, "right-start"],
     [true, "bottom-start"],
@@ -111,22 +93,18 @@ describe("openclaw-tooltip", () => {
     },
   );
 
-  it("renders slotted shortcuts without duplicating descriptions", async () => {
-    const { tooltip, trigger, card } = createRichTooltip("");
-    const view = mountSolid(
-      () => ["Search (", createComponent(Kbd, { keys: ["⌘", "K"], inline: true }), ")"],
-      { container: card },
-    );
+  it("renders shortcut templates without changing plain descriptions or dismissal", async () => {
+    const { tooltip, trigger } = createTooltip("Search (⌘K)");
+    tooltip.contentTemplate = html`Search (${renderKbd(["⌘", "K"], { inline: true })})`;
     document.body.append(tooltip);
     await commitTooltip(tooltip);
 
     hoverTrigger(trigger);
     vi.advanceTimersByTime(150);
     await settleTooltip(tooltip);
-    expect(projectedTooltipContent(tooltip)).toEqual([card]);
-    expect(card.querySelector("kbd svg")).not.toBeNull();
-    expect(card.textContent?.replace(/\s+/gu, "")).toBe("Search(⌘K)");
-    expect(tooltipContent(tooltip)?.textContent).toBe("");
+    const content = tooltipContent(tooltip);
+    expect(content?.querySelector("kbd svg")).not.toBeNull();
+    expect(content?.textContent?.replace(/\s+/gu, "")).toBe("Search(⌘K)");
     const descriptionId = trigger.getAttribute("aria-describedby") ?? "";
     expect(document.getElementById(descriptionId)?.textContent).toBe("Search (⌘K)");
 
@@ -134,18 +112,15 @@ describe("openclaw-tooltip", () => {
     vi.advanceTimersByTime(150);
     await expectOpenCount(1);
     dispatchMousePointer(trigger, "pointerleave");
-    vi.advanceTimersByTime(100);
     await expectOpenCount(0);
     focusTrigger(trigger);
     await expectOpenCount(1);
     dispatchMousePointer(trigger, "pointerdown");
     await expectOpenCount(0);
 
-    view.unmount();
-    card.remove();
+    tooltip.contentTemplate = undefined;
     tooltip.content = "Search unavailable";
     await commitTooltip(tooltip);
-    const content = tooltipContent(tooltip);
     expect(content?.querySelector("kbd")).toBeNull();
     expect(content?.textContent).toBe("Search unavailable");
     expect(document.getElementById(descriptionId)?.textContent).toBe("Search unavailable");
@@ -441,22 +416,18 @@ describe("openclaw-tooltip", () => {
   it.each([true])(
     "returns Escape focus from rich content to its trigger (wrapped=%s)",
     async (wrapped) => {
-      const { tooltip, trigger: directTrigger, card } = createRichTooltip("Focusable card");
-      const trigger = wrapped ? document.createElement("button") : directTrigger;
+      const { tooltip, trigger, card } = createRichTooltip("Focusable card");
       if (wrapped) {
         const wrapper = document.createElement("span");
-        trigger.textContent = directTrigger.textContent;
+        trigger.replaceWith(wrapper);
         wrapper.append(trigger);
-        directTrigger.replaceWith(wrapper);
       }
       const action = document.createElement("button");
       action.textContent = "Card action";
       card.append(action);
       document.body.append(tooltip);
-      await settleTooltip(tooltip);
+      await commitTooltip(tooltip);
       trigger.focus();
-      expect(document.activeElement).toBe(trigger);
-      await expectOpenCount(1);
       action.focus();
       await expectOpenCount(1);
       action.dispatchEvent(

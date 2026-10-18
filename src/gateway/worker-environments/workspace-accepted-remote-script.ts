@@ -144,8 +144,19 @@ function readPhase(candidate, required = true) {
   }
   return value.phase;
 }
-function transitionPhase(candidate, next) {
+function transitionPhase(candidate, current, expected, next) {
+  const allowed =
+    (expected === null && next !== null) ||
+    (expected === "begun" && next === "applying") ||
+    (expected === "applying" && next === "applied") ||
+    (expected === "applied" && next === "committed");
+  if (current !== expected || !allowed) {
+    throw new Error("invalid accepted workspace transaction phase transition");
+  }
   const candidateNonce = path.basename(candidate).slice(-32);
+  if (!/^[a-f0-9]{32}$/.test(candidateNonce)) {
+    throw new Error("invalid accepted workspace transaction phase path");
+  }
   const candidatePhase = path.join(candidate, "phase.json");
   const temporary = candidatePhase + "." + process.pid + "." + crypto.randomBytes(4).toString("hex");
   fs.writeFileSync(temporary, JSON.stringify({ version: 1, nonce: candidateNonce, phase: next }), {
@@ -167,7 +178,7 @@ function normalizeRecoveredPhase(candidate, cleanupNamespace = false) {
         : "begun";
   // Transactions from pre-phase beta workers are normalized only while the
   // locked recovery owner is deciding their existing durable rollback state.
-  transitionPhase(candidate, inferred);
+  transitionPhase(candidate, null, null, inferred);
   return inferred;
 }
 function readState(candidate) {
@@ -318,7 +329,7 @@ function recoverTransaction(candidate) {
 }
 function recoverCleanup(candidate) {
   const phase = normalizeRecoveredPhase(candidate, true);
-  if (phase === "applied") transitionPhase(candidate, "committed");
+  if (phase === "applied") transitionPhase(candidate, phase, "applied", "committed");
   else if (phase !== "committed") throw new Error("invalid accepted workspace cleanup phase");
   removeTree(candidate);
 }
@@ -348,7 +359,7 @@ function runAction() {
     fs.mkdirSync(nextRoot, { mode: 0o700 });
     fs.mkdirSync(backupRoot, { mode: 0o700 });
     fs.writeFileSync(pathsFile, JSON.stringify(paths), { mode: 0o600 });
-    transitionPhase(transaction, "begun");
+    transitionPhase(transaction, null, null, "begun");
     process.stdout.write(nextRoot + "\n");
     return;
   }
@@ -360,7 +371,7 @@ function runAction() {
       throw new Error("recovered interrupted accepted workspace apply");
     }
     if (phase !== "begun") throw new Error("accepted workspace transaction cannot be applied");
-    transitionPhase(transaction, "applying");
+    transitionPhase(transaction, phase, "begun", "applying");
     const paths = parsePaths(fs.readFileSync(pathsFile, "utf8"));
     try {
       const ancestorModes = prepareWritableAncestors(paths);
@@ -402,7 +413,7 @@ function runAction() {
         if (exists(source)) fs.renameSync(source, livePath(entry.relative));
       }
       restoreAncestorModes(ancestorModes);
-      transitionPhase(transaction, "applied");
+      transitionPhase(transaction, "applying", "applying", "applied");
     } catch (error) {
       restoreTransaction(transaction);
       throw error;
@@ -433,7 +444,7 @@ function runAction() {
     }
     if (exists(cleanup)) {
       const phase = normalizeRecoveredPhase(cleanup, true);
-      if (phase === "applied") transitionPhase(cleanup, "committed");
+      if (phase === "applied") transitionPhase(cleanup, phase, "applied", "committed");
       else if (phase !== "committed") throw new Error("invalid accepted workspace cleanup phase");
       writeSettlementOutcome("committed");
       return;
@@ -464,7 +475,7 @@ function runAction() {
     }
     if (exists(cleanup)) {
       const phase = readPhase(cleanup);
-      if (phase === "applied") transitionPhase(cleanup, "committed");
+      if (phase === "applied") transitionPhase(cleanup, phase, "applied", "committed");
       else if (phase !== "committed") throw new Error("accepted workspace cleanup is not committed");
     } else if (exists(transaction)) {
       const phase = readPhase(transaction);
@@ -472,7 +483,7 @@ function runAction() {
       // The namespace rename is the commit point. Later recovery removes the backup
       // only after the gateway has had a chance to observe this command's success.
       fs.renameSync(transaction, cleanup);
-      transitionPhase(cleanup, "committed");
+      transitionPhase(cleanup, phase, "applied", "committed");
     }
     return;
   }

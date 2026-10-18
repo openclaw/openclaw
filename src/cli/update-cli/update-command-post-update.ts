@@ -2,7 +2,6 @@ import { isUpdateDoctorInspectionReportMode } from "../../commands/doctor/shared
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { buildControlPlaneUpdateRestartHealthPendingResult } from "../../infra/update-control-plane-sentinel.js";
-import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
@@ -10,8 +9,11 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { classifyUpdateOutcome, isVerifiedUpdateRollback } from "../../shared/update-outcome.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
-import { verifyUpdateFailureRecovery } from "./update-command-failure-recovery.js";
-import type { FinishUpdateOptions, FinishUpdateParams } from "./update-command-finish-types.js";
+import {
+  shouldWaitForRecovery,
+  verifyUpdateFailureRecovery,
+} from "./update-command-failure-recovery.js";
+import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { parkForegroundUpdateForActivation } from "./update-command-handoff.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
@@ -62,6 +64,14 @@ import {
   recordUpdatePackageCompletion,
 } from "./update-command-terminal.js";
 
+type FinishUpdateOptions = {
+  candidateRuntime?: boolean;
+  /** Set by the candidate after it adopts restart and terminal reporting. */
+  adoptedFinalization?: true;
+  onGatewayStartAttempted?: () => void;
+  beforeFinalization?: () => Promise<void>;
+};
+
 export async function finishUpdate(
   params: FinishUpdateParams,
   { beforeFinalization, ...options }: FinishUpdateOptions = {},
@@ -92,9 +102,9 @@ async function finishSettledUpdate(
     recordPhase,
     sentinelOptions,
   } = captured;
-  let gatewayStartAttempted: "install" | "restart" | undefined;
-  const onGatewayStartAttempted = (action: "install" | "restart" = "restart") => {
-    gatewayStartAttempted = gatewayStartAttempted === "restart" ? gatewayStartAttempted : action;
+  let gatewayStartAttempted = false;
+  const onGatewayStartAttempted = () => {
+    gatewayStartAttempted = true;
     observeGatewayStartAttempted?.();
   };
   const definitionRecovery: UpdateServiceDefinitionRecovery = {};
@@ -105,7 +115,7 @@ async function finishSettledUpdate(
     ? false
     : await preparePostUpdateService(params, assertCurrent);
   assertCurrent();
-  const { createFailure, settleResult } = bindUpdateFinalizationFailure(progressFailure);
+  const createFailure = bindUpdateFinalizationFailure(progressFailure);
   let rollbackAttempted = false;
   let latestServiceStop = params.preManagedServiceStop;
   // Doctor parking and rollback replace this run's earlier service observation.
@@ -130,7 +140,6 @@ async function finishSettledUpdate(
   recordUpdateResultNextAction(params, params.result);
 
   let pendingResult = params.result;
-  let settledResult: UpdateRunResult | undefined;
   let terminalRecord: UpdateCommandTerminalRecord | undefined;
   let pendingNotify = true;
   const writeRestartSentinel = (result: UpdateRunResult) =>
@@ -211,7 +220,7 @@ async function finishSettledUpdate(
       recoverService = false;
     }
     if (result.status === "error" && params.rollbackBlockedReason) {
-      result = completeUpdateCommandResult(params, result);
+      result = { ...result, reason: params.rollbackBlockedReason };
     } else if (
       result.status === "error" &&
       params.result.status === "ok" &&
@@ -234,9 +243,6 @@ async function finishSettledUpdate(
     recoverService ||=
       !gatewayStartAttempted &&
       (await admitInstalledGatewayRecovery(recoveryParams, result, assertCurrent));
-    if (recoverService) {
-      params.rollbackBlockedReason = undefined;
-    }
     if (isUpdateGatewayReadinessPending(result)) {
       return { result, recoverService: false };
     }
@@ -297,7 +303,7 @@ async function finishSettledUpdate(
       finalResult.status = "error";
       finalResult.reason =
         result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
-      finalResult.recovery = unsafeUpdateRecovery(finalResult.recovery);
+      finalResult.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
       finalResult.steps = finalResult.steps.concat({
         name: "windows-task-autostart-recovery",
         command: "openclaw update",
@@ -364,21 +370,10 @@ async function finishSettledUpdate(
         env: currentServiceStop()?.serviceEnv ?? params.ownedManagedUpdateEnv,
         timeoutMs: params.updateStepTimeoutMs,
         serviceStopped: !rolledBack && currentServiceStop()?.stopped,
-        gatewayStartAttempted,
-        definitionRecovery,
-        preManagedServiceStop: currentServiceStop(),
-        onGatewayStartAttempted,
-        nodeRunner: params.packageUpdateNodeRunner,
-        invocationCwd: params.invocationCwd,
         serviceUpdateVerdict: gatewayStartAttempted
           ? undefined
           : currentServiceStop()?.serviceUpdateVerdict,
-        waitForStartup:
-          params.result.status !== "error" ||
-          params.mutationStarted ||
-          currentServiceStop()?.stopped ||
-          Boolean(params.originalManagedServiceRuntime?.definition.rebound) ||
-          rollbackAttempted,
+        waitForStartup: shouldWaitForRecovery(params, currentServiceStop(), rollbackAttempted),
         assertCurrent,
       });
       assertCurrent();
@@ -408,7 +403,6 @@ async function finishSettledUpdate(
         : restoreFailure.cause;
       throw createFailure(reportedResult, detail, { cause });
     }
-    settledResult = reportedResult;
     return reportedResult;
   };
   const restoreWindowsAutoStart = (result: UpdateRunResult) =>
@@ -431,7 +425,7 @@ async function finishSettledUpdate(
           { ...params.result, status: "error" },
           params.result.recovery?.serviceRestartSafe === true,
         );
-        return settleResult(reported, params.failure?.detail, params.failure);
+        throw createFailure(reported, params.failure?.detail, params.failure);
       }
 
       if (params.result.status === "skipped" && !params.coreAlreadyCurrent) {
@@ -551,8 +545,6 @@ async function finishSettledUpdate(
             onGatewayStartAttempted,
             originalManagedServiceRuntime: params.originalManagedServiceRuntime,
             shouldRestart: shouldRestart && restartContext.serviceMutationAllowed,
-            observePackageReplacement:
-              params.opts.restart === false && currentServiceStop()?.running === true,
             result: resultWithPostUpdate,
             opts: params.opts,
             refreshServiceEnv: restartContext.refreshGatewayServiceEnv,
@@ -588,7 +580,7 @@ async function finishSettledUpdate(
           ...resultWithPostUpdate,
           status: "error",
           reason: verificationFailure,
-          recovery: unsafeUpdateRecovery(resultWithPostUpdate.recovery),
+          recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
         };
         const recovered = await recoverFailedResult(failure, false);
         if (recovered.result.status !== "ok") {
@@ -599,16 +591,13 @@ async function finishSettledUpdate(
             reason: recovered.result.reason ?? verificationFailure,
           });
           const reported = await reportResult(recovered.result, false, undefined, false);
-          return settleResult(reported);
+          throw createFailure(reported);
         }
         resultWithPostUpdate = recovered.result;
         return true;
       };
       if (!params.coreAlreadyCurrent) {
-        const recovered = await restart();
-        if (typeof recovered !== "boolean") {
-          return recovered;
-        }
+        await restart();
       }
       if (deferPluginConvergence) {
         ({ resultWithPostUpdate, postUpdateConfigSnapshot } = await convergePlugins(async () => {
@@ -658,9 +647,6 @@ async function finishSettledUpdate(
           await notifyRestart();
           await restoreWindowsAutoStart(resultWithPostUpdate);
           const reconciled = await restart();
-          if (typeof reconciled !== "boolean") {
-            return reconciled;
-          }
           if (
             requiresInstallRootRefresh &&
             reconciled &&
@@ -725,6 +711,5 @@ async function finishSettledUpdate(
     }
   };
   // Reporting cannot revoke verified activation or authorize another native rollback.
-  const result = await runPostUpdate();
-  return settledResult === result ? result : await reportResult(result);
+  return await reportResult(await runPostUpdate());
 }

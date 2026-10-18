@@ -30,7 +30,7 @@ describe("vLLM provider thinking policy", () => {
         resolveThinkingProfile({
           provider: "vllm",
           modelId: "qwen3:8b",
-          ...(source === "model" ? { thinkingLevelMap: { ...mapping, off: null } } : {}),
+          ...(source === "model" ? { thinkingLevelMap: mapping } : {}),
           compat: {
             thinkingFormat: "qwen-chat-template",
             supportedReasoningEfforts: [" LOW ", "HIGH"],

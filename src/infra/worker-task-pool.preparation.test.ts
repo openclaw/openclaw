@@ -15,8 +15,7 @@ import { createOwnedWorkerTaskPool, WorkerTaskPool } from "./worker-task-pool.js
 type PostedTask = { input: string; taskId: number };
 type FakeWorker = EventEmitter & {
   options?: WorkerOptions;
-  posted: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
-  postMessage: (message: PostedTask) => void;
+  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
   terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
 };
 const workers = vi.hoisted(() => [] as FakeWorker[]);
@@ -38,12 +37,11 @@ vi.mock("node:worker_threads", async (importOriginal) => {
         super();
         workers.push(this);
       }
-      posted = vi.fn((message: PostedTask) => {
+      postMessage = vi.fn((message: PostedTask) => {
         queueMicrotask(() =>
           this.emit("message", { status: "ok", taskId: message.taskId, value: message.input }),
         );
       });
-      postMessage = this.posted;
       ref() {}
       unref() {}
       terminate = vi.fn(async () => {
@@ -265,7 +263,7 @@ describe("public worker task preparation custody", () => {
     await expect(retried).resolves.toBe("immediate retry");
     expect(workers).toHaveLength(1);
     expect(worker.terminate).not.toHaveBeenCalled();
-    expect(worker.posted.mock.calls.map(([message]) => message.input)).toEqual([
+    expect(worker.postMessage.mock.calls.map(([message]) => message.input)).toEqual([
       "warm",
       "immediate retry",
     ]);
@@ -361,7 +359,7 @@ describe("public worker task preparation custody", () => {
         expect(captured).toEqual([]);
         expect(consumed).toHaveBeenCalledOnce();
         expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
-        expect(worker.posted.mock.calls.map(([message]) => message.input)).toEqual(["warm"]);
+        expect(worker.postMessage.mock.calls.map(([message]) => message.input)).toEqual(["warm"]);
         expect(pool.getSnapshot().pendingTasks).toBe(0);
         await expect(active).rejects.toBe(reason);
       } finally {
@@ -423,7 +421,7 @@ describe("public worker task preparation custody", () => {
       expect(consumed).toHaveBeenCalledOnce();
       expect(captured).toEqual([]);
       expect(pool.getSnapshot().pendingTasks).toBe(0);
-      expect(worker.posted.mock.calls.map(([message]) => message.input)).toEqual(["warm"]);
+      expect(worker.postMessage.mock.calls.map(([message]) => message.input)).toEqual(["warm"]);
       expect(await outcome).toBe(originalFailure);
     } finally {
       preparation.resolve();

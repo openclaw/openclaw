@@ -7,7 +7,7 @@ import {
   mountPalette,
   registerCommandPaletteTestHooks,
 } from "./command-palette.test-support.ts";
-import "./command-palette.tsx";
+import "./command-palette.ts";
 
 describe("CommandPalette platform shortcuts", () => {
   registerCommandPaletteTestHooks();

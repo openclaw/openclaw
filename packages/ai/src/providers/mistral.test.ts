@@ -473,7 +473,7 @@ describe("Mistral provider", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("reports unreadable tool parameters before sending a request", async () => {
+  it("omits tools and automatic tool choice when every schema is unreadable", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -483,9 +483,11 @@ describe("Mistral provider", () => {
         toolChoice: "auto",
       },
     );
+    const payload = mistralMockState.payloads[0] as Record<string, unknown>;
+
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
-    expect(mistralMockState.payloads).toHaveLength(0);
+    expect(payload).not.toHaveProperty("tools");
+    expect(payload).not.toHaveProperty("toolChoice");
   });
 
   it("keeps omitted streamed tool ids stable within a response and unique across responses", async () => {
@@ -720,7 +722,7 @@ describe("Mistral provider", () => {
     ]);
   });
 
-  it("reports unreadable parameters even when another tool is usable", async () => {
+  it("fails locally when a pinned Mistral tool choice is skipped", async () => {
     const result = await runMistralFixture(
       {
         ...context,
@@ -732,7 +734,9 @@ describe("Mistral provider", () => {
     );
 
     expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toContain("fuzzplugin parameters getter exploded");
+    expect(result.errorMessage).toContain(
+      'Mistral tool_choice requested unavailable tool "broken_tool"',
+    );
     expect(mistralMockState.payloads).toHaveLength(0);
   });
 
@@ -868,6 +872,30 @@ describe("Mistral provider", () => {
     const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toBe("  indented\n");
+  });
+
+  it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    const testContext = makeMistralToolResultContext("fetch", [
+      {
+        type: "resource",
+        resource: {
+          uri: "https://example.com/data.json",
+          mimeType: "application/json",
+          text: '{"key":"value"}',
+        },
+      },
+    ]);
+
+    await runMistralFixture(testContext);
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>;
+    };
+    const toolMessage = payload.messages.find((message) => message.role === "tool");
+    const toolContent = Array.isArray(toolMessage?.content) ? toolMessage.content : [];
+    const textBlock = toolContent.find((block) => block.type === "text");
+    expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
+    expect(textBlock?.text).toContain('{\\"key\\":\\"value\\"}');
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {

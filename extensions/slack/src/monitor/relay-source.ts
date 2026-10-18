@@ -194,7 +194,8 @@ function runRelayWebSocket(params: {
         });
     };
     const onError = (error: Error) => {
-      settleReject(error);
+      cleanup();
+      reject(error);
     };
     const onClose = (code: number, reason: Buffer) => {
       const closeReason = formatRelayClose(code, reason);

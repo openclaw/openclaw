@@ -101,10 +101,12 @@ export type ProjectChipOptions = {
   submitting: boolean;
   pendingPlacement: boolean;
   popoverOpen: boolean;
+  popoverHiding: boolean;
   browserOpen: boolean;
   browser: PlaceBrowserState;
   registerProjectPath: string | null;
   registeringProject: boolean;
+  onGuardTransition: (event: MouseEvent) => void;
   onPopoverShow: () => void;
   onPopoverHide: () => void;
   onPopoverAfterHide: () => void;

@@ -1,7 +1,6 @@
 import "./isolated-agent.mocks.js";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import {
@@ -21,7 +20,7 @@ import {
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 type AnnounceOptions = {
-  payloads: ReplyPayload[];
+  texts: string[];
   cfg?: Parameters<typeof makeCfg>[2];
   entries?: Record<string, SessionEntry>;
   delivery?: { mode: "announce"; channel: "last" | "telegram"; to?: string };
@@ -42,7 +41,7 @@ async function withAnnounce(
     setRuntimeConfigSnapshot(cfg);
     await writeSessionStoreEntries(home, options.entries ?? {});
     const deps = createCliDeps();
-    mockAgentPayloads(options.payloads);
+    mockAgentPayloads(options.texts.map((text) => ({ text })));
     const result = await runCronIsolatedAgentTurn({
       deliveryAttemptFence: null,
       cfg,
@@ -63,7 +62,7 @@ describe("isolated cron delivery notifications", () => {
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
     resetSystemEventsForTest();
-    await withAnnounce({ payloads: [{ text: "warm runtime" }] });
+    await withAnnounce({ texts: ["warm runtime"] });
   });
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
@@ -73,10 +72,7 @@ describe("isolated cron delivery notifications", () => {
   it("adds the exact run-session inspection link only to the final visible payload", async () => {
     await withAnnounce(
       {
-        payloads: [
-          { text: "first cron update", mediaUrl: "https://example.com/report.png" },
-          { text: "final cron summary" },
-        ],
+        texts: ["first cron update", "final cron summary"],
         cfg: {
           gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } },
         },
@@ -107,10 +103,7 @@ describe("isolated cron delivery notifications", () => {
 
   it("does not turn a silent reply into an inspection-link announcement", async () => {
     await withAnnounce(
-      {
-        payloads: [{ text: "NO_REPLY" }],
-        cfg: { gateway: { publicOrigin: "https://control.example" } },
-      },
+      { texts: ["NO_REPLY"], cfg: { gateway: { publicOrigin: "https://control.example" } } },
       (result, deps) => {
         expect(result.status).toBe("ok");
         expect(result.delivered).toBeFalsy();
@@ -123,7 +116,7 @@ describe("isolated cron delivery notifications", () => {
     // #91613: main.lastTo belongs to whichever conversation last wrote the shared bucket.
     await withAnnounce(
       {
-        payloads: [{ text: "implicit cron digest" }],
+        texts: ["implicit cron digest"],
         delivery: { mode: "announce", channel: "last" },
         entries: {
           "agent:main:main": {

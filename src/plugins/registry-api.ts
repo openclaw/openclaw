@@ -202,7 +202,6 @@ export function createPluginApiFactory(
                   // SAFETY: The host helper reads the SDK's readonly view of the same config data.
                   cfg: registryParams.runtime.config.current() as OpenClawConfig,
                   pluginId: record.id,
-                  pluginName: record.name,
                   input,
                   assertCurrent,
                 });

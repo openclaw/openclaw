@@ -185,15 +185,12 @@ export async function createUpdateCommandTransportFixture(transport: {
           (await transport.readServiceCommand?.(options.env)) ?? null,
         );
         expect(before).toBe(originalDefinition);
-        const { readDaemonRuntimePinForInstall, withDaemonRuntimePinMigration } =
+        const { readDaemonRuntimePinForInstall } =
           await import("../../daemon/runtime-pin-state.js");
         const pinRevision = () =>
           readDaemonRuntimePinForInstall({ kind: "gateway", env: options.env ?? {} }, null, true)
             .revision;
-        const runtimePinBefore = await withDaemonRuntimePinMigration(
-          options.env ?? {},
-          pinRevision,
-        );
+        const runtimePinBefore = pinRevision();
         expect(runtimePinBefore).toBe(isRecord(input) ? input.originalRuntimePin : undefined);
         const result = await transport.run(argv, options);
         // Explicit response fixtures retain malformed/missing-receipt coverage.

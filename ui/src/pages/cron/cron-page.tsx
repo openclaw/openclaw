@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
@@ -10,9 +11,9 @@ import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CronPageController } from "./cron-page-controller.ts";
 import { reserveCronEditorClearance } from "./editor-clearance.ts";
-import { validateCronEventSelection } from "./event-source.ts";
 import {
   buildCronSuggestions,
   resolveConversationTargetSuggestions,
@@ -44,11 +45,6 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       ),
     });
     const canManage = page.canManageCron;
-    const eventSource = page.eventSource.view;
-    const fieldErrors = {
-      ...page.cron.cronFieldErrors,
-      ...validateCronEventSelection(page.cron.cronForm, eventSource),
-    };
     return {
       ...page.actions,
       loading: page.cron.cronLoading,
@@ -93,9 +89,8 @@ export function CronPageContent(props: { controller: CronPageController; revisio
       runsDeliveryStatuses: page.cron.cronRunsDeliveryStatuses,
       runsQuery: page.cron.cronRunsQuery,
       runsSortDir: page.cron.cronRunsSortDir,
-      eventSource,
-      fieldErrors,
-      canSubmit: !hasCronFormErrors(fieldErrors),
+      fieldErrors: page.cron.cronFieldErrors,
+      canSubmit: !hasCronFormErrors(page.cron.cronFieldErrors),
       agentSuggestions: suggestions.agentSuggestions,
       modelSuggestions: suggestions.modelSuggestions,
       thinkingSuggestions: THINKING_SUGGESTIONS,
@@ -158,7 +153,7 @@ export function CronPageContent(props: { controller: CronPageController; revisio
   );
 }
 
-function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
+export function CronPage(props: { routeSearch?: string; host: HTMLElement }) {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const controller = new CronPageController(
@@ -170,17 +165,25 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     () => props.routeSearch ?? "",
     (search) => controller.setRouteSearch(search),
   );
-  // Activate after the page host is inserted.
+  // A legacy route island can settle before its outer host is inserted.
   onSettled(() => queueMicrotask(() => controller.activate()));
   onCleanup(() => controller.dispose());
   return <CronPageContent controller={controller} revision={revision} />;
 }
 
-export function CronPage(props: { routeSearch?: string }) {
-  let host!: HTMLElement;
-  return (
-    <openclaw-cron-page ref={(element) => (host = element)}>
-      <CronPageBody routeSearch={props.routeSearch} host={host} />
-    </openclaw-cron-page>
+// Module re-evaluation can retain the shared custom-element registry.
+if (!customElements.get("openclaw-cron-page")) {
+  defineSolidBridge<{ routeSearch: string }>(
+    "openclaw-cron-page",
+    (props, host) => <CronPage routeSearch={props.routeSearch} host={host} />,
+    { properties: { routeSearch: { default: "", attribute: false } } },
   );
+}
+
+export function CronPageBridge(props: { routeSearch?: string }): JSX.Element {
+  // SAFETY: The registration above installs the Solid bridge's static renderer.
+  const Bridge = customElements.get("openclaw-cron-page") as CustomElementConstructor & {
+    render: (props: { routeSearch?: string }) => JSX.Element;
+  };
+  return Bridge.render(props);
 }

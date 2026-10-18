@@ -127,9 +127,7 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "mcp-app-view": HTMLAttributes<HTMLElementTagNameMap["mcp-app-view"]> &
-        Properties<HTMLElementTagNameMap["mcp-app-view"]> & {
-          "prop:onHeightChange"?: HTMLElementTagNameMap["mcp-app-view"]["onHeightChange"];
-        };
+        Properties<HTMLElementTagNameMap["mcp-app-view"]>;
     }
   }
 }

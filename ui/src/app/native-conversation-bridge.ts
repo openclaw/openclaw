@@ -11,6 +11,7 @@
  */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
+import type { LitElement } from "lit";
 import { z } from "zod";
 import { registerListener } from "../../../src/shared/listeners.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
@@ -18,6 +19,7 @@ import { t } from "../i18n/index.ts";
 import type { StoredSidebarSessionFacts } from "../lib/chat/outbox-store-projection.ts";
 import { anchorFromNavigationEvent, shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
+import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -30,7 +32,6 @@ import {
   CHAT_RUN_ACTIVITY_CHANGED_EVENT,
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
 } from "../pages/chat/chat-history-events.ts";
-import type { ChatPageHost } from "../pages/chat/chat-page-types.ts";
 import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import type { ChatRouteData } from "../pages/chat/session-route-data.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -301,7 +302,7 @@ export function createNativeConversationBridge(
       conversation = {
         context: { agentId, sessionKey },
         title: resolveSessionDisplayName(sessionKey, row),
-        run: { active: paneActive || (row ? context.sessions.isRunVisuallyActive(row) : false) },
+        run: { active: paneActive || (row ? isSessionRunActive(row) : false) },
       };
     }
     // Keep the last settled owner through pending loaders so web navigation
@@ -416,7 +417,7 @@ export function createNativeConversationBridge(
           return "navigate-rejected";
         }
         if (openActions) {
-          const page = document.querySelector<ChatPageHost>("openclaw-chat-page");
+          const page = document.querySelector<LitElement>("openclaw-chat-page");
           await page?.updateComplete;
           const pane = page?.querySelector<ChatPaneElement>(".chat-pane-cache__pane--active");
           await pane?.updateComplete;

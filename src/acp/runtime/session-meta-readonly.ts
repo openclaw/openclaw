@@ -9,15 +9,11 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   executeExistingOpenClawStateRead,
-  getActiveOpenClawStateDatabaseReadSnapshot,
   withExistingOpenClawStateDatabaseReadOnly,
   withExistingOpenClawStateDatabaseCurrentReadOnly,
 } from "../../state/openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import {
   buildAcpDatabaseSessionKey,
-  readPublishedAcpSessionRows,
   resolveReadableAcpSessionRow,
   selectAcpSessionRowForStoreEntry,
 } from "./session-meta-keys.js";
@@ -55,30 +51,13 @@ export async function readAcpSessionMetaForEntries(
         }
       : undefined,
   }));
-  const database = {
-    env: params.env,
-    path: params.databasePath ?? resolveOpenClawStateSqlitePath(params.env),
-  };
-  const context =
-    options.current || !getActiveOpenClawStateDatabaseReadSnapshot(database)
-      ? captureOpenClawStateReadWorkerContext(database)
-      : undefined;
-  if (context) {
-    const published = readPublishedAcpSessionRows(database.path, entries);
-    if (published) {
-      options.signal?.throwIfAborted();
-      context.maintenanceScope?.assertAdmission();
-      context.admission.assertCurrent();
-      return published.map((row) => (row ? rowToAcpSessionMeta(row) : null));
-    }
-  }
   const result = await executeExistingOpenClawStateRead(
-    database,
+    { env: params.env, path: params.databasePath },
     {
       type: "acpSessions.metadata",
       entries,
     },
-    { ...options, context },
+    options,
   );
   if (result === undefined) {
     return entries.map(() => null);

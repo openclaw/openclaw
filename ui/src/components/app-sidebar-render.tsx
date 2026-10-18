@@ -12,28 +12,32 @@ import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
-import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { projectGateway } from "../lib/reactive/application.ts";
-import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
+import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { pluginTabKey } from "../pages/plugin/route.ts";
-import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
+import { renderSidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarSessionNavigationElement } from "./app-sidebar-session-navigation.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { iconData, type IconName } from "./icon-data.ts";
+// Tooltip still owns Lit contentTemplate rendering until its overlay port lands.
+import { renderShortcutHint } from "./kbd.ts";
 import { HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { SidebarAgentCard } from "./sidebar-agent-card.tsx";
 import { SidebarAttention } from "./sidebar-attention.tsx";
 import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderGatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ShortcutHint } from "./solid/kbd.tsx";
 import { renderSessionLeadingState, SessionRowBadges } from "./solid/session-presentation.tsx";
-import "./theme-brand-icon.tsx";
+import "./theme-brand-icon.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
+  teamOnlineExpanded: boolean;
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
   renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element;
@@ -72,7 +76,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
     host.sidebarSnapshot?.mode === "chip" && host.sidebarSnapshot.brand.agentId === cardAgentId()
       ? host.sidebarSnapshot.brand
       : null;
-  const menuUnread = createMemo(() => host.otherAgentsHaveUnread());
+  const menuUnread = createMemo(() =>
+    cardAgents().some((entry) => {
+      const agentId = normalizeAgentId(entry.id);
+      return agentId !== cardAgentId() && host.agentUnreadCount(agentId) > 0;
+    }),
+  );
   const cardName = createMemo(() => {
     const agent = cardAgent();
     return cached()?.name ?? (agent ? normalizeAgentLabel(agent, cardIdentity()) : "");
@@ -188,18 +197,22 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
-          onPointerMove={(event) => {
-            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+          onPointerMove={(event: PointerEvent) => {
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+            }
           }}
           onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
           onPointerDown={(event: PointerEvent) => event.stopPropagation()}
-          onClick={(event) => {
+          onClick={(event: MouseEvent) => {
             event.stopPropagation();
-            host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            if (event.currentTarget instanceof HTMLElement) {
+              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+            }
           }}
-          onContextMenu={(event) => {
+          onContextMenu={(event: MouseEvent) => {
             event.preventDefault();
-            if (!menuOpen()) {
+            if (!menuOpen() && event.currentTarget instanceof HTMLElement) {
               host.sidebarMenus.toggleAgentMenu(event.currentTarget);
             }
           }}
@@ -209,7 +222,9 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
               class="sidebar-workspace-header__mark sidebar-workspace-header__mark--neutral"
               aria-hidden="true"
             >
-              {branding().brandIcon === "mark" ? (
+              {branding().brandIcon === "claw" ? (
+                <Icon name="lobster" />
+              ) : branding().brandIcon === "mark" ? (
                 <Icon name="mark" />
               ) : (
                 <openclaw-theme-brand-icon prop:branding={branding()} aria-hidden="true" />
@@ -222,11 +237,11 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
           )}
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              <HoverMarquee
-                content={name()}
-                class="sidebar-agent-card__name-text"
-                options={{ loop: true, delay: 300, speed: 35 }}
-              />
+              {renderHoverMarquee(name(), "sidebar-agent-card__name-text", {
+                loop: true,
+                delay: 300,
+                speed: 35,
+              })}
               <span class="sidebar-agent-card__chevron" aria-hidden="true">
                 <Icon name="chevronsUpDown" />
               </span>
@@ -244,15 +259,12 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
 }
 
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Element {
-  const context = useApplication();
-  const profileGateway = projectGateway(context.gateway);
   const home = () => host.visibleHomeSession(host.expandedAgentId());
   const connectionStatus = () => host.connectionStatus;
-  const selfUser = createMemo(() => {
-    profileGateway.read();
-    const gateway = host.sessionDataContext?.gateway;
-    return gateway ? gatewayPresentationScope(gateway).displayUser : null;
-  });
+  const selfUser = () =>
+    host.sessionDataContext
+      ? gatewayPresentationScope(host.sessionDataContext.gateway).displayUser
+      : null;
   const displayUser = () => selfUser() ?? host.sidebarSnapshot?.footer;
   const selfLabel = () => displayUser()?.name ?? displayUser()?.email ?? t("nav.owner");
   const avatarUser = createMemo(() => ({
@@ -283,13 +295,13 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
         {announcement()}
       </span>
       <span class="sidebar-footer-actions">
-        <openclaw-tooltip>
-          <span slot="content">
-            <ShortcutHint
-              label={t("assistantPanel.toggle")}
-              combo={KEYBOARD_SHORTCUT_COMBOS.homePanel}
-            />
-          </span>
+        <openclaw-tooltip
+          prop:content={`${t("assistantPanel.toggle")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.homePanel)})`}
+          prop:contentTemplate={renderShortcutHint(
+            t("assistantPanel.toggle"),
+            KEYBOARD_SHORTCUT_COMBOS.homePanel,
+          )}
+        >
           <button
             type="button"
             class="sidebar-brand__icon sidebar-footer-bar__home"
@@ -355,11 +367,11 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): JSX.Eleme
       >
         <openclaw-viewer-avatar prop:user={avatarUser()} variant="footer" />
         <span class="sidebar-identity-card__text">
-          <HoverMarquee
-            content={selfLabel()}
-            class="sidebar-identity-card__name"
-            options={{ loop: true, delay: 300, speed: 35 }}
-          />
+          {renderHoverMarquee(selfLabel(), "sidebar-identity-card__name", {
+            loop: true,
+            delay: 300,
+            speed: 35,
+          })}
           {connectionStatus() ? (
             renderGatewayStatus({
               get kind() {
@@ -461,21 +473,30 @@ export function renderAppSidebarPluginTab(
     return isRouteId(route) ? route : null;
   });
   const location = createMemo(() => pluginTabLocation(tab(), host.basePath));
-  const iconName = createMemo(() => {
-    const icon = tab().icon;
-    return icon && Object.hasOwn(iconData, icon)
-      ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
-      : "plug";
+  const link = renderSidebarNavLink({
+    get href() {
+      return `${location().pathname}${location().search}`;
+    },
+    get icon() {
+      const icon = tab().icon;
+      return (
+        <Icon
+          name={
+            icon && Object.hasOwn(iconData, icon)
+              ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
+              : "plug"
+          }
+        />
+      );
+    },
+    get label() {
+      return tab().label;
+    },
+    get active() {
+      return host.activeRouteId === "plugin" && host.activePluginTabId === key();
+    },
+    onNavigate: () => host.onNavigate?.("plugin", location()),
   });
-  const link = (
-    <SidebarNavLink
-      href={`${location().pathname}${location().search}`}
-      icon={<Icon name={iconName()} />}
-      label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === key()}
-      onNavigate={() => host.onNavigate?.("plugin", location())}
-    />
-  );
   return (
     <Show when={routeId()} fallback={link}>
       {(route) => host.sidebarMenus.renderRoute(route())}

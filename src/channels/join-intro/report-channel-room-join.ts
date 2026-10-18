@@ -177,7 +177,6 @@ export async function reportChannelRoomJoin(
         cfg: params.cfg,
         deps: createDefaultDeps(),
         job,
-        trigger: "event",
         deliveryAttemptFence: null,
         message,
         sessionKey: params.route.sessionKey,

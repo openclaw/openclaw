@@ -172,7 +172,8 @@ export function readCodexCatalogDecodeRoute(line: Buffer): CodexCatalogDecodeRou
       for (;;) {
         index = line.indexOf(34, index + 1);
         if (index < 0) {
-          // Keep malformed-payload parsing and diagnostics off the main thread.
+          // A raw newline may precede the ID in a result-first envelope. Keep
+          // recovery off-main until the decoded ID can select its projection.
           return "unresolved";
         }
         let slash = index - 1;

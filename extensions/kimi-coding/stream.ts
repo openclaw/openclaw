@@ -2,13 +2,11 @@ import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import {
   resolveOpenAIRequestReasoning,
   streamSimple,
-  type AssistantMessage,
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   normalizeOpenAICompatibleReasoningReplay,
-  mapAssistantMessageStream,
   streamWithPayloadPatch,
   transformProviderStreamMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
@@ -177,11 +175,20 @@ function parseKimiTaggedToolCalls(text: string): ToolCall[] | null {
   return toolCalls.length > 0 ? toolCalls : null;
 }
 
-function rewriteKimiTaggedToolCallsInMessage(message: AssistantMessage): void {
+function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
+  const record = asOptionalObjectRecord(message);
+  if (!record || !Array.isArray(record.content)) {
+    return;
+  }
+
   let changed = false;
-  const nextContent: AssistantMessage["content"] = [];
-  for (const block of message.content) {
-    const parsed = block.type === "text" ? parseKimiTaggedToolCalls(block.text) : null;
+  const nextContent: unknown[] = [];
+  for (const block of record.content) {
+    const typedBlock = asOptionalObjectRecord(block);
+    const parsed =
+      typedBlock?.type === "text" && typeof typedBlock.text === "string"
+        ? parseKimiTaggedToolCalls(typedBlock.text)
+        : null;
     if (!parsed) {
       nextContent.push(block);
       continue;
@@ -195,18 +202,23 @@ function rewriteKimiTaggedToolCallsInMessage(message: AssistantMessage): void {
     return;
   }
 
-  message.content = nextContent;
-  if (message.stopReason === "stop") {
-    message.stopReason = "toolUse";
+  record.content = nextContent;
+  if (record.stopReason === "stop") {
+    record.stopReason = "toolUse";
   }
 }
 
 function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    mapAssistantMessageStream(underlying(model, context, options), (stream) =>
-      transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
-    );
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        transformProviderStreamMessages(stream, rewriteKimiTaggedToolCallsInMessage),
+      );
+    }
+    return transformProviderStreamMessages(maybeStream, rewriteKimiTaggedToolCallsInMessage);
+  };
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {

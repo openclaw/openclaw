@@ -1,7 +1,6 @@
 import { Type, type Static } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SESSION_LIST_SOURCES = [
   "sidebar",
@@ -17,10 +16,12 @@ export const SESSION_LIST_SOURCES = [
 export const SessionsListParamsSchema = closedObject({
   /** Bounded caller attribution for response diagnostics; does not affect selection. */
   source: Type.Optional(Type.Enum(SESSION_LIST_SOURCES)),
-  /** Omit unchanged sidebar rows; delta:<revision> also accepts a retained window delta. */
+  /** Omit an unchanged sidebar row vector after current selection and authorization. */
   ifRowsRevision: Type.Optional(Type.String({ maxLength: 64 })),
   /** Compact omits capabilities; sidebar/dashboard retain their view and membership facts. */
-  rowMode: Type.Optional(stringLiteralUnion(["compact", "dashboard", "sidebar"])),
+  rowMode: Type.Optional(
+    Type.Union([Type.Literal("compact"), Type.Literal("dashboard"), Type.Literal("sidebar")]),
+  ),
   /** Maximum rows to return; omitted Gateway RPC calls use a bounded default. */
   limit: Type.Optional(Type.Integer({ minimum: 1 })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
@@ -34,7 +35,13 @@ export const SessionsListParamsSchema = closedObject({
   activeOnly: Type.Optional(Type.Boolean()),
   /** Require a real user/channel interaction; excludes synthetic isolated heartbeat rows. */
   requireLastInteraction: Type.Optional(Type.Boolean()),
-  sortBy: Type.Optional(stringLiteralUnion(["updatedAt", "lastInteractionAt", "activity"])),
+  sortBy: Type.Optional(
+    Type.Union([
+      Type.Literal("updatedAt"),
+      Type.Literal("lastInteractionAt"),
+      Type.Literal("activity"),
+    ]),
+  ),
   includeGlobal: Type.Optional(Type.Boolean()),
   includeUnknown: Type.Optional(Type.Boolean()),
   /** Exclude subagent sessions before facets and pagination. */
@@ -69,7 +76,7 @@ export const SessionsListParamsSchema = closedObject({
   /** Filter by the canonical root-session pin state. */
   pinned: Type.Optional(Type.Boolean()),
   /** Limit rows to sessions with an explicitly stored Control UI face preference. */
-  boardFace: Type.Optional(stringLiteralUnion(["chat", "dashboard"])),
+  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
   /** Limit rows by whether a persisted session dashboard exists. */
   hasBoard: Type.Optional(Type.Boolean()),
   /** Filter rows by their immutable creator provenance. */
@@ -84,7 +91,11 @@ export const SessionsListParamsSchema = closedObject({
   profileRelation: Type.Optional(
     closedObject({
       profileId: NonEmptyString,
-      relationship: stringLiteralUnion(["owned", "created", "involving"]),
+      relationship: Type.Union([
+        Type.Literal("owned"),
+        Type.Literal("created"),
+        Type.Literal("involving"),
+      ]),
     }),
   ),
   /** Profile association filter, applied to visible retained identities before pagination. */

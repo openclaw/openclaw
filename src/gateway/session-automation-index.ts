@@ -12,6 +12,8 @@ type SessionAutomationSource = {
 };
 
 let source: SessionAutomationSource | null = null;
+let epochCounter = 0;
+let registeredEpoch = 0;
 
 let memo: {
   jobs: readonly CronJob[] | undefined;
@@ -23,8 +25,25 @@ let memo: {
 // jobs array before awaited persistence, so a read must not consume that delta.
 let publishedKeys: ReadonlySet<string> | undefined;
 
-/** The latest started cron service supplies the display-only automation index. */
-export function registerSessionAutomationSource(next: SessionAutomationSource | null): void {
+/**
+ * Claimed at cron service build time so registration authority follows build
+ * order: a stale service whose start resolves after a config reload cannot
+ * clobber the replacement's registration.
+ */
+export function claimSessionAutomationEpoch(): number {
+  return ++epochCounter;
+}
+
+/** Registered by the gateway cron owner; newer epochs win over stale services. */
+export function registerSessionAutomationSource(
+  next: SessionAutomationSource | null,
+  epoch?: number,
+): void {
+  const effectiveEpoch = epoch ?? claimSessionAutomationEpoch();
+  if (effectiveEpoch < registeredEpoch) {
+    return;
+  }
+  registeredEpoch = effectiveEpoch;
   source = next;
   invalidateSessionAutomationIndex();
 }

@@ -15,6 +15,15 @@ import {
 
 type MatrixMonitorStatusSink = (patch: ChannelAccountSnapshot) => void;
 
+function cloneLastDisconnect(
+  value: ChannelAccountSnapshot["lastDisconnect"],
+): ChannelAccountSnapshot["lastDisconnect"] {
+  if (!value || typeof value === "string") {
+    return value ?? null;
+  }
+  return { ...value };
+}
+
 function formatSyncError(error: unknown): string | null {
   if (!error) {
     return null;
@@ -44,7 +53,10 @@ export function createMatrixMonitorStatusController(params: {
   };
 
   const emit = () => {
-    params.statusSink?.({ ...status });
+    params.statusSink?.({
+      ...status,
+      lastDisconnect: cloneLastDisconnect(status.lastDisconnect),
+    });
   };
 
   const noteConnected = (at = Date.now(), options?: { transportActivity?: boolean }) => {

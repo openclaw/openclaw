@@ -223,6 +223,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
                 { ...runtimeParams },
                 contextEngineProjection,
               ),
+              projection: contextEngineProjection,
               dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
               legacyDynamicToolsFingerprint: codexLegacyDynamicToolsFingerprint(toolBridge.specs),
             })

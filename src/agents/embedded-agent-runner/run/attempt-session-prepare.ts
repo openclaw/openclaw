@@ -161,12 +161,11 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
   const { allCustomTools, sessionToolAllowlist, ...clientToolRuntime } = preparedClientTools;
 
   const { session: activeSession } = await createAgentSession({
-    systemPrompt: input.initialSystemPrompt.trim(),
+    systemPrompt: input.initialSystemPrompt,
     cwd: input.effectiveCwd,
     modelRegistry: attempt.modelRegistry,
     model: attempt.model,
     thinkingLevel: input.agentCoreThinkingLevel,
-    thinkingExplicit: attempt.thinkingExplicit,
     tools: sessionToolAllowlist,
     customTools: allCustomTools,
     sessionManager: input.sessionManager,
@@ -222,9 +221,10 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       : undefined,
   });
   // Publish ownership before post-construction hooks. Outer cleanup must dispose
-  // the session if prompt or terminal-hook installation fails.
+  // the session if tool activation or terminal-hook installation fails.
   input.onSessionCreated(activeSession);
   installToolLoopRecoveryCleanup({ agent: activeSession.agent, runId: attempt.runId });
+  activeSession.setActiveToolsByName(sessionToolAllowlist);
   const setActiveSessionSystemPrompt = (nextSystemPrompt: string) => {
     input.onSystemPromptChanged(nextSystemPrompt);
     activeSession.setBaseSystemPrompt(nextSystemPrompt.trim());
@@ -238,7 +238,7 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     prepareInitialUserTurnReplay: input.prepareInitialUserTurnReplay,
     prepareSystemPromptUpdate,
   });
-  input.onSystemPromptChanged(input.initialSystemPrompt);
+  setActiveSessionSystemPrompt(input.initialSystemPrompt);
   let didDeliverSourceReplyViaMessageTool = false;
   const markSourceReplyDelivered = () => {
     didDeliverSourceReplyViaMessageTool = true;

@@ -241,7 +241,6 @@ function logSlowTransactionHold(params: {
   prepareMs?: number;
   beginMs: number;
   hostAdmissionWaitMs: number;
-  databaseAdmissionWaitMs: number;
   commitMs: number;
 }): void {
   if (
@@ -251,22 +250,13 @@ function logSlowTransactionHold(params: {
   }
   (params.options?.logger ?? transactionLog).warn("slow SQLite transaction hold", {
     async: false,
-    callbackKind: "application-transaction",
     ...transactionDiagnosticLabels(params.db, params.options),
     elapsedMs: params.elapsedMs,
     phases: {
       prepareMs: params.prepareMs,
       beginMs: params.beginMs,
-      // This legacy field includes application work between native statements.
-      sqlMs: Math.max(
-        0,
-        params.elapsedMs -
-          params.hostAdmissionWaitMs -
-          params.databaseAdmissionWaitMs -
-          params.commitMs,
-      ),
+      sqlMs: Math.max(0, params.elapsedMs - params.hostAdmissionWaitMs - params.commitMs),
       hostAdmissionWaitMs: params.hostAdmissionWaitMs,
-      databaseAdmissionWaitMs: params.databaseAdmissionWaitMs,
       commitMs: params.commitMs,
     },
     isMainThread,
@@ -442,9 +432,6 @@ function runSqliteTransactionSync<T>(
     sql: mode === "immediate" ? "BEGIN IMMEDIATE" : "BEGIN",
     step: "begin",
   });
-  if (timing) {
-    timing.transactions.count += 1;
-  }
   return settleSqliteTransactionSync(db, operation, mode, beginMs, prepareMs, options);
 }
 
@@ -476,20 +463,14 @@ function settleSqliteTransactionSync<T>(
   const timing = currentSqliteOperationTiming();
   const transactionStartedAt = Date.now();
   const admissionWaitBefore = timing?.hostAdmissionWaitMs ?? 0;
-  const databaseAdmissionWaitBefore = timing?.databaseAdmissionWaitMs ?? 0;
   let commitMs = 0;
   const commit = () => {
     const startedAt = Date.now();
-    const databaseAdmissionWaitBeforeCommit = timing?.databaseAdmissionWaitMs ?? 0;
     try {
       prepareSqliteTransactionCommit(db);
       execTimedTransactionStep({ db, options, sql: "COMMIT", step: "commit" });
     } finally {
-      // Schema publication can exchange metadata during COMMIT; count that wait only once.
-      commitMs +=
-        Date.now() -
-        startedAt -
-        ((timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBeforeCommit);
+      commitMs += Date.now() - startedAt;
     }
   };
   let commitStarted = false;
@@ -514,8 +495,6 @@ function settleSqliteTransactionSync<T>(
     try {
       const elapsedMs = Date.now() - transactionStartedAt;
       const hostAdmissionWaitMs = (timing?.hostAdmissionWaitMs ?? 0) - admissionWaitBefore;
-      const databaseAdmissionWaitMs =
-        (timing?.databaseAdmissionWaitMs ?? 0) - databaseAdmissionWaitBefore;
       logSlowTransactionHold({
         db,
         elapsedMs,
@@ -524,7 +503,6 @@ function settleSqliteTransactionSync<T>(
         prepareMs,
         beginMs,
         hostAdmissionWaitMs,
-        databaseAdmissionWaitMs,
         commitMs,
       });
     } catch {

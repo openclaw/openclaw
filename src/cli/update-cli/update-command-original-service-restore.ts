@@ -44,13 +44,15 @@ export async function restoreOriginalManagedServiceDefinition(params: {
         assertOwned();
         const current = await fingerprintGatewayServiceDefinition(state.command);
         assertOwned();
-        const expectedPin =
-          original.definition.runtimePin &&
-          readDaemonRuntimePinForInstall({ kind: "gateway", env }, state.command, true);
+        const expectedPin = readDaemonRuntimePinForInstall(
+          { kind: "gateway", env },
+          state.command,
+          true,
+        );
         assertOwned();
         if (
           current === original.definition.fingerprint &&
-          expectedPin?.revision === original.definition.runtimePin?.revision
+          expectedPin.revision === original.definition.runtimePin.revision
         ) {
           return;
         }
@@ -63,7 +65,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
             "Retained service has operator-owned definition overrides; restoration refused.",
           );
         }
-        if (!expectedPin || expectedPin.revision !== original.definition.reboundRuntimePin) {
+        if (expectedPin.revision !== original.definition.reboundRuntimePin) {
           throw new Error("Runtime intent changed after this update rebind; restoration refused.");
         }
         const definition = resolveManagedGatewayServiceCommand(command) ?? command;
@@ -71,7 +73,7 @@ export async function restoreOriginalManagedServiceDefinition(params: {
           env,
           stdout: params.stdout,
           preserveAutoStart: true,
-          runtimePinUpdate: { expected: expectedPin, pin: original.definition.runtimePin?.pin },
+          runtimePinUpdate: { expected: expectedPin, pin: original.definition.runtimePin.pin },
           assertCurrent: assertOwned,
           beforeMutation: async () => {
             await assertOriginalServiceStateCompatible(original, assertOwned);

@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
+import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 export type RoleContentMessage = {
   role: string;
@@ -179,7 +180,22 @@ export function shouldPreserveAssistantControlReplyText(message: Record<string, 
   if (isProjectedForwardedMessage(message)) {
     return true;
   }
-  return hasAssistantDisplayableNonTextContent(message);
+  if (!hasAssistantDisplayableNonTextContent(message)) {
+    return false;
+  }
+  const content = message.text ?? message.content;
+  const texts =
+    typeof content === "string"
+      ? [content]
+      : Array.isArray(content)
+        ? content.flatMap((block) => {
+            const typed = readRecord(block);
+            return isAssistantTextContentType(typed?.type) && typeof typed?.text === "string"
+              ? [typed.text]
+              : [];
+          })
+        : [];
+  return texts.length > 0 && texts.every((text) => isSuppressedControlReplyText(text));
 }
 
 export function asRoleContentMessage(message: Record<string, unknown>): RoleContentMessage | null {
@@ -188,7 +204,6 @@ export function asRoleContentMessage(message: Record<string, unknown>): RoleCont
     return null;
   }
   return {
-    ...message,
     role,
     ...(message.content !== undefined
       ? { content: message.content }

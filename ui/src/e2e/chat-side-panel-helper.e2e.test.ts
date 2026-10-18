@@ -47,11 +47,11 @@ suite.define(() => {
           const revealBatch = (event: Event) => {
             if (
               !(event.target instanceof HTMLElement) ||
-              !event.target.matches(".chat-pane__layout-menu > .oc-menu")
+              !event.target.matches(".chat-pane__layout-menu")
             ) {
               return;
             }
-            document.removeEventListener("overlay-show", revealBatch);
+            document.removeEventListener("wa-show", revealBatch);
             (window as MockGatewayWindow).openclawControlUiE2eGateway?.emit("sessions.changed", {
               sessionKey: childRow.key,
               reason: "run-start",
@@ -60,7 +60,7 @@ suite.define(() => {
               ancestorSessions: [parentRow],
             });
           };
-          document.addEventListener("overlay-show", revealBatch);
+          document.addEventListener("wa-show", revealBatch);
         },
         { parentRow: runningParent, childRow: child },
       );

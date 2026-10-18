@@ -13,8 +13,10 @@ import {
   readUserProfileAliasRevision,
   readUserProfileVersion,
 } from "./user-profile-events.js";
-import { readUserProfileEmailBindings } from "./user-profile-identity.read.js";
-import { readUserProfileSnapshotSync } from "./user-profile-list-item.test-support.js";
+import {
+  readUserProfileSnapshotSync,
+  readUserProfileEmailBindings,
+} from "./user-profile-identity.read.js";
 import { prepareUserProfileCatalog, readUserProfileAliases } from "./user-profile-list.js";
 import {
   linkEmail,

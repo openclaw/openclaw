@@ -6,10 +6,7 @@ import {
   projectRestartRecoveryDeliverySettlement,
   resolveRestartRecoveryTerminalDeliveryDisposition,
 } from "./restart-recovery-receipt-state.js";
-import {
-  getRestartRecoveryPendingFinalSourceRunId,
-  mergeRestartRecoveryTerminalRunIds,
-} from "./restart-recovery-state.js";
+import { mergeRestartRecoveryTerminalRunIds } from "./restart-recovery-state.js";
 import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type {
   SessionActorAppend,
@@ -23,7 +20,7 @@ import type {
 } from "./session-actor-contract.js";
 import { reduceSessionActorEntry } from "./session-actor-reducers.js";
 import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
-import { reduceSessionEntryPatch } from "./session-entry-patch-operation.js";
+import { projectSessionEntryPatch } from "./session-entry-patch-operation.js";
 import { projectPendingFinalDeliverySettlement } from "./session-pending-final-settlement.js";
 import type {
   PendingInputMutation,
@@ -283,18 +280,7 @@ export function applySessionActorPhaseWithBackend(
       break;
     }
     case "session.actor.completeTurn": {
-      const { turn: input, bookkeeping } = command.input;
-      const pendingFinalDelivery = command.input.pendingFinalDelivery
-        ? {
-            ...command.input.pendingFinalDelivery,
-            sourceRunId: hot.entry
-              ? getRestartRecoveryPendingFinalSourceRunId(
-                  hot.entry,
-                  command.input.pendingFinalDelivery.context,
-                )
-              : undefined,
-          }
-        : undefined;
+      const { pendingFinalDelivery, turn: input, bookkeeping } = command.input;
       if (bookkeeping) {
         if (requireEntry().activeWriterRunId !== bookkeeping.writerRunId) {
           throw new SessionActorStaleStateError(
@@ -439,10 +425,13 @@ export function applySessionActorPhaseWithBackend(
   }
   if (command.type === "session.actor.completeTurn" && command.input.restartClaimCleanup) {
     const entry = entryUpdate ?? requireEntry();
-    const patch = reduceSessionEntryPatch(command.input.restartClaimCleanup, entry, entry);
-    if (patch) {
-      entryUpdate = { ...entry, ...patch };
-    }
+    entryUpdate =
+      projectSessionEntryPatch({
+        existing: entry,
+        writeBase: entry,
+        sessionKey,
+        operation: command.input.restartClaimCleanup,
+      }) ?? entryUpdate;
   }
   if (entryUpdate) {
     backend.writeEntry(entryUpdate);

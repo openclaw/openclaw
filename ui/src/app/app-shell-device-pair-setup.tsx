@@ -48,7 +48,7 @@ export function DevicePairSetup(props: {
                   </p>
                 </div>
               </header>
-              <openclaw-modal-actions class="device-pair-setup__footer">
+              <footer class="device-pair-setup__footer">
                 <Show when={state().failed}>
                   <button
                     class="btn btn--primary"
@@ -61,7 +61,7 @@ export function DevicePairSetup(props: {
                 <button class="btn btn--ghost" type="button" onClick={() => props.props.onClose()}>
                   {t("common.close")}
                 </button>
-              </openclaw-modal-actions>
+              </footer>
             </section>
           </openclaw-modal-dialog>
         }

@@ -651,7 +651,6 @@ const AgentToolsSchema = z
   .optional();
 
 export const AgentEntrySchema = AgentEntryBaseSchema.extend({
-  nativeRuntimeConsent: z.array(z.string().trim().min(1)).optional(),
   memory: z
     .strictObject({
       search: MemorySearchSchema,

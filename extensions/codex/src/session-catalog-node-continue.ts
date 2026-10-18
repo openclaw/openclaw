@@ -15,7 +15,6 @@ import {
   CODEX_CLI_SESSION_SOURCE_CAPABILITY,
   CODEX_CLI_SESSION_SOURCE_UPGRADE_MESSAGE,
 } from "./node-cli-sessions.js";
-import { CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS } from "./session-catalog-limits.js";
 import {
   createOrReuseNodeAdoptedSession,
   finalizeNodeAdoptedSession,
@@ -56,6 +55,9 @@ const CODEX_NODE_CONTINUE_COMMANDS = [
   CODEX_CLI_SESSION_RESUME_COMMAND,
 ] as const;
 
+// Catalog refresh is fail-soft: one unhealthy machine must not hold the whole sidebar.
+// The node invoke keeps running so cold native discovery can warm the next poll.
+const NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS = 8_000;
 const continueNodeAdoption =
   createSessionCatalogAdoptionCoordinator<
     Awaited<ReturnType<typeof continueNodeCodexSessionInner>>
@@ -161,7 +163,7 @@ export async function listPairedNode(params: {
   publishSessionCatalogHost(params, eventualHost);
   return await withTimeout(
     eventualHost,
-    CODEX_CATALOG_HOST_RESPONSE_TIMEOUT_MS,
+    NODE_CATALOG_LIST_RESPONSE_TIMEOUT_MS,
     "paired node Codex session catalog timed out",
   ).catch(failedHost);
 }

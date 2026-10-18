@@ -150,10 +150,9 @@ function createQaPartitionEvidenceOwner(params: {
     generatedAt: new Date().toISOString(),
     evidenceMode: params.evidenceMode,
   });
-  const invocation = createQaEvidenceInvocation(params);
-  const scheduledAnchors = invocation.anchors;
-  const scheduledIds = new Set(scheduledAnchors.map((anchor) => anchor.id));
-  let current = invocation.snapshot(options());
+  const initial = createQaEvidenceInvocation(params);
+  const scheduledIds = new Set(initial.anchors.map((anchor) => anchor.id));
+  let current = initial.snapshot(options());
   let active = false;
   const parentFailures = new Map<number, string>();
   const rawRowOrder = new Map<string, number>();
@@ -170,12 +169,21 @@ function createQaPartitionEvidenceOwner(params: {
       return { entry, order: rawRowOrder.get(key)! };
     });
   };
+  const restore = () =>
+    createQaEvidenceInvocation({
+      ...params,
+      anchors: resolveQaEvidenceContainment(current.occurrences, current.entries).rootInstances,
+      continuation: current,
+    });
   const receive = (summary: QaEvidenceSummaryV3Json) => {
     const anchors = resolveQaEvidenceContainment(
       summary.occurrences,
       summary.entries,
     ).rootInstances;
-    if (JSON.stringify(anchors.map((item) => item.id)) !== JSON.stringify([...scheduledIds])) {
+    if (
+      JSON.stringify(anchors.map((item) => item.id)) !==
+      JSON.stringify(initial.anchors.map((item) => item.id))
+    ) {
       throw new Error("partition evidence replaced its scheduled instances");
     }
     const child = createQaEvidenceInvocation({
@@ -183,17 +191,19 @@ function createQaPartitionEvidenceOwner(params: {
       anchors,
       continuation: summary,
     });
+    const next = restore();
     for (const [index, anchor] of anchors.entries()) {
       const input = child.childInput(index);
-      invocation.importChild(index, input);
+      next.importChild(index, input);
       if (anchor.scenario?.kind === "instance") {
-        invocation.select(index, anchor.scenario.resultOccurrenceId);
+        next.select(index, anchor.scenario.resultOccurrenceId);
       }
     }
-    current = invocation.snapshot(options());
+    current = next.snapshot(options());
     orderedRows(current.entries);
   };
   const failure = (details: string, final: boolean, status: "fail" | "blocked" = "fail") => {
+    const invocation = restore();
     const diagnostics = buildQaSuiteEvidenceSummary({
       artifactPaths: [],
       // This diagnostic identifies the requested lane, not a connected transport.
@@ -252,7 +262,7 @@ function createQaPartitionEvidenceOwner(params: {
   ) => {
     receive(evidence);
     const selectedIds = new Set(
-      invocation.anchors.flatMap((anchor) =>
+      restore().anchors.flatMap((anchor) =>
         anchor.scenario?.kind === "instance" && anchor.scenario.resultOccurrenceId !== null
           ? [anchor.scenario.resultOccurrenceId]
           : [],
@@ -265,6 +275,7 @@ function createQaPartitionEvidenceOwner(params: {
     ) {
       throw new Error("partition result does not match its selected observation");
     }
+    const invocation = restore();
     const remaining = [...results];
     const normalized: QaUnifiedPartitionResult["scenarioResults"] = [];
     const startedInstances = new Set(
@@ -336,11 +347,11 @@ function createQaPartitionEvidenceOwner(params: {
     return normalized;
   };
   return {
-    anchors: scheduledAnchors,
+    anchors: initial.anchors,
     input() {
       active = true;
       return {
-        evidenceAnchors: invocation.anchors,
+        evidenceAnchors: restore().anchors,
         evidenceContinuation: current,
         onEvidence: receive,
       };

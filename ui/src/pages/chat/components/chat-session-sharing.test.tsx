@@ -1,7 +1,6 @@
 import { createSignal, flush } from "solid-js";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatSessionSharing, type ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
 
 function renderSharing(props: Partial<ChatSessionSharingProps>) {
@@ -34,18 +33,6 @@ function sharingSession(overrides: Partial<NonNullable<ChatSessionSharingProps["
 
 let container: HTMLDivElement | undefined;
 
-// JSDOM has no visibility API; browser menu tests cover layout and hidden controls.
-beforeAll(() => {
-  Object.defineProperty(Element.prototype, "checkVisibility", {
-    configurable: true,
-    value: () => true,
-  });
-});
-
-afterAll(() => {
-  Reflect.deleteProperty(Element.prototype, "checkVisibility");
-});
-
 afterEach(() => {
   container?.remove();
   container = undefined;
@@ -68,46 +55,23 @@ function render(props: ChatSessionSharingProps, root: HTMLElement) {
     },
     { container: root },
   );
-  flush();
 }
 
-async function openMenu(root: HTMLElement) {
-  const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel");
-  const trigger = root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger");
-  if (panel && trigger && !trigger.disabled && !panel.matches(":popover-open")) {
-    trigger.click();
-    await waitForSolid(() => expect(panel.matches(":popover-open")).toBe(true));
-  }
-  return panel;
-}
-
-async function select(root: HTMLElement, value: string) {
-  await openMenu(root);
-  const item = root.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
-  if (!item) {
-    throw new Error(`Expected sharing item: ${value}`);
-  }
-  item.click();
-  await Promise.resolve();
-  flush();
-}
-
-async function mount(props: ChatSessionSharingProps, open = true) {
+function mount(props: ChatSessionSharingProps, open = true) {
   container = document.createElement("div");
   document.body.append(container);
   render(props, container);
   if (open) {
-    await openMenu(container);
+    container.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-show"));
+    flush();
   }
   return container;
 }
 
 describe("chat session sharing menu", () => {
-  it("reads people only on opening and retains the latest member rows across reopening", async () => {
-    const onOpen = vi.fn();
+  it("defers people until opening and uses the latest sharing state", () => {
     const sharing = (count: number) =>
       renderSharing({
-        onOpen,
         state: {
           loading: false,
           result: {
@@ -123,26 +87,25 @@ describe("chat session sharing menu", () => {
           },
         },
       });
-    const root = await mount(sharing(100), false);
-    expect(root.querySelector(".chat-pane__sharing-trigger")).not.toBeNull();
-    expect(onOpen).not.toHaveBeenCalled();
+    const root = mount(sharing(100), false);
+    expect(root.querySelector("button[slot='trigger']")).not.toBeNull();
+    expect(root.querySelector("wa-dropdown-item")).toBeNull();
     render(sharing(101), root);
-    expect(onOpen).not.toHaveBeenCalled();
-    const panel = (await openMenu(root))!;
-    expect(panel.matches(":popover-open")).toBe(true);
-    expect(onOpen).toHaveBeenCalledOnce();
-    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(101);
-    const member = root.querySelector('[data-value="member:person-100"]');
-    panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(root.querySelector("wa-dropdown-item")).toBeNull();
+    const dropdown = root.querySelector("wa-dropdown")!;
+    dropdown.dispatchEvent(new CustomEvent("wa-show"));
     flush();
-    expect(panel.matches(":popover-open")).toBe(false);
-    await openMenu(root);
-    expect(root.querySelector('[data-value="member:person-100"]')).toBe(member);
+    expect(root.querySelectorAll(".chat-pane__sharing-member")).toHaveLength(101);
+    const member = root.querySelector('[value="member:person-100"]');
+    dropdown.dispatchEvent(new CustomEvent("wa-after-hide"));
+    dropdown.dispatchEvent(new CustomEvent("wa-show"));
+    flush();
+    expect(root.querySelector('[value="member:person-100"]')).toBe(member);
   });
 
   it.each(["draft"] as const)(
     "keeps a world-readable %s session visibly public after its menu closes",
-    async (visibility) => {
+    (visibility) => {
       const session = {
         key: "agent:main:current",
         sessionId: "session-current",
@@ -169,12 +132,8 @@ describe("chat session sharing menu", () => {
           },
           onPublicShareChange: vi.fn(),
         });
-      const root = await mount(renderIndicator(true));
+      const root = mount(renderIndicator(true));
 
-      const panel = root.querySelector<HTMLElement>(".chat-pane__sharing-panel")!;
-      panel.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-      flush();
-      expect(panel.matches(":popover-open")).toBe(false);
       const indicator = root.querySelector(".chat-pane__public-share-indicator");
       expect(indicator?.textContent?.trim()).toBe("Public");
       expect(indicator?.getAttribute("aria-label")).toContain("anyone can read");
@@ -184,11 +143,11 @@ describe("chat session sharing menu", () => {
     },
   );
 
-  it("keeps disabling public access separate from team visibility", async () => {
+  it("keeps disabling public access separate from team visibility", () => {
     const onPublicShareChange = vi.fn();
     const onCopyPublicLink = vi.fn();
     const onVisibilityChange = vi.fn();
-    const root = await mount(
+    const root = mount(
       renderSharing({
         session: {
           key: "agent:main:current",
@@ -214,20 +173,27 @@ describe("chat session sharing menu", () => {
         onCopyPublicLink,
       }),
     );
+    const dropdown = root.querySelector("wa-dropdown");
     expect(root.textContent).toContain("Public access");
     expect(root.textContent).toContain("anyone can read without signing in");
-    await select(root, "public:disable");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "public:disable" } },
+      }),
+    );
     expect(onPublicShareChange).toHaveBeenCalledWith(false);
     expect(onVisibilityChange).not.toHaveBeenCalled();
-    await select(root, "public:copy");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", { detail: { item: { value: "public:copy" } } }),
+    );
     expect(onCopyPublicLink).toHaveBeenCalledOnce();
   });
 
   it.each(["loading", "read-only", "member"] as const)(
     "refuses public mutations for %s controls",
-    async (blocked) => {
+    (blocked) => {
       const onPublicShareChange = vi.fn();
-      const root = await mount(
+      const root = mount(
         renderSharing({
           session: {
             key: "agent:main:current",
@@ -251,24 +217,24 @@ describe("chat session sharing menu", () => {
           onPublicShareChange,
         }),
       );
-      const dropdown = root.querySelector(".chat-pane__sharing-panel");
+      const dropdown = root.querySelector("wa-dropdown");
       if (blocked === "member") {
         expect(dropdown).toBeNull();
       } else {
-        expect(root.querySelector('[data-value="public:enable"]')?.hasAttribute("disabled")).toBe(
-          true,
+        expect(root.querySelector('[value="public:enable"]')?.hasAttribute("disabled")).toBe(true);
+        dropdown?.dispatchEvent(
+          new CustomEvent("wa-select", { detail: { item: { value: "public:enable" } } }),
         );
-        await select(root, "public:enable");
       }
       expect(onPublicShareChange).not.toHaveBeenCalled();
     },
   );
 
-  it("shows the owner picker with policy-gated modes and known identities", async () => {
+  it("shows the owner picker with policy-gated modes and known identities", () => {
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();
     const navigate = vi.fn();
-    const root = await mount(
+    const root = mount(
       renderSharing({
         session: sharingSession({ visibility: "read-only" }),
         state: {
@@ -297,18 +263,17 @@ describe("chat session sharing menu", () => {
         onMemberChange,
       }),
     );
-    expect(root.querySelector(".chat-pane__sharing-panel")).not.toBeNull();
+    const dropdown = root.querySelector("wa-dropdown");
+    expect(dropdown).not.toBeNull();
     expect(root.textContent).toContain("Shared");
     expect(root.textContent).toContain("Read-only");
     expect(root.textContent).not.toContain("Suggest");
     expect(root.textContent).toContain("Alice");
-    expect(root.querySelector('button[data-value="member:owner"]')).toBeNull();
+    expect(root.querySelector('wa-dropdown-item[value="member:owner"]')).toBeNull();
     expect(root.querySelector(".chat-pane__sharing-owner-title")?.textContent?.trim()).toBe(
       "Owner",
     );
-    expect(
-      root.querySelector(".chat-pane__sharing-owner .session-menu__text")?.textContent?.trim(),
-    ).toBe("Owner");
+    expect(root.querySelector(".chat-pane__sharing-owner")?.textContent?.trim()).toBe("Owner");
     expect(
       root.querySelector(".chat-pane__sharing-owner openclaw-session-owner-chip"),
     ).not.toBeNull();
@@ -316,24 +281,27 @@ describe("chat session sharing menu", () => {
       ".chat-pane__sharing-owner a.person-activity-link",
     );
     expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
-    const ownerAvatarLink = root.querySelector<HTMLAnchorElement>(
-      ".chat-pane__sharing-owner a.person-activity-avatar-link",
-    );
-    expect(ownerAvatarLink?.tabIndex).toBe(-1);
-    expect(ownerAvatarLink?.getAttribute("aria-hidden")).toBe("true");
     expect(root.querySelector(".session-menu__separator")).toBeNull();
 
     ownerLink?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     expect(navigate).toHaveBeenCalledWith("owner", "Owner");
 
-    await select(root, "visibility:shared");
-    await select(root, "member:alice");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:shared" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:alice" } },
+      }),
+    );
     expect(onVisibilityChange).toHaveBeenCalledWith("shared");
     expect(onMemberChange).toHaveBeenCalledWith("alice", true);
   });
 
-  it("renders member presentation from identity.type, not from ID spelling", async () => {
-    const root = await mount(
+  it("renders member presentation from identity.type, not from ID spelling", () => {
+    const root = mount(
       renderSharing({
         session: sharingSession({}),
         state: {
@@ -361,12 +329,12 @@ describe("chat session sharing menu", () => {
     );
 
     const humans = [
-      root.querySelector('button[data-value="member:profile-vyctor"]'),
-      root.querySelector('button[data-value="member:channel:chn_design"]'),
+      root.querySelector('wa-dropdown-item[value="member:profile-vyctor"]'),
+      root.querySelector('wa-dropdown-item[value="member:channel:chn_design"]'),
     ];
     const nonHumans = [
-      root.querySelector('button[data-value="member:discord:channel:operations"]'),
-      root.querySelector('button[data-value="member:channel:audit"]'),
+      root.querySelector('wa-dropdown-item[value="member:discord:channel:operations"]'),
+      root.querySelector('wa-dropdown-item[value="member:channel:audit"]'),
     ];
 
     for (const human of humans) {
@@ -378,8 +346,8 @@ describe("chat session sharing menu", () => {
     }
   });
 
-  it("keeps the linked owner beside the draft marker for a non-manager", async () => {
-    const root = await mount(
+  it("keeps the linked owner beside the draft marker for a non-manager", () => {
+    const root = mount(
       renderSharing({
         session: {
           key: "agent:main:main",
@@ -405,25 +373,22 @@ describe("chat session sharing menu", () => {
         onMemberChange: vi.fn(),
       }),
     );
-    expect(root.querySelector(".chat-pane__sharing-panel")).toBeNull();
+    expect(root.querySelector("wa-dropdown")).toBeNull();
     const indicator = root.querySelector(".chat-pane__draft-indicator");
     expect(indicator?.querySelector("svg")).not.toBeNull();
     expect(indicator?.textContent?.trim()).toBe("");
-    const ownerLink = root.querySelector<HTMLAnchorElement>(
-      "a.person-activity-avatar-link:has(openclaw-session-owner-chip)",
-    );
-    expect(ownerLink?.getAttribute("href")).toBe("/activity/owner");
-    expect(ownerLink?.tabIndex).toBe(0);
-    expect(ownerLink?.hasAttribute("aria-hidden")).toBe(false);
-    ownerLink?.focus();
-    expect(document.activeElement).toBe(ownerLink);
+    expect(
+      root
+        .querySelector("a.person-activity-avatar-link:has(openclaw-session-owner-chip)")
+        ?.getAttribute("href"),
+    ).toBe("/activity/owner");
   });
 
-  it("keeps read-only owner controls visible but refuses disabled selections", async () => {
+  it("keeps read-only owner controls visible but refuses disabled synthetic actions", () => {
     const onOpen = vi.fn();
     const onVisibilityChange = vi.fn();
     const onMemberChange = vi.fn();
-    const root = await mount(
+    const root = mount(
       renderSharing({
         session: sharingSession({}),
         state: {
@@ -455,36 +420,51 @@ describe("chat session sharing menu", () => {
         onMemberChange,
       }),
     );
-    expect(root.querySelector(".chat-pane__sharing-panel")).not.toBeNull();
+    const dropdown = root.querySelector("wa-dropdown");
+    expect(dropdown).not.toBeNull();
     expect(
-      root.querySelector<HTMLElement>('button[data-value="visibility:read-only"]')?.title,
+      root.querySelector<HTMLElement>('wa-dropdown-item[value="visibility:read-only"]')?.title,
     ).toBe("Requires write");
-    expect(root.querySelector('button[data-value="member:alice"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
-    expect(root.querySelector('button[data-value="member:bob"]')?.hasAttribute("disabled")).toBe(
-      true,
-    );
+    expect(
+      root.querySelector('wa-dropdown-item[value="member:alice"]')?.hasAttribute("disabled"),
+    ).toBe(true);
+    expect(
+      root.querySelector('wa-dropdown-item[value="member:bob"]')?.hasAttribute("disabled"),
+    ).toBe(true);
     for (const identityId of ["alice", "bob"]) {
-      const item = root.querySelector<HTMLElement>(`button[data-value="member:${identityId}"]`);
+      const item = root.querySelector<HTMLElement>(
+        `wa-dropdown-item[value="member:${identityId}"]`,
+      );
       expect(item?.title).toBe("Requires write");
       expect(item?.querySelector(".chat-pane__sharing-member-label")?.hasAttribute("title")).toBe(
         false,
       );
     }
 
-    await select(root, "visibility:read-only");
-    await select(root, "member:alice");
-    await select(root, "member:bob");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:read-only" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:alice" } },
+      }),
+    );
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "member:bob" } },
+      }),
+    );
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).not.toHaveBeenCalled();
     expect(onMemberChange).not.toHaveBeenCalled();
   });
 
-  it("disables opening when sharing reads are unavailable", async () => {
+  it("disables opening when sharing reads are unavailable", () => {
     const onOpen = vi.fn();
-    const root = await mount(
+    const root = mount(
       renderSharing({
         session: sharingSession({}),
         state: undefined,
@@ -498,14 +478,14 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
       true,
     );
-    root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    root.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-show"));
     expect(onOpen).not.toHaveBeenCalled();
   });
 
-  it("keeps visibility controls usable without member-list support", async () => {
+  it("keeps visibility controls usable without member-list support", () => {
     const onOpen = vi.fn();
     const onVisibilityChange = vi.fn();
-    const root = await mount(
+    const root = mount(
       renderSharing({
         session: sharingSession({}),
         state: undefined,
@@ -520,10 +500,15 @@ describe("chat session sharing menu", () => {
     expect(root.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled).toBe(
       false,
     );
-    expect(root.querySelector('button[data-value="visibility:read-only"]')).not.toBeNull();
+    expect(root.querySelector('wa-dropdown-item[value="visibility:read-only"]')).not.toBeNull();
     expect(root.textContent).not.toContain("People");
 
-    await select(root, "visibility:read-only");
+    const dropdown = root.querySelector("wa-dropdown");
+    dropdown?.dispatchEvent(
+      new CustomEvent("wa-select", {
+        detail: { item: { value: "visibility:read-only" } },
+      }),
+    );
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
@@ -531,8 +516,8 @@ describe("chat session sharing menu", () => {
 
   it.each([{ name: "visibility-only", membersAvailable: false }])(
     "shows rejected sharing changes for $name Gateways",
-    async ({ membersAvailable }) => {
-      const root = await mount(
+    ({ membersAvailable }) => {
+      const root = mount(
         renderSharing({
           session: sharingSession({}),
           state: { loading: false, error: "Visibility update rejected" },

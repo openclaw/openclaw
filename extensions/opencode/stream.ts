@@ -6,10 +6,6 @@ import {
   type ToolCall,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  mapAssistantMessageStream,
-  wrapProviderPayloadHook,
-} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const WEB_SEARCH = "web_search";
@@ -242,11 +238,12 @@ export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): St
     if (model.api !== "openai-responses") {
       return underlying(model, context, options);
     }
+    const originalOnPayload = options?.onPayload;
     const state: TransformState = { fields: new Map() };
     const maybeStream = underlying(model, context, {
       ...options,
-      onPayload: wrapProviderPayloadHook(options?.onPayload, (payload, replacement) => {
-        const finalPayload = replacement ?? payload;
+      async onPayload(payload, payloadModel) {
+        const finalPayload = (await originalOnPayload?.(payload, payloadModel)) ?? payload;
         state.fields = new Map();
         state.alias = undefined;
         if (isRecord(finalPayload)) {
@@ -259,8 +256,11 @@ export function wrapOpencodeProviderStream(ctx: ProviderWrapStreamFnContext): St
           state.alias = aliasWebSearch(finalPayload);
         }
         return finalPayload;
-      }),
+      },
     });
-    return mapAssistantMessageStream(maybeStream, (stream) => wrapResponseStream(stream, state));
+    const wrap = (stream: ProviderStream) => wrapResponseStream(stream, state);
+    return maybeStream && typeof maybeStream === "object" && "then" in maybeStream
+      ? Promise.resolve(maybeStream).then(wrap)
+      : wrap(maybeStream);
   };
 }

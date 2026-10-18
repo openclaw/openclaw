@@ -363,12 +363,11 @@ export function registerPackageRootRollbackTests(
     if (scenario === "backup restore failed") {
       expect(outcome.rolledBack).toBe(false);
       expect(outcome.result).toMatchObject({
-        reason: "doctor-failed",
+        reason: "service-definition-rollback-unverified",
         root: previousRoot,
         recovery: { packageRollbackVerified: true, serviceRestartSafe: false },
         rollbackOutcome: { status: "failed" },
       });
-      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
       expect(await fs.readFile(path.join(previousRoot, "package.json"), "utf8")).toContain(
         previousPackageVersion,
       );
@@ -379,8 +378,7 @@ export function registerPackageRootRollbackTests(
       expect(outcome.rolledBack).toBe(false);
       expect(await fs.readFile(command.sourcePath!)).toEqual(definitionBeforeRollback);
       expect(mocks.child).not.toHaveBeenCalled();
-      expect(outcome.result.reason).toBe("doctor-failed");
-      expect(outcome.result).not.toHaveProperty("recovery.dataAtRisk");
+      expect(outcome.result.reason).toBe("service-definition-rollback-unverified");
       expect(outcome.result.rollbackOutcome).toEqual({
         status: "not-attempted",
         reason: "service-definition-rollback-unverified",

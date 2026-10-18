@@ -106,7 +106,12 @@ export class DiscordThreadInitialMessageError extends Error {
       describeDiscordThreadInitialMessageFailure(initialMessageDelivery);
     super(`${initialMessageWarning}: ${initialMessageError}`, { cause: error });
     this.name = "DiscordThreadInitialMessageError";
-    this.initialMessageDelivery = initialMessageDelivery;
+    this.initialMessageDelivery = initialMessageDelivery
+      ? {
+          ...initialMessageDelivery,
+          deliveredMessageIds: [...initialMessageDelivery.deliveredMessageIds],
+        }
+      : undefined;
     this.initialMessageError = initialMessageError;
     this.initialMessageWarning = initialMessageWarning;
     this.thread = thread;

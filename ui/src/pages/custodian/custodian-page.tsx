@@ -2,7 +2,6 @@ import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gatew
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import "../../components/openclaw-mascot.ts";
-import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -255,7 +254,7 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sidebar-attention": SidebarAttentionElementAttributes;
+      "openclaw-sidebar-attention": HTMLAttributes<HTMLElement>;
     }
   }
 }

@@ -9,16 +9,16 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { createIdleImport } from "../../lib/idle-import.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
+import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lib/subscriptions-controller.ts";
-import type { SolidBridgeElement } from "../../lit/solid-bridge.ts";
+} from "../../lit/subscriptions-controller.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
-import type { ChatWelcomeProps } from "../chat/components/chat-welcome.tsx";
+import type { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import type { NewSessionComposerOptions } from "./composer.tsx";
@@ -336,6 +336,7 @@ export class NewSessionPageOwner extends ControllerHost {
     this.place.resetDraft();
     this.submission.resetDraft();
     this.messageOwnerKey = catalog.routeKey(this.data);
+    this.browser.clearPopoverHiding();
     closeAgentPicker(this.host);
     this.browser.close();
     this.connectMachine.close();
@@ -426,7 +427,7 @@ export class NewSessionPageOwner extends ControllerHost {
     };
   }
 
-  welcomeOptions(): Omit<ChatWelcomeProps, "composer"> {
+  welcomeOptions(): Omit<Parameters<typeof renderWelcomeState>[0], "composer"> {
     const agent = this.place.selectedAgent();
     const identity = this.context?.agentIdentity.get(this.place.agentId);
     const gateway = this.context?.gateway.snapshot;

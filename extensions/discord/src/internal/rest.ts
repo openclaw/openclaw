@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { gunzipSync } from "node:zlib";
 import {
   captureChannelReadAuthority,
@@ -246,6 +247,11 @@ export class RequestClient {
         throw new DiscordError(response, parsed);
       }
       return parsed;
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`Discord request failed: ${inspect(error)}`, { cause: error });
     } finally {
       clearTimeout(timeout);
       this.requestControllers.delete(controller);

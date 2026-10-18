@@ -26,7 +26,7 @@ export async function cleanupPendingWorkspaceResultOrphans(
   admit: WorkerPlacementRecoveryAdmission,
   pass: PendingWorkspaceResultOrphanCleanup,
 ): Promise<boolean> {
-  if (deps.isShuttingDown?.() || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
+  if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
     return false;
   }
   const { placements } = deps;
@@ -35,9 +35,6 @@ export async function cleanupPendingWorkspaceResultOrphans(
   // once per pass; a failed resolution stays uncached and is retried on the next sweep.
   const workspaceSessions = new Map<string, string[]>();
   for (const placement of pass.placements) {
-    if (deps.isShuttingDown?.()) {
-      return false;
-    }
     let root = rootsBySession.get(placement.sessionId);
     if (root === undefined) {
       try {
@@ -64,11 +61,7 @@ export async function cleanupPendingWorkspaceResultOrphans(
     if (completedRoots.has(root)) {
       continue;
     }
-    if (
-      deps.isShuttingDown?.() ||
-      remaining === 0 ||
-      getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
-    ) {
+    if (remaining === 0 || getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
       return false;
     }
     const idleAdmission = tryBeginGatewayRootWorkAdmission("idle-task");
@@ -79,10 +72,7 @@ export async function cleanupPendingWorkspaceResultOrphans(
       let deferred = false;
       const admitted = await idleAdmission.run(() =>
         admit(sessionIds, async () => {
-          if (
-            deps.isShuttingDown?.() ||
-            getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0
-          ) {
+          if (getActiveGatewayRootWorkCount({ excludeCurrent: true }) > 0) {
             deferred = true;
             return;
           }

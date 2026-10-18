@@ -13,9 +13,7 @@ export const updateRepairValidationSchema = z.object({
   summary: z.string(),
   stopReason: z.string().max(1024).optional(),
 });
-// Wire cap enforced by both the current protocol and the frozen published parser.
-export const UPDATE_REPAIR_TEXT_MAX_CHARS = 1024;
-const text = z.string().max(UPDATE_REPAIR_TEXT_MAX_CHARS);
+const text = z.string().max(1024);
 const wireValidation = updateRepairValidationSchema.extend({ summary: text });
 const status = z.enum(["repaired", "improved", "unrepaired", "unavailable", "aborted"]);
 const turn = z.number().int().positive();

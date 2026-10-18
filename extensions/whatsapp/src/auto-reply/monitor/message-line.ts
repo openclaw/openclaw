@@ -4,6 +4,7 @@ import {
   getSenderIdentity,
   type WhatsAppReplyContext,
 } from "../../identity.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatInboundEnvelope, type EnvelopeFormatOptions } from "./message-line.runtime.js";
 
@@ -23,7 +24,7 @@ export function buildInboundLine(params: {
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { msg, previousTimestamp, envelope } = params;
-  const admission = msg.admission;
+  const admission = requireWhatsAppInboundAdmission(msg);
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const replyContext = formatReplyTarget(

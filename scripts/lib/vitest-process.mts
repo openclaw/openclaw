@@ -22,7 +22,6 @@ import {
 } from "../vitest-process-group.mts";
 import { writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
-import { resolveRepoRoot } from "./repo-root.mjs";
 import { vitestInfrastructureExitCode } from "./vitest-outcome.mts";
 import {
   createVitestResourceOwner,
@@ -78,12 +77,6 @@ export function spawnOwnedVitestProcess(spec: {
       const callerHome = env.HOME ?? env.USERPROFILE ?? homedir();
       childEnv.COREPACK_HOME = resolveTestCorepackHome(env, callerHome);
       childEnv.PLAYWRIGHT_BROWSERS_PATH = resolveTestBrowserCache(env, callerHome);
-      // Bun's content-addressed compiler cache must survive test HOME cleanup.
-      childEnv.BUN_RUNTIME_TRANSPILER_CACHE_PATH ??= path.join(
-        resolveRepoRoot(import.meta.url),
-        ".cache",
-        "bun-transpiler",
-      );
       // Set the actual process environment before config imports and Worker creation.
       // Worker-local process.env and restored os.homedir mocks cannot retarget libuv.
       if (!policy.hermetic) {

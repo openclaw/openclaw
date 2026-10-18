@@ -5,17 +5,19 @@ import type { ClickClackMessage } from "./types.js";
 
 type ActivityClient = Parameters<typeof createClickClackActivityPublisher>[0]["client"];
 
-function createClientMock() {
+function createClientMock(): {
+  client: ActivityClient;
+  createActivityMessage: ReturnType<typeof vi.fn>;
+  updateMessageBody: ReturnType<typeof vi.fn>;
+} {
   let counter = 0;
-  const createActivityMessage = vi.fn<ActivityClient["createActivityMessage"]>(async () => {
+  const createActivityMessage = vi.fn(async () => {
     counter += 1;
     return { id: `msg_${counter}` } as ClickClackMessage;
   });
-  const updateMessageBody = vi.fn<ActivityClient["updateMessageBody"]>(
-    async () => ({}) as ClickClackMessage,
-  );
+  const updateMessageBody = vi.fn(async () => ({}) as ClickClackMessage);
   return {
-    client: { createActivityMessage, updateMessageBody },
+    client: { createActivityMessage, updateMessageBody } as ActivityClient,
     createActivityMessage,
     updateMessageBody,
   };
@@ -150,67 +152,6 @@ describe("createClickClackActivityPublisher", () => {
       kind: "agent_tool",
       body: "Read: Done",
     });
-    expect(updateMessageBody).not.toHaveBeenCalled();
-  });
-
-  it.each(["POST", "PATCH"])(
-    "publishes updates arriving during an activity %s",
-    async (operation) => {
-      const { client, createActivityMessage, updateMessageBody } = createClientMock();
-      const entered = Promise.withResolvers<void>();
-      const resume = Promise.withResolvers<void>();
-      let remoteBody = "";
-      let blocked = false;
-      const write = async (method: string, body: string): Promise<ClickClackMessage> => {
-        if (method === operation && !blocked) {
-          blocked = true;
-          entered.resolve();
-          await resume.promise;
-        }
-        remoteBody = body;
-        return {
-          id: "msg_1",
-          workspace_id: "wsp_1",
-          author_id: "usr_agent",
-          thread_root_id: "msg_turn",
-          body,
-          body_format: "markdown",
-          created_at: "2026-10-15T00:00:00.000Z",
-        };
-      };
-      createActivityMessage.mockImplementation(async ({ body }) => write("POST", body));
-      updateMessageBody.mockImplementation(async (_id, body) => write("PATCH", body));
-      const publisher = createPublisher(client);
-      const event = { itemId: "work", kind: "tool", name: "read" };
-
-      publisher.onItemEvent({ ...event, progressText: "First" });
-      if (operation === "PATCH") {
-        await publisher.finalize();
-        publisher.onItemEvent({ ...event, progressText: "Second" });
-      }
-      await entered.promise;
-      publisher.onItemEvent({ ...event, progressText: "Latest" });
-      resume.resolve();
-      await publisher.finalize();
-
-      expect(remoteBody).toBe("Read: Latest");
-    },
-  );
-
-  it("does not retry an ambiguous failed activity POST when a later frame arrives", async () => {
-    const { client, createActivityMessage, updateMessageBody } = createClientMock();
-    const onError = vi.fn();
-    createActivityMessage.mockRejectedValueOnce(new Error("connection lost after dispatch"));
-    const publisher = createPublisher(client, { onError });
-    const event = { itemId: "work", kind: "tool", name: "read" };
-
-    publisher.onItemEvent({ ...event, progressText: "First" });
-    await publisher.finalize();
-    publisher.onItemEvent({ ...event, progressText: "Latest" });
-    await publisher.finalize();
-
-    expect(onError).toHaveBeenCalledOnce();
-    expect(createActivityMessage).toHaveBeenCalledOnce();
     expect(updateMessageBody).not.toHaveBeenCalled();
   });
 

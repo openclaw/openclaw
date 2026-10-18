@@ -19,7 +19,6 @@ type ReplyModelLevelSelection = {
 type ReplyModelLevels = {
   resolvedThinkLevel: ThinkLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
-  thinkingExplicit?: boolean;
 };
 
 export type ReplyModelLevelResolver = () => Promise<ReplyModelLevels>;
@@ -55,11 +54,7 @@ export function createReplyModelLevelResolver(params: {
               abortSignal,
             )
           : selection.reasoningLevel;
-      return {
-        resolvedThinkLevel,
-        resolvedReasoningLevel,
-        thinkingExplicit: selection.thinkingExplicit,
-      };
+      return { resolvedThinkLevel, resolvedReasoningLevel };
     },
     { cacheRejections: true },
   );

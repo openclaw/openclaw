@@ -376,7 +376,7 @@ export function validateReadyRelease(value, expected) {
   return value;
 }
 
-async function loadPreparedPlugins({
+export async function loadPreparedPlugins({
   plugins,
   inputs,
   sourceSha,

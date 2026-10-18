@@ -1,5 +1,4 @@
 /** Plugin-owned MCP server connection resolver contracts. */
-import type { McpConnectionAuthority } from "../agents/mcp-connection-authority.types.js";
 
 /**
  * Trusted runtime identity for per-requester MCP connection resolution.
@@ -13,8 +12,6 @@ export type McpServerConnectionResolveContext = {
   agentAccountId?: string;
   /** Message channel id (for example telegram or slack). */
   messageChannel?: string;
-  /** Event consumers need an owner-held authorization observation, not only credentials. */
-  requireLiveAuthority?: true;
 };
 
 /** Transport connection resolved for one requester-scoped MCP server. */
@@ -22,8 +19,6 @@ export type McpServerConnectionResolved = {
   url: string;
   /** Per-user credentials; never logged, fingerprinted, or persisted by core. */
   headers?: Record<string, string>;
-  /** Required when requireLiveAuthority is set. Disposal releases observation, not the account. */
-  authority?: McpConnectionAuthority;
 };
 
 /**

@@ -48,6 +48,13 @@ function remainingTtlMs(timestamp: number): number | undefined {
   return remaining > 0 ? remaining : undefined;
 }
 
+function resolveEntryTtlMs(entry: PersistedEchoEntry, ttlMs?: number): number | undefined {
+  if (typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0) {
+    return ttlMs;
+  }
+  return remainingTtlMs(entry.timestamp);
+}
+
 function isLiveEntry(entry: PersistedEchoEntry, now = Date.now()): boolean {
   const cutoff = now - IMESSAGE_SENT_ECHOES_TTL_MS;
   return entry.timestamp >= cutoff && (entry.expiresAt == null || entry.expiresAt > now);
@@ -57,7 +64,9 @@ async function readRecentEntries(): Promise<PersistedEchoEntry[]> {
   try {
     return (await openPersistedEchoStore().entries())
       .map(({ value }) => value)
-      .filter((entry) => isLiveEntry(entry));
+      .filter((entry) => isLiveEntry(entry))
+      .toSorted((a, b) => a.timestamp - b.timestamp)
+      .slice(-IMESSAGE_SENT_ECHOES_MAX_ENTRIES);
   } catch (err) {
     reportFailure("read", err);
     return [];
@@ -68,13 +77,14 @@ async function persistEntry(
   entry: PersistedEchoEntry,
   ttlMs?: number,
 ): Promise<string | undefined> {
-  if (!ttlMs) {
+  const effectiveTtlMs = resolveEntryTtlMs(entry, ttlMs);
+  if (!effectiveTtlMs) {
     return undefined;
   }
   const key = resolveIMessageSentEchoEntryKey(entry);
   try {
     await openPersistedEchoStore().register(key, entry, {
-      ttlMs,
+      ttlMs: effectiveTtlMs,
     });
   } catch (err) {
     reportFailure("write", err);
@@ -102,17 +112,13 @@ export async function rememberPersistedIMessageEcho(params: {
     ...(messageId ? { messageId } : {}),
     ...(params.pending ? { pending: true } : {}),
   };
-  const ttlMs =
-    typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0
-      ? params.ttlMs
-      : undefined;
-  if (ttlMs !== undefined) {
-    entry.expiresAt = entry.timestamp + ttlMs;
+  if (typeof params.ttlMs === "number" && Number.isFinite(params.ttlMs) && params.ttlMs > 0) {
+    entry.expiresAt = entry.timestamp + params.ttlMs;
   }
   if (!entry.text && !entry.media && !entry.messageId) {
     return undefined;
   }
-  return await persistEntry(entry, ttlMs ?? remainingTtlMs(entry.timestamp));
+  return await persistEntry(entry, params.ttlMs);
 }
 
 export async function forgetPersistedIMessageEchoKey(key: string | undefined): Promise<void> {

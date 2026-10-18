@@ -136,9 +136,7 @@ class ExecApprovalButton extends Button {
 
     try {
       await interaction.acknowledge();
-    } catch {
-      // A failed Discord acknowledgement must not discard an approval decision.
-    }
+    } catch {}
 
     const result = await this.ctx.resolveApproval(
       parsed.approvalId,
@@ -155,9 +153,7 @@ class ExecApprovalButton extends Button {
               : `Failed to submit approval decision for **${decisionLabel}**. The request may have expired or already been resolved.`,
           ephemeral: true,
         });
-      } catch {
-        // The Gateway result is authoritative even if Discord feedback fails.
-      }
+      } catch {}
       return;
     }
     const terminalLabel = resolveTerminalLabel(result.resolution.approval);
@@ -181,9 +177,7 @@ class ExecApprovalButton extends Button {
           },
         );
       }
-    } catch {
-      // The approval is already resolved; fall back to a separate receipt below.
-    }
+    } catch {}
     if (!terminalized || !result.resolution.applied) {
       try {
         await interaction.followUp({
@@ -192,9 +186,7 @@ class ExecApprovalButton extends Button {
             : `This approval was already resolved: ${terminalLabel}.`,
           ephemeral: true,
         });
-      } catch {
-        // Resolving an approval does not depend on delivering its receipt.
-      }
+      } catch {}
     }
   }
 }

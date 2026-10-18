@@ -10,18 +10,13 @@ import type {
 
 const AGENT_RUN_REGISTRY_STATE_KEY = Symbol.for("openclaw.agentRunRegistry.state");
 
-const registryState = resolveGlobalSingleton<AgentRunRegistryState>(
-  AGENT_RUN_REGISTRY_STATE_KEY,
-  () => ({
+export function getAgentRunRegistryState(): AgentRunRegistryState {
+  return resolveGlobalSingleton<AgentRunRegistryState>(AGENT_RUN_REGISTRY_STATE_KEY, () => ({
     contexts: new Map<string, AgentRunContext>(),
     owners: new Map<string, AgentRunContextOwnership>(),
     lifecycleGeneration: randomUUID(),
     version: 0,
-  }),
-);
-
-export function getAgentRunRegistryState(): AgentRunRegistryState {
-  return registryState;
+  }));
 }
 
 /** Lists registered runs bound to one current session identity. */

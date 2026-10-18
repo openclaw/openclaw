@@ -15,7 +15,6 @@ import {
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  normalizeVideoGenerationDuration,
   selectSupportedVideoDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
@@ -97,22 +96,23 @@ function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRout
     generation_id: normalizeOptionalString(payload.generation_id) ?? null,
     polling_url: normalizeOptionalString(payload.polling_url),
     status: normalizeOptionalString(payload.status),
-    unsigned_urls: unsignedUrls?.map((url) => {
-      const normalized = normalizeOptionalString(url);
-      if (!normalized) {
-        throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
-      }
-      return normalized;
-    }),
+    unsigned_urls: Array.isArray(unsignedUrls)
+      ? unsignedUrls.map((url) => {
+          const normalized = normalizeOptionalString(url);
+          if (!normalized) {
+            throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+          }
+          return normalized;
+        })
+      : undefined,
     error: normalizeOptionalString(payload.error) ?? null,
     model: normalizeOptionalString(payload.model) ?? null,
-    usage:
-      usage == null
-        ? undefined
-        : {
-            cost: typeof usage.cost === "number" ? usage.cost : null,
-            is_byok: typeof usage.is_byok === "boolean" ? usage.is_byok : undefined,
-          },
+    usage: isRecord(usage)
+      ? {
+          cost: typeof usage.cost === "number" ? usage.cost : null,
+          is_byok: typeof usage.is_byok === "boolean" ? usage.is_byok : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -173,12 +173,15 @@ function resolveDurationSeconds(
   durationSeconds: number | undefined,
   supportedDurations: readonly number[] = SUPPORTED_DURATION_SECONDS,
 ): number | undefined {
-  const rounded = normalizeVideoGenerationDuration({ durationSeconds });
-  if (rounded === undefined) {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
   }
   const effectiveDurations =
     supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS;
+  const rounded = Math.max(1, Math.round(durationSeconds));
+  if (durationSeconds === rounded && effectiveDurations.includes(rounded)) {
+    return rounded;
+  }
   return selectSupportedVideoDuration(rounded, effectiveDurations);
 }
 

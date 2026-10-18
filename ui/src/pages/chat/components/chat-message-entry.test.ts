@@ -1,13 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
-import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
 import { toggleTranscriptSearch } from "./chat-thread-interactions.ts";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -37,10 +38,8 @@ function setupEntryTranscript(messages: unknown[] = []) {
     runWorking: false,
   };
   let container = document.body.appendChild(document.createElement("div"));
-  let view = createChatThreadHarness(container, transcript);
-  onTestFinished(() => view.unmount());
   const update = () => {
-    view.render(props);
+    render(renderChatThread(props, transcript), container);
     flush();
     transcript.hostUpdated();
     flush();
@@ -56,9 +55,8 @@ function setupEntryTranscript(messages: unknown[] = []) {
       return container;
     },
     remount() {
-      view.unmount();
+      render(null, container);
       container = document.body.appendChild(document.createElement("div"));
-      view = createChatThreadHarness(container, transcript);
       update();
     },
   };

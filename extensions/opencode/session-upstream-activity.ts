@@ -147,18 +147,17 @@ async function readIndicators(threadIds: string[]): Promise<Map<string, OpenCode
   }
   const indicators = new Map<string, OpenCodeIndicator>();
   for (const row of value) {
-    const record = isRecord(row) ? row : undefined;
-    const seq = record?.seq === null ? 0 : record?.seq;
+    const seq = isRecord(row) && row.seq === null ? 0 : isRecord(row) ? row.seq : undefined;
     if (
-      !record ||
-      typeof record.id !== "string" ||
-      !OPENCODE_SESSION_ID_PATTERN.test(record.id) ||
+      !isRecord(row) ||
+      typeof row.id !== "string" ||
+      !OPENCODE_SESSION_ID_PATTERN.test(row.id) ||
       !Number.isSafeInteger(seq) ||
       Number(seq) < 0
     ) {
       throw new Error("OpenCode returned invalid upstream indicators");
     }
-    indicators.set(record.id, { threadId: record.id, seq: Number(seq) });
+    indicators.set(row.id, { threadId: row.id, seq: Number(seq) });
   }
   return indicators;
 }

@@ -15,7 +15,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimeRoot = "test/e2e/qa-lab/runtime";
 const expectedFiles = readdirSync(runtimeRoot)
   .filter((file) =>
-    /^(?:cloud-worker-|(?:codex|gateway)-node-|node-worker-launch-|paired-node-worker-|native-worker-|required-native-|skill-library-worker-).*\.e2e\.test\.ts$/u.test(
+    /^(?:(?:codex|gateway)-node-|node-worker-launch-|paired-node-worker-|native-worker-|required-native-|skill-library-worker-).*\.e2e\.test\.ts$/u.test(
       file,
     ),
   )
@@ -57,14 +57,10 @@ it("selects node-worker process proofs for their owners without static test impo
   expect(NODE_WORKER_E2E_TEST_FILES.toSorted()).toEqual(expectedFiles);
 });
 
-it("balances hourly node-worker E2Es inside the existing matrix capacity", () => {
+it("reserves hourly main capacity for the complete node-worker E2E group", () => {
   const rows = createNodeWorkerE2eTestShards();
-  expect(rows).toHaveLength(2);
-  expect(rows.every((row) => row.planConcurrency === 1)).toBe(true);
-  expect(rows.every((row) => row.runner === "blacksmith-8vcpu-ubuntu-2404")).toBe(true);
-  expect(Math.max(...rows.map((row) => row.predictedSeconds ?? Infinity))).toBeLessThanOrEqual(
-    1_260,
-  );
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.planConcurrency).toBe(1);
   expect(rows.flatMap((row) => row.targets ?? []).toSorted()).toEqual(expectedFiles);
   expect(rows.every((row) => row.pretestBuildMode === "private-qa")).toBe(true);
   const result = runCiManifestFixture({
@@ -80,11 +76,9 @@ it("balances hourly node-worker E2Es inside the existing matrix capacity", () =>
   });
   expect(result.status, result.output).toBe(0);
   const matrix = JSON.parse(result.outputs.checks_node_core_nondist_matrix!);
-  const workerRows = matrix.include.filter((row: { targets?: string[] }) => row.targets?.length);
-  expect(workerRows).toHaveLength(2);
-  expect(workerRows.every((row: { plan_concurrency?: number }) => row.plan_concurrency === 1)).toBe(
-    true,
-  );
+  expect(
+    matrix.include.find((row: { targets?: string[] }) => row.targets?.length)?.plan_concurrency,
+  ).toBe(1);
   const selected = matrix.include.flatMap((row: { targets?: string[] }) => row.targets ?? []);
   expect(selected.toSorted()).toEqual(expectedFiles);
   const optionsLine = result.output

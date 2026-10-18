@@ -4,6 +4,7 @@ import { normalizeMSTeamsConversationId } from "./inbound.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getPendingUploadFs, removePendingUploadFs } from "./pending-uploads-fs.js";
 import { getPendingUpload, removePendingUpload } from "./pending-uploads.js";
+import { withRevokedProxyFallback } from "./revoked-context.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 async function handleMSTeamsFileConsentInvoke(
@@ -120,7 +121,13 @@ export async function runMSTeamsFileConsentInvokeHandler(
   log: MSTeamsMonitorLogger,
 ): Promise<void> {
   try {
-    await handleMSTeamsFileConsentInvoke(context, log);
+    await withRevokedProxyFallback({
+      run: () => handleMSTeamsFileConsentInvoke(context, log),
+      onRevoked: async () => true,
+      onRevokedLog: () => {
+        log.debug?.("turn context revoked during file consent invoke; skipping delayed response");
+      },
+    });
   } catch (err) {
     log.debug?.("file consent handler error", { error: formatUnknownError(err) });
   }

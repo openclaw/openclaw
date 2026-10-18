@@ -1,14 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { nothing, render, type ReactiveControllerHost } from "lit";
 import { createComponent, createSignal } from "solid-js";
 import { expect, onTestFinished, vi } from "vitest";
-import type { ApplicationContext } from "../../app/context.ts";
 import { buildFallbackSlashCommands, replaceSlashCommands } from "../../lib/chat/commands.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
@@ -47,7 +46,7 @@ export function createTestTranscript(
       removeController: () => undefined,
       requestUpdate: () => undefined,
       updateComplete: Promise.resolve(true),
-    } satisfies ConstructorParameters<typeof ChatTranscriptController>[0],
+    } satisfies ReactiveControllerHost,
     () => paneId,
   );
 }
@@ -219,50 +218,31 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
 }
 
 const renderedTranscripts = new WeakMap<HTMLElement, ChatTranscriptController>();
-const mountedViews = new WeakMap<
-  HTMLElement,
-  { update: (props: ChatProps, application?: ApplicationContext) => void; unmount: () => void }
->();
+const mountedViews = new WeakMap<HTMLElement, (props: ChatProps) => void>();
 
-export function disposeChatView(container: HTMLElement) {
-  mountedViews.get(container)?.unmount();
-  mountedViews.delete(container);
-  renderedTranscripts.get(container)?.hostDisconnected();
-  renderedTranscripts.delete(container);
-}
-
-export function renderChatPropsInto(
-  container: HTMLElement,
-  props: ChatProps,
-  application?: ApplicationContext,
-) {
+export function renderChatPropsInto(container: HTMLElement, props: ChatProps) {
   const previous = renderedTranscripts.get(container);
   if (!previous) {
     const attached = !container.parentNode;
     if (attached) {
       document.body.append(container);
     }
-    const [current, setCurrent] = createSignal({ props, application });
+    const [current, setCurrent] = createSignal(props, { equals: false });
     const view = mountSolid(
       () =>
         createComponent(ChatView, {
           get props() {
-            return current().props;
-          },
-          get application() {
-            const value = current().application;
-            return value && normalizeApplicationContext(value);
+            return current();
           },
         }),
       { container },
     );
-    mountedViews.set(container, {
-      update: (nextProps, nextApplication) =>
-        setCurrent({ props: nextProps, application: nextApplication }),
-      unmount: view.unmount,
-    });
+    mountedViews.set(container, (next) => setCurrent(() => next));
     onTestFinished(() => {
-      disposeChatView(container);
+      view.unmount();
+      mountedViews.delete(container);
+      renderedTranscripts.get(container)?.hostDisconnected();
+      renderedTranscripts.delete(container);
       if (attached) {
         container.remove();
       }
@@ -272,7 +252,7 @@ export function renderChatPropsInto(
   }
   renderedTranscripts.set(container, props.transcript);
   if (previous) {
-    mountedViews.get(container)?.update(props, application);
+    mountedViews.get(container)?.(props);
   }
   flush();
   props.transcript.hostConnected();
@@ -387,7 +367,7 @@ export function createReactiveDraftHarness({
   const container = createComposerContainer();
   onTestFinished(() => {
     active = false;
-    disposeChatView(container);
+    render(nothing, container);
   });
   const onDraftChange = vi.fn((next: string) => {
     draft = next;
@@ -468,7 +448,7 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
     onSend,
     onAbort,
     dispose: () => {
-      disposeChatView(container);
+      render(null, container);
       container.remove();
       resetChatViewState(paneId, container);
     },

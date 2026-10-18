@@ -163,13 +163,10 @@ describe("SQLite session row persistence", () => {
             (entry.sessionId === "predecessor" || entry.sessionId === "successor"),
         ).length,
       ).toBeLessThanOrEqual(3);
-      expect(facts[0]?.skillsSnapshot).toEqual(skillsSnapshot);
+      const retainedSkills = facts[0]?.skillsSnapshot?.skills;
+      expect(retainedSkills).toEqual(skillsSnapshot.skills);
+      retainedSkills?.push({ name: "observer-only" });
       expect(result?.skillsSnapshot).toEqual(skillsSnapshot);
-      result!.skillsSnapshot!.skills.push({ name: "caller-only" });
-      expect(result!.skillsSnapshot!.skills).toEqual([
-        ...skillsSnapshot.skills,
-        { name: "caller-only" },
-      ]);
       expect(loadSessionEntry(scope)?.skillsSnapshot).toEqual(skillsSnapshot);
     } finally {
       clone.mockRestore();

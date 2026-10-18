@@ -1,18 +1,4 @@
-export type FaceTimeHelperPeer = {
-  bundleIdentifier: string;
-  processId: number;
-  processStartedAtMs: number;
-  connectionGeneration: number;
-};
-
-export type HelperActionResult = Record<string, unknown> & {
-  helperBundleIdentifier?: string;
-  helperPeer?: FaceTimeHelperPeer;
-  helperResults?: HelperActionResult[];
-  helpersContacted?: number;
-  topologyGeneration?: number;
-  topologyComplete?: boolean;
-};
+export type HelperActionResult = Record<string, unknown>;
 
 type FaceTimeNativeActionOutcome =
   | { status: "answered-muted" }
@@ -46,12 +32,20 @@ export class FaceTimeHelperUnavailableError extends Error {
 }
 
 export function readHelperResults(result: HelperActionResult): HelperActionResult[] {
-  return result.helperResults ?? [result];
+  return Array.isArray(result.helperResults)
+    ? result.helperResults.filter((entry): entry is HelperActionResult =>
+        Boolean(entry && typeof entry === "object"),
+      )
+    : [result];
 }
 
 function requireCompleteTopology(result: HelperActionResult): HelperActionResult[] {
   const results = readHelperResults(result);
-  if (result.topologyComplete !== true || results.length !== result.helpersContacted) {
+  if (
+    result.topologyComplete !== true ||
+    typeof result.helpersContacted !== "number" ||
+    results.length !== result.helpersContacted
+  ) {
     throw new FaceTimeHelperAmbiguousError("FaceTime helper topology was incomplete", result);
   }
   return results;
@@ -111,7 +105,7 @@ export function projectCompleteFaceTimeAbsence(result: HelperActionResult): {
   if (!results.every((entry) => entry.outcome === "absent" && entry.found === false)) {
     throw new FaceTimeHelperAmbiguousError("FaceTime carrier is still present", result);
   }
-  if (result.topologyGeneration === undefined) {
+  if (typeof result.topologyGeneration !== "number") {
     throw new FaceTimeHelperAmbiguousError("FaceTime topology generation is missing", result);
   }
   return { status: "absent", topologyGeneration: result.topologyGeneration };

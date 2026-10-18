@@ -62,9 +62,7 @@ import {
   createDeliveryQueueMediaRetention,
 } from "./delivery-queue-media-staging.js";
 import {
-  buildReconciledSentResult,
   buildUnknownSendContext,
-  needsUnknownSendReconciliation,
   reconcileUnknownQueuedDelivery,
 } from "./delivery-queue-reconciliation.js";
 import { buildRecoveryDeliverParams } from "./delivery-queue-recovery-params.js";
@@ -237,6 +235,12 @@ function emitQueuedDeliveryResults(
   });
 }
 
+function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
+  return (
+    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
+  );
+}
+
 export async function withActiveDeliveryClaim<T>(
   entryId: string,
   fn: () => Promise<T>,
@@ -368,6 +372,21 @@ async function settleQueuedFailure(
     );
   }
   return terminalized ? "moved-to-failed" : "failed";
+}
+
+function buildReconciledSentResult(
+  entry: QueuedDelivery,
+  reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>,
+) {
+  return {
+    channel: entry.channel,
+    messageId:
+      reconciliation.messageId ??
+      reconciliation.receipt.primaryPlatformMessageId ??
+      reconciliation.receipt.platformMessageIds[0] ??
+      "",
+    receipt: reconciliation.receipt,
+  } satisfies OutboundDeliveryResult;
 }
 
 async function runReconciledSentCommitHooks(params: {
@@ -577,13 +596,6 @@ async function drainQueuedEntry(
             result,
             opts.stateDir,
             stateContext,
-            undefined,
-            {
-              results: [result],
-              payloadCount: entry.preparedBatch.sourcePayloadCount,
-              // Reconciliation supplies no per-payload completion outcomes.
-              payloadOutcomes: [{ index: 0, status: "sent", results: [result] }],
-            },
           );
         }
         await owner.ack();
@@ -839,16 +851,7 @@ async function drainQueuedEntry(
       const terminalResult = results.at(-1);
       await settleDurableDelivery(
         entry.deliveryCompletion,
-        terminalResult
-          ? {
-              result: terminalResult,
-              batch: {
-                results,
-                payloadCount: entry.preparedBatch.sourcePayloadCount,
-                payloadOutcomes,
-              },
-            }
-          : { platformSendStarted: false },
+        terminalResult ? { result: terminalResult } : { platformSendStarted: false },
         opts.stateDir,
         stateContext,
       );

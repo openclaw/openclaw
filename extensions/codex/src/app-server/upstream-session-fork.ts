@@ -24,6 +24,7 @@ import { createImportedCodexSession } from "./session-history-import.js";
 import { withCodexAppServerThreadMutation } from "./thread-ownership.js";
 import {
   listCodexUpstreamTurns,
+  precheckCodexUpstreamForkBoundary,
   resolveCodexUpstreamForkBoundary,
 } from "./upstream-fork-boundary.js";
 
@@ -113,6 +114,14 @@ export async function forkCodexUpstreamSession(
           harnessRuntimeId: options.harnessRuntimeId,
           config: options.resolveConfig?.() ?? {},
         });
+      }
+      const liveTurns = await listCodexUpstreamTurns(control, sourceThreadId);
+      const precheck = precheckCodexUpstreamForkBoundary({
+        boundary: resolved.boundary,
+        turns: liveTurns,
+      });
+      if (!precheck.ok) {
+        return { status: "failed", code: precheck.code, message: precheck.message };
       }
       let response: CodexThreadForkResponse;
       let threadId: string;

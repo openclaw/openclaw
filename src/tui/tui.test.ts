@@ -35,82 +35,101 @@ import {
   stopTuiSafely,
 } from "./tui.js";
 
-it("resolveFinalAssistantText formats malformed fragments when final and streamed text are empty", () => {
-  expect(
-    resolveFinalAssistantText({
-      finalText: "",
-      streamedText: "",
-      errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-    }),
-  ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
-});
-
-it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CLI runtime context", () => {
-  const originalArgv = [...process.argv];
-  try {
-    const cliEntry = path.resolve("openclaw.mjs");
-    process.argv[1] = cliEntry;
-
+describe("resolveFinalAssistantText", () => {
+  it("formats malformed streaming fragment errors when final and streamed text are empty", () => {
     expect(
-      resolveTuiLocalAuthCliInvocation({
-        provider: "test-provider",
-        execArgv: [
-          "--import",
-          "/repo/node_modules/tsx/dist/loader.mjs",
-          "--inspect-brk=0",
-          "--trace-warnings",
-        ],
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
       }),
-    ).toStrictEqual({
-      command: process.execPath,
-      args: [
-        "--import",
-        "/repo/node_modules/tsx/dist/loader.mjs",
-        "--trace-warnings",
-        cliEntry,
-        "models",
-        "auth",
-        "login",
-        "--provider",
-        "test-provider",
-      ],
-      cwd: path.resolve("."),
-    });
-  } finally {
-    process.argv = originalArgv;
-  }
-});
-
-it("isTuiBusyActivityStatus treats post-connect initialization as visibly busy", () => {
-  expect(isTuiBusyActivityStatus("starting up")).toBe(true);
-});
-
-describe("resolveTuiToolsToggleActivityStatus", () => {
-  it.each([
-    { currentStatus: "streaming", toolsExpanded: true, expected: "streaming" },
-    { currentStatus: "idle", toolsExpanded: false, expected: "tools collapsed" },
-  ])("resolves the tool toggle while $currentStatus", ({ expected, ...input }) => {
-    expect(resolveTuiToolsToggleActivityStatus(input)).toBe(expected);
+    ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
   });
 });
 
-it("resolveTuiSessionKey uses global only as the default when scope is global", () => {
-  expect(
-    resolveTuiSessionKey({
-      raw: "",
-      sessionScope: "global",
-      currentAgentId: "main",
-      sessionMainKey: "agent:main:main",
-    }),
-  ).toBe("global");
-  expect(
-    resolveTuiSessionKey({
-      raw: "test123",
-      sessionScope: "global",
-      currentAgentId: "main",
-      sessionMainKey: "agent:main:main",
-    }),
-  ).toBe("agent:main:test123");
+describe("resolveTuiLocalAuthCliInvocation", () => {
+  it("filters inspector flags while preserving the current CLI runtime context", () => {
+    const originalArgv = [...process.argv];
+    try {
+      const cliEntry = path.resolve("openclaw.mjs");
+      process.argv[1] = cliEntry;
+
+      expect(
+        resolveTuiLocalAuthCliInvocation({
+          provider: "test-provider",
+          execArgv: [
+            "--import",
+            "/repo/node_modules/tsx/dist/loader.mjs",
+            "--inspect-brk=0",
+            "--trace-warnings",
+          ],
+        }),
+      ).toStrictEqual({
+        command: process.execPath,
+        args: [
+          "--import",
+          "/repo/node_modules/tsx/dist/loader.mjs",
+          "--trace-warnings",
+          cliEntry,
+          "models",
+          "auth",
+          "login",
+          "--provider",
+          "test-provider",
+        ],
+        cwd: path.resolve("."),
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+  });
+});
+
+describe("isTuiBusyActivityStatus", () => {
+  it("treats post-connect initialization as a visible busy status", () => {
+    expect(isTuiBusyActivityStatus("starting up")).toBe(true);
+  });
+});
+
+describe("resolveTuiToolsToggleActivityStatus", () => {
+  it("preserves busy status while an active run exists", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "streaming",
+        toolsExpanded: true,
+      }),
+    ).toBe("streaming");
+  });
+
+  it("uses the tool toggle status when activity is idle", () => {
+    expect(
+      resolveTuiToolsToggleActivityStatus({
+        currentStatus: "idle",
+        toolsExpanded: false,
+      }),
+    ).toBe("tools collapsed");
+  });
+});
+
+describe("resolveTuiSessionKey", () => {
+  it("uses global only as the default when scope is global", () => {
+    expect(
+      resolveTuiSessionKey({
+        raw: "",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("global");
+    expect(
+      resolveTuiSessionKey({
+        raw: "test123",
+        sessionScope: "global",
+        currentAgentId: "main",
+        sessionMainKey: "agent:main:main",
+      }),
+    ).toBe("agent:main:test123");
+  });
 });
 
 describe("resolveInitialTuiAgentId", () => {
@@ -124,22 +143,39 @@ describe("resolveInitialTuiAgentId", () => {
     },
   };
 
-  it.each([
-    { initialSessionInput: "", cwd: "/tmp/openclaw/projects/ops/src", expected: "ops" },
-    {
-      initialSessionInput: "agent:main:incident",
-      agentId: "ops",
-      cwd: "/tmp/openclaw/projects/ops/src",
-      expected: "main",
-    },
-    {
-      initialSessionInput: "global",
-      agentId: "ops",
-      cwd: "/tmp/openclaw",
-      expected: "ops",
-    },
-  ])("resolves initial owner for '$initialSessionInput' in $cwd", ({ expected, ...input }) => {
-    expect(resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", ...input })).toBe(expected);
+  it("infers agent from cwd when session is not agent-prefixed", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("ops");
+  });
+
+  it("keeps explicit agent prefix from --session", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "agent:main:incident",
+        agentId: "ops",
+        cwd: "/tmp/openclaw/projects/ops/src",
+      }),
+    ).toBe("main");
+  });
+
+  it("keeps an explicit global-session agent ahead of workspace inference", () => {
+    expect(
+      resolveInitialTuiAgentId({
+        cfg,
+        fallbackAgentId: "main",
+        initialSessionInput: "global",
+        agentId: "ops",
+        cwd: "/tmp/openclaw",
+      }),
+    ).toBe("ops");
   });
 
   it("falls back when the working directory was deleted", () => {
@@ -183,25 +219,18 @@ describe("resolveInitialTuiAgentId", () => {
 });
 
 describe("resolveTuiSessionSelection", () => {
-  it.each([
-    {
-      raw: "incident-42",
-      cfg: {
+  it.each([{ raw: "incident-42", expected: "incident-42" }])(
+    "keeps the persisted owner when selecting fixed-store $raw",
+    ({ raw, expected }) => {
+      const cfg: OpenClawConfig = {
         session: { store: "/tmp/shared.sqlite" },
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
           entries: { ops: {}, research: {} },
         },
-      },
-    },
-    {
-      raw: "agent:ops:global",
-      cfg: { agents: { ownership: "explicit", entries: { ops: {}, research: {} } } },
-    },
-  ] satisfies { raw: string; cfg: OpenClawConfig }[])(
-    "keeps the owner and key for $raw",
-    ({ raw, cfg }) => {
+      };
+
       expect(
         resolveTuiSessionSelection({
           raw,
@@ -210,70 +239,80 @@ describe("resolveTuiSessionSelection", () => {
           currentAgentId: "research",
           sessionMainKey: "main",
         }),
-      ).toEqual({ key: raw, agentId: "ops" });
+      ).toEqual({ key: expected, agentId: "ops" });
     },
   );
+
+  it("carries an explicit owner without reinterpreting the qualified global selector", () => {
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
+    };
+    expect(
+      resolveTuiSessionSelection({
+        raw: "agent:ops:global",
+        cfg,
+        sessionScope: "per-sender",
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toEqual({ key: "agent:ops:global", agentId: "ops" });
+  });
 });
 
 describe("resolveGatewayDisconnectState", () => {
-  it.each([
-    {
-      reason: "gateway starting",
-      expected: { connectionStatus: "gateway starting", activityStatus: "starting up" },
-    },
-    {
+  it("shows startup progress while the gateway keeps retrying", () => {
+    expect(resolveGatewayDisconnectState({ reason: "gateway starting" })).toEqual({
+      connectionStatus: "gateway starting",
+      activityStatus: "starting up",
+    });
+  });
+
+  it("uses structured pairing details before the generic close reason", () => {
+    const state = resolveGatewayDisconnectState({
       details: { code: "PAIRING_REQUIRED", reason: "scope-upgrade" },
       reason: "connect failed",
-      expected: {
-        activityStatus: "device approval needed: preview latest request",
-        connectionStatus: expect.stringContaining("scope upgrade pending approval"),
-        remediation: expect.stringContaining("openclaw devices approve --latest"),
-      },
-    },
-    {
+    });
+    expect(state.activityStatus).toBe("device approval needed: preview latest request");
+    expect(state.connectionStatus).toContain("scope upgrade pending approval");
+    expect(state.remediation).toContain("openclaw devices approve --latest");
+  });
+
+  it("shows the device-token rotation command for structured token mismatch", () => {
+    const state = resolveGatewayDisconnectState({
       details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
       reason: "device token mismatch",
-      expected: {
-        activityStatus: "gateway authentication needs attention",
-        remediation: expect.stringContaining(
-          "openclaw devices rotate --device <deviceId> --role operator",
-        ),
-      },
-    },
-    {
+    });
+    expect(state.activityStatus).toBe("gateway authentication needs attention");
+    expect(state.remediation).toContain(
+      "openclaw devices rotate --device <deviceId> --role operator",
+    );
+  });
+
+  it("shows wait-and-retry guidance for a temporary authentication lockout", () => {
+    const state = resolveGatewayDisconnectState({
       details: { code: "AUTH_RATE_LIMITED" },
       reason: "unauthorized: too many failed authentication attempts (retry later)",
-      expected: {
-        activityStatus: "gateway authentication temporarily rate-limited",
-        remediation: expect.stringContaining("temporary authentication lockout"),
-      },
-      forbidden: ["gateway.remote.token", "devices rotate"],
-    },
-    {
+    });
+    expect(state.activityStatus).toBe("gateway authentication temporarily rate-limited");
+    expect(state.remediation).toContain("temporary authentication lockout");
+    expect(state.remediation).not.toContain("gateway.remote.token");
+    expect(state.remediation).not.toContain("devices rotate");
+  });
+
+  it("shows edge-auth guidance for an identity-proxy rejection", () => {
+    const state = resolveGatewayDisconnectState({
       details: { reason: "websocket-upgrade-rejected", httpStatus: 302 },
       reason: "gateway rejected websocket upgrade (HTTP 302)",
-      expected: {
-        activityStatus: "identity-aware proxy rejected connection",
-        remediation: expect.stringContaining("gateway.remote.edgeAuth"),
-      },
-    },
-    {
-      reason: "network timeout",
-      expected: {
-        connectionStatus: "gateway disconnected: network timeout",
-        activityStatus: "idle",
-        remediation: undefined,
-      },
-    },
-  ])("shows actionable disconnect state for $reason", ({ expected, forbidden, ...input }) => {
-    const state = resolveGatewayDisconnectState(input);
-    expect(state).toMatchObject(expected);
-    if (input.reason === "gateway starting") {
-      expect(state).toEqual(expected);
-    }
-    for (const text of forbidden ?? []) {
-      expect(state.remediation).not.toContain(text);
-    }
+    });
+    expect(state.activityStatus).toBe("identity-aware proxy rejected connection");
+    expect(state.remediation).toContain("gateway.remote.edgeAuth");
+  });
+
+  it("falls back to idle for generic disconnect reasons", () => {
+    const state = resolveGatewayDisconnectState({ reason: "network timeout" });
+    expect(state.connectionStatus).toBe("gateway disconnected: network timeout");
+    expect(state.activityStatus).toBe("idle");
+    expect(state.remediation).toBeUndefined();
   });
 });
 
@@ -304,19 +343,17 @@ describe("createBackspaceDeduper", () => {
     };
   }
 
+  it("treats ASCII BS as backspace when it is the first event", () => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe, advance } = createTimedDedupe();
+
+      expect(dedupe("\x08")).toBe("\x08");
+      advance(1);
+      expect(dedupe("\x7f")).toBe("");
+    });
+  });
+
   it.each([
-    {
-      name: "ASCII BS as the first event",
-      input: ["\x08", "\x7f"],
-      expected: ["\x08", ""],
-      interval: 1,
-    },
-    {
-      name: "complementary events outside the dedupe window",
-      input: ["\x7f", "\x08"],
-      expected: ["\x7f", "\x08"],
-      interval: 10,
-    },
     {
       name: "consecutive DEL events",
       input: ["\x7f", "\x7f"],
@@ -332,16 +369,21 @@ describe("createBackspaceDeduper", () => {
       input: ["\x7f", "\x08", "\x7f", "\x08"],
       expected: ["\x7f", "", "\x7f", ""],
     },
-  ])("handles $name", ({ input, expected, interval = 0 }) => {
+  ])("handles $name", ({ input, expected }) => {
+    withLegacyBackspaceEnv(() => {
+      const { dedupe } = createTimedDedupe();
+
+      expect(input.map(dedupe)).toEqual(expected);
+    });
+  });
+
+  it("preserves complementary legacy events outside the dedupe window", () => {
     withLegacyBackspaceEnv(() => {
       const { dedupe, advance } = createTimedDedupe();
-      expect(
-        input.map((data) => {
-          const result = dedupe(data);
-          advance(interval);
-          return result;
-        }),
-      ).toEqual(expected);
+
+      expect(dedupe("\x7f")).toBe("\x7f");
+      advance(10);
+      expect(dedupe("\x08")).toBe("\x08");
     });
   });
 
@@ -363,49 +405,77 @@ describe("createBackspaceDeduper", () => {
 });
 
 describe("resolveCtrlCAction", () => {
-  it.each([
-    { now: 2800, action: "exit", nextLastCtrlCAt: 2000 },
-    { now: 3501, action: "warn", nextLastCtrlCAt: 3501 },
-  ])("returns $action at $now", ({ now, action, nextLastCtrlCAt }) => {
-    expect(resolveCtrlCAction({ hasInput: false, now, lastCtrlCAt: 2000 })).toEqual({
-      action,
-      nextLastCtrlCAt,
+  it("exits on second ctrl+c within the exit window", () => {
+    expect(resolveCtrlCAction({ hasInput: false, now: 2800, lastCtrlCAt: 2000 })).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 2000,
+    });
+  });
+
+  it("shows warning when exit window has elapsed", () => {
+    expect(resolveCtrlCAction({ hasInput: false, now: 3501, lastCtrlCAt: 2000 })).toEqual({
+      action: "warn",
+      nextLastCtrlCAt: 3501,
     });
   });
 });
 
 describe("resolveTuiCtrlCAction", () => {
-  it.each([
-    { hasInput: false, lastCtrlCAt: 0, wasDisconnected: true, action: "exit", nextLastCtrlCAt: 0 },
-    {
-      hasInput: true,
-      lastCtrlCAt: 0,
-      wasDisconnected: true,
+  it("exits immediately after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: false,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
+      action: "exit",
+      nextLastCtrlCAt: 0,
+    });
+  });
+
+  it("clears a nonempty draft before exiting after a gateway disconnect", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 0,
+        wasDisconnected: true,
+      }),
+    ).toEqual({
       action: "clear",
       nextLastCtrlCAt: 2000,
-    },
-    {
-      hasInput: true,
-      lastCtrlCAt: 1000,
-      exitRequested: true,
+    });
+  });
+
+  it("keeps shutdown idempotent when another interrupt arrives", () => {
+    expect(
+      resolveTuiCtrlCAction({
+        hasInput: true,
+        now: 2000,
+        lastCtrlCAt: 1000,
+        exitRequested: true,
+      }),
+    ).toEqual({
       action: "closing",
       nextLastCtrlCAt: 1000,
-    },
-  ])("returns $action for interrupted TUI state", ({ action, nextLastCtrlCAt, ...input }) => {
-    expect(resolveTuiCtrlCAction({ now: 2000, ...input })).toEqual({ action, nextLastCtrlCAt });
+    });
   });
 });
 
-it("createTuiConnectionLineage keeps a startup retry before the first hello out of reconnect recovery", () => {
-  const lineage = createTuiConnectionLineage();
+describe("createTuiConnectionLineage", () => {
+  it("keeps a startup retry before the first hello out of reconnect recovery", () => {
+    const lineage = createTuiConnectionLineage();
 
-  lineage.disconnect();
-  expect(lineage.wasDisconnected()).toBe(false);
-  expect(lineage.connect()).toBe(false);
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(false);
+    expect(lineage.connect()).toBe(false);
 
-  lineage.disconnect();
-  expect(lineage.wasDisconnected()).toBe(true);
-  expect(lineage.connect()).toBe(true);
+    lineage.disconnect();
+    expect(lineage.wasDisconnected()).toBe(true);
+    expect(lineage.connect()).toBe(true);
+  });
 });
 
 describe("TUI shutdown safety", () => {
@@ -478,23 +548,20 @@ describe("TUI shutdown safety", () => {
     expect(calls).toEqual(["drain", "stop"]);
   });
 
-  it.each([
-    {
-      errors: [new Error("setRawMode EBADF"), { code: "EBADF", syscall: "setRawMode" }],
-      ignorable: true,
-    },
-    {
-      errors: [new Error("something else failed"), { code: "EIO", syscall: "write" }],
-      ignorable: false,
-    },
-  ])(
-    "classifies message and structured stop errors (ignorable=$ignorable)",
-    ({ errors, ignorable }) => {
-      for (const error of errors) {
-        expect(isIgnorableTuiStopError(error)).toBe(ignorable);
-      }
-    },
-  );
+  it("treats setRawMode EBADF errors as ignorable", () => {
+    expect(isIgnorableTuiStopError(new Error("setRawMode EBADF"))).toBe(true);
+    expect(
+      isIgnorableTuiStopError({
+        code: "EBADF",
+        syscall: "setRawMode",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not ignore unrelated stop errors", () => {
+    expect(isIgnorableTuiStopError(new Error("something else failed"))).toBe(false);
+    expect(isIgnorableTuiStopError({ code: "EIO", syscall: "write" })).toBe(false);
+  });
 
   it("swallows only ignorable stop errors", () => {
     expect(
@@ -690,21 +757,23 @@ describe("formatTuiAuthCommandArgv", () => {
   });
 });
 
-it("resolveLocalAuthSpawnInvocation keeps direct execution for non-wrapper commands", () => {
-  expect(
-    resolveLocalAuthSpawnInvocation({
-      command: "/usr/local/bin/codex",
-      args: ["login"],
-      platform: "linux",
-    }),
-  ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
-  expect(
-    resolveLocalAuthSpawnInvocation({
-      command: "C:\\tools\\codex.exe",
-      args: ["login"],
-      platform: "win32",
-    }),
-  ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
+describe("resolveLocalAuthSpawnInvocation", () => {
+  it("keeps direct execution for non-wrapper commands", () => {
+    expect(
+      resolveLocalAuthSpawnInvocation({
+        command: "/usr/local/bin/codex",
+        args: ["login"],
+        platform: "linux",
+      }),
+    ).toStrictEqual({ command: "/usr/local/bin/codex", args: ["login"], options: {} });
+    expect(
+      resolveLocalAuthSpawnInvocation({
+        command: "C:\\tools\\codex.exe",
+        args: ["login"],
+        platform: "win32",
+      }),
+    ).toStrictEqual({ command: "C:\\tools\\codex.exe", args: ["login"], options: {} });
+  });
 });
 
 function createGatewayLockOptions(stateDir: string): GatewayLockOptions {

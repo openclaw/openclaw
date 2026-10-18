@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { html } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
@@ -12,6 +13,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../test-helpers/gateway-client.ts";
+import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   installDialogPolyfill,
   submitInputDialog,
@@ -121,15 +123,15 @@ describe("chat pane retained presentation", () => {
     });
     const lifecycle = pane;
     lifecycle.render = () => ({
-      layout: emptyLegacyContent,
+      layout: html`${emptyLegacyContent}`,
       capabilityDialogs: undefined,
     });
     connectPaneTestView(lifecycle);
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
     const performUpdate = vi.spyOn(lifecycle, "render");
 
     lifecycle.onPaneSessionChange = () => undefined;
-    await lifecycle.updateComplete;
+    await settleLitElement(lifecycle);
 
     expect(performUpdate).not.toHaveBeenCalled();
     lifecycle.disconnectedCallback();

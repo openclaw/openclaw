@@ -1,7 +1,6 @@
 import childProcess from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { syncFixtureBuiltinExports } from "../scripts/fixtures/ci-fixture-runtime.cjs";
 
 /** @param {{ root: string, preload: string }} options */
@@ -12,10 +11,7 @@ export function installVitestShutdownCancellation({ root, preload }) {
     fs.renameSync(file(`${name}.tmp`), file(name));
   };
 
-  if (
-    process.argv.includes(fileURLToPath(new URL("./vitest-fork-shutdown.mjs", import.meta.url)))
-  ) {
-    let workerReady = false;
+  if (process.argv[2] === root) {
     const spawn = childProcess.spawn;
     childProcess.spawn = (command, args, options) => {
       const child = spawn(command, args, {
@@ -30,7 +26,6 @@ export function installVitestShutdownCancellation({ root, preload }) {
       const forwardReady = (chunk) => {
         output += chunk.toString();
         if (output.includes("shutdown-worker-ready\n")) {
-          workerReady = true;
           child.stdout.off("data", forwardReady);
           fs.writeSync(1, "shutdown-worker-ready\n");
         }
@@ -43,9 +38,6 @@ export function installVitestShutdownCancellation({ root, preload }) {
     process.on("SIGTERM", () => {
       publish("term-received", process.pid);
       setImmediate(() => {
-        if (!workerReady) {
-          return;
-        }
         for (const name of ["shim.pid", "worker.pid"]) {
           try {
             process.kill(Number(fs.readFileSync(file(name), "utf8")), "SIGCONT");

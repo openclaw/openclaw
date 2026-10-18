@@ -1,10 +1,9 @@
 /* @vitest-environment jsdom */
 
 import assert from "node:assert/strict";
-import { createComponent } from "solid-js";
+import { render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ComposerQuestionDock } from "./chat-composer-question.tsx";
+import { renderComposerQuestionDock } from "./chat-composer-question.test-support.ts";
 import { questionPanelIn } from "./chat-question-card.test-support.ts";
 import type { QuestionPanelProps } from "./chat-question-card.ts";
 
@@ -33,7 +32,7 @@ async function mountQuestion(question: QuestionPanelProps["model"]["questions"][
     },
     onSubmit,
   };
-  mountSolid(() => createComponent(ComposerQuestionDock, { panel: props }), { container });
+  render(renderComposerQuestionDock(props), container);
   const panel = await questionPanelIn(container);
   const group = container.querySelector<HTMLElement>(".chat-question-panel");
   assert(group);

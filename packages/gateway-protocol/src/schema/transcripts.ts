@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const TRANSCRIPTS_PAGE_DEFAULT = 50;
 export const TRANSCRIPTS_PAGE_MAX = 100;
@@ -22,14 +21,14 @@ const Page = {
   cursor: Type.Optional(Type.String({ minLength: 1, maxLength: TRANSCRIPTS_RESULT_MAX_BYTES })),
   query: Type.Optional(Type.String({ maxLength: 256 })),
 };
-const SummarySourceSchema = stringLiteralUnion(["model", "heuristic"]);
-const SourceKind = stringLiteralUnion([
-  "live-audio",
-  "live-caption",
-  "posthoc-transcript",
-  "recording-stt",
+const SummarySourceSchema = Type.Union([Type.Literal("model"), Type.Literal("heuristic")]);
+const SourceKind = Type.Union([
+  Type.Literal("live-audio"),
+  Type.Literal("live-caption"),
+  Type.Literal("posthoc-transcript"),
+  Type.Literal("recording-stt"),
 ]);
-const AutoStartField = stringLiteralUnion(["optional", "required"]);
+const AutoStartField = Type.Union([Type.Literal("optional"), Type.Literal("required")]);
 const Source = closedObject({
   providerId: NonEmptyString,
   kind: Type.Optional(SourceKind),
@@ -113,7 +112,7 @@ export const TranscriptsGetResultSchema = closedObject({
 });
 export const TranscriptsExportParamsSchema = closedObject({
   selector: Selector,
-  format: stringLiteralUnion(["markdown", "jsonl"]),
+  format: Type.Union([Type.Literal("markdown"), Type.Literal("jsonl")]),
 });
 export const TranscriptsExportResultSchema = closedObject({
   selector: Selector,
@@ -131,7 +130,12 @@ export const TranscriptsStatusResultSchema = closedObject({
       providerId: Type.String(),
       pluginId: Type.Optional(Type.String()),
       name: Type.String(),
-      availability: stringLiteralUnion(["enabled", "disabled", "unavailable", "unknown"]),
+      availability: Type.Union([
+        Type.Literal("enabled"),
+        Type.Literal("disabled"),
+        Type.Literal("unavailable"),
+        Type.Literal("unknown"),
+      ]),
       sourceKinds: Type.Optional(Type.Array(SourceKind)),
       canStart: Type.Optional(Type.Boolean()),
       canStop: Type.Optional(Type.Boolean()),
@@ -152,16 +156,21 @@ export const TranscriptsStatusResultSchema = closedObject({
       source: Source,
       title: Type.Optional(Type.String()),
       sessionId: Type.Optional(Type.String()),
-      state: stringLiteralUnion(["disabled", "armed", "not-active", "unknown"]),
+      state: Type.Union([
+        Type.Literal("disabled"),
+        Type.Literal("armed"),
+        Type.Literal("not-active"),
+        Type.Literal("unknown"),
+      ]),
       activeSelectors: Type.Array(Selector, { maxItems: TRANSCRIPTS_PAGE_MAX }),
       startDiagnostic: Type.Optional(
-        stringLiteralUnion([
-          "starting",
-          "retrying",
-          "id-conflict",
-          "admitted-start-failed",
-          "start-failed",
-          "ended",
+        Type.Union([
+          Type.Literal("starting"),
+          Type.Literal("retrying"),
+          Type.Literal("id-conflict"),
+          Type.Literal("admitted-start-failed"),
+          Type.Literal("start-failed"),
+          Type.Literal("ended"),
         ]),
       ),
     }),

@@ -14,6 +14,7 @@ import {
   sanitizeReplyDirectiveId,
   stripInlineDirectiveTagsForDelivery,
 } from "../../utils/directive-tags.js";
+import { isSuppressedControlReplyText } from "../control-reply-text.js";
 import {
   combineNonStreamingReplyParts,
   sanitizeAssistantDisplayText,
@@ -56,7 +57,7 @@ export function buildTranscriptReplyTextFromInputs(
         input.kind === "raw" && payload.text
           ? stripInlineDirectiveTagsForDelivery(payload.text).text
           : (payload.text ?? "");
-      if (text.trim()) {
+      if (text.trim() && (input.kind === "prepared" || !isSuppressedControlReplyText(text))) {
         lines.push(text);
       }
       for (const mediaUrl of parts.mediaUrls) {

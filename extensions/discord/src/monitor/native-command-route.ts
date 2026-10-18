@@ -2,13 +2,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveConfiguredBindingRoute } from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
-import type { resolveDiscordNativeInteractionChannelContext } from "./native-interaction-channel-context.js";
 import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
-import type { ThreadBindingManager } from "./thread-bindings.js";
+import type { ThreadBindingRecord } from "./thread-bindings.js";
 
 type ConfiguredBindingResolution = NonNullable<
   NonNullable<ReturnType<typeof resolveConfiguredBindingRoute>>["bindingResolution"]
@@ -23,44 +21,33 @@ type DiscordNativeInteractionRouteState = {
 export function resolveDiscordNativeInteractionRouteState(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  interaction: CommandInteraction | BaseComponentInteraction;
-  channelContext: Awaited<ReturnType<typeof resolveDiscordNativeInteractionChannelContext>>;
-  threadBindings?: ThreadBindingManager;
-  conversationId?: string;
+  guildId?: string;
+  memberRoleIds?: string[];
+  isDirectMessage: boolean;
+  isGroupDm: boolean;
+  directUserId?: string;
+  conversationId: string;
+  parentConversationId?: string;
+  threadBinding?: ThreadBindingRecord;
 }): DiscordNativeInteractionRouteState {
-  const { channelContext, interaction } = params;
-  const conversationId = params.conversationId ?? channelContext.rawChannelId;
-  const threadBinding = channelContext.isThreadChannel
-    ? params.threadBindings?.getByThreadId(channelContext.rawChannelId)
-    : undefined;
-  const route = resolveDiscordBoundConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    guildId: interaction.guild?.id,
-    memberRoleIds: channelContext.memberRoleIds,
-    isDirectMessage: channelContext.isDirectMessage,
-    isGroupDm: channelContext.isGroupDm,
-    directUserId: interaction.user?.id ?? channelContext.rawChannelId,
-    conversationId,
-    parentConversationId: channelContext.threadParentId,
-  });
+  const route = resolveDiscordBoundConversationRoute(params);
   const configuredRoute =
-    threadBinding == null
+    params.threadBinding == null
       ? resolveConfiguredBindingRoute({
           cfg: params.cfg,
           route,
           conversation: {
             channel: "discord",
             accountId: params.accountId,
-            conversationId,
-            parentConversationId: channelContext.threadParentId,
+            conversationId: params.conversationId,
+            parentConversationId: params.parentConversationId,
           },
         })
       : null;
   const configuredBinding = configuredRoute?.bindingResolution ?? null;
   const configuredBoundSessionKey = normalizeOptionalString(configuredRoute?.boundSessionKey);
   const boundSessionKey =
-    normalizeOptionalString(threadBinding?.targetSessionKey) ?? configuredBoundSessionKey;
+    normalizeOptionalString(params.threadBinding?.targetSessionKey) ?? configuredBoundSessionKey;
   const effectiveRoute = resolveDiscordEffectiveRoute({
     route,
     boundSessionKey,

@@ -1,4 +1,3 @@
-import type { TextQuery } from "../../infra/database-engine/text-contract.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 
@@ -26,16 +25,14 @@ export function sessionTranscriptSearchTerms(input: string): string[] {
 export function sessionTranscriptSearchFtsQuery(
   query: string,
   match: SessionTranscriptSearchParams["match"],
-): TextQuery {
+): string {
   // Implicit AND lets FTS5 discard empty phrases using its own tokenizer.
-  return {
-    kind: "all",
-    clauses: sessionTranscriptSearchTerms(query).map((text, index, tokens) => ({
-      kind: "phrase",
-      text,
-      prefix: match === "prefix" && index === tokens.length - 1,
-    })),
-  };
+  return sessionTranscriptSearchTerms(query)
+    .map(
+      (token, index, tokens) =>
+        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
+    )
+    .join(" ");
 }
 
 export function sessionTranscriptSearchLimit(limit?: number): number {

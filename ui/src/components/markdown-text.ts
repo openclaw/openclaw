@@ -14,15 +14,20 @@ export function isMarkdownBlockArtText(value: string): boolean {
   if (!BLOCK_ART_GLYPH_RE.test(value)) {
     return false;
   }
-  const artLines = normalizeMarkdownLineBreaks(value)
-    .split("\n")
-    .filter((line) => line.trim().length > 0);
+  const lines = normalizeMarkdownLineBreaks(value).split("\n");
+  const artLines = lines.filter((line) => line.trim().length > 0);
+  if (artLines.length < 2) {
+    return false;
+  }
 
   // QR generators commonly use spaces plus upper/lower/full block glyphs.
   // Require multiple glyph-only lines so ordinary prose with a stray block character stays markdown.
-  return (
-    artLines.length >= 2 &&
-    artLines.every((line) => BLOCK_ART_LINE_RE.test(line) && BLOCK_ART_GLYPH_RE.test(line)) &&
-    value.match(/[▀▄█]/gu)!.length >= 8
-  );
+  let glyphCount = 0;
+  for (const line of artLines) {
+    if (!BLOCK_ART_LINE_RE.test(line) || !BLOCK_ART_GLYPH_RE.test(line)) {
+      return false;
+    }
+    glyphCount += Array.from(line).filter((char) => BLOCK_ART_GLYPH_RE.test(char)).length;
+  }
+  return glyphCount >= 8;
 }

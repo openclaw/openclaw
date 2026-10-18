@@ -240,11 +240,16 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
   const result = await runAnthropicCliMigration(ctx);
   const currentDefaults = ctx.config.agents?.defaults;
   const currentModel = currentDefaults?.model;
-  const currentFallbacks = typeof currentModel === "string" ? undefined : currentModel?.fallbacks;
+  const currentFallbacks =
+    currentModel && typeof currentModel === "object" && "fallbacks" in currentModel
+      ? currentModel.fallbacks
+      : undefined;
   const migratedModel = result.configPatch?.agents?.defaults?.model;
   const migratedFallbacks =
-    typeof migratedModel === "string" ? undefined : migratedModel?.fallbacks;
-  const nextFallbacks = migratedFallbacks ?? currentFallbacks;
+    migratedModel && typeof migratedModel === "object" && "fallbacks" in migratedModel
+      ? migratedModel.fallbacks
+      : undefined;
+  const nextFallbacks = Array.isArray(migratedFallbacks) ? migratedFallbacks : currentFallbacks;
 
   return {
     ...ctx.config,
@@ -256,7 +261,7 @@ export async function runAnthropicCliMigrationNonInteractive(ctx: {
         ...currentDefaults,
         ...result.configPatch?.agents?.defaults,
         model: {
-          ...(nextFallbacks ? { fallbacks: nextFallbacks } : {}),
+          ...(Array.isArray(nextFallbacks) ? { fallbacks: nextFallbacks } : {}),
           primary: result.defaultModel,
         },
       },

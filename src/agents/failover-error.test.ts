@@ -12,6 +12,7 @@ import {
   describeFailoverError,
   FailoverError,
   findCliTimeoutError,
+  hasLocalWorkerTaskTimeout,
   isNonProviderRuntimeCoordinationError,
   isSignalTimeoutReason,
   isTimeoutError,
@@ -20,7 +21,6 @@ import {
 } from "./failover-error.js";
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import { getFailoverErrorCode } from "./failover/error.js";
-import { findLocalWorkerTaskTimeout } from "./failover/local-preparation-error.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { AgentHarnessPreflightError } from "./harness/errors.js";
 import { PreparedModelRuntimePublicationSupersededError } from "./prepared-model-runtime.errors.js";
@@ -484,75 +484,81 @@ describe("failover diagnostic isolation", () => {
     }
   });
 
-  describe("findLocalWorkerTaskTimeout", () => {
-    it("finds the typed timeout through a cause wrapper", () => {
+  describe("hasLocalWorkerTaskTimeout", () => {
+    it("returns true through a cause wrapper", () => {
       const wrapped = new Error("preparation failed", {
         cause: new WorkerTaskError("worker task timed out", "timeout"),
       });
-      expect(findLocalWorkerTaskTimeout(wrapped)).toBe(wrapped.cause);
+      expect(hasLocalWorkerTaskTimeout(wrapped)).toBe(true);
     });
 
-    it("finds the typed timeout through an aggregate wrapper", () => {
+    it("returns true through an aggregate wrapper", () => {
       const aggregate = new AggregateError(
         [new WorkerTaskError("worker task timed out", "timeout")],
         "run failed",
       );
-      expect(findLocalWorkerTaskTimeout(aggregate)).toBe(aggregate.errors[0]);
+      expect(hasLocalWorkerTaskTimeout(aggregate)).toBe(true);
     });
 
     it.each([
       ["failed", new WorkerTaskError("worker task timed out", "failed")],
       ["overloaded", new WorkerTaskError("worker task capacity reached", "overloaded")],
       ["unavailable", new WorkerTaskError("worker task closed", "unavailable")],
-    ])("ignores local worker code %s", (_code, error) => {
-      expect(findLocalWorkerTaskTimeout(error)).toBeUndefined();
+    ])("returns false for local worker code %s", (_code, error) => {
+      expect(hasLocalWorkerTaskTimeout(error)).toBe(false);
     });
 
-    it("defers to an HTTP fact anywhere in the graph", () => {
+    it("returns false when an HTTP fact exists anywhere in the graph", () => {
       const providerTimeoutWithLocalCause = Object.assign(
         new Error("worker task timed out", {
           cause: new WorkerTaskError("worker task timed out", "timeout"),
         }),
         { status: 408 },
       );
-      expect(findLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBeUndefined();
+      expect(hasLocalWorkerTaskTimeout(providerTimeoutWithLocalCause)).toBe(false);
       expect(
-        findLocalWorkerTaskTimeout(
+        hasLocalWorkerTaskTimeout(
           Object.assign(new WorkerTaskError("timed out", "timeout"), { status: 504 }),
         ),
-      ).toBeUndefined();
+      ).toBe(false);
     });
 
-    it("ignores provider timeouts and untyped values", () => {
+    it("returns false for a plain provider timeout and non-matching values", () => {
       const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
-      expect(findLocalWorkerTaskTimeout(timeoutErr)).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBeUndefined();
-      expect(
-        findLocalWorkerTaskTimeout({ name: "WorkerTaskError", code: "timeout" }),
-      ).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(null)).toBeUndefined();
-      expect(findLocalWorkerTaskTimeout(undefined)).toBeUndefined();
+      expect(hasLocalWorkerTaskTimeout(timeoutErr)).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(new Error("worker task timed out"))).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(null)).toBe(false);
+      expect(hasLocalWorkerTaskTimeout(undefined)).toBe(false);
     });
   });
 
   describe("local worker task timeout attribution", () => {
-    it("keeps local deadlines out of provider classification through wrappers", () => {
+    it("keeps a local worker-task deadline on the configured fallback chain", () => {
+      // A local worker deadline is runtime infrastructure, not a provider
+      // timeout. It must NOT become coordination (a later candidate rebuilds its
+      // own context and can recover), and it must not fabricate a provider HTTP
+      // status from its timeout reason.
+      const timeout = new WorkerTaskError("worker task timed out", "timeout");
+      expect(isNonProviderRuntimeCoordinationError(timeout)).toBe(false);
+      const resolution = resolveModelFallbackError(timeout);
+      expect(resolution.kind).toBe("failover");
+      if (resolution.kind === "failover") {
+        expect(resolution.error.reason).toBe("timeout");
+        expect(resolution.error.status).toBeUndefined();
+      }
+    });
+
+    it("keeps the chain advancing through wrappers and aggregates", () => {
       const timeout = new WorkerTaskError("worker task timed out", "timeout");
       for (const error of [
-        timeout,
         new Error("preparation failed", { cause: timeout }),
         new AggregateError([timeout], "run failed"),
-        new FailoverError("previously classified timeout", {
-          reason: "timeout",
-          status: 408,
-          provider: "openai",
-          cause: timeout,
-        }),
       ]) {
-        expect(resolveModelFallbackError(error)).toEqual({ kind: "coordination", error });
-        expect(resolveFailoverReasonFromError(error)).toBeNull();
-        expect(coerceToFailoverError(error)).toBeNull();
-        expect(describeFailoverError(error)).toEqual({ message: timeout.message });
+        // Whatever the classification shape (a non-classifying wrapper message
+        // can surface as unknown), it must never become coordination: only
+        // coordination stops the fallback chain (model-fallback-attempt.ts:281).
+        expect(isNonProviderRuntimeCoordinationError(error)).toBe(false);
+        expect(resolveModelFallbackError(error).kind).not.toBe("coordination");
       }
     });
 

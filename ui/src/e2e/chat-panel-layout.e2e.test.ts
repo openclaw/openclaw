@@ -305,8 +305,7 @@ suite.define(() => {
         await selectChatLayoutAction(paneHeader, /^Swap /);
         await expect.poll(() => dashboard.getAttribute("data-region")).toBe("main");
         await expect.poll(() => regionSize(chat)).toBeCloseTo(width, 0);
-        // Layout settles before the frame-batched geometry event is delivered.
-        await expect.poll(() => chat.getAttribute("data-swap-width-invalidated")).toBe("true");
+        expect(await chat.getAttribute("data-swap-width-invalidated")).toBe("true");
         await expectPaneHeaderGeometry(page, "right");
         for (const dock of ["left", "bottom", "right"] as const) {
           await dockChatSidePanel(page, dock);

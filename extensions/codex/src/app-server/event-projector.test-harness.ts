@@ -28,8 +28,6 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
-import { prepareCodexServerNotification } from "./protocol-validators.js";
-import type { CodexServerNotification } from "./protocol.js";
 import { createCodexTestModel, createCodexTestToolTerminalObserver } from "./test-support.js";
 
 export { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
@@ -280,10 +278,10 @@ export function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
 ): ProjectorNotification {
-  return prepareCodexServerNotification({
+  return {
     method,
     params: { threadId: THREAD_ID, turnId: TURN_ID, ...params },
-  } as CodexServerNotification);
+  } as ProjectorNotification;
 }
 
 export function agentMessageDelta(delta: string, itemId = "msg-1"): ProjectorNotification {
@@ -306,7 +304,7 @@ export function appServerError(params: {
 }
 
 export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
-  return prepareCodexServerNotification({
+  return {
     method: "account/rateLimits/updated",
     params: {
       rateLimits: {
@@ -319,7 +317,7 @@ export function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
         rateLimitReachedType: "rate_limit_reached",
       },
     },
-  });
+  } as ProjectorNotification;
 }
 
 export function turnCompleted(items: unknown[] = []): ProjectorNotification {
@@ -327,13 +325,13 @@ export function turnCompleted(items: unknown[] = []): ProjectorNotification {
 }
 
 export function turnWithStatus(status: string, items: unknown[] = []): ProjectorNotification {
-  return prepareCodexServerNotification({
+  return {
     method: "turn/completed",
     params: {
       threadId: THREAD_ID,
       turn: { id: TURN_ID, status, items },
     },
-  } as CodexServerNotification);
+  } as ProjectorNotification;
 }
 
 export function pendingCommandStarted(id: string): ProjectorNotification {

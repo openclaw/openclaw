@@ -1,10 +1,8 @@
 import { Show } from "solid-js";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import type { readPendingSendStatus } from "../chat-thread-items.ts";
 
 export type ChatSendStatusActions = {
-  connected?: boolean;
   onRetryQueuedMessage?: (id: string) => void;
   onDiscardQueuedMessage?: (id: string) => void;
   queuedMessageAction?: { id: string; label?: string; onAction?: () => void };
@@ -50,16 +48,15 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
     props.actions.queuedMessageAction?.id === props.status?.id
       ? props.actions.queuedMessageAction
       : undefined;
-  const awaitingRecovery = () => props.status?.state === "waiting-reconnect";
-  const reconnecting = () => isChatSendReconnecting(props.status?.state, props.actions.connected);
+  const reconnecting = () => props.status?.state === "waiting-reconnect";
   const retry = () =>
-    awaitingRecovery() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
+    reconnecting() ? undefined : (action()?.onAction ?? props.actions.onRetryQueuedMessage);
   const discard = () =>
     props.status &&
     (props.status.state === "failed" ||
       props.status.state === "unconfirmed" ||
       props.status.state === "held" ||
-      awaitingRecovery()) &&
+      reconnecting()) &&
     !action()
       ? props.actions.onDiscardQueuedMessage
       : undefined;
@@ -77,13 +74,11 @@ export function ChatSendStatus(props: { status: SendStatus; actions: ChatSendSta
               {t(
                 reconnecting()
                   ? "chat.queue.states.waitingForReconnect"
-                  : awaitingRecovery()
-                    ? "common.queued"
-                    : status().state === "held"
-                      ? "chat.queue.states.needsReview"
-                      : status().state === "unconfirmed"
-                        ? "chat.queue.deliveryUnconfirmed"
-                        : "chat.queue.notSent",
+                  : status().state === "held"
+                    ? "chat.queue.states.needsReview"
+                    : status().state === "unconfirmed"
+                      ? "chat.queue.deliveryUnconfirmed"
+                      : "chat.queue.notSent",
               )}
             </span>
           </span>

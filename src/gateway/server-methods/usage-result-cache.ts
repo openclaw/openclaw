@@ -117,7 +117,10 @@ export async function loadCostUsageSummaryCached(params: {
       allAgents
         ? loadAllAgentCostUsageSummary(params)
         : loadCostUsageSummaryFromCache({
-            ...params,
+            startMs: params.startMs,
+            endMs: params.endMs,
+            dayBucket: params.dayBucket,
+            config: params.config,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
           }),
@@ -139,7 +142,10 @@ async function loadAllAgentCostUsageSummary(params: {
     agentIds.map(
       (agentId) => () =>
         loadCostUsageSummaryFromCache({
-          ...params,
+          startMs: params.startMs,
+          endMs: params.endMs,
+          dayBucket: params.dayBucket,
+          config: params.config,
           agentId,
           requestRefresh: true,
         }),

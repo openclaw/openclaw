@@ -1,17 +1,17 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal, flush } from "solid-js";
+import { cleanup, render as renderSolid } from "@solidjs/testing-library";
+import { nothing, render } from "lit";
+import { createComponent, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { renderHubTabs } from "./hub-tabs.ts";
 import { HubTabs } from "./solid/hub-tabs.tsx";
 
 type SessionsHubTabsProps = {
   active: "sessions" | "worktrees";
   onSelect: (tab: "sessions" | "worktrees") => void;
 };
-
-const updates = new WeakMap<HTMLDivElement, (props: SessionsHubTabsProps) => void>();
 
 async function mount(
   props: SessionsHubTabsProps,
@@ -20,33 +20,19 @@ async function mount(
   if (!container.isConnected) {
     document.body.append(container);
   }
-  const update = updates.get(container);
-  if (update) {
-    update(props);
-  } else {
-    const [current, setCurrent] = createSignal(props);
-    updates.set(container, setCurrent);
-    mountSolid(
-      () =>
-        createComponent(HubTabs<"sessions" | "worktrees">, {
-          get active() {
-            return current().active;
-          },
-          get onSelect() {
-            return current().onSelect;
-          },
-          id: "sessions",
-          tabs: [
-            { value: "sessions", label: "Sessions" },
-            { value: "worktrees", label: "Worktrees" },
-          ],
-          ariaLabel: "Sessions",
-          panelId: "sessions-hub-panel",
-        }),
-      { container },
-    );
-  }
-  flush();
+  render(
+    renderHubTabs({
+      ...props,
+      id: "sessions",
+      tabs: [
+        { value: "sessions", label: "Sessions" },
+        { value: "worktrees", label: "Worktrees" },
+      ],
+      ariaLabel: "Sessions",
+      panelId: "sessions-hub-panel",
+    }),
+    container,
+  );
   await Promise.resolve();
   return container;
 }
@@ -57,7 +43,7 @@ describe("Sessions hub navigation", () => {
   });
 
   afterEach(() => {
-    cleanupSolid();
+    cleanup();
     document.body.innerHTML = "";
   });
 
@@ -174,31 +160,29 @@ describe("Sessions hub navigation", () => {
       ),
     );
   });
-  it("hands keyboard focus from a retiring route to the Solid destination", async () => {
+  it("hands keyboard focus from a retiring Lit route to the Solid destination", async () => {
     const source = document.createElement("div");
     document.body.append(source);
-    const mounted = mountSolid(
-      () =>
-        createComponent(HubTabs, {
-          id: "mixed-routes",
-          active: "a",
-          tabs: [
-            { value: "a", label: "Alpha" },
-            { value: "b", label: "Beta" },
-          ],
-          ariaLabel: "Routes",
-          panelId: "mixed-panel",
-          onSelect: () => undefined,
-        }),
-      { container: source },
+    render(
+      renderHubTabs({
+        id: "mixed-routes",
+        active: "a",
+        tabs: [
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Beta" },
+        ],
+        ariaLabel: "Routes",
+        panelId: "mixed-panel",
+        onSelect: () => undefined,
+      }),
+      source,
     );
-    flush();
     source
       .querySelector<HTMLElement>("#mixed-routes-tab-b")!
       .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    mounted.unmount();
+    render(nothing, source);
     source.remove();
-    const view = mountSolid(() =>
+    const view = renderSolid(() =>
       createComponent(HubTabs, {
         id: "mixed-routes",
         active: "b",

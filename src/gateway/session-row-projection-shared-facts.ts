@@ -1,7 +1,4 @@
-import {
-  buildAcpDatabaseSessionKey,
-  readPublishedAcpSessionRows,
-} from "../acp/runtime/session-meta-keys.js";
+import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { rowToAcpSessionMeta } from "../acp/runtime/session-meta-readonly.js";
 import { normalizeStoreSessionKey } from "../config/sessions/store-entry.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
@@ -24,7 +21,6 @@ export function prepareSessionRowSharedFacts({
   env: NodeJS.ProcessEnv;
   shared: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
 }) {
-  const databasePath = resolveOpenClawStateSqlitePath(env);
   const sharedRows = rows.flatMap((row) => {
     const prepared = facts.get(identity(row));
     if (!prepared) {
@@ -32,17 +28,6 @@ export function prepareSessionRowSharedFacts({
     }
     if (!prepared.entry) {
       prepared.acpMeta = null;
-    }
-    if (prepared.acpMeta === undefined) {
-      const published = readPublishedAcpSessionRows(databasePath, [
-        {
-          keys: [buildAcpDatabaseSessionKey(normalizeStoreSessionKey(row.key), row.agentId)],
-          entry: prepared.entry,
-        },
-      ]);
-      if (published) {
-        prepared.acpMeta = published[0] ? rowToAcpSessionMeta(published[0]) : null;
-      }
     }
     if (!prepared.entry?.repositoryWorkspaceId) {
       prepared.repositoryWorkspace = null;
@@ -57,7 +42,7 @@ export function prepareSessionRowSharedFacts({
   return {
     assertCurrent: () => shared.admission.assertCurrent(),
     reply: executeExistingOpenClawStateRead(
-      { env, path: databasePath },
+      { env, path: resolveOpenClawStateSqlitePath(env) },
       {
         type: "sessionRows.sharedFacts",
         entries: sharedRows.map(({ row, prepared }) => ({

@@ -13,7 +13,6 @@ import {
   installDialogPolyfill,
   waitForConfirmDialogActions,
 } from "../modal-dialog.ts";
-import { openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 
 async function openSessionMenu(sidebar: SidebarLifecycleState, key: string) {
@@ -72,8 +71,7 @@ describe("AppSidebar session delete access", () => {
     const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => undefined);
     try {
       const menu = await openSessionMenu(sidebar, archived.key);
-      await openSubmenu(menu, "Advanced");
-      await selectMenuValue(menu, "delete");
+      menu.querySelector<HTMLButtonElement>('[data-shortcut="d"]')?.click();
       answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
       await waitForFast(() => expect(harness.deleteSession).toHaveBeenCalledOnce());
       await waitForFast(() => expect(alertSpy).toHaveBeenCalledOnce());

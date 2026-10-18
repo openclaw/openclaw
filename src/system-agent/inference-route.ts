@@ -180,16 +180,11 @@ export async function resolveSystemAgentConfiguredRouteFromConfig(
     : undefined;
   const authProfileId = allowCliAuthProfileForwarding ? cliAuthProfileId : selection.profileId;
   const executionConfig = projectSystemAgentExecutionConfig(preparedConfig, modelOwnerAgentId);
-  const modelLabel = modelSelection.resolveConfiguredRouteModelLabel({
-    configuredRef: configuredSelection.modelRef,
-    resolved: { provider: selection.provider, model: selection.modelId },
-    ...(selection.profileId ? { profileId: selection.profileId } : {}),
-  });
   const base = {
     ...(configuredSelection.modelTarget ? { modelTarget: configuredSelection.modelTarget } : {}),
     sourceConfig: runConfig,
     runConfig: executionConfig,
-    modelLabel,
+    modelLabel: `${selection.provider}/${selection.modelId}`,
     provider: executionProvider,
     model: selection.modelId,
     agentDir: selection.agentDir,

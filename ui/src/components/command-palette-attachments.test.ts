@@ -14,7 +14,7 @@ import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.tsx";
+import "./command-palette.ts";
 
 let restoreDialog: () => void;
 let readers: FileReader[];
@@ -344,10 +344,7 @@ describe("command palette paste-only images", () => {
         ),
       );
       expect(palette.querySelectorAll(".chat-attachment-thumb")).toHaveLength(
-        outcome === "partial" ? 2 : 1,
-      );
-      expect(palette.querySelector(".chat-attachment-failures")?.textContent).toContain(
-        "oversized.gif",
+        outcome === "partial" ? 1 : 0,
       );
     }
     if (outcome === "ready" || delayedPolicy) {

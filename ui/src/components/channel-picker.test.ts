@@ -1,32 +1,27 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { updatePickers, choosePickerValue } from "../test-helpers/select-picker.ts";
+import { renderChannelPicker } from "./channel-picker.ts";
 import type { SelectPicker } from "./select-picker.ts";
-import { ChannelPicker } from "./solid/channel-picker.tsx";
 
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-});
+afterEach(() => document.body.replaceChildren());
 
-describe("ChannelPicker", () => {
+describe("renderChannelPicker", () => {
   it("renders channel placeholders and neutral choices while preserving a missing current channel", async () => {
     const container = document.createElement("div");
-    mountSolid(
-      () =>
-        createComponent(ChannelPicker, {
-          label: "Channel",
-          value: "retired-channel",
-          options: [
-            { value: "last", label: "last", kind: "neutral" },
-            { value: "telegram", label: "Telegram" },
-          ],
-          onChange: vi.fn(),
-        }),
-      { container },
+    render(
+      renderChannelPicker({
+        label: "Channel",
+        value: "retired-channel",
+        options: [
+          { value: "last", label: "last", kind: "neutral" },
+          { value: "telegram", label: "Telegram" },
+        ],
+        onChange: vi.fn(),
+      }),
+      container,
     );
     await updatePickers(container);
 
@@ -49,18 +44,17 @@ describe("ChannelPicker", () => {
   it("honors disabled choices and reports enabled changes", async () => {
     const container = document.createElement("div");
     const onChange = vi.fn();
-    mountSolid(
-      () =>
-        createComponent(ChannelPicker, {
-          label: "Channel",
-          value: "telegram",
-          options: [
-            { value: "telegram", label: "Telegram" },
-            { value: "disabled", label: "Disabled", disabled: true },
-          ],
-          onChange,
-        }),
-      { container },
+    render(
+      renderChannelPicker({
+        label: "Channel",
+        value: "telegram",
+        options: [
+          { value: "telegram", label: "Telegram" },
+          { value: "disabled", label: "Disabled", disabled: true },
+        ],
+        onChange,
+      }),
+      container,
     );
     await updatePickers(container);
 

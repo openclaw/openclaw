@@ -8,7 +8,6 @@ import {
 } from "../../infra/gateway-state-owner.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
 import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
-import { recordWorkerMessage } from "../../infra/worker-message-metrics.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
@@ -392,9 +391,6 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                 },
                 metadata ? [metadata.port] : [],
               );
-              if (transport.kind === "pooled") {
-                recordWorkerMessage("admission", "to_worker");
-              }
               // Refusal holds the FIFO until exit. The owner publishes successful results
               // before returning this writer section; preliminary admissions release separately.
               await requested.released.promise;
@@ -414,9 +410,6 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
             if (!completed) {
               try {
                 worker.postMessage({ type: "admission", operationId, allowed: false }, []);
-                if (transport.kind === "pooled") {
-                  recordWorkerMessage("admission", "to_worker");
-                }
               } catch (dispatchError) {
                 fail(
                   new AggregateError(

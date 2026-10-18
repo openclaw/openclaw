@@ -27,10 +27,7 @@ import {
   type SessionTranscriptInitializationPublication,
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { isSessionEntryReplacementReceiptUsable } from "./session-accessor.sqlite-entry-receipt.js";
-import {
-  captureSessionEntryMaintenanceAgeChange,
-  publishSessionEntryMaintenanceAgeChanges,
-} from "./session-accessor.sqlite-maintenance-age.js";
+import { publishSessionEntryMaintenanceAgeChanges } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
@@ -296,14 +293,6 @@ export function retainSessionEntryWorkerPublication(params: {
             receipt.source.identity === params.databaseIdentity && currentKeys.has(sessionKey),
         );
         release();
-        publishSessionEntryMaintenanceAgeChanges(
-          params.databaseIdentity,
-          identityRecords.flatMap(({ sessionKey, value }) =>
-            value.previous
-              ? []
-              : [captureSessionEntryMaintenanceAgeChange({ sessionKey, entry: value.entry })],
-          ),
-        );
         sessionChanges.emitBatch(
           [...selected, ...invalidations, ...transcriptChanges],
           undefined,

@@ -66,33 +66,33 @@ export type AccountScopedConversationBindingRecord<TKind extends string = string
 
 /**
  * Released synchronous thread-bindings-runtime SDK contract retained during deprecation.
- * @deprecated Use AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31.
+ * @deprecated Use AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period.
  */
 export type AccountScopedConversationBindingManager<TKind extends string = string> = {
   accountId: string;
-  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use getByConversationIdAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   getByConversationId: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | undefined;
-  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use listBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   listBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
-  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use bindConversationAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   bindConversation: (params: {
     conversationId: string;
     targetKind: BindingTargetKind;
     targetSessionKey: string;
     metadata?: Record<string, unknown>;
   }) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use touchConversationAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   touchConversation: (
     conversationId: string,
     at?: number,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use unbindConversationAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   unbindConversation: (
     conversationId: string,
   ) => AccountScopedConversationBindingRecord<TKind> | null;
-  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+  /** @deprecated Use unbindBySessionKeyAsync on AccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
   unbindBySessionKey: (targetSessionKey: string) => AccountScopedConversationBindingRecord<TKind>[];
   stop: () => void;
 };
@@ -143,7 +143,7 @@ type AccountBindingManagerParams<TKind extends string> = {
   toSessionBindingTargetKind: (raw: TKind) => BindingTargetKind;
 };
 
-/** @deprecated Use createAccountScopedConversationBindingManagerV2; final compatibility day: 2026-12-31. */
+/** @deprecated Use createAccountScopedConversationBindingManagerV2; removal follows a stable deprecation period. */
 export function createAccountScopedConversationBindingManager<TKind extends string>(
   params: AccountBindingManagerParams<TKind>,
 ): AccountScopedConversationBindingManager<TKind> {
@@ -517,7 +517,7 @@ function createAccountBindingManager<TKind extends string>(
     channel: params.channel,
     accountId,
     capabilities: { placements: ["current"] },
-    /** @deprecated Use listBySessionAsync; final compatibility day: 2026-12-31. */
+    /** @deprecated Use listBySessionAsync; removal follows a stable deprecation period. */
     listBySession: (targetSessionKey) => {
       warnPluginSdkDeprecation({
         family: "conversation-bindings",
@@ -526,7 +526,7 @@ function createAccountBindingManager<TKind extends string>(
       });
       return listCurrentConversationBindingRecordsBySession(targetSessionKey, accountScope);
     },
-    /** @deprecated Use resolveByConversationAsync; final compatibility day: 2026-12-31. */
+    /** @deprecated Use resolveByConversationAsync; removal follows a stable deprecation period. */
     resolveByConversation: (ref) => {
       warnPluginSdkDeprecation({
         family: "conversation-bindings",
@@ -537,7 +537,7 @@ function createAccountBindingManager<TKind extends string>(
         ? resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId))
         : null;
     },
-    /** @deprecated Use touchAsync; final compatibility day: 2026-12-31. */
+    /** @deprecated Use touchAsync; removal follows a stable deprecation period. */
     touch: (bindingId, at) => {
       warnPluginSdkDeprecation({
         family: "conversation-bindings",
@@ -619,7 +619,7 @@ function createAccountBindingManager<TKind extends string>(
         assertCurrent,
         context,
       ),
-    /** @deprecated Use inspectByConversationAsync; final compatibility day: 2026-12-31. */
+    /** @deprecated Use inspectByConversationAsync; removal follows a stable deprecation period. */
     inspectByConversation: (ref) => {
       warnPluginSdkDeprecation({
         family: "conversation-bindings",

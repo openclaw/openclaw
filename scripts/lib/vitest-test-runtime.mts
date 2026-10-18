@@ -1,7 +1,6 @@
 import path from "node:path";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.ts";
-import { pinnedBunEnv, requirePinnedBun } from "./pinned-bun.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 import { resolveTestRuntime } from "./test-runtime.mts";
 import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
@@ -19,12 +18,10 @@ const bunTestEnvOverrides = { NODE_DISABLE_COMPILE_CACHE: "1" } as const;
 export function resolveNativeBunTestCommand(
   files: string[],
   repoRoot = resolveRepoRoot(import.meta.url),
-  env: NodeJS.ProcessEnv = process.env,
 ): VitestTestCommand {
-  const command = requirePinnedBun(env);
   return {
-    command,
-    envOverrides: { ...bunTestEnvOverrides, ...pinnedBunEnv(command, env) },
+    command: "bun",
+    envOverrides: bunTestEnvOverrides,
     args: [
       "test",
       "--no-env-file",
@@ -51,10 +48,9 @@ export function resolveVitestTestCommand(
     return { command: process.execPath, args };
   }
   const nodeFlags = new Set(resolveVitestNodeArgs({}));
-  const command = requirePinnedBun(env);
   return {
-    command,
-    envOverrides: { ...bunTestEnvOverrides, ...pinnedBunEnv(command, env) },
+    command: "bun",
+    envOverrides: bunTestEnvOverrides,
     // Strip V8 flags only before the CLI; test names and filters stay byte-for-byte.
     args: [
       // Workers inherit this resolver without adding aliases to child-process environments.

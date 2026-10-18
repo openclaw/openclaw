@@ -108,7 +108,6 @@ export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPa
     ...existing,
     text: `${existingText}${separator}${line}`,
   });
-  setReplyPayloadMetadata(next, { responseUsageLine: line });
   const mirror = getReplyPayloadMetadata(existing)?.sourceReplyTranscriptMirror;
   // Transcript mirrors must track the mutated text or source-reply delivery drifts.
   if (mirror) {

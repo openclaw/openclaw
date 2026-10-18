@@ -36,11 +36,25 @@ describe("memory capture sanitization", () => {
   });
 
   test("preserves a DM body label that does not identify its sender", () => {
-    const wrapped = `[Telegram Alice +5m] Bob (42): ${preference}`;
+    expect(sanitizeForMemoryCapture("[Telegram Alice +5m] Bob (42): I prefer dark mode")).toBe(
+      "Bob (42): I prefer dark mode",
+    );
+  });
+
+  test("sanitizes timed envelopes before deciding whether to capture", () => {
+    const wrapped = `[Telegram Alice +5m] ${preference}`;
     expect(shouldCapture(wrapped)).toBe(false);
     const sanitized = sanitizeForMemoryCapture(wrapped);
-    expect(sanitized).toBe(`Bob (42): ${preference}`);
+    expect(sanitized).toBe(preference);
     expect(shouldCapture(sanitized)).toBe(true);
+  });
+
+  test("rejects capture of memory triggers inside injected history", () => {
+    expect(
+      shouldCapture(
+        `Thanks\n${ctx("Chat history since last reply")}\nBot: I always recommend TypeScript`,
+      ),
+    ).toBe(false);
   });
 
   test.each([
@@ -101,7 +115,6 @@ describe("memory capture sanitization", () => {
 
   test("truncates at the earliest trailing metadata header", () => {
     const input = `${preference}\n${ctx("Chat history since last reply")}\nBot: I always say hello\n${ctx("Conversation info")}\ntrailing metadata`;
-    expect(shouldCapture(input)).toBe(false);
     expect(sanitizeForMemoryCapture(input)).toBe(preference);
   });
 
@@ -177,5 +190,13 @@ describe("memory capture sanitization", () => {
         `${json("Conversation info", '{"channel":"telegram"}')}\n\n[Telegram Alice] ${preference}`,
       ),
     ).toBe(preference);
+  });
+
+  test("returns no memory for pure metadata", () => {
+    expect(
+      sanitizeForMemoryCapture(
+        `${json("Conversation info", '{"id":"chat-123"}')}\n${json("Sender", '{"name":"Alex"}')}`,
+      ),
+    ).toBe("");
   });
 });

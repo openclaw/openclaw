@@ -2,10 +2,6 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import type { ContainerConfig } from "@microsoft/mxc-sdk";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
-import {
-  resolveReadOnlyWorkspaceSkillMounts,
-  type SandboxContext,
-} from "openclaw/plugin-sdk/sandbox";
 import type { MxcConfig } from "./config.js";
 import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import { resolveBaselineReadonlyPaths, type BaselineHostEnv } from "./sandbox-baseline.js";
@@ -15,6 +11,10 @@ import type {
 } from "./sandbox-policy-loader.js";
 import { buildCommandLine } from "./windows-command.js";
 import { normalizeWindowsProcessEnvRecord } from "./windows-env.js";
+import {
+  resolveMxcReadOnlySkillMounts,
+  type MxcWorkspaceAccess,
+} from "./workspace-skill-mounts.js";
 
 const MXC_SCHEMA_VERSION = "0.7.0-alpha";
 
@@ -37,7 +37,7 @@ type MxcWorkspaceContext = {
   activeWorkspaceDir: string;
   skillsWorkspaceDir?: string;
   workdir: string;
-  workspaceAccess: SandboxContext["workspaceAccess"];
+  workspaceAccess: MxcWorkspaceAccess;
 };
 
 export function resolveCurrentBaselineContext(projectDir: string): BaselineApplicationContext {
@@ -59,7 +59,7 @@ export function resolveMxcWorkspaceContext(params: {
   workdir: string;
   agentWorkspaceDir?: string;
   skillsWorkspaceDir?: string;
-  workspaceAccess?: SandboxContext["workspaceAccess"];
+  workspaceAccess?: MxcWorkspaceAccess;
 }): MxcWorkspaceContext {
   const workspaceAccess = params.workspaceAccess ?? "rw";
   const workspaceDir = path.resolve(params.workdir);
@@ -162,7 +162,6 @@ function buildFilesystemConfig(params: {
   const readwritePathSpecs: FilesystemPathSpec[] = [];
   const readonlyPathSpecs: FilesystemPathSpec[] = [];
   const workspace = params.workspace;
-  const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(workspace);
   if (workspace.workspaceAccess === "rw") {
     readwritePathSpecs.push(requiredFilesystemPath(workspace.activeWorkspaceDir));
   } else {
@@ -178,7 +177,7 @@ function buildFilesystemConfig(params: {
   readonlyPathSpecs.push(
     ...resolveBaselineReadonlyPaths(params.context.hostEnv).map(optionalFilesystemPath),
     ...params.baseline.configuredPaths.readonlyPaths.map(createConfiguredFilesystemPath),
-    ...protectedSkillPolicyPaths.map(optionalFilesystemPath),
+    ...resolveMxcProtectedSkillPolicyPaths(workspace).map(optionalFilesystemPath),
   );
 
   // Policy admission accepts only restrictToProjectDir=true.
@@ -193,15 +192,16 @@ function buildFilesystemConfig(params: {
     ...params.baseline.configuredPaths.readwritePaths.map(createConfiguredFilesystemPath),
   );
 
-  const readwritePaths = resolveExistingFilesystemPaths(readwritePathSpecs, "readwrite");
+  const protectedSkillPolicyPaths = resolveMxcProtectedSkillPolicyPaths(params.workspace);
   // ProcessContainer writable-parent grants override nested read-only grants.
   // Fail closed instead of claiming protected skill overlays are enforceable.
   assertNoMxcReadwriteReadonlyOverlap({
-    readwritePaths,
+    readwritePaths: resolveExistingFilesystemPaths(readwritePathSpecs, "readwrite"),
     readonlyPaths: protectedSkillPolicyPaths,
   });
 
   const readonlyPaths = resolveExistingFilesystemPaths(readonlyPathSpecs, "read-only");
+  const readwritePaths = resolveExistingFilesystemPaths(readwritePathSpecs, "readwrite");
   assertNoMxcReadwriteReadonlyOverlap({ readwritePaths, readonlyPaths });
 
   return {
@@ -212,11 +212,8 @@ function buildFilesystemConfig(params: {
 }
 
 function resolveMxcProtectedSkillPolicyPaths(context: MxcWorkspaceContext): string[] {
-  if (context.workspaceAccess !== "rw") {
-    return [];
-  }
   const deduped = new Map<string, string>();
-  for (const mount of resolveReadOnlyWorkspaceSkillMounts(context)) {
+  for (const mount of resolveMxcReadOnlySkillMounts(context)) {
     const hostPath = path.resolve(mount.hostPath);
     deduped.set(normalizeMxcPathForComparison(hostPath), hostPath);
     const containerPath = path.resolve(mount.containerPath);

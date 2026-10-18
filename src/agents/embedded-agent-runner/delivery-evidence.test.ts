@@ -12,6 +12,8 @@ import {
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "./delivery-evidence.js";
 import {
+  hasIntentionalSilentAgentPayload,
+  hasVisibleAgentPayload,
   isMeaningfulTranscriptMessage,
   isTerminalSilentAssistantMessage,
 } from "./message-visibility.js";
@@ -306,6 +308,18 @@ describe("queued delivery evidence", () => {
 });
 
 describe("agent reply visibility", () => {
+  it("distinguishes visible replies from intentional silent payloads", () => {
+    const result = { payloads: [{ text: "NO_REPLY" }] };
+    expect(hasVisibleAgentPayload(result)).toBe(true);
+    expect(hasVisibleAgentPayload(result, { includeSilentReplyPayloads: false })).toBe(false);
+    expect(hasIntentionalSilentAgentPayload(result)).toBe(true);
+    expect(
+      hasIntentionalSilentAgentPayload({
+        payloads: [{ text: "NO_REPLY", mediaUrls: ["/tmp/proof.png"] }],
+      }),
+    ).toBe(false);
+  });
+
   it("classifies terminal silent transcript messages and meaningful tails", () => {
     expect(
       isTerminalSilentAssistantMessage({

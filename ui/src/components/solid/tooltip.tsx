@@ -1,16 +1,19 @@
+import { render } from "@solidjs/web";
 import type { JSX } from "@solidjs/web";
+import { Show, createSignal, flush } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
+import { LitContent } from "../../lit/solid-content.tsx";
 import { createOverlayAnchor } from "../overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
-import type { TooltipController, TooltipPolicyProps } from "../tooltip-controller.ts";
-import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
+import type { TooltipController } from "../tooltip-controller.ts";
+import { TooltipElement, type TooltipProps, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
 export type { TooltipElement } from "../tooltip.ts";
 
-/** Policy and slots stay on the native tag; presentation loads only on reveal. */
+/** The native tag owns policy and slots; Solid owns only its lazily loaded text content. */
 export function mountTooltipView(
   host: TooltipElement,
   surface: HTMLDivElement,
@@ -20,7 +23,24 @@ export function mountTooltipView(
   const content = host.ownerDocument.createElement("span");
   content.className = "tooltip-content";
   surface.insertBefore(content, rich);
-  content.textContent = host.content;
+  let updateContent = () => {};
+  const disposeContent = render(() => {
+    const [revision, setRevision] = createSignal(0);
+    updateContent = () => setRevision((value) => value + 1);
+    const template = () => {
+      revision();
+      return host.contentTemplate;
+    };
+    const text = () => {
+      revision();
+      return host.content;
+    };
+    return (
+      <Show when={template()} fallback={text()}>
+        {(value) => <LitContent value={value()} />}
+      </Show>
+    );
+  }, content);
   let anchorBinding: ReturnType<typeof createOverlayAnchor> | undefined;
   let anchoredTrigger: HTMLElement | SVGElement | null = null;
   let anchoredPlacement: string | undefined;
@@ -86,7 +106,8 @@ export function mountTooltipView(
       return overlay.request(open);
     },
     update() {
-      content.textContent = host.content;
+      updateContent();
+      flush();
       if (overlay.open) {
         updateAnchor();
       }
@@ -96,6 +117,7 @@ export function mountTooltipView(
       unsubscribe();
       overlay.dispose();
       anchorBinding?.dispose();
+      disposeContent();
       content.remove();
       for (const remove of listeners) {
         remove();
@@ -104,8 +126,7 @@ export function mountTooltipView(
   };
 }
 
-type ComponentProps = TooltipPolicyProps &
-  Omit<JSX.HTMLAttributes<TooltipElement>, keyof TooltipPolicyProps>;
+type ComponentProps = TooltipProps & Omit<JSX.HTMLAttributes<TooltipElement>, keyof TooltipProps>;
 
 /** Solid callers use the same native tag without pulling presentation into startup. */
 export const Tooltip = Object.assign(
@@ -114,12 +135,12 @@ export const Tooltip = Object.assign(
       <openclaw-tooltip
         {...props}
         prop:content={props.content ?? ""}
+        prop:contentTemplate={props.contentTemplate}
         prop:placement={props.placement ?? "top"}
         prop:closeDelay={props.closeDelay ?? 100}
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}
         prop:describe={props.describe ?? true}
-        prop:pointerThrough={props.pointerThrough ?? false}
         prop:autoSize={props.autoSize ?? false}
         prop:disabled={props.disabled ?? false}
         prop:openOnClick={props.openOnClick ?? false}

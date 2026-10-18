@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type {
   OpenClawPluginToolContext,
@@ -93,10 +92,7 @@ function classifyXaiFailoverReason({
   return undefined;
 }
 
-function isCodeExecutionEnabled(
-  config: OpenClawConfig | undefined,
-  auth?: XaiToolAuthContext,
-): boolean {
+function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   return resolveCodeExecutionEnabled({
     sourceConfig: config,
     runtimeConfig: config,
@@ -105,12 +101,15 @@ function isCodeExecutionEnabled(
   });
 }
 
-function isXSearchEnabled(config: OpenClawConfig | undefined, auth?: XaiToolAuthContext): boolean {
-  const resolved = resolveEffectiveXSearchConfig(config);
+function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
+  const resolved =
+    config && typeof config === "object"
+      ? resolveEffectiveXSearchConfig(config as never)
+      : undefined;
   if (resolved?.enabled === false) {
     return false;
   }
-  return isXaiToolEnabled({ sourceConfig: config, auth });
+  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
 function shouldExposeXaiBilledTool(params: {
@@ -145,8 +144,8 @@ function createLazyCodeExecutionTool(ctx: OpenClawPluginToolContext) {
     async (toolCallId: string, args: Record<string, unknown>) => {
       const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
-        config: ctx.config,
-        runtimeConfig: ctx.runtimeConfig ?? null,
+        config: ctx.config as never,
+        runtimeConfig: (ctx.runtimeConfig as never) ?? null,
         auth: ctx,
       });
       if (!tool) {

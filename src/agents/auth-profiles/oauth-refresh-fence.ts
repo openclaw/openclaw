@@ -69,7 +69,7 @@ export async function observeOAuthRefreshFenceSettlement<TSnapshot, TResult>(par
   isPending: (snapshot: TSnapshot) => boolean;
   resolve: (snapshot: TSnapshot) => Promise<TResult | null>;
 }): Promise<TResult | null> {
-  const deadline = performance.now() + params.timeoutMs;
+  const deadline = Date.now() + params.timeoutMs;
   while (true) {
     params.signal?.throwIfAborted();
     const snapshot = await observeOAuthRefreshSettlementBeforeDeadline(
@@ -83,12 +83,11 @@ export async function observeOAuthRefreshFenceSettlement<TSnapshot, TResult>(par
     if (!params.isPending(snapshot)) {
       return await params.resolve(snapshot);
     }
-    const remainingMs = deadline - performance.now();
+    const remainingMs = deadline - Date.now();
     if (remainingMs <= 0) {
       throw createOAuthRefreshTimeoutError(params.label, params.timeoutMs);
     }
-    // Preserve a positive fractional remainder so polling yields until the deadline.
-    await sleepWithAbort(Math.min(25, Math.ceil(remainingMs)), params.signal);
+    await sleepWithAbort(Math.min(25, remainingMs), params.signal);
   }
 }
 
@@ -358,7 +357,7 @@ export async function observeOAuthRefreshSettlement<T>(
   return await observeOAuthRefreshSettlementBeforeDeadline(
     label,
     timeoutMs,
-    performance.now() + timeoutMs,
+    Date.now() + timeoutMs,
     settlement,
     signal,
   );
@@ -379,12 +378,11 @@ async function observeOAuthRefreshSettlementBeforeDeadline<T>(
           () => {
             reject(createOAuthRefreshTimeoutError(label, timeoutMs));
           },
-          // performance.now() is fractional; rounding down can expire before the deadline.
-          Math.max(0, Math.ceil(deadline - performance.now())),
+          Math.max(0, deadline - Date.now()),
         );
         settlement
           .finally(() => {
-            if (performance.now() >= deadline) {
+            if (Date.now() >= deadline) {
               throw createOAuthRefreshTimeoutError(label, timeoutMs);
             }
           })

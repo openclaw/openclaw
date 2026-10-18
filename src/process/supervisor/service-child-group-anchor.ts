@@ -202,7 +202,6 @@ export function runServiceChildGroupAnchor(): void {
     closeInheritedLineage();
     await send({
       type: "startup-error",
-      anchorPid: process.pid,
       error: error instanceof Error ? error.message : error,
       ...(error instanceof Error ? { errorDetails: serializeBrokerError(error) } : {}),
     });

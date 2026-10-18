@@ -182,13 +182,16 @@ export function buildSlackDataTableBlock(
     return undefined;
   }
   if (
+    typeof block.caption !== "string" ||
     block.caption.trim().length === 0 ||
+    !Array.isArray(block.headers) ||
     block.headers.length < 1 ||
     block.headers.length > SLACK_DATA_TABLE_COLUMNS_MAX ||
+    !Array.isArray(block.rows) ||
     block.rows.length < 1 ||
     block.rows.length > SLACK_DATA_TABLE_ROWS_MAX ||
     new Set(block.headers).size !== block.headers.length ||
-    !block.headers.every((header) => header.trim().length > 0) ||
+    !block.headers.every((header) => typeof header === "string" && header.trim().length > 0) ||
     (block.rowHeaderColumnIndex !== undefined &&
       (!Number.isInteger(block.rowHeaderColumnIndex) ||
         block.rowHeaderColumnIndex < 0 ||
@@ -200,7 +203,7 @@ export function buildSlackDataTableBlock(
     Array.from(block.headers, (text) => ({ type: "raw_text", text })),
   ];
   for (const row of block.rows) {
-    if (row.length !== block.headers.length) {
+    if (!Array.isArray(row) || row.length !== block.headers.length) {
       return undefined;
     }
     const cells: SlackDataTableCell[] = [];
@@ -212,7 +215,7 @@ export function buildSlackDataTableBlock(
         cells.push({ type: "raw_number", value: cell, text: String(cell) });
         continue;
       }
-      if (cell.trim().length === 0) {
+      if (typeof cell !== "string" || cell.trim().length === 0) {
         return undefined;
       }
       cells.push({ type: "raw_text", text: cell });

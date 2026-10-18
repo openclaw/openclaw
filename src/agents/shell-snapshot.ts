@@ -200,8 +200,11 @@ async function createShellSnapshot(
   void cleanupPromise;
 
   const snapshotPath = path.join(snapshotDir, `${key}.sh`);
-  // Only validated captures are atomically published at this path.
-  if (!forceRefresh && (await isFreshSnapshot(snapshotPath))) {
+  if (
+    !forceRefresh &&
+    (await isFreshSnapshot(snapshotPath)) &&
+    (await validateSnapshot(opts, snapshotPath))
+  ) {
     return snapshotPath;
   }
 
@@ -235,6 +238,11 @@ async function validateSnapshot(
   opts: ShellSnapshotWrapOptions,
   snapshotPath: string,
 ): Promise<boolean> {
+  try {
+    await fs.access(snapshotPath);
+  } catch {
+    return false;
+  }
   const exitCode = await runShell({
     shell: opts.shell,
     shellArgs: opts.shellArgs,

@@ -29,7 +29,6 @@ import type {
 } from "./store/save-worker.types.js";
 import {
   isCronRuntimeOnlySave,
-  loadCronStoreForChanges,
   prepareCronStoreChanges,
   saveCronStoreChangesInDatabase,
   saveCronStoreInDatabase,
@@ -282,15 +281,7 @@ function saveCronJobsStoreChangesNative(
   return commitCronStoreNative(
     storeKey,
     ({ db }, admittedHooks) =>
-      saveCronStoreChangesInDatabase(
-        db,
-        storeKey,
-        storeKey,
-        prepared,
-        loadCronStoreForChanges(db, storeKey),
-        options,
-        admittedHooks,
-      ),
+      saveCronStoreChangesInDatabase(db, storeKey, storeKey, prepared, options, admittedHooks),
     transactionHooks,
     "cron.config-mutation",
   ).value;
@@ -371,7 +362,7 @@ export async function saveCronJobsStore(
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.
-/** @deprecated Await resolveCronStorePathAsync. Final compatibility day: 2026-12-31. */
+/** @deprecated Await resolveCronStorePathAsync. Removal is planned for a later stable release. */
 export function resolveCronStorePath(storePath?: string) {
   warnPluginSdkDeprecation({
     family: "cron-store-path",

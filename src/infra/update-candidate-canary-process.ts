@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { redactSupportDiagnosticLine } from "../logging/diagnostic-support-redaction.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
@@ -26,13 +25,7 @@ export function launchCanary(params: {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
   const runtime = params.nodeRunner ?? process.execPath;
-  const invocation = resolveOpenClawCliInvocation({
-    execPath: runtime,
-    execArgv: resolveRuntimeArgs(runtime),
-    entryPath: entry,
-    args,
-  });
-  const child = spawn(invocation.command, invocation.args, {
+  const child = spawn(runtime, [...resolveRuntimeArgs(runtime), entry, ...args], {
     cwd: params.root,
     env,
     detached: process.platform !== "win32",

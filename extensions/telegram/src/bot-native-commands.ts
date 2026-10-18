@@ -16,6 +16,7 @@ import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatc
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  syncTelegramMenuCommands as syncTelegramMenuCommandsRuntime,
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -181,8 +182,10 @@ export const registerTelegramNativeCommands = async ({
       `Telegram menu text still exceeded the conservative ${maxTotalChars}-character payload budget after shortening descriptions; registering first ${commandsToRegister.length} commands.`,
     );
   }
+  const syncTelegramMenuCommands =
+    telegramDeps.syncTelegramMenuCommands ?? syncTelegramMenuCommandsRuntime;
   // Telegram only limits menu entries; hidden commands remain callable.
-  void telegramDeps.syncTelegramMenuCommands({
+  void syncTelegramMenuCommands({
     bot,
     runtime,
     commandsToRegister,

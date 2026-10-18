@@ -10,6 +10,7 @@ import {
   fetchClawHubSkillSecurityVerdictsMock,
   fetchClawHubSkillVerificationMock,
   installPackageDirMock,
+  markClawPackageIndependentlyOwnedMock,
   isDefaultClawHubBaseUrlMock,
   mockDefaultPackageInstall,
   pathExistsMock,
@@ -34,6 +35,7 @@ export function resetClawHubSkillTestMocks(workspaceDir: string): void {
   archiveCleanupMock.mockReset();
   withExtractedArchiveRootMock.mockReset();
   installPackageDirMock.mockReset();
+  markClawPackageIndependentlyOwnedMock.mockReset();
   evaluateSkillInstallPolicyMock.mockReset();
   pathExistsMock.mockReset();
 

@@ -495,7 +495,7 @@ export class CodexCatalogIndex {
   ): Promise<void> {
     const projected = await projectCodexCatalogPage(
       { data: [thread] },
-      { localSessionsRoot: this.options.localSessionsRoot },
+      { localSessionsRoot: this.options.localSessionsRoot, sanitize: sanitizeTerminalText },
     );
     if (this.closed) {
       return;

@@ -10,6 +10,7 @@ import type { FenceScanState } from "../../packages/markdown-core/src/fences.js"
 import {
   addReplyPayloadMediaFailures,
   appendReplyMediaFailures,
+  setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
@@ -482,6 +483,7 @@ export function createStreamRendering({
     let splitResult: ReplyDirectiveParseResult = {
       text: chunk,
       replyToTag: false,
+      isSilent: false,
     };
     if (options?.finalReply) {
       let pendingText = splitResult.text;
@@ -526,6 +528,9 @@ export function createStreamRendering({
       replyToCurrent,
     };
     addReplyPayloadMediaFailures(payload, mediaFailures);
+    if (splitResult.isSilent) {
+      setReplyPayloadMetadata(payload, { silentReply: true });
+    }
     const emittedBlockSourceRange =
       chunk === text.trimEnd() &&
       cleanedText === chunk &&
@@ -716,7 +721,6 @@ export function createStreamRendering({
 
   return {
     consumePartialReplyDirectives,
-    getPartialReplySourceText: () => partialReplyDirectiveAccumulator.sourceText,
     resetPartialReplyDirectives,
     emitBlockChunk,
     emitReasoningStream,

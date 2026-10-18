@@ -205,6 +205,7 @@ export function createAgentDatabaseExecution(
     createIfMissing = false,
     creatingTarget?: DatabasePathIdentity,
     signal?: AbortSignal,
+    readmitSchema = false,
     contentionDeadline?: number,
     schemaReadmitted = false,
   ): Promise<T | undefined> {
@@ -264,6 +265,7 @@ export function createAgentDatabaseExecution(
         assertCallerCurrent,
         createIfMissing,
         signal,
+        readmitSchema,
       );
       // A peer's intentional native close can finish while this admitted operation settles.
       if (generation === current && !nativeClosing && current.failure()) {
@@ -311,6 +313,7 @@ export function createAgentDatabaseExecution(
           createIfMissing,
           creatingTarget,
           signal,
+          readmitSchema,
           contentionDeadline,
           true,
         );
@@ -341,6 +344,7 @@ export function createAgentDatabaseExecution(
             createIfMissing,
             creatingTarget,
             signal,
+            readmitSchema,
             deadline,
             schemaReadmitted,
           );
@@ -357,9 +361,6 @@ export function createAgentDatabaseExecution(
     },
     get creationIdentity() {
       return creationIdentity;
-    },
-    getPendingPreparation() {
-      return generation?.getPendingPreparation();
     },
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
@@ -473,7 +474,7 @@ export function createAgentDatabaseExecution(
           }
           return captureGenerationClaim();
         },
-        async prepare(source, signal) {
+        async prepare(source, signal, preparationOptions) {
           assertBorrowed();
           assertCreationReference(true);
           const result = run(
@@ -488,6 +489,7 @@ export function createAgentDatabaseExecution(
             true,
             creatingTarget,
             signal,
+            preparationOptions?.readmitSchema,
           );
           acceptedWork.pending.set(result, { borrower });
           void result.finally(() => acceptedWork.pending.delete(result)).catch(() => undefined);

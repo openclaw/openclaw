@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { createStubTool } from "./test-helpers/agent-tool-stubs.js";
-import { prepareAgentToolSurfacePresentation } from "./tool-surface-plan.js";
 
 it.each<{
   name: string;
@@ -33,7 +32,7 @@ it.each<{
     direct: false,
   },
   { name: "explicit disable", api: "ollama", hint: "tools", setting: false, direct: true },
-])("exposes web and memory schemas for $name with explicit config taking precedence", (row) => {
+])("exposes web schemas for $name with explicit config taking precedence", (row) => {
   const config: OpenClawConfig = { tools: { toolSearch: row.setting } };
   const model = { api: row.api, toolSearchMode: row.hint };
   const runtime = createAgentHarnessToolSurfaceRuntimeCore({
@@ -43,56 +42,51 @@ it.each<{
   });
   try {
     const surface = runtime.compactTools(
-      ["web_search", "web_fetch", "memory_search", "memory_get", "hidden_target"].map(
-        createStubTool,
-      ),
+      ["web_search", "web_fetch", "hidden_target"].map(createStubTool),
     );
     const names = new Set(surface.tools.map((tool) => tool.name));
     expect(names.has("web_search")).toBe(row.direct);
     expect(names.has("web_fetch")).toBe(row.direct);
-    expect(names.has("memory_search")).toBe(row.direct);
-    expect(names.has("memory_get")).toBe(row.direct);
     expect(names.has("hidden_target")).toBe(row.setting === false);
   } finally {
     runtime.cleanup();
   }
 });
 
-it.each([
-  { search: "web_search", get: "web_fetch", pluginId: "web-search" },
-  { search: "memory_search", get: "memory_get", pluginId: "memory-core" },
-])("keeps $search policy and provenance checks", ({ search, get, pluginId }) => {
+it("does not restore withheld tools or expose an MCP lookalike, and honors prompt restrictions", () => {
   const model = { api: "ollama", toolSearchMode: "tools" as const };
   const runtime = createAgentHarnessToolSurfaceRuntimeCore({ model, modelToolsEnabled: true });
-  const searchTool = createStubTool(search);
-  setPluginToolMeta(searchTool, { pluginId, optional: true });
-  const lookalike = createStubTool(get);
+  const lookalike = createStubTool("web_fetch");
   setPluginToolMeta(lookalike, {
     pluginId: "bundle-mcp",
     optional: true,
     mcp: {
       serverName: "fixture",
       safeServerName: "fixture",
-      toolName: get,
+      toolName: "web_fetch",
       operation: "tool",
     },
   });
   try {
-    const surface = runtime.compactTools([searchTool, lookalike, createStubTool("hidden_target")]);
-    expect(surface.tools.map((tool) => tool.name)).toContain(search);
-    expect(surface.tools.map((tool) => tool.name)).not.toContain(get);
+    const surface = runtime.compactTools([
+      createStubTool("web_search"),
+      lookalike,
+      createStubTool("hidden_target"),
+    ]);
+    expect(surface.tools.map((tool) => tool.name)).toContain("web_search");
+    expect(surface.tools.map((tool) => tool.name)).not.toContain("web_fetch");
     const restricted = surface.promptToolPolicy.apply({ toolsAllow: ["hidden_target"] });
-    expect(restricted.tools.map((tool) => tool.name)).not.toContain(search);
-    expect(restricted.callableToolNames).not.toContain(search);
+    expect(restricted.tools.map((tool) => tool.name)).not.toContain("web_search");
+    expect(restricted.callableToolNames).not.toContain("web_search");
     expect(
       runtime.compactTools([createStubTool("hidden_target")]).tools.map((tool) => tool.name),
-    ).not.toContain(get);
+    ).not.toContain("web_fetch");
   } finally {
     runtime.cleanup();
   }
 });
 
-it("keeps web and memory tools deferred when Code Mode owns the surface", () => {
+it("keeps web tools deferred when Code Mode owns the surface", () => {
   const model = { api: "ollama", toolSearchMode: "tools" as const };
   const runtime = createAgentHarnessToolSurfaceRuntimeCore({
     config: { tools: { codeMode: true } },
@@ -101,31 +95,9 @@ it("keeps web and memory tools deferred when Code Mode owns the surface", () => 
   });
   try {
     const names = runtime
-      .compactTools(["web_search", "web_fetch", "memory_search", "memory_get"].map(createStubTool))
+      .compactTools(["web_search", "web_fetch"].map(createStubTool))
       .tools.map((tool) => tool.name);
     expect(names).toEqual(["exec", "wait"]);
-  } finally {
-    runtime.cleanup();
-  }
-});
-
-it("preserves the deferred web and memory tools in prepared worker presentations", () => {
-  const model = { api: "ollama", toolSearchMode: "tools" as const };
-  const runtime = createAgentHarnessToolSurfaceRuntimeCore({
-    model,
-    modelToolsEnabled: true,
-    presentation: prepareAgentToolSurfacePresentation({
-      model,
-      toolsEnabled: true,
-      isRawModelRun: false,
-      forceDirectMessageTool: false,
-    }),
-  });
-  try {
-    const names = runtime
-      .compactTools(["web_search", "web_fetch", "memory_search", "memory_get"].map(createStubTool))
-      .tools.map((tool) => tool.name);
-    expect(names).toEqual(["tool_search", "tool_describe", "dispatch_action"]);
   } finally {
     runtime.cleanup();
   }

@@ -15,18 +15,7 @@ import {
 
 type ChildMessage = Exclude<
   BrokerResponse,
-  {
-    type:
-      | "ready"
-      | "startup-failed"
-      | "prepared"
-      | "owned"
-      | "pipe"
-      | "pipe-prefix"
-      | "execa-result"
-      | "file-read-chunk"
-      | "file-read-result";
-  }
+  { type: "ready" | "prepared" | "owned" | "pipe" | "pipe-prefix" | "execa-result" }
 >;
 
 /** Native pipes remain native streams; only lifecycle and IPC cross the broker. */

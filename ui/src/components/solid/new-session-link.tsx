@@ -1,25 +1,23 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, createUniqueId, lazy, Loading, onSettled, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import { IdentityAvatarController } from "../../lib/identity-avatar-loader.ts";
-import type { AgentIdentity } from "../../lib/identity-avatar-view.ts";
-import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
+import {
+  formatKeyboardShortcutCombo,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRosterActivity } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import {
-  readSessionMethodAccess,
-  type SessionMethodAccess,
-} from "../../lib/session-method-access.ts";
-import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
 import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { newSessionSearch, type NewSessionTarget } from "../../pages/new-session/location.ts";
+import type { AgentIdentity } from "../identity-avatar-view.ts";
+import { renderShortcutHint } from "../kbd.ts";
 import { Icon } from "./icon.tsx";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
-import { ShortcutHint } from "./kbd.tsx";
 import type { MenuItem } from "./menu.tsx";
 import "../tooltip.ts";
 import "../../styles/sidebar-agent-roster.css";
@@ -31,7 +29,7 @@ export function renderNewSessionLink(params: {
   basePath: string;
   agentId: string;
   target?: NewSessionTarget;
-  class: string;
+  className: string;
   label: string;
   disabledReason?: string;
   showShortcut?: boolean;
@@ -40,17 +38,21 @@ export function renderNewSessionLink(params: {
   const disabled = () => Boolean(params.disabledReason);
   const href = () =>
     `${pathForRoute("new-session", params.basePath)}${newSessionSearch(params.agentId, params.target)}`;
+  const hint = () =>
+    params.showShortcut
+      ? `${params.label} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession)})`
+      : params.label;
   return (
     <openclaw-tooltip
-      prop:content={params.disabledReason ?? (params.showShortcut ? undefined : params.label)}
+      prop:content={params.disabledReason ?? hint()}
+      prop:contentTemplate={
+        params.disabledReason == null && params.showShortcut
+          ? renderShortcutHint(params.label, KEYBOARD_SHORTCUT_COMBOS.newSession)
+          : undefined
+      }
     >
-      <Show when={params.disabledReason == null && params.showShortcut}>
-        <span slot="content">
-          <ShortcutHint label={params.label} combo={KEYBOARD_SHORTCUT_COMBOS.newSession} />
-        </span>
-      </Show>
       <a
-        class={params.class}
+        class={params.className}
         role="link"
         href={disabled() ? undefined : href()}
         aria-label={params.label}
@@ -74,62 +76,6 @@ export function renderNewSessionLink(params: {
         <Icon name="plus" />
       </a>
     </openclaw-tooltip>
-  );
-}
-
-const NewSessionLink = renderNewSessionLink;
-
-export function ContextNewSessionAction(props: {
-  context: ApplicationContext;
-  class: string;
-  agentId?: string;
-}) {
-  const agentId = () =>
-    props.agentId ??
-    normalizeAgentId(
-      props.context.agentSelection.state.selectedId ??
-        props.context.gateway.snapshot.assistantAgentId,
-    );
-  const readAccess = () =>
-    readSessionMethodAccess(props.context.gateway.snapshot, {
-      method: "sessions.create",
-      params: {},
-      sessionScope: true,
-    });
-  const access = createMemo(readAccess);
-  const disabledReason = () => {
-    const current = access();
-    return current.allowed ? undefined : current.reason;
-  };
-  const onOpen = (id: string) => {
-    if (readAccess().allowed) {
-      props.context.navigate("new-session", { search: newSessionSearch(id) });
-    }
-  };
-  return (
-    <Show
-      when={props.context.theme.settings.sidebarAgentsMode === "roster"}
-      fallback={
-        <NewSessionLink
-          basePath={props.context.basePath}
-          agentId={agentId()}
-          class={props.class}
-          label={t("agentChip.newConversation")}
-          showShortcut
-          disabledReason={disabledReason()}
-          onOpen={onOpen}
-        />
-      }
-    >
-      <NewSessionMenu
-        basePath={props.context.basePath}
-        access={access()}
-        triggerClass={props.class}
-        active
-        snapshotCards={null}
-        onOpen={onOpen}
-      />
-    </Show>
   );
 }
 

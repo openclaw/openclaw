@@ -430,8 +430,8 @@ export async function streamContainerEvents(params: {
             ws.close();
           });
         }
-      } catch {
-        logError("[signal-ws] parse error: invalid JSON frame");
+      } catch (err) {
+        logError(`[signal-ws] parse error: ${coerceErrorMessage(err)}`);
       }
     });
 

@@ -129,12 +129,9 @@ function countAcquiredTranscriptPayloadBytes(
 it("skips sizing an empty transcript and reads its first committed turn", async () => {
   await withBoundedContextScope(async (scope) => {
     const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
-    const counter = trackSqliteStatementExecutions(db, ["sizing", "prefix"], (sql) => {
-      if (sql.includes('"active"."active_position" <')) {
-        return "prefix";
-      }
-      return sql.includes("serialized_bytes") ? "sizing" : null;
-    });
+    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
+      sql.includes("serialized_bytes") ? "sizing" : null,
+    );
     const onRead = vi.fn();
     try {
       const empty = readSessionTranscriptBoundedActiveContextCore(scope, {
@@ -152,7 +149,7 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
         truncated: false,
         completeActivePath: true,
       });
-      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), [], undefined);
+      expect(onRead).toHaveBeenCalledExactlyOnceWith(expect.anything(), []);
       expect(counter.counts.sizing).toBe(0);
 
       await persistSessionTranscriptTurn(scope, {
@@ -173,7 +170,6 @@ it("skips sizing an empty transcript and reads its first committed turn", async 
         truncated: false,
         completeActivePath: true,
       });
-      expect(counter.counts.prefix).toBe(0);
     } finally {
       counter.restore();
     }

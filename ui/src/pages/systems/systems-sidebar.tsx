@@ -101,7 +101,7 @@ function SystemsSidebarContent(props: SystemsSidebarProps) {
 function SystemsInventory(props: { controller: SystemsController }) {
   const menuId = createUniqueId();
   const controller = () => props.controller;
-  const query = createMemo(() => controller().query.trim().toLocaleLowerCase());
+  const query = () => controller().query.trim().toLocaleLowerCase();
   const rows = createMemo(() => {
     const sortMode = controller().sortMode;
     return controller()
@@ -137,23 +137,6 @@ function SystemsInventory(props: { controller: SystemsController }) {
           }) || a.environment.id.localeCompare(b.environment.id)
         );
       });
-  });
-  const filterItem = (
-    prefix: "sort" | "status",
-    option: { value: string; labelKey: string },
-    checked: boolean,
-  ): MenuItem => ({
-    id: `${prefix}:${option.value}`,
-    label: t(option.labelKey),
-    type: "radio",
-    checked,
-    class: "sidebar-session-sort-menu__item",
-    content: <span class="session-menu__text">{t(option.labelKey)}</span>,
-    details: (
-      <span class="session-menu__check" aria-hidden="true">
-        {checked ? <Icon name="check" /> : null}
-      </span>
-    ),
   });
   const renderRow = (row: SystemsInventoryRow) => {
     const online = row.environment.status === "available";
@@ -197,7 +180,11 @@ function SystemsInventory(props: { controller: SystemsController }) {
           aria-label={t("systems.search")}
           placeholder={t("systems.search")}
           value={controller().query}
-          onInput={(event) => controller().updatePresentation({ query: event.currentTarget.value })}
+          onInput={(event: InputEvent) => {
+            if (event.currentTarget instanceof HTMLInputElement) {
+              controller().updatePresentation({ query: event.currentTarget.value });
+            }
+          }}
         />
         <Menu
           id={menuId}
@@ -214,9 +201,19 @@ function SystemsInventory(props: { controller: SystemsController }) {
               id: "sort-heading",
               content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
             },
-            ...sortOptions.map((option) =>
-              filterItem("sort", option, controller().sortMode === option.value),
-            ),
+            ...sortOptions.map((option): MenuItem => ({
+              id: `sort:${option.value}`,
+              label: t(option.labelKey),
+              type: "radio",
+              checked: controller().sortMode === option.value,
+              class: "sidebar-session-sort-menu__item",
+              content: <span class="session-menu__text">{t(option.labelKey)}</span>,
+              details: (
+                <span class="session-menu__check" aria-hidden="true">
+                  {controller().sortMode === option.value ? <Icon name="check" /> : null}
+                </span>
+              ),
+            })),
             {
               kind: "content",
               id: "status-heading",
@@ -227,9 +224,19 @@ function SystemsInventory(props: { controller: SystemsController }) {
                 </>
               ),
             },
-            ...statusOptions.map((option) =>
-              filterItem("status", option, controller().statusFilter === option.value),
-            ),
+            ...statusOptions.map((option): MenuItem => ({
+              id: `status:${option.value}`,
+              label: t(option.labelKey),
+              type: "radio",
+              checked: controller().statusFilter === option.value,
+              class: "sidebar-session-sort-menu__item",
+              content: <span class="session-menu__text">{t(option.labelKey)}</span>,
+              details: (
+                <span class="session-menu__check" aria-hidden="true">
+                  {controller().statusFilter === option.value ? <Icon name="check" /> : null}
+                </span>
+              ),
+            })),
           ]}
           onSelect={(item) => {
             const value = item.id;
@@ -262,7 +269,7 @@ function SystemsInventory(props: { controller: SystemsController }) {
         <For each={rows().filter((row) => systemKind(row) === "host")}>{renderRow}</For>
         <For each={["node", "worker"] as const}>
           {(kind) => {
-            const group = createMemo(() => rows().filter((row) => systemKind(row) === kind));
+            const group = () => rows().filter((row) => systemKind(row) === kind);
             return (
               <Show when={group().length}>
                 <section class="systems-group">

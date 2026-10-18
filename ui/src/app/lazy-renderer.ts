@@ -1,4 +1,4 @@
-import type { SolidControllerHost } from "../lit/solid-controller-host.ts";
+import type { ReactiveControllerHost } from "lit";
 
 export class LazyRenderer<Renderer> {
   renderer: Renderer | null = null;
@@ -6,7 +6,7 @@ export class LazyRenderer<Renderer> {
   private pending: Promise<void> | null = null;
 
   constructor(
-    private readonly host: Pick<SolidControllerHost, "requestUpdate">,
+    private readonly host: Pick<ReactiveControllerHost, "requestUpdate">,
     private readonly importRenderer: () => Promise<Renderer>,
   ) {}
 

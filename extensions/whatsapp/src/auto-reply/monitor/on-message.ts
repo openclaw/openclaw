@@ -15,6 +15,7 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { resolveWhatsAppGroupSessionRoute } from "../../group-session-key.js";
 import { getPrimaryIdentityId, getSenderIdentity } from "../../identity.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { buildMentionConfig } from "../mentions.js";
 import { maybeSendAckReaction } from "./ack-reaction.js";
@@ -49,7 +50,7 @@ export function createWebOnMessageHandler(params: {
     msg: AdmittedWebInboundMessage,
     peerId: string,
   ): AdmittedWebInboundMessage => {
-    const admission = msg.admission;
+    const admission = requireWhatsAppInboundAdmission(msg);
     if (
       admission.conversation.kind === "group" ||
       msg.platform.sender?.e164 ||
@@ -102,7 +103,7 @@ export function createWebOnMessageHandler(params: {
     const cfg = params.loadConfig?.() ?? params.cfg;
     const peerId = resolvePeerId(normalizedMsg);
     const msg = withDirectSenderPeer(normalizedMsg, peerId);
-    const admission = msg.admission;
+    const admission = requireWhatsAppInboundAdmission(msg);
     if (admission.ingress.admission !== "dispatch" && admission.ingress.admission !== "observe") {
       return;
     }

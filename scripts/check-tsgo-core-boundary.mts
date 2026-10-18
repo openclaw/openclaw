@@ -202,15 +202,7 @@ async function validateCoreGraphs(cwd: string, query: GraphQuery): Promise<CoreT
         .map((file) => normalize(path.resolve(cwd, path.dirname(graph.config), file)))
         .filter((file) => testRootPattern.test(file)),
     });
-    const extensionFiles = files.filter(
-      (file) =>
-        file.startsWith("extensions/") &&
-        !(
-          (graph.name === "ui" || graph.name.startsWith("core-test-")) &&
-          (file === "extensions/active-memory/control-ui.presentation.json" ||
-            file === "extensions/memory-wiki/control-ui.presentation.json")
-        ),
-    );
+    const extensionFiles = files.filter((file) => file.startsWith("extensions/"));
     for (const file of extensionFiles) {
       violations.push(`${graph.name}: ${file}`);
     }

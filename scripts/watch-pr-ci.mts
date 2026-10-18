@@ -554,7 +554,7 @@ export function classifyRunAttachment(runId: number, run: RunStatus, after?: num
   };
 }
 
-function classifyAttachedCiRun(run: RunStatus) {
+export function classifyAttachedCiRun(run: RunStatus) {
   if (run.status !== "completed") {
     return { verdict: "PENDING" };
   }

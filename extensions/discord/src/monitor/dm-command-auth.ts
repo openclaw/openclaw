@@ -7,6 +7,7 @@ import type {
   ResolveChannelMessageIngressParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RequestClient } from "../internal/discord.js";
 import { getDiscordRuntime } from "../runtime.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
@@ -63,7 +64,7 @@ function createDiscordDynamicAccessGroupResolver(params: {
     return undefined;
   }
   const cfg = params.cfg;
-  return async ({ group, accountId, subject }) => {
+  return async ({ name, group, accountId, subject }) => {
     if (group.type !== "discord.channelAudience") {
       return false;
     }
@@ -75,12 +76,17 @@ function createDiscordDynamicAccessGroupResolver(params: {
     if (membership !== "canViewChannel") {
       return false;
     }
-    return await canViewDiscordGuildChannel(group.guildId, group.channelId, senderId, {
-      cfg,
-      accountId,
-      token: params.token,
-      rest: params.rest,
-    });
+    try {
+      return await canViewDiscordGuildChannel(group.guildId, group.channelId, senderId, {
+        cfg,
+        accountId,
+        token: params.token,
+        rest: params.rest,
+      });
+    } catch (err) {
+      logVerbose(`discord: accessGroup:${name} lookup failed for user ${senderId}: ${String(err)}`);
+      throw err;
+    }
   };
 }
 

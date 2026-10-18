@@ -74,7 +74,7 @@ afterEach(async () => {
 
 describe("prepared subagent publication ownership", () => {
   it.each(["run", "session"] as const)(
-    "reuses the selected %s projection from 5,000 retained records",
+    "copies only the selected %s from 5,000 retained records",
     async (kind) => {
       const records = new Map(
         Array.from({ length: 5_000 }, (_, i) => {
@@ -101,7 +101,7 @@ describe("prepared subagent publication ownership", () => {
           ({ snapshot }, selected) => ({ snapshot, ids: [...selected.keys()] }),
           readScope,
         );
-      const warmed = await read();
+      await read();
       const projected = vi.spyOn(delivery, "projectSubagentRunForSessionList");
       const scan = vi.spyOn(subagentRuns, Symbol.iterator).mockImplementation(() => {
         throw new Error("A keyed read must not scan the live registry");
@@ -110,15 +110,17 @@ describe("prepared subagent publication ownership", () => {
       scan.mockRestore();
       expect(result.ids).toEqual(["run-0"]);
       expect([...result.snapshot.keys()]).toEqual(["run-0"]);
-      expect(result.snapshot.get("run-0")).toBe(warmed.snapshot.get("run-0"));
-      expect(projected).not.toHaveBeenCalled();
+      expect(new Set(projected.mock.calls.map(([entry]) => entry.runId))).toEqual(
+        new Set(["run-0"]),
+      );
+      // Each preparation/capture frame owns at most one copy of its matching record.
+      expect(projected.mock.calls.length).toBeLessThanOrEqual(3);
       const current = subagentRuns.get("run-0")!;
       subagentRuns.set(current.runId, {
         ...current,
         execution: { ...current.execution, status: "terminal" },
       });
       expect(result.snapshot.get("run-0")?.execution.status).toBe("running");
-      expect((await read()).snapshot.get("run-0")?.execution.status).toBe("terminal");
     },
   );
 

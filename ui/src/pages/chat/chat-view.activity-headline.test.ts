@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createTestTranscript, disposeChatView, renderChatInto } from "./chat-view.test-helpers.ts";
+import { createTestTranscript, renderChatInto } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -21,7 +22,7 @@ beforeEach(() => {
   transcript = createTestTranscript();
 });
 afterEach(() => {
-  disposeChatView(container);
+  render(nothing, container);
   transcript.hostDisconnected();
   resetChatViewState();
   resetTranscriptTestDom();

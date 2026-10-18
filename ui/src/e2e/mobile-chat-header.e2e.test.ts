@@ -92,13 +92,11 @@ suite.define(() => {
               element.querySelectorAll<HTMLButtonElement>(
                 ".chat-pane__nav-toggle, .chat-pane__actions button",
               ),
-            )
-              .filter((button) => button.checkVisibility())
-              .map((button) => ({
-                label: button.getAttribute("aria-label"),
-                width: button.getBoundingClientRect().width,
-                height: button.getBoundingClientRect().height,
-              })),
+            ).map((button) => ({
+              label: button.getAttribute("aria-label"),
+              width: button.getBoundingClientRect().width,
+              height: button.getBoundingClientRect().height,
+            })),
           };
         });
         expect(geometry.titleWidth).toBeGreaterThan(80);

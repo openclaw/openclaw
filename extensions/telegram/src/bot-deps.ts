@@ -47,7 +47,6 @@ type ResolveTelegramApprovalParams = {
   approvalId: string;
   decision: ExecApprovalReplyDecision;
   channel: "telegram";
-  accountId?: string | null;
   senderId?: string | null;
   gatewayUrl?: string;
 } & (
@@ -59,9 +58,24 @@ type ResolveTelegramApproval = (
   params: ResolveTelegramApprovalParams,
 ) => Promise<ApprovalResolveResult | void>;
 
-export type TelegramBotDeps = Omit<typeof telegramBotImplementations, "wasSentByBot"> & {
-  wasSentByBot: (...args: Parameters<typeof wasSentByBot>) => boolean | Promise<boolean>;
-};
+type RequiredTelegramBotDeps = Pick<
+  typeof telegramBotImplementations,
+  | "getRuntimeConfig"
+  | "resolveStorePath"
+  | "readChannelAllowFromStore"
+  | "upsertChannelPairingRequest"
+  | "enqueueRoutedSystemEvent"
+  | "dispatchReplyWithBufferedBlockDispatcher"
+  | "buildModelsProviderData"
+  | "prepareSkillCommandsForAgents"
+>;
+
+export type TelegramBotDeps = RequiredTelegramBotDeps &
+  Partial<
+    Omit<typeof telegramBotImplementations, keyof RequiredTelegramBotDeps | "wasSentByBot">
+  > & {
+    wasSentByBot: (...args: Parameters<typeof wasSentByBot>) => boolean | Promise<boolean>;
+  };
 
 const telegramBotImplementations = {
   getRuntimeConfig,

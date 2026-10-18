@@ -198,7 +198,6 @@ export async function listPage(
           const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
           const source = state.store?.jobs ?? [];
           sourceCount = source.length;
-          const defaultAgentId = requestedAgentId ? resolveCurrentDefaultAgentId(state) : undefined;
           const filtered = source.filter((job) => {
             if (enabledFilter === "enabled" && !isJobEnabled(job)) {
               return false;
@@ -208,7 +207,8 @@ export async function listPage(
             }
             if (
               requestedAgentId &&
-              tryResolveCronJobEffectiveAgentId(job, defaultAgentId) !== requestedAgentId
+              tryResolveCronJobEffectiveAgentId(job, resolveCurrentDefaultAgentId(state)) !==
+                requestedAgentId
             ) {
               return false;
             }

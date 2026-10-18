@@ -9,9 +9,11 @@ import {
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/mention-menu.css";
+import { LitContent } from "./chat-composer-interop.tsx";
 import {
   handleComposerMenuKeydown,
   ComposerMenu,
@@ -378,6 +380,14 @@ export class HumanMentionMenu {
     return this.selectedAvatars;
   }
 
+  render(host: HumanMentionMenuHost, requestUpdate: () => void) {
+    return solidTemplate(HumanMentionMenuView, { args: [this, host, requestUpdate] });
+  }
+
+  renderSolid(host: HumanMentionMenuHost, requestUpdate: () => void) {
+    return <HumanMentionMenuView args={[this, host, requestUpdate]} />;
+  }
+
   renderContents(host: HumanMentionMenuHost, requestUpdate: () => void) {
     if (!this.open) {
       return null;
@@ -433,13 +443,13 @@ export class HumanMentionMenu {
                       requestUpdate();
                     },
                     icon: (
-                      <ChatAuthorAvatar
-                        sender={{
+                      <LitContent
+                        value={renderChatAuthorAvatar({
                           id: person.profileId,
                           name: person.displayName,
                           identity: { type: "profile", id: person.profileId },
                           profileAvatarUrl: person.avatarUrl,
-                        }}
+                        })}
                       />
                     ),
                     iconHidden: true,

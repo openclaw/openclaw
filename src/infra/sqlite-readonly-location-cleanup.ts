@@ -12,7 +12,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { hasErrnoCode } from "./errno.js";
 import { retireSqliteDatabaseAdmissionForPath } from "./sqlite-database-admission.js";
-import { recordSqliteSnapshotFailure } from "./sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import type {
   PreparedSqliteReadOnlyLocation,
@@ -56,24 +55,22 @@ export function settleSqliteSnapshotRequest<T>(request: {
   startClose(): RetainedOperation<void>;
 }): Promise<T> {
   return request.result.catch(async (error: unknown) => {
-    let failure = error;
     try {
       await request.startClose().result;
     } catch (cleanupError) {
-      if (cleanupError !== error) {
-        const combined = createSqliteLifecycleAggregateError(
-          [error, cleanupError],
-          "SQLite snapshot allocation and cleanup failed",
-          error,
-        );
-        failure =
-          error instanceof SqliteSnapshotCleanupError
-            ? new SqliteSnapshotCleanupError(error.message, { cause: combined })
-            : combined;
+      if (cleanupError === error) {
+        throw error;
       }
+      const combined = createSqliteLifecycleAggregateError(
+        [error, cleanupError],
+        "SQLite snapshot allocation and cleanup failed",
+        error,
+      );
+      throw error instanceof SqliteSnapshotCleanupError
+        ? new SqliteSnapshotCleanupError(error.message, { cause: combined })
+        : combined;
     }
-    recordSqliteSnapshotFailure(failure);
-    throw failure;
+    throw error;
   });
 }
 

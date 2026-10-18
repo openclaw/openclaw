@@ -657,8 +657,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           : ["final-start", "final-end", "followup"];
         const deliveryOrder: string[] = [];
         const releaseDelivery = createDeferred();
-        const deliveryEntered = createDeferred();
-        const followupEntered = createDeferred();
         let receiptCallbackWork: Promise<void> | undefined;
         const dispatcher = createReplyDispatcher({
           deliver: async (_payload, info) => {
@@ -667,7 +665,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
               return;
             }
             deliveryOrder.push("final-start");
-            deliveryEntered.resolve();
             await releaseDelivery.promise;
             deliveryOrder.push("final-end");
           },
@@ -687,7 +684,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
               sessionId: "queued-session",
               resetTriggered: false,
             });
-            followupEntered.resolve();
           });
           if (holdReceiptCallback) {
             return undefined;
@@ -708,7 +704,6 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             onBlockReplyQueued: holdReceiptCallback
               ? () => {
                   deliveryOrder.push("callback-start");
-                  deliveryEntered.resolve();
                   receiptCallbackWork = releaseDelivery.promise.then(() => {
                     deliveryOrder.push("callback-end");
                   });
@@ -723,8 +718,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         });
 
         try {
-          await deliveryEntered.promise;
-          expect(deliveryOrder).toEqual(heldOrder);
+          await vi.waitFor(() => {
+            expect(deliveryOrder).toEqual(heldOrder);
+          });
           const result = await dispatchPromise;
 
           expect(operation).toBeDefined();
@@ -743,8 +739,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
 
           releaseDelivery.resolve();
           await dispatcher.waitForIdle();
-          await followupEntered.promise;
-          expect(queuedOperation).toBeDefined();
+          await vi.waitFor(() => {
+            expect(queuedOperation).toBeDefined();
+          });
 
           expect(deliveryOrder).toEqual(completedOrder);
           expect(replyRunRegistry.get("agent:test:session")).toBe(queuedOperation);
@@ -755,8 +752,9 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await dispatcher.waitForIdle();
           operation?.complete();
           if (operation) {
-            await followupEntered.promise;
-            expect(queuedOperation).toBeDefined();
+            await vi.waitFor(() => {
+              expect(queuedOperation).toBeDefined();
+            });
           }
           queuedOperation?.complete();
           expect(getActiveReplyRunCount()).toBe(0);

@@ -167,6 +167,40 @@ export class McpAppViewController {
     this.inactiveValue = value;
     this.notify();
   }
+  get isConnected() {
+    return this.host.isConnected;
+  }
+  get sessionKey() {
+    return this.host.sessionKey;
+  }
+  get viewId() {
+    return this.host.viewId;
+  }
+  get agentId() {
+    return this.host.agentId;
+  }
+  get title() {
+    return this.host.title;
+  }
+  get deepLink() {
+    return this.host.deepLink;
+  }
+  get height() {
+    return this.host.height;
+  }
+  get fillContainer() {
+    return this.host.fillContainer;
+  }
+  get displayMode() {
+    return this.host.displayMode;
+  }
+  set displayMode(value: "inline" | "fullscreen") {
+    this.host.displayMode = value;
+  }
+  dispatchEvent(event: Event) {
+    return this.host.dispatchEvent(event);
+  }
+
   async setup(binding: McpAppBinding | null) {
     this.setupAbort?.abort();
     const abort = new AbortController();
@@ -177,7 +211,7 @@ export class McpAppViewController {
       await this.teardownResources(this.resources);
       abort.signal.throwIfAborted();
       this.inactive = null;
-      if (!this.host.sessionKey || !this.host.viewId) {
+      if (!this.sessionKey || !this.viewId) {
         return;
       }
       if (!binding) {
@@ -194,17 +228,15 @@ export class McpAppViewController {
 
   updateTitle() {
     if (this.resources) {
-      this.resources.iframe.title = this.host.title || translate("mcpApp.title");
+      this.resources.iframe.title = this.title || translate("mcpApp.title");
     }
   }
 
   updateReservedHeight() {
     if (this.mount) {
       this.mount.style.minHeight =
-        this.host.surface === "conversation" &&
-        !this.host.fillContainer &&
-        this.host.displayMode === "inline"
-          ? `${this.resources?.frameHeight ?? this.host.height}px`
+        this.host.surface === "conversation" && !this.fillContainer && this.displayMode === "inline"
+          ? `${this.resources?.frameHeight ?? this.height}px`
           : "";
       if (this.host.onHeightChange) {
         this.host.style.minHeight = "";
@@ -214,17 +246,15 @@ export class McpAppViewController {
 
   updatePresentation() {
     this.confirmation.update();
-    if (this.host.displayMode === "fullscreen") {
+    if (this.displayMode === "fullscreen") {
       promoteToPopoverTopLayer(this.host);
     } else {
       this.host.removeAttribute("popover");
     }
     if (this.resources) {
-      this.resources.frameHeight = this.host.height;
+      this.resources.frameHeight = this.height;
       this.resources.iframe.style.height =
-        this.host.fillContainer || this.host.displayMode === "fullscreen"
-          ? "100%"
-          : `${this.host.height}px`;
+        this.fillContainer || this.displayMode === "fullscreen" ? "100%" : `${this.height}px`;
       this.resources.updateHostContext?.();
     }
     this.updateReservedHeight();
@@ -250,13 +280,13 @@ export class McpAppViewController {
     } catch (error) {
       if (
         isMcpAppViewExpiredError(error) &&
-        this.host.viewId === binding.viewId &&
-        this.host.sessionKey === binding.sessionKey &&
+        this.viewId === binding.viewId &&
+        this.sessionKey === binding.sessionKey &&
         this.context?.gateway.snapshot.client === binding.client
       ) {
         this.inactive = "ended";
         this.confirmation.cancel();
-        this.host.dispatchEvent(
+        this.dispatchEvent(
           new CustomEvent(MCP_APP_VIEW_EXPIRED_EVENT, { bubbles: true, composed: true }),
         );
       }
@@ -315,7 +345,7 @@ export class McpAppViewController {
 
   /** Restarts a torn-down view only when its parent kept the element connected. */
   restartAfterTeardown() {
-    if (!this.host.isConnected || this.resources || this.teardownPromise) {
+    if (!this.isConnected || this.resources || this.teardownPromise) {
       return;
     }
     void this.setup(this.binding());
@@ -327,9 +357,9 @@ export class McpAppViewController {
     return client
       ? {
           client,
-          sessionKey: this.host.sessionKey,
-          viewId: this.host.viewId,
-          agentId: this.host.agentId || undefined,
+          sessionKey: this.sessionKey,
+          viewId: this.viewId,
+          agentId: this.agentId || undefined,
           connectionRevision: gateway.connectionRevision,
           hello: gateway.snapshot.hello,
         }
@@ -346,11 +376,11 @@ export class McpAppViewController {
       !signal.aborted &&
       !resources.disposed &&
       this.resources === resources &&
-      this.host.isConnected &&
+      this.isConnected &&
       this.inactive !== "ended" &&
-      this.host.sessionKey === binding.sessionKey &&
-      this.host.viewId === binding.viewId &&
-      (this.host.agentId || undefined) === binding.agentId &&
+      this.sessionKey === binding.sessionKey &&
+      this.viewId === binding.viewId &&
+      (this.agentId || undefined) === binding.agentId &&
       gateway?.snapshot.phase === "connected" &&
       gateway.snapshot.client === binding.client &&
       gateway.connectionRevision === binding.connectionRevision &&
@@ -365,17 +395,18 @@ export class McpAppViewController {
     signal: AbortSignal,
   ) {
     bridge.onopenlink = async ({ url }) => {
+      if (!parseMcpAppLink(url)) {
+        return openExternalUrlSafe(url) ? {} : { isError: true };
+      }
       const context = this.context;
-      // Both external and plugin navigation require the current, focused App.
+      // Recognized plugin links navigate this host, so a retired/background frame
+      // must not redirect a collaborator or a replacement connection.
       if (
         !context ||
         !this.isCurrentBinding(binding, resources, signal) ||
         !isWidgetFrameInteractable(resources.iframe)
       ) {
         return { isError: true };
-      }
-      if (!parseMcpAppLink(url)) {
-        return openExternalUrlSafe(url) ? {} : { isError: true };
       }
       return navigateMcpAppLink(context, url) ? {} : { isError: true };
     };
@@ -396,11 +427,11 @@ export class McpAppViewController {
         throw new Error(translate("mcpApp.errors.mountUnavailable"));
       }
       const iframe = document.createElement("iframe");
-      iframe.title = this.host.title || translate("mcpApp.title");
+      iframe.title = this.title || translate("mcpApp.title");
       // The isolated proxy binds its parent before accepting messages. Only the
       // Control UI origin is disclosed; path/query data remains suppressed.
       iframe.referrerPolicy = "origin";
-      iframe.style.height = this.host.fillContainer ? "100%" : `${this.host.height}px`;
+      iframe.style.height = this.fillContainer ? "100%" : `${this.height}px`;
       // The proxy listener is a dedicated origin that never serves host data,
       // so Apps retain their required origin capabilities without reaching Control UI.
       iframe.setAttribute("sandbox", "allow-scripts allow-same-origin allow-forms");
@@ -408,7 +439,7 @@ export class McpAppViewController {
       const createdResources: McpAppResources = {
         bridge: null,
         cleanups: new Set(),
-        frameHeight: this.host.height,
+        frameHeight: this.height,
         iframe,
         transport: null,
         disposed: false,
@@ -455,15 +486,15 @@ export class McpAppViewController {
       }
 
       let modes = negotiateMcpAppDisplayModes(payload.displayModes);
-      this.host.displayMode =
+      this.displayMode =
         payload.displayMode && modes.available.includes(payload.displayMode)
           ? payload.displayMode
           : modes.initial;
       let modelContext = payload.hostContext?.["openai/modelContext"] ?? null;
       let contextGeneration = 0;
       const buildHostContext = () => {
-        const deepLink = this.host.deepLink
-          ? { url: this.host.deepLink }
+        const deepLink = this.deepLink
+          ? { url: this.deepLink }
           : payload.hostContext?.["openai/deepLink"];
         if (
           deepLink &&
@@ -477,8 +508,8 @@ export class McpAppViewController {
           ...hostContext(
             mount,
             createdResources.frameHeight,
-            this.host.fillContainer || this.host.displayMode === "fullscreen",
-            this.host.displayMode,
+            this.fillContainer || this.displayMode === "fullscreen",
+            this.displayMode,
             modes.available,
           ),
           "openai/modelContext": modelContext,
@@ -486,7 +517,7 @@ export class McpAppViewController {
         };
       };
       const publishContext = () =>
-        this.host.dispatchEvent(
+        this.dispatchEvent(
           new CustomEvent<McpAppContextEventDetail>(MCP_APP_CONTEXT_EVENT, {
             bubbles: true,
             composed: true,
@@ -515,7 +546,7 @@ export class McpAppViewController {
       const confirm = (text: string, kind: "message" | "file") =>
         this.confirmation.request({
           frame: iframe,
-          title: this.host.title || translate("mcpApp.title"),
+          title: this.title || translate("mcpApp.title"),
           text,
           kind,
           isCurrent,
@@ -587,22 +618,22 @@ export class McpAppViewController {
         addCleanup: (cleanup) => {
           this.addResourceCleanup(createdResources, cleanup);
         },
-        dispatchEvent: (event) => this.host.dispatchEvent(event),
+        dispatchEvent: (event) => this.dispatchEvent(event),
         onModelContextChanged: (clearedUpdateId) => {
           void refreshModelContext(clearedUpdateId)?.catch(() => undefined);
         },
         onConversationInputRequested: () => {
-          this.host.displayMode = "inline";
+          this.displayMode = "inline";
         },
         subscribeEvents: (listener) => this.context?.gateway.subscribeEvents?.(listener),
       });
       bridge.onrequestdisplaymode = async ({ mode }) => {
         if ((mode !== "inline" && mode !== "fullscreen") || !modes.available.includes(mode)) {
-          return { mode: this.host.displayMode };
+          return { mode: this.displayMode };
         }
-        this.host.displayMode = mode;
+        this.displayMode = mode;
         iframe.style.height =
-          mode === "fullscreen" || this.host.fillContainer
+          mode === "fullscreen" || this.fillContainer
             ? "100%"
             : `${createdResources.frameHeight}px`;
         bridge.setHostContext(buildHostContext());
@@ -614,8 +645,8 @@ export class McpAppViewController {
           height !== undefined &&
           Number.isFinite(height) &&
           isCurrent() &&
-          !this.host.fillContainer &&
-          this.host.displayMode !== "fullscreen"
+          !this.fillContainer &&
+          this.displayMode !== "fullscreen"
         ) {
           const nextHeight = Math.min(1200, Math.max(160, Math.round(height)));
           createdResources.frameHeight = nextHeight;
@@ -631,7 +662,7 @@ export class McpAppViewController {
             payload.displayModes,
             bridge.getAppCapabilities()?.availableDisplayModes,
           );
-          this.host.displayMode =
+          this.displayMode =
             payload.displayMode && modes.available.includes(payload.displayMode)
               ? payload.displayMode
               : modes.initial;

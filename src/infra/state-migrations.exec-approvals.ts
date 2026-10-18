@@ -1,5 +1,6 @@
 // Doctor-only import for the retired exec approvals JSON store.
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { root, type Root } from "@openclaw/fs-safe";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,6 +11,7 @@ import {
   normalizeExecApprovalsInternal,
   parseLegacyExecApprovals,
   resolveExecApprovalsPath,
+  tryParsePersistedExecApprovals,
 } from "./exec-approvals-config.js";
 import type { ExecApprovalsFile } from "./exec-approvals-core.js";
 import { ExecApprovalsMigrationRequiredError } from "./exec-approvals-migration-gate.js";
@@ -192,6 +194,20 @@ function decideAndRecordMigration(params: {
         });
         decision = canonical ? "invalid-canonical-repaired" : "legacy-imported";
         removeSource = true;
+        const verified = readExecApprovalsConfigRow(db);
+        const verifiedFile = verified ? tryParsePersistedExecApprovals(verified.raw_json) : null;
+        const rawMatches = verified?.raw_json === importedRaw;
+        const fileMatches =
+          verifiedFile &&
+          isDeepStrictEqual(
+            JSON.parse(serializeExecApprovals(verifiedFile)),
+            JSON.parse(serializeExecApprovals(legacyFile)),
+          );
+        if (!rawMatches || !fileMatches) {
+          throw new Error(
+            `SQLite verification failed for the exec approvals migration (raw=${rawMatches}, parsed=${Boolean(fileMatches)})`,
+          );
+        }
       } else {
         decision = "canonical-preserved";
         removeSource = canonical.raw_json === params.snapshot.raw;

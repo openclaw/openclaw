@@ -509,7 +509,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
       ...config,
       agents: {
         defaults: {
-          model: { primary: "groq/openai/gpt-oss-120b" },
+          model: { primary: "groq/llama-3.3-70b-versatile" },
         },
       },
     }));
@@ -579,7 +579,7 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(result).toMatchObject({
       agents: {
         defaults: {
-          model: { primary: "groq/openai/gpt-oss-120b" },
+          model: { primary: "groq/llama-3.3-70b-versatile" },
         },
       },
       plugins: {

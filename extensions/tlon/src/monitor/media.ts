@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { MAX_IMAGE_BYTES, saveRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
@@ -49,7 +50,7 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboun
   try {
     const parsedUrl = new URL(url);
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      console.warn("[tlon-media] Rejected non-http(s) media URL");
+      console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
       return null;
     }
 
@@ -64,8 +65,8 @@ async function downloadMedia(url: string, maxBytes?: number): Promise<TlonInboun
       path: saved.path,
       contentType: saved.contentType ?? "application/octet-stream",
     };
-  } catch {
-    console.error("[tlon-media] Error downloading inbound media");
+  } catch (error: unknown) {
+    console.error(`[tlon-media] Error downloading ${url}: ${formatErrorMessage(error)}`);
     return null;
   }
 }

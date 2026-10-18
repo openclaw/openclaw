@@ -180,7 +180,6 @@ export function installEmbeddedRunnerFastRunE2eMocks(
     runAgentHarnessAttempt: (params: EmbeddedRunAttemptParams) =>
       options.runEmbeddedAttempt(params),
   }));
-  // mock-isolation: harness fixtures supply runtime plans without loading live plugin or auth catalogs.
   vi.doMock("../runtime-plan/build.js", () => ({
     buildAgentRuntimePlan: vi.fn(
       (params: {
@@ -227,6 +226,7 @@ export function installEmbeddedRunnerFastRunE2eMocks(
           resolvePolicy: vi.fn(() => undefined),
         },
         delivery: {
+          isSilentPayload: vi.fn(() => false),
           resolveFollowupRoute: vi.fn(() => undefined),
         },
         outcome: {

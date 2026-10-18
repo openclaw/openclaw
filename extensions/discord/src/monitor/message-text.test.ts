@@ -2,12 +2,10 @@ import {
   ComponentType,
   MessageFlags,
   MessageReferenceType,
-  MessageType,
   StickerFormatType,
 } from "discord-api-types/v10";
 import { describe, expect, it } from "vitest";
-import { Message } from "../internal/discord.js";
-import { createInternalTestClient } from "../internal/test-builders.test-support.js";
+import type { Message } from "../internal/discord.js";
 import { resolveDiscordMessageHistoryText, resolveDiscordMessageText } from "./message-text.js";
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -218,29 +216,9 @@ describe("resolveDiscordMessageText", () => {
   });
 
   it("uses Components v2 text display content when normal message text is empty", () => {
-    const client = createInternalTestClient();
     const text = resolveDiscordMessageText(
-      new Message(client, {
-        id: "message-components",
-        channel_id: "channel-components",
+      asMessage({
         content: "",
-        type: MessageType.Default,
-        author: {
-          id: "user-components",
-          username: "user",
-          discriminator: "0",
-          avatar: null,
-          global_name: null,
-        },
-        timestamp: "2026-01-01T00:00:00.000Z",
-        edited_timestamp: null,
-        attachments: [],
-        embeds: [],
-        mentions: [],
-        mention_roles: [],
-        mention_everyone: false,
-        pinned: false,
-        tts: false,
         flags: MessageFlags.IsComponentsV2,
         components: [
           {
@@ -259,7 +237,6 @@ describe("resolveDiscordMessageText", () => {
     );
 
     expect(text).toBe("Component headline\nComponent body");
-    expect(resolveDiscordMessageText(new Message(client, "partial-message"))).toBe("");
   });
 
   it("joins embed title and description when content is empty", () => {

@@ -473,7 +473,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
       });
       runEmbeddedAgentMock.mockResolvedValue({
         payloads: [
-          ...(outcome === "silent" ? [] : [{ text: "Report" }]),
+          { text: outcome === "silent" ? "NO_REPLY" : "Report" },
           ...(outcome === "presentation warning"
             ? [
                 setReplyPayloadMetadata(
@@ -485,10 +485,7 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
         ],
         meta: {
           agentMeta: {},
-          terminalReply:
-            outcome === "silent"
-              ? { disposition: "silent" }
-              : { disposition: "visible", text: "Report" },
+          ...(outcome === "silent" ? { finalAssistantRawText: "NO_REPLY" } : {}),
           ...(outcome === "execution error"
             ? { error: { kind: "provider_error", message: "provider failed" } }
             : {}),
@@ -619,6 +616,13 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       }
       const retryPreparationFailure = outcome === "retry-preflight-failure";
       const retryPreparationError = new AgentHarnessPreflightError("retry preparation failed");
+      const retriesInterimAck = retryPreparationFailure;
+      if (retriesInterimAck) {
+        resolveCronPayloadOutcomeMock.mockImplementation(
+          (await vi.importActual<typeof import("./helpers.js")>("./helpers.js"))
+            .resolveCronPayloadOutcome,
+        );
+      }
       runWithModelFallbackMock.mockImplementation(
         (
           await vi.importActual<typeof import("../../agents/model-fallback-runner.js")>(
@@ -694,12 +698,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
       runEmbeddedAgentMock.mockImplementation(async (runParams: RunEmbeddedAgentParams) => {
         runIds.add(runParams.runId);
         const first = attemptIndex++ === 0;
+        if (retriesInterimAck && attemptIndex > 2) {
+          throw retryPreparationError;
+        }
         if (!first) {
           secondPreparing.resolve();
           await releaseSecond.promise;
-          if (retryPreparationFailure) {
-            throw retryPreparationError;
-          }
         }
         const { provider, model, thinkLevel } = runParams;
         if (!provider || !model || !thinkLevel) {
@@ -822,7 +826,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             emitAssistantEnd({ stopReason: "aborted", content: [] });
             return { payloads: [], meta: { aborted: true, stopReason: "aborted", agentMeta: {} } };
           }
-          const text = "Final report";
+          const text = retriesInterimAck ? "On it." : "Final report";
           emitAssistantEnd({
             stopReason: "stop",
             content: [{ type: "text", text }],
@@ -892,7 +896,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           });
         }
         if (retryPreparationFailure) {
-          await expect(runWithModelFallbackMock.mock.results[0]?.value).rejects.toBe(
+          await expect(runWithModelFallbackMock.mock.results[1]?.value).rejects.toBe(
             retryPreparationError,
           );
         }
@@ -917,7 +921,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             sessionKey,
           });
         }
-        expect(onExecutionStarted).toHaveBeenCalledTimes(retryPreparationFailure ? 1 : 2);
+        expect(onExecutionStarted).toHaveBeenCalledTimes(2);
         expect(runIds.size).toBe(1);
         expect(
           broadcast.mock.calls.filter(

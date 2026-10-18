@@ -127,11 +127,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    using retainedSource = (parser.api ??= new API({ cwd: root })).createSourceFile(
-      absolute,
-      source,
-    );
-    const sourceFile = retainedSource.sourceFile;
+    const sourceFile = (parser.api ??= new API({ cwd: root })).createSourceFile(absolute, source);
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (

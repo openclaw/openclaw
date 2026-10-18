@@ -867,7 +867,8 @@ export async function runMemoryFlushIfNeeded(params: {
       ...params,
       sessionEntry: entry,
       flushRunId,
-      resolution: memoryFlushResolution,
+      contextWindowTokens,
+      memoryFlushWritable,
       abortSignal,
       assertCurrent: assertMemoryFlushCurrent,
       recordPersistenceToolSuccess: () => {
@@ -881,6 +882,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return { sessionEntry: entry, outcome: "skipped" };
   }
   const {
+    plan: activeMemoryFlushPlan,
     writePath: memoryFlushWritePath,
     systemPrompt: flushSystemPrompt,
     selection,
@@ -937,7 +939,7 @@ export async function runMemoryFlushIfNeeded(params: {
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
       modelResolve: {
-        prompt: memoryFlushPlan.prompt,
+        prompt: activeMemoryFlushPlan.prompt,
         awaitSessionDiffBaseline: params.followupRun.runObservers?.awaitSessionDiffBaseline,
         cwd: maintenanceRun.cwd,
         modelSelectionLocked: maintenanceRun.modelSelectionLocked,
@@ -1016,7 +1018,7 @@ export async function runMemoryFlushIfNeeded(params: {
           memoryFlushTools,
           initialTurnTainted:
             !params.followupRun.run.senderIsOwner || sessionLogSnapshot?.turnTainted === true,
-          prompt: memoryFlushPlan.prompt,
+          prompt: activeMemoryFlushPlan.prompt,
           transcriptPrompt: "",
           extraSystemPrompt: flushSystemPrompt,
           isFinalFallbackAttempt: runOptions.isFinalFallbackAttempt,
@@ -1109,45 +1111,49 @@ async function recordMemoryFlushFailure(
   const { sessionKey, storePath } = run;
   if (!isAbortError(error) && storePath && sessionKey) {
     try {
-      let failureCount = 0;
-      const updatedEntry = await updateSessionEntry(
-        { storePath, sessionKey },
-        (currentEntry) => {
-          failureCount =
+      const adoptEntry = (entry: SessionEntry | null) => {
+        if (entry) {
+          sessionEntry = entry;
+          if (run.sessionStore) {
+            run.sessionStore[sessionKey] = entry;
+          }
+        }
+      };
+      const updateEntry = (update: Parameters<typeof updateSessionEntry>[1]) =>
+        updateSessionEntry({ storePath, sessionKey }, update, {
+          skipMaintenance: true,
+          takeCacheOwnership: true,
+        });
+      const failedEntry = await updateEntry(async (currentEntry) => ({
+        memoryFlush: {
+          kind: "failed",
+          ...(currentEntry.memoryFlush?.compactionCount !== undefined
+            ? { compactionCount: currentEntry.memoryFlush.compactionCount }
+            : {}),
+          failureCount:
             (currentEntry.memoryFlush?.kind === "failed"
               ? currentEntry.memoryFlush.failureCount
-              : 0) + 1;
-          return {
-            memoryFlush:
-              failureCount >= MAX_FLUSH_FAILURES
-                ? { kind: "succeeded", compactionCount: currentEntry.compactionCount ?? 0 }
-                : {
-                    kind: "failed",
-                    ...(currentEntry.memoryFlush?.compactionCount !== undefined
-                      ? { compactionCount: currentEntry.memoryFlush.compactionCount }
-                      : {}),
-                    failureCount,
-                  },
-          };
+              : 0) + 1,
         },
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      if (updatedEntry) {
-        sessionEntry = updatedEntry;
-        if (run.sessionStore) {
-          run.sessionStore[sessionKey] = updatedEntry;
-        }
-      } else {
-        failureCount = 0;
-      }
+      }));
+      adoptEntry(failedEntry);
+      const failureCount =
+        failedEntry?.memoryFlush?.kind === "failed" ? failedEntry.memoryFlush.failureCount : 0;
       logVerbose(
         `memory flush failed (attempt ${failureCount}/${MAX_FLUSH_FAILURES}): ${truncatedError}`,
       );
-      if (updatedEntry && failureCount >= MAX_FLUSH_FAILURES) {
+      if (failedEntry && failureCount >= MAX_FLUSH_FAILURES) {
         outcome = "exhausted";
         logVerbose(
           `memory flush exhausted: skipping flush for this compaction cycle after ${failureCount} consecutive failures`,
         );
+        const exhaustedEntry = await updateEntry(async (currentEntry) => ({
+          memoryFlush: {
+            kind: "succeeded",
+            compactionCount: currentEntry.compactionCount ?? 0,
+          },
+        }));
+        adoptEntry(exhaustedEntry);
       }
     } catch (persistError) {
       logVerbose(`failed to persist memory flush failure metadata: ${String(persistError)}`);

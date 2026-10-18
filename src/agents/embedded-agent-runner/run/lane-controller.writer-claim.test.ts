@@ -182,7 +182,6 @@ describe("embedded run durable writer admission", () => {
       activeWriterRunId: "run-b",
       lifecycleRevision,
       sessionId,
-      updatedAt: 1,
     });
     expect(params.sessionTarget).toMatchObject({
       expectedLifecycleRevision: lifecycleRevision,
@@ -274,7 +273,7 @@ describe("embedded run durable writer admission", () => {
     expect(lifecycleEvents).toEqual([]);
     expect(
       loadSessionEntry({ agentId: "main", sessionKey, storePath: fixture.storePath() }),
-    ).toMatchObject({ activeWriterRunId: "run-next", updatedAt: 1 });
+    ).toMatchObject({ activeWriterRunId: "run-next" });
     expect(() =>
       staleManager.appendMessage(
         buildAssistantMessage({

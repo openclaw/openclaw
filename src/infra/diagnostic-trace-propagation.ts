@@ -21,51 +21,44 @@ type RegisteredDiagnosticTracePropagationBridge = DiagnosticTracePropagationBrid
 type DiagnosticTracePropagationState = {
   marker: symbol;
   bridges: Set<RegisteredDiagnosticTracePropagationBridge>;
-  activeBridge: RegisteredDiagnosticTracePropagationBridge | undefined;
 };
 
 const DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY = Symbol.for(
   "openclaw.diagnosticTracePropagation.state.v1",
 );
 
-const tracePropagationState = resolveGlobalSingleton<DiagnosticTracePropagationState>(
-  DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
-  () => ({
+function getDiagnosticTracePropagationState(): DiagnosticTracePropagationState {
+  return resolveGlobalSingleton(DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY, () => ({
     marker: DIAGNOSTIC_TRACE_PROPAGATION_STATE_KEY,
     bridges: new Set<RegisteredDiagnosticTracePropagationBridge>(),
-    activeBridge: undefined,
-  }),
-);
+  }));
+}
 
-/** Whether an exporter needs events prepared before their queued delivery. */
-export function hasDiagnosticTracePropagationConsumer(): boolean {
-  return tracePropagationState.activeBridge?.prepareEvent !== undefined;
+function activeDiagnosticTracePropagationBridge():
+  | RegisteredDiagnosticTracePropagationBridge
+  | undefined {
+  let active: RegisteredDiagnosticTracePropagationBridge | undefined;
+  for (const bridge of getDiagnosticTracePropagationState().bridges) {
+    active = bridge;
+  }
+  return active;
 }
 
 export function registerDiagnosticTracePropagationBridge(
   bridge: DiagnosticTracePropagationBridge<never, never>,
 ): () => void {
-  const state = tracePropagationState;
+  const state = getDiagnosticTracePropagationState();
   // The global registry crosses preloaded and plugin-owned SDK copies. Erase
   // event types only inside that registry; callers keep the exact typed seam.
   const registered = bridge as unknown as RegisteredDiagnosticTracePropagationBridge;
-  if (!state.bridges.has(registered)) {
-    state.bridges.add(registered);
-    state.activeBridge = registered;
-  }
+  state.bridges.add(registered);
   return () => {
-    if (!state.bridges.delete(registered) || state.activeBridge !== registered) {
-      return;
-    }
-    state.activeBridge = undefined;
-    for (const remaining of state.bridges) {
-      state.activeBridge = remaining;
-    }
+    state.bridges.delete(registered);
   };
 }
 
 export function shouldPrepareDiagnosticTracePropagation(event: unknown): boolean {
-  const bridge = tracePropagationState.activeBridge;
+  const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge?.prepareEvent) {
     return false;
   }
@@ -84,7 +77,7 @@ export function prepareDiagnosticTracePropagation(
   event: { type: string; seq: number },
   metadata: unknown,
 ): void {
-  const bridge = tracePropagationState.activeBridge;
+  const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge?.prepareEvent) {
     return;
   }
@@ -104,7 +97,7 @@ export function formatPropagatedDiagnosticTraceparent(
   if (!traceContext) {
     return undefined;
   }
-  const bridge = tracePropagationState.activeBridge;
+  const bridge = activeDiagnosticTracePropagationBridge();
   if (!bridge) {
     return formatDiagnosticTraceparent(traceContext);
   }
@@ -121,6 +114,5 @@ export function formatPropagatedDiagnosticTraceparent(
 }
 
 export function resetDiagnosticTracePropagationForTest(): void {
-  tracePropagationState.bridges.clear();
-  tracePropagationState.activeBridge = undefined;
+  getDiagnosticTracePropagationState().bridges.clear();
 }

@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -21,8 +20,6 @@ const mocks = vi.hoisted(() => ({
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
   refreshModels: vi.fn(),
-  replacement: vi.fn(),
-  modelSnapshot: vi.fn(),
   snapshot: vi.fn(),
   revision: vi.fn(),
   info: vi.fn(),
@@ -58,8 +55,7 @@ vi.mock("./server-startup-session-migration.js", () => ({
 // mock-isolation: Model preparation stays observable without loading provider plugins.
 vi.mock("../agents/prepared-model-runtime.js", () => ({
   refreshPreparedModelRuntimeSnapshots: mocks.refreshModels,
-  getPreparedModelRuntimeSnapshot: mocks.modelSnapshot,
-  getPendingPreparedModelRuntimeReplacement: mocks.replacement,
+  getPreparedModelRuntimeSnapshot: () => ({}),
 }));
 // mock-isolation: Configured model inputs are not the behavior under test.
 vi.mock("../agents/prepared-model-runtime.configured.js", () => ({
@@ -120,8 +116,6 @@ function createFleet(
     }
   });
   mocks.journal.mockResolvedValue("absent");
-  mocks.refreshModels.mockResolvedValue(undefined);
-  mocks.modelSnapshot.mockReturnValue({});
   mocks.migrate.mockImplementation(async ({ assertCurrent }) => assertCurrent());
   mocks.revision.mockImplementation(() => revision);
   mocks.snapshot.mockImplementation(() => ({
@@ -530,27 +524,12 @@ it.for(["agent removal", "database move", "deletion", "shutdown"] as const)(
   },
 );
 
-it.for([
-  "config",
-  "secrets",
-  "secrets preparation",
-  "model runtime",
-  "queued model runtime",
-] as const)(
+it.for(["config", "secrets", "secrets preparation"] as const)(
   "retries a superseded publication after %s replacement",
   async (replacement, { signal }) => {
     const fleet = createFleet(["large"]);
     const entered = createDeferredCore();
     const release = fleet.hold();
-    const successor = fleet.hold();
-    const joining = createDeferredCore();
-    mocks.replacement.mockImplementation(() => {
-      joining.resolve();
-      return successor.promise;
-    });
-    if (replacement === "queued model runtime") {
-      mocks.modelSnapshot.mockReturnValueOnce(undefined);
-    }
     if (replacement === "secrets preparation") {
       const refresh = mocks.refreshSecrets.getMockImplementation()!;
       mocks.refreshSecrets.mockImplementationOnce(async (params) => {
@@ -562,9 +541,6 @@ it.for([
       mocks.refreshModels.mockImplementationOnce(async () => {
         entered.resolve();
         await release.promise;
-        if (replacement === "model runtime") {
-          throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
-        }
       });
     }
     await fleet.run(async (admission) => {
@@ -572,18 +548,10 @@ it.for([
       await withinTest(entered.promise, signal);
       if (replacement === "secrets") {
         fleet.bumpSecretsRevision();
-      } else if (replacement === "config" || replacement === "secrets preparation") {
+      } else {
         fleet.reloadConfig();
       }
       release.resolve();
-      if (replacement === "model runtime" || replacement === "queued model runtime") {
-        await withinTest(joining.promise, signal);
-        expect(readAgentDatabaseAdmissionRefusal("large", fleet)?.code).toBe(
-          "agent-database-inspection-pending",
-        );
-        expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
-        successor.resolve();
-      }
       await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
       expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toBeUndefined();
       expect(mocks.info).toHaveBeenCalledWith(
@@ -601,58 +569,21 @@ it.for([
   },
 );
 
-it.for(["secrets", "model runtime"] as const)(
-  "fails admission after four continuously superseded %s publications",
-  async (replacement, { signal }) => {
-    const fleet = createFleet(["large"]);
-    mocks.refreshModels.mockImplementation(async () => {
-      if (replacement === "model runtime") {
-        throw new PreparedModelRuntimePublicationSupersededError("publication was superseded");
-      }
-      fleet.bumpSecretsRevision();
-    });
-    await fleet.run(async (admission) => {
-      fleet.inspect(0);
-      await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
-      expect(readAgentDatabaseAdmissionRefusal("large", fleet)).toMatchObject({
-        code: "agent-database-inspection-failed",
-        reason: expect.stringContaining("preparation was superseded"),
-        repairHint: expect.stringContaining("openclaw doctor --fix"),
-      });
-      expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
-      expect(mocks.opened).toHaveBeenCalledTimes(1);
-      expect(mocks.migrate).toHaveBeenCalledTimes(1);
-      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
-    });
-  },
-);
-
-it.for(["initial", "successor"] as const)(
-  "preserves a genuine %s model publication failure without retrying",
-  async (publication, { signal }) => {
-    const fleet = createFleet(["main"]);
-    const error = new Error("Cannot load model catalog: permission denied");
-    mocks.refreshModels.mockRejectedValue(
-      publication === "initial"
-        ? error
-        : new PreparedModelRuntimePublicationSupersededError("publication was superseded"),
+it("fails admission after four continuously superseded publications", async ({ signal }) => {
+  const fleet = createFleet(["large"]);
+  mocks.refreshModels.mockImplementation(async () => fleet.bumpSecretsRevision());
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await withinTest(admission.waitForAgentPreparation("large", fleet)!, signal);
+    expect(readAgentDatabaseAdmissionRefusal("large", fleet)?.code).toBe(
+      "agent-database-inspection-failed",
     );
-    mocks.replacement.mockImplementation(async () => {
-      throw error;
-    });
-    await fleet.run(async (admission) => {
-      fleet.inspect(0);
-      await withinTest(admission.waitForAgentPreparation("main", fleet)!, signal);
-      expect(readAgentDatabaseAdmissionRefusal("main", fleet)).toMatchObject({
-        code: "agent-database-inspection-failed",
-        reason: error.message,
-        repairHint: expect.stringContaining("openclaw doctor --fix"),
-      });
-      expect(mocks.refreshModels).toHaveBeenCalledTimes(1);
-      expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
-    });
-  },
-);
+    expect(mocks.refreshModels).toHaveBeenCalledTimes(4);
+    expect(mocks.opened).toHaveBeenCalledTimes(1);
+    expect(mocks.migrate).toHaveBeenCalledTimes(1);
+    expect(mocks.info).not.toHaveBeenCalledWith(recoveredMessage, expect.anything());
+  });
+});
 
 it.for(["agent removal", "database move"] as const)(
   "does not readmit after %s during publication",

@@ -1,11 +1,11 @@
 import type { GatewayAgentRow } from "../api/types.ts";
-import type { IconName } from "./icon-data.ts";
+import type { LegacyTemplateResult } from "../lit/solid-content.tsx";
 
 export type AgentSelectOption = {
   value: string;
   label: string;
   agent?: GatewayAgentRow;
-  icon?: IconName;
+  icon?: LegacyTemplateResult;
   description?: string;
   badge?: string;
   disabled?: boolean;

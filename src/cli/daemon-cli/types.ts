@@ -10,7 +10,6 @@ export type DaemonStatusOptions = {
   probe: boolean;
   requireRpc: boolean;
   json: boolean;
-  runtimeIntentOnly?: boolean;
 } & FindExtraGatewayServicesOptions;
 
 export type DaemonInstallOptions = {

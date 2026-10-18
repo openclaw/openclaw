@@ -17,7 +17,6 @@ import {
   type ProjectedAgentRunIndex,
 } from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
 import type { SessionTranscriptUsageSnapshot } from "./session-transcript-derived-readers.js";
 import {
   createSessionRowModelCacheKey,
@@ -115,7 +114,6 @@ export function buildProjectedSubagentActivity(
 export function projectSessionRowChildLinks(links: readonly SessionChildLink[] | undefined) {
   return links?.map(({ key, entry }) => ({
     key,
-    parsedKey: parseAgentSessionKey(key),
     entry: {
       sessionId: entry.sessionId,
       updatedAt: entry.updatedAt,

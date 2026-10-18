@@ -4,6 +4,7 @@ import {
   resolveChannelContextVisibilityMode,
 } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveMatrixReplyToEventId } from "../relations.js";
 import { resolveMatrixAckReactionConfig } from "./ack-config.js";
 import { resolveMatrixAllowListMatch } from "./allowlist.js";
@@ -285,7 +286,8 @@ export async function resolveMatrixInboundContext(config: {
     logVerboseMessage(`matrix: drop reply context (mode=${contextVisibilityMode})`);
   }
 
-  logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} chars=${bodyText.length}`);
+  const preview = truncateUtf16Safe(bodyText, 200).replace(/\n/g, "\\n");
+  logVerboseMessage(`matrix inbound: room=${roomId} from=${senderId} preview="${preview}"`);
 
   const replyTarget = ctxPayload.To;
   if (!replyTarget) {

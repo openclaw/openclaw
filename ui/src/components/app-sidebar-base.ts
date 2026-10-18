@@ -1,3 +1,4 @@
+import type { ReactiveController } from "lit";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
@@ -15,7 +16,6 @@ import {
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
 import type { ContextualSidebar } from "./sidebar-context-state.ts";
@@ -142,13 +142,12 @@ export abstract class AppSidebarBase {
   declare readonly contains: HTMLElement["contains"];
   declare readonly matches: HTMLElement["matches"];
 
-  private readonly controllers = new Set<SolidController>();
+  private readonly controllers = new Set<ReactiveController>();
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
   contextualSidebar: ContextualSidebar | undefined;
-
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
@@ -218,13 +217,13 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: SolidController): void {
+  addController(controller: ReactiveController): void {
     this.controllers.add(controller);
     if (this.isConnected) {
       controller.hostConnected?.();
     }
   }
-  removeController(controller: SolidController): void {
+  removeController(controller: ReactiveController): void {
     this.controllers.delete(controller);
   }
   subscribe(listener: () => void): () => void {
@@ -274,14 +273,6 @@ export abstract class AppSidebarBase {
     return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
   }
 
-  get sessionCatalogRowsVisible(): boolean {
-    return (
-      this.navigationView === "sessions" &&
-      this.sidebarAgentsMode === "chip" &&
-      !this.contextualSidebar
-    );
-  }
-
   abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
@@ -290,21 +281,6 @@ export abstract class AppSidebarBase {
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];
-  }
-
-  pendingSessionCreate() {
-    const pending = this.context?.chatSubmissions?.readCreate();
-    return this.activeRouteId === "chat" && !pending?.creation.admitted ? pending : undefined;
-  }
-
-  public getRouteSessionKey(): string {
-    // A provisional row owns only presentation, never the saved Gateway selection.
-    return (
-      this.pendingSessionCreate()?.creation.sessionKey ||
-      this.sessionKey.trim() ||
-      this.context?.gateway.snapshot.sessionKey.trim() ||
-      ""
-    );
   }
 
   protected setApplicationSession(sessionKey: string, fallbackAgentId?: string): void {

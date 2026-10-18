@@ -166,7 +166,7 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     }
   });
 
-  it.each([undefined])(
+  it.each([undefined, "memory-lancedb"])(
     "skips retrieval preparation when Memory Core is inactive (%s)",
     async (pluginId) => {
       vi.useFakeTimers();

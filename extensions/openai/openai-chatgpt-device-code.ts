@@ -99,15 +99,12 @@ function sanitizeDeviceCodeErrorText(value: string): string {
 }
 
 function resolveNextDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - performance.now());
+  const remainingMs = Math.max(0, deadlineMs - Date.now());
   return Math.min(Math.max(intervalMs, OPENAI_CODEX_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
 function resolveDeviceCodePollRequestTimeoutMs(deadlineMs: number): number {
-  return Math.min(
-    OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS,
-    Math.max(0, deadlineMs - performance.now()),
-  );
+  return Math.min(OPENAI_CODEX_DEVICE_REQUEST_TIMEOUT_MS, Math.max(0, deadlineMs - Date.now()));
 }
 
 function isDeviceCodeOperationTimeoutError(error: unknown): boolean {
@@ -265,11 +262,9 @@ async function pollOpenAICodexDeviceCode(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<DeviceCodeAuthorizationCode> {
-  // Keep the polling budget independent of wall-clock corrections. Whether
-  // suspended time counts toward performance.now() depends on the host runtime.
-  const deadline = performance.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
+  const deadline = Date.now() + OPENAI_CODEX_DEVICE_CODE_TIMEOUT_MS;
 
-  while (performance.now() < deadline) {
+  while (Date.now() < deadline) {
     params.signal?.throwIfAborted();
     const requestTimeoutMs = resolveDeviceCodePollRequestTimeoutMs(deadline);
     if (requestTimeoutMs <= 0) {

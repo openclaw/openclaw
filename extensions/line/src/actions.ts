@@ -41,6 +41,10 @@ export function truncateLineActionLabel(label: string, limit = LINE_ACTION_LABEL
   return truncated || (label ? "…" : "");
 }
 
+function truncateLineActionData(data: string): string {
+  return truncateUtf16Safe(data, LINE_ACTION_DATA_LIMIT);
+}
+
 const UNDELIVERABLE_IMAGE_WARNING = "Image unavailable: URL must use HTTPS.";
 
 function flexWarning(text: string): messagingApi.FlexText {
@@ -215,20 +219,21 @@ function normalizeImagemapAction(action: ImagemapAction): ImagemapAction {
       : truncateLineActionText(action.label, LINE_IMAGEMAP_ACTION_LABEL_LIMIT);
 
   if (action.type === "uri") {
-    if (action.linkUri.length > LINE_ACTION_URI_LIMIT) {
+    if (truncateUtf16Safe(action.linkUri, LINE_ACTION_URI_LIMIT) !== action.linkUri) {
       return unavailableImagemapAction("Link", "URL exceeds LINE's limit.", action.area);
     }
     return { ...action, label };
   }
 
   if (action.type === "message") {
-    if (action.text.length > LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT) {
+    const text = truncateUtf16Safe(action.text, LINE_IMAGEMAP_MESSAGE_TEXT_LIMIT);
+    if (text !== action.text) {
       return unavailableImagemapAction("Action", "message text exceeds LINE's limit.", action.area);
     }
-    return { ...action, label };
+    return { ...action, label, text };
   }
 
-  if (action.clipboardText.length > LINE_CLIPBOARD_TEXT_LIMIT) {
+  if (truncateUtf16Safe(action.clipboardText, LINE_CLIPBOARD_TEXT_LIMIT) !== action.clipboardText) {
     return unavailableImagemapAction("Action", "clipboard text exceeds LINE's limit.", action.area);
   }
   return { ...action, label };
@@ -248,7 +253,10 @@ function normalizeImagemapVideo(video: ImagemapVideo): {
       ? undefined
       : truncateUtf16Safe(externalLink.label, LINE_IMAGEMAP_EXTERNAL_LINK_LABEL_LIMIT) ||
         (externalLink.label ? "…" : "");
-  if (externalLink.linkUri !== undefined && externalLink.linkUri.length > LINE_ACTION_URI_LIMIT) {
+  if (
+    externalLink.linkUri !== undefined &&
+    truncateUtf16Safe(externalLink.linkUri, LINE_ACTION_URI_LIMIT) !== externalLink.linkUri
+  ) {
     const normalizedVideo = { ...video };
     delete normalizedVideo.externalLink;
     return {
@@ -322,23 +330,25 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
     action.label === undefined ? undefined : truncateLineActionLabel(action.label, labelLimit);
 
   if (action.type === "uri") {
-    const uriTooLong = action.uri !== undefined && action.uri.length > LINE_ACTION_URI_LIMIT;
+    const uriTooLong =
+      action.uri !== undefined &&
+      truncateUtf16Safe(action.uri, LINE_ACTION_URI_LIMIT) !== action.uri;
     const desktopUri = action.altUri?.desktop;
-    const desktopUriTooLong = desktopUri !== undefined && desktopUri.length > LINE_ACTION_URI_LIMIT;
+    const desktopUriTooLong =
+      desktopUri !== undefined &&
+      truncateUtf16Safe(desktopUri, LINE_ACTION_URI_LIMIT) !== desktopUri;
     if (uriTooLong || desktopUriTooLong) {
       return unavailableAction("Link", "URL exceeds LINE's limit.");
     }
     return { ...action, label };
   }
 
-  if (action.type === "postback" || action.type === "datetimepicker") {
-    if (action.data !== undefined && action.data.length > LINE_ACTION_DATA_LIMIT) {
+  if (action.type === "postback") {
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
+    if (data !== action.data) {
       // Callback data is opaque and echoed back by LINE. Never dispatch a value
       // whose identity changed merely to satisfy the transport cap.
       return unavailableAction("Action", "callback data exceeds LINE's limit.");
-    }
-    if (action.type === "datetimepicker") {
-      return { ...action, label };
     }
     const text =
       action.text === undefined
@@ -354,6 +364,7 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
     return {
       ...action,
       label,
+      data,
       displayText:
         action.displayText === undefined
           ? undefined
@@ -361,6 +372,14 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
       text,
       fillInText,
     };
+  }
+
+  if (action.type === "datetimepicker") {
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
+    if (data !== action.data) {
+      return unavailableAction("Action", "callback data exceeds LINE's limit.");
+    }
+    return { ...action, label, data };
   }
 
   if (action.type === "message") {
@@ -379,21 +398,24 @@ export function normalizeLineAction(action: Action, labelLimit = LINE_ACTION_LAB
   }
 
   if (action.type === "clipboard") {
-    if (action.clipboardText.length > LINE_CLIPBOARD_TEXT_LIMIT) {
+    if (
+      truncateUtf16Safe(action.clipboardText, LINE_CLIPBOARD_TEXT_LIMIT) !== action.clipboardText
+    ) {
       return unavailableAction("Action", "clipboard text exceeds LINE's limit.");
     }
     return { ...action, label };
   }
 
   if (action.type === "richmenuswitch") {
-    const dataTooLong = action.data !== undefined && action.data.length > LINE_ACTION_DATA_LIMIT;
+    const data = action.data === undefined ? undefined : truncateLineActionData(action.data);
     const aliasTooLong =
       action.richMenuAliasId !== undefined &&
-      action.richMenuAliasId.length > LINE_RICH_MENU_ALIAS_LIMIT;
-    if (dataTooLong || aliasTooLong) {
+      truncateUtf16Safe(action.richMenuAliasId, LINE_RICH_MENU_ALIAS_LIMIT) !==
+        action.richMenuAliasId;
+    if (data !== action.data || aliasTooLong) {
       return unavailableAction("Action", "rich menu data exceeds LINE's limit.");
     }
-    return { ...action, label };
+    return { ...action, label, data };
   }
 
   return action.label === label ? action : { ...action, label };

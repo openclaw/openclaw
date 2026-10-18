@@ -20,15 +20,9 @@ export function composerContext(
   snapshot: Partial<ApplicationGatewaySnapshot> & { client: GatewayBrowserClient | null },
 ) {
   return {
-    gateway: {
-      snapshot,
-      connection: { gatewayUrl: "ws://gateway.test" },
-      connectionRevision: 0,
-      subscribe: () => () => {},
-    },
-    agents: { subscribe: () => () => {} },
-    config: { current: {}, subscribe: () => () => {} },
-    sessions: { state: { result: null }, subscribe: () => () => {} },
+    gateway: { snapshot, connection: { gatewayUrl: "ws://gateway.test" }, connectionRevision: 0 },
+    config: { current: {} },
+    sessions: { state: { result: null } },
     theme: {
       branding: resolveThemeBranding(undefined),
       settings: { lobsterPetVisits: true, lobsterPetSounds: false },

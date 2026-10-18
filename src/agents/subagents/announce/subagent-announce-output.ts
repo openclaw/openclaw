@@ -1,6 +1,7 @@
 import { formatCompactTokenCount } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import {
   findTranscriptEvent,
   type SessionTranscriptRuntimeTarget,
@@ -9,7 +10,6 @@ import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessi
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
-import { isSilentAssistantTranscriptMessage } from "../../../shared/chat-message-content.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
 import { sleep } from "../../../utils/sleep.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
@@ -92,10 +92,6 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         snapshot.latestText = undefined;
         continue;
       }
-      if (isSilentAssistantTranscriptMessage(message)) {
-        snapshot.latestText = undefined;
-        continue;
-      }
       const toolCalls = record.toolCalls ?? record.tool_calls;
       const toolCallCount =
         (Array.isArray(record.content)
@@ -129,10 +125,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
 export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
-  options?: {
-    childAgentId?: string;
-    sessionTarget?: SessionTranscriptRuntimeTarget;
-  },
+  options?: { childAgentId?: string; sessionTarget?: SessionTranscriptRuntimeTarget },
 ): Promise<string | undefined> {
   const agentId =
     options?.sessionTarget?.agentId ??
@@ -221,7 +214,7 @@ export async function readSubagentTimeoutProgress(
   const progress = initial?.trim()
     ? initial
     : await readLatestSubagentOutputWithRetry({ sessionKey, childAgentId, maxWaitMs, outcome });
-  return progress;
+  return progress && !isSilentReplyText(progress, SILENT_REPLY_TOKEN) ? progress : undefined;
 }
 
 export async function captureSubagentCompletionReply(
@@ -236,9 +229,7 @@ export async function captureSubagentCompletionReply(
   const maxWaitMs = isFastTestRuntimeEnv() ? 50 : 1_500;
   const retryIntervalMs = isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100;
   const readOutput = () =>
-    readSubagentOutput(sessionKey, options?.outcome, {
-      sessionTarget: options?.sessionTarget,
-    });
+    readSubagentOutput(sessionKey, options?.outcome, { sessionTarget: options?.sessionTarget });
   const immediate = await readOutput();
   if (immediate?.trim()) {
     return immediate;
@@ -284,7 +275,7 @@ export async function readChildCompletionFindings(
     children.map(async (observed) => {
       const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
       const child = readCurrent(observed.runId);
-      if (!child) {
+      if (!child || !prepared.isCurrent()) {
         throw new SubagentAnnouncePreparationConflictError(
           "A child result changed while preparing the completion batch.",
         );
@@ -300,7 +291,17 @@ export async function readChildCompletionFindings(
   }
   return {
     text: buildChildCompletionFindings(
-      results.map(({ child, text }) => Object.assign({}, child, { announceResult: text })),
+      results.map(({ child, text }) => ({
+        childSessionKey: child.childSessionKey,
+        task: child.task,
+        taskName: child.taskName,
+        label: child.label,
+        createdAt: child.createdAt,
+        endedReason: child.endedReason,
+        execution: child.execution,
+        completion: child.completion,
+        announceResult: text,
+      })),
     ),
     isCurrent,
   };
@@ -309,12 +310,11 @@ export async function readChildCompletionFindings(
 export function dedupeLatestChildCompletionRows<
   T extends ChildCompletionRow & { runId: string; generation?: number },
 >(children: T[]): T[] {
-  const latestByChildOwner = new Map<string, (typeof children)[number]>();
+  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
   for (const child of children) {
-    const key = JSON.stringify([resolveSubagentChildAgentId(child), child.childSessionKey]);
-    recordLatestSubagentRun(latestByChildOwner, key, child);
+    recordLatestSubagentRun(latestByChildSessionKey, child.childSessionKey, child);
   }
-  return [...latestByChildOwner.values()];
+  return [...latestByChildSessionKey.values()];
 }
 
 export function filterCurrentDirectChildCompletionRows<

@@ -157,9 +157,7 @@ it.each([true, false])(
       expect(recover).toHaveBeenCalled();
       if (enabled) {
         await logged.promise;
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`sessionId=${sessionId}`));
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(reply);
-        expect(JSON.stringify(warn.mock.calls)).not.toContain("lastAssistant=");
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining(`lastAssistant="${reply}"`));
       } else {
         expect(warn).not.toHaveBeenCalled();
       }

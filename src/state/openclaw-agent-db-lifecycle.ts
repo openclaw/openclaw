@@ -18,11 +18,13 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
-import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
+import {
+  registerSqliteCacheExitClose,
+  runInSqliteMaintenanceContext,
+} from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGatewayShutdownCleanupSignal } from "../process/gateway-work-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createAgentDatabaseHandleCloser } from "./openclaw-agent-db-close.js";
 import type {
@@ -283,12 +285,14 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
   const refresh = () => {
     if (cleanupSignal.aborted) {
       // A synchronous opener can still borrow the exact handle before cleanup runs.
-      runInDetachedAsyncContext(() => queueMicrotask(closeIdle));
+      runInSqliteMaintenanceContext(() => queueMicrotask(closeIdle));
     } else {
       timer.refresh();
     }
   };
-  const timer = runInDetachedAsyncContext(() => setTimeout(closeIdle, SQLITE_IDLE_HANDLE_TTL_MS));
+  const timer = runInSqliteMaintenanceContext(() =>
+    setTimeout(closeIdle, SQLITE_IDLE_HANDLE_TTL_MS),
+  );
   const cleanupListener = addAbortListener(cleanupSignal, refresh);
   timer.unref();
   cache.idleTimers.set(database.db, {

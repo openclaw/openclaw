@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { render } from "lit";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type {
@@ -9,7 +10,6 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
@@ -304,7 +304,7 @@ it.each(["unbound", "materialized"] as const)(
         onModelSetup: vi.fn(),
       });
       const container = document.createElement("div");
-      renderPaneLegacyContent(controls.composerControls, container);
+      render(controls.composerControls, container);
       expect
         .soft(
           container.querySelector<HTMLElement>("[data-chat-thinking-select]")?.dataset

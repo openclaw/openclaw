@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { SessionsListResult } from "../../api/types.ts";
 import "../../lib/toast-host.ts";
 import { installDialogPolyfill, submitInputDialog, waitForInputDialog } from "../modal-dialog.ts";
-import { openSubmenu, selectMenuValue } from "../session-menu.ts";
 import { waitForFast } from "../wait-for.ts";
 import {
   click,
@@ -36,8 +35,7 @@ describe("AppSidebar new group dialog", () => {
       openContextMenu(sidebar, "agent:main:a");
       await sidebar.updateComplete;
       const menu = await sessionMenu(sidebar);
-      await openSubmenu(menu, "Move 2 to group");
-      await selectMenuValue(menu, "new-group");
+      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
 
       await waitForInputDialog();
       await submitInputDialog("Projects");
@@ -90,8 +88,7 @@ describe("AppSidebar new group dialog", () => {
       openContextMenu(sidebar, "agent:main:a");
       await sidebar.updateComplete;
       const menu = await sessionMenu(sidebar);
-      await openSubmenu(menu, "Move 2 to group");
-      await selectMenuValue(menu, "new-group");
+      menu.querySelector<HTMLElement>('wa-dropdown-item[value="new-group"]')?.click();
 
       await waitForInputDialog();
       await submitInputDialog("Projects");

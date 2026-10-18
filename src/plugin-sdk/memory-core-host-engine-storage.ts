@@ -3,10 +3,6 @@
  */
 export { encodeSqliteStringSet, sqliteStringSetEntries } from "../infra/kysely-sync.js";
 export {
-  loadSqliteVecExtension,
-  loadSqliteVecExtensionFromPath,
-} from "../infra/database-engine/sqlite-vec.js";
-export {
   ensureMemoryEntryOriginsSchema,
   readMemoryEntryOriginsInDatabase,
   recordMemoryEntryOriginsInDatabase,
@@ -28,6 +24,8 @@ export {
   isAutomaticMemoryEntryEligible,
   isFileMissingError,
   listMemoryFiles,
+  loadSqliteVecExtension,
+  loadSqliteVecExtensionFromPath,
   matchesExtraMemoryPathEntry,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   MEMORY_CHUNKING_VERSION,

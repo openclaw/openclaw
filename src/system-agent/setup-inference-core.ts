@@ -133,7 +133,6 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
-      modelName?: string;
       gatewayRestartRequired?: true;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
@@ -223,8 +222,6 @@ export type ActivateSetupInferenceParams = {
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
   onPreparationComplete?: () => void;
-  /** Present installation and activation separately from the live connection test. */
-  onActivationStarted?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */

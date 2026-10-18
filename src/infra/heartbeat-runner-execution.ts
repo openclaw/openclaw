@@ -23,6 +23,7 @@ import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-ent
 import { mergeSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  hasActiveCronJobs,
   hasActiveCronJobsExceptMarkers,
   listCronHeartbeatWaitOwners,
 } from "../cron/active-jobs.js";
@@ -81,7 +82,7 @@ export type HeartbeatDeps = OutboundSendDeps &
   ChannelHeartbeatDeps & {
     getReplyFromConfig?: typeof import("../auto-reply/reply/get-reply.js").getReplyFromConfig;
     runtime?: RuntimeEnv;
-    getQueueSize?: typeof getQueueSize;
+    getQueueSize?: (lane?: string) => number;
     isReplyRunActive?: (sessionKey: string) => boolean;
     listActiveReplyRunSessionKeys?: () => readonly string[];
     listActiveEmbeddedRunSessionKeys?: () => readonly string[];
@@ -213,25 +214,20 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedBusyStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT);
   }
 
-  const targetsHeartbeatAgent = (target?: { agentId?: string; sessionKey?: string }) => {
-    const sessionAgentId = parseAgentSessionKey(target?.sessionKey)?.agentId;
-    // Unknown targets stay global; an explicit session can belong to a different agent.
-    return (
-      (!target?.agentId && !sessionAgentId) ||
-      target?.agentId === agentId ||
-      sessionAgentId === agentId ||
-      (target?.sessionKey !== undefined && !sessionAgentId)
-    );
-  };
-  // Exact cron executions awaiting heartbeat settlement are idle, not competing work.
-  const cronBusy = hasActiveCronJobsExceptMarkers(
-    listCronHeartbeatWaitOwners(),
-    targetsHeartbeatAgent,
-  );
+  // Cron executions awaiting heartbeat settlement are idle owners, not competing work.
+  // Keep unrelated Cron work and all CronNested work as busy signals.
+  const heartbeatWaitOwners = listCronHeartbeatWaitOwners();
+  const cronBusy =
+    heartbeatWaitOwners.length > 0
+      ? hasActiveCronJobsExceptMarkers(heartbeatWaitOwners)
+      : hasActiveCronJobs();
+  // HookDispatch is included so moving hook agent runs off `cron-nested` onto
+  // their own lane does not silently stop them from suppressing heartbeats.
+  // They are still active agent work; only the lane they occupy changed.
   const cronLaneBusy =
-    getSize(CommandLane.Cron, targetsHeartbeatAgent) > 0 ||
-    getSize(CommandLane.CronNested, targetsHeartbeatAgent) > 0 ||
-    getSize(CommandLane.HookDispatch, targetsHeartbeatAgent) > 0;
+    getSize(CommandLane.Cron) > 0 ||
+    getSize(CommandLane.CronNested) > 0 ||
+    getSize(CommandLane.HookDispatch) > 0;
   if (!isSessionExecCompletion && (cronBusy || cronLaneBusy)) {
     return skippedBusyStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS);
   }
@@ -342,11 +338,6 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     wakeSource,
     heartbeat,
     scheduledTasks,
-    isAmbientPoll:
-      (wakeSource === undefined || wakeSource === "interval") &&
-      (opts.intent === undefined || opts.intent === "scheduled") &&
-      preflight.pendingEventEntries.length === 0 &&
-      scheduledTasks.length === 0,
     startedAt,
     isEmbeddedRunActive,
     isReplyRunActive,
@@ -452,7 +443,13 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and
   // scheduled-task wakes must still run to process their payloads even when
   // the reply cannot deliver. An absent source is the plain scheduled poll.
-  if (delivery.channel === "none" && delivery.reason === "no-route" && wake.isAmbientPoll) {
+  if (
+    delivery.channel === "none" &&
+    delivery.reason === "no-route" &&
+    (wake.wakeSource === undefined || wake.wakeSource === "interval") &&
+    preflight.pendingEventEntries.length === 0 &&
+    scheduledTasks.length === 0
+  ) {
     return skippedHeartbeatStage("no-route", startedAt);
   }
   const heartbeatAccountId = heartbeat?.accountId?.trim();

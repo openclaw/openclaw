@@ -1,4 +1,6 @@
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import {
+  attachChannelToResult,
   type ChannelOutboundAdapter,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
@@ -28,9 +30,10 @@ import {
 } from "./outbound-components.js";
 import { sendDiscordOutboundPayload } from "./outbound-payload.js";
 import {
-  createDiscordOutboundSendContext,
   loadDiscordSendRuntime,
-  resolveDiscordDeliveryOptions,
+  resolveDiscordFormattingOptions,
+  type DiscordSendFn,
+  type DiscordVoiceSendFn,
 } from "./outbound-send-context.js";
 import { resolveDiscordReplyReference } from "./reply-reference.js";
 import { canFallbackDiscordWebhookSend } from "./retry.js";
@@ -38,6 +41,7 @@ import {
   createDiscordSendReceiptFromResults,
   toDiscordOutboundDeliveryResult,
 } from "./send.receipt.js";
+import type { DiscordSendResult } from "./send.types.js";
 
 export const DISCORD_TEXT_CHUNK_LIMIT = 2000;
 // Shared planning owns explicit per-send limits; Discord's sender resolves account config/defaults.
@@ -51,6 +55,19 @@ const loadDiscordComponentSendRuntime = createLazyRuntimeModule(
 );
 
 type DiscordOutboundMessageContext = Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0];
+
+function resolveDiscordDeliveryOptions(params: DiscordOutboundMessageContext) {
+  return {
+    onPlatformSendDispatch: params.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
+    onDeliveryResult: params.onDeliveryResult
+      ? async (result: DiscordSendResult) =>
+          params.onDeliveryResult?.(
+            attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+          )
+      : undefined,
+  };
+}
 
 async function maybeSendDiscordWebhookText(params: DiscordOutboundMessageContext) {
   const threadId = normalizeOptionalStringifiedId(params.threadId) ?? "";
@@ -84,6 +101,26 @@ async function maybeSendDiscordWebhookText(params: DiscordOutboundMessageContext
     },
     ...resolveDiscordDeliveryOptions(params),
   });
+}
+
+async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageContext) {
+  const send =
+    resolveOutboundSendDep<DiscordSendFn>(params.deps, "discord") ??
+    (await loadDiscordSendRuntime()).sendMessageDiscord;
+  const reply = resolveDiscordReplyReference(params);
+  return {
+    send,
+    target: resolveDiscordAttachedOutboundTarget(params),
+    options: {
+      verbose: false as const,
+      reply,
+      accountId: params.accountId ?? undefined,
+      silent: params.silent ?? undefined,
+      cfg: params.cfg,
+      ...resolveDiscordFormattingOptions(params),
+      ...resolveDiscordDeliveryOptions(params),
+    },
+  };
 }
 
 export const discordOutbound: ChannelOutboundAdapter = {
@@ -135,24 +172,35 @@ export const discordOutbound: ChannelOutboundAdapter = {
           log.warn("discord webhook persona send failed; falling back to bot send", { error });
         }
       }
-      const prepared = await createDiscordOutboundSendContext(ctx);
-      return toDiscordOutboundDeliveryResult(
-        await prepared.send(prepared.target, ctx.text, { verbose: false, ...prepared.options() }),
-      );
+      const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);
+      return toDiscordOutboundDeliveryResult(await send(target, ctx.text, options));
     },
     sendMedia: async (ctx) => {
-      const prepared = await createDiscordOutboundSendContext(ctx);
-      const { send, target } = prepared;
-      const reply = prepared.resolveReply();
+      const { send, target, options } = await resolveDiscordOutboundMessageSend(ctx);
       if (ctx.audioAsVoice && ctx.mediaUrl) {
+        const sendVoice =
+          resolveOutboundSendDep<DiscordVoiceSendFn>(ctx.deps, "discordVoice") ??
+          (await loadDiscordSendRuntime()).sendVoiceMessageDiscord;
         return toDiscordOutboundDeliveryResult(
-          await prepared.sendVoice(target, ctx.mediaUrl, prepared.voiceOptions(reply)),
+          await sendVoice(target, ctx.mediaUrl, {
+            cfg: ctx.cfg,
+            reply: options.reply,
+            accountId: ctx.accountId ?? undefined,
+            silent: ctx.silent ?? undefined,
+            mediaAccess: ctx.mediaAccess,
+            mediaLocalRoots: ctx.mediaLocalRoots,
+            mediaReadFile: ctx.mediaReadFile,
+            onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+            assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
+          }),
         );
       }
-      const options = { verbose: false, ...prepared.options(reply) };
       const mediaOptions = {
-        verbose: false,
-        ...prepared.mediaOptions(ctx.mediaUrl, reply),
+        ...options,
+        mediaUrl: ctx.mediaUrl,
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
       };
       if (ctx.text.trim() && ctx.mediaUrl && isLikelyDiscordVideoMedia(ctx.mediaUrl)) {
         const captionResult = await send(target, ctx.text, options);

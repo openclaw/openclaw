@@ -4,15 +4,12 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { stripEnvelope } from "../shared/chat-envelope.js";
-import {
-  extractAssistantPhaseText,
-  isSilentAssistantTranscriptMessage,
-} from "../shared/chat-message-content.js";
+import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import {
   stripAssistantMediaDirectivesForDisplay,
   takeAssistantManagedMediaUrlsForDisplay,
 } from "./chat-display-projection.helpers.js";
-import { prepareAssistantHistoryMessage } from "./chat-display-projection.sanitize.js";
+import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 const SESSION_DISPLAY_PROJECTION_MAX_CHARS = 800;
@@ -55,12 +52,12 @@ export function projectSessionDisplayMessage(
   message: unknown,
   options: SessionDisplayProjectionOptions = {},
 ): SessionDisplayProjection | null {
-  const entry = readRecord(prepareAssistantHistoryMessage(message));
+  const entry = readRecord(message);
   if (!entry || (options.view !== "model-context" && entry.display === false)) {
     return null;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-  if ((role !== "user" && role !== "assistant") || isSilentAssistantTranscriptMessage(entry)) {
+  if (role !== "user" && role !== "assistant") {
     return null;
   }
   const projectedEntry =
@@ -77,7 +74,7 @@ export function projectSessionDisplayMessage(
     );
   }
   text = text?.trim();
-  if (!text) {
+  if (!text || (role === "assistant" && isSuppressedControlReplyText(text))) {
     return null;
   }
   if (role === "user") {

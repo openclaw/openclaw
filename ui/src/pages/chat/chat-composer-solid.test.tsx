@@ -1,4 +1,5 @@
-import { createSignal, merge } from "solid-js";
+import { html, render, nothing } from "lit";
+import { createSignal } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
@@ -8,23 +9,23 @@ import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createComposerContainer,
   createComposerProps,
-  disposeComposer,
-  renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
+import { solidTemplate } from "./components/chat-composer-controls.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
-import type { ChatComposerProps } from "./components/chat-composer-types.ts";
+import { LitContent } from "./components/chat-composer-interop.tsx";
+import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationController } from "./composer-dictation.ts";
 
 afterEach(() => resetComposerFixture());
 
-function mountComposer(initial: ChatComposerProps) {
+function mountComposer(initial: Parameters<typeof renderChatComposer>[0]) {
   const container = document.body.appendChild(createComposerContainer());
   let props = initial;
-  const paint = () => renderComposerInto(container, props);
+  const paint = () => render(renderChatComposer(props), container);
   onTestFinished(() => {
-    disposeComposer(container);
+    render(nothing, container);
   });
   paint();
   return {
@@ -47,12 +48,10 @@ it("updates composer text on a live locale change without disturbing an IME draf
     onDraftChange,
   });
   const view = mountComposer(props);
-  view.container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!.click();
-  await waitForSolid(() =>
-    expect(
-      view.container.querySelector(".chat-controls__permission-menu")?.matches(":popover-open"),
-    ).toBe(true),
-  );
+  view.container
+    .querySelector(".chat-controls__permission-picker")!
+    .dispatchEvent(new Event("wa-show"));
+  flush();
   const textarea = view.container.querySelector("textarea")!;
   const heading = view.container.querySelector(".chat-controls__permission-heading")!;
   expect(heading.textContent).toBe("Execution permissions");
@@ -115,6 +114,25 @@ it("updates an existing private draft recovery error when the locale changes", a
   expect(document.querySelector('[role="alert"]')).toBe(error);
   expect(error.textContent).toBe(
     "Dieser Anhang kann nicht mehr heruntergeladen werden. Lassen Sie den Entwurf geöffnet und stellen Sie die Originaldatei wieder her, bevor Sie ihn verwerfen.",
+  );
+});
+
+it("mounts nested Solid content when opaque Lit content changes after mount", async () => {
+  const Label = (props: { text: string }) => <b class="nested-label">{props.text}</b>;
+  const [value, setValue] = createSignal<unknown>(html`<i>initial</i>`);
+  const view = mountSolid(() => <LitContent value={value()} />);
+
+  // Composer updates reach LitContent from its render effect, where nested
+  // directives must not create roots without an owner.
+  setValue(html`${solidTemplate(Label, { text: "attached" })}`);
+  flush();
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("attached"),
+  );
+
+  setValue(html`${solidTemplate(Label, { text: "still reactive" })}`);
+  await waitForSolid(() =>
+    expect(view.container.querySelector(".nested-label")?.textContent).toBe("still reactive"),
   );
 });
 
@@ -202,14 +220,13 @@ it("ends the old IME scope without writing into a newly selected session", () =>
   expect(onNewDraftChange).toHaveBeenCalledWith("second draft edited", undefined);
 });
 
-it("keeps the open permission picker through parent updates", async () => {
+it("keeps the open permission picker through parent updates", () => {
   const permissionPicker = { canSelectFull: true, onSelect: vi.fn() };
   const view = mountComposer(createComposerProps({ permissionPicker }));
-  const picker = view.container.querySelector(".chat-controls__permission-picker")!;
-  const trigger = picker.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-  trigger.click();
-  const surface = picker.querySelector<HTMLElement>('[role="menu"]')!;
-  await waitForSolid(() => expect(surface.matches(":popover-open")).toBe(true));
+  const picker = view.container.querySelector<HTMLElement & { open: boolean }>(
+    ".chat-controls__permission-picker",
+  )!;
+  picker.open = true;
   view.update((previous) => ({
     ...previous,
     stream: "More response",
@@ -217,9 +234,7 @@ it("keeps the open permission picker through parent updates", async () => {
   }));
   flush();
   expect(view.container.querySelector(".chat-controls__permission-picker")).toBe(picker);
-  expect(picker.querySelector('[role="menu"]')).toBe(surface);
-  expect(surface.matches(":popover-open")).toBe(true);
-  expect(trigger.getAttribute("aria-expanded")).toBe("true");
+  expect(picker.open).toBe(true);
 });
 
 it("keeps a pending dictation send bound to the action that started it", async () => {
@@ -241,22 +256,30 @@ it("keeps a pending dictation send bound to the action that started it", async (
   );
   const firstSend = vi.fn();
   const laterSend = vi.fn();
-  const [props, setProps] = createSignal({
-    readDictation: () => controller,
-    onSend: firstSend,
-  });
-  const actionProps = merge(props);
-  const view = mountSolid(() => <ComposerDictationSendAction {...actionProps} />);
+  const view = mountSolid(() => <section />);
+  const outlet = view.container.querySelector("section")!;
   try {
-    view.container.querySelector<HTMLButtonElement>("button")!.click();
-    setProps({ readDictation: () => controller, onSend: laterSend });
-    flush();
+    render(
+      solidTemplate(ComposerDictationSendAction, {
+        readDictation: () => controller,
+        onSend: firstSend,
+      }),
+      outlet,
+    );
+    outlet.querySelector<HTMLButtonElement>("button")!.click();
+    render(
+      solidTemplate(ComposerDictationSendAction, {
+        readDictation: () => controller,
+        onSend: laterSend,
+      }),
+      outlet,
+    );
     finish(true);
     await Promise.resolve();
     expect(firstSend).toHaveBeenCalledOnce();
     expect(laterSend).not.toHaveBeenCalled();
   } finally {
-    view.unmount();
+    render(nothing, outlet);
     controller.dispose();
   }
 });

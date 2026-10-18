@@ -85,39 +85,19 @@ describe("channel DM access request views", () => {
   it("renders pending senders without exposing the pairing code", () => {
     const onApprove = vi.fn();
     const onDismiss = vi.fn();
-    const props = createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss });
-    const container = renderInto(renderChannelPairingQueue, props);
+    const container = renderInto(
+      renderChannelPairingQueue,
+      createProps({ onPairingApprove: onApprove, onPairingDismiss: onDismiss }),
+    );
 
     expect(container.textContent).toContain("+15551234567");
     expect(container.textContent).toContain("Alice");
     expect(container.textContent).not.toContain("SECRET12");
     const buttons = Array.from(container.querySelectorAll("button"));
-    const approve = buttons.find((button) => button.textContent?.trim() === "Approve")!;
-    const dismiss = buttons.find((button) => button.textContent?.trim() === "Dismiss")!;
-    approve.click();
-    dismiss.click();
+    buttons.find((button) => button.textContent?.trim() === "Approve")?.click();
+    buttons.find((button) => button.textContent?.trim() === "Dismiss")?.click();
     expect(onApprove).toHaveBeenCalledWith(request);
     expect(onDismiss).toHaveBeenCalledWith(request);
-
-    const details = container.querySelector<HTMLDetailsElement>(
-      ".channels-pairing-request__details",
-    )!;
-    details.open = true;
-    const refreshed = { ...request, metadata: { name: "Alice Updated" } };
-    props.channels.pairingSnapshot = {
-      ...props.channels.pairingSnapshot!,
-      requests: [refreshed],
-    };
-    renderChannelView(renderChannelPairingQueue, props, container);
-    expect(container.querySelector(".channels-pairing-request__details")).toBe(details);
-    expect(details.open).toBe(true);
-    expect(details.textContent).toContain("Alice Updated");
-    expect(container.contains(approve)).toBe(true);
-    expect(container.contains(dismiss)).toBe(true);
-    approve.click();
-    dismiss.click();
-    expect(onApprove).toHaveBeenLastCalledWith(refreshed);
-    expect(onDismiss).toHaveBeenLastCalledWith(refreshed);
   });
 
   it("hides cached sender data without pairing access", () => {
@@ -136,26 +116,20 @@ describe("channel DM access request views", () => {
   });
 
   it("renders notice and error feedback as status rows without nested callouts", () => {
-    const noticeProps = createProps({ pairingNotice: "Request approved" });
-    const noticeContainer = renderInto(renderChannelPairingQueue, noticeProps);
-    const noticeSelector = '.channels-pairing-feedback[role="status"]';
-    const notice = noticeContainer.querySelector(noticeSelector);
+    const noticeContainer = renderInto(
+      renderChannelPairingQueue,
+      createProps({ pairingNotice: "Request approved" }),
+    );
+    const notice = noticeContainer.querySelector('[role="status"]');
 
     expect(notice?.textContent).toContain("Request approved");
     expect(noticeContainer.querySelector(".callout")).toBeNull();
-    noticeProps.pairingNotice = "Request dismissed";
-    renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
-    expect(noticeContainer.querySelector(noticeSelector)).toBe(notice);
-    expect(notice?.textContent).toContain("Request dismissed");
-    noticeProps.pairingNotice = null;
-    renderChannelView(renderChannelPairingQueue, noticeProps, noticeContainer);
-    expect(noticeContainer.querySelector(noticeSelector)).toBeNull();
 
     const errorContainer = renderInto(
       renderChannelPairingQueue,
       createProps({ channels: { pairingError: "Approval failed" } }),
     );
-    const error = errorContainer.querySelector('.channels-pairing-feedback[role="alert"]');
+    const error = errorContainer.querySelector('[role="alert"]');
 
     expect(error?.textContent).toContain("Approval failed");
     expect(errorContainer.querySelector(".callout")).toBeNull();

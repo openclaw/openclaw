@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, onCleanup, Show, For } from "solid-js";
+import { createSignal, onCleanup, Show, For } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
@@ -88,8 +88,6 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
     packageImage().source && packageImage().status !== "failed"
       ? { state: packageImage(), update: setPackageImage, package: true }
       : { state: authorImage(), update: setAuthorImage, package: false };
-  const gradient = createMemo(() => pluginFallbackGradient(props.slug));
-  const monogram = createMemo(() => pluginMonogram(props.name));
   const source = () =>
     currentImage().state.status === "failed" ? undefined : currentImage().state.source;
   const pending = () =>
@@ -137,12 +135,16 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
           class={[className(), `${className()}--fallback`]}
           data-plugin-icon-id={props.slug}
           style={{
-            "--plugins-art-a": gradient()[0],
-            "--plugins-art-b": gradient()[1],
+            "--plugins-art-a": pluginFallbackGradient(props.slug)[0],
+            "--plugins-art-b": pluginFallbackGradient(props.slug)[1],
           }}
           aria-hidden="true"
         >
-          {monogram() ? <span>{monogram()}</span> : <Icon name="plug" />}
+          {pluginMonogram(props.name) ? (
+            <span>{pluginMonogram(props.name)}</span>
+          ) : (
+            <Icon name="plug" />
+          )}
         </span>
       )}
     </>
@@ -152,10 +154,12 @@ export function PluginArtTile(props: ArtTileProps): JSX.Element {
 function renderPluginMetaRow(label: string, value: JSX.Element | string, warning = false) {
   return (
     <SettingsRow
-      title={label}
-      control={<span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>}
-      stackedOnNarrow
-      carapace
+      {...{
+        title: label,
+        control: <span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>,
+        stackedOnNarrow: true,
+        carapace: true,
+      }}
     />
   );
 }
@@ -196,21 +200,31 @@ function renderPluginDeclaredCapabilities(declared: PluginDeclaredSurface): JSX.
   const rows = renderCapabilityRows(declared);
   return (
     <SettingsSection
-      title={t("pluginConsent.declaredTitle")}
-      description={t("pluginConsent.declaredDescription")}
-      carapace
+      {...{
+        title: t("pluginConsent.declaredTitle"),
+        description: t("pluginConsent.declaredDescription"),
+        carapace: true,
+      }}
     >
-      {rows.length ? rows : <SettingsRow title={t("pluginConsent.declaredEmpty")} carapace />}
-      {declared.hooks.length === 0
-        ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
-        : undefined}
-      {declared.dangerousConfigFlags.length > 0
-        ? renderPluginMetaRow(
-            t("pluginConsent.dangerousFlags"),
-            renderCapabilityItems(declared.dangerousConfigFlags),
-            true,
-          )
-        : undefined}
+      {
+        <>
+          {rows.length ? (
+            rows
+          ) : (
+            <SettingsRow {...{ title: t("pluginConsent.declaredEmpty"), carapace: true }} />
+          )}
+          {declared.hooks.length === 0
+            ? renderPluginMetaRow(t("pluginConsent.hooks"), t("pluginConsent.runtimeHooks"))
+            : undefined}
+          {declared.dangerousConfigFlags.length > 0
+            ? renderPluginMetaRow(
+                t("pluginConsent.dangerousFlags"),
+                renderCapabilityItems(declared.dangerousConfigFlags),
+                true,
+              )
+            : undefined}
+        </>
+      }
     </SettingsSection>
   );
 }
@@ -276,44 +290,50 @@ function renderPluginGrants(grants: PluginOperatorGrants, origin?: string): JSX.
   const conversation = grants.hooks.allowConversationAccess;
   return (
     <SettingsSection
-      title={t("pluginConsent.grantsTitle")}
-      description={t("pluginConsent.grantsDescription")}
-      carapace
+      {...{
+        title: t("pluginConsent.grantsTitle"),
+        description: t("pluginConsent.grantsDescription"),
+        carapace: true,
+      }}
     >
-      {renderPluginMetaRow(
-        t("pluginConsent.promptInjection"),
-        grantValue(
-          grants.hooks.allowPromptInjection,
-          "pluginConsent.allowed",
-          "pluginConsent.blocked",
-        ),
-      )}
-      {renderPluginMetaRow(
-        t("pluginConsent.conversationAccess"),
+      {
         <>
-          {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
-          {!conversation.effective &&
-          conversation.configured === undefined &&
-          origin !== "bundled" ? (
-            <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
-          ) : undefined}
-        </>,
-      )}
-      <For each={["llm", "subagent"] as const}>
-        {(key) => {
-          const overrides = grants[key];
-          return overrides
-            ? renderPluginMetaRow(
-                t(
-                  key === "llm"
-                    ? "pluginConsent.modelOverrides"
-                    : "pluginConsent.subagentModelOverrides",
-                ),
-                modelOverrideSummary(overrides),
-              )
-            : undefined;
-        }}
-      </For>
+          {renderPluginMetaRow(
+            t("pluginConsent.promptInjection"),
+            grantValue(
+              grants.hooks.allowPromptInjection,
+              "pluginConsent.allowed",
+              "pluginConsent.blocked",
+            ),
+          )}
+          {renderPluginMetaRow(
+            t("pluginConsent.conversationAccess"),
+            <>
+              {grantValue(conversation, "pluginConsent.on", "pluginConsent.off")}
+              {!conversation.effective &&
+              conversation.configured === undefined &&
+              origin !== "bundled" ? (
+                <span class="plugins-consent__hint">{t("pluginConsent.externalAccessHint")}</span>
+              ) : undefined}
+            </>,
+          )}
+          <For each={["llm", "subagent"] as const}>
+            {(key) => {
+              const overrides = grants[key];
+              return overrides
+                ? renderPluginMetaRow(
+                    t(
+                      key === "llm"
+                        ? "pluginConsent.modelOverrides"
+                        : "pluginConsent.subagentModelOverrides",
+                    ),
+                    modelOverrideSummary(overrides),
+                  )
+                : undefined;
+            }}
+          </For>
+        </>
+      }
     </SettingsSection>
   );
 }
@@ -396,7 +416,7 @@ function renderTrust(trust: PluginsInspectResult["trust"]) {
     trust.disposition === "clean" ? "ok" : trust.disposition === "blocked" ? "danger" : "warn";
   return (
     <section class="plugins-consent__trust">
-      <SettingsStatus kind={kind} label={label} carapace />
+      {<SettingsStatus {...{ kind, label, carapace: true }} />}
       {trust.reasons?.length ? (
         <ul>
           <For each={trust.reasons}>{(reason) => <li>{reason}</li>}</For>
@@ -490,7 +510,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
         ) : (
           <p class="plugins-consent__description">{t("pluginConsent.fallback")}</p>
         )}
-        <openclaw-modal-actions class="plugins-consent__actions">
+        <footer class="plugins-consent__actions">
           <button
             type="button"
             class="btn oc-action oc-action-secondary"
@@ -501,7 +521,7 @@ export function renderPluginConsentDialog(props: PluginConsentDialogProps): JSX.
           <ReasonedDisabledControl reason={props.mutationBlockedReason}>
             {confirm}
           </ReasonedDisabledControl>
-        </openclaw-modal-actions>
+        </footer>
       </section>
     </openclaw-modal-dialog>
   );

@@ -23,6 +23,7 @@ import {
   resolveDiscordMessageStickers,
   resolveDiscordReferencedForwardMessage,
   resolveDiscordReferencedReplyMessage,
+  resolveDiscordSnapshotStickers,
 } from "./message-forwarded.js";
 import { withAbortTimeout } from "./timeouts.js";
 
@@ -57,10 +58,6 @@ type DiscordMediaOperation = DiscordMediaResolveOptions & {
   endpointRuntime: DiscordEndpointRuntime | null;
   maxBytes: number;
   out: DiscordMediaInfo[];
-};
-
-type DiscordMediaSource = Parameters<typeof resolveDiscordMessageStickers>[0] & {
-  attachments?: APIAttachment[] | null;
 };
 
 function createDiscordMediaOperation(
@@ -137,7 +134,7 @@ function resolveDiscordMediaClassification(params: {
 }
 
 async function resolveMessageMedia(
-  message: DiscordMediaSource,
+  message: Message,
   operation: DiscordMediaOperation,
   errorPrefix: string,
 ): Promise<DiscordMediaInfo[]> {
@@ -155,7 +152,7 @@ async function resolveMessageMedia(
 }
 
 export async function resolveMediaList(
-  message: DiscordMediaSource,
+  message: Message,
   maxBytes: number,
   options?: DiscordMediaResolveOptions,
 ): Promise<DiscordMediaInfo[]> {
@@ -175,11 +172,16 @@ export async function resolveForwardedMediaList(
   const operation = createDiscordMediaOperation(maxBytes, options);
   if (snapshots.length > 0) {
     for (const snapshot of snapshots) {
-      await resolveMessageMedia(
-        snapshot.message ?? {},
-        operation,
-        "discord: failed to download forwarded",
-      );
+      await appendResolvedMediaFromAttachments({
+        ...operation,
+        attachments: snapshot.message?.attachments,
+        errorPrefix: "discord: failed to download forwarded attachment",
+      });
+      await appendResolvedMediaFromStickers({
+        ...operation,
+        stickers: snapshot.message ? resolveDiscordSnapshotStickers(snapshot.message) : [],
+        errorPrefix: "discord: failed to download forwarded sticker",
+      });
     }
     return operation.out;
   }

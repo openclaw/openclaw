@@ -28,6 +28,27 @@ type ChannelDoctorLookupContext = {
   env?: NodeJS.ProcessEnv;
 };
 
+const channelDoctorFunctionKeys = new Set<keyof ChannelDoctorAdapter>([
+  "normalizeCompatibilityConfig",
+  "collectPreviewWarnings",
+  "collectMutableAllowlistWarnings",
+  "repairConfig",
+  "runConfigSequence",
+  "cleanStaleConfig",
+  "collectEmptyAllowlistExtraWarnings",
+  "shouldSkipDefaultEmptyGroupAllowlistWarning",
+]);
+
+const channelDoctorBooleanKeys = new Set<keyof ChannelDoctorAdapter>([
+  "groupAllowFromFallbackToAllowFrom",
+  "warnOnEmptyGroupSenderAllowlist",
+]);
+
+const channelDoctorEnumValues: Partial<Record<keyof ChannelDoctorAdapter, ReadonlySet<string>>> = {
+  dmAllowFromMode: new Set(["topOnly", "topOrNested", "nestedOnly"]),
+  groupModel: new Set(["sender", "route", "hybrid"]),
+};
+
 export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
 } & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
@@ -79,19 +100,41 @@ function listReadOnlyChannelDoctorsById(
 function mergeDoctorAdapters(
   adapters: Array<ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorAdapter | undefined {
-  const merged: ChannelDoctorAdapter = {};
+  const merged: Partial<Record<keyof ChannelDoctorAdapter, unknown>> = {};
   for (const adapter of adapters) {
     if (!adapter) {
       continue;
     }
-    for (const [key, value] of Object.entries(adapter)) {
+    for (const [key, value] of Object.entries(adapter) as Array<
+      [keyof ChannelDoctorAdapter, unknown]
+    >) {
       // Earlier adapters win so read-only installed plugins can override bundled fallbacks.
-      if (value !== undefined && !(key in merged)) {
-        Object.assign(merged, { [key]: value });
+      if (merged[key] === undefined && isValidChannelDoctorAdapterValue(key, value)) {
+        merged[key] = value;
       }
     }
   }
-  return Object.keys(merged).length > 0 ? merged : undefined;
+  return Object.keys(merged).length > 0 ? (merged as ChannelDoctorAdapter) : undefined;
+}
+
+function isValidChannelDoctorAdapterValue(
+  key: keyof ChannelDoctorAdapter,
+  value: unknown,
+): boolean {
+  if (channelDoctorFunctionKeys.has(key)) {
+    return typeof value === "function";
+  }
+  if (channelDoctorBooleanKeys.has(key)) {
+    return typeof value === "boolean";
+  }
+  const enumValues = channelDoctorEnumValues[key];
+  if (enumValues) {
+    return typeof value === "string" && enumValues.has(value);
+  }
+  if (key === "legacyConfigRules") {
+    return Array.isArray(value);
+  }
+  return false;
 }
 
 function listChannelDoctorEntries(

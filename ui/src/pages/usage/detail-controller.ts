@@ -39,6 +39,7 @@ function createUsageDetailRequest<T>(
     sessionId: string | undefined,
   ) => Promise<T>,
   resolveTarget: (key: string) => UsageDetailTarget,
+  canLoad?: (key: string) => boolean,
   onClear?: () => void,
 ) {
   let value: { target: UsageDetailTarget; data?: T } | null = null;
@@ -126,7 +127,7 @@ function createUsageDetailRequest<T>(
       if (!client || !gateway.connected) {
         return Promise.resolve();
       }
-      const enabled = Boolean(sessionKey);
+      const enabled = Boolean(sessionKey) && canLoad?.(sessionKey) !== false;
       const target = resolveTarget(sessionKey);
       const sameTarget = sameUsageTarget(value?.target, target);
       if (!sameTarget || !enabled) {
@@ -173,6 +174,7 @@ export class UsageDetailsController {
       gateway,
       requestSessionUsageTimeSeries,
       resolveTarget,
+      undefined,
       clearTimeSeriesRange,
     );
     this.sessionLogs = createUsageDetailRequest(

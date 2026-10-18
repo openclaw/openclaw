@@ -17,7 +17,7 @@ import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
 import { resolveTerminalRouteLocation } from "./route-location.ts";
 import "./terminal-page.css";
 
-export function TerminalPage(props: { location: RouteLocation | null }) {
+export function TerminalPageContent(props: { location: RouteLocation | null }) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const config = projectApplicationConfig(context.config);
@@ -43,37 +43,35 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
     return context.theme.resolvedMode;
   };
   return (
-    <openclaw-terminal-page>
-      <For each={route()} keyed={(entry) => entry.key}>
-        {(entry) => (
-          <>
-            <TerminalPanelHost
-              hidden={!available()}
-              embedded
-              fullscreen
-              page={true}
-              routeTarget={entry().target}
-              client={snapshot().phase === "connected" ? snapshot().client : null}
-              available={available()}
-              agentId={owner() ? normalizeAgentId(owner()!) : null}
-              basePath={context.basePath}
-              themeMode={themeMode()}
+    <For each={route()} keyed={(entry) => entry.key}>
+      {(entry) => (
+        <>
+          <TerminalPanelHost
+            hidden={!available()}
+            embedded
+            fullscreen
+            page={true}
+            routeTarget={entry().target}
+            client={snapshot().phase === "connected" ? snapshot().client : null}
+            available={available()}
+            agentId={owner() ? normalizeAgentId(owner()!) : null}
+            basePath={context.basePath}
+            themeMode={themeMode()}
+          />
+          {!available() && (
+            <PanelEmptyState
+              heading={t("terminal.title")}
+              description={t("terminal.unavailable")}
+              icon={<Icon name="terminal" />}
+              action={
+                <button class="btn" onClick={() => context.navigate("new-session")}>
+                  {t("newSession.title")}
+                </button>
+              }
             />
-            {!available() && (
-              <PanelEmptyState
-                heading={t("terminal.title")}
-                description={t("terminal.unavailable")}
-                icon={<Icon name="terminal" />}
-                action={
-                  <button class="btn" onClick={() => context.navigate("new-session")}>
-                    {t("newSession.title")}
-                  </button>
-                }
-              />
-            )}
-          </>
-        )}
-      </For>
-    </openclaw-terminal-page>
+          )}
+        </>
+      )}
+    </For>
   );
 }

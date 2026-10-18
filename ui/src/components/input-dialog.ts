@@ -1,3 +1,4 @@
+import { render as renderSolid, type JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import type { InputDialogOptions } from "./input-dialog-types.ts";
 import { InputDialogView } from "./input-dialog-view.tsx";
@@ -8,14 +9,17 @@ export type { InputDialogOptions } from "./input-dialog-types.ts";
 let inputActive = false;
 
 function presentInputDialog(options: InputDialogOptions): Promise<string | null> {
-  return withPromiseModalHost<string | null>({ signal: options.signal, value: null }, (modal) =>
-    modal.render(() =>
-      createComponent(InputDialogView, {
-        options,
-        finish: modal.finish,
-        settled: () => modal.settled,
-      }),
-    ),
+  return withPromiseModalHost<string | null, JSX.Element>(
+    { signal: options.signal, value: null },
+    (modal) =>
+      modal.render(() =>
+        createComponent(InputDialogView, {
+          options,
+          finish: modal.finish,
+          settled: () => modal.settled,
+        }),
+      ),
+    (content, host) => renderSolid(content, host),
   );
 }
 

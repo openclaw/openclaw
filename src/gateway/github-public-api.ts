@@ -32,7 +32,6 @@ export type ControlUiGitHubPreviewIdentity = {
   /** Host service/env credentials may retry a stale HTTP 401 anonymously. */
   optionalAuth?: true;
   stale?: true;
-  signal?: AbortSignal;
   revalidate: () => Promise<void>;
   assertSelected: () => void;
 };
@@ -45,15 +44,6 @@ type ControlUiGitHubPreviewTarget = {
 type GitHubDetailTarget =
   | ControlUiGitHubPreviewTarget
   | { owner: string; repo: string; kind: "commit"; sha: string };
-
-type GitHubSearchParams = {
-  repository: string;
-  query: string;
-  kind: "issue" | "pull";
-  state: "all" | "open" | "closed";
-  page: number;
-};
-type GitHubReadRequest = { assertActive: () => void; signal: AbortSignal };
 
 /** Host consumers depend on this public read contract, not the plugin's source graph. */
 type GitHubPublicApi = {
@@ -91,7 +81,7 @@ type GitHubPublicApi = {
     fetchImpl: typeof fetch,
     token?: string,
     beforeRedirect?: (url: URL) => Promise<void>,
-    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected" | "signal">,
+    identity?: Pick<ControlUiGitHubPreviewIdentity, "revalidate" | "assertSelected">,
     etag?: string,
     signal?: AbortSignal,
     graphql?: { query: string; variables: Record<string, string> },
@@ -119,19 +109,11 @@ type GitHubPublicApi = {
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
-  parseGitHubSearchParams: (params: unknown) => GitHubSearchParams | null;
-  searchPublicGitHubItems: (
-    params: GitHubSearchParams,
-    identity?: ControlUiGitHubPreviewIdentity,
-    fetchImpl?: typeof fetch,
-    request?: GitHubReadRequest,
-  ) => Promise<unknown>;
   loadGitHubDetail: (
     target: GitHubDetailTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
-    request?: GitHubReadRequest,
   ) => Promise<ControlUiLinkReaderDocument>;
   loadControlUiGitHubPreview: (
     target: ControlUiGitHubPreviewTarget,
@@ -249,28 +231,6 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
       revalidate: async () => assertSelected(),
     };
   };
-  const resolveReadRequestIdentity = (
-    identity: ControlUiGitHubPreviewIdentity | undefined,
-    request: GitHubReadRequest | undefined,
-  ): ControlUiGitHubPreviewIdentity => {
-    const selected = resolveReadIdentity(identity);
-    // Keep one transport/cooldown owner while each invocation owns its authority.
-    return request
-      ? {
-          ...selected,
-          signal: request.signal,
-          assertSelected() {
-            request.assertActive();
-            selected.assertSelected();
-          },
-          async revalidate() {
-            request.assertActive();
-            await selected.revalidate();
-            request.assertActive();
-          },
-        }
-      : selected;
-  };
   return {
     ...library,
     get GITHUB_API_BASE_URL() {
@@ -302,20 +262,8 @@ export const gitHubPublicApi = createLazyFacadeObjectValue<GitHubPublicApi>(() =
         refresh,
       );
     },
-    searchPublicGitHubItems(params, identity, fetchImpl, request) {
-      return library.searchPublicGitHubItems(
-        params,
-        resolveReadRequestIdentity(identity, request),
-        fetchImpl,
-      );
-    },
-    loadGitHubDetail(target, identity, fetchImpl, refresh, request) {
-      return library.loadGitHubDetail(
-        target,
-        resolveReadRequestIdentity(identity, request),
-        fetchImpl,
-        refresh,
-      );
+    loadGitHubDetail(target, identity, fetchImpl, refresh) {
+      return library.loadGitHubDetail(target, resolveReadIdentity(identity), fetchImpl, refresh);
     },
   };
 });

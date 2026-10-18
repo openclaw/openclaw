@@ -162,15 +162,17 @@ function configPatchRaw(request: { params?: unknown }) {
 
 async function openMenu(page: Page) {
   const composer = page.locator(".agent-chat__input");
-  const dropdown = composer.locator(".agent-chat__capability-menu");
+  const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
   const skills = composer.getByRole("menuitem", { name: "Skills" });
-  const isOpen = await dropdown.evaluate((node) => node.hasAttribute("open"));
+  const isOpen = await dropdown.evaluate((node) => (node as HTMLElement & { open: boolean }).open);
   if (!isOpen) {
     await composer.getByRole("button", { name: "Add attachment" }).click();
   }
   await expect
     .poll(async () => {
-      const open = await dropdown.evaluate((node) => node.hasAttribute("open"));
+      const open = await dropdown.evaluate(
+        (node) => (node as HTMLElement & { open: boolean }).open,
+      );
       return open && (await skills.isVisible());
     })
     .toBe(true);
@@ -178,12 +180,16 @@ async function openMenu(page: Page) {
 }
 
 function webSearchItem(menu: import("playwright").Locator) {
-  return menu.locator('.oc-menu-item[data-value="toggle-web-search"]');
+  return menu.locator('wa-dropdown-item[value="toggle-web-search"]');
 }
 
 async function forceCapabilitySelection(item: import("playwright").Locator) {
   await item.evaluate(async (element) => {
-    element.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    const menu = element.closest("wa-dropdown");
+    if (!menu) {
+      throw new Error("Capability item has no dropdown owner");
+    }
+    menu.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item: element } }));
     // Drain the handler's microtasks and the mock Gateway's response task before checking writes.
     await new Promise<void>((resolve) => {
       setTimeout(resolve, 0);
@@ -230,7 +236,7 @@ suite.define(() => {
         .toContain("agent-chat__input-btn--has-overrides");
 
       let composer = await openMenu(page);
-      const dropdown = composer.locator(".agent-chat__capability-menu");
+      const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
         .poll(() => dropdown.getByRole("menuitem").allTextContents())
@@ -250,13 +256,15 @@ suite.define(() => {
       const skillsRoot = dropdown.getByRole("menuitem", { name: /^Skills/ });
       await skillsRoot.focus();
       await skillsRoot.evaluate((item) => {
-        item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
       });
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
       await dropdown.getByRole("menuitem", { name: "Back" }).click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("root");
       await expect
-        .poll(() => dropdown.locator(".oc-menu-item:focus").textContent())
+        .poll(() => dropdown.locator("wa-dropdown-item:focus").textContent())
         .toContain("Take photo");
       await page.evaluate(() => {
         const input = document.querySelector<HTMLInputElement>(".agent-chat__file-input");
@@ -273,15 +281,15 @@ suite.define(() => {
         .toBe("true");
 
       composer = await openMenu(page);
-      const reopenedMenu = composer.locator(".agent-chat__capability-menu");
-      await reopenedMenu.locator('.oc-menu-item[data-value="clear-overrides"]').click();
+      const reopenedMenu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      await reopenedMenu.locator('wa-dropdown-item[value="clear-overrides"]').click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual(null);
       await expect
         .poll(() => attachTrigger.getAttribute("class"))
         .not.toContain("agent-chat__input-btn--has-overrides");
 
       composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("skills");
       const docs = menu.getByRole("menuitemcheckbox", { name: /^Docs/ });
@@ -315,17 +323,23 @@ suite.define(() => {
       await menu.getByRole("menuitem", { name: "Back" }).click();
       const webSearch = webSearchItem(menu);
       await expect
-        .poll(() => webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"))
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
         .toBe(true);
       await webSearchItem(menu).click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({ webSearch: false });
       await expect
-        .poll(() => webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"))
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
         .toBe(false);
       await webSearchItem(menu).click();
       await expect.poll(() => latestToolOverrides(gateway)).toEqual({});
       await expect
-        .poll(() => webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"))
+        .poll(() =>
+          webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+        )
         .toBe(true);
 
       const patchCount = (await gateway.getRequests("sessions.patch")).length;
@@ -338,16 +352,16 @@ suite.define(() => {
       });
       await page.getByText("Web search preference could not be saved", { exact: true }).waitFor();
       await expect.poll(() => webSearch.isDisabled()).toBe(false);
-      expect(await webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true")).toBe(
-        true,
-      );
+      expect(
+        await webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+      ).toBe(true);
 
       const themeBackgrounds: string[] = [];
       for (const mode of ["dark", "light"] as const) {
         themeBackgrounds.push(
           await menu.evaluate((node, nextMode) => {
             document.documentElement.dataset.themeMode = nextMode;
-            const surface = node.querySelector(".oc-menu");
+            const surface = node.shadowRoot?.querySelector('[part="menu"]');
             return surface ? getComputedStyle(surface).backgroundColor : "";
           }, mode),
         );
@@ -376,7 +390,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
@@ -385,7 +399,7 @@ suite.define(() => {
         .poll(() => menu.getByRole("menuitemcheckbox", { name: "delete_page" }).count())
         .toBe(0);
 
-      const toolRows = menu.locator('.oc-menu-item[data-value^="mcp-tool:"]');
+      const toolRows = menu.locator('wa-dropdown-item[value^="mcp-tool:"]');
       const rawToolNames = toolRows.locator(
         ".agent-chat__capability-menu-label > span:first-child",
       );
@@ -400,7 +414,10 @@ suite.define(() => {
         .toEqual([true, true]);
       await expect
         .poll(() =>
-          toolRows.nth(2).evaluate((node) => node.getAttribute("aria-checked") === "true"),
+          toolRows
+            .nth(2)
+            .locator("wa-switch")
+            .evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
         )
         .toBe(false);
 
@@ -447,15 +464,13 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
 
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:constructor");
       await expect.poll(() => menu.getByText("3 of 3 tools on").isVisible()).toBe(true);
-      await expect
-        .poll(() => menu.locator('.oc-menu-item[data-value^="mcp-tool:"]').count())
-        .toBe(3);
+      await expect.poll(() => menu.locator('wa-dropdown-item[value^="mcp-tool:"]').count()).toBe(3);
     });
   });
 
@@ -475,7 +490,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).first().click();
 
@@ -527,7 +542,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("sessions.list");
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
       await gateway.waitForRequest("tools.effective");
@@ -535,11 +550,13 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
       await gateway.resolveDeferred("tools.effective", effectiveToolsResponse());
-      const listIssues = menu.locator('.oc-menu-item[data-value="mcp-tool:list-issues"]');
+      const listIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
       await expect.poll(() => listIssues.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(listIssues)).toBe("Loading…");
       await listIssues.evaluate((item) => {
-        item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
       });
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
@@ -547,7 +564,7 @@ suite.define(() => {
       await expect.poll(() => menu.getAttribute("data-view")).toBe("tools:github");
       await menu.getByRole("menuitem", { name: "Back" }).click();
       await menu.getByRole("menuitem", { name: "Tool access" }).click();
-      const readyListIssues = menu.locator('.oc-menu-item[data-value="mcp-tool:list-issues"]');
+      const readyListIssues = menu.locator('wa-dropdown-item[value="mcp-tool:0"]');
       await expect.poll(() => readyListIssues.isDisabled()).toBe(false);
       await readyListIssues.click();
       await expect
@@ -594,14 +611,16 @@ suite.define(() => {
           return;
         }
         const composer = await openMenu(page);
-        const menu = composer.locator(".agent-chat__capability-menu");
-        const clear = menu.locator('.oc-menu-item[data-value="clear-overrides"]');
+        const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
+        const clear = menu.locator('wa-dropdown-item[value="clear-overrides"]');
         await expect.poll(() => clear.isDisabled()).toBe(true);
         await expect.poll(() => tooltipTitleText(clear)).toContain("operator.admin access");
         await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
         await expect
           .poll(() =>
-            webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
+            webSearchItem(menu).evaluate(
+              (node) => (node as HTMLElement & { checked: boolean }).checked,
+            ),
           )
           .toBe(false);
         await forceCapabilitySelection(webSearchItem(menu));
@@ -666,12 +685,14 @@ suite.define(() => {
         gateway.waitForRequest("config.get"),
       ]);
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const webSearch = webSearchItem(menu);
       await expect.poll(() => webSearch.isDisabled()).toBe(true);
       await expect.poll(() => tooltipTitleText(webSearch)).toBe("Loading…");
       await webSearch.evaluate((item) => {
-        item.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+        item
+          .closest("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { bubbles: true, detail: { item } }));
       });
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
 
@@ -685,7 +706,9 @@ suite.define(() => {
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(false);
       await expect
         .poll(() =>
-          webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
+          webSearchItem(menu).evaluate(
+            (node) => (node as HTMLElement & { checked: boolean }).checked,
+          ),
         )
         .toBe(false);
       await expect.poll(() => tooltipTitleText(webSearchItem(menu))).toContain("clear");
@@ -708,7 +731,9 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
       await expect.poll(() => webSearchItem(menu).isDisabled()).toBe(true);
       expect(
-        await webSearchItem(menu).evaluate((node) => node.getAttribute("aria-checked") === "true"),
+        await webSearchItem(menu).evaluate(
+          (node) => (node as HTMLElement & { checked: boolean }).checked,
+        ),
       ).toBe(false);
     });
   });
@@ -736,17 +761,19 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         const composer = await openMenu(page);
-        const menu = composer.locator(".agent-chat__capability-menu");
+        const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
         const webSearch = webSearchItem(menu);
         await expect.poll(() => webSearch.isDisabled()).toBe(true);
         await expect
-          .poll(() => webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"))
+          .poll(() =>
+            webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
+          )
           .toBe(false);
         await expect.poll(() => tooltipTitleText(webSearch)).toContain("tools.web.search.enabled");
         await forceCapabilitySelection(webSearch);
         expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
         expect(
-          await webSearch.evaluate((node) => node.getAttribute("aria-checked") === "true"),
+          await webSearch.evaluate((node) => (node as HTMLElement & { checked: boolean }).checked),
         ).toBe(false);
       });
     },
@@ -768,7 +795,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = await openMenu(page);
-      const menu = composer.locator(".agent-chat__capability-menu");
+      const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await expect.poll(() => webSearchItem(menu).count()).toBe(1);
       await menu.getByRole("menuitem", { name: /^Skills/ }).click();
       await expect.poll(() => menu.getByText("No skills available.").isVisible()).toBe(true);
@@ -794,7 +821,7 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       let composer = await openMenu(page);
-      let menu = composer.locator(".agent-chat__capability-menu");
+      let menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await menu.getByRole("menuitem", { name: /Add MCP server/ }).click();
 
@@ -853,7 +880,7 @@ suite.define(() => {
       await expect.poll(() => modal.count()).toBe(0);
 
       composer = await openMenu(page);
-      menu = composer.locator(".agent-chat__capability-menu");
+      menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
         .poll(() =>
@@ -903,7 +930,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(sessionPatchCount);
 
       composer = await openMenu(page);
-      menu = composer.locator(".agent-chat__capability-menu");
+      menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
       await expect
         .poll(() =>

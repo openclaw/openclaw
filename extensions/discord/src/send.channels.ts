@@ -41,7 +41,18 @@ export async function editChannelDiscord(
     archived: payload.archived,
     locked: payload.locked,
     auto_archive_duration: payload.autoArchiveDuration,
-    available_tags: payload.availableTags,
+    available_tags:
+      payload.availableTags === undefined
+        ? undefined
+        : payload.availableTags.map((tag) =>
+            stripUndefinedFields({
+              id: tag.id,
+              name: tag.name,
+              moderated: tag.moderated,
+              emoji_id: tag.emoji_id,
+              emoji_name: tag.emoji_name,
+            }),
+          ),
   });
   // SAFETY: Discord's Modify Channel route returns the updated API channel.
   return (await rest.patch(Routes.channel(payload.channelId), { body })) as APIChannel;

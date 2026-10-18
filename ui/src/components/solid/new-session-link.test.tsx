@@ -13,9 +13,8 @@ it("keeps a resident new-session link current as permission and agent change", (
       get agentId() {
         return agentId();
       },
-      class: "sidebar-new-session",
+      className: "sidebar-new-session",
       label: "New conversation",
-      showShortcut: true,
       get disabledReason() {
         return disabledReason();
       },
@@ -25,7 +24,6 @@ it("keeps a resident new-session link current as permission and agent change", (
   const link = view.getByRole<HTMLAnchorElement>("link", { name: "New conversation" });
   expect(link.hasAttribute("href")).toBe(false);
   expect(link.tabIndex).toBe(-1);
-  expect(view.container.querySelector('[slot="content"]')).toBeNull();
   link.click();
   expect(open).not.toHaveBeenCalled();
 
@@ -37,7 +35,6 @@ it("keeps a resident new-session link current as permission and agent change", (
   expect(link.getAttribute("href")).toBe("/new?agent=research");
   expect(link.getAttribute("aria-disabled")).toBeNull();
   expect(link.tabIndex).toBe(0);
-  expect(view.container.querySelector('[slot="content"] kbd')).not.toBeNull();
   link.focus();
   expect(document.activeElement).toBe(link);
   link.click();
@@ -48,7 +45,6 @@ it("keeps a resident new-session link current as permission and agent change", (
 
   expect(link.getAttribute("aria-disabled")).toBe("true");
   expect(link.hasAttribute("href")).toBe(false);
-  expect(view.container.querySelector('[slot="content"]')).toBeNull();
   link.click();
   expect(open).toHaveBeenCalledOnce();
 });

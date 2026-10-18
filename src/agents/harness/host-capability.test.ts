@@ -231,13 +231,10 @@ describe("agent harness host capability", () => {
       const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "copilot" });
       attempt.githubPublicationAvailable = available !== true;
       try {
-        const inheritedToolAllowlistRef: string[] = [];
-        const tools = await host.capabilities.createToolSurfaceAsync!({
+        const tools = host.capabilities.createToolSurface?.({
           githubPublicationAvailable: available !== true,
           config: { tools: { profile: "coding" } },
-          inheritedToolAllowlistRef,
         });
-        expect(inheritedToolAllowlistRef.includes("github_publish")).toBe(available !== undefined);
         expect(
           tools?.filter((tool) => tool.name.startsWith("github_")).map((tool) => tool.name),
         ).toEqual(expected);

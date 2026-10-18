@@ -52,7 +52,6 @@ import {
 } from "./runtime-plan/resolve-auth.js";
 import type { AgentRuntimeAuthPlan } from "./runtime-plan/types.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
-import type { SimpleCompletionAuthProfiles } from "./simple-completion-profile-failover.js";
 import {
   createPreparedSimpleCompletionResolverContext,
   type PreparedSimpleCompletionResolverContext,
@@ -151,9 +150,7 @@ export async function prepareSimpleCompletionModel(
 }
 
 async function prepareSimpleCompletionModelCore(
-  params: PrepareSimpleCompletionModelParams & {
-    onAuthProfiles?: (store: AuthProfileStore, profileIds: string[]) => void;
-  },
+  params: PrepareSimpleCompletionModelParams,
   context: PreparedSimpleCompletionResolverContext,
   assertCurrent?: () => void,
 ): Promise<PreparedStreamCompletionModel> {
@@ -194,7 +191,7 @@ async function prepareSimpleCompletionModelCore(
   let auth: ResolvedProviderAuth;
   try {
     authStore =
-      params.onAuthProfiles || params.bindAuthOwner || initialModel.provider === "openai"
+      params.bindAuthOwner || initialModel.provider === "openai"
         ? await ensureAuthProfileStoreAsync(params.agentDir, {
             readOnly: true,
             allowKeychainPrompt: false,
@@ -216,9 +213,7 @@ async function prepareSimpleCompletionModelCore(
       metadataSnapshot: context.preparedModelRuntime.metadataSnapshot,
       sessionAuthProfileId: params.profileId ?? params.preferredProfile,
       sessionAuthProfileSource: params.profileId ? "user" : "auto",
-      ...((params.onAuthProfiles || params.bindAuthOwner) && params.profileId
-        ? { allowAuthProfileFallback: false }
-        : {}),
+      ...(params.bindAuthOwner && params.profileId ? { allowAuthProfileFallback: false } : {}),
     } satisfies Parameters<typeof prepareAgentRuntimeAuth>[0];
     await reconcileAuthProfileQuotaBlocks(authParams);
     assertCurrent?.();
@@ -268,7 +263,7 @@ async function prepareSimpleCompletionModelCore(
       env: process.env,
     });
     const preparedAuth =
-      routeResolution?.kind === "routes" || params.onAuthProfiles
+      routeResolution?.kind === "routes"
         ? prepareAgentRuntimeAuth({ ...authParams, routeIntent })
         : undefined;
     const materializeModel = async ({
@@ -323,13 +318,6 @@ async function prepareSimpleCompletionModelCore(
       });
       auth = resolvedAuth.auth;
       resolvedModel = resolvedAuth.model;
-      params.onAuthProfiles?.(authStore, [
-        ...new Set(
-          preparedAuth.attempts.flatMap((attempt) =>
-            attempt.kind === "profile" ? [attempt.profileId] : [],
-          ),
-        ),
-      ]);
     } else {
       auth = await getApiKeyForModelCore({
         model: initialModel,
@@ -461,13 +449,12 @@ async function prepareSimpleCompletionModelCore(
 }
 
 type AcquiredSimpleCompletionModelForAgent =
-  | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> &
-      AsyncDisposable & { authProfiles?: SimpleCompletionAuthProfiles })
+  | (Extract<PreparedSimpleCompletionModelForAgent, { model: Model }> & AsyncDisposable)
   | Extract<PreparedSimpleCompletionModelForAgent, { error: string }>;
 
 /** Keeps prepared facts in use until the internal completion owner releases its lease. */
 export async function acquireSimpleCompletionModelForAgent(
-  params: PrepareSimpleCompletionModelForAgentParams & { profileFailover?: boolean },
+  params: PrepareSimpleCompletionModelForAgentParams,
 ): Promise<AcquiredSimpleCompletionModelForAgent> {
   return await acquireSimpleCompletionModelWithSelection(params, (manifestPlugins) =>
     resolveSimpleCompletionSelectionRequest({ ...params, manifestPlugins }),
@@ -477,7 +464,7 @@ export async function acquireSimpleCompletionModelForAgent(
 type SimpleCompletionAcquisitionParams = Omit<
   PrepareSimpleCompletionModelForAgentParams,
   "agentId" | "modelRef" | "useUtilityModel" | "useAsyncModelResolution"
-> & { agentId?: string; profileFailover?: boolean };
+> & { agentId?: string };
 
 type SimpleCompletionRequestResolver = (manifestPlugins?: PluginMetadataSnapshot) => {
   selection: Omit<AgentSimpleCompletionSelection, "agentDir">;
@@ -602,42 +589,17 @@ async function acquireCommittedSimpleCompletionModel(
       workspaceDir: lease.snapshot.workspaceDir ?? requestedWorkspaceDir,
       modelResolver,
     });
-    const preparationParams: PrepareSimpleCompletionModelParams = {
-      ...params,
-      transport: "simple-completion",
-      provider: selection.provider,
-      modelId: selection.modelId,
-      modelIdSource: "selected",
-      agentDir: selection.agentDir,
-      profileId: selection.profileId,
-    };
-    let authProfiles: SimpleCompletionAuthProfiles | undefined;
     const prepared = await withPluginRuntimeGenerationScope(context.preparedModelRuntime, () => {
       captureWorkContext();
       return prepareSimpleCompletionModelCore(
         {
-          ...preparationParams,
-          onAuthProfiles: params.profileFailover
-            ? (store, profileIds) => {
-                authProfiles = {
-                  store,
-                  profileIds,
-                  prepare: (profileId, assertCurrent) =>
-                    withPluginRuntimeGenerationScope(context.preparedModelRuntime, () =>
-                      prepareSimpleCompletionModelCore(
-                        {
-                          ...preparationParams,
-                          profileId,
-                          preferredProfile: undefined,
-                          bindAuthOwner: true,
-                        },
-                        context,
-                        assertCurrent,
-                      ),
-                    ),
-                };
-              }
-            : undefined,
+          ...params,
+          transport: "simple-completion",
+          provider: selection.provider,
+          modelId: selection.modelId,
+          modelIdSource: "selected",
+          agentDir: selection.agentDir,
+          profileId: selection.profileId,
         },
         context,
       );
@@ -649,7 +611,6 @@ async function acquireCommittedSimpleCompletionModel(
     callerReleased = false;
     return {
       ...prepared,
-      ...(authProfiles ? { authProfiles } : {}),
       async [Symbol.asyncDispose]() {
         callerReleased = true;
         // Caller disposal joins setup tails; setup drainage never waits for an unreleased caller.

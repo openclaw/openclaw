@@ -3,15 +3,15 @@ import { setReplyPayloadMetadata, stripReplyPayloadResponsePrefix } from "../rep
 import { HEARTBEAT_TOKEN } from "../tokens.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 
-it("preserves truncated control-looking text and attached media", () => {
+it("suppresses truncated silent finals while preserving attached media", () => {
   expect(normalizeReplyPayloadOutcome({ text: "NO_R \n" })).toEqual({
-    kind: "deliver",
-    payload: { text: "NO_R \n" },
+    kind: "suppress",
+    reason: "silent",
   });
   const mediaUrl = "https://example.test/report.png";
   expect(normalizeReplyPayloadOutcome({ text: "NO_R", mediaUrl })).toEqual({
     kind: "deliver",
-    payload: { text: "NO_R", mediaUrl },
+    payload: { text: "", mediaUrl },
   });
 });
 

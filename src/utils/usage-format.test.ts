@@ -144,7 +144,7 @@ describe("usage-format", () => {
   const firstRates = { input: 1, output: 2, cacheRead: 0.1, cacheWrite: 0.2 };
   const laterRates = { input: 7, output: 8, cacheRead: 0.7, cacheWrite: 0.8 };
 
-  it("refreshes duplicate model prices and fingerprints with replacement config snapshots", () => {
+  it("refreshes duplicate model prices and fingerprints after ordered source mutations", () => {
     type SourceModel = { id: string; cost?: Partial<ModelDefinitionConfig["cost"]> };
     const first: SourceModel = { id: "priced-fixture", cost: { ...firstRates } };
     const later: SourceModel = { id: "priced-fixture", cost: { ...laterRates } };
@@ -154,30 +154,19 @@ describe("usage-format", () => {
     } as unknown as OpenClawConfig;
     let previousFingerprint: string | undefined;
     const check = (label: string, expected: ModelCostConfig | undefined) => {
-      const snapshot = structuredClone(config);
       expect
         .soft(
-          resolveModelCostConfig({
-            config: snapshot,
-            agentDir,
-            provider: "venice",
-            model: "priced-fixture",
-          }),
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
           label,
         )
         .toEqual(expected);
-      const fingerprint = resolveModelCostConfigFingerprint(snapshot, agentDir);
+      const fingerprint = resolveModelCostConfigFingerprint(config, agentDir);
       expect.soft(fingerprint, label).not.toBe(previousFingerprint);
       previousFingerprint = fingerprint;
-      // Fingerprinting and direct lookups share this snapshot's prices.
+      // Fingerprinting refreshes the full index; it must agree with direct lookups.
       expect
         .soft(
-          resolveModelCostConfig({
-            config: snapshot,
-            agentDir,
-            provider: "venice",
-            model: "priced-fixture",
-          }),
+          resolveModelCostConfig({ config, agentDir, provider: "venice", model: "priced-fixture" }),
           label,
         )
         .toEqual(expected);
@@ -243,7 +232,7 @@ describe("usage-format", () => {
       resolveModelCostConfig({
         provider: "demo-metadata-row",
         model: "metadata-only",
-        config: structuredClone(config),
+        config,
       })?.input,
     ).toBe(9);
 

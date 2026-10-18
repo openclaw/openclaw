@@ -428,7 +428,6 @@ export async function readWorkboardLifecycleSessions(
     {
       limit: WORKBOARD_SESSION_SWEEP_LIMIT,
       configuredAgentsOnly: true,
-      archived: "all",
       includeGlobal: false,
       includeUnknown,
     },

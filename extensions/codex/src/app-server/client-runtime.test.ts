@@ -347,6 +347,35 @@ describe("Codex app-server client runtime", () => {
     ).resolves.toBe(true);
   });
 
+  it("does not let an older owner forget or release a newly claimed thread generation", async () => {
+    const request = vi.fn(async () => ({}));
+    const client = {
+      request,
+      addCloseHandler: vi.fn(),
+      addNotificationHandler: vi.fn(),
+      addRequestHandler: vi.fn(),
+    } as unknown as CodexAppServerClient;
+    ensureCodexAppServerClientRuntime(client, { agentDir: "/tmp/agent" });
+    await retainCodexAppServerLiveThread(client, "thread-reclaimed");
+    const first = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
+    await retainCodexAppServerLiveThread(client, "thread-reclaimed", first?.release);
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
+    const second = await consumeCodexAppServerLiveThread(client, "thread-reclaimed");
+
+    first?.forget();
+    await first?.release("thread-reclaimed");
+
+    expect(request).not.toHaveBeenCalled();
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(true);
+    await second?.release("thread-reclaimed");
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "thread/unsubscribe",
+      { threadId: "thread-reclaimed" },
+      { timeoutMs: 5_000 },
+    );
+    expect(isCodexAppServerLiveThreadClaimed(client, "thread-reclaimed")).toBe(false);
+  });
+
   it("preserves a retained successor from obsolete forget, release, and republish after independent-retain", async () => {
     vi.useFakeTimers();
     const harness = createClientHarness();
@@ -389,11 +418,7 @@ describe("Codex app-server client runtime", () => {
     expect(successor).toMatchObject({ configFingerprint: "successor-config" });
     successor?.assertCurrent();
     await successor?.release("thread-reused");
-    expect(replacementRelease).toHaveBeenCalledExactlyOnceWith(
-      "thread-reused",
-      undefined,
-      undefined,
-    );
+    expect(replacementRelease).toHaveBeenCalledExactlyOnceWith("thread-reused");
     expect(hasCodexAppServerLiveThread(harness.client, "thread-reused")).toBe(false);
     harness.client.close();
     expect(invalidated).toHaveBeenCalledOnce();
@@ -584,11 +609,7 @@ describe("Codex app-server client runtime", () => {
       consumeCodexAppServerLiveThread(harness.client, "thread-overflow"),
     ).resolves.toBeUndefined();
     await overflow?.release("thread-overflow");
-    expect(overflowRelease).toHaveBeenCalledExactlyOnceWith(
-      "thread-overflow",
-      undefined,
-      undefined,
-    );
+    expect(overflowRelease).toHaveBeenCalledExactlyOnceWith("thread-overflow");
     expect(invalidated).toHaveBeenCalledOnce();
     await expect(consumeCodexAppServerLiveThread(harness.client, "thread-1")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
@@ -644,7 +665,7 @@ describe("Codex app-server client runtime", () => {
     expect(release).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(release).toHaveBeenCalledExactlyOnceWith("thread-expiry-retry", undefined, undefined);
+    expect(release).toHaveBeenCalledExactlyOnceWith("thread-expiry-retry");
     expect(invalidated).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(EXPECTED_LIVE_THREAD_IDLE_TIMEOUT_MS - 1);
     expect(release).toHaveBeenCalledOnce();
@@ -722,7 +743,7 @@ describe("Codex app-server client runtime", () => {
     expect(release).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
 
-    expect(release).toHaveBeenCalledExactlyOnceWith("thread-parent", undefined, undefined);
+    expect(release).toHaveBeenCalledExactlyOnceWith("thread-parent");
   });
 
   it("keeps a failed unpin eviction owned until its original subscription can be retried", async () => {
@@ -829,6 +850,6 @@ describe("Codex app-server client runtime", () => {
     await expect(
       nextCopy.releaseCodexAppServerLiveThread(harness.client, "copy-retained"),
     ).resolves.toBe(true);
-    expect(release).toHaveBeenCalledExactlyOnceWith("copy-retained", undefined, undefined);
+    expect(release).toHaveBeenCalledExactlyOnceWith("copy-retained");
   });
 });

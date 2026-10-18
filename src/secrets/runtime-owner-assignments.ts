@@ -30,8 +30,10 @@ import {
   type ResolverContext,
   type SecretAssignment,
 } from "./runtime-shared.js";
-import { hasSameSecretProviderDefinition } from "./runtime-source-contract.js";
-import { getActiveSecretsRuntimeSnapshotState } from "./runtime-state.js";
+import {
+  getActiveSecretsRuntimeSnapshotState,
+  hasSameSecretProviderDefinition,
+} from "./runtime-state.js";
 
 type SecretResolutionOptions = Parameters<typeof resolveSecretRefValues>[1];
 

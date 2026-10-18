@@ -384,7 +384,6 @@ export function makeSubagentCompletion(
     outcome: { status: "ok" },
     reason: SUBAGENT_ENDED_REASON_COMPLETE,
     triggerCleanup: false,
-    terminalReply: { disposition: "visible", text: "final completion reply" },
     ...overrides,
   };
 }
@@ -396,7 +395,6 @@ export function makeKilledSubagentCompletion(
   return makeSubagentCompletion(entry, {
     outcome: { status: "error", error: "agent run aborted" },
     reason: SUBAGENT_ENDED_REASON_KILLED,
-    terminalReply: undefined,
     ...overrides,
   });
 }
@@ -409,7 +407,6 @@ export function makeInterruptedSubagentCompletion(
     outcome: { status: "error", error: "restart interrupted run" },
     reason: SUBAGENT_ENDED_REASON_ERROR,
     recoverInterrupted: true,
-    terminalReply: undefined,
     ...overrides,
   });
 }

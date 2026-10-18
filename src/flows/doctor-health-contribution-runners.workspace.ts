@@ -151,7 +151,9 @@ export async function runMemorySearchHealthContribution(
     env: ctx.env,
     gatewayMemoryProbe: ctx.gatewayMemoryProbe ?? { checked: false, ready: false, skipped: false },
   });
-  await noteMemoryRecallHealth(ctx.cfg, ctx.options.deep === true);
+  if (ctx.options.deep === true) {
+    await noteMemoryRecallHealth(ctx.cfg);
+  }
 }
 
 export async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

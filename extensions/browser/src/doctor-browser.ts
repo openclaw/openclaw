@@ -9,7 +9,6 @@ import {
 import { CONFIG_DIR } from "openclaw/plugin-sdk/text-utility-runtime";
 import { parseBrowserMajorVersion, readBrowserVersion } from "./browser/chrome.executable-probe.js";
 import {
-  assertBrowserExecutableSupportsLaunch,
   resolveBrowserExecutableForPlatform,
   resolveGoogleChromeExecutableForPlatform,
 } from "./browser/chrome.executables.js";
@@ -17,7 +16,6 @@ import {
   getManagedBrowserMissingDisplayError,
   isLocalManagedProfile,
   resolveBrowserConfig,
-  resolveManagedBrowserHeadlessMode,
   resolveProfile,
   type ResolvedBrowserConfig,
 } from "./browser/config.js";
@@ -103,27 +101,14 @@ export async function noteChromeMcpBrowserReadiness(
     ReturnType<typeof resolveBrowserExecutableForPlatform>
   >();
   const missingExecutableProfiles = managedProfiles.filter((profile) => {
-    try {
-      const executablePath = profile.executablePath;
-      if (!managedExecutables.has(executablePath)) {
-        managedExecutables.set(
-          executablePath,
-          resolveBrowserExecutableForPlatform({ ...resolved, executablePath }, platform),
-        );
-      }
-      const executable = managedExecutables.get(executablePath);
-      if (executable) {
-        const mode = resolveManagedBrowserHeadlessMode(resolved, profile);
-        assertBrowserExecutableSupportsLaunch(executable, mode.headless, platform);
-      }
-      return !executable;
-    } catch (error) {
-      noteFn(
-        `- Managed browser profile "${profile.name}" could not be checked: ${error instanceof Error ? error.message : String(error)}`,
-        "Browser",
+    const executablePath = profile.executablePath;
+    if (!managedExecutables.has(executablePath)) {
+      managedExecutables.set(
+        executablePath,
+        resolveBrowserExecutableForPlatform({ ...resolved, executablePath }, platform),
       );
-      return false;
     }
+    return !managedExecutables.get(executablePath);
   });
   const missingDisplay = managedProfiles
     .map((profile) =>

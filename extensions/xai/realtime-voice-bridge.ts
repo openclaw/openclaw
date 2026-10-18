@@ -34,7 +34,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
   private readonly transport: RealtimeVoiceWebSocketTransport<XaiRealtimeEvent>;
   private pendingToolResults: Array<{
     callId: string;
-    output: string;
+    result: unknown;
     options?: RealtimeVoiceToolResultOptions;
   }> = [];
   private pendingUserMessages: string[] = [];
@@ -135,17 +135,14 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
     if (this.transport.lifecycle.phase() === "terminal" || options?.willContinue === true) {
       return;
     }
-    const connected = this.isConnected();
-    let output: string;
-    try {
-      output = serializeXaiRealtimeToolResult(result);
-    } catch (error) {
-      if (!connected) {
+    if (!this.isConnected()) {
+      let serialized: string;
+      try {
+        serialized = serializeXaiRealtimeToolResult(result);
+      } catch (error) {
         this.config.onError?.(error as Error);
+        throw error;
       }
-      throw error;
-    }
-    if (!connected) {
       if (this.pendingToolResults.length >= XAI_REALTIME_MAX_PENDING_TOOL_RESULTS) {
         const error = new Error(
           "xAI realtime voice pending tool result queue overflow during reconnect",
@@ -155,12 +152,12 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       }
       this.pendingToolResults.push({
         callId,
-        output,
+        result: JSON.parse(serialized) as unknown,
         ...(options ? { options } : {}),
       });
       return;
     }
-    this.submitToolResultNow(callId, output, options);
+    this.submitToolResultNow(callId, result, options);
   }
 
   close(): void {
@@ -220,7 +217,7 @@ export class XaiRealtimeVoiceBridge extends XaiRealtimeVoiceEvents implements Re
       this.sendAudio(chunk);
     }
     for (const pending of this.pendingToolResults.splice(0)) {
-      this.submitToolResultNow(pending.callId, pending.output, pending.options);
+      this.submitToolResultNow(pending.callId, pending.result, pending.options);
     }
     for (const message of this.pendingUserMessages.splice(0)) {
       this.sendUserMessageNow(message);

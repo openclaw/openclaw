@@ -19,7 +19,7 @@ Public GitHub link previews and document reader.
 
 ## Surface
 
-- Contracts: `gatewayMethodDispatch`, `tools`
+- Contracts: `gatewayMethodDispatch`
 
 ## Related docs
 

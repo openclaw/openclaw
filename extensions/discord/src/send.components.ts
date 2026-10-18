@@ -20,6 +20,7 @@ import {
   type MessagePayloadObject,
 } from "./internal/discord.js";
 import { withDiscordRequestAuthority } from "./internal/request-authority.js";
+import { parseAndResolveChannelRecipient } from "./recipient-resolution.js";
 import { sendMessageDiscord } from "./send.outbound.js";
 import { createDiscordSendResult } from "./send.receipt.js";
 import {
@@ -31,7 +32,6 @@ import {
   SUPPRESS_NOTIFICATIONS_FLAG,
 } from "./send.shared.js";
 import type { DiscordSendResult } from "./send.types.js";
-import { parseAndResolveDiscordTarget } from "./target-resolver.js";
 
 const DISCORD_FORUM_LIKE_TYPES = new Set<number>([ChannelType.GuildForum, ChannelType.GuildMedia]);
 
@@ -167,7 +167,9 @@ async function buildDiscordComponentPayload(params: {
     accountId: params.accountId,
   });
   const flags = buildDiscordComponentMessageFlags(buildResult.components);
-  const finalFlags = params.opts.silent ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG : flags;
+  const finalFlags = params.opts.silent
+    ? (flags ?? 0) | SUPPRESS_NOTIFICATIONS_FLAG
+    : (flags ?? undefined);
 
   const payload: MessagePayloadObject = {
     components: buildResult.components,
@@ -221,11 +223,7 @@ async function writeDiscordComponentMessage(
     creating ? "Discord component send" : "Discord component edit",
   );
   const { token, rest, request, account: accountInfo } = createDiscordClient({ ...opts, cfg });
-  const recipient = await parseAndResolveDiscordTarget(
-    to,
-    { cfg, accountId: accountInfo.accountId },
-    { defaultKind: "channel" },
-  );
+  const recipient = await parseAndResolveChannelRecipient(to, cfg, accountInfo.accountId);
   const { channelId } = await resolveChannelId(rest, recipient, request);
   if (creating) {
     const channel = await resolveDiscordChannel(rest, channelId);

@@ -68,7 +68,6 @@ type ArchiveMigrationOptions = {
   signal?: AbortSignal;
   verification?: { key: string; prepared?: ReadonlySet<string>; collect?: Set<string> };
   verifyOnly?: boolean;
-  beforeRewrite?: () => void;
   writeCursor?: (cursor: ArchiveCursor | { phase: "complete" }) => void;
 };
 
@@ -494,7 +493,6 @@ export async function migrateCanonicalTranscriptArchives(
               return !planned.changed && assertArchiveSourceUnchanged(params.database, planned);
             })
           : write("historical-transcript-archive-directives", () => {
-              params.beforeRewrite?.();
               const pending = new Map(
                 (readTranscriptArchiveRecoveryJournal(params.database)?.rows ?? []).map((row) => [
                   transcriptArchiveRecoveryRowKey(row),

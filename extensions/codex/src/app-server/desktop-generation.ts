@@ -1,5 +1,5 @@
 /** Lifecycle-owned generation for managed macOS Codex desktop artifacts. */
-import { watch, type FSWatcher } from "node:fs";
+import { existsSync, watch, type FSWatcher } from "node:fs";
 import path from "node:path";
 import type {
   OpenClawPluginServiceV2,
@@ -7,13 +7,18 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineCodexBuildState } from "../build-state.js";
 import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
-import { readMacOSDesktopGenerationFingerprint } from "./desktop-generation-fingerprint.js";
+import {
+  readMacOSDesktopGenerationFingerprint,
+  resolveMacOSDesktopGenerationWatchPaths,
+} from "./desktop-generation-fingerprint.js";
 import {
   createCodexDesktopGenerationOwner,
   type CodexDesktopGeneration,
 } from "./desktop-generation-owner.js";
 
 const APPLICATIONS_PATH = "/Applications";
+const REARM_INITIAL_DELAY_MS = 100;
+
 type GenerationOwner = ReturnType<typeof createCodexDesktopGenerationOwner>;
 type WatchFactory = (
   watchedPath: string,
@@ -23,13 +28,17 @@ type WatchFactory = (
 type DesktopGenerationRuntime = {
   platform: NodeJS.Platform;
   readFingerprint: () => Promise<string>;
+  resolveWatchPaths: () => string[];
+  pathExists: (watchedPath: string) => boolean;
   watchPath: WatchFactory;
 };
 type DesktopGenerationState = {
   owner?: GenerationOwner;
   lastGeneration?: CodexDesktopGeneration;
-  watcher?: FSWatcher;
+  watchers?: Set<FSWatcher>;
+  watchHealthy?: boolean;
   context?: OpenClawPluginServiceContextV2;
+  runtime?: DesktopGenerationRuntime;
 };
 
 const state = defineCodexBuildState(
@@ -40,7 +49,10 @@ const state = defineCodexBuildState(
 export function waitForCodexDesktopGeneration(): Promise<CodexDesktopGeneration | undefined> {
   const current = state();
   const owner = current.owner;
-  return (current.watcher ? owner?.wait() : owner?.refresh()) ?? Promise.resolve(undefined);
+  return (
+    (current.watchHealthy === false ? owner?.refresh() : owner?.wait()) ??
+    Promise.resolve(undefined)
+  );
 }
 
 export function createCodexDesktopGenerationService(
@@ -50,6 +62,8 @@ export function createCodexDesktopGenerationService(
   runtime: DesktopGenerationRuntime = {
     platform: process.platform,
     readFingerprint: readMacOSDesktopGenerationFingerprint,
+    resolveWatchPaths: resolveMacOSDesktopGenerationWatchPaths,
+    pathExists: existsSync,
     watchPath: (watchedPath, options, listener) => watch(watchedPath, options, listener),
   },
 ): OpenClawPluginServiceV2 {
@@ -62,38 +76,15 @@ export function createCodexDesktopGenerationService(
       }
       const current = state();
       current.context = ctx;
-      const owner = createCodexDesktopGenerationOwner({
+      current.runtime = { ...runtime };
+      current.owner = createCodexDesktopGenerationOwner({
         signal: ctx.scheduler.signal,
         readFingerprint: runtime.readFingerprint,
         onGenerationChange: params.onGenerationChange,
         initialGeneration: current.lastGeneration,
       });
-      current.owner = owner;
-      const candidateNames = new Set<string>(
-        resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
-      );
-      try {
-        // Managed candidates live under this stable parent. Bundle replacement
-        // needs no per-bundle watcher handoff; manual nested edits are best effort.
-        current.watcher = runtime.watchPath(
-          APPLICATIONS_PATH,
-          { recursive: false },
-          (_eventType, filename) => {
-            if (
-              ctx.scheduler.signal.aborted ||
-              (filename && !candidateNames.has(filename.toString().split(path.sep)[0] ?? ""))
-            ) {
-              return;
-            }
-            owner.markDirty();
-            void refreshGeneration(current, owner.wait());
-          },
-        );
-        current.watcher.on("error", (error) => reportWatcherFailure(current, error));
-      } catch (error) {
-        reportWatcherFailure(current, error);
-      }
-      void refreshGeneration(current, owner.refresh());
+      armWatchers(current);
+      void refreshGeneration(current, current.owner.refresh());
     },
     async stop() {
       const current = state();
@@ -103,22 +94,96 @@ export function createCodexDesktopGenerationService(
       current.lastGeneration = current.owner?.read() ?? current.lastGeneration;
       current.owner = undefined;
       current.context = undefined;
-      current.watcher?.close();
-      current.watcher = undefined;
+      current.runtime = undefined;
+      current.watchHealthy = undefined;
+      closeWatchers(current);
       await Promise.all([scheduler?.stop(), owner?.waitForIdle()]);
     },
   };
 }
 
-function reportWatcherFailure(current: DesktopGenerationState, error: unknown): void {
-  if (current.context?.scheduler.signal.aborted) {
+function armWatchers(current: DesktopGenerationState, retryOnFailure = true): boolean {
+  const owner = current.owner;
+  const runtime = current.runtime;
+  if (!owner || !runtime || current.watchers) {
+    return false;
+  }
+  const watchers = new Set<FSWatcher>();
+  current.watchers = watchers;
+  const candidateNames = new Set<string>(
+    resolveMacOSDesktopCodexAppPathCandidates("darwin").map((candidate) => candidate.appName),
+  );
+  let complete = true;
+  for (const watchedPath of runtime.resolveWatchPaths()) {
+    if (!runtime.pathExists(watchedPath)) {
+      continue;
+    }
+    try {
+      // Bundle roots need recursive invalidation: nested plugin bytes can change without
+      // updating the app directory metadata that the settled fingerprint observes first.
+      const watcher = runtime.watchPath(
+        watchedPath,
+        { recursive: watchedPath !== APPLICATIONS_PATH },
+        (_eventType, filename) => {
+          if (
+            watchedPath === APPLICATIONS_PATH &&
+            filename &&
+            !candidateNames.has(filename.toString().split(path.sep)[0] ?? "")
+          ) {
+            return;
+          }
+          owner.markDirty();
+          scheduleRearm(current, owner);
+        },
+      );
+      watchers.add(watcher);
+      watcher.on("error", (error) => {
+        reportWatcherFailure(current, owner, error);
+        scheduleRearm(current, owner);
+      });
+    } catch (error) {
+      complete = false;
+      reportWatcherFailure(current, owner, error);
+    }
+  }
+  current.watchHealthy = complete;
+  if (!complete && retryOnFailure) {
+    scheduleRearm(current, owner, false);
+  }
+  return complete;
+}
+
+function reportWatcherFailure(
+  current: DesktopGenerationState,
+  owner: GenerationOwner,
+  error: unknown,
+): void {
+  if (current.watchHealthy === false) {
     return;
   }
-  current.watcher?.close();
-  current.watcher = undefined;
-  current.owner?.markDirty();
+  current.watchHealthy = false;
+  owner.markDirty();
   current.context?.serviceHealth?.reportFailure(error);
   current.context?.logger.warn(`codex desktop generation watcher failed: ${String(error)}`);
+}
+
+function scheduleRearm(
+  current: DesktopGenerationState,
+  owner: GenerationOwner,
+  retryOnFailure = true,
+): void {
+  current.context?.scheduler.schedule({
+    id: "watcher-rearm",
+    delayMs: REARM_INITIAL_DELAY_MS,
+    run: async () => {
+      const wasUnhealthy = current.watchHealthy === false;
+      closeWatchers(current);
+      if (!armWatchers(current, retryOnFailure) || wasUnhealthy) {
+        owner.markDirty();
+      }
+      await refreshGeneration(current, owner.wait());
+    },
+  });
 }
 
 function refreshGeneration(
@@ -127,7 +192,7 @@ function refreshGeneration(
 ): Promise<void> {
   return refresh
     .then(() => {
-      if (!current.context?.scheduler.signal.aborted && current.watcher) {
+      if (!current.context?.scheduler.signal.aborted && current.watchHealthy) {
         current.context?.serviceHealth?.clearFailure();
       }
     })
@@ -138,4 +203,12 @@ function refreshGeneration(
       current.context?.serviceHealth?.reportFailure(error);
       current.context?.logger.warn(`codex desktop generation refresh failed: ${String(error)}`);
     });
+}
+
+function closeWatchers(current: DesktopGenerationState): void {
+  const watchers = current.watchers;
+  current.watchers = undefined;
+  for (const watcher of watchers ?? []) {
+    watcher.close();
+  }
 }

@@ -10,6 +10,7 @@ import {
 } from "./realtime-session-lifecycle.js";
 
 type LoadedBridge = {
+  connection: RealtimeVoiceSessionConnection;
   promise: Promise<RealtimeVoiceBridge>;
   bridge?: RealtimeVoiceBridge;
   closeOptions?: RealtimeVoiceCloseOptions;
@@ -105,7 +106,9 @@ export function createLazyRealtimeVoiceBridgeLifecycle(params: {
     try {
       pending = state?.bridge
         ? dispose(state, state.bridge)
-        : state?.promise.then((bridge) => dispose(state, bridge));
+        : state && state.connection === connection
+          ? state.promise.then((bridge) => dispose(state, bridge))
+          : undefined;
     } catch (error) {
       return fail(error);
     }
@@ -142,7 +145,8 @@ export function createLazyRealtimeVoiceBridgeLifecycle(params: {
               if (!isCurrent()) {
                 return [];
               }
-              return getPlaybackState();
+              const playback = getPlaybackState();
+              return isCurrent() ? playback : [];
             },
           }
         : {}),
@@ -184,7 +188,9 @@ export function createLazyRealtimeVoiceBridgeLifecycle(params: {
       onReady: () => {
         if (isCurrent()) {
           request.onReady?.();
-          params.onProviderReady?.(loaded?.bridge);
+          if (isCurrent()) {
+            params.onProviderReady?.(loaded?.bridge);
+          }
         }
       },
       onClose: (reason) => notifyTerminal(connection, reason),
@@ -202,6 +208,7 @@ export function createLazyRealtimeVoiceBridgeLifecycle(params: {
         closing = undefined;
         // Publish the load before factory callbacks can close or reconnect this wrapper.
         const state: LoadedBridge = {
+          connection,
           promise: Promise.resolve().then(() => params.load(guardRequest(connection))),
         };
         loaded = state;

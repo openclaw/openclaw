@@ -187,6 +187,7 @@ export class ChatPositionRailController {
   private refreshWindow(): void {
     if (this.connected && this.session) {
       const scroller = this.scrollElement;
+      const session = this.session;
       const focused = scroller?.ownerDocument.activeElement;
       const focusedId =
         focused instanceof HTMLElement ? focused.dataset.positionMarkerId : undefined;
@@ -202,6 +203,9 @@ export class ChatPositionRailController {
         !this.pendingFocusId &&
         focusedId &&
         focused instanceof HTMLElement &&
+        this.connected &&
+        this.session === session &&
+        this.scrollElement === scroller &&
         scroller?.contains(focused) &&
         scroller.ownerDocument.activeElement === scroller.ownerDocument.body
       ) {
@@ -230,9 +234,16 @@ export class ChatPositionRailController {
   }
 
   private focusMarker(id: string): void {
+    const session = this.session;
+    const scroller = this.scrollElement;
     this.pendingFocusId = id;
     this.revealMarker(id);
     this.refreshWindow();
+    // Rendering can retire this view through a host update; never focus its successor.
+    if (!this.connected || this.session !== session || this.scrollElement !== scroller) {
+      this.pendingFocusId = undefined;
+      return;
+    }
     this.syncMountedMarkers();
     this.markerElements.get(id)?.focus({ preventScroll: true });
     this.pendingFocusId = undefined;
@@ -293,7 +304,10 @@ export class ChatPositionRailController {
       });
       // Publish the first visible pixel after an initially zero-area edge touch.
       this.intersectionObserver = new IntersectionObserver(
-        (entries) => {
+        (entries, observer) => {
+          if (observer !== this.intersectionObserver) {
+            return;
+          }
           for (const entry of entries) {
             const message = this.observedMessages.get(entry.target);
             if (message) {
@@ -311,7 +325,10 @@ export class ChatPositionRailController {
         element.matches(MESSAGE_SELECTOR) ||
         (element.matches(PROVISIONAL_MESSAGE_SELECTOR) &&
           this.markerIdsByMessageId.has(element.getAttribute("data-message-id")!));
-      this.mutationObserver = new MutationObserver((records) => {
+      this.mutationObserver = new MutationObserver((records, observer) => {
+        if (observer !== this.mutationObserver) {
+          return;
+        }
         if (
           records.some((record) => {
             if (record.target instanceof Element && record.target.closest(".chat-position-rail")) {
@@ -526,7 +543,10 @@ export class ChatPositionRailController {
     if (this.scrollElement) {
       this.reader.followActive = true;
       this.observationPending = true;
-      this.resizeObserver = new ResizeObserver(() => {
+      this.resizeObserver = new ResizeObserver((_entries, observer) => {
+        if (observer !== this.resizeObserver) {
+          return;
+        }
         this.observationPending = false;
         this.observeLayout();
       });

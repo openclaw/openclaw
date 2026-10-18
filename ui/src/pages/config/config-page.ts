@@ -55,6 +55,7 @@ import {
   realtimeTalkDeviceIssueMessage,
 } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
+import { isUnknownSystemInfoMethodError } from "../connection/system-info.ts";
 import {
   configSectionKeysForPage,
   configSelectionFromSearch,
@@ -66,6 +67,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { localPresentationProps } from "./local-presentation-props.ts";
 import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
 import type { SecurityOverview } from "./security.tsx";
 import {
@@ -125,6 +127,16 @@ export function extractQuickSettingsSecurity(root: Record<string, unknown>): Sec
     toolProfile: typeof profile === "string" ? profile.trim() : "",
     toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
   };
+}
+
+function applyTextScale(value: unknown) {
+  if (typeof document === "undefined") {
+    return;
+  }
+  document.documentElement.style.setProperty(
+    "--control-ui-text-scale",
+    (normalizeTextScale(value) / 100).toFixed(2),
+  );
 }
 
 /** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
@@ -189,6 +201,10 @@ export class ConfigPageController {
   get application() {
     this.observe();
     return this.context;
+  }
+  get browserLinksEnabled() {
+    this.observe();
+    return this.settings.openLinksInControlUiBrowser === true;
   }
   get configObject() {
     this.observe();
@@ -435,7 +451,7 @@ export class ConfigPageController {
       if (abort.signal.aborted) {
         return;
       }
-      if (isMissingOperatorReadScopeError(error)) {
+      if (isMissingOperatorReadScopeError(error) || isUnknownSystemInfoMethodError(error)) {
         this.systemInfo = null;
         this.systemInfoUnavailable = true;
       }
@@ -689,6 +705,7 @@ export class ConfigPageController {
     this.settings = selectedTheme
       ? selectThemeSettings(selectedTheme, patch)
       : patchSettings(patch);
+    applyTextScale(this.settings.textScale);
     // theme.refresh() also republishes non-theme appearance prefs (text
     // scale, lobster pet visits/sounds) to app-host subscribers.
     this.context.theme.refresh();
@@ -968,15 +985,7 @@ export class ConfigPageController {
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
       hiddenSessionCatalogLabels: this.hiddenSessionCatalogLabels,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
-      terminalFontFamily: this.settings.terminalFontFamily,
-      setTerminalFontFamily: (value) => this.applySettings({ terminalFontFamily: value }),
-      chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
-      chatShowTaskProgress:
-        this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
-      openLinksExternally: this.settings.openLinksExternally === true,
-      openLinksInControlUiBrowser: this.settings.openLinksInControlUiBrowser === true,
-      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
-      showAdvancedSettings: this.settings.showAdvancedSettings === true,
+      ...localPresentationProps(this.settings, (patch) => this.applySettings(patch)),
       forceShowAdvanced: this.pageId === "advanced",
       forceAdvancedSection: this.routeData?.advanced
         ? (this.routeData.section ?? defaultConfigSelection(this.pageId).activeSection)

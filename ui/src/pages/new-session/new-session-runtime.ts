@@ -1,5 +1,4 @@
 import type { PresenceEntry } from "../../api/types.ts";
-import { closeMenusWithin } from "../../components/solid/menu.tsx";
 
 const PLACE_TOPOLOGY_EVENTS = new Set([
   "config.changed",
@@ -27,14 +26,16 @@ export function nodePresenceStateSignature(entries: PresenceEntry[]): string {
 }
 
 export function closeAgentPicker(root: ParentNode) {
-  const picker = root.querySelector(".new-session-page__select--agent");
-  if (picker) {
-    closeMenusWithin(picker);
+  const dropdown = root.querySelector<HTMLElement & { open: boolean }>(
+    ".new-session-page__select--agent wa-dropdown",
+  );
+  if (dropdown) {
+    dropdown.open = false;
   }
 }
 
-export function closeSessionMenus(
-  root: Pick<ParentNode, "querySelectorAll"> & { ownerDocument: Document },
-) {
-  closeMenusWithin(root);
+export function closeSessionMenus(root: Pick<ParentNode, "querySelectorAll">) {
+  for (const menu of root.querySelectorAll<HTMLElement & { open: boolean }>("wa-dropdown[open]")) {
+    menu.open = false;
+  }
 }

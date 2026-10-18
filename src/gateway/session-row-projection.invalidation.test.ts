@@ -623,9 +623,8 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
 
-          // A source-only restamp is a full no-op for runtime publication and resident rows.
-          const previousSource = getRuntimeConfigSourceSnapshot();
-          const previousMetadata = getRuntimeConfigSnapshotMetadata();
+          // A value-identical config.apply only restamps the file's meta, so the gateway takes its
+          // effective-config-unchanged branch: the runtime object stays and only its source advances.
           const rewritten = source("2");
           expect(
             setSecretsRuntimeSourceSnapshotIfCurrent({
@@ -635,8 +634,7 @@ it.each(["source rewrite", "resolved snapshot"] as const)(
               secretsSourceConfig: rewritten,
             }),
           ).toBe(true);
-          expect(getRuntimeConfigSourceSnapshot()).toBe(previousSource);
-          expect(getRuntimeConfigSnapshotMetadata()).toBe(previousMetadata);
+          expect(getRuntimeConfigSourceSnapshot()).toEqual(rewritten);
           expect(projection.dirtyRowCount).toBe(0);
         } else {
           await listProjectedSessions({ projection, opts: {} });

@@ -11,6 +11,7 @@ import { createMatrixPrivateMarkers, MATRIX_FORMAT_PROFILE } from "./format-prof
 import type { MatrixSpoilerMarkers, MatrixSpoilerProtection } from "./format-profile.js";
 import { analyzeMatrixSpoilers, type MatrixSpoilerAnalysis } from "./format-spoiler-ranges.js";
 import type { MatrixClient } from "./sdk.js";
+import { isMatrixQualifiedUserId } from "./target-ids.js";
 
 export { MATRIX_FORMAT_PROFILE, renderMatrixMarkdownTables } from "./format-profile.js";
 const MATRIX_STYLE_MARKERS = {
@@ -166,6 +167,10 @@ function trimMentionSuffix(
   return { raw, end };
 }
 
+function isMatrixMentionUserId(raw: string): boolean {
+  return isMatrixQualifiedUserId(raw) && MATRIX_MENTION_USER_ID_PATTERN.test(raw);
+}
+
 function buildMentionCandidate(raw: string, start: number): MatrixMentionCandidate | null {
   const normalized = trimMentionSuffix(raw, start + raw.length);
   if (!normalized) {
@@ -174,7 +179,7 @@ function buildMentionCandidate(raw: string, start: number): MatrixMentionCandida
   if (normalizeLowercaseStringOrEmpty(normalized.raw) === "@room") {
     return { ...normalized, start, kind: "room" };
   }
-  return MATRIX_MENTION_USER_ID_PATTERN.test(normalized.raw)
+  return isMatrixMentionUserId(normalized.raw)
     ? { ...normalized, start, kind: "user", userId: normalized.raw }
     : null;
 }
@@ -500,18 +505,19 @@ export function markdownToMatrixBody(markdown: string): string {
 
 export function renderMatrixBody(analysis: MatrixSpoilerAnalysis): string {
   const { markdown: projected, delimiterOffsets: offsets, metadataCollision } = analysis;
-  if (metadataCollision) {
-    return "[Spoiler]";
-  }
-  if (offsets.length === 0) {
+  if (offsets.length === 0 && !metadataCollision) {
     return projected;
   }
   let body = projected;
-  for (let index = offsets.length - 2; index >= 0; index -= 2) {
-    const open = offsets[index];
-    const close = offsets[index + 1];
-    if (open !== undefined && close !== undefined) {
-      body = `${body.slice(0, open)}[Spoiler]${body.slice(close + 2)}`;
+  if (metadataCollision) {
+    body = "[Spoiler]";
+  } else {
+    for (let index = offsets.length - 2; index >= 0; index -= 2) {
+      const open = offsets[index];
+      const close = offsets[index + 1];
+      if (open !== undefined && close !== undefined) {
+        body = `${body.slice(0, open)}[Spoiler]${body.slice(close + 2)}`;
+      }
     }
   }
   const ir = markdownToIR(body, {
@@ -585,10 +591,15 @@ export async function renderMarkdownToMatrixHtmlWithMentions(params: {
   tableMode?: MarkdownTableMode;
 }): Promise<{ html?: string; mentions: MatrixMentions }> {
   const analysis = analyzeMatrixSpoilers(params.markdown);
-  if (analysis.metadataCollision) {
-    return { html: renderMatrixFallbackHtml(analysis), mentions: {} };
-  }
   const state = await resolveMarkdownMentionState({ ...params, analysis });
+  if (analysis.metadataCollision) {
+    const redacted = renderMatrixBody(analysis);
+    const redactedState = await resolveMarkdownMentionState({
+      ...params,
+      analysis: analyzeMatrixSpoilers(redacted),
+    });
+    return { html: renderMatrixFallbackHtml(analysis), mentions: redactedState.mentions };
+  }
   compactLooseListTokens(state.tokens);
   const html = md.renderer.render(state.tokens, md.options, {}).trimEnd();
   return {

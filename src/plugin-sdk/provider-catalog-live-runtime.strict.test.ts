@@ -56,11 +56,11 @@ afterEach(() => {
 
 describe("strict catalog acquisition", () => {
   it("keeps a shared upstream acquisition alive after one consumer cancels", async () => {
-    const started = createDeferredCore();
+    const started = createDeferredCore<AbortSignal | undefined>();
     const responseReady = createDeferredCore();
     const release = vi.fn(async () => {});
-    fetchGuard.mockImplementation(async ({ url }) => {
-      started.resolve();
+    fetchGuard.mockImplementation(async ({ signal, url }) => {
+      started.resolve(signal);
       await responseReady.promise;
       return {
         response: Response.json({
@@ -84,10 +84,11 @@ describe("strict catalog acquisition", () => {
     const second = acquire(secondController.signal, "beta");
     const settled = Promise.allSettled([first, second]);
     try {
-      await started.promise;
+      const acquisitionSignal = await started.promise;
       expect(fetchGuard).toHaveBeenCalledOnce();
       const reason = { source: "first catalog consumer closed" };
       firstController.abort(reason);
+      expect(acquisitionSignal?.aborted).toBe(false);
       responseReady.resolve();
       await expect(first).rejects.toBe(reason);
       const expected = { id: "beta", models: {} };
@@ -103,10 +104,11 @@ describe("strict catalog acquisition", () => {
     }
   });
 
-  it("preserves HTTP catalog availability and releases admitted bodies before teardown", async () => {
+  it("preserves available HTTP catalogs and releases abandoned bodies before teardown", async () => {
     for (const mode of ["shared", "abandoned", "capacity"] as const) {
       const responseReady = createDeferredCore<ServerResponse>();
       const firstChunkRead = createDeferredCore();
+      const responseClosed = createDeferredCore();
       const released = createDeferredCore();
       let response: ServerResponse | undefined;
       let requests = 0;
@@ -116,6 +118,7 @@ describe("strict catalog acquisition", () => {
           createServer((_request, reply) => {
             requests += 1;
             response = reply;
+            reply.once("close", () => responseClosed.resolve());
             reply.setHeader("content-type", "application/json");
             reply.write('{"data":[');
             responseReady.resolve(reply);
@@ -135,7 +138,9 @@ describe("strict catalog acquisition", () => {
           : [];
       const releases: Array<() => Promise<void>> = [];
       const restoreReaders: Array<() => void> = [];
+      let acquisitionSignal: AbortSignal | undefined;
       const observedGuard: LiveModelCatalogFetchGuard = async (params) => {
+        acquisitionSignal = params.signal;
         const result = await fetchWithSsrFGuard({
           ...params,
           requireHttps: false,
@@ -200,7 +205,7 @@ describe("strict catalog acquisition", () => {
         if (mode === "shared") {
           pending.push(acquire(controllers[1]!.signal));
         }
-        // Observe caller cancellation before releasing the held response body.
+        // Attach both rejection handlers before the first caller can abort shared I/O.
         const settled = Promise.allSettled(pending);
         await Promise.race([
           firstChunkRead.promise,
@@ -220,16 +225,18 @@ describe("strict catalog acquisition", () => {
           };
           await expect(pending[0]).resolves.toMatchObject(expected);
           await expect(acquire(controllers[0]!.signal)).resolves.toMatchObject(expected);
+          expect(acquisitionSignal?.aborted).toBe(false);
         } else {
           const reason = new Error("catalog consumer closed");
           controllers[0]!.abort(reason);
           await expect(pending[0]).rejects.toBe(reason);
-          reply.end('{"id":"known"}]}');
+          expect(acquisitionSignal?.aborted).toBe(mode === "abandoned");
           if (mode === "shared") {
+            reply.end('{"id":"known"}]}');
             await expect(pending[1]).resolves.toEqual([{ id: "known" }]);
           } else {
-            await released.promise;
-            await expect(acquire(controllers[1]!.signal)).resolves.toEqual([{ id: "known" }]);
+            await responseClosed.promise;
+            expect(reply.writableFinished).toBe(false);
           }
         }
         await released.promise;
@@ -255,19 +262,17 @@ describe("strict catalog acquisition", () => {
     }
   });
 
-  it("family adapter reports cancellation while admitted metadata finishes", async () => {
+  it("family adapter cancels its underlying acquisition", async () => {
     const controller = new AbortController();
-    const started = createDeferredCore();
-    const responseReady = createDeferredCore();
-    const released = createDeferredCore();
-    fetchGuard.mockImplementation(async ({ url }) => {
-      started.resolve();
-      await responseReady.promise;
-      return {
-        response: Response.json({ data: [{ id: "known" }] }),
-        finalUrl: url,
-        release: async () => released.resolve(),
-      };
+    const started = createDeferredCore<AbortSignal>();
+    fetchGuard.mockImplementation(({ signal }) => {
+      if (!signal) {
+        throw new Error("Expected acquisition signal");
+      }
+      const cancelled = createDeferredCore<never>();
+      started.resolve(signal);
+      signal.addEventListener("abort", () => cancelled.reject(signal.reason), { once: true });
+      return cancelled.promise;
     });
     const ctx = {
       config: {},
@@ -293,18 +298,14 @@ describe("strict catalog acquisition", () => {
       staticCatalog: async () => ({ providers: {} }),
       augmentModelCatalog: () => [],
     }).catalog.run(ctx);
-    try {
-      await started.promise;
-      controller.abort(new Error("Catalog owner closed"));
-      await expect(pending).resolves.toMatchObject({
-        outcomes: [{ provider: "demo", status: "unavailable" }],
-      });
-      expect(fetchGuard).toHaveBeenCalledOnce();
-    } finally {
-      responseReady.resolve();
-      await released.promise;
-      await pending;
-    }
+    const signal = await started.promise;
+    expect(signal.aborted).toBe(false);
+    controller.abort(new Error("Catalog owner closed"));
+    await expect(pending).resolves.toMatchObject({
+      outcomes: [{ provider: "demo", status: "unavailable" }],
+    });
+    expect(signal.aborted).toBe(true);
+    expect(fetchGuard).toHaveBeenCalledOnce();
   });
 
   it("preserves failure, caches authoritative empty until expiry and supports bypass", async () => {

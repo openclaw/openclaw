@@ -406,9 +406,10 @@ export class IMessageRpcClient {
     let parsed: IMessageRpcResponse<unknown>;
     try {
       parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
-    } catch {
+    } catch (err) {
       this.recordProcessDiagnostic(line);
-      this.runtime?.error?.("imsg rpc: failed to parse JSON response");
+      const detail = formatErrorMessage(err);
+      this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
       return;
     }
 

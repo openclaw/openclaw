@@ -25,7 +25,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { backupDoctorSqliteRepair } from "./sqlite-index-recovery.js";
 import { resolveSqliteInspectionSignal } from "./sqlite-readonly-worker.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -249,7 +248,6 @@ async function migrateTranscriptSessions(params: {
   owner: OpenClawAgentDatabase;
   pathname: string;
   start: Extract<MigrationCursor, { phase: "transcripts" }>;
-  beforeRewrite: () => void;
 }): Promise<number> {
   let rewrittenSessions = 0;
   let afterSessionId = params.start.sessionId;
@@ -282,9 +280,6 @@ async function migrateTranscriptSessions(params: {
         () => {
           assertAgentDatabaseMaintenanceAuthority();
           assertTranscriptSessionSourceUnchanged(params.database, sessionId, planned);
-          if (changedRows.length > 0) {
-            params.beforeRewrite();
-          }
           updateSqliteTranscriptEventJsonInTransaction(
             params.owner,
             sessionId,
@@ -317,7 +312,7 @@ async function migrateTranscriptSessions(params: {
 }
 
 async function migrateAgentDatabase(
-  params: { agentId: string; pathname: string; changes: string[] },
+  params: { agentId: string; pathname: string },
   maintenance: OpenClawStateLeaseContext,
 ): Promise<DatabaseMigrationResult> {
   await migrateOpenClawAgentDatabaseForMaintenance(params, maintenance);
@@ -338,14 +333,6 @@ async function migrateAgentDatabase(
       return { archivedTranscripts: 0, transcriptSessions: 0, warnings };
     }
     const owner = createMigrationDatabaseHandle(database, params.agentId, params.pathname);
-    let preserved = false;
-    const beforeRewrite = () => {
-      if (!preserved) {
-        const backup = backupDoctorSqliteRepair(params.pathname, "transcript-directives");
-        preserved = true;
-        params.changes.push(`Saved pre-repair SQLite backup: ${backup}`);
-      }
-    };
     const transcriptSessions =
       cursor.phase === "transcripts"
         ? await migrateTranscriptSessions({
@@ -354,7 +341,6 @@ async function migrateAgentDatabase(
             owner,
             pathname: params.pathname,
             start: cursor,
-            beforeRewrite,
           })
         : 0;
     const archiveCursor = readMigrationCursor(database, params.pathname);
@@ -366,7 +352,6 @@ async function migrateAgentDatabase(
             pathname: params.pathname,
             signal: maintenance.signal,
             start: archiveCursor,
-            beforeRewrite,
             writeCursor: (next) =>
               writeMigrationCursor(
                 database,
@@ -485,7 +470,7 @@ export async function migrateHistoricalTranscriptDirectives(
           try {
             assertMigrationTargetPathCurrent(target);
             const result = await migrateAgentDatabase(
-              { agentId: target.agentId, pathname: target.path, changes },
+              { agentId: target.agentId, pathname: target.path },
               maintenance,
             );
             warnings.push(...result.warnings);

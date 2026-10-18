@@ -22,8 +22,8 @@ export const waitClockFixture = {
   resumedReply: "The review finished successfully. No issues found in the release notes.",
 };
 
-export async function createWaitClockInstance(port: number, controlUiRoot: string) {
-  const instance = await createOpenClawTestInstance({
+export function createWaitClockInstance(port: number, controlUiRoot: string) {
+  return createOpenClawTestInstance({
     name: "wait-clock",
     // Admission below requires built artifacts; never let the helper rebuild during proof.
     entrypoint: ["dist/index.js"],
@@ -35,11 +35,7 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
       tools: { profile: "full", codeMode: false, toolSearch: false },
       agents: {
         ownership: "explicit",
-        defaults: {
-          workspace: "${OPENCLAW_WORKSPACE_DIR}",
-          model: "wait-fixture/parent",
-          modelPolicy: { allow: ["wait-fixture/*"] },
-        },
+        defaults: { model: "wait-fixture/parent", modelPolicy: { allow: ["wait-fixture/*"] } },
         entries: { main: { identity: { name: "Review assistant" } } },
       },
       models: {
@@ -59,8 +55,6 @@ export async function createWaitClockInstance(port: number, controlUiRoot: strin
       plugins: { allow: [] },
     },
   });
-  instance.env.OPENCLAW_WORKSPACE_DIR = instance.state.path("public-workspace");
-  return instance;
 }
 
 type ProviderInput = { type?: string; name?: string; call_id?: string; output?: string };

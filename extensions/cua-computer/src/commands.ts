@@ -24,7 +24,6 @@ import {
 } from "./driver-client.js";
 import { actionEnvelope, platformActions, projectedToolDetails } from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
-import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   issueFrame,
@@ -474,28 +473,9 @@ export function createCuaComputerProvider(
       }
       const executionDriver = options.driver ?? createDriver();
       const resources = createLazyCuaExecutionResources();
-      const executionState: CuaExecutionState = { resources, recording: {} };
+      const executionState = { resources, recording: {} };
       const queue = new KeyedAsyncQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };
-      const prepareExecution = async (signal?: AbortSignal) => {
-        const assertAuthority = () => {
-          signal?.throwIfAborted();
-          assertOpen();
-        };
-        assertAuthority();
-        try {
-          await executionDriver.prepareExecution?.(signal, assertAuthority);
-        } finally {
-          // Released recording ownership must not survive an interrupted renewal.
-          if (frameState.generation !== executionDriver.generation) {
-            executionState.recording.active = undefined;
-          }
-        }
-        // Close/cancellation can arrive while the native health call is pending.
-        assertAuthority();
-        // Renewal revokes refs before action validation, not after dispatch.
-        adoptGeneration(frameState, executionDriver.generation);
-      };
       let closing = false;
       let closePromise: Promise<void> | undefined;
       const assertOpen = () => {
@@ -516,7 +496,6 @@ export function createCuaComputerProvider(
             assertOpen();
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
-            await prepareExecution(signal);
             const format = params.format ?? "jpeg";
             const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
@@ -567,14 +546,12 @@ export function createCuaComputerProvider(
         act: async (paramsJSON, signal) =>
           await queue.enqueue("execution", async () => {
             assertOpen();
-            const params = parseComputerActParamsJSON(paramsJSON);
-            await prepareExecution(signal);
             return await handleWindowAct(
               platform,
               executionDriver,
               frameState,
               executionState,
-              params,
+              parseComputerActParamsJSON(paramsJSON),
               handleDesktopAct,
               signal,
             );

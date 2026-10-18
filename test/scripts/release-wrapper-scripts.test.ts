@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 const UNKNOWN_PACKAGE = "@openclaw/not-a-real-release-wrapper-test-package";
 const tempDirs: string[] = [];
-const tsxImport = new URL("../../scripts/tsx.mjs", import.meta.url).href;
+const tsxImport = import.meta.resolve("tsx");
 
 afterEach(() => {
   for (const directory of tempDirs.splice(0)) {

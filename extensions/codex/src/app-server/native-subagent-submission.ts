@@ -74,7 +74,8 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   consume: boolean;
 }): { applied: boolean; next?: CodexNativeSubagentSubmissions } {
   const current = readCodexNativeSubagentSubmissions(params.current);
-  const { owner, receipt } = params;
+  const owner = codexNativeSubagentHistoryOwnerSchema.parse(params.owner);
+  const receipt = submissionSchema.parse(params.receipt);
   if (current && !matchesCodexNativeSubagentSubmissionOwner(current.owner, owner)) {
     return { applied: false };
   }

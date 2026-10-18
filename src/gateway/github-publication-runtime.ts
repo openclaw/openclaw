@@ -152,19 +152,10 @@ export function createGitHubPublicationRuntime(params: {
       });
     }
   };
-  const reconcilePublications = async (isStopping?: () => boolean) => {
-    if (isStopping?.()) {
-      return;
-    }
+  const reconcilePublications = async () => {
     await ready;
-    if (isStopping?.()) {
-      return;
-    }
     if (!pendingKnown) {
       await loadPendingRequests();
-    }
-    if (isStopping?.()) {
-      return;
     }
     if (!reconcileNeeded && pendingRequests.size === 0) {
       return;
@@ -172,23 +163,13 @@ export function createGitHubPublicationRuntime(params: {
     reconcileNeeded = false;
     try {
       await coordinator.deferOrphanedRequestsAsync();
-      if (!isStopping?.()) {
-        await coordinator.resumeSessionRequests(isStopping);
-      }
+      await coordinator.resumeSessionRequests();
     } catch (error) {
       reconcileNeeded = true;
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);
     }
-    if (isStopping?.()) {
-      reconcileNeeded = true;
-      return;
-    }
     try {
       for (const publication of await coordinator.listUnreportedResultsAsync()) {
-        if (isStopping?.()) {
-          reconcileNeeded = true;
-          break;
-        }
         if (!(await reportDeferred(publication))) {
           reconcileNeeded = true;
         }

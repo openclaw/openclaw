@@ -292,22 +292,10 @@ export async function runTalkNodePermissionParity({
               params.abortSignal,
             );
             finished.resolve(result.details);
-            return {
-              payloads: [{ text: "Native action finished." }],
-              meta: {
-                durationMs: 0,
-                terminalReply: { disposition: "visible", text: "Native action finished." },
-              },
-            };
+            return { payloads: [{ text: "Native action finished." }], meta: { durationMs: 0 } };
           } catch (error) {
             finished.resolve({ error: String(error) });
-            return {
-              payloads: [{ text: "Native action did not run." }],
-              meta: {
-                durationMs: 0,
-                terminalReply: { disposition: "visible", text: "Native action did not run." },
-              },
-            };
+            return { payloads: [{ text: "Native action did not run." }], meta: { durationMs: 0 } };
           } finally {
             host.close();
           }
@@ -525,10 +513,7 @@ export async function runTalkOperatorSourceParity({
   let admittedSource: object | undefined;
   runEmbeddedAgent.mockImplementationOnce(async (params) => {
     admittedSource = params.preparedRunAdmission?.readOperatorAuthority?.()?.source;
-    return {
-      payloads: [{ text: "Done." }],
-      meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "Done." } },
-    };
+    return { payloads: [{ text: "Done." }], meta: { durationMs: 1 } };
   });
   const handler = expectDefined(talkClientHandlers["talk.client.toolCall"], "Talk RPC handler");
   const respond = vi.fn<RespondFn>();

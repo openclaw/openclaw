@@ -13,7 +13,6 @@ import {
   reportToolSchemaTruncation,
   truncateToolSchemaDepth,
 } from "./tool-schema-depth.js";
-import { extendSchemaDefs, type SchemaDefs } from "./tool-schema-refs.js";
 
 // Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
 export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
@@ -136,6 +135,28 @@ function isNullSchema(variant: unknown): boolean {
   );
 }
 
+type SchemaDefs = Map<string, unknown>;
+
+function extendSchemaDefs(
+  defs: SchemaDefs | undefined,
+  schema: Record<string, unknown>,
+): SchemaDefs | undefined {
+  const defsEntry = isRecord(schema.$defs) ? schema.$defs : undefined;
+  const legacyDefsEntry = isRecord(schema.definitions) ? schema.definitions : undefined;
+
+  if (!defsEntry && !legacyDefsEntry) {
+    return defs;
+  }
+
+  const next = new Map(defs);
+  for (const entry of [defsEntry, legacyDefsEntry]) {
+    for (const [key, value] of Object.entries(entry ?? {})) {
+      next.set(key, value);
+    }
+  }
+  return next;
+}
+
 function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
   if (!defs) {
     return undefined;
@@ -145,7 +166,7 @@ function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown 
   if (tokens?.length !== 2 || (table !== "$defs" && table !== "definitions") || !name) {
     return undefined;
   }
-  return defs[table].get(name);
+  return defs.get(name);
 }
 
 function simplifyUnionVariants(params: { obj: Record<string, unknown>; variants: unknown[] }):

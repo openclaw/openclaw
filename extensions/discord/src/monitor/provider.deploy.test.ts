@@ -6,7 +6,6 @@ import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 
 type RestFn = (path: string, data?: unknown, query?: unknown) => Promise<unknown>;
 type RestMock = {
-  options: { timeout: number };
   get: Mock<RestFn>;
   post: Mock<RestFn>;
   put: Mock<RestFn>;
@@ -16,7 +15,6 @@ type RestMock = {
 
 function createRestMock(): RestMock {
   return {
-    options: { timeout: 15_000 },
     get: vi.fn<RestFn>(async () => undefined),
     post: vi.fn<RestFn>(async () => undefined),
     put: vi.fn<RestFn>(async () => undefined),

@@ -19,7 +19,7 @@ Files in `apps/macos/Sources/OpenClaw/Resources/DeviceModels/`:
 
 ## Data source
 
-Vendored from the MIT-licensed `kyle-seongwoo-jun/apple-device-identifiers` GitHub repository. JSON files are pinned to commit SHAs recorded in `NOTICE.md` to keep builds repeatable.
+Vendored from the MIT-licensed `kyle-seongwoo-jun/apple-device-identifiers` GitHub repository. JSON files are pinned to commit SHAs recorded in `NOTICE.md` to keep builds deterministic.
 
 ## Updating the database
 

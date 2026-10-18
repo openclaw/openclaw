@@ -1,6 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { ProjectRegistryRecord } from "../../projects/project-registry.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -35,30 +36,32 @@ function indexPathProjects(projects: readonly ProjectRegistryRecord[]) {
 }
 
 export async function listProjectRecents(
-  candidates: Iterable<{ key: string; entry: SessionEntry; agentId: string }>,
+  store: Record<string, SessionEntry>,
+  getSessionAgentId: (key: string) => string | undefined,
+  profileIds: ReadonlySet<string>,
   projects: readonly ProjectRegistryRecord[],
   usedSessions: Set<string>,
 ): Promise<ProjectRecent[]> {
+  const candidates = Object.entries(store)
+    .filter(
+      ([, entry]) =>
+        Boolean(sessionCreatorProfileId(entry.createdActor)) &&
+        Boolean(entry.createdActor?.id && profileIds.has(entry.createdActor.id)),
+    )
+    .toSorted(
+      ([leftKey, left], [rightKey, right]) =>
+        (right.updatedAt ?? 0) - (left.updatedAt ?? 0) || leftKey.localeCompare(rightKey),
+    );
   const projectsById = new Map(projects.map((project) => [project.id, project]));
   const seen = new Set<string>();
   const recents: ProjectRecent[] = [];
   let pathProjects: ReturnType<typeof indexPathProjects> | undefined;
   // Stop fetching once the picker is full, while bounding worker round trips for long histories.
-  const iterator = candidates[Symbol.iterator]();
-  while (recents.length < 8) {
-    const batch: Array<{ key: string; entry: SessionEntry; agentId: string }> = [];
-    for (let index = 0; index < 64; index++) {
-      const next = iterator.next();
-      if (next.done) {
-        break;
-      }
-      batch.push(next.value);
-    }
-    if (!batch.length) {
-      break;
-    }
-    const repositoryCandidates = batch.flatMap(({ key: sessionKey, entry, agentId }) => {
-      return entry.repositoryWorkspaceId ? [{ agentId, sessionKey }] : [];
+  for (let offset = 0; offset < candidates.length && recents.length < 8; offset += 64) {
+    const batch = candidates.slice(offset, offset + 64);
+    const repositoryCandidates = batch.flatMap(([sessionKey, entry]) => {
+      const agentId = getSessionAgentId(sessionKey);
+      return entry.repositoryWorkspaceId && agentId ? [{ agentId, sessionKey }] : [];
     });
     const repositories = new Map(
       (repositoryCandidates.length
@@ -68,7 +71,7 @@ export async function listProjectRecents(
         : []
       ).map((repository) => [repository.workspaceId, repository]),
     );
-    for (const { key: sessionKey, entry } of batch) {
+    for (const [sessionKey, entry] of batch) {
       if (entry.repositoryWorkspaceId) {
         const repository = repositories.get(entry.repositoryWorkspaceId);
         const sessionAgentId = parseAgentSessionKey(sessionKey)?.agentId;

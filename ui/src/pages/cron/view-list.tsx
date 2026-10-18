@@ -2,18 +2,18 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, For } from "solid-js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import type { CronJobsEnabledFilter, CronJob } from "../../api/types.ts";
-import { AgentRowChip } from "../../components/agent-row-chip.tsx";
 import { CronJobsPagination } from "../../components/cron-jobs-pagination.tsx";
-import { HubTabs } from "../../components/solid/hub-tabs.tsx";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { formatCronSchedule } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { LitContent } from "../../lit/solid-bridge.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
 import { AdminRequired, ErrorBanner, EnabledSwitch, JobMenu } from "./view-controls.tsx";
 import {
-  describeJobSchedule,
   JobStateIndicator,
   TriggerIndicator,
   DisabledNote,
@@ -90,36 +90,38 @@ export function ListView(props: CronProps) {
 }
 function ListTabs(props: CronProps) {
   return (
-    <HubTabs<CronJobsEnabledFilter | "activity">
-      {...{
-        id: "cron-list",
-        panelId: "cron-list-panel",
-        class: "cron-tabs",
-        active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
-        tabs: [
-          ...ENABLED_TABS.map((tab) => ({
-            value: tab.value,
-            label: t(tab.labelKey),
-            testId: `cron-tab-${tab.value}`,
-          })),
-          {
-            value: "activity",
-            label: t("cron.list.activityTab"),
-            testId: "cron-list-tab-activity",
+    <LitContent
+      render={() =>
+        renderHubTabs({
+          id: "cron-list",
+          panelId: "cron-list-panel",
+          className: "cron-tabs",
+          active: props.listTab === "activity" ? "activity" : props.jobsEnabledFilter,
+          tabs: [
+            ...ENABLED_TABS.map((tab) => ({
+              value: tab.value,
+              label: t(tab.labelKey),
+              testId: `cron-tab-${tab.value}`,
+            })),
+            {
+              value: "activity",
+              label: t("cron.list.activityTab"),
+              testId: "cron-list-tab-activity",
+            },
+          ],
+          ariaLabel: t("cron.list.viewLabel"),
+          onSelect: (value) => {
+            if (value === "activity") {
+              props.onListTabChange("activity");
+              return;
+            }
+            props.onListTabChange("tasks");
+            if (value !== props.jobsEnabledFilter) {
+              void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
+            }
           },
-        ],
-        ariaLabel: t("cron.list.viewLabel"),
-        onSelect: (value) => {
-          if (value === "activity") {
-            props.onListTabChange("activity");
-            return;
-          }
-          props.onListTabChange("tasks");
-          if (value !== props.jobsEnabledFilter) {
-            void props.onJobsFiltersChange({ cronJobsEnabledFilter: value });
-          }
-        },
-      }}
+        })
+      }
     />
   );
 }
@@ -270,7 +272,7 @@ function JobRow(
             <span class="cron-table__name-text">{displayName()}</span>
             {props.job.trigger ? <TriggerIndicator /> : undefined}
           </span>
-          {systemOwned() ? undefined : <AgentRowChip agentId={props.job.agentId} />}
+          {systemOwned() ? undefined : <openclaw-agent-row-chip prop:agentId={props.job.agentId} />}
           {description() || !props.job.enabled ? (
             <span class="cron-table__name-meta">
               {description() ? (
@@ -295,7 +297,7 @@ function JobRow(
       <JobCell
         class="cron-table__schedule"
         label={t("cron.jobs.schedule")}
-        value={describeJobSchedule(props.job)}
+        value={formatCronSchedule(props.job)}
       />
       <JobCell
         class="cron-table__next"

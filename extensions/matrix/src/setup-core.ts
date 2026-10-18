@@ -68,7 +68,7 @@ export const finishMatrixSetupAfterConfigWrite: NonNullable<
   });
 };
 
-export const matrixSetupAdapter = {
+export const matrixSetupAdapter: ChannelSetupAdapter = {
   singleAccountKeysToMove,
   namedAccountPromotionKeys,
   resolveSingleAccountPromotionTarget,
@@ -97,7 +97,7 @@ export const matrixSetupAdapter = {
       input,
     }),
   afterAccountConfigWritten: finishMatrixSetupAfterConfigWrite,
-} satisfies ChannelSetupAdapter;
+};
 
 export const matrixSetupContract = defineChannelSetupContract({
   fields: {

@@ -73,7 +73,7 @@ describe("session archive tree", () => {
   });
 });
 
-describe("archive descendant discovery hint", () => {
+describe("archive-tree menu availability", () => {
   it("discovers persistent descendants behind workers and preserves unloaded discovery", () => {
     const child = row("agent:main:child");
     const worker = row("agent:main:subagent:worker", { childSessions: [child.key] });

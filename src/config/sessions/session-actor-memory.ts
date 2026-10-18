@@ -252,7 +252,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
                     phase,
                     command: input,
                     before: before.hot,
-                    after: structuredClone(working.hot),
+                    after: working.hot,
                     applied,
                   });
                   session.state = working;

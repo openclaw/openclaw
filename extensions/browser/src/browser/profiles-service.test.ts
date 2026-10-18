@@ -350,23 +350,46 @@ describe("BrowserProfilesService", () => {
     },
   );
 
-  it("deletes existing-session profiles without touching local browser data", async () => {
-    const { ctx, service } = createDeletionFixture({
-      name: "chrome-live",
-      resolvedProfile: {
+  it.each([
+    [
+      "deletes remote profiles without stopping or removing local data",
+      "remote",
+      { cdpUrl: "http://10.0.0.42:9222", color: "#0066CC" },
+      undefined,
+    ],
+    [
+      "deletes existing-session profiles without touching local browser data",
+      "chrome-live",
+      {
         cdpPort: 18801,
         color: "#0066CC",
         driver: "existing-session",
         attachOnly: true,
       },
-    });
-    const result = await service.deleteProfile("chrome-live");
+      undefined,
+    ],
+    [
+      "deletes attach-only openclaw profiles without touching local browser data",
+      "work",
+      { cdpPort: 18801, color: "#0066CC" },
+      { cdpPort: 18801, color: "#0066CC", driver: "openclaw", attachOnly: true },
+    ],
+  ] as Array<[string, string, BrowserProfileConfig, BrowserProfileConfig | undefined]>)(
+    "%s",
+    async (_name, profileName, resolvedProfile, persistedProfile) => {
+      const { ctx, service } = createDeletionFixture({
+        name: profileName,
+        resolvedProfile,
+        persistedProfile,
+      });
+      const result = await service.deleteProfile(profileName);
 
-    expect(result.deleted).toBe(false);
-    expect(ctx.forProfile).not.toHaveBeenCalled();
-    expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
-    expect(movePathToTrash).not.toHaveBeenCalled();
-  });
+      expect(result.deleted).toBe(false);
+      expect(ctx.forProfile).not.toHaveBeenCalled();
+      expect(resolveOpenClawUserDataDir).not.toHaveBeenCalled();
+      expect(movePathToTrash).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects deletion when the profile became default before persistence", async () => {
     const resolved = resolveBrowserConfig({
@@ -498,6 +521,33 @@ describe("BrowserProfilesService", () => {
 
     expect(order).toEqual(["stop", "config", "trash"]);
     expect(state.profiles.has("work")).toBe(false);
+  });
+
+  it("rolls back a delete tombstone when config persistence fails after cleanup", async () => {
+    const { service, state } = createDeletionFixture({
+      resolvedProfile: { cdpPort: 18801, color: "#0066CC" },
+    });
+    const profile = resolveProfile(state.resolved, "work");
+    if (!profile) {
+      throw new Error("Expected work profile");
+    }
+    const runtime = getOrCreateProfileRuntime(state, profile);
+    configMocks.writeConfigFile.mockRejectedValueOnce(new Error("config write failed"));
+
+    await expect(service.deleteProfile("work")).rejects.toThrow("config write failed");
+
+    expect(getProfileLifecycle(runtime).terminal).toBeNull();
+    expect(getProfileLifecycle(runtime).blockedReason).toBeNull();
+    expect(state.resolved.profiles.work).toEqual({ cdpPort: 18801, color: "#0066CC" });
+    expect(movePathToTrash).not.toHaveBeenCalled();
+    await expect(
+      enqueueProfileStart({
+        state,
+        runtime,
+        key: "default",
+        run: async () => {},
+      }),
+    ).resolves.toBeUndefined();
   });
 
   it("preserves a same-name replacement config that appears during lifecycle drain", async () => {

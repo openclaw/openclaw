@@ -96,9 +96,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     }
     await settleDurableDelivery(
       params.deliveryCompletion,
-      result
-        ? { result, batch: { results: deliveredResults, payloadCount, payloadOutcomes } }
-        : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
+      result ? { result } : { platformSendStarted: platformSendStarted && !allPayloadsSuppressed },
       platformQueueStateDir,
       params.deliveryQueueStateContext,
       params.conversationDeliveryTarget,

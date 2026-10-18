@@ -220,7 +220,6 @@ export async function prepareCronRunContext(params: {
       cronSession,
       agentSessionKey,
       runSessionKey,
-      usesDetachedRunSession,
       signal: input.abortSignal ?? input.signal,
       onInterrupt: params.onLifecycleInterrupt,
     });
@@ -247,7 +246,6 @@ export async function prepareCronRunContext(params: {
       });
       workspaceLease = selectedWorkspace.lease;
       const workspaceDir = selectedWorkspace.workspaceDir;
-      let baseSessionMaintenanceStarted = false;
       const persistCronSessionRow: CronSessionRowWriter = async ({
         storePath,
         sessionKey,
@@ -281,14 +279,9 @@ export async function prepareCronRunContext(params: {
           {
             fallbackEntry,
             replaceEntry: true,
-            // The maintenance owner follows later writes through its receipt subscription.
-            skipMaintenance: baseSessionMaintenanceStarted || sessionKey !== agentSessionKey,
             workerGuard: { assertCurrent: assertCommitAllowed },
           },
         );
-        if (sessionKey === agentSessionKey) {
-          baseSessionMaintenanceStarted = true;
-        }
       };
       const persistSessionEntry = createPersistCronSessionEntry({
         cronSession,
@@ -577,28 +570,21 @@ export async function prepareCronRunContext(params: {
         job: input.job,
         cronSession,
       });
-      const authSelection = input.job.runtimeAuthority
-        ? undefined
-        : input.job.inferenceBinding
-          ? {
-              profileId: input.job.inferenceBinding.profileId,
-              source: input.job.inferenceBinding.source,
-            }
-          : await resolveCronAuthSelection({
-              agentId,
-              cfg: admittedConfig,
-              provider,
-              modelId: model,
-              ...(provider === resolvedModelSelection.provider &&
-              resolvedModelSelection.configuredProfileId
-                ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
-                : {}),
-              harnessRuntime: effectiveAgentRuntime,
-              agentDir,
-              cronSession,
-              sessionKey: agentSessionKey,
-              isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
-            });
+      const authSelection = await resolveCronAuthSelection({
+        agentId,
+        cfg: admittedConfig,
+        provider,
+        modelId: model,
+        ...(provider === resolvedModelSelection.provider &&
+        resolvedModelSelection.configuredProfileId
+          ? { configuredProfileId: resolvedModelSelection.configuredProfileId }
+          : {}),
+        harnessRuntime: effectiveAgentRuntime,
+        agentDir,
+        cronSession,
+        sessionKey: agentSessionKey,
+        isNewSession: cronSession.isNewSession && input.job.sessionTarget !== "isolated",
+      });
       const authProfileId = authSelection?.profileId;
       const liveSelection: LiveSessionModelSelection = {
         provider,

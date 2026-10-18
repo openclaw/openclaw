@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Read-only agent workspace browsing schemas.
@@ -16,7 +15,7 @@ import { stringLiteralUnion } from "./string-literal-union.js";
 export const AgentsWorkspaceEntrySchema = closedObject({
   path: NonEmptyString,
   name: NonEmptyString,
-  kind: stringLiteralUnion(["file", "directory"]),
+  kind: Type.Union([Type.Literal("file"), Type.Literal("directory")]),
   size: Type.Optional(Type.Integer({ minimum: 0 })),
   updatedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
 });
@@ -44,7 +43,7 @@ export const AgentsWorkspaceFileSchema = closedObject({
   size: Type.Integer({ minimum: 0 }),
   updatedAtMs: Type.Integer({ minimum: 0 }),
   mimeType: NonEmptyString,
-  encoding: stringLiteralUnion(["utf8", "base64"]),
+  encoding: Type.Union([Type.Literal("utf8"), Type.Literal("base64")]),
   content: Type.String(),
 });
 

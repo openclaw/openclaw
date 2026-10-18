@@ -1,5 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { hasInternalDiagnosticEventInterest } from "./diagnostic-event-listener-presence.js";
 import { emitTrustedDiagnosticEvent } from "./diagnostic-events.js";
@@ -13,38 +11,14 @@ import type { WorkerRequestKind } from "./worker-request-kind.js";
 
 export type WorkerRequestObservation = {
   timing?: DiagnosticWorkerRequestFields["timing"];
-  recordTransactions?(count: number): void;
-  started(this: void): void;
-  completed(this: void): void;
+  started(): void;
+  completed(): void;
 };
-
-export type SqliteWorkerReservationObservation = {
-  operations: Set<string>;
-  transactionCount?: number;
-};
-
-const reservations = resolveGlobalSingleton(
-  Symbol.for("openclaw.sqliteWorkerReservationObservation"),
-  () => new AsyncLocalStorage<SqliteWorkerReservationObservation>(),
-);
-
-export function withSqliteWorkerReservationObservation<T>(
-  observation: SqliteWorkerReservationObservation,
-  run: () => T,
-): T {
-  return reservations.run(observation, run);
-}
 
 const detailedTiming = isDiagnosticFlagEnabled("sqlite.worker-timing");
 
 // Exact owner commands only: SDK callers may supply private suffixes.
-const coreCommands = new Set([
-  "devicePairing.lookup",
-  "devicePairing.list",
-  "devicePairing.updateMetadata",
-  "devicePairing.updatePresence",
-  "devicePairing.verifyToken",
-  "devicePairing.ensureToken",
+const sessionCommands = new Set([
   "session.actor.read",
   "session.actor.acceptInput",
   "session.actor.adoptRun",
@@ -60,37 +34,12 @@ const coreCommands = new Set([
   "session.entry.replacements.prepare",
   "session.entry.replacements.commit",
   "session.lifecycle.project",
-  "session.maintenance.metadata",
-  "session.maintenance.prepare",
-  "session.maintenance.release",
-  "session.maintenance.finalize",
-  "session.maintenance.size",
-  "session.rowTranscript.backfill",
-  "usageCache.writeRollup",
-  "usageCache.prune",
-  "trajectory.events.append",
-  "trajectory.retention.begin",
-  "trajectory.retention.delete",
+  "session.maintenance.read",
   "session.pendingInputs.read",
   "session.pendingInputs.mutate",
   "session.turn.prepare",
   "session.turn.commit",
-  "transcript.prepare",
-  "transcript.commit",
 ]);
-
-const projectionCommands = new Map([
-  ["preflight", "transcript-projection.preflight"],
-  ["sweep", "transcript-projection.sweep"],
-  ["claim", "transcript-projection.claim"],
-  ["deleteChunk", "transcript-projection.deleteChunk"],
-  ["appendChunk", "transcript-projection.appendChunk"],
-  ["finalize", "transcript-projection.finalize"],
-]);
-const projectionModuleSuffixes = [
-  "/config/sessions/session-transcript-projection-publication.worker.js",
-  "/config/sessions/session-transcript-projection-publication.worker.ts",
-];
 
 const requestPrefixes = [
   ["pluginState.", "plugin_state"],
@@ -102,34 +51,18 @@ const requestPrefixes = [
   ["cron.", "cron"],
 ] as const;
 
-export function classifyWorkerRequest(commandType: unknown, commandInput?: unknown): string {
+export function classifyWorkerRequest(commandType: PropertyKey): string {
   if (typeof commandType !== "string") {
     return "execute";
   }
-  if (coreCommands.has(commandType)) {
+  if (sessionCommands.has(commandType)) {
     return commandType;
   }
   if (commandType === "auth-profile-rows") {
     return "auth_profiles";
   }
-  if (commandType === "database.domain.execute" || commandType === "database.domain.publish") {
-    const publication = isRecord(commandInput) ? commandInput : undefined;
-    const inner = publication && isRecord(publication.command) ? publication.command : undefined;
-    const moduleUrl = publication?.moduleUrl;
-    // Bare commands such as claim also belong to other owners. Never log their module paths.
-    if (
-      commandType === "database.domain.publish" &&
-      typeof moduleUrl === "string" &&
-      typeof inner?.type === "string" &&
-      projectionModuleSuffixes.some((suffix) => moduleUrl.endsWith(suffix))
-    ) {
-      const projection = projectionCommands.get(inner.type);
-      if (projection) {
-        return projection;
-      }
-    }
-    const label = inner ? classifyWorkerRequest(inner.type) : "execute";
-    return label === "execute" ? "domain_execute" : label;
+  if (commandType === "database.domain.execute") {
+    return "domain_execute";
   }
   for (const [prefix, requestClass] of requestPrefixes) {
     if (commandType.startsWith(prefix)) {
@@ -145,8 +78,7 @@ const queued = resolveGlobalSingleton(
 );
 
 const requestClasses = new Set([
-  ...coreCommands,
-  ...projectionCommands.values(),
+  ...sessionCommands,
   ...sqliteWorkerRequestClasses,
   ...requestPrefixes.map(([, requestClass]) => requestClass),
   "task",
@@ -164,11 +96,10 @@ export function trackWorkerRequest(
   queuedSignal?: AbortSignal,
 ): WorkerRequestObservation {
   const label = requestClasses.has(requestClass) ? requestClass : "other";
-  const reservation = kind === "sqlite_writer" ? reservations.getStore() : undefined;
   const enqueuedAt = performance.now();
   const timing: DiagnosticWorkerRequestFields["timing"] =
     kind === "sqlite_writer" &&
-    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request", true))
+    (detailedTiming || hasInternalDiagnosticEventInterest("worker.request"))
       ? { enqueued: enqueuedAt }
       : undefined;
   let startedAt: number | undefined;
@@ -177,7 +108,7 @@ export function trackWorkerRequest(
     phase: DiagnosticWorkerRequestFields["phase"],
     durations: Pick<DiagnosticWorkerRequestFields, "queueWaitMs" | "durationMs"> = {},
   ) => {
-    if (!hasInternalDiagnosticEventInterest("worker.request", true)) {
+    if (!hasInternalDiagnosticEventInterest("worker.request")) {
       return;
     }
     emitTrustedDiagnosticEvent({
@@ -193,25 +124,13 @@ export function trackWorkerRequest(
   const dequeue = () => queued.set(kind, (queued.get(kind) ?? 0) - 1);
   queued.set(kind, (queued.get(kind) ?? 0) + 1);
   emit("queued");
-  const observation: WorkerRequestObservation = {
+  const observation = {
     timing,
-    ...(reservation
-      ? {
-          recordTransactions: (count: number) => {
-            reservation.transactionCount = (reservation.transactionCount ?? 0) + count;
-          },
-        }
-      : {}),
     started: () => {
       if (completed || startedAt !== undefined) {
         return;
       }
       startedAt = performance.now();
-      if (reservation) {
-        reservation.operations.add(
-          reservation.operations.has(label) || reservation.operations.size < 8 ? label : "other",
-        );
-      }
       if (timing) {
         timing.dispatched = startedAt;
       }

@@ -19,12 +19,11 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeVideoGenerationDuration,
-  type VideoGenerationModeCapabilities,
-  type VideoGenerationProvider,
-  type VideoGenerationRequest,
-  type VideoGenerationSourceAsset,
+import type {
+  VideoGenerationModeCapabilities,
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_PIXVERSE_MODEL_ID,
@@ -118,6 +117,13 @@ function resolvePixVerseQuality(req: VideoGenerationRequest): string {
     : DEFAULT_PIXVERSE_QUALITY;
 }
 
+function resolvePixVerseDurationSeconds(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 5;
+  }
+  return Math.max(1, Math.min(MAX_DURATION_SECONDS, Math.round(value)));
+}
+
 function readPixVerseSeed(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0, max: PIXVERSE_SEED_MAX });
 }
@@ -190,10 +196,7 @@ function buildVideoBody(
 ): Record<string, unknown> {
   const options = req.providerOptions ?? {};
   const body: Record<string, unknown> = {
-    duration: Math.min(
-      MAX_DURATION_SECONDS,
-      normalizeVideoGenerationDuration({ durationSeconds: req.durationSeconds }) ?? 5,
-    ),
+    duration: resolvePixVerseDurationSeconds(req.durationSeconds),
     model,
     prompt: req.prompt,
     quality: resolvePixVerseQuality(req),

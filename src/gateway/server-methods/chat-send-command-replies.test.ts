@@ -233,9 +233,9 @@ function buildRawTranscriptReplyText(payloads: ReplyPayload[]): string {
 describe("buildTranscriptReplyTextFromInputs", () => {
   it.each([
     ...["NO_REPLY", "ANNOUNCE_SKIP", "REPLY_SKIP"].map((controlText) => ({
-      name: `literal ${controlText}`,
+      name: `suppressed ${controlText}`,
       payloads: [{ text: "First instruction" }, { text: controlText }, { text: "Done" }],
-      expected: `First instruction\n\n${controlText}\n\nDone`,
+      expected: "First instruction\n\nDone",
       project: true,
     })),
     {

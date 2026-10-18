@@ -143,11 +143,6 @@ export function createNonExitingRuntime(): OutputRuntimeEnv {
   };
 }
 
-/** Ingress owners return payloads through their transport, never process output. */
-export function withoutRuntimeOutput(runtime: RuntimeEnv): OutputRuntimeEnv {
-  return { ...runtime, writeStdout() {}, writeJson() {} };
-}
-
 export function writeRuntimeJson(
   runtime: RuntimeEnv | OutputRuntimeEnv,
   value: unknown,

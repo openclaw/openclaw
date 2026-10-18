@@ -5,8 +5,7 @@ import type {
   RealtimeVoiceResponseOutcome,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
-import { ChannelType, type APIVoiceState } from "../internal/discord.js";
-import { DiscordGatewayVoiceStateCache } from "../internal/gateway-voice-state-cache.js";
+import { ChannelType } from "../internal/discord.js";
 import type { voiceTestMocks } from "./voice-test-mocks.test-support.js";
 
 export type MockCallSource = {
@@ -98,35 +97,21 @@ export function createDiscordVoiceTestHelpers(updateVoiceStateMock: ReturnType<t
   });
   type VoiceChannelInfo = ReturnType<typeof createVoiceChannelInfo>;
 
-  const createClient = () => {
-    const voiceStateCache = new DiscordGatewayVoiceStateCache();
-    return {
-      rest: { get: vi.fn() as Mock },
-      fetchChannel: vi.fn(async (channelId: string): Promise<VoiceChannelInfo | null> =>
-        createVoiceChannelInfo(channelId),
+  const createClient = () => ({
+    rest: { get: vi.fn() as Mock },
+    fetchChannel: vi.fn(async (channelId: string): Promise<VoiceChannelInfo | null> =>
+      createVoiceChannelInfo(channelId),
+    ),
+    fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
+    getPlugin: vi.fn((_id?: string): unknown => ({
+      getGatewayAdapterCreator: vi.fn(() =>
+        vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
       ),
-      fetchGuild: vi.fn(async (guildId: string) => ({ id: guildId, name: "Guild One" })),
-      getPlugin: vi.fn((id?: string): unknown =>
-        id === "gateway"
-          ? {
-              listVoiceChannelStates: (guildId: string, channelId: string) =>
-                voiceStateCache.listVoiceChannelStates(guildId, channelId),
-              takeVoiceStateTransition: (state: APIVoiceState) =>
-                voiceStateCache.takeTransition(state),
-            }
-          : id === "voice"
-            ? {
-                getGatewayAdapterCreator: vi.fn(() =>
-                  vi.fn(() => ({ sendPayload: vi.fn(() => true), destroy: vi.fn() })),
-                ),
-                getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
-              }
-            : undefined,
-      ),
-      fetchMember: vi.fn() as Mock,
-      fetchUser: vi.fn() as Mock,
-    };
-  };
+      getGateway: vi.fn(() => ({ updateVoiceState: updateVoiceStateMock })),
+    })),
+    fetchMember: vi.fn() as Mock,
+    fetchUser: vi.fn() as Mock,
+  });
 
   const createClientWithMember = (
     id: string,

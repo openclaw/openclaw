@@ -29,6 +29,7 @@ type ReplyRunSettleTimer = {
   scheduleOnce(timeoutMs: number): void;
 };
 
+const activeSettleTimers = new Set<ReplyRunSettleTimer>();
 const leasesByOwner = new WeakMap<object, FinalizationLease>();
 
 export function createReplyRunSettleTimer(params: {
@@ -40,12 +41,14 @@ export function createReplyRunSettleTimer(params: {
     clear() {
       clearTimeout(timer);
       timer = undefined;
+      activeSettleTimers.delete(settleTimer);
     },
     renew(timeoutMs) {
       settleTimer.clear();
       timer = setTimeout(
         () => {
           timer = undefined;
+          activeSettleTimers.delete(settleTimer);
           if (params.canExpire()) {
             params.onExpire();
           }
@@ -53,6 +56,7 @@ export function createReplyRunSettleTimer(params: {
         resolveTimerTimeoutMs(timeoutMs, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS, 1),
       );
       timer.unref?.();
+      activeSettleTimers.add(settleTimer);
     },
     scheduleOnce(timeoutMs) {
       if (!timer) {
@@ -133,4 +137,10 @@ export function createReplyRunFinalizationLease(params: {
 
 export function beginReplyOperationFinalizationWork(owner: object, timeoutMs: number): () => void {
   return leasesByOwner.get(owner)?.beginWork(timeoutMs) ?? (() => undefined);
+}
+
+export function resetReplyRunSettleTimersForTesting(): void {
+  for (const timer of activeSettleTimers) {
+    timer.clear();
+  }
 }

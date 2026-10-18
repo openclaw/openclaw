@@ -67,7 +67,10 @@ import {
 } from "./targets.js";
 import type { SessionEntry } from "./types.js";
 
-export type { GatewayStoredSessionTarget } from "./combined-store-model-sources.js";
+export type {
+  GatewayStoredSessionTarget,
+  GatewayStoredSessionTargets,
+} from "./combined-store-model-sources.js";
 export type {
   GatewaySessionStoreOptions,
   ResolvedGatewaySessionStoreTargets,
@@ -135,7 +138,7 @@ export function projectGatewaySessionEntry(
   entry: SessionEntry,
   resolveSourceKey?: (key: string) => string,
 ): SessionEntry {
-  let projected = entry;
+  const projected = { ...entry };
   // Global display uses the captured parent selection; per-sender lineage stays literal.
   // Raw sentinels keep their physical owner and are never reinterpreted here.
   if (cfg.session?.scope === "global") {
@@ -143,15 +146,9 @@ export function projectGatewaySessionEntry(
       const sessionKey = projected[field];
       const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
       if (sessionKey && parsed) {
-        const sourceKey =
+        projected[field] =
           resolveSourceKey?.(sessionKey) ??
           canonicalizeMainSessionAlias({ cfg, agentId: parsed.agentId, sessionKey });
-        if (sourceKey !== sessionKey) {
-          if (projected === entry) {
-            projected = { ...entry };
-          }
-          projected[field] = sourceKey;
-        }
       }
     }
   }

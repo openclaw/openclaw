@@ -349,9 +349,7 @@ describe("ConfigPage navigation", () => {
         expect(mounted.querySelector("#config-section-tts")).not.toBeNull();
       });
       const host = expectDefined(mounted.querySelector("openclaw-config-page"), "config host");
-      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-        "Communications",
-      );
+      expect(Reflect.get(host, "pageId")).toBe("communications");
 
       const navigation = router.navigate("advanced", context);
       await waitForSolid(() => {
@@ -363,14 +361,12 @@ describe("ConfigPage navigation", () => {
       });
       expect(mounted.querySelector("openclaw-config-page")).toBe(host);
       expect(host.isConnected).toBe(true);
-      expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
-        "Communications",
-      );
-      expect(host.querySelector("#config-section-tts")).not.toBeNull();
+      expect(Reflect.get(host, "pageId")).toBe("communications");
 
       releaseAdvanced.resolve(undefined);
       await navigation;
       await waitForSolid(() => {
+        expect(Reflect.get(host, "pageId")).toBe("advanced");
         expect(host.querySelector(".content-header--settings .page-title")?.textContent).toBe(
           "Advanced",
         );

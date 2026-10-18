@@ -50,8 +50,7 @@ export function createNodeWorkspaceTestTransport(
       params: request.params as Record<string, unknown>,
       pluginConfig: api.config.plugins!.entries!["file-transfer"]!.config,
     });
-    invokeNode.mockImplementation(async (options = {}) => {
-      const { params } = options;
+    invokeNode.mockImplementation(async ({ params } = {}) => {
       request.assertCurrent?.();
       signal.throwIfAborted();
       if (request.command === "workspace.memory" || request.command === "workspace.skills") {

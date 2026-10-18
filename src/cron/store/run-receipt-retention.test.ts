@@ -74,6 +74,7 @@ describe("pending cron receipt retention", () => {
         claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
+          resolveAgentId: (current) => current.agentId!,
         }),
       );
       history.push(receipt.receiptId);

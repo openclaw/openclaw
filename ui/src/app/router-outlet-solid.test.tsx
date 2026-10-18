@@ -45,7 +45,7 @@ it("preserves a routed page's focused draft through loader updates and retryable
         id: "page",
         path: "/page",
         component: () => ({ renderSolid: FirstPage }),
-        loader: (context) => {
+        loader: () => {
           loads += 1;
           return loads === 1
             ? "Initial"
@@ -53,7 +53,7 @@ it("preserves a routed page's focused draft through loader updates and retryable
               ? reload.promise
               : loads === 3
                 ? failingReload.promise
-                : `Recovered ${context.label}`;
+                : "Recovered";
         },
       }),
       definePage({
@@ -103,16 +103,9 @@ it("preserves a routed page's focused draft through loader updates and retryable
     expect(document.activeElement).toBe(input);
     expect(firstCleanup).not.toHaveBeenCalled();
 
-    const retry = outlet.querySelector<HTMLButtonElement>(".lazy-view-error__action")!;
-    retry.focus();
-    outlet.setInputs({ retryContext: { label: "retry" } });
-    await settleRouterOutlet(outlet);
-    expect(outlet.querySelector(".lazy-view-error__action")).toBe(retry);
-    expect(document.activeElement).toBe(retry);
-    expect(input.value).toBe("Unsaved notes");
-    retry.click();
+    outlet.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
     await waitForSolid(() =>
-      expect(outlet.querySelector("p")?.textContent).toBe("Recovered retry / ready"),
+      expect(outlet.querySelector("p")?.textContent).toBe("Recovered / ready"),
     );
     expect(outlet.querySelector("input")).toBe(input);
     expect(input.value).toBe("Unsaved notes");

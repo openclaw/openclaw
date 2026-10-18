@@ -30,6 +30,8 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { PageLayout } from "../page-layout.tsx";
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -121,7 +123,7 @@ function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
   );
 }
 
-export function ApprovalsPage() {
+function ApprovalsPageContent() {
   const context = useApplication();
   let disposed = false;
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
@@ -456,7 +458,7 @@ export function ApprovalsPage() {
     );
   }
   return (
-    <openclaw-approvals-page>
+    <>
       <SettingsPageHeader
         title={t("tabs.approvals")}
         subtitle={
@@ -604,6 +606,16 @@ export function ApprovalsPage() {
           ) : null}
         </SettingsPage>
       </SettingsWorkspace>
-    </openclaw-approvals-page>
+    </>
   );
 }
+
+export const ApprovalsPage = defineSolidBridge(
+  "openclaw-approvals-page",
+  (_props, host) => (
+    <PageLayout host={host}>
+      <ApprovalsPageContent />
+    </PageLayout>
+  ),
+  { properties: {} },
+);

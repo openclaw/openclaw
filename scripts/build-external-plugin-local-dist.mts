@@ -84,10 +84,9 @@ export async function buildExternalPluginLocalDist(
     }
     const target = `dist/extensions/${plan.pluginDir}`;
     const browserOutput = `${packageDir}/dist/control-ui`;
-    const browserManifest = `${packageDir}/dist/openclaw.plugin.json`;
-    // Browser dependencies are outside the backend graph. Their fresh declaration
-    // fingerprints complete browser bytes; cached backends must not replace it.
-    const earlyAssets = generatedAssets.includes(browserManifest);
+    // Manifest writers run before compilation. Their fresh manifest fingerprints
+    // browser dependencies; the runtime cache must not restore over that owner.
+    const earlyAssets = generatedAssets.includes(`${packageDir}/openclaw.plugin.json`);
     const sourceOutputs = earlyAssets
       ? []
       : generatedAssets.filter(
@@ -98,7 +97,6 @@ export async function buildExternalPluginLocalDist(
       cache: {
         inputs: [
           { path: packageDir, excludeDirectories: ["dist", "node_modules", ".artifacts", ".git"] },
-          ...(earlyAssets ? [browserManifest] : []),
           ...plan.bundledSdkSourceFiles,
         ],
         env: ["NODE_ENV", "SOURCE_DATE_EPOCH"],
@@ -182,7 +180,7 @@ export async function buildExternalPluginLocalDist(
     for (const entry of fs.readdirSync(result.outDir)) {
       // Source-discovered plugins serve these assets in place; plugins:assets:copy
       // also stages them at their manifest-relative path, without flattening dist/.
-      if (entry === "control-ui" || entry === "openclaw.plugin.json") {
+      if (entry === "control-ui") {
         continue;
       }
       const source = path.join(result.outDir, entry);

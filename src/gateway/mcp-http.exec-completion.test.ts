@@ -180,38 +180,12 @@ async function readToolSurface(context: PreparedCliRunContext, signal: AbortSign
 }
 
 it.for([
-  {
-    name: "unrestricted native tools",
-    toolsAllow: undefined,
-    sessionId: "exec-full",
-    terminal: "text",
-    expectedStatus: "completed",
-  },
-  {
-    name: "a finite caller cap",
-    toolsAllow: ["exec", "process", "session_status"],
-    sessionId: "exec-capped",
-    terminal: "text",
-    expectedStatus: "failed",
-  },
-  {
-    name: "an empty CLI final",
-    toolsAllow: undefined,
-    sessionId: "exec-empty",
-    terminal: "empty",
-    expectedStatus: "failed",
-  },
-  {
-    name: "a failed CLI final",
-    toolsAllow: undefined,
-    sessionId: "exec-failed",
-    terminal: "failed",
-    expectedStatus: "failed",
-  },
+  { name: "unrestricted native tools", toolsAllow: undefined },
+  { name: "a finite caller cap", toolsAllow: ["exec", "process", "session_status"] },
 ])(
   "retains the CLI surface and enforces completion effects with $name",
   async (source, { signal }) => {
-    const sessionId = source.sessionId;
+    const sessionId = source.toolsAllow ? "exec-capped" : "exec-full";
     const sessionKey = `agent:main:${sessionId}`;
     sessionKeys.push(sessionKey);
     const entry = {
@@ -315,10 +289,7 @@ it.for([
         } finally {
           launches.mockRestore();
         }
-        if (source.terminal === "failed") {
-          throw new Error("Synthetic CLI provider failure.");
-        }
-        return { text: source.terminal === "empty" ? "" : "Completion observed." };
+        return { text: "Completion observed." };
       });
     const receiptIndex = receipts.length;
     try {
@@ -336,18 +307,10 @@ it.for([
       await withinTest(waitForExecScope(sessionKey), signal);
       const receipt = expectDefined(receipts[receiptIndex], "background exec completion");
       await expect(withinTest(receipt.accepted, signal)).resolves.toEqual({ ok: true });
-      const outcome = await withinTest(receipt.settled, signal);
-      expect(outcome).toMatchObject({
-        status: source.expectedStatus,
+      await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
+        status: "completed",
         executionStarted: true,
       });
-      if (source.expectedStatus === "failed") {
-        expect(outcome.error).toBeTruthy();
-        expect(outcome).toMatchObject({ delivered: false, deliveryAttempted: false });
-      }
-      if (source.toolsAllow) {
-        expect(outcome.error).toContain("Session event permissions were restricted");
-      }
       expect(completionSurfaces).toEqual([normalSurface]);
     } finally {
       for (const receipt of receipts.slice(receiptIndex)) {

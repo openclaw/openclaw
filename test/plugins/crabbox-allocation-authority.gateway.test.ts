@@ -165,8 +165,6 @@ describe("Crabbox allocation through Gateway ownership", () => {
                     id,
                     state: "running",
                     ready: true,
-                    expiresAt: new Date(Date.now() + 4 * 60 * 60_000).toISOString(),
-                    leasePolicy: { maxTTLSeconds: 14_400 },
                     providerMetadata: { instanceProfileAttached: false },
                   }),
                 )

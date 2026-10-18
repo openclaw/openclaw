@@ -1,11 +1,11 @@
-import { createSignal, flush, Show } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControlUiEnvironment } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import type { SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import "./app-topbar-solid.tsx";
-import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime-solid.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
+import "./app-topbar.ts";
+import { MacosTitlebarControls } from "./macos-titlebar-controls.runtime.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 
 afterEach(() => {
   cleanupSolid();
@@ -16,7 +16,7 @@ describe("Solid shell chrome", () => {
   it("updates the topbar's environment and drawer state while retaining its action target", async () => {
     const [environment, setEnvironment] = createSignal<ControlUiEnvironment | null>(null);
     const [open, setOpen] = createSignal(false);
-    const [showNewSessionAction, setShowNewSessionAction] = createSignal(false);
+    const [newSessionAction, setNewSessionAction] = createSignal<unknown>(undefined);
     const toggle = vi.fn();
     const palette = vi.fn();
     const openSession = vi.fn();
@@ -24,17 +24,7 @@ describe("Solid shell chrome", () => {
       <openclaw-app-topbar
         prop:environment={environment()}
         prop:navDrawerOpen={open()}
-        prop:newSessionAction={() => (
-          <Show when={showNewSessionAction()}>
-            <NewSessionLink
-              basePath="/control"
-              agentId="writer"
-              class="header-new-session"
-              label="New conversation"
-              onOpen={openSession}
-            />
-          </Show>
-        )}
+        prop:newSessionAction={newSessionAction()}
         prop:resourceBasePath="/control"
         prop:onToggleDrawer={toggle}
         prop:onOpenPalette={palette}
@@ -57,7 +47,15 @@ describe("Solid shell chrome", () => {
     search.click();
     expect(palette).toHaveBeenCalledOnce();
 
-    setShowNewSessionAction(true);
+    setNewSessionAction(
+      renderNewSessionLink({
+        basePath: "/control",
+        agentId: "writer",
+        className: "header-new-session",
+        label: "New conversation",
+        onOpen: openSession,
+      }),
+    );
     flush();
     await topbar.updateComplete;
     const newSession = view.container.querySelector<HTMLAnchorElement>(
@@ -66,14 +64,8 @@ describe("Solid shell chrome", () => {
     expect(newSession.getAttribute("href")).toBe("/control/new?agent=writer");
     newSession.click();
     expect(openSession).toHaveBeenCalledWith("writer", undefined);
-    newSession.focus();
-    setEnvironment({ label: "edge", color: "amber" });
-    flush();
-    await topbar.updateComplete;
-    expect(view.container.querySelector(".header-new-session")).toBe(newSession);
-    expect(document.activeElement).toBe(newSession);
 
-    setShowNewSessionAction(false);
+    setNewSessionAction(undefined);
     flush();
     await topbar.updateComplete;
     expect(view.container.querySelector(".header-new-session")).toBeNull();

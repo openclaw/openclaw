@@ -1,10 +1,9 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Match, Switch } from "solid-js";
-import { providerIdFromModelRef } from "../../components/provider-icon-data.ts";
+import { renderProviderBrandIcon, providerIdFromModelRef } from "../../components/provider-icon.ts";
 import "../../components/select-picker.ts";
 import type { PickerParams } from "../../components/select-picker.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {
   LearnMoreLink,
   SettingsDefaultDescription,
@@ -153,6 +152,10 @@ function parseDreamingNumber(raw: string, bounds: DreamingNumberBounds): number 
   return bounds.max !== undefined && parsed > bounds.max ? null : parsed;
 }
 
+function renderField(props: DreamingSettingsProps, spec: DreamingFieldSpec) {
+  return <DreamingField settings={props} spec={spec} />;
+}
+
 function DreamingField(props: { settings: DreamingSettingsProps; spec: DreamingFieldSpec }) {
   const field = () => fieldAtPath(props.settings.dreaming, props.spec.path);
   const defaultValue = () => {
@@ -299,10 +302,11 @@ function DreamingModelPicker(props: DreamingModelPickerProps) {
     searchable: true,
     showOptionTooltips: false,
     className: "model-picker__select ",
+    // The retained picker owns and renders its Lit option adornments.
     renderLeading: (option) =>
-      option.provider ? (
-        <ProviderBrandIcon provider={option.provider} class="model-picker__provider-icon" />
-      ) : undefined,
+      option.provider
+        ? renderProviderBrandIcon(option.provider, { className: "model-picker__provider-icon" })
+        : undefined,
     onChange: props.onChange,
     onChangeTarget: (value) => {
       if (value === customValue()) {
@@ -384,17 +388,14 @@ function DreamingSettings(props: DreamingSettingsProps): JSX.Element {
               />
             }
           />
-          <DreamingField
-            settings={props}
-            spec={{
-              kind: "toggle",
-              path: ["storage", "separateReports"],
-              labelKey: "memoryPage.dreaming.storage.separateReportsLabel",
-              helpKey: "memoryPage.dreaming.storage.separateReportsHelp",
-              // DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS
-              fallback: false,
-            }}
-          />
+          {renderField(props, {
+            kind: "toggle",
+            path: ["storage", "separateReports"],
+            labelKey: "memoryPage.dreaming.storage.separateReportsLabel",
+            helpKey: "memoryPage.dreaming.storage.separateReportsHelp",
+            // DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS
+            fallback: false,
+          })}
         </>
       </SettingsSection>
       <For each={Object.entries(DREAMING_PHASE_NUMBERS)} keyed={(entry) => entry[0]}>

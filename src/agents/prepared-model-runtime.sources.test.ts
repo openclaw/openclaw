@@ -358,6 +358,7 @@ describe("prepared catalog source composition", () => {
       undefined,
       { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
       createPreparedModelCatalogProviderNormalizer(pluginMetadataSnapshot, facts.input.config),
+      new Map(),
     );
 
     expect(catalog.entries.map(({ provider, id }) => `${provider}/${id}`).toSorted()).toEqual([

@@ -20,9 +20,11 @@ import {
   emitCodexNativePreToolUseFailureDiagnostic,
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
+import { isCodexNotificationForTurn } from "./notification-correlation.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexPreparedServerNotification,
+  type CodexServerNotification,
   type CodexThreadItem,
   type JsonObject,
   type JsonValue,
@@ -168,9 +170,9 @@ export class CodexNativeToolLifecycleProjector {
     };
   }
 
-  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
+    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     // The route's receipt hook precedes its FIFO projection queue. Refuse stale
@@ -179,15 +181,15 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      notification.completedTurn?.id === this.turnId
+      readCodexTurnCompletedNotification(params)?.turn.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
   }
 
-  handleNotification(notification: CodexPreparedServerNotification): void {
+  handleNotification(notification: CodexServerNotification): void {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
+    if (!params || !isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (
@@ -197,7 +199,7 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = notification.completedTurn;
+      const turn = readCodexTurnCompletedNotification(params)?.turn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }

@@ -1,12 +1,12 @@
 import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { stripUndefinedFields } from "../internal/undefined-fields.js";
 import { getDiscordRuntime } from "../runtime.js";
 import {
   BINDINGS_BY_THREAD_ID,
   PERSIST_BY_ACCOUNT_ID,
   THREAD_BINDINGS_STATE,
+  normalizePersistedBinding,
   openThreadBindingsStore,
   openThreadBindingsStoreAsync,
   removeBindingRecord,
@@ -28,7 +28,15 @@ function snapshotThreadBindingJson(value: unknown): unknown {
 }
 
 export function snapshotThreadBindingMetadata(input: { metadata?: Record<string, unknown> }) {
-  return asOptionalObjectRecord(snapshotThreadBindingJson(input.metadata));
+  return asOptionalObjectRecord(
+    snapshotThreadBindingJson(input.metadata ? { ...input.metadata } : undefined),
+  );
+}
+
+function toPersistedBindingRecord(record: ThreadBindingRecord): ThreadBindingRecord {
+  return (
+    normalizePersistedBinding(record.threadId, snapshotThreadBindingJson(record)) ?? { ...record }
+  );
 }
 
 export function runThreadBindingAccountOperation<T>(
@@ -118,7 +126,8 @@ export async function commitBindingRecord(params: {
       // Preserve the namespace's registration order and bounded eviction recency.
       for (const [key, record] of records) {
         assertCurrent();
-        await store.register(key, stripUndefinedFields(record), { assertCurrent });
+        const persisted = toPersistedBindingRecord(record);
+        await store.register(key, persisted, { assertCurrent });
         committedWrites += 1;
         targetCommitted ||= key === params.bindingKey;
       }
@@ -196,13 +205,13 @@ function persistBindingsSync(update?: {
         throw new Error("Discord synchronous compatibility requires atomic state update");
       }
       const next = update.transform(record);
-      store.update(key, () => stripUndefinedFields(next));
+      store.update(key, () => toPersistedBindingRecord(next));
       updatedRecord = next;
       if (next !== record) {
         setBindingRecord(next);
       }
     } else {
-      store.register(key, stripUndefinedFields(record));
+      store.register(key, toPersistedBindingRecord(record));
     }
   }
   for (const entry of store.entries()) {

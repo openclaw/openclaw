@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import {
+  hasOnlyAssistantReasoningContent,
   isReasoningOnlyLengthAssistantTurn,
   isStreamErrorFallbackContent,
 } from "@openclaw/ai/internal/shared";
@@ -13,6 +14,7 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -24,7 +26,6 @@ import {
   normalizeInputProvenance,
 } from "../../sessions/input-provenance.js";
 import { hasPersistedMedia } from "../../sessions/user-turn-media.js";
-import { isSilentAssistantTranscriptMessage } from "../../shared/chat-message-content.js";
 import {
   isTranscriptOnlyOpenClawAssistantMessage,
   OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
@@ -208,6 +209,7 @@ function normalizeAssistantReplayBlockContent(
   replayContent: unknown[],
 ): AssistantReplayMessage | null {
   let touched = false;
+  let removedSilentText = false;
   const sanitizedContent: unknown[] = [];
   for (const block of replayContent) {
     const record = asOptionalRecord(block);
@@ -223,14 +225,17 @@ function normalizeAssistantReplayBlockContent(
     }
     const strippedText = stripInternalMetadataForDisplay(text);
     const trimmed = strippedText.trim();
-    if (strippedText === text) {
+    const isSilentText =
+      trimmed.length > 0 && isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN);
+    if (strippedText === text && !isSilentText) {
       sanitizedContent.push(block);
       continue;
     }
     touched = true;
-    if (trimmed) {
+    if (trimmed && !isSilentText) {
       sanitizedContent.push({ ...record, text: strippedText });
     }
+    removedSilentText ||= isSilentText;
   }
   const spoken = message.openclawDelivery?.tts?.text;
   if (
@@ -257,7 +262,9 @@ function normalizeAssistantReplayBlockContent(
     message,
     sanitizedContent as AssistantReplayMessage["content"],
   );
-  return normalized;
+  // A silent reply has no visible assistant output. Do not let its signed
+  // reasoning merge into the next assistant turn during strict replay.
+  return removedSilentText && hasOnlyAssistantReasoningContent(normalized) ? null : normalized;
 }
 
 function isBareDeliveryMirrorDuplicate(out: AgentMessage[], next: AssistantReplayMessage): boolean {
@@ -315,14 +322,10 @@ function normalizeAssistantReplayMessage(
     return null;
   }
   const replayContent = (message as { content?: unknown }).content;
-  // Hidden transcript rows still belong to model context, including tool-call/result pairs.
-  if (asOptionalRecord(message)?.display !== false && isSilentAssistantTranscriptMessage(message)) {
-    return null;
-  }
   if (typeof replayContent === "string") {
     const strippedText = stripInternalMetadataForDisplay(replayContent);
     const trimmed = strippedText.trim();
-    return !trimmed
+    return !trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)
       ? null
       : replaceCompactionReplayOwnerContent(message, [{ type: "text", text: strippedText }]);
   }

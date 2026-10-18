@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ControlUiSessionPullRequest,
@@ -9,19 +10,14 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
-import {
-  paintChatPullRequests,
-  clearChatPullRequests,
-  publication,
-  sessionBranch,
-} from "./chat-pull-requests.test-support.ts";
+import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
 import {
   chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
+  renderChatPullRequests,
 } from "./chat-pull-requests.ts";
-import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
 
 function pullRequest(
   overrides: Partial<ControlUiSessionPullRequest> = {},
@@ -42,17 +38,17 @@ function pullRequest(
   };
 }
 
-describe("ChatPullRequests", () => {
+describe("renderChatPullRequests", () => {
   let container: HTMLDivElement;
 
-  function paint(props: Partial<ChatPullRequestsProps>) {
-    paintChatPullRequests(
-      {
+  function paint(props: Partial<Parameters<typeof renderChatPullRequests>[0]>) {
+    render(
+      renderChatPullRequests({
         pullRequests: [],
         status: "ready",
         onDismiss: () => {},
         ...props,
-      },
+      }),
       container,
     );
   }
@@ -63,19 +59,18 @@ describe("ChatPullRequests", () => {
   });
 
   afterEach(() => {
-    clearChatPullRequests(container);
     container.remove();
   });
 
   it("does not call account discovery Publishing before any publication is admitted", () => {
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [],
         branch: sessionBranch(),
         status: "ready",
         onDismiss: () => {},
         publication: publication({ activity: "read", selection: null }),
-      },
+      }),
       container,
     );
     expect(container.textContent).not.toContain("Publishing");
@@ -83,27 +78,25 @@ describe("ChatPullRequests", () => {
   });
 
   it("marks retained merged PR status unavailable without pretending it is rate limited", () => {
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [pullRequest({ state: "merged" })],
         status: "unavailable",
         onDismiss: () => {},
-      },
+      }),
       container,
     );
     const warning = container.querySelector(".chat-pr__warning");
     expect(warning?.getAttribute("aria-label")).toContain("could not be refreshed");
     expect(warning?.getAttribute("aria-label")).not.toContain("rate limit");
-    expect(container.querySelector(".chat-pr__number")?.textContent).toBe(
-      "openclaw/openclaw#103469",
-    );
+    expect(container.querySelector(".chat-pr__number")?.textContent).toBe("#103469");
   });
 
   it("renders merged PRs without a redundant completed publication card", () => {
     const onDismiss = vi.fn();
     const onNewAction = vi.fn();
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [
           pullRequest({
             state: "merged",
@@ -128,7 +121,7 @@ describe("ChatPullRequests", () => {
           },
           onNewAction,
         }),
-      },
+      }),
       container,
     );
     const chip = container.querySelector(".chat-pr");
@@ -152,14 +145,14 @@ describe("ChatPullRequests", () => {
 
   it("shows unpublished changes on the same branch instead of merged PR history", () => {
     const branch = pullRequest().branch;
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [pullRequest({ state: "merged" })],
         branch: sessionBranch({ branch }),
         status: "ready",
         onDismiss: () => {},
         publication: publication(),
-      },
+      }),
       container,
     );
     expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
@@ -257,8 +250,8 @@ describe("ChatPullRequests", () => {
   it("keeps the current PR and CI visible when an older receipt falls out of the PR snapshot", () => {
     const onNewAction = vi.fn();
     const onDismiss = vi.fn();
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "ready",
         onDismiss,
@@ -273,13 +266,11 @@ describe("ChatPullRequests", () => {
           },
           onNewAction,
         }),
-      },
+      }),
       container,
     );
     expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
-    expect(container.querySelector(".chat-pr__number")?.textContent).toBe(
-      "openclaw/openclaw#103469",
-    );
+    expect(container.querySelector(".chat-pr__number")?.textContent).toBe("#103469");
     expect(container.querySelector(".chat-pr__checks")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
     expect(onNewAction).toHaveBeenCalledOnce();
@@ -288,8 +279,8 @@ describe("ChatPullRequests", () => {
 
   it("keeps publication recovery separate and expanded after publication completed", () => {
     const onRefresh = vi.fn();
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         pullRequests: [pullRequest()],
         status: "ready",
         onDismiss: () => {},
@@ -306,7 +297,7 @@ describe("ChatPullRequests", () => {
             headCommit: "a".repeat(40),
           },
         }),
-      },
+      }),
       container,
     );
     expect(container.querySelectorAll(".chat-pr")).toHaveLength(1);
@@ -364,7 +355,7 @@ describe("ChatPullRequests", () => {
 
   it("shows Gateway publication request and terminal URL states", () => {
     const onPublish = vi.fn();
-    const props: ChatPullRequestsProps = {
+    const props: Parameters<typeof renderChatPullRequests>[0] = {
       pullRequests: [],
       branch: sessionBranch(),
       status: "ready",
@@ -453,7 +444,6 @@ describe("branch row dismissal", () => {
   });
 
   afterEach(() => {
-    clearChatPullRequests(container);
     container.remove();
   });
 
@@ -475,11 +465,11 @@ describe("branch row dismissal", () => {
         },
       }),
     };
-    paintChatPullRequests(props, container);
+    render(renderChatPullRequests(props), container);
     container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
     expect(onDismissBranch).toHaveBeenCalledWith(sessionBranch());
 
-    paintChatPullRequests({ ...props, branchDismissed: true }, container);
+    render(renderChatPullRequests({ ...props, branchDismissed: true }), container);
     expect(container.querySelector(".chat-pr")).toBeNull();
   });
 });
@@ -621,7 +611,7 @@ describe("CI job details", () => {
       status: "ready" as const,
       onDismiss() {},
     };
-    paintChatPullRequests(props, container);
+    render(renderChatPullRequests(props), container);
     const element = container.querySelector<ChatCiDetailsElement>("openclaw-chat-ci-details")!;
     const disclosure = container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
     return {
@@ -651,7 +641,6 @@ describe("CI job details", () => {
   });
 
   afterEach(() => {
-    clearChatPullRequests(container);
     container.remove();
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -730,8 +719,8 @@ describe("CI job details", () => {
     h.disclosure.open = true;
     await settle(h.element);
     expect(h.request).toHaveBeenCalledTimes(1);
-    paintChatPullRequests(
-      {
+    render(
+      renderChatPullRequests({
         ...h.props,
         pullRequests: [
           pullRequest({
@@ -739,7 +728,7 @@ describe("CI job details", () => {
             checks: { state: "pending", passed: 0, failed: 0, skipped: 0, running: 1 },
           }),
         ],
-      },
+      }),
       container,
     );
     await settle(h.element);
@@ -778,7 +767,7 @@ describe("CI job details", () => {
     await settle(h.element);
     h.disclosure.open = true;
     await settle(h.element);
-    paintChatPullRequests({ ...h.props, sessionKey: "agent:other:main" }, container);
+    render(renderChatPullRequests({ ...h.props, sessionKey: "agent:other:main" }), container);
     await settle(h.element);
     pending.resolve(details());
     await settle(h.element);

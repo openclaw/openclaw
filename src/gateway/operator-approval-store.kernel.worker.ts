@@ -10,7 +10,6 @@ import {
 // Approval creation and bounded query transactions, executed in workers.
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../infra/sqlite-schema-ensure.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
@@ -308,7 +307,7 @@ export function readPendingOperatorApprovalsInDatabase(
   return { records, corrupt };
 }
 
-function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
+export function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection): boolean {
   return (
     executeSqliteQueryTakeFirstSync(
       db,
@@ -320,18 +319,6 @@ function hasDueOperatorApprovalsInDatabase(nowMs: number, db: EngineConnection):
         .limit(1),
     ) !== undefined
   );
-}
-
-export function readOperatorApprovalReplayInDatabase(
-  params: PendingApprovalInput & { nowMs: number },
-  db: EngineConnection,
-) {
-  return runSqliteDeferredTransactionSync(db, () => {
-    if (hasDueOperatorApprovalsInDatabase(params.nowMs, db)) {
-      return { outcome: "expiry-required" as const };
-    }
-    return { outcome: "pending" as const, ...readPendingOperatorApprovalsInDatabase(params, db) };
-  });
 }
 
 export function listPendingOperatorApprovalsInDatabase(

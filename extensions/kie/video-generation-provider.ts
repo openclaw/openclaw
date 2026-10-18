@@ -5,10 +5,12 @@ import {
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   createProviderOperationTimeoutResolver,
   pollProviderOperationJson,
-  postJsonResponse,
+  postJsonRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -177,21 +179,23 @@ export function buildKieVideoGenerationProvider(): VideoGenerationProvider {
         transport: "http",
       });
       const post = async (url: string, body: Record<string, unknown>, policy: typeof http) => {
-        return readKieData(
-          await postJsonResponse({
-            url,
-            body,
-            headers: policy.headers,
-            timeoutMs: timeoutMs(),
-            fetchFn: fetch,
-            allowPrivateNetwork: policy.allowPrivateNetwork,
-            dispatcherPolicy: policy.dispatcherPolicy,
-            errorLabel: "Kie AI request failed",
-            responseLabel: "Kie AI response",
-            readOptions: { timeoutMs },
-            objectResponse: true,
-          }),
-        );
+        const { response, release } = await postJsonRequest({
+          url,
+          body,
+          headers: policy.headers,
+          timeoutMs: timeoutMs(),
+          fetchFn: fetch,
+          allowPrivateNetwork: policy.allowPrivateNetwork,
+          dispatcherPolicy: policy.dispatcherPolicy,
+        });
+        try {
+          await assertOkOrThrowHttpError(response, "Kie AI request failed");
+          return readKieData(
+            await readProviderJsonObjectResponse(response, "Kie AI response", { timeoutMs }),
+          );
+        } finally {
+          await release();
+        }
       };
       if (image && imageField) {
         let url = imageUrl;

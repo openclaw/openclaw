@@ -8,7 +8,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { requireGit } from "./git.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { isWorktreeRepositoryCorruptionError } from "./removal-errors.js";
-import { resolveRepository } from "./repository-paths.js";
+import { resolveRepository } from "./service-preparation.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -164,8 +164,8 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   }
 });
 
-it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"] as const)(
-  "consolidates healthy pack batches independently of missing snapshot objects (%s)",
+it.each(["promised", "promised-retry", "unpromised", "checksum"] as const)(
+  "maintains deferred partial-clone packs only when missing objects are promised (%s)",
   async (damage) => {
     const root = tempDirs.make("worktree-partial-clone-deferral-");
     const source = await initializeRepository(root);
@@ -208,7 +208,6 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
     }
     const directory = path.join(repo, ".git", "objects", "pack");
     const objects: string[] = [];
-    const payloadPacks: string[] = [];
     for (let index = 0; index < 16; index++) {
       const object = await requireGit(repo, ["hash-object", "-w", "--stdin"], {
         input: `partial-payload-${index}`,
@@ -217,12 +216,14 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
       const hash = await requireGit(repo, ["pack-objects", path.join(directory, "pack")], {
         input: `${object}\n`,
       });
-      payloadPacks.push(path.join(directory, `pack-${hash}.pack`));
       await fs.writeFile(path.join(directory, `pack-${hash}.promisor`), "");
     }
     await requireGit(repo, ["prune-packed"]);
     if (damage === "checksum") {
-      const pack = payloadPacks[0]!;
+      const pack = path.join(
+        directory,
+        (await fs.readdir(directory)).find((name) => name.endsWith(".pack"))!,
+      );
       const bytes = await fs.readFile(pack);
       bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 1, bytes.length - 1);
       await fs.chmod(pack, 0o600);
@@ -241,22 +242,6 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
       await requireGit(source, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
     }
     const before = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
-    if (damage === "byte-limited") {
-      // Exercise the 512-MiB budget with native tiny packs, without writing 640 MiB in a test.
-      const realStat = fs.stat.bind(fs);
-      vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
-        const stat = await realStat(...args);
-        if (
-          stat &&
-          path.dirname(String(args[0])) === directory &&
-          String(args[0]).endsWith(".pack")
-        ) {
-          stat.size = 40 * 1024 * 1024;
-        }
-        return stat;
-      });
-    }
-    const expectedPacks = damage === "byte-limited" ? before.length - 11 : 1;
     const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
     expect(missing).toContain("?");
     await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable.git")]);
@@ -270,23 +255,17 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
       });
       const result = await service.gc({ retryDeferred: damage === "promised-retry" });
       expect(result.removed).toEqual([]);
-      expect(result.failedCount).toBe(damage === "checksum" || damage === "promised-retry" ? 2 : 1);
+      expect(result.failedCount).toBe(1);
       expect(result.deferredCount).toBe(1);
       const after = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
-      expect(after.length).toBe(damage === "checksum" ? before.length : expectedPacks);
-      expect(result.gitMaintenance).toMatchObject({
-        repoRoot: repo,
-        stage: damage === "checksum" || damage === "promised-retry" ? "suspended" : "completed",
-        packsBefore: before.length,
-        ...(damage === "checksum" ? {} : { packsAfter: expectedPacks }),
-      });
+      expect(after.length).toBe(damage.startsWith("promised") ? 1 : before.length);
       for (const record of records) {
         expect(await fs.readFile(path.join(record.path, "missing.txt"), "utf8")).toBe(
           "omitted blob\n",
         );
         expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
       }
-      if (damage !== "checksum") {
+      if (damage.startsWith("promised")) {
         expect(await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"])).toBe(
           missing,
         );
@@ -297,7 +276,6 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
         ).not.toContain("missing");
         await requireGit(repo, ["multi-pack-index", "verify"]);
       }
-      expect(await fs.readFile(trace, "utf8")).not.toContain('"fsck"');
       if (damage !== "promised-retry") {
         expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
       }

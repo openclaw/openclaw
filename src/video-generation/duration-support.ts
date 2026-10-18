@@ -1,6 +1,4 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { positiveDurationError } from "../shared/positive-duration.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { VideoGenerationProvider } from "./types.js";
 
@@ -42,13 +40,10 @@ export function normalizeVideoGenerationDuration(params: {
   inputImageCount?: number;
   inputVideoCount?: number;
 }): number | undefined {
-  if (params.durationSeconds === undefined) {
+  if (typeof params.durationSeconds !== "number" || !Number.isFinite(params.durationSeconds)) {
     return undefined;
   }
-  const rounded = parseStrictPositiveInteger(Math.round(params.durationSeconds));
-  if (rounded === undefined) {
-    throw positiveDurationError("durationSeconds", "s");
-  }
+  const rounded = Math.max(1, Math.round(params.durationSeconds));
   const supported = resolveVideoGenerationSupportedDurations(params);
   if (!supported || supported.length === 0) {
     return rounded;

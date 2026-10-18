@@ -65,7 +65,6 @@ export {
   normalizeModelSelection,
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
-  resolveConfiguredRouteModelLabel,
   resolveHooksGmailModel,
   resolveModelRefFromString,
 } from "./model-selection-shared.js";

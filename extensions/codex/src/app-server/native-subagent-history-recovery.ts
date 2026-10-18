@@ -4,7 +4,6 @@ import {
   readStringField as readString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  findCodexNativeSuccessorTurn,
   normalizeIdentifier,
   readThreadParentThreadId,
   readThreadSpawnSource,
@@ -67,12 +66,14 @@ export class CodexNativeSubagentHistoryRecovery {
     const rawTurns = Array.isArray(thread.turns) ? thread.turns : [];
     if (options.predecessorNativeTurnId) {
       const turns = rawTurns.filter(isJsonObject);
+      const predecessor = turns.findIndex(
+        (turn) => readString(turn, "id") === options.predecessorNativeTurnId,
+      );
+      const target = turns.findIndex((turn) => readString(turn, "id") === assignment.nativeTurnId);
       if (
-        !findCodexNativeSuccessorTurn(
-          turns,
-          options.predecessorNativeTurnId,
-          assignment.nativeTurnId,
-        )
+        predecessor < 0 ||
+        target <= predecessor ||
+        !["completed", "failed"].includes(readString(turns[predecessor], "status") ?? "")
       ) {
         return { resumable: false, threadState: "unavailable", observedPendingTurns: [] };
       }

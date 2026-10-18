@@ -1,16 +1,18 @@
-import { createComponent, createSignal, merge, onCleanup } from "solid-js";
+import { nothing, render } from "lit";
+import { createComponent, onCleanup } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
-import { ControllerHost } from "../../lib/subscriptions-controller.ts";
+import { ControllerHost } from "../../lit/subscriptions-controller.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import { renderChatQueue } from "./chat-composer-queue.test-support.ts";
 import { renderChatQueueSolid } from "./components/chat-composer-queue.tsx";
 import { createSolidRenderLifecycle } from "./solid-render-lifecycle.ts";
 import baseStyles from "../../styles/base.css?inline";
@@ -23,8 +25,6 @@ describe("composer queue", () => {
   let container: HTMLDivElement;
   let styles: HTMLStyleElement;
   let attachments: ChatAttachment[];
-  let view: ReturnType<typeof mountSolid> | undefined;
-  let updateQueue: ((props: Parameters<typeof renderChatQueueSolid>[0]) => void) | undefined;
 
   beforeEach(() => {
     styles = document.createElement("style");
@@ -42,9 +42,7 @@ describe("composer queue", () => {
   });
 
   afterEach(() => {
-    view?.unmount();
-    view = undefined;
-    updateQueue = undefined;
+    render(nothing, container);
     container.remove();
     styles.remove();
     releaseChatAttachmentPayloads(attachments);
@@ -53,19 +51,14 @@ describe("composer queue", () => {
   });
 
   function draw(queue: ChatQueueItem[], editingId?: string) {
-    const props: Parameters<typeof renderChatQueueSolid>[0] = {
-      queue,
-      queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
-      onQueueRemove: vi.fn(),
-    };
-    if (updateQueue) {
-      updateQueue(props);
-    } else {
-      const [current, setCurrent] = createSignal(props);
-      updateQueue = setCurrent;
-      view = mountSolid(() => createComponent(renderChatQueueSolid, merge(current)), { container });
-    }
-    flush();
+    render(
+      renderChatQueue({
+        queue,
+        queuedEdit: { editingId: editingId ?? null, onCancel: vi.fn(), onEdit: vi.fn() },
+        onQueueRemove: vi.fn(),
+      }),
+      container,
+    );
   }
 
   it.each([
@@ -86,7 +79,7 @@ describe("composer queue", () => {
       host.requestUpdate();
     });
     const onQueueRemove = vi.fn();
-    view = mountSolid(
+    mountSolid(
       () => {
         const lifecycle = createSolidRenderLifecycle({
           host,

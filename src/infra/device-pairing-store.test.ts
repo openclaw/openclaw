@@ -9,8 +9,7 @@ import {
   loadDevicePairingStoreState,
   loadPairedDevicePairingStoreRecordFromDatabase,
   persistDevicePairingStoreState,
-  readDevicePairingStoreStateFromDatabase,
-  readPairedDevicePairingSnapshotFromDatabase,
+  readPairedDevicePairingRecordsFromDatabase,
   updatePairedDeviceInTransaction,
   withDevicePairingStoreDatabase,
   type DevicePairingStoreState,
@@ -51,7 +50,7 @@ test("invalidates retained pairing rows after a worker commit without freshness 
     (sql) =>
       /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql)
         ? "freshness"
-        : /\b(?:from|join) "device_pairing_paired"/iu.test(sql)
+        : /\bfrom "device_pairing_paired"/iu.test(sql)
           ? "paired"
           : null,
   );
@@ -60,7 +59,6 @@ test("invalidates retained pairing rows after a worker commit without freshness 
       type: "devicePairing.lookup",
       deviceId: "node",
     });
-  const initialRevision = read().revision;
   try {
     runSqliteReadOperationSync(database.db, () => {
       expect(read()).toMatchObject({ device: { publicKey: "synthetic-key" } });
@@ -72,66 +70,12 @@ test("invalidates retained pairing rows after a worker commit without freshness 
       await updatePairedDeviceMetadata("node", { displayName: "Worker update" }, baseDir),
     ).toBe(true);
     expect(read()).toMatchObject({ device: { displayName: "Worker update" } });
-    expect(BigInt(read().revision)).toBe(BigInt(initialRevision) + 1n);
     expect(reads.counts).toEqual({ freshness: 0, paired: 1 });
 
     runSqliteReadOperationSync(database.db, () => {
       expect(read()).toMatchObject({ device: { displayName: "Worker update" } });
     });
     expect(reads.counts).toEqual({ freshness: 0, paired: 1 });
-  } finally {
-    reads.restore();
-  }
-});
-
-test("exact pairing reads materialize only their device and never satisfy a full list", () => {
-  const sibling = { ...initial.pairedByDeviceId.node!, deviceId: "sibling", approvedAtMs: 2 };
-  const pending = {
-    requestId: "pending",
-    deviceId: "pending-node",
-    publicKey: "synthetic-pending-key",
-    ts: 1,
-  };
-  const state = {
-    pairedByDeviceId: { ...initial.pairedByDeviceId, sibling },
-    pendingById: { pending },
-  };
-  persistDevicePairingStoreState(state, baseDir, "both");
-  const reads = trackSqliteStatementExecutions(
-    requireNativeSqliteDatabase(database.db),
-    ["paired", "pending"],
-    (sql) =>
-      /\b(?:from|join) "device_pairing_paired"/iu.test(sql)
-        ? "paired"
-        : /\bfrom "device_pairing_pending"/iu.test(sql)
-          ? "pending"
-          : null,
-  );
-  const lookup = (deviceId: string) =>
-    executeDevicePairingRead(database.db, database.path, {
-      type: "devicePairing.lookup",
-      deviceId,
-    });
-  try {
-    const revision = lookup("node").revision;
-    expect(lookup("node")).toMatchObject({ device: initial.pairedByDeviceId.node, revision });
-    expect(reads.rowCounts).toEqual({ paired: 1, pending: 0 });
-    expect(lookup("sibling")).toMatchObject({ device: sibling, revision });
-    expect(lookup("missing")).toMatchObject({ device: null, revision });
-    expect(reads.rowCounts).toEqual({ paired: 3, pending: 0 });
-    expect(reads.counts).toEqual({ paired: 3, pending: 0 });
-    expect(
-      executeDevicePairingRead(database.db, database.path, {
-        type: "devicePairing.list",
-        nowMs: 1,
-      }),
-    ).toMatchObject({
-      list: { paired: [sibling, initial.pairedByDeviceId.node], pending: [pending] },
-      revision,
-    });
-    expect(reads.rowCounts).toEqual({ paired: 5, pending: 1 });
-    persistDevicePairingStoreState({ ...state, pendingById: {} }, baseDir, "pending");
-    expect(lookup("node").revision).toBe(revision);
   } finally {
     reads.restore();
   }
@@ -163,7 +107,7 @@ test.each(["cleanup failure", "module copy", "reopened connection"])(
         env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
       });
       expect(reopened.db === database.db).toBe(false);
-      persistDevicePairingStoreState(empty, baseDir, "paired");
+      reopened.db.prepare("DELETE FROM device_pairing_paired").run();
     }
     expect(loadDevicePairingStoreState(baseDir).pairedByDeviceId).toEqual({});
   },
@@ -172,7 +116,6 @@ test.each(["cleanup failure", "module copy", "reopened connection"])(
 test.each([false, true])(
   "keeps transaction-local pairing reads out of the cache (rollback=%s)",
   (rollback) => {
-    const beforeRevision = readPairedDevicePairingSnapshotFromDatabase(database.db).revision;
     const operate = () =>
       stateDb.runOpenClawStateWriteTransaction(
         () => {
@@ -182,9 +125,6 @@ test.each([false, true])(
             "paired",
           );
           expect(loadDevicePairingStoreState(baseDir).pairedByDeviceId).toEqual({});
-          expect(BigInt(readPairedDevicePairingSnapshotFromDatabase(database.db).revision)).toBe(
-            BigInt(beforeRevision) + 1n,
-          );
           if (rollback) {
             throw new Error("rollback pairing");
           }
@@ -199,9 +139,6 @@ test.each([false, true])(
     expect(loadDevicePairingStoreState(baseDir).pairedByDeviceId).toEqual(
       rollback ? initial.pairedByDeviceId : {},
     );
-    expect(BigInt(readPairedDevicePairingSnapshotFromDatabase(database.db).revision)).toBe(
-      BigInt(beforeRevision) + (rollback ? 0n : 1n),
-    );
   },
 );
 
@@ -211,8 +148,7 @@ test.each([false, true])(
     const reads = trackSqliteStatementExecutions(
       requireNativeSqliteDatabase(database.db),
       ["paired"],
-      (sql) =>
-        /^\s*select\b.*\b(?:from|join) "device_pairing_paired"/iu.test(sql) ? "paired" : null,
+      (sql) => (/^\s*select\b.*\bfrom "device_pairing_paired"/iu.test(sql) ? "paired" : null),
     );
     const env = { ...process.env, OPENCLAW_STATE_DIR: baseDir };
     const expected = {
@@ -242,7 +178,7 @@ test.each([false, true])(
       runWithSqliteWorkerStateContext({ environment: env }, () =>
         stateDb.runOpenClawStateWriteTransaction(
           () => {
-            const paired = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
+            const paired = readPairedDevicePairingRecordsFromDatabase(database.db);
             return withDevicePairingStoreDatabase(
               database,
               () => {
@@ -266,9 +202,7 @@ test.each([false, true])(
                 expect(loadPairedDevicePairingStoreRecordFromDatabase(database.db, "node")).toEqual(
                   expected.node,
                 );
-                expect(
-                  readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId,
-                ).toEqual(expected);
+                expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(expected);
                 expect(
                   loadPairedDevicePairingStoreRecordFromDatabase(database.db, "constructor"),
                 ).toBeNull();
@@ -292,7 +226,7 @@ test.each([false, true])(
       } else {
         operate();
       }
-      expect(readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId).toEqual(
+      expect(readPairedDevicePairingRecordsFromDatabase(database.db)).toEqual(
         rollback ? initial.pairedByDeviceId : expected,
       );
     } finally {

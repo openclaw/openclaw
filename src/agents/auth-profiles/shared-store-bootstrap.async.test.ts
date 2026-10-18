@@ -5,6 +5,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { readConfigMachineState } from "../../state/config-machine-state.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
@@ -50,16 +51,21 @@ function interceptBootstrap(intercept: <T>(execute: () => Promise<T>) => Promise
   );
 }
 
-it.each(["missing", "credentials"] as const)(
+it.each(["missing", "empty", "credentials", "owned"] as const)(
   "prepares the %s legacy auth source without caller-thread SQL",
   async (source) => {
     await withOpenClawTestState({ scenario: "minimal" }, async ({ env, stateDir }) => {
       const sourcePath = resolveAuthProfileDatabasePath(resolveSharedMainAuthAgentDir(env));
-      if (source === "credentials") {
+      if (source === "empty" || source === "credentials") {
         const database = openOpenClawAgentDatabase({ agentId: "main", path: sourcePath, env });
-        writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+        if (source === "credentials") {
+          writeAuthProfileJsonCell(database.db, "store", "agent", { version: 1, profiles: {} });
+        }
       }
       await prepareActor(env);
+      if (source === "owned") {
+        writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
+      }
       const sql = observeHostDataSql();
       try {
         expect(
@@ -105,22 +111,35 @@ it("holds an empty legacy source against a foreign writer through shared commit 
   });
 });
 
-it("fences replacement of the selected legacy source", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
-    const sourceDir = resolveSharedMainAuthAgentDir(env);
-    const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
-    await prepareActor(env);
-    interceptBootstrap((execute) => {
-      fs.mkdirSync(sourceDir, { recursive: true });
-      fs.writeFileSync(sourcePath, "replacement source");
-      return execute();
+it.each([false, true])(
+  "fences replacement only for the selected legacy source (sharedOwned=%s)",
+  async (sharedOwned) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const sourceDir = resolveSharedMainAuthAgentDir(env);
+      const sourcePath = resolveAuthProfileDatabasePath(sourceDir);
+      await prepareActor(env);
+      if (sharedOwned) {
+        writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
+      }
+      interceptBootstrap((execute) => {
+        fs.mkdirSync(sourceDir, { recursive: true });
+        fs.writeFileSync(sourcePath, "replacement source");
+        return execute();
+      });
+      const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
+      if (sharedOwned) {
+        expect((await prepared).sharedOwner.location).toBe("state-db");
+        expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toEqual({
+          location: "state-db",
+        });
+      } else {
+        await expect(prepared).rejects.toThrow(/identity changed/);
+        expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
+      }
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
     });
-    const prepared = prepareAuthProfileWriteTransactionAsync(undefined, { env });
-    await expect(prepared).rejects.toThrow(/identity changed/);
-    expect(readConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { env })).toBeUndefined();
-    expect(fs.readFileSync(sourcePath, "utf8")).toBe("replacement source");
-  });
-});
+  },
+);
 
 it("publishes acknowledged relocation without replay when its result is lost", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {

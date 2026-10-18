@@ -10,6 +10,8 @@ import { registerModelAccountsEnglish } from "../../../i18n/locales/en-model-acc
 import { normalizeChatModelProviderId } from "../../../lib/chat/model-ref.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import { canonicalModelAuthProviderId } from "../../../lib/model-auth.ts";
+import { solidTemplate } from "./chat-composer-controls.ts";
+import { ChatModelAccountSectionView } from "./chat-model-account-control.tsx";
 import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 registerModelAccountsEnglish();
@@ -28,6 +30,7 @@ type AccountInventory = {
 const inventories = new WeakMap<object, AccountInventory>();
 
 export type ChatModelAccountSection = {
+  render: (startIndex: number) => ReturnType<typeof solidTemplate>;
   viewProps: (startIndex: number) => ChatModelAccountSectionViewProps;
   onClose: () => void;
 };
@@ -218,6 +221,7 @@ export function renderChatModelAccountControl(params: {
       currentInventory.open = false;
       params.onRequestUpdate();
     },
+    render: (startIndex) => solidTemplate(ChatModelAccountSectionView, viewProps(startIndex)),
     viewProps,
   };
 }

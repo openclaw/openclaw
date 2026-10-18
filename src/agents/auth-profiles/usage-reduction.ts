@@ -10,7 +10,7 @@ import type {
   ProfileUsageStats,
 } from "./types.js";
 import { computeNextProfileUsageStats, resolveUsageWindowUntil } from "./usage-failure-state.js";
-import { isBlockedWindowActiveForModel } from "./usage-state.js";
+import { isAuthCooldownBypassedForProvider, isBlockedWindowActiveForModel } from "./usage-state.js";
 
 export type WhamCooldownProbeResult = {
   available?: true;
@@ -149,7 +149,7 @@ export type AuthProfileFailureReduction = {
 };
 
 export type PersonalAuthProfileUsageReduction =
-  | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number; modelId?: string }
+  | { kind: "success"; expectedProfile: AuthProfileCredential; lastUsed: number }
   | ({ kind: "failure" } & AuthProfileFailureReduction);
 
 export type PersonalAuthProfileUsageResult = {
@@ -165,7 +165,11 @@ export function reduceAuthProfileFailure(
   input: AuthProfileFailureReduction,
   now: number,
 ): ProfileUsageStats | undefined {
-  if (!profile || profile.setup?.replacement) {
+  if (
+    !profile ||
+    profile.setup?.replacement ||
+    isAuthCooldownBypassedForProvider(profile.provider)
+  ) {
     return undefined;
   }
   const { expectedProfile, reason, modelId, whamResult, observedProfile, blockGeneration } = input;

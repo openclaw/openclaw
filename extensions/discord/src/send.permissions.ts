@@ -49,13 +49,13 @@ async function fetchBotUserId(rest: RequestClient) {
 }
 
 function resolveMemberGuildPermissionBits(params: {
-  guildId: string;
-  roles: ReadonlyMap<string, APIRole>;
+  guild: Pick<APIGuild, "id" | "roles">;
   member: Pick<APIGuildMember, "roles">;
 }) {
-  let permissions = addPermissionBits(0n, params.roles.get(params.guildId)?.permissions);
+  const rolesByIdLocal = rolesById(params.guild);
+  let permissions = addPermissionBits(0n, rolesByIdLocal.get(params.guild.id)?.permissions);
   for (const roleId of params.member.roles ?? []) {
-    permissions = addPermissionBits(permissions, params.roles.get(roleId)?.permissions);
+    permissions = addPermissionBits(permissions, rolesByIdLocal.get(roleId)?.permissions);
   }
   return permissions;
 }
@@ -69,9 +69,10 @@ function rolePosition(role: Pick<APIRole, "position"> | undefined) {
 }
 
 function highestMemberRolePosition(
-  roles: ReadonlyMap<string, APIRole>,
+  guild: Pick<APIGuild, "roles">,
   member: Pick<APIGuildMember, "roles">,
 ) {
+  const roles = rolesById(guild);
   return Math.max(...(member.roles ?? []).map((roleId) => rolePosition(roles.get(roleId))), 0);
 }
 
@@ -83,8 +84,7 @@ function resolveMemberChannelPermissionBits(params: {
   channel: APIChannel;
 }) {
   let permissions = resolveMemberGuildPermissionBits({
-    guildId: params.guildId,
-    roles: rolesById(params.guild),
+    guild: params.guild,
     member: params.member,
   });
 
@@ -145,7 +145,7 @@ export async function fetchMemberGuildPermissionsDiscord(
     if (guild.owner_id === userId) {
       return ALL_PERMISSIONS;
     }
-    return resolveMemberGuildPermissionBits({ guildId, roles: rolesById(guild), member });
+    return resolveMemberGuildPermissionBits({ guild, member });
   } catch {
     // Not a guild member, guild not found, or API failure.
     return null;
@@ -257,15 +257,13 @@ export async function canManageGuildMemberRoleDiscord(
       return false;
     }
 
-    const roles = rolesById(guild);
-    const targetRole = roles.get(roleId);
+    const targetRole = rolesById(guild).get(roleId);
     const targetRolePosition = rolePosition(targetRole);
     if (targetRolePosition < 0) {
       return false;
     }
     const senderPermissions = resolveMemberGuildPermissionBits({
-      guildId,
-      roles,
+      guild,
       member: senderMember,
     });
     if (
@@ -275,11 +273,11 @@ export async function canManageGuildMemberRoleDiscord(
     ) {
       return false;
     }
-    const senderHighestRolePosition = highestMemberRolePosition(roles, senderMember);
+    const senderHighestRolePosition = highestMemberRolePosition(guild, senderMember);
     if (senderHighestRolePosition <= targetRolePosition) {
       return false;
     }
-    return senderHighestRolePosition > highestMemberRolePosition(roles, targetMember);
+    return senderHighestRolePosition > highestMemberRolePosition(guild, targetMember);
   } catch {
     return false;
   }
@@ -297,15 +295,14 @@ export async function canManageGuildRoleDiscord(
       getGuild(rest, guildId),
       getGuildMember(rest, guildId, senderUserId),
     ]);
-    const roles = rolesById(guild);
-    const targetRole = roles.get(roleId);
+    const targetRole = rolesById(guild).get(roleId);
     if (!targetRole) {
       return null;
     }
     if (guild.owner_id === senderUserId) {
       return true;
     }
-    return highestMemberRolePosition(roles, senderMember) > rolePosition(targetRole);
+    return highestMemberRolePosition(guild, senderMember) > rolePosition(targetRole);
   } catch {
     return false;
   }

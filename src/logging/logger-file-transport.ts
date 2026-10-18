@@ -3,7 +3,6 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { appendRegularFile, appendRegularFileSync } from "@openclaw/fs-safe/advanced";
-import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { formatConsoleDiagnosticLine } from "./json-console-line.js";
 import { redactSensitiveText } from "./redact.js";
@@ -52,33 +51,9 @@ function rotatedLogPath(file: string, index: number): string {
   return `${base}.${index}${ext}`;
 }
 
-/**
- * Creates a log directory and its missing parents with a bounded number of mkdir calls.
- * Node's recursive mkdirSync retries forever when a parent exists but refuses new
- * children (a deleted directory that is still mounted, such as a stale systemd
- * PrivateTmp), which would block the event loop inside the logger.
- */
-export function ensureLogDirectorySync(dir: string, createParents = true): void {
-  try {
-    fs.mkdirSync(dir);
-  } catch (error) {
-    const code = extractErrorCode(error);
-    if (code === "EEXIST" && fs.statSync(dir).isDirectory()) {
-      return;
-    }
-    const parent = path.dirname(dir);
-    if (!createParents || code !== "ENOENT" || parent === dir) {
-      throw error;
-    }
-    ensureLogDirectorySync(parent);
-    // One retry once the parents exist; a second ENOENT is final.
-    ensureLogDirectorySync(dir, false);
-  }
-}
-
 function rotateLogFile(file: string): boolean {
   try {
-    ensureLogDirectorySync(path.dirname(file));
+    fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.rmSync(rotatedLogPath(file, MAX_ROTATED_LOG_FILES), { force: true });
     for (let index = MAX_ROTATED_LOG_FILES - 1; index >= 1; index -= 1) {
       const from = rotatedLogPath(file, index);

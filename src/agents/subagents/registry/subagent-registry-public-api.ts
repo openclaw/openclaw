@@ -17,6 +17,7 @@ import {
   SubagentRegistryWriteError,
 } from "./subagent-registry-persistence.js";
 import {
+  countActiveRunsForSessionFromRuns,
   listSwarmRunsForGroupFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
 } from "./subagent-registry-queries.js";
@@ -25,7 +26,6 @@ import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { listUnsettledRequesterChildrenInRuns } from "./subagent-registry-requester-yield.js";
 import { claimSubagentYieldInRuns } from "./subagent-registry-run-pause.js";
 import {
-  countActiveSubagentRunsForSession,
   getSubagentRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   withSubagentRunReadSnapshot,
@@ -284,6 +284,17 @@ export function createSubagentRegistryPublicApi(config: {
     );
   }
 
+  function countActiveRunsForSession(
+    requesterSessionKey: string,
+    options?: { collect?: boolean; requesterAgentId?: string },
+  ): number {
+    return countActiveRunsForSessionFromRuns(
+      new Map([...getSubagentSessionListRunsSnapshotForRead(runs), ...runs]),
+      requesterSessionKey,
+      options,
+    );
+  }
+
   /** Records sessions_yield before the active requester run is aborted. */
   async function markRequesterTurnYielded(
     params: Parameters<SubagentLifecycleController["markRequesterTurnYielded"]>[0],
@@ -376,7 +387,7 @@ export function createSubagentRegistryPublicApi(config: {
     recordSwarmStructuredOutput,
     listSwarmRunsForGroup,
     getSwarmRunByLaunchReplayKey,
-    countActiveRunsForSession: countActiveSubagentRunsForSession.bind(null, runs),
+    countActiveRunsForSession,
     settleRequesterAfterSessionSpawns: settleRequesterTurn,
     markRequesterTurnYielded,
     listUnsettledRequesterChildren,

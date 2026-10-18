@@ -58,7 +58,6 @@ type ActiveLogin = {
   runtime: RuntimeEnv;
   socketTiming: WhatsAppSocketTimingOptions;
   beforeCredentialPersistence?: () => Promise<void>;
-  assertCredentialPersistenceCurrent?: () => void;
 };
 
 type LoginQrRaceResult =
@@ -266,19 +265,13 @@ export async function startWebLoginWithQr(
     accountId?: string;
     runtime?: RuntimeEnv;
     beforeCredentialPersistence?: () => Promise<void>;
-    assertCredentialPersistenceCurrent?: () => void;
   } = {},
 ): Promise<StartWebLoginWithQrResult> {
   const runtime = opts.runtime ?? defaultRuntime;
-  const beforeBootstrapPersistence = async () => {
-    await opts.beforeCredentialPersistence?.();
-    opts.assertCredentialPersistenceCurrent?.();
-  };
   const cfg = await captureRuntimeConfigAsyncReader()();
   const account = resolveWhatsAppAccount({ cfg, accountId: opts.accountId });
   const socketTiming = resolveWhatsAppSocketTiming();
   const authState = await readWebAuthExistsForDecision(account.authDir);
-  opts.assertCredentialPersistenceCurrent?.();
   if (authState.outcome === "unstable") {
     return {
       code: WHATSAPP_AUTH_UNSTABLE_CODE,
@@ -298,7 +291,7 @@ export async function startWebLoginWithQr(
         authDir: account.authDir,
         isLegacyAuthDir: account.isLegacyAuthDir,
         runtime,
-        beforeCredentialPersistence: beforeBootstrapPersistence,
+        beforeCredentialPersistence: opts.beforeCredentialPersistence,
       });
       if (!cleared) {
         return {
@@ -313,18 +306,7 @@ export async function startWebLoginWithQr(
     }
   }
 
-  let existing = activeLogins.get(account.accountId);
-  if (existing && opts.assertCredentialPersistenceCurrent) {
-    try {
-      if (!existing.assertCredentialPersistenceCurrent) {
-        throw new Error("The active QR login has no Gateway account binding.");
-      }
-      existing.assertCredentialPersistenceCurrent();
-    } catch {
-      await resetActiveLogin(account.accountId);
-      existing = undefined;
-    }
-  }
+  const existing = activeLogins.get(account.accountId);
   if (
     !opts.force &&
     existing &&
@@ -361,10 +343,9 @@ export async function startWebLoginWithQr(
   const beforeCredentialPersistence = async () => {
     const login = operationOwner.current;
     if (!login) {
-      await beforeBootstrapPersistence();
+      await opts.beforeCredentialPersistence?.();
       return;
     }
-    opts.assertCredentialPersistenceCurrent?.();
     if (activeLogins.get(account.accountId) !== login || !isLoginFresh(login)) {
       throw new Error("WhatsApp login is no longer active.");
     }
@@ -407,12 +388,11 @@ export async function startWebLoginWithQr(
     runtime,
     socketTiming,
     beforeCredentialPersistence,
-    assertCredentialPersistenceCurrent: opts.assertCredentialPersistenceCurrent,
   };
   try {
     // Bootstrap authority is checked immediately before ownership transfers to
     // this exact login instance; stale, expired, or replaced instances fail later writes.
-    await beforeBootstrapPersistence();
+    await opts.beforeCredentialPersistence?.();
   } catch (err) {
     clearTimeout(qrTimer);
     closeWaSocket(sock);

@@ -88,7 +88,7 @@ type PendingLiveTextFlush = {
 
 type LiveDisplayState = NonNullable<assistantText.ChatRunBufferState["display"]>;
 
-type ChatRunRecord = assistantText.ChatRunBufferState & {
+export type ChatRunRecord = assistantText.ChatRunBufferState & {
   lastActivityAt: number;
   registrations?: ChatRunEntry[];
   buffer?: string;
@@ -274,7 +274,11 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         return full;
       }
       // Missing source context cannot justify suppressing retained output.
-      const suppressed = !contextEvicted && full.suppress;
+      const suppressed =
+        !contextEvicted &&
+        (options?.final
+          ? projectLiveAssistantBufferedText(full.text, { suppressLeadFragments: false }).suppress
+          : full.suppress);
       const text = suppressed
         ? ""
         : contextEvicted
@@ -284,6 +288,7 @@ export function createChatRunState(isConnectionActive?: (connId: string) => bool
         ...full,
         text,
         suppress: suppressed || !text,
+        pendingLeadFragment: suppressed && full.pendingLeadFragment,
       };
     };
     // Delivery remains complete; display finalizes the same occurrence-owned tail.

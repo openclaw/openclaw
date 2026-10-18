@@ -3,6 +3,7 @@ package ai.openclaw.app.voice
 import android.content.Context
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -63,7 +64,7 @@ internal class SystemSpeechSpeaker(
         try {
           withContext(Dispatchers.Main.immediate) {
             synchronized(lock) {
-              request.ensureActive()
+              checkActive(request)
               if (start == 0) {
                 // Chat retains the engine's defaults; Talk supplies its validated directive.
                 locale?.let {
@@ -75,7 +76,7 @@ internal class SystemSpeechSpeaker(
                 speechRate?.let { speechEngine.setSpeechRate(it) }
                 speechEngine.setAudioAttributes(speechPlaybackAttributes())
                 beforeSpeak()
-                request.ensureActive()
+                checkActive(request)
               }
               speechEngine.setOnUtteranceProgressListener(
                 object : UtteranceProgressListener() {
@@ -152,11 +153,16 @@ internal class SystemSpeechSpeaker(
     }
   }
 
+  private fun checkActive(request: Job) {
+    request.ensureActive()
+    if (active !== request) throw CancellationException("Speech request superseded")
+  }
+
   private suspend fun ensureEngine(request: Job): TextToSpeech =
     withContext(Dispatchers.Main.immediate) {
       val pending =
         synchronized(lock) {
-          request.ensureActive()
+          checkActive(request)
           ready ?: CompletableDeferred<Int>().also { initialization ->
             ready = initialization
             try {
@@ -164,7 +170,7 @@ internal class SystemSpeechSpeaker(
               // own initialization; it cannot republish an engine retired by shutdown.
               engine = TextToSpeech(context) { initialization.complete(it) }
             } catch (err: Throwable) {
-              ready = null
+              if (ready === initialization) ready = null
               initialization.completeExceptionally(err)
               throw err
             }
@@ -172,7 +178,7 @@ internal class SystemSpeechSpeaker(
         }
       val result = pending.await()
       synchronized(lock) {
-        request.ensureActive()
+        checkActive(request)
         if (result != TextToSpeech.SUCCESS) {
           val failed = engine
           engine = null

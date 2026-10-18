@@ -282,7 +282,7 @@ export function createConfigFileAdapter(opts: {
     };
     watcher = next;
     status = "active";
-    return enqueueRefresh(next);
+    void enqueueRefresh(next);
   };
 
   const handleWatcherError = (source: Watcher, error: unknown, eventWatchFailed = false) => {
@@ -329,7 +329,7 @@ export function createConfigFileAdapter(opts: {
       void retirement.then(
         () => {
           if (!stopped && !watcher) {
-            void createWatcher(true);
+            createWatcher(true);
           }
         },
         () => {},
@@ -362,13 +362,12 @@ export function createConfigFileAdapter(opts: {
   };
 
   return {
-    start: async () => {
+    start: () => {
       if (!started && !stopped) {
         started = true;
-        await createWatcher(false);
+        createWatcher(false);
       }
     },
-    whenSettled: () => watcher?.stability.whenSettled() ?? Promise.resolve(),
     observePaths: (paths: readonly string[]) => reconcilePaths([...acceptedPaths, ...paths]),
     acceptPaths: (paths: readonly string[]) => {
       acceptedPaths = [...paths];

@@ -9,14 +9,11 @@ import {
 } from "../../../components/session-placement-action.ts";
 import { isCloudWorkerPlacementState } from "../../../components/session-row-badges.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuEntry } from "../../../components/solid/menu.tsx";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { solidContent } from "../../../lit/solid-content.tsx";
 import { resolveChatPaneWorkerPresentation } from "../chat-pane-placement.ts";
-
-let nextPlacementId = 0;
 
 export function ChatPanePlacement(props: {
   session: GatewaySessionRow | undefined;
@@ -30,7 +27,6 @@ export function ChatPanePlacement(props: {
   onPlacementReclaim?: () => void;
   onPlacementRecover?: () => void;
 }) {
-  const id = `chat-placement-${++nextPlacementId}`;
   const state = createMemo(() => {
     const session = props.session;
     const placement = session?.placement;
@@ -155,42 +151,14 @@ export function ChatPanePlacement(props: {
       ],
     };
   });
-  const items = createMemo((): MenuEntry[] =>
-    (state()?.actions ?? [])
-      .filter((action) => action.visible)
-      .map((action) => ({
-        id: action.id,
-        label: action.label,
-        class: `session-menu__item ${action.className}`,
-        variant: action.destructive ? "danger" : undefined,
-        disabled: Boolean(action.disabledReason),
-        attributes: { title: action.disabledReason },
-        icon: (
-          <span class="session-menu__icon" aria-hidden="true">
-            <Icon name={action.icon} />
-          </span>
-        ),
-        content: <span class="session-menu__text">{action.label}</span>,
-      })),
-  );
   return (
     <Show when={state()}>
       {(view) => (
         <div class="chat-pane__placement-control">
-          <Menu
-            lazy
-            id={id}
-            class="chat-pane__placement-menu"
-            placement="bottom-start"
-            label={view().label}
-            triggerClass="chat-pane__placement-chip"
-            items={items()}
-            onSelect={(item) =>
-              view()
-                .actions.find((action) => action.id === item.id)
-                ?.onClick?.()
-            }
-          >
+          <wa-dropdown class="chat-pane__placement-menu" placement="bottom-start">
+            <button slot="trigger" class="chat-pane__placement-chip" type="button">
+              {view().label}
+            </button>
             <Show when={view().exceptionState}>
               {(message) => <div class="chat-pane__placement-state">{message()}</div>}
             </Show>
@@ -238,7 +206,29 @@ export function ChatPanePlacement(props: {
                 </Show>
               </dl>
             </Show>
-          </Menu>
+            <For each={view().actions} keyed={(action) => action.id}>
+              {(action) => (
+                <Show when={action().visible}>
+                  <wa-dropdown-item
+                    class={`session-menu__item ${action().className}`}
+                    variant={action().destructive ? "danger" : undefined}
+                    disabled={Boolean(action().disabledReason)}
+                    title={action().disabledReason}
+                    onClick={() => {
+                      if (!action().disabledReason) {
+                        action().onClick?.();
+                      }
+                    }}
+                  >
+                    <span slot="icon" class="session-menu__icon" aria-hidden="true">
+                      <Icon name={action().icon} />
+                    </span>
+                    <span class="session-menu__text">{action().label}</span>
+                  </wa-dropdown-item>
+                </Show>
+              )}
+            </For>
+          </wa-dropdown>
           <Show
             when={view().deviceOffline}
             fallback={

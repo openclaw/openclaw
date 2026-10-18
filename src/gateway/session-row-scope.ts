@@ -250,7 +250,6 @@ export function prepareSessionRowScopes(
   residentPaths: ReadonlyMap<string, string>,
   prepared: CombinedSessionStoreScopeTargets,
 ) {
-  const ownerAgentIds: ReadonlySet<string> = new Set(listAgentIds(cfg));
   const residentPath = (pathname: string) => residentPaths.get(pathname) ?? pathname;
   const filenames = new Map([...residentPaths].map(([filename, locator]) => [locator, filename]));
   const aliases = new Map<string, Map<string, string>>();
@@ -290,7 +289,6 @@ export function prepareSessionRowScopes(
         paths: new Map(paths.map((pathname, index) => [pathname, index])),
         path: paths.length === 1 ? (filenames.get(paths[0]!) ?? paths[0]!) : "(multiple)",
         configuredAgentIds: resolved.configuredAgentIds,
-        ownerAgentIds,
         agentId: resolved.requestedAgentId,
       };
     } catch (error) {
@@ -300,7 +298,10 @@ export function prepareSessionRowScopes(
   const all = capture({});
   const configured = capture({ configuredAgentsOnly: true });
   const agents = new Map(
-    [...new Set([...ownerAgentIds, ...agentIds])].map((agentId) => [agentId, capture({ agentId })]),
+    [...new Set([...listAgentIds(cfg), ...agentIds])].map((agentId) => [
+      agentId,
+      capture({ agentId }),
+    ]),
   );
   const select = (options: { agentId?: string; configuredAgentsOnly?: boolean }) => {
     const requestedAgentId = options.agentId?.trim()
@@ -312,7 +313,6 @@ export function prepareSessionRowScopes(
           path: "(multiple)",
           agentId: requestedAgentId,
           configuredAgentIds: undefined,
-          ownerAgentIds,
         })
       : options.configuredAgentsOnly
         ? configured

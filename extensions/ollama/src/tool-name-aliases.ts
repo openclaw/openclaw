@@ -5,10 +5,6 @@ import {
   type Context,
   type ProviderStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import {
-  mapAssistantMessageStream,
-  wrapProviderPayloadHook,
-} from "openclaw/plugin-sdk/provider-stream-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 // Ollama 0.40.1 tools.findTool searches the retained envelope before the JSON
@@ -177,16 +173,19 @@ export function wrapOllamaToolNames(baseFn: StreamFn | undefined): StreamFn {
     }
     const maybeStream = underlying(model, wireContext, {
       ...providerOptions,
-      onPayload: wrapProviderPayloadHook(options?.onPayload, (payload, replacement) => {
+      onPayload: async (payload, selectedModel) => {
+        const replacement = await options?.onPayload?.(payload, selectedModel);
         const request = replacement === undefined ? payload : replacement;
         // OpenAI-compatible callers can choose a function through a payload hook.
         if (isRecord(request) && "tool_choice" in request) {
           request.tool_choice = mapToolChoice(request.tool_choice, mapName);
         }
         return replacement;
-      }),
+      },
     });
     const fromWire = new Map([...toWire].map(([name, alias]) => [alias, name]));
-    return mapAssistantMessageStream(maybeStream, (stream) => restoreStreamNames(stream, fromWire));
+    return "then" in maybeStream
+      ? maybeStream.then((stream) => restoreStreamNames(stream, fromWire))
+      : restoreStreamNames(maybeStream, fromWire);
   };
 }

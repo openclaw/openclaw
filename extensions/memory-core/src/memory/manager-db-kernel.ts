@@ -63,9 +63,7 @@ function replaceMemoryVectorTable(db: DatabaseSync): void {
     // rebuild before that table can be queried again.
     try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
-    } catch {
-      // Without sqlite-vec, retaining the unused virtual table is intentional.
-    }
+    } catch {}
     return;
   }
   db.exec(`DROP TABLE IF EXISTS main.${tableName}`);

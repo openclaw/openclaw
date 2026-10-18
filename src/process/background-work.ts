@@ -94,7 +94,7 @@ export function getBackgroundWorkSnapshot(): CommandLaneSnapshot {
     if (!state) {
       continue;
     }
-    const activeCount = state.activeTasks.size;
+    const activeCount = state.activeTaskIds.size;
     snapshot.activeCount += activeCount;
     snapshot.queuedCount += state.queue.length;
     snapshot.draining ||= state.draining;

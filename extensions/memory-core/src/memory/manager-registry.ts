@@ -128,6 +128,11 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     return await create();
   }
 
+  canPublishProbe(manager: T): boolean {
+    const owner = this.managers.get(manager);
+    return owner !== undefined && !owner.retiring;
+  }
+
   getProbeOwners(manager: T): readonly MemoryEmbeddingProviderAdapter[] {
     const owner = this.managers.get(manager);
     return owner ? [...owner.adapters] : [];
@@ -151,8 +156,8 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
       );
       for (const [manager, owner] of selected) {
         owner.retiring = true;
-        // Release reuse before cleanup can yield. Keep the retiring owner to
-        // decline late provider creation.
+        // Release reuse before cleanup can yield. Keep the retiring owner so
+        // late provider/probe work cannot publish into its replacement's cache.
         if (this.cache.get(owner.key) === manager) {
           this.cache.delete(owner.key);
         }

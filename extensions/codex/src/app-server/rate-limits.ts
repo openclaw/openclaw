@@ -109,8 +109,9 @@ export function formatCodexUsageLimitErrorMessage(params: {
   }
   const nowMs = params.nowMs ?? Date.now();
   const ordinaryUsageAllowed = readOrdinaryUsageAllowed(params.rateLimits);
-  const allSnapshots = collectCodexRateLimitSnapshots(params.rateLimits);
-  const snapshots = allSnapshots.filter(snapshotHasDisplayableData);
+  const snapshots = collectCodexRateLimitSnapshots(params.rateLimits).filter(
+    snapshotHasDisplayableData,
+  );
   const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
   const blockingSnapshot = selectBlockingRateLimitSnapshot(snapshots, ordinaryUsageAllowed);
   const usageSummary = usageSnapshot
@@ -132,7 +133,11 @@ export function formatCodexUsageLimitErrorMessage(params: {
   const nextReset =
     blockingReset ??
     (ordinaryUsageAllowed === undefined && !usageSummary?.blocked
-      ? selectRateLimitWindowEntry(allSnapshots.flatMap(readWindowEntries), nowMs, "next")?.window
+      ? selectRateLimitWindowEntry(
+          collectCodexRateLimitSnapshots(params.rateLimits).flatMap(readWindowEntries),
+          nowMs,
+          "next",
+        )?.window
       : undefined);
   const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
   let recoveryAction = "Wait until Codex becomes available";

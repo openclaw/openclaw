@@ -1,4 +1,4 @@
-import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
+import { requireNativeDatabaseFile } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteQueryCache,
   getNodeSqliteKysely,
@@ -44,13 +44,7 @@ export function readStateSchemaContentVersion(
   readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
 ): number {
   if (isPostgresSqlConnection(db)) {
-    const facts = getStateSchemaVersionAdmission(db);
-    if (!facts) {
-      throw new Error(
-        "Missing PostgreSQL state schema admission; use the matching OpenClaw version or restore the matching PostgreSQL schema and anchor.",
-      );
-    }
-    return Math.max(published ?? facts.userVersion, facts.contentVersion);
+    requireNativeDatabaseFile("postgres", "repair");
   }
   const admitted = getStateSchemaVersionAdmission(db);
   if (admitted) {
@@ -99,10 +93,7 @@ export type { StateSchemaVersionFacts } from "./openclaw-state-db-admission.js";
 /** Refuse newer headers before catalog inspection, then share one physical schema capture. */
 export function admitStateSchemaFacts(database: EngineConnection, pathname: string): void {
   if (isPostgresSqlConnection(database)) {
-    if (!getPostgresPhysicalFacts(database)) {
-      throw new Error("Missing PostgreSQL physical schema admission");
-    }
-    return;
+    requireNativeDatabaseFile("postgres", "repair");
   }
   try {
     admitSqliteSchema(database, (userVersion) =>
@@ -138,7 +129,7 @@ export function assertSupportedStateSchemaVersion(
   readRow?: StateSchemaContentVersionRowReader,
 ): number {
   if (isPostgresSqlConnection(db)) {
-    return readStateSchemaContentVersion(db);
+    requireNativeDatabaseFile("postgres", "repair");
   }
   try {
     const userVersion =

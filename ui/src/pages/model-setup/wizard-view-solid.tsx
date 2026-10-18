@@ -1,23 +1,17 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Match, Show, Switch } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
-import { WizardStepControls } from "../../components/wizard-step-controls.tsx";
-import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
-import "../../components/modal-dialog.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import "../../components/modal-dialog.ts";
 import type { ModelSetupWizardState } from "./state.ts";
 import { WIZARD_COPY } from "./wizard-copy.ts";
-
-registerModelSetupEnglish();
+import { WizardStepControls } from "./wizard-step-controls.tsx";
 
 export type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
   doneMessage?: string;
-  doneDescription?: string;
-  doneAction?: { label: string; disabled?: boolean; onClick: () => void };
   cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
@@ -27,14 +21,6 @@ export type WizardViewProps = {
 };
 
 export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
-  let content: HTMLDivElement | undefined;
-  createEffect(
-    () =>
-      props.state.phase === "step"
-        ? props.state.step.id
-        : `${props.state.phase}:${Boolean(props.doneAction)}`,
-    () => content?.querySelector<HTMLElement>("[autofocus]")?.focus({ preventScroll: true }),
-  );
   const copy = createMemo(() => WIZARD_COPY[props.mode]);
   const canCancel = () => props.state.phase === "starting" || props.state.phase === "step";
   const stepState = createMemo(() => (props.state.phase === "step" ? props.state : undefined));
@@ -47,23 +33,10 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
         label={t(copy().dialog)}
         onModal-cancel={() => (canCancel() ? props.onCancel() : props.onClose())}
       >
-        <div
-          class={[
-            "model-setup-wizard",
-            {
-              "model-setup-wizard--auth": props.mode === "auth",
-              "model-setup-wizard--done": props.state.phase === "done",
-            },
-          ]}
-          ref={(element) => {
-            content = element;
-          }}
-        >
-          <Show when={props.state.phase !== "done"}>
-            <div class="model-setup-wizard__header">
-              <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
-            </div>
-          </Show>
+        <div class="model-setup-wizard">
+          <div class="model-setup-wizard__header">
+            <h2>{props.state.authLabel || stepState()?.step.title || t(copy().titleKey)}</h2>
+          </div>
           <div class="model-setup-wizard__body">
             <For
               each={[
@@ -83,27 +56,16 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             </For>
             <Switch>
               <Match when={props.state.phase === "starting"}>
-                <div class="wizard-step__progress" role="status" aria-busy="true">
-                  <span class="wizard-step__spinner" aria-hidden="true" />
-                  {t(copy().starting)}
-                </div>
+                <div role="status">{t(copy().starting)}</div>
               </Match>
               <Match when={props.state.phase === "done"}>
-                <div class="model-setup-wizard__success" role="status">
-                  <span class="model-setup-wizard__success-icon" aria-hidden="true">
-                    <Icon name="check" />
-                  </span>
-                  <h2 class="model-setup-wizard__success-title">
-                    {props.doneMessage ??
-                      t(
-                        props.mode === "auth"
-                          ? "modelSetup.wizard.connected"
-                          : "modelSetup.wizard.checking",
-                      )}
-                  </h2>
-                  <Show when={props.doneDescription}>
-                    <p class="model-setup-wizard__success-description">{props.doneDescription}</p>
-                  </Show>
+                <div role="status">
+                  {props.doneMessage ??
+                    t(
+                      props.mode === "auth"
+                        ? "modelSetup.wizard.connected"
+                        : "modelSetup.wizard.checking",
+                    )}
                 </div>
               </Match>
               <Match when={errorState()}>
@@ -141,7 +103,6 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       </div>
                     </Show>
                     <WizardStepControls
-                      presentation="model-setup"
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
                       value={props.value}
@@ -164,17 +125,9 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       onAnswer={(value) => props.onAnswer(value)}
                     />
                     <Show
-                      when={
-                        state().busy &&
-                        state().step.type !== "progress" &&
-                        !state().step.externalUrl &&
-                        !state().step.deviceCode
-                      }
+                      when={state().busy && !state().step.externalUrl && !state().step.deviceCode}
                     >
-                      <div class="wizard-step__progress" role="status" aria-busy="true">
-                        <span class="wizard-step__spinner" aria-hidden="true" />
-                        {t("modelSetup.wizard.working")}
-                      </div>
+                      <div role="status">{t("modelSetup.wizard.working")}</div>
                     </Show>
                   </>
                 )}
@@ -182,34 +135,15 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
             </Switch>
           </div>
           <Show when={props.state.phase !== "step"}>
-            <openclaw-modal-actions class="model-setup-wizard__footer">
-              <Show when={props.state.phase === "done" && props.doneAction}>
-                {(action) => (
-                  <button
-                    type="button"
-                    class="btn primary"
-                    data-login-start-chat
-                    autofocus
-                    disabled={action().disabled}
-                    aria-busy={action().disabled ? "true" : "false"}
-                    onClick={() => action().onClick()}
-                  >
-                    <Show when={action().disabled}>
-                      <span class="btn__spinner" aria-hidden="true" />
-                    </Show>
-                    {action().label}
-                  </button>
-                )}
-              </Show>
+            <div class="model-setup-wizard__footer">
               <button
                 type="button"
                 class="btn"
-                autofocus={props.state.phase !== "done" || !props.doneAction}
                 onClick={() => (canCancel() ? props.onCancel() : props.onClose())}
               >
                 {t(canCancel() ? "common.cancel" : "common.close")}
               </button>
-            </openclaw-modal-actions>
+            </div>
           </Show>
         </div>
       </openclaw-modal-dialog>

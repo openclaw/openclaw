@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
+import { isPluginProvidersLoadInFlight } from "../plugins/providers.runtime.js";
 import {
   getActivePluginRegistryWorkspaceDirFromState,
   getPluginRegistryState,
@@ -241,11 +242,18 @@ function resolveFallbackCandidateContext(params: ModelCandidateChainParams) {
     allowWorkspaceScopedSnapshot: true,
     requireDefaultDiscoveryContext: params.cfg === undefined,
   });
-  const registryState = getPluginRegistryState();
-  // register() can add provider hooks between lookups in the same growing registry.
-  if (registryState?.registrationContext) {
+  if (
+    isPluginProvidersLoadInFlight({
+      config: params.cfg,
+      workspaceDir,
+      env,
+      ...(providerLoadMetadata ? { pluginMetadataSnapshot: providerLoadMetadata } : {}),
+      activate: false,
+    })
+  ) {
     return { cacheKey: null, manifestPlugins: providerLoadMetadata };
   }
+  const registryState = getPluginRegistryState();
   const registry = getPluginRuntimeGenerationRegistry() ?? getPluginRegistryForContext();
   const agentConfig =
     params.cfg && params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;

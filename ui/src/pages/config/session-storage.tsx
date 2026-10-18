@@ -19,6 +19,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatByteSize, formatDateTimeMs } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { createSettingsStatus } from "./settings-status.ts";
 import { SESSION_STORAGE_SETTINGS_TARGET_ID } from "./settings-targets.ts";
 
@@ -38,11 +39,11 @@ function externalizedTranscripts(count: number): string {
 }
 
 type SettingsProps = {
-  mutationDisabled?: boolean;
-  buildEditor?: () => JSX.Element;
-  advancedExpanded?: boolean;
+  mutationDisabled: boolean;
+  buildEditor: (() => JSX.Element) | undefined;
+  advancedExpanded: boolean;
 };
-export function SessionStorageSettings(props: SettingsProps) {
+function SessionStorageSettingsContent(props: SettingsProps) {
   const context = useApplication();
   const {
     client,
@@ -94,7 +95,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     setRunError(null);
     setRunOutcome(null);
   }
-  onCleanup(stopPolling);
+  onCleanup(retireRequests);
   function observeMaintenance(status: SessionsStorageStatusResult) {
     if (status.maintenance.running) {
       followingRun = true;
@@ -331,7 +332,7 @@ export function SessionStorageSettings(props: SettingsProps) {
     return requestStatus() !== "error" && currentResult?.isCurrent() ? currentResult.status : null;
   };
   return (
-    <openclaw-session-storage-settings>
+    <>
       <SettingsPage>
         <div class="settings-stack" id={SESSION_STORAGE_SETTINGS_TARGET_ID}>
           <SettingsSection
@@ -453,6 +454,18 @@ export function SessionStorageSettings(props: SettingsProps) {
           {props.buildEditor?.()}
         </details>
       </ShellLayoutBoundary>
-    </openclaw-session-storage-settings>
+    </>
   );
 }
+
+export const SessionStorageSettings = defineSolidBridge<SettingsProps>(
+  "openclaw-session-storage-settings",
+  (props) => <SessionStorageSettingsContent {...props} />,
+  {
+    properties: {
+      mutationDisabled: { default: false, type: Boolean },
+      buildEditor: { default: undefined, attribute: false },
+      advancedExpanded: { default: false, type: Boolean },
+    },
+  },
+);

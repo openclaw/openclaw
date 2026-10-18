@@ -612,7 +612,7 @@ export function prepareCompaction(
     return ok(undefined);
   }
 
-  const prevBoundaryIndex = pathEntries.findLastIndex(
+  let prevBoundaryIndex = pathEntries.findLastIndex(
     (entry) => entry?.type === "compaction" || entry?.type === "reset",
   );
 
@@ -647,6 +647,7 @@ export function prepareCompaction(
         return message ? [message] : [];
       });
       effectiveEntries = pathEntries.slice(prevBoundaryIndex + 1);
+      prevBoundaryIndex = -1;
     } else {
       boundaryStart = firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : prevBoundaryIndex + 1;
     }
@@ -727,8 +728,14 @@ export function prepareCompaction(
     return ok(undefined);
   }
   const fileOps = createFileOps();
-  if (previousSummaryDetails) {
-    mergeSummaryFileOperations(fileOps, previousSummaryDetails);
+  if (prevBoundaryIndex >= 0) {
+    const prevCompaction = effectiveEntries[prevBoundaryIndex];
+    if (prevCompaction?.type === "compaction" && !prevCompaction.fromHook) {
+      const details = parseCompactionDetails(prevCompaction.details);
+      if (details) {
+        mergeSummaryFileOperations(fileOps, details);
+      }
+    }
   }
   for (const msg of messagesToSummarize) {
     extractFileOpsFromMessage(msg, fileOps);

@@ -1,8 +1,4 @@
 import { createHash, type Hash } from "node:crypto";
-import {
-  createRootFileOpenBatchSync,
-  type RootFileOpenBatchSync,
-} from "@openclaw/fs-safe/advanced";
 import { hashPluginSourceFile } from "./plugin-source-file.js";
 
 type PluginSourceContent = { contentHash: string; sizeBytes: number };
@@ -31,18 +27,12 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
       file.onContent(content);
     }
   };
-  const readContent = (
-    file: PluginReceiptFile,
-    receipt?: Hash,
-    expected = file.content,
-    openFile?: RootFileOpenBatchSync["openFile"],
-  ) => {
+  const readContent = (file: PluginReceiptFile, receipt?: Hash, expected = file.content) => {
     const content = hashPluginSourceFile(
       file.target,
       file.boundary,
       receipt,
       file.native ? file.content : undefined,
-      openFile,
     );
     if (!file.native && expected && content.contentHash !== expected.contentHash) {
       throw new Error(
@@ -73,20 +63,17 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         events.push(framed);
       }
     },
-    file(
-      params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent },
-      openFile?: RootFileOpenBatchSync["openFile"],
-    ): void {
+    file(params: Omit<PluginReceiptFile, "content"> & { prepared?: PluginSourceContent }): void {
       const { prepared: content, ...input } = params;
       const file: PluginReceiptFile = input;
       if (content) {
         if (finished && !file.native) {
-          readContent(file, undefined, content, openFile);
+          readContent(file, undefined, content);
         } else {
           publishContent(file, content);
         }
       } else if (!file.native || finished) {
-        readContent(file, undefined, undefined, openFile);
+        readContent(file);
       }
       if (!finished) {
         events.push(file);
@@ -101,15 +88,13 @@ export function createPluginGenerationReceipt(prepared?: PluginGenerationReceipt
         signature !== undefined && prepared?.signature === signature
           ? undefined
           : createHash("sha256");
-      using opened = createRootFileOpenBatchSync();
-      const openFile = opened.openFile.bind(opened);
       for (const event of events) {
         if (typeof event === "string") {
           receipt?.update(event);
         } else if (receipt || !event.content || !event.native) {
           // Copied descriptors supply bytes, not pathname admission. Recheck ordinary
           // destinations even on a receipt hit; misses also replay native raw bytes.
-          readContent(event, receipt, event.content, openFile);
+          readContent(event, receipt);
         }
       }
       finished = {

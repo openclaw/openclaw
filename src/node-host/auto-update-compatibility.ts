@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { hasErrnoCode } from "../infra/errno.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -147,23 +146,19 @@ export async function assertNodeRuntimeUpdateCompatible(params: {
         sourcePath,
         (await fs.stat(consolidated)).size,
       );
-      const invocation = resolveOpenClawCliInvocation({
-        execArgv: resolveRuntimeArgs(),
-        entryPath: path.join(params.packageRoot, "openclaw.mjs"),
-        args: [
+      const result = await runCommandWithTimeout(
+        [
+          process.execPath,
+          ...resolveRuntimeArgs(),
+          path.join(params.packageRoot, "openclaw.mjs"),
           "database",
           agentId === undefined ? "preflight" : "preflight-agent",
           consolidated,
           ...(agentId === undefined ? [] : ["--agent-id", agentId]),
           "--json",
         ],
-      });
-      const result = await runCommandWithTimeout([invocation.command, ...invocation.args], {
-        timeoutMs,
-        signal: params.signal,
-        killProcessTree: true,
-        env,
-      });
+        { timeoutMs, signal: params.signal, killProcessTree: true, env },
+      );
       let report: Record<string, unknown> | null = null;
       try {
         report = asNullableRecord(JSON.parse(result.stdout));

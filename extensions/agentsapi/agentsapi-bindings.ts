@@ -164,12 +164,7 @@ export function createAgentsApiBindings(
                 });
                 assertMigrationCurrent();
               } else if (stored?.sessionId && stored.configFingerprint) {
-                binding = {
-                  sessionId: stored.sessionId,
-                  configFingerprint: stored.configFingerprint,
-                  executorControllerPluginId: stored.executorControllerPluginId,
-                  executor: stored.executor,
-                };
+                binding = bindingSchema.parse(stored);
               }
               return await run(binding, bind, assertLeaseCurrent);
             } finally {

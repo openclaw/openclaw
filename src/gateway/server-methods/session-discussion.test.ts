@@ -12,7 +12,7 @@ import type { SessionDiscussionProvider } from "../../plugins/session-discussion
 import { sessionDiscussionHandlers } from "./session-discussion.js";
 
 const mocks = vi.hoisted(() => ({
-  emitSessionTitleChanged: vi.fn(),
+  emitSessionsChanged: vi.fn(),
   generateConversationLabelWithFallback: vi.fn(),
   getProvider: vi.fn(),
   loadSessionTarget: vi.fn(),
@@ -52,9 +52,8 @@ vi.mock("../dashboard-session-title.js", async (importOriginal) => {
 vi.mock("../session-transcript-title-reader.js", () => ({
   readSessionTitleFieldsFromTranscriptAsync: mocks.readSessionTitleFields,
 }));
-// mock-isolation: Capture title lifecycle notifications without starting Gateway broadcast workers.
 vi.mock("./session-change-event.js", () => ({
-  emitSessionTitleChanged: mocks.emitSessionTitleChanged,
+  emitSessionsChanged: mocks.emitSessionsChanged,
 }));
 // mock-isolation: Discussion fixtures own selected targets and rows without admitting physical stores.
 vi.mock("../session-utils-store-lookup.js", () => ({
@@ -123,7 +122,7 @@ function provider() {
 
 describe("session discussion gateway methods", () => {
   beforeEach(() => {
-    mocks.emitSessionTitleChanged.mockReset();
+    mocks.emitSessionsChanged.mockReset();
     mocks.generateConversationLabelWithFallback.mockReset();
     mocks.getProvider.mockReset();
     mocks.loadSessionTarget.mockReset();
@@ -229,14 +228,9 @@ describe("session discussion gateway methods", () => {
     expect(
       mocks.updateSessionEntry.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     ).toBeLessThan(registered.open.mock.invocationCallOrder[0] ?? Number.NEGATIVE_INFINITY);
-    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
-    expect(mocks.emitSessionTitleChanged).toHaveBeenLastCalledWith(
+    expect(mocks.emitSessionsChanged).toHaveBeenCalledExactlyOnceWith(
       expect.anything(),
-      expect.objectContaining({
-        sessionKey,
-        sessionId: "session-1",
-        agentId: "main",
-      }),
+      expect.objectContaining({ sessionKey, agentId: "main", reason: "chat.title" }),
     );
   });
 
@@ -278,13 +272,12 @@ describe("session discussion gateway methods", () => {
       payload: { state: "available" },
     });
     expect(registered.open).toHaveBeenCalledOnce();
-    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledOnce();
+    expect(mocks.emitSessionsChanged).not.toHaveBeenCalled();
     releaseGeneration?.(null);
     // Bounded flush: eviction settles via microtasks, so advancing 0ms is
     // enough. runAllTimersAsync livelocks (10000-timer abort) when any other
     // suite in a shared shard worker schedules an interval into this fake clock.
     await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
   });
 
   it.each(["session.discussion.open"] as const)(

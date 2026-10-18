@@ -535,12 +535,7 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
 export function installGatewayTestHooks(
   options?:
     | { scope?: "test" }
-    | {
-        scope: "suite";
-        prepareServer?: boolean;
-        setup?: () => Promise<void>;
-        cleanup?: () => Promise<void>;
-      },
+    | { scope: "suite"; setup?: () => Promise<void>; cleanup?: () => Promise<void> },
 ) {
   if (options?.scope === "suite") {
     let homeSetup: Promise<void> | undefined;
@@ -562,9 +557,7 @@ export function installGatewayTestHooks(
         activeSuiteHookScopeCount += 1;
         if (createHome) {
           await setupGatewayTestHome();
-          if (options.prepareServer !== false) {
-            await prepareGatewayServerImplementationForTest();
-          }
+          await prepareGatewayServerImplementationForTest();
           await resetGatewayTestState({ uniqueConfigRoot: false });
         }
       })();
@@ -1314,11 +1307,7 @@ export async function rpcReq<T extends Record<string, unknown>>(
     timeoutMs,
   );
   ws.send(JSON.stringify({ type: "req", id, method, params }));
-  try {
-    return await responsePromise;
-  } catch (error) {
-    throw new Error(`Gateway test RPC ${method}: ${String(error)}`, { cause: error });
-  }
+  return await responsePromise;
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {

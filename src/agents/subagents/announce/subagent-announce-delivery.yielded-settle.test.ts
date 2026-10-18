@@ -17,10 +17,7 @@ describe("yielded private settle outcomes", () => {
     },
     {
       name: "intentional silence",
-      response: {
-        status: "ok",
-        result: { payloads: [], meta: { terminalReply: { disposition: "silent" } } },
-      },
+      response: { status: "ok", result: { payloads: [{ text: "NO_REPLY" }] } },
       expected: { delivered: true },
     },
     ...["ok", "timeout"].map((status) => ({
@@ -62,10 +59,7 @@ describe("yielded private settle outcomes", () => {
       name: "failed silence",
       response: {
         status: "ok",
-        result: {
-          payloads: [],
-          meta: { aborted: true, terminalReply: { disposition: "silent" } },
-        },
+        result: { payloads: [{ text: "NO_REPLY" }], meta: { aborted: true } },
       },
       expected: { delivered: false, reason: "visible_reply_missing" },
     },
@@ -158,11 +152,7 @@ describe("yielded private settle outcomes", () => {
     const sessionKey = "agent:main:discord:dm:U123";
     const origin = { channel: "discord", to: "dm:U123", accountId: "acct-1" };
     const current = "replaced" in testCase ? "replacement-parent" : "requester-session-dm";
-    const dispatch = vi.fn(async function <T>(
-      _method: string,
-      _params: Record<string, unknown>,
-      _options?: unknown,
-    ) {
+    const dispatch = vi.fn(async function <T>(_method: string, _params: Record<string, unknown>) {
       return testCase.response as T;
     });
     const send = vi.fn<typeof sendMessage>();
@@ -197,9 +187,6 @@ describe("yielded private settle outcomes", () => {
     if ("replaced" in testCase) {
       expect(dispatch).not.toHaveBeenCalled();
     } else {
-      expect(dispatch.mock.calls[0]?.[2]).toMatchObject({
-        replyExpectation: "public" in testCase ? "required" : "optional",
-      });
       const agentParams = dispatch.mock.calls[0]?.[1];
       expect(agentParams).toMatchObject({
         deliver: true,

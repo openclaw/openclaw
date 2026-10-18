@@ -103,7 +103,10 @@ final class NodesStore {
     private let interval: TimeInterval = 30
     private let localNodeIdentityProfile: GatewayDeviceIdentityProfile
     @ObservationIgnored private let localNodeIDLoader: @Sendable (GatewayDeviceIdentityProfile) -> String?
-    @ObservationIgnored private var localNodeIdentityLoad: Task<Void, Never>?
+    @ObservationIgnored private var localNodeIdentityLoad:
+        (generation: UInt64, task: Task<String?, Never>)?
+    @ObservationIgnored private var localNodeIdentityLoadGeneration: UInt64 = 0
+    @ObservationIgnored private var localNodeIdentityPreparationTask: Task<Void, Never>?
 
     init(
         control: ControlChannel = .shared,
@@ -171,26 +174,43 @@ final class NodesStore {
     }
 
     private func scheduleLocalNodeIdentityPreparation() {
-        guard self.localNodeIdentityLoad == nil else { return }
+        guard self.localNodeIdentityPreparationTask == nil else { return }
         if case .available = self.localNodeIdentityState { return }
         // Retry on the node refresh lifecycle so transient storage failures recover
         // without moving identity I/O back into SwiftUI view evaluation.
-        self.localNodeIdentityState = .loading
-        self.localNodeIdentityLoad = Task { [weak self] in
+        self.localNodeIdentityPreparationTask = Task { [weak self] in
             guard let self else { return }
-            let profile = self.localNodeIdentityProfile
-            let loader = self.localNodeIDLoader
-            let nodeID = await Task.detached(priority: .utility) {
-                loader(profile)
-            }.value
-            self.localNodeIdentityState = nodeID.map(LocalNodeIdentityState.available) ?? .unavailable
-            self.localNodeIdentityLoad = nil
+            await self.prepareLocalNodeIdentity()
+            self.localNodeIdentityPreparationTask = nil
         }
     }
 
     func prepareLocalNodeIdentity() async {
-        self.scheduleLocalNodeIdentityPreparation()
-        await self.localNodeIdentityLoad?.value
+        if case .available = self.localNodeIdentityState {
+            return
+        }
+
+        let generation: UInt64
+        let task: Task<String?, Never>
+        if let load = self.localNodeIdentityLoad {
+            generation = load.generation
+            task = load.task
+        } else {
+            self.localNodeIdentityState = .loading
+            self.localNodeIdentityLoadGeneration &+= 1
+            generation = self.localNodeIdentityLoadGeneration
+            let profile = self.localNodeIdentityProfile
+            let loader = self.localNodeIDLoader
+            task = Task.detached(priority: .utility) {
+                loader(profile)
+            }
+            self.localNodeIdentityLoad = (generation, task)
+        }
+
+        let nodeID = await task.value
+        guard self.localNodeIdentityLoad?.generation == generation else { return }
+        self.localNodeIdentityLoad = nil
+        self.localNodeIdentityState = nodeID.map(LocalNodeIdentityState.available) ?? .unavailable
     }
 
     func refresh() async {

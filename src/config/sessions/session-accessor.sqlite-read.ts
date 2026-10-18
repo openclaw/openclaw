@@ -86,53 +86,51 @@ export function createTranscriptIdentityReader(
   sessionId: string,
 ) {
   const actor = readSessionActorTransactionState(database, { sessionId });
-  const db = getSessionKysely(database.db);
-  let read: ReturnType<typeof prepareRead> | undefined;
-  const prepareRead = () =>
-    prepareSqliteQuerySync<
-      string,
-      {
-        event_id: string | null;
-        parent_id: string | null;
-        seq: number | null;
-        cold: boolean | number;
-      }
-    >(database.db, (parameter) =>
-      db
-        .selectFrom(db.selectNoFrom((eb) => eb.val(sessionId).as("session_id")).as("target"))
-        .leftJoin("transcript_event_identities as identity", (join) =>
-          join.onRef("identity.session_id", "=", "target.session_id").on(
-            "identity.event_id",
-            "=",
-            parameter((eventId) => eventId),
-          ),
-        )
-        .select(["identity.event_id", "identity.parent_id", "identity.seq"])
-        .select((eb) =>
-          eb
-            .exists(
-              eb
-                .selectFrom("session_transcript_cold_archives")
-                .select("session_id")
-                .where("session_id", "=", sessionId),
-            )
-            .as("cold"),
-        ),
-    );
-  return (eventId: string) => {
-    if (actor) {
+  if (actor) {
+    return (eventId: string) => {
       if (actor.transcript.coldArchive) {
         throw new SessionTranscriptColdError(sessionId);
       }
       const row = actor.transcript.identities.get(eventId);
-      if (row || actor.transcript.complete) {
-        return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
-      }
+      return row ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq } : undefined;
+    };
+  }
+  const db = getSessionKysely(database.db);
+  const read = prepareSqliteQuerySync<
+    string,
+    {
+      event_id: string | null;
+      parent_id: string | null;
+      seq: number | null;
+      cold: boolean | number;
     }
-    return runSqliteReadOperationSync(database.db, () => {
+  >(database.db, (parameter) =>
+    db
+      .selectFrom(db.selectNoFrom((eb) => eb.val(sessionId).as("session_id")).as("target"))
+      .leftJoin("transcript_event_identities as identity", (join) =>
+        join.onRef("identity.session_id", "=", "target.session_id").on(
+          "identity.event_id",
+          "=",
+          parameter((eventId) => eventId),
+        ),
+      )
+      .select(["identity.event_id", "identity.parent_id", "identity.seq"])
+      .select((eb) =>
+        eb
+          .exists(
+            eb
+              .selectFrom("session_transcript_cold_archives")
+              .select("session_id")
+              .where("session_id", "=", sessionId),
+          )
+          .as("cold"),
+      ),
+  );
+  return (eventId: string) =>
+    runSqliteReadOperationSync(database.db, () => {
       assertTransactionUsable(database.db);
       // The singleton keeps cold-state evidence even when this identity is absent.
-      const row = (read ??= prepareRead())(eventId).rows[0]!;
+      const row = read(eventId).rows[0]!;
       assertTransactionUsable(database.db);
       if (row.cold) {
         throw new SessionTranscriptColdError(sessionId);
@@ -141,7 +139,6 @@ export function createTranscriptIdentityReader(
         ? { eventId: row.event_id, parentId: row.parent_id, seq: row.seq }
         : undefined;
     });
-  };
 }
 
 export function readTranscriptIdentityByEventId(

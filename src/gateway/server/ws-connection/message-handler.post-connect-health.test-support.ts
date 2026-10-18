@@ -314,10 +314,8 @@ export function attachGatewayHarness(options: {
     connectionWork.beginClose();
     await connectionWork.drain();
   });
-  const frames: unknown[] = [];
   let finishSocketSend: ((error?: Error) => void) | undefined;
   const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
-    frames.push(JSON.parse(_payload));
     if (options.deferSocketSend) {
       finishSocketSend = (error) => cb?.(error);
       return;
@@ -338,10 +336,7 @@ export function attachGatewayHarness(options: {
         return socket;
       }),
     } as unknown as WebSocket);
-  const send = vi.fn((frame: unknown) => {
-    frames.push(frame);
-    return { kind: "sent" } as const;
-  });
+  const send = vi.fn((_frame: unknown) => ({ kind: "sent" }) as const);
   let client: unknown = options.client ?? null;
   let registeredProfileId: string | undefined;
   const refreshedProfileIds: Array<string | undefined> = [];
@@ -458,7 +453,6 @@ export function attachGatewayHarness(options: {
     onMessage(Buffer.from(data));
   };
   return {
-    frames,
     whenAttached: attachment.promise,
     runWhenIdle: () => connectionWork.runWhenIdle(() => {}),
     advanceHandshakePhase,

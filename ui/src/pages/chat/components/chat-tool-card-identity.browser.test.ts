@@ -1,18 +1,16 @@
-import { createComponent, createSignal } from "solid-js";
+import { html, nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
-const views = new Map<HTMLElement, () => void>();
+const containers: HTMLElement[] = [];
 afterEach(() => {
-  for (const [container, unmount] of views) {
-    unmount();
+  for (const container of containers.splice(0)) {
+    render(nothing, container);
     container.remove();
   }
-  views.clear();
   window.getSelection()?.removeAllRanges();
 });
 
@@ -40,47 +38,28 @@ function fixture(mode: "inline" | "standalone") {
     };
   });
   const container = document.body.appendChild(document.createElement("div"));
-  let root: ReturnType<typeof mountSolid> | undefined;
-  let refresh: () => void;
-  views.set(container, () => root?.unmount());
+  containers.push(container);
   const toggledKeys: string[] = [];
   const expansion = new Map<string, boolean>();
   for (const row of rows) {
     expansion.set(`${row.key}:toolcard:0`, true);
     expansion.set(`toolmsg:${row.key}`, true);
   }
-  const draw = () => {
-    if (root) {
-      refresh();
-      flush();
-    } else {
-      root = mountSolid(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          refresh = () => setRevision((value) => value + 1);
-          return rows.map((row) =>
-            createComponent(GroupedMessage, {
-              preparation: prepareChatMessageRender(row.message),
-              messageKey: row.key,
-              get options() {
-                revision();
-                return {
-                  isStreaming: false,
-                  showReasoning: false,
-                  showToolCalls: true,
-                  isToolExpanded: (key: string) => expansion.get(key) ?? false,
-                  isToolMessageExpanded: (key: string) => expansion.get(key),
-                  onToggleToolExpanded: toggle,
-                  onToggleToolMessageExpanded: toggle,
-                };
-              },
-            }),
-          );
-        },
-        { container },
-      );
-    }
-  };
+  const draw = () =>
+    render(
+      html`${rows.map((row) =>
+        renderGroupedMessage(prepareChatMessageRender(row.message), row.key, {
+          isStreaming: false,
+          showReasoning: false,
+          showToolCalls: true,
+          isToolExpanded: (key) => expansion.get(key) ?? false,
+          isToolMessageExpanded: (key) => expansion.get(key),
+          onToggleToolExpanded: toggle,
+          onToggleToolMessageExpanded: toggle,
+        }),
+      )}`,
+      container,
+    );
   function toggle(key: string) {
     toggledKeys.push(key);
     expansion.set(key, !expansion.get(key));

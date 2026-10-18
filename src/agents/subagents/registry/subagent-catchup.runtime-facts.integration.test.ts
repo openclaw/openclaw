@@ -23,7 +23,6 @@ import {
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../../test-utils/database-cleanup.js";
 import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
-import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { buildRuntimeFactsContext } from "../../runtime-facts-prompt.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
@@ -77,11 +76,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           outcome: { status: "ok" },
         },
         expectsCompletionMessage: true,
-        completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: result }).terminalReply,
-          resultText: result,
-        },
+        completion: { required: true, resultText: result },
         delivery: { status },
       });
       saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));
@@ -178,7 +173,7 @@ describe("parent runtime facts from retained completion obligations", () => {
     },
   );
 
-  it.each(["retained result", "requester final pending", "older generation"])(
+  it.each(["fallback result", "requester final pending", "older generation"])(
     "exposes the owned result without acknowledging it: %s",
     async (scenario) => {
       setRuntimeConfigSnapshot({ agents: { entries: { main: {}, other: {} } } });
@@ -199,16 +194,16 @@ describe("parent runtime facts from retained completion obligations", () => {
         expectsCompletionMessage: true,
         completion: {
           required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
+          resultText: scenario === "fallback result" ? null : RESULT,
+          ...(scenario === "fallback result" ? { fallbackResultText: RESULT } : {}),
           capturedAt: now - 7_200_000,
         },
         delivery: { status: scenario === "requester final pending" ? "delivered" : "pending" },
         ...(scenario === "requester final pending"
           ? {
               requesterSettleWake: {
-                status: "pending" as const,
-                attemptCount: 0,
+                status: "dispatching" as const,
+                attemptCount: 1,
                 requesterYieldBatch: true as const,
                 rearmGeneration: 1,
                 batchRunIds: ["catchup-original"],
@@ -231,7 +226,11 @@ describe("parent runtime facts from retained completion obligations", () => {
         );
       }
       const before = loadSubagentRegistryFromSqlite();
-      expect(before.get(child.runId)?.completion?.resultText).toBe(RESULT);
+      expect(
+        scenario === "fallback result"
+          ? before.get(child.runId)?.completion?.fallbackResultText
+          : before.get(child.runId)?.completion?.resultText,
+      ).toBe(RESULT);
       const params = {
         cfg: getRuntimeConfig(),
         agentId: "main",
@@ -279,11 +278,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           endedAt: Date.now() - 7_200_000,
           outcome: { status: "ok" },
         },
-        completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
-        },
+        completion: { required: true, resultText: RESULT },
         delivery: { status: "pending" },
       });
       // Use the real durable writer without this reader process's publication/cache bridge.
@@ -308,11 +303,7 @@ describe("parent runtime facts from retained completion obligations", () => {
           requesterSessionKey: PARENT,
           requesterAgentId: "main",
           execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "error" } },
-          completion: {
-            required: true,
-            terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-            resultText: RESULT,
-          },
+          completion: { required: true, resultText: RESULT },
           delivery: {
             status: "failed",
             ...(disposition === "intentional non-delivery"
@@ -348,11 +339,7 @@ describe("parent runtime facts from retained completion obligations", () => {
             endedAt: now - 7_200_000 + index,
             outcome: { status: "ok" },
           },
-          completion: {
-            required: true,
-            terminalReply: prepareAgentRunTerminalReply({ rawText: untrustedResult }).terminalReply,
-            resultText: untrustedResult,
-          },
+          completion: { required: true, resultText: untrustedResult },
           delivery: { status: "pending" },
         }),
       );
@@ -389,12 +376,7 @@ describe("parent runtime facts from retained completion obligations", () => {
         requesterAgentId: "main",
         execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
         expectsCompletionMessage: true,
-        completion: {
-          required: true,
-          terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-          resultText: RESULT,
-          capturedAt: Date.now(),
-        },
+        completion: { required: true, resultText: RESULT, capturedAt: Date.now() },
         delivery: { status: "delivered", deliveredAt: Date.now() },
       }),
     );
@@ -419,11 +401,7 @@ describe("parent runtime facts from retained completion obligations", () => {
       controllerStorePath: storePath,
       requesterAgentId: "main",
       execution: { status: "terminal", endedAt: Date.now() - 7_200_000, outcome: { status: "ok" } },
-      completion: {
-        required: true,
-        terminalReply: prepareAgentRunTerminalReply({ rawText: RESULT }).terminalReply,
-        resultText: RESULT,
-      },
+      completion: { required: true, resultText: RESULT },
       delivery: { status: "pending" },
     });
     saveSubagentRegistryToSqlite(new Map([[child.runId, child]]));

@@ -27,6 +27,7 @@ import { withExtractedArchiveRoot } from "../../infra/install-flow.js";
 import type { PackageDirInstallTransaction } from "../../infra/install-package-dir.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
+import { markClawPackageIndependentlyOwned } from "../../state/claw-package-adoption.js";
 import {
   CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
   installExtractedSkillRoot,
@@ -474,7 +475,6 @@ export async function performClawHubSkillInstall(
                 ...(result.replacementBlocked !== undefined
                   ? { replacementBlocked: result.replacementBlocked }
                   : {}),
-                ...(result.recoveryIncomplete ? { recoveryIncomplete: true } : {}),
               } satisfies InstallClawHubSkillResult);
         },
       });
@@ -565,6 +565,15 @@ export async function performClawHubSkillInstall(
         };
         if (!directoryTransaction) {
           await refreshDiscovery();
+        }
+        if (!params.clawManaged) {
+          await markClawPackageIndependentlyOwned({
+            kind: "skill",
+            source: "clawhub",
+            ref: formatClawHubSkillRef(params),
+            version,
+            workspace: params.workspaceDir,
+          });
         }
         await reportClawHubSkillInstallTelemetry({
           baseUrl: params.baseUrl,

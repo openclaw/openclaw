@@ -19,7 +19,7 @@ import {
 } from "../shared/path-binding.js";
 import { createTarArchive } from "./dir-fetch-archive.js";
 import {
-  createReadErrorClassifier,
+  classifyFsSafeReadError,
   readAbsolutePath,
   resolveBoundReadDirectory,
   statRequiredDirectory,
@@ -34,7 +34,17 @@ type DirFetchParams = {
   expectedBinding?: unknown;
 };
 
-const classifyFsError = createReadErrorClassifier({ ENOENT: "NOT_FOUND" } as const);
+function classifyFsError(err: unknown) {
+  const safeCode = classifyFsSafeReadError(err);
+  if (safeCode) {
+    return safeCode;
+  }
+  const code = (err as { code?: string } | null)?.code;
+  if (code === "ENOENT") {
+    return "NOT_FOUND";
+  }
+  return "READ_ERROR";
+}
 
 async function preflightDu(dirPath: string, maxBytes: number): Promise<boolean> {
   // du -sk gives size in 1KB blocks (512-byte blocks on macOS with -k)

@@ -5,7 +5,6 @@ import { notifyPreparedModelRuntimePublication } from "../agents/prepared-model-
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { beginPluginStatePublication } from "../plugin-state/plugin-state-publication.js";
 import { createPluginStateKeyedStoreV2 } from "../plugin-state/plugin-state-store.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -321,17 +320,6 @@ it("prepares native model ownership in workers and invalidates only its committe
         sql.restore();
       }
       const initialReads = ownershipReads;
-      const source = projection.capture({ agentId: "main", key })?.runtimeOwnershipDependencies?.[0]
-        ?.identity;
-      expect(source).toBeDefined();
-      const pending = beginPluginStatePublication(() => source!);
-      try {
-        await projection.ensureMaterialized();
-        expect(snapshot()?.model).toBe("gpt-5.6-sol");
-        expect(ownershipReads).toBe(initialReads);
-      } finally {
-        pending.finish("completed");
-      }
       await bindings.register("unrelated", "gpt-5.6-luna");
       await projection.ensureMaterialized();
       expect(ownershipReads).toBe(initialReads);
@@ -341,11 +329,6 @@ it("prepares native model ownership in workers and invalidates only its committe
       await bindings.delete(key);
       await projection.ensureMaterialized();
       expect(snapshot()).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
-      const beforeUnknown = ownershipReads;
-      beginPluginStatePublication(() => source!).finish("unknown");
-      await projection.ensureMaterialized();
-      expect(ownershipReads).toBeGreaterThan(beforeUnknown);
-      expect(snapshot()?.model).toBe("gpt-5.5");
       expect(syncOwnership).not.toHaveBeenCalled();
     } finally {
       projection?.dispose();

@@ -1,17 +1,18 @@
-import { Show } from "solid-js";
-import type { SolidRouteProps } from "../../app-route-types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { solidContent } from "../../lit/solid-content.tsx";
 import { SystemsController, type SystemsRouteData } from "./systems-controller.ts";
-import { SystemsPage } from "./systems-page.tsx";
+import "./systems-page.tsx";
 import "./systems-sidebar.tsx";
 
-/** Route rendering stays in the lazy page module, not in startup route metadata. */
-export function renderSolid(props: SolidRouteProps<SystemsRouteData>) {
+function SystemsPageHost(props: { routeData: SystemsRouteData; presented: boolean }) {
   return (
-    <Show when={props.data}>
-      {(data) => <SystemsPage controller={data().controller} presented={props.presented} />}
-    </Show>
+    <openclaw-systems-page prop:routeData={props.routeData} prop:presented={props.presented} />
   );
+}
+
+/** Route rendering stays in the lazy page module, not in startup route metadata. */
+export function render(data: SystemsRouteData | undefined, _pending: boolean, presented = true) {
+  return data ? solidContent(SystemsPageHost, { routeData: data, presented }) : undefined;
 }
 
 const sidebarNodes = new WeakMap<

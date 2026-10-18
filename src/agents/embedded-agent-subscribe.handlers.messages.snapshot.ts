@@ -1,8 +1,5 @@
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
-import {
-  createStreamingDirectiveAccumulator,
-  splitTrailingDirective,
-} from "../auto-reply/reply/streaming-directives.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   assistantVisibleTextFilters,
@@ -51,24 +48,20 @@ export function extractAssistantStreamSnapshot(
   }
   const state: EmbeddedAgentSubscribeState["partialBlockState"] = createAssistantStreamBlockState();
   let rawText = "";
-  const protocol = createStreamingDirectiveAccumulator();
   const blockSources: { text: string; separator: string; finalAnswer: boolean }[] = [];
   const parts: { separator: string; index?: number }[] = [];
   const renderText = prepareAssistantVisibleText(observedMessage, (part, final, phase, index) => {
     // Native blocks can divide a tag or fence; only complete visible parts get a separator.
     const separator =
-      protocol.sourceText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
+      rawText && !state.pendingTagFragment && !state.pendingFenceFragment ? "\n" : "";
     const previousIndex = parts.at(-1)?.index;
     parts.push({ separator, index });
-    rawText += part;
-    const preparedStart = protocol.sourceText.length;
-    protocol.consume(part, { final: final && options?.final !== false });
-    const preparedPart = protocol.sourceText.slice(preparedStart);
+    rawText += `${separator}${part}`;
     // Final prose preserves inline tag examples; generic streams still hide reasoning.
     const preparedFinal = phase === "final_answer" && !ctx.params.enforceFinalTag;
     const visible = preparedFinal
-      ? `${separator}${preparedPart}`
-      : ctx.stripBlockTags(`${separator}${preparedPart}`, state, {
+      ? `${separator}${part}`
+      : ctx.stripBlockTags(`${separator}${part}`, state, {
           final: final && options?.final !== false,
         });
     const previous = blockSources.at(-1);
@@ -86,7 +79,7 @@ export function extractAssistantStreamSnapshot(
         finalAnswer: preparedFinal,
       });
     }
-    return preparedFinal ? preparedPart : visible;
+    return preparedFinal ? part : visible;
   });
   const visibleBlockSource = blockSources
     .map(({ text, separator, finalAnswer }) => ({

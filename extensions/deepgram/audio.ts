@@ -25,17 +25,20 @@ function readDeepgramTranscript(payload: Record<string, unknown>): string | unde
       throw new Error("Audio transcription failed: malformed JSON response");
     }
     const alternative = asOptionalRecord(channel.alternatives[0]);
-    if (!alternative || alternative.transcript === undefined) {
+    if (!alternative) {
       return undefined;
     }
-    if (typeof alternative.transcript !== "string") {
+    if (alternative.transcript !== undefined && typeof alternative.transcript !== "string") {
       throw new Error("Audio transcription failed: malformed JSON response");
     }
-    transcripts.push(alternative.transcript.trim());
+    const text = alternative.transcript?.trim();
+    if (text) {
+      transcripts.push(text);
+    }
   }
   // Multichannel results contain independent tracks, not alternative hypotheses.
   // Retain the best transcript per track in provider order, including repeats.
-  return transcripts.length ? transcripts.filter(Boolean).join("\n\n") : undefined;
+  return transcripts.join("\n\n");
 }
 
 export async function transcribeDeepgramAudio(

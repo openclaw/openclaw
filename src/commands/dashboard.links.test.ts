@@ -9,7 +9,6 @@ const resolveGatewayPortMock = vi.hoisted(() => vi.fn());
 const resolveControlUiLinksMock = vi.hoisted(() => vi.fn());
 const detectBrowserOpenSupportMock = vi.hoisted(() => vi.fn());
 const openUrlMock = vi.hoisted(() => vi.fn());
-const openUrlPrivatelyMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const issueDeviceBootstrapTokenMock = vi.hoisted(() => vi.fn());
@@ -27,11 +26,6 @@ vi.mock("./onboard-helpers.js", () => ({
   detectBrowserOpenSupport: detectBrowserOpenSupportMock,
   openUrl: openUrlMock,
   formatControlUiSshHint: formatControlUiSshHintMock,
-}));
-
-vi.mock("../infra/browser-handoff.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/browser-handoff.js")>()),
-  openUrlPrivately: openUrlPrivatelyMock,
 }));
 
 vi.mock("../infra/clipboard.js", () => ({
@@ -112,7 +106,6 @@ describe("dashboardCommand", () => {
     resolveControlUiLinksMock.mockClear();
     detectBrowserOpenSupportMock.mockClear();
     openUrlMock.mockClear();
-    openUrlPrivatelyMock.mockReset().mockResolvedValue(true);
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
     issueDeviceBootstrapTokenMock.mockReset();
@@ -137,7 +130,7 @@ describe("dashboardCommand", () => {
     mockSnapshot(secretToken);
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(true);
+    openUrlMock.mockResolvedValue(true);
 
     await dashboardCommand(runtime);
 
@@ -145,11 +138,9 @@ describe("dashboardCommand", () => {
     expect(copyToClipboardMock).toHaveBeenCalledWith(
       "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
-    expect(openUrlPrivatelyMock).toHaveBeenCalledWith(
+    expect(openUrlMock).toHaveBeenCalledWith(
       "http://127.0.0.1:18789/#bootstrapToken=browser-bootstrap&bootstrapProfile=owner&gatewayUrl=ws%3A%2F%2F127.0.0.1%3A18789",
     );
-    // The plain opener must never receive the credential URL.
-    expect(openUrlMock).not.toHaveBeenCalled();
 
     // The logged output must never contain the token — it flows into
     // console-captured log files readable by operator.read-scoped devices.
@@ -178,7 +169,7 @@ describe("dashboardCommand", () => {
     });
     copyToClipboardMock.mockResolvedValue(false);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(false);
+    openUrlMock.mockResolvedValue(false);
     formatControlUiSshHintMock.mockReturnValue("ssh hint");
 
     await dashboardCommand(runtime);
@@ -195,7 +186,7 @@ describe("dashboardCommand", () => {
     mockSnapshot("shhhh");
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(false);
+    openUrlMock.mockResolvedValue(false);
 
     await dashboardCommand(runtime);
 
@@ -259,7 +250,7 @@ describe("dashboardCommand", () => {
     });
     copyToClipboardMock.mockResolvedValue(true);
     detectBrowserOpenSupportMock.mockResolvedValue({ ok: true });
-    openUrlPrivatelyMock.mockResolvedValue(true);
+    openUrlMock.mockResolvedValue(true);
     resolveSecretRefValuesMock.mockRejectedValue(new Error("missing env var"));
 
     await dashboardCommand(runtime);

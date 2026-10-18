@@ -1,5 +1,4 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
 import { hasCommandProcessCleanupError, type SpawnResult } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
@@ -162,22 +161,12 @@ export async function runCronCommandJob(params: {
       termination !== "no-output-timeout" &&
       termination !== "signal";
     const status: CronRunStatus = ok && !cleanupFailure ? "ok" : "error";
-    const rawSummary = buildCronCommandSummary({
+    const summary = buildCronCommandSummary({
       stdout: result.stdout,
       stderr: result.stderr,
       preservedStdoutLines: result.preservedStdoutLines,
       preservedStderrLines: result.preservedStderrLines,
     });
-    const rawOutput =
-      result.stdout.trim() && result.stderr.trim()
-        ? `stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`
-        : result.stdout.trim()
-          ? result.stdout
-          : result.stderr;
-    const prepared =
-      status === "ok" ? prepareAgentRunTerminalReply({ rawText: rawOutput }) : undefined;
-    const summary =
-      prepared && prepared.text !== rawOutput ? prepared.text || undefined : rawSummary;
     const error = ok
       ? cleanupFailure?.message
       : commandErrorMessage({
@@ -195,7 +184,6 @@ export async function runCronCommandJob(params: {
             : undefined;
     return {
       status,
-      ...(prepared ? { replyDisposition: prepared.terminalReply.disposition } : {}),
       ...(error ? { error } : {}),
       ...(failureNotificationDetail
         ? {

@@ -76,16 +76,13 @@ const timeoutMs = readStrictInteger({ ...timeoutOption, allowZero: true });
 const attemptTimeoutMs = readStrictInteger(attemptTimeoutOption);
 const maxBodyBytes = readStrictInteger(maxBodyOption);
 const url = new URL(probePath, baseUrl).toString();
-if (expectKind !== "live" && expectKind !== "ready" && expectKind !== "started") {
+if (expectKind !== "live" && expectKind !== "ready") {
   throw new Error(`unknown probe expectation: ${expectKind}`);
 }
 
 function matchesExpectation(body) {
   if (expectKind === "live") {
     return body?.ok === true && body?.status === "live";
-  }
-  if (expectKind === "started") {
-    return body?.ok === true && body?.status === "started";
   }
   return body?.ready === true;
 }

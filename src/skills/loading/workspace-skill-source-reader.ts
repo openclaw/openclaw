@@ -13,7 +13,6 @@ import {
   loadWorkspaceSkillSourceEntries,
   loadExecutionSkillEntries,
   warnInvalidSkill,
-  type SkillSourceReadBatch,
 } from "./skill-root-loader.js";
 import { tryRealpath } from "./symlink-targets.js";
 import type {
@@ -24,7 +23,6 @@ import type {
 /** Run on the workspace host using an admitted source plan and native discovery limits. */
 export function readWorkspaceSkillSources(
   request: WorkspaceSkillSourceRequest,
-  batch?: SkillSourceReadBatch,
 ): WorkspaceSkillSources {
   const config: OpenClawConfig = {
     skills: {
@@ -38,9 +36,9 @@ export function readWorkspaceSkillSources(
           config,
           bundledSkillsDir: request.sourcePlan.bundledSkillsDir,
         })
-      : loadWorkspaceSkillSourceEntries(request.sourcePlan, config, batch);
+      : loadWorkspaceSkillSourceEntries(request.sourcePlan, config);
   const executionEntries = request.executionWorkspaceDir
-    ? loadExecutionSkillEntries(request.executionWorkspaceDir, config, batch)
+    ? loadExecutionSkillEntries(request.executionWorkspaceDir, config)
     : [];
   const bins = [
     ...new Set([

@@ -7,7 +7,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { ensureCronRunReceiptSchema } from "../cron/store/run-receipt-store.js";
 import { runSqliteSchemaReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { preflightOpenClawDatabaseSchemas } from "./openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openOpenClawStateReadOnlyLocation } from "./openclaw-state-db-read-connection.js";
@@ -76,7 +75,7 @@ it.each(["managed transaction", "implicit snapshot"] as const)(
       if (kind === "managed transaction") {
         runSqliteDeferredTransactionSync(db, migrateWhileReading);
       } else {
-        runSqliteSchemaReadSnapshotSync(requireNativeSqliteDatabase(db), migrateWhileReading);
+        runSqliteSchemaReadSnapshotSync(db, migrateWhileReading);
       }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {

@@ -105,7 +105,26 @@ export function projectCodexDynamicTools<T extends CodexToolDescriptor>(
 } {
   const projectedTools: ProjectedCodexDynamicTool<T>[] = [];
   const quarantinedTools: CodexDynamicToolSchemaQuarantine[] = [];
-  for (const [toolIndex, tool] of tools.entries()) {
+  let length: number;
+  try {
+    length = tools.length;
+  } catch {
+    return {
+      tools: [],
+      quarantinedTools: [{ tool: "tool[0]", violations: ["tool[0] is unreadable"] }],
+    };
+  }
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    let tool: T;
+    try {
+      tool = tools[toolIndex]!;
+    } catch {
+      quarantinedTools.push({
+        tool: `tool[${toolIndex}]`,
+        violations: [`tool[${toolIndex}] is unreadable`],
+      });
+      continue;
+    }
     const descriptor = readCodexDynamicToolDescriptor(tool, toolIndex);
     if ("diagnostic" in descriptor) {
       quarantinedTools.push(descriptor.diagnostic);

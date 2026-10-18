@@ -109,28 +109,23 @@ export async function markCodexAuthProfileBlockedFromRateLimits(params: {
   }
 }
 
-export async function resolveCodexTurnStartError(params: {
+export async function formatCodexTurnStartUsageLimitError(params: {
   client: CodexAppServerClient;
   error: unknown;
   errorNotification?: CodexServerNotification;
   rateLimitsRevisionBeforeTurnStart?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<(CodexUsageLimitErrorResult & { promptError: Error }) | undefined> {
-  const source = readCodexTurnStartUsageLimitErrorSource(
-    params.client,
-    params.error,
-    params.errorNotification,
-    params.rateLimitsRevisionBeforeTurnStart,
-  );
-  const usageLimit = await refreshCodexUsageLimitError({ ...params, source });
-  if (usageLimit) {
-    return { ...usageLimit, promptError: new CodexUsageLimitPromptError(usageLimit.message) };
-  }
-  // Startup RPC errors carry the same provider facts as terminal notifications.
-  // Normalize them before the generic runner loses the native error envelope.
-  const promptError = resolveCodexPromptError(source);
-  return promptError instanceof Error ? { message: promptError.message, promptError } : undefined;
+}): Promise<CodexUsageLimitErrorResult | undefined> {
+  return refreshCodexUsageLimitError({
+    ...params,
+    source: readCodexTurnStartUsageLimitErrorSource(
+      params.client,
+      params.error,
+      params.errorNotification,
+      params.rateLimitsRevisionBeforeTurnStart,
+    ),
+  });
 }
 
 export async function refreshCodexUsageLimitPromptError(params: {

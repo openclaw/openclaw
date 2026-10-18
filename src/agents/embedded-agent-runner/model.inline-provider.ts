@@ -24,10 +24,9 @@ import {
 /**
  * Normalizes inline `models.providers` config into runtime model entries.
  */
-export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow" | "input"> & {
+export type InlineModelEntry = Omit<ModelDefinitionConfig, "api" | "contextWindow"> & {
   api?: Api;
   contextWindow?: number;
-  input: ReturnType<typeof resolveProviderModelInput>;
   provider: string;
   baseUrl?: string;
   headers?: Record<string, string>;
@@ -187,6 +186,12 @@ export function completeInlineProviderModel(
     api: model.api ?? providerConfig.api ?? "openai-responses",
     baseUrl: model.baseUrl ?? "",
     reasoning: model.reasoning ?? false,
+    input: resolveProviderModelInput({
+      provider: model.provider,
+      modelId: model.id,
+      modelName: model.name,
+      input: model.input,
+    }),
     cost: model.cost ?? normalizeResolvedPricing({}),
     contextWindow:
       model.contextWindow ?? Math.max(model.contextTokens ?? 0, DEFAULT_CONTEXT_TOKENS),

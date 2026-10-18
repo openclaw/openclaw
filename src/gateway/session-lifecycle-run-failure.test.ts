@@ -175,7 +175,7 @@ describe("durable pre-reply run failure", () => {
       );
       assert(resolved.action === "complete");
       const result = resolved.result;
-      const notice = "No answer was returned. Ask again if you still need one.";
+      const notice = "⚠️ Agent couldn't generate a response. Please try again.";
       let persistence: Promise<void> | undefined;
       const h = createAgentEventTestHarness({
         lifecycleErrorRetryGraceMs: 0,
@@ -784,7 +784,7 @@ describe("CLI history through Gateway terminal persistence", () => {
   });
 
   it.each(["close", "fallback"] as const)(
-    "settles a closed writer but rejects a replaced candidate: %s",
+    "rejects a captured writer after %s without changing history",
     async (revoke) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({});
@@ -797,18 +797,8 @@ describe("CLI history through Gateway terminal persistence", () => {
           clearAgentRunTerminalWriteContext(f.admission.operationalRunInstance);
         }
         try {
-          if (revoke === "fallback") {
-            await expect(pending).rejects.toThrow("Terminal write owner changed");
-            expect(await loadTranscriptEvents(f.cliTarget)).toEqual(before);
-          } else {
-            await pending;
-            await f.persist("error");
-            expect(loadSessionEntry(f.cliTarget)?.status).toBe("timeout");
-            expect(await loadTranscriptEvents(f.cliTarget)).toHaveLength(before.length + 1);
-            expect((await f.laterContext("account-a")).reseedMessages).toContainEqual(
-              expect.objectContaining({ role: "user", content: "Prior account-owned request" }),
-            );
-          }
+          await expect(pending).rejects.toThrow("Terminal write owner changed");
+          expect(await loadTranscriptEvents(f.cliTarget)).toEqual(before);
         } finally {
           f.admission.close();
         }

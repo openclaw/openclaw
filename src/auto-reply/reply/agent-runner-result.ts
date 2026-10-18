@@ -5,14 +5,11 @@ import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { enqueueGoalContinuation } from "./goal-continuation.js";
-import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 
 export async function finalizeReplyAgentRun(
   context: FinalizeReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const initialGoalId = context.activeSessionEntry?.goal?.id;
-  const { result, accounting: completedAccounting } = await withAgentTurnCompletion(
+  return withAgentTurnCompletion(
     {
       agentId: context.followupRun.run.agentId,
       storePath: context.storePath,
@@ -53,42 +50,13 @@ export async function finalizeReplyAgentRun(
         });
         await completion?.complete();
         if (!diagnostics) {
-          return { result: prepared.value, accounting };
+          return prepared.value;
         }
-        return {
-          result: prepared.value
-            ? [...(Array.isArray(prepared.value) ? prepared.value : [prepared.value]), diagnostics]
-            : diagnostics,
-          accounting,
-        };
+        return prepared.value
+          ? [...(Array.isArray(prepared.value) ? prepared.value : [prepared.value]), diagnostics]
+          : diagnostics;
       }
-      return {
-        result: await completeReplyAgentRun({ context: current, accounting, prepared }),
-        accounting,
-      };
+      return completeReplyAgentRun({ context: current, accounting, prepared });
     },
   );
-  if (
-    !context.isHeartbeat &&
-    context.sessionKey &&
-    context.storePath &&
-    context.execution.status === "ok" &&
-    completedAccounting.activeSessionEntry?.goal?.status === "active"
-  ) {
-    await enqueueGoalContinuation({
-      base: context.followupRun,
-      result: completedAccounting.runResult,
-      initialGoalId,
-      expectedSession: completedAccounting.expectedSession,
-      sessionKey: context.sessionKey,
-      storePath: context.storePath,
-      reader: getReplyOperationSessionReader(context.replyOperation),
-      queueKey: context.queueKey,
-      settings: context.resolvedQueue,
-      sourceRunId: context.runId,
-      operation: context.replyOperation,
-      runFollowup: context.runFollowupTurn,
-    });
-  }
-  return context.returnWithQueuedFollowupDrain(result);
 }

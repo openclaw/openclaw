@@ -38,3 +38,7 @@ export function recordRecentQueueMessageId(
     };
   }
 }
+
+export function resetRecentQueuedMessageIdDedupe(): void {
+  RECENT_QUEUE_MESSAGE_IDS.clear();
+}

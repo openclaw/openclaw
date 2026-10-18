@@ -32,7 +32,7 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "./session-store-target-runtime.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { projectionLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 afterAll(clearRuntimeConfigSnapshot);
@@ -64,13 +64,27 @@ describe("transcript turn physical identity", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
-  it("resolves the current transcript and lifecycle revision across entry writes", async () => {
+  it("resolves the current transcript from receipt-maintained entry facts", async () => {
     const selected = scope("agent:main:current");
     replaceSessionEntrySync(selected, { sessionId, updatedAt: 1, lifecycleRevision: "first" });
     await readSessionEntriesFromStoreInWorker({
       agentId: "main",
       storePath: selected.storePath,
       sessionKeys: [selected.sessionKey],
+    });
+    const run = projectionLane.pool.run.bind(projectionLane.pool);
+    let runtimeReads = 0;
+    vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+      const reply = await run(...args);
+      if (
+        reply.ok &&
+        typeof reply.value !== "boolean" &&
+        !Array.isArray(reply.value) &&
+        reply.value.kind === "session-runtime-target"
+      ) {
+        runtimeReads++;
+      }
+      return reply;
     });
     expect(
       await transcriptTargets.resolveSessionTranscriptRuntimeTarget(selected, undefined, {
@@ -91,28 +105,7 @@ describe("transcript turn physical identity", () => {
       sessionKey: selected.sessionKey,
       selectedLifecycleRevision: "second",
     });
-  });
-
-  it("resolves a shared session ID to its transcript owner after the requested row's facts are retained", async () => {
-    const base = scope("agent:main:cron:job");
-    const run = scope(`${base.sessionKey}:run:${sessionId}`);
-    replaceSessionEntrySync(base, { sessionId, updatedAt: 1, lifecycleRevision: "base" });
-    replaceSessionEntrySync(run, { sessionId, updatedAt: 2, lifecycleRevision: "run" });
-    await readSessionEntriesFromStoreInWorker({
-      agentId: "main",
-      storePath: base.storePath,
-      sessionKeys: [base.sessionKey],
-    });
-    expect(
-      await transcriptTargets.resolveSessionTranscriptRuntimeTarget(base, undefined, {
-        keyFormat: "agent-qualified",
-      }),
-    ).toMatchObject({
-      sessionId,
-      sessionKey: run.sessionKey,
-      selectedSessionId: sessionId,
-      selectedLifecycleRevision: "run",
-    });
+    expect(runtimeReads).toBe(0);
   });
 
   it("reuses a selected target until an owning registry write reassigns it", async () => {

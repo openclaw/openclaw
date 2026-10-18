@@ -1,5 +1,4 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { normalizeOpenRouterModelFamilyId } from "openclaw/plugin-sdk/model-ref-parse";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import {
@@ -9,8 +8,8 @@ import {
   stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
+import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isOpenRouterDeepSeekV4ModelId, normalizeOpenRouterModelFamilyId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -20,9 +19,13 @@ import {
 const log = createSubsystemLogger("openrouter-stream");
 const openRouterThinkingStreamHooks = buildProviderStreamFamilyHooks("openrouter-thinking");
 
+function normalizeOpenRouterStringPreservingEmpty(value: unknown): string | undefined {
+  return readStringValue(value)?.trim();
+}
+
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
-  const provider = model.provider.trim().toLowerCase();
-  const baseUrl = model.baseUrl?.trim();
+  const provider = normalizeOpenRouterStringPreservingEmpty(model.provider)?.toLowerCase();
+  const baseUrl = normalizeOpenRouterStringPreservingEmpty(model.baseUrl);
   if (baseUrl) {
     return normalizeOpenRouterBaseUrl(baseUrl) === OPENROUTER_BASE_URL;
   }
@@ -34,13 +37,12 @@ function shouldPatchOpenRouterPayload(
   sourceApi?: ProviderWrapStreamFnContext["sourceApi"],
 ): boolean {
   // Standalone dispatch aliases retain the original API as their wire-policy owner.
-  return (
-    (sourceApi ?? model.api).trim() === "openai-completions" && isVerifiedOpenRouterRoute(model)
-  );
+  const api = normalizeOpenRouterStringPreservingEmpty(sourceApi ?? model.api);
+  return (api === undefined || api === "openai-completions") && isVerifiedOpenRouterRoute(model);
 }
 
 function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameters<StreamFn>[2] {
-  const apiKey = options?.apiKey?.trim();
+  const apiKey = normalizeOpenRouterStringPreservingEmpty(options?.apiKey);
   if (!apiKey) {
     return options;
   }
@@ -200,7 +202,7 @@ export function wrapOpenRouterProviderStream(
   const routedStreamFn = providerRouting
     ? injectOpenRouterRouting(ctx.streamFn, providerRouting, ctx.sourceApi)
     : ctx.streamFn;
-  const wrapStreamFn = openRouterThinkingStreamHooks.wrapStreamFn;
+  const wrapStreamFn = openRouterThinkingStreamHooks.wrapStreamFn ?? undefined;
   return composeProviderStreamWrappers(
     routedStreamFn,
     wrapStreamFn &&

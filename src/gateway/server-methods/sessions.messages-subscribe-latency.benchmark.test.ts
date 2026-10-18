@@ -62,15 +62,15 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
       subscribeSessionMessageEvents: subscribers.subscribe,
       listSessionPendingApprovals: runtime.replay,
     });
-    const phaseMs = { preparation: 0, pendingAfterExpiry: 0 };
-    const prepare = approvals.prepareOperatorApprovalReplay;
+    const phaseMs = { expiry: 0, pending: 0 };
+    const expire = approvals.expireDueOperatorApprovals;
     const pending = approvals.listPendingOperatorApprovals;
-    vi.spyOn(approvals, "prepareOperatorApprovalReplay").mockImplementation(async (...args) => {
+    vi.spyOn(approvals, "expireDueOperatorApprovals").mockImplementation(async (...args) => {
       const start = performance.now();
       try {
-        return await prepare(...args);
+        return await expire(...args);
       } finally {
-        phaseMs.preparation += performance.now() - start;
+        phaseMs.expiry += performance.now() - start;
       }
     });
     vi.spyOn(approvals, "listPendingOperatorApprovals").mockImplementation(async (...args) => {
@@ -78,7 +78,7 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
       try {
         return await pending(...args);
       } finally {
-        phaseMs.pendingAfterExpiry += performance.now() - start;
+        phaseMs.pending += performance.now() - start;
       }
     });
     const projection = getSessionRowProjection(context)!;
@@ -123,8 +123,8 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
           const samples: number[] = [];
           readMs = 0;
           currencyReads = 0;
-          phaseMs.preparation = 0;
-          phaseMs.pendingAfterExpiry = 0;
+          phaseMs.expiry = 0;
+          phaseMs.pending = 0;
           for (let index = 0; index < 50; index++) {
             const respond = vi.fn();
             const start = performance.now();
@@ -162,8 +162,8 @@ it("measures subscription dispatch with a 160k-token transcript", async () => {
               p50Ms: samples[25],
               p99Ms: samples[49],
               retainedReadMs: readMs / samples.length,
-              approvalStorePreparationMs: phaseMs.preparation / samples.length,
-              pendingAfterExpiryMs: phaseMs.pendingAfterExpiry / samples.length,
+              expiryMs: phaseMs.expiry / samples.length,
+              pendingMs: phaseMs.pending / samples.length,
               currencyReadsPerSubscribe: currencyReads / samples.length,
             }),
           );

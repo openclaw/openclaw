@@ -96,6 +96,7 @@ it.each([false, true])(
               { databasePath },
               unused,
               unused,
+              unused,
               () => writer,
             ),
           ),

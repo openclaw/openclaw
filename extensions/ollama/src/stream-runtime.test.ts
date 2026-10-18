@@ -122,14 +122,19 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     });
   });
 
-  it("preserves compat Kimi thinking and configured context", async () => {
-    const result = await compatPayload(
-      "kimi-k2.5:cloud",
-      { num_ctx: 65536 },
-      { tool_choice: "auto" },
-    );
-    expect(result.thinking).toEqual({ type: "enabled" });
-    expect(result.options).toEqual({ num_ctx: 65536 });
+  it.each([
+    {
+      name: "Kimi thinking and configured context",
+      id: "kimi-k2.5:cloud",
+      params: { num_ctx: 65536 },
+      payload: { tool_choice: "auto" },
+      expected: { thinking: { type: "enabled" }, options: { num_ctx: 65536 } },
+    },
+  ])("preserves compat $name", async ({ id, params, payload, expected }) => {
+    const result = await compatPayload(id, params, payload);
+    for (const [key, value] of Object.entries(expected)) {
+      expect(result[key]).toEqual(value);
+    }
   });
 
   it.each([
@@ -184,10 +189,15 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
 });
 
 describe("convertToOllamaMessages", () => {
-  it("converts legacy tool text without inventing metadata", () => {
-    expect(convertToOllamaMessages([{ role: "tool", content: "output" }])).toEqual([
-      { role: "tool", content: "output" },
-    ]);
+  it.each([
+    {
+      name: "legacy tool text",
+      messages: [{ role: "tool", content: "output" }],
+      system: undefined,
+      expected: [{ role: "tool", content: "output" }],
+    },
+  ])("converts $name without inventing metadata", ({ messages, system, expected }) => {
+    expect(convertToOllamaMessages(messages, system)).toEqual(expected);
   });
 
   it.each([
@@ -238,29 +248,33 @@ describe("buildAssistantMessage", () => {
 
   const emojiAnswer =
     "This is a normal Kimi cloud answer with enough length to cross the prefix threshold and no hidden reasoning leak. ☀️sunshine should remain visible to the user.";
-  it("preserves visible content for Kimi emoji variation selectors", () => {
-    const result = buildAssistantMessage(createAssistantResponse({ content: emojiAnswer }), {
-      ...modelInfo,
-      id: "kimi-k2.6:cloud",
-    });
+  it.each([
+    [
+      "Kimi emoji variation selectors",
+      "kimi-k2.6:cloud",
+      { content: emojiAnswer },
+      [{ type: "text", text: emojiAnswer }],
+    ],
+  ] as const)("preserves visible content for %s", (_name, id, message, expected) => {
+    const result = buildAssistantMessage(createAssistantResponse(message), { ...modelInfo, id });
     expect(result.stopReason).toBe("stop");
-    expect(result.content).toEqual([{ type: "text", text: emojiAnswer }]);
+    expect(result.content).toEqual(expected);
   });
 
-  it("accounts for cached prompt tokens without changing the total", () => {
+  it.each([6])("accounts for %s cached prompt tokens without changing the total", (cacheRead) => {
     const response = createAssistantResponse(
       { content: "ok" },
       {
         prompt_eval_count: 10,
-        prompt_eval_cached_count: 6,
+        prompt_eval_cached_count: cacheRead,
         eval_count: 2,
       },
     );
     const result = buildAssistantMessage(response, modelInfo);
     expect(result.usage).toMatchObject({
-      input: 4,
+      input: 10 - cacheRead,
       output: 2,
-      cacheRead: 6,
+      cacheRead,
       cacheWrite: 0,
       totalTokens: 12,
       cacheTelemetry: { state: "available" },
@@ -1118,21 +1132,30 @@ describe("createOllamaStreamFn", () => {
 });
 
 describe("createConfiguredOllamaStreamFn", () => {
-  it("routes a remote model endpoint without acquiring the local service", async () => {
+  it.each([
+    {
+      name: "remote model endpoint",
+      model: { baseUrl: "https://remote-ollama.example.test" },
+      providerBaseUrl: undefined,
+      managed: true,
+      acquisitions: 0,
+      url: "https://remote-ollama.example.test/api/chat",
+    },
+  ])("routes $name", async ({ model, providerBaseUrl, managed, acquisitions, url }) => {
     const acquire = vi.fn(async () => ({ release: vi.fn() }));
     await expectSuccessfulOllamaRequest(
       {
         model: { provider: "ollama-gpu" },
         configured: {
-          model: { baseUrl: "https://remote-ollama.example.test" },
-          providerBaseUrl: undefined,
-          localService: { providerId: "ollama-gpu", acquire },
+          model,
+          providerBaseUrl,
+          ...(managed ? { localService: { providerId: "ollama-gpu", acquire } } : {}),
         },
-        options: {},
+        options: managed ? {} : { apiKey: "ollama-local" }, // pragma: allowlist secret
       },
       ({ request }) => {
-        expect(acquire).not.toHaveBeenCalled();
-        expect(request.url).toBe("https://remote-ollama.example.test/api/chat");
+        expect(acquire).toHaveBeenCalledTimes(acquisitions);
+        expect(request.url).toBe(url);
       },
     );
   });
@@ -1346,21 +1369,26 @@ describe("createConfiguredOllamaStreamFn", () => {
     },
   );
 
-  it("does not acquire or fetch after payload serialization failure", async () => {
-    const acquire = vi.fn(async () => ({ release: vi.fn() }));
-    const events = await collectStreamEvents(
-      await createManagedOllamaTestStream({
-        options: {
-          onPayload: () => {
-            return { value: 1n };
+  it.each(["serialization failure"] as const)(
+    "does not acquire or fetch after payload %s",
+    async () => {
+      const acquire = vi.fn(async () => ({ release: vi.fn() }));
+
+      const events = await collectStreamEvents(
+        await createManagedOllamaTestStream({
+          options: {
+            onPayload: () => {
+              return { value: 1n };
+            },
           },
-        },
-        acquire,
-      }),
-    );
-    expect(events).toMatchObject([{ type: "error", reason: "error" }]);
-    expect(acquire).not.toHaveBeenCalled();
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
+          acquire,
+        }),
+      );
+
+      expect(events).toMatchObject([{ type: "error", reason: "error" }]);
+      expect(acquire).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -9,10 +9,7 @@ import {
   parseReplyDirectives,
   type ReplyDirectiveParseResult,
 } from "../auto-reply/reply/reply-directives.js";
-import {
-  createStreamingDirectiveAccumulator,
-  splitTrailingDirective,
-} from "../auto-reply/reply/streaming-directives.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import type { AssistantMessage } from "../llm/types.js";
 import {
   parseAssistantTextSignature,
@@ -188,12 +185,7 @@ export function emitAssistantCommentaryStreamData(
     }
   }
   for (const commentaryMessage of commentaryMessages) {
-    const accumulator = createStreamingDirectiveAccumulator();
-    const text = extractAssistantCommentaryText(commentaryMessage, (part, final) => {
-      const preparedStart = accumulator.sourceText.length;
-      accumulator.consume(part, { final: finalMessage && final });
-      return accumulator.sourceText.slice(preparedStart);
-    });
+    const text = extractAssistantCommentaryText(commentaryMessage);
     if (!text || (!finalMessage && isResponsesCommentary && ctx.state.deltaBuffer === text)) {
       continue;
     }
@@ -352,6 +344,7 @@ export function resolveStreamingReply(params: {
   if (
     params.evtType !== "text_end" &&
     params.parsedStreamDirectives &&
+    !params.parsedStreamDirectives.isSilent &&
     !hasReplyDirectiveMetadata(params.parsedStreamDirectives) &&
     !/(?:^|\n)[^\S\n]*MEDIA:\s*\S[^\n]*(?:\n|$)/i.test(params.visibleDelta) &&
     params.parsedStreamDirectives.text === params.visibleDelta &&
@@ -374,6 +367,7 @@ export function resolveStreamingReply(params: {
     text === undefined &&
     params.evtType !== "text_end" &&
     params.parsedStreamDirectives &&
+    !params.parsedStreamDirectives.isSilent &&
     params.parsedStreamDirectives.text === params.visibleDelta &&
     params.appendDelta !== null &&
     params.previousCleaned &&
@@ -426,6 +420,7 @@ export function resolveStreamingReply(params: {
       params.appendDelta !== null &&
       source === params.rawDirectiveSource &&
       text === params.next &&
+      !parsed.isSilent &&
       !hasReplyDirectiveMetadata(parsed) &&
       !parsed.mediaUrls?.length
     ) {

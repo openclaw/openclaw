@@ -11,6 +11,7 @@ import {
   type BaseMessageInteractiveComponent,
   type DiscordCommand,
   type Modal,
+  type RegisteredPlugin,
 } from "../internal/discord.js";
 import { VoicePlugin } from "../internal/voice.js";
 import { parseApplicationIdFromToken } from "../probe.js";
@@ -70,7 +71,7 @@ export async function createDiscordMonitorClient(params: {
   isDisallowedIntentsError: (err: unknown) => boolean;
 }) {
   let autoPresenceController: DiscordAutoPresenceController | null = null;
-  const gateway = createDiscordGatewayPlugin(params);
+  const constructorPlugins: RegisteredPlugin[] = [createDiscordGatewayPlugin(params)];
   const voicePlugin = params.voiceEnabled ? new VoicePlugin() : undefined;
 
   const eventQueueOpts = {
@@ -79,12 +80,12 @@ export async function createDiscordMonitorClient(params: {
   } satisfies DiscordEventQueueOptions;
   const readyDiscordConfig = params.discordConfig;
   const readyListener = new (class DiscordStatusReadyListener extends ReadyListener {
-    async handle(_data: unknown) {
+    async handle(_data: unknown, client: Client) {
       if (autoPresenceController?.enabled) {
         void autoPresenceController.refresh();
         return;
       }
-      gateway.updatePresence(resolveDiscordPresenceUpdate(readyDiscordConfig));
+      client.getPlugin("gateway")?.updatePresence(resolveDiscordPresenceUpdate(readyDiscordConfig));
     }
   })();
   const client = params.createClient(
@@ -104,24 +105,29 @@ export async function createDiscordMonitorClient(params: {
       components: params.components,
       modals: params.modals,
     },
-    [gateway],
+    constructorPlugins,
   );
   if (voicePlugin) {
-    voicePlugin.registerClient(client);
-    client.plugins.push(voicePlugin);
+    voicePlugin.registerClient?.(client);
+    if (!client.plugins.some((entry) => entry.id === voicePlugin.id)) {
+      client.plugins.push(voicePlugin);
+    }
   }
+  const gateway = client.getPlugin("gateway");
   await waitForDiscordGatewayPluginRegistration(gateway);
   const gatewaySupervisor = createDiscordGatewaySupervisor({
     ...params,
     gateway,
   });
 
-  autoPresenceController = createDiscordAutoPresenceController({
-    ...params,
-    gateway,
-    log: (message) => params.runtime.log?.(message),
-  });
-  void autoPresenceController.start();
+  if (gateway) {
+    autoPresenceController = createDiscordAutoPresenceController({
+      ...params,
+      gateway,
+      log: (message) => params.runtime.log?.(message),
+    });
+    void autoPresenceController.start();
+  }
 
   return {
     client,

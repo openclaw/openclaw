@@ -44,13 +44,12 @@ function randomNonZeroHex(bytes: number): string {
   return value;
 }
 
-const traceScopeState = resolveGlobalSingleton<DiagnosticTraceScopeState>(
-  DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
-  () => ({
+function getDiagnosticTraceScopeState(): DiagnosticTraceScopeState {
+  return resolveGlobalSingleton(DIAGNOSTIC_TRACE_SCOPE_STATE_KEY, () => ({
     marker: DIAGNOSTIC_TRACE_SCOPE_STATE_KEY,
     storage: new AsyncLocalStorage<DiagnosticTraceContext | undefined>(),
-  }),
-);
+  }));
+}
 
 /** Returns whether a value is a non-zero W3C trace id. */
 export function isValidDiagnosticTraceId(value: unknown): value is string {
@@ -190,7 +189,7 @@ export function freezeDiagnosticTraceContext(
 
 /** Returns the trace context bound to the current async scope. */
 export function getActiveDiagnosticTraceContext(): DiagnosticTraceContext | undefined {
-  return traceScopeState.storage.getStore();
+  return getDiagnosticTraceScopeState().storage.getStore();
 }
 
 /** Runs a callback with a frozen trace context, or explicitly without a trace. */
@@ -198,7 +197,7 @@ export function runWithDiagnosticTraceContext<T>(
   trace: DiagnosticTraceContext | undefined,
   callback: () => T,
 ): T {
-  return traceScopeState.storage.run(
+  return getDiagnosticTraceScopeState().storage.run(
     trace === undefined ? undefined : freezeDiagnosticTraceContext(trace),
     callback,
   );

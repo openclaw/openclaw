@@ -9,9 +9,9 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-stat
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { deleteRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
-import { resolveRepository } from "./repository-paths.js";
 import * as runLease from "./run-lease.js";
 import { hasLiveWorktreeRunLease } from "./run-lease.test-support.js";
+import { resolveRepository } from "./service-preparation.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   materializeManagedWorktreeFixture,
@@ -48,20 +48,7 @@ describe("interrupted ordinary worktree removal recovery", () => {
       cleanup();
     }),
   );
-  let fixtureHead: string;
-  let fixtureSnapshot: string;
-  const initialize = useManagedWorktreeTestRepository(async (repo) => {
-    fixtureHead = await git(repo, "rev-parse", "HEAD");
-    fixtureSnapshot = await git(
-      repo,
-      "commit-tree",
-      `${fixtureHead}^{tree}`,
-      "-p",
-      fixtureHead,
-      "-m",
-      "original completed capture",
-    );
-  });
+  const initialize = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let service: ManagedWorktreeService;
@@ -103,11 +90,19 @@ describe("interrupted ordinary worktree removal recovery", () => {
       repositoryIdentity: { repoRoot: repo, repoFingerprint: repository.fingerprint },
     });
     record = getRegistryWorktree(env, record.id)!;
-    head = fixtureHead;
+    head = await git(repo, "rev-parse", "HEAD");
     admin = (await fs.readFile(path.join(record.path, ".git"), "utf8"))
       .trim()
       .slice("gitdir: ".length);
-    snapshot = fixtureSnapshot;
+    snapshot = await git(
+      repo,
+      "commit-tree",
+      `${head}^{tree}`,
+      "-p",
+      head,
+      "-m",
+      "original completed capture",
+    );
     const snapshotRef = `refs/openclaw/snapshots/${record.id}`;
     await pinSnapshot();
     await updateRegistryWorktree(env, record.id, { snapshotRef, provisionedState: [] });

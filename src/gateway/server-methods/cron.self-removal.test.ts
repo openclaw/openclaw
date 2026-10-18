@@ -6,7 +6,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { getActiveCronJobCount } from "../../cron/active-jobs.js";
+import { hasActiveCronJobs } from "../../cron/active-jobs.js";
 import { CronService, type CronEvent } from "../../cron/service.js";
 import { setupCronServiceSuite } from "../../cron/service.test-harness.js";
 import * as cronServiceState from "../../cron/service/state.js";
@@ -30,15 +30,13 @@ const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-self-rem
 
 describe("cron self-removal", () => {
   it.each([
-    ["agentTurn", "manual", 0, "exact"],
-    ["agentTurn", "timer", 60, "exact"],
-    ["script", "manual", 0, "exact"],
-    ["script", "timer", 60, "exact"],
-    ["agentTurn", "manual", 0, "unbound"],
-    ["agentTurn", "manual", 0, "different instance"],
+    { payloadKind: "agentTurn", path: "manual", timeoutSeconds: 0 },
+    { payloadKind: "agentTurn", path: "timer", timeoutSeconds: 60 },
+    { payloadKind: "script", path: "manual", timeoutSeconds: 0 },
+    { payloadKind: "script", path: "timer", timeoutSeconds: 60 },
   ] as const)(
-    "%s preserves %s completion (timeoutSeconds=%i, owner=%s)",
-    async (payloadKind, path, timeoutSeconds, owner) => {
+    "$payloadKind finishes its $path run with timeoutSeconds=$timeoutSeconds",
+    async ({ payloadKind, path, timeoutSeconds }) => {
       const { storePath } = await makeStorePath();
       const clock = createGatewaySchedulerClock(Date.now());
       const scheduler = createTestGatewayScheduler(clock.clock);
@@ -63,9 +61,7 @@ describe("cron self-removal", () => {
         const creatorScope = createCronCreatorAuthorityRunScope(`run-${job.id}`, { kind: "local" });
         try {
           const admitted = await admission.admit("embedded");
-          if (owner !== "unbound") {
-            await executionIdentity?.onPostAdmission?.(admitted);
-          }
+          await executionIdentity?.onPostAdmission?.(admitted);
           const delegatedAuthority = expectDefined(
             getAdmittedRunDelegatedAuthority(admitted),
             "live scheduled admission",
@@ -77,10 +73,7 @@ describe("cron self-removal", () => {
                 kind: "agentRuntime",
                 agentId: "main",
                 sessionKey: `agent:main:cron:${job.id}`,
-                operationalRunInstance:
-                  owner === "different instance"
-                    ? createOperationalRunInstanceRef(`run-${job.id}`)
-                    : admitted.operationalRunInstance,
+                operationalRunInstance: admitted.operationalRunInstance,
                 delegatedAuthority: { kind: "local", ...delegatedAuthority },
                 cronCreatorAuthorityGrant: mintCronCreatorAuthorityGrant(
                   creatorScope,
@@ -110,17 +103,9 @@ describe("cron self-removal", () => {
             }),
             isWebchatConnect: () => false,
           });
-          if (owner === "exact") {
-            expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
-          } else {
-            expect(respond).toHaveBeenCalledWith(
-              false,
-              undefined,
-              expect.objectContaining({ message: expect.stringContaining("job was not removed") }),
-            );
-          }
+          expect(respond).toHaveBeenCalledWith(true, { ok: true, removed: true }, undefined);
           abortedAfterRemoval = abortSignal?.aborted;
-          activeAfterRemoval = getActiveCronJobCount() > 0;
+          activeAfterRemoval = hasActiveCronJobs();
           return {
             status: "ok" as const,
             summary: "final reply after self-cleanup",
@@ -191,13 +176,8 @@ describe("cron self-removal", () => {
         ]);
         expect(abortedAfterRemoval).toBe(false);
         expect(activeAfterRemoval).toBe(true);
-        expect(getActiveCronJobCount()).toBe(0);
-        const remainingJob = await cron.readJob(job.id);
-        if (owner === "exact") {
-          expect(remainingJob).toBeUndefined();
-        } else {
-          expect(remainingJob).toMatchObject({ id: job.id });
-        }
+        expect(hasActiveCronJobs()).toBe(false);
+        expect(await cron.readJob(job.id)).toBeUndefined();
       } finally {
         cron.stop();
         await scheduler.stop();

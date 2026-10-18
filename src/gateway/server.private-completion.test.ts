@@ -9,7 +9,6 @@ import {
 } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
-import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
 import { resolveAgentRunErrorLifecycleFields } from "../agents/run-termination.js";
 import { runAnnounceAgentCall } from "../agents/subagents/announce/subagent-announce-completion-delivery.js";
 import { SubagentLifecycleController } from "../agents/subagents/registry/subagent-registry-lifecycle.js";
@@ -155,10 +154,7 @@ describe("private subagent completion processing receipts", () => {
 
   async function processPrivateInput(input: unknown) {
     await recorder(input).persistApproved();
-    return {
-      payloads: [],
-      meta: { durationMs: 1, terminalReply: { disposition: "silent" } },
-    } satisfies EmbeddedAgentRunResult;
+    return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
   }
 
   it("binds a settle handoff to the source accepted by pending-input replay", async () => {
@@ -189,9 +185,8 @@ describe("private subagent completion processing receipts", () => {
       const command = input as AgentCommandOpts;
       expect(command.inputProvenance?.sourceSessionKey).toBe(sourceSessionKeys[1]);
       expect(command.trustedInternalHandoff?.sourceSessionKey).toBe(sourceSessionKeys[1]);
-      expect(command.replyExpectation).toBe("optional");
       await recorder(input).persistApproved();
-      return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
+      return { payloads: [], meta: { durationMs: 1 } };
     });
     try {
       const result = await runAnnounceAgentCall({
@@ -204,7 +199,6 @@ describe("private subagent completion processing receipts", () => {
           },
         },
         privateCompletion: true,
-        replyExpectation: "optional",
         expectFinal: true,
         settleWakeSourceSessionKeys: sourceSessionKeys,
         delegatedToolPolicyHandoff: {
@@ -410,7 +404,7 @@ describe("private subagent completion processing receipts", () => {
     agentCommandMock.mockImplementationOnce(async (input) => {
       await recorder(input).persistApproved();
       processingCount += 1;
-      return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "silent" } } };
+      return { payloads: [{ text: "NO_REPLY", mediaUrl: null }], meta: { durationMs: 1 } };
     });
     expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
     expect(processingCount).toBe(1);
@@ -1018,7 +1012,7 @@ describe("private subagent completion processing receipts", () => {
       kernel.gatewayRequestContext.dedupe.delete(`agent:${runId}`);
       agentCommandMock.mockImplementationOnce(async (input) => {
         await recorder(input).persistApproved();
-        return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
+        return { payloads: [], meta: { durationMs: 1 } };
       });
       expect(await dispatch()).toMatchObject({ status: "ok", inputProcessingCompleted: true });
       expect(agentCommandMock).toHaveBeenCalledTimes(2);

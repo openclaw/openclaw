@@ -5,7 +5,6 @@
     "onStartup": false
   },
   "enabledByDefault": true,
-  "managesOwnAvailability": true,
   "providers": ["kilocode"],
   "modelPricing": {
     "providers": {

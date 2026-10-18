@@ -8,7 +8,6 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   listSessionParticipantsReadOnly,
   loadSessionEntryReadOnly,
-  persistSessionTranscriptTurn,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -145,20 +144,12 @@ function mockGatewayReply(
     terminalReply: { disposition: "visible", text: "Requested result" },
   },
 ) {
-  let targetSessionKey: string | undefined;
   callGatewayMock.mockImplementation(async (request: GatewayCall) => {
     calls.push(request);
     if (request.method === "agent") {
-      targetSessionKey = String(request.params?.sessionKey);
       return { runId: "coordination-run", status: "accepted" };
     }
-    if (request.method === "agent.wait") {
-      if (waitResult.status === "ok" && targetSessionKey) {
-        await writeFinal(targetSessionKey, "coordination-run", "Requested result");
-      }
-      return waitResult;
-    }
-    return {};
+    return request.method === "agent.wait" ? waitResult : {};
   });
 }
 function agentParams(call: GatewayCall): AgentCallParams {
@@ -213,44 +204,6 @@ async function writeEntry(sessionKey: string, entry: SessionEntry, storePath?: s
       storePath: storePath ?? resolveSessionStorePathCore(config.session?.store, { agentId }),
     },
     entry,
-  );
-}
-
-async function writeFinal(sessionKey: string, runId: string, text: string) {
-  const target = await resolveGatewaySessionStoreTargetWithStoreAsync({
-    cfg: config,
-    key: sessionKey,
-    readOnly: true,
-    exactRead: true,
-  });
-  const sessionId = target.store[target.canonicalKey]?.sessionId;
-  if (!sessionId) {
-    throw new Error(`Expected a fixture session for ${sessionKey}`);
-  }
-  await persistSessionTranscriptTurn(
-    {
-      agentId: target.agentId,
-      storePath: target.storePath,
-      sessionKey: target.canonicalKey,
-      sessionId,
-    },
-    {
-      config,
-      runId,
-      expectedSessionId: sessionId,
-      touchSessionEntry: false,
-      updateMode: "none",
-      messages: [
-        {
-          message: {
-            role: "assistant",
-            phase: "final_answer",
-            stopReason: "stop",
-            content: [{ type: "text", text }],
-          },
-        },
-      ],
-    },
   );
 }
 
@@ -467,11 +420,7 @@ describe("sessions_send child coordination", () => {
         expectsCompletionMessage: true,
         createdAt: 1,
         execution: { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } },
-        completion: {
-          required: true,
-          resultText: "Original result",
-          terminalReply: { disposition: "visible", text: "Original result" },
-        },
+        completion: { required: true, resultText: "Original result" },
         delivery: { status: "delivered" },
         cleanupCompletedAt: 3,
         requesterTurnRunId: undefined,
@@ -493,7 +442,6 @@ describe("sessions_send child coordination", () => {
         }
         if (request.method === "agent.wait" && request.params?.runId === runId) {
           await childPending;
-          await writeFinal(childSessionKey, runId, "Follow-up result");
           return {
             runId,
             status: "ok",
@@ -633,7 +581,6 @@ describe("sessions_send child coordination", () => {
         const index = runIds.indexOf(String(request.params?.runId));
         if (index >= 0) {
           await replies[index]!.promise;
-          await writeFinal(childSessionKey, runIds[index]!, "FOLLOWUP-" + (index + 1));
           return {
             status: "ok",
             startedAt: 10,
@@ -767,7 +714,6 @@ describe("sessions_send child coordination", () => {
     callGatewayMock,
     calls,
     writeEntry,
-    writeFinal,
     settleSessionWork,
     drainRootWork: () => settleRootWork(true),
   });
@@ -888,7 +834,7 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionEntryAsync>[0]) =>
+        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
           metadataRead.readAcpSessionMetaForEntryAsync({
             ...params,
             databasePath,

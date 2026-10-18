@@ -1,7 +1,6 @@
 import {
   ErrorCodes,
   errorShape,
-  type ErrorShape,
   validateUsersBackgroundGetParams,
   validateUsersBackgroundUploadParams,
   validateUsersBackgroundRemoveParams,
@@ -21,11 +20,11 @@ import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js"
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { publishUserPreferencesChanged } from "./user-preference-events.js";
-import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
+import { assertValidParams } from "./validation.js";
 
 /** Bind private profile work to this live human connection before asynchronous image decoding. */
 export async function prepareUserBackgroundAction(
-  options: Omit<GatewayRequestHandlerOptions, "params">,
+  options: GatewayRequestHandlerOptions,
   scope: "operator.read" | "operator.write",
 ) {
   const { client, context } = options;
@@ -76,67 +75,101 @@ export async function prepareUserBackgroundAction(
   return { owner, assertCurrent };
 }
 
-function backgroundHandler<P extends object>(
-  operation: "get" | "upload" | "remove",
-  validate: Validator<P>,
-  run: (
-    action: Awaited<ReturnType<typeof prepareUserBackgroundAction>>,
-    options: Omit<GatewayRequestHandlerOptions, "params"> & { params: P },
-  ) => Promise<Awaited<ReturnType<typeof getUserBackground>>>,
-  mapError: (error: unknown) => ErrorShape,
-): GatewayRequestHandlers[string] {
-  return defineValidatedGatewayHandler(
-    `users.background.${operation}`,
-    validate,
-    async (options) => {
-      const { client, respond, context } = options;
-      if (!client?.authenticatedUserProfile) {
-        respond(true, { status: "no_durable_identity" });
-        return;
-      }
-      const action = await prepareUserBackgroundAction(
-        options,
-        operation === "get" ? "operator.read" : "operator.write",
-      );
-      const result = await run(action, options);
+export const usersBackgroundHandlers: GatewayRequestHandlers = {
+  "users.background.get": async (options) => {
+    const { client, params, respond } = options;
+    if (
+      !assertValidParams(params, validateUsersBackgroundGetParams, "users.background.get", respond)
+    ) {
+      return;
+    }
+    if (!client?.authenticatedUserProfile) {
+      respond(true, { status: "no_durable_identity" });
+      return;
+    }
+    try {
+      const action = await prepareUserBackgroundAction(options, "operator.read");
+      const result = await getUserBackground(action.owner, action);
       action.assertCurrent();
       respond(true, result);
-      if (operation !== "get" && result.status === "ok") {
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "Backgrounds require a current authenticated profile"),
+      );
+    }
+  },
+  "users.background.upload": async (options) => {
+    const { client, params, respond, context, signal } = options;
+    if (
+      !assertValidParams(
+        params,
+        validateUsersBackgroundUploadParams,
+        "users.background.upload",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (!client?.authenticatedUserProfile) {
+      respond(true, { status: "no_durable_identity" });
+      return;
+    }
+    try {
+      const action = await prepareUserBackgroundAction(options, "operator.write");
+      const result = await uploadUserBackground(action.owner, params, { ...action, signal });
+      action.assertCurrent();
+      respond(true, result);
+      if (result.status === "ok") {
         publishUserPreferencesChanged(context, action.owner, [USER_BACKGROUND_PREFERENCE_KEY]);
       }
-    },
-    mapError,
-  );
-}
-
-export const usersBackgroundHandlers: GatewayRequestHandlers = {
-  "users.background.get": backgroundHandler(
-    "get",
-    validateUsersBackgroundGetParams,
-    (action) => getUserBackground(action.owner, action),
-    () => errorShape(ErrorCodes.FORBIDDEN, "Backgrounds require a current authenticated profile"),
-  ),
-  "users.background.upload": backgroundHandler(
-    "upload",
-    validateUsersBackgroundUploadParams,
-    (action, { params, signal }) =>
-      uploadUserBackground(action.owner, params, { ...action, signal }),
-    (error) =>
-      errorShape(
-        error instanceof UserBackgroundInputError
-          ? ErrorCodes.INVALID_REQUEST
-          : ErrorCodes.UNAVAILABLE,
-        error instanceof Error ? error.message : "Background upload failed",
-      ),
-  ),
-  "users.background.remove": backgroundHandler(
-    "remove",
-    validateUsersBackgroundRemoveParams,
-    (action, { params }) => removeUserBackground(action.owner, params, action),
-    () =>
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "Background removal failed; reload your preference and retry",
-      ),
-  ),
+    } catch (error) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          error instanceof UserBackgroundInputError
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          error instanceof Error ? error.message : "Background upload failed",
+        ),
+      );
+    }
+  },
+  "users.background.remove": async (options) => {
+    const { client, params, respond, context } = options;
+    if (
+      !assertValidParams(
+        params,
+        validateUsersBackgroundRemoveParams,
+        "users.background.remove",
+        respond,
+      )
+    ) {
+      return;
+    }
+    if (!client?.authenticatedUserProfile) {
+      respond(true, { status: "no_durable_identity" });
+      return;
+    }
+    try {
+      const action = await prepareUserBackgroundAction(options, "operator.write");
+      const result = await removeUserBackground(action.owner, params, action);
+      action.assertCurrent();
+      respond(true, result);
+      if (result.status === "ok") {
+        publishUserPreferencesChanged(context, action.owner, [USER_BACKGROUND_PREFERENCE_KEY]);
+      }
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          "Background removal failed; reload your preference and retry",
+        ),
+      );
+    }
+  },
 };

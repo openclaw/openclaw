@@ -8,9 +8,8 @@ export function SkillLibraryToolbar(props: {
   library: SkillLibraryController;
   navigationActions: JSX.Element;
 }) {
-  const listSnapshot = createMemo(() => props.library.list);
   const options = createMemo(() => {
-    const list = listSnapshot();
+    const list = props.library.list;
     const entries: Array<{ value: LibraryView; label: string }> = [];
     if (list?.multipleProfiles || list?.entries.length || list?.defaultTarget === "personal") {
       if (list?.profileId) {

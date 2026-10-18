@@ -1,5 +1,6 @@
 import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
 import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
@@ -8,16 +9,15 @@ import {
   postJsonRequest,
   readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
-  resolveProviderApiKeyHttpRequestConfig,
+  resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
   waitProviderOperationPollInterval,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeVideoGenerationDuration,
-  type VideoGenerationProvider,
-  type VideoGenerationRequest,
-  type VideoGenerationSourceAsset,
+import type {
+  VideoGenerationProvider,
+  VideoGenerationRequest,
+  VideoGenerationSourceAsset,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_XAI_VIDEO_BASE_URL,
@@ -140,11 +140,10 @@ function resolveDurationSeconds(
   min: number,
   max: number,
 ): number | undefined {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds: value });
-  if (duration === undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
-  return Math.max(min, Math.min(max, duration));
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function resolveAspectRatio(value: string | undefined): string | undefined {
@@ -251,23 +250,36 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       // Validate provider/model mode constraints before auth or HTTP setup so
       // unsupported 1.5 requests cannot be submitted and billed accidentally.
       const { body, endpoint, mode } = prepareCreateRequest(req);
+      const auth = await resolveApiKeyForProvider({
+        provider: "xai",
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        store: req.authStore,
+      });
+      if (!auth.apiKey) {
+        throw new Error("xAI API key missing");
+      }
+
       const fetchFn = fetch;
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveProviderApiKeyHttpRequestConfig({
-          req,
-          missingApiKeyMessage: "xAI API key missing",
-          baseUrl:
-            normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ??
-            DEFAULT_XAI_VIDEO_BASE_URL,
-          defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
-          request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.xai?.request),
-          provider: "xai",
-          capability: "video",
-        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "xAI video generation",
       });
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl:
+            normalizeOptionalString(req.cfg?.models?.providers?.xai?.baseUrl) ??
+            DEFAULT_XAI_VIDEO_BASE_URL,
+          defaultBaseUrl: DEFAULT_XAI_VIDEO_BASE_URL,
+          defaultHeaders: {
+            Authorization: `Bearer ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          request: sanitizeConfiguredModelProviderRequest(req.cfg?.models?.providers?.xai?.request),
+          provider: "xai",
+          capability: "video",
+          transport: "http",
+        });
       // Per-submit idempotency key prevents accidental double-charging if
       // the request is replayed. Polls intentionally reuse `headers` without it.
       const submitHeaders = new Headers(headers);

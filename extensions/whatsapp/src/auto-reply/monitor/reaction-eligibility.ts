@@ -1,5 +1,6 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { resolveWhatsAppReactionLevel } from "../../reaction-level.js";
 import type { sendReactionWhatsApp } from "../../send.js";
@@ -21,7 +22,7 @@ export async function resolveWhatsAppReactionEligibility(params: {
     return DISABLED_REACTION;
   }
 
-  const admission = params.msg.admission;
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const accountId = admission.accountId;
   // ackReaction owns emoji/scope, while reactionLevel can suppress every automatic reaction.
   if (resolveWhatsAppReactionLevel({ cfg: params.cfg, accountId }).level === "off") {

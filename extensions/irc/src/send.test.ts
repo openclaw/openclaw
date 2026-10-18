@@ -161,7 +161,6 @@ describe("sendMessageIrc cfg threading", () => {
         },
       ],
       sentAt: 123,
-      sourceResults: [{ channel: "irc", messageId: "irc-msg-1" }],
       raw: [
         {
           channel: "irc",

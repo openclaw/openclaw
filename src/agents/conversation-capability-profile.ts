@@ -35,7 +35,7 @@ import {
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "./tool-policy.js";
-import { prepareSandboxSessionTools } from "./tools/sessions-operator-authority.js";
+import { prepareSandboxSessionRename } from "./tools/sessions-operator-authority.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
 function resolveManifestToolProfileNames(
@@ -108,7 +108,7 @@ export function resolveConversationCapabilityProfile(params: ConversationCapabil
   const messageProvider = params.messageProvider;
   const effective = resolveEffectiveToolPolicy(params);
   const { policy: sandboxToolPolicy, renameOnly: sandboxSessionRenameOnly } =
-    prepareSandboxSessionTools({
+    prepareSandboxSessionRename({
       policy: resolveSessionPlacementSandboxToolPolicy(params.sandboxToolPolicy, {
         runId: params.runId,
         agentId: effective.agentId,

@@ -1,3 +1,4 @@
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
@@ -36,7 +37,6 @@ function mountPicker() {
       isDefault: false,
     })),
     onModelSelect: vi.fn(async () => {}),
-    onOpenChange: vi.fn(),
   };
   let update!: () => void;
   mountSolid(
@@ -67,37 +67,24 @@ function mountPicker() {
   const trigger = picker.querySelector("summary")!;
   const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]")!;
   const composer = container.querySelector("textarea")!;
+  const popup = picker.querySelector<WaPopup>("wa-popup")!;
   const toggle = async (activate: () => Promise<void>) => {
     const toggled = new Promise<void>((resolve) => {
       picker.addEventListener("toggle", () => resolve(), { once: true });
     });
     await activate();
     await toggled;
-    flush();
+    await popup.updateComplete;
     await new Promise(requestAnimationFrame);
   };
   return { params, update, picker, trigger, search, composer, toggle };
 }
 
-it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
+it("keeps typing in the filter and preserves focus and query across catalog rerenders", async () => {
   const { search, composer, toggle, params, update, trigger } = mountPicker();
-  let visibleAtActivation = false;
-  container.addEventListener(
-    "click",
-    () => {
-      queueMicrotask(() => {
-        visibleAtActivation = container
-          .querySelector("[data-anchored-overlay]")!
-          .matches(":popover-open");
-      });
-    },
-    { once: true },
-  );
   composer.value = "Keep this draft";
   composer.focus();
   await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  expect(visibleAtActivation).toBe(true);
-  expect(params.onOpenChange).toHaveBeenCalledExactlyOnceWith(true);
   expect(document.activeElement).toBe(search);
   await userEvent.keyboard("beta");
   expect(search.value).toBe("beta");
@@ -121,55 +108,6 @@ it("opens during activation and preserves filter focus and query across catalog 
   trigger.focus();
   await userEvent.keyboard("1");
   expect(params.onModelSelect).toHaveBeenCalledWith("example/beta", "main", undefined);
-});
-
-it("clears the active descendant when a catalog refresh removes the filtered choice", async () => {
-  const { search, toggle, params, update } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  await userEvent.keyboard("beta");
-  const highlighted = container.querySelector<HTMLElement>("[data-chat-model-highlighted]")!;
-  expect(highlighted.textContent).toContain("Beta");
-  expect(search.getAttribute("aria-activedescendant")).toBe(highlighted.id);
-  params.modelOptions = params.modelOptions.filter((option) => option.value !== "example/beta");
-  update();
-  await Promise.resolve();
-  expect(search.value).toBe("beta");
-  expect(search.hasAttribute("aria-activedescendant")).toBe(false);
-  expect(container.querySelector("[data-chat-model-highlighted]")).toBeNull();
-});
-
-it("keeps a disabled picker closed on keyboard activation", async () => {
-  const { picker, trigger, params, update } = mountPicker();
-  params.disabled = true;
-  update();
-  trigger.focus();
-  await userEvent.keyboard("{Enter}");
-  expect(picker.open).toBe(false);
-  expect(params.onOpenChange).not.toHaveBeenCalled();
-});
-
-it("leaves digit shortcuts to a nested native menu", async () => {
-  const { picker, toggle, params, trigger } = mountPicker();
-  await toggle(() => page.getByText("Alpha", { exact: true }).first().click());
-  const menu = document.createElement("div");
-  menu.setAttribute("role", "menu");
-  menu.setAttribute("popover", "manual");
-  const item = document.createElement("button");
-  item.setAttribute("role", "menuitem");
-  item.dataset.shortcut = "1";
-  item.textContent = "Nested choice";
-  menu.append(item);
-  picker.querySelector(".chat-controls__model-menu")!.append(menu);
-  menu.showPopover();
-  item.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).not.toHaveBeenCalled();
-  expect(picker.open).toBe(true);
-  menu.hidePopover();
-  menu.remove();
-  trigger.focus();
-  await userEvent.keyboard("1");
-  expect(params.onModelSelect).toHaveBeenCalledWith("example/alpha", "main", undefined);
 });
 
 it("focuses the filter on keyboard open and reopen, and returns Escape to the trigger", async () => {

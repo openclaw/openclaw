@@ -106,6 +106,17 @@ describe("CDP discovery and ownership", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("adds exact loopback hosts to the CDP hostname allowlist", async () => {
+    await expect(
+      assertCdpEndpointAllowed("http://127.0.0.1:9222/json/version", {
+        dangerouslyAllowPrivateNetwork: false,
+        allowedHostnames: ["*.corp.example"],
+      }),
+    ).resolves.toEqual(
+      expect.objectContaining({ hostname: "127.0.0.1", lookup: expect.any(Function) }),
+    );
+  });
+
   it("preserves broad private authority permission through exact-host scoping", async () => {
     const policy = scopeCdpPolicyToConfiguredEndpoint("http://127.0.0.1:9222", {
       allowPrivateNetwork: true,
@@ -261,16 +272,22 @@ describe("CDP reachability policy", () => {
     expect(policy).toEqual({ allowPrivateNetwork: true, allowedHostnames: ["metadata.internal"] });
   });
 
-  it("narrows the global wildcard allowlist to the normalized CDP host", () => {
+  it("normalizes the selected CDP host before narrowing wildcard policy", () => {
     expect(
       resolveCdpReachabilityPolicy(
         createProfile({
           cdpUrl: "https://browser.corp.example.:9222",
           cdpHost: "browser.corp.example.",
         }),
-        { allowedHostnames: ["*."], allowedOrigins: ["https://navigation.example"] },
+        { allowedHostnames: ["*.corp.example"], allowedOrigins: ["https://navigation.example"] },
       ),
     ).toEqual({ allowedHostnames: ["browser.corp.example"] });
+  });
+
+  it("narrows the global wildcard allowlist to the selected CDP host", () => {
+    expect(resolveCdpReachabilityPolicy(createProfile(), { allowedHostnames: ["*."] })).toEqual({
+      allowedHostnames: ["172.29.128.1"],
+    });
   });
 
   it("narrows configured extension loopback outside navigation allowlist", () => {

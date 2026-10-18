@@ -134,6 +134,12 @@ describe("reply run registry cancellation", () => {
 
   it.each([
     {
+      reason: undefined,
+      code: "aborted_by_user",
+      cancelReason: "user_abort",
+      direct: false,
+    },
+    {
       reason: new Error("caller cancelled"),
       code: "aborted_by_user",
       cancelReason: "user_abort",
@@ -578,7 +584,17 @@ describe("reply run successor barriers", () => {
       const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
       releaseFirstBarrier();
       for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({ settled: true });
+        await expect(wait).resolves.toEqual({
+          settled: true,
+          sources: [
+            {
+              sessionId: "rotated-alias-session",
+              sessionIds: operation.captureOwnedSessionIds(),
+              operation,
+              databaseIdentity: undefined,
+            },
+          ],
+        });
       }
       expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
         ReplyRunSuccessorAdmissionBlockedError,
@@ -586,6 +602,14 @@ describe("reply run successor barriers", () => {
       releaseSecondBarrier();
       await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
         settled: true,
+        sources: [
+          {
+            sessionId: "rotated-alias-session",
+            sessionIds: operation.captureOwnedSessionIds(),
+            operation,
+            databaseIdentity: undefined,
+          },
+        ],
       });
       const successor = createTestReplyOperation({ sessionKey: canonicalKey });
       successor.complete();

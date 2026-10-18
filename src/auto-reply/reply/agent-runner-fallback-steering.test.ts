@@ -73,7 +73,6 @@ describe("ordinary steering into automatic model fallback", () => {
       if (!holdBackend) {
         operation.attachBackend({
           kind: "embedded",
-          terminalReplyExpectation: "result-required",
           cancel() {},
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
         });
@@ -150,7 +149,6 @@ describe("ordinary steering into automatic model fallback", () => {
         if (replaceBackend) {
           operation.attachBackend({
             kind: "embedded",
-            terminalReplyExpectation: "result-required",
             cancel() {},
             messageInjectionV2: {
               version: 2,
@@ -319,7 +317,6 @@ describe("ordinary steering into automatic model fallback", () => {
           });
           operation.attachBackend({
             kind: "embedded",
-            terminalReplyExpectation: "result-required",
             cancel: vi.fn(),
             messageInjectionV2: {
               version: 2,

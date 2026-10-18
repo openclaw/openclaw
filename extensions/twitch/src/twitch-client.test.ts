@@ -44,6 +44,15 @@ const authSuccessHandlers: Array<() => void> = [];
 const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
 const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
+type TwitchClientManagerState = {
+  clients: Map<string, unknown>;
+  messageHandlers: Map<string, unknown>;
+};
+
+function managerState(manager: TwitchClientManager): TwitchClientManagerState {
+  return manager as unknown as TwitchClientManagerState;
+}
+
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: (typeof messageHandlers)[number]) => {
   messageHandlers.push(handler);
@@ -259,23 +268,35 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(2);
     });
 
-    it("does not create a client when disconnect completes during authentication setup", async () => {
-      const authentication = createDeferred<string>();
-      mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
-      const account = {
-        ...testAccount,
-        clientSecret: "test-client-secret",
-        refreshToken: "test-refresh-token",
-      };
-      const connection = manager.getClient(account);
+    it.each(["account", "all"] as const)(
+      "does not create a client when %s disconnect completes during authentication setup",
+      async (scope) => {
+        const authentication = createDeferred<string>();
+        mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
+        const account = {
+          ...testAccount,
+          clientSecret: "test-client-secret",
+          refreshToken: "test-refresh-token",
+        };
+        manager.onMessage(account, vi.fn());
+        const connection = manager.getClient(account);
 
-      expect(mockAddUserForToken).toHaveBeenCalledOnce();
-      await manager.disconnectAll();
-      authentication.resolve("123456");
+        expect(mockAddUserForToken).toHaveBeenCalledOnce();
+        if (scope === "account") {
+          await manager.disconnect(account);
+        } else {
+          await manager.disconnectAll();
+        }
+        authentication.resolve("123456");
 
-      await expect(connection).rejects.toThrow("Twitch connection cancelled");
-      expect(mockConnect).not.toHaveBeenCalled();
-    });
+        await expect(connection).rejects.toThrow("Twitch connection cancelled");
+        expect(mockConnect).not.toHaveBeenCalled();
+        expect(managerState(manager).clients.size).toBe(0);
+        expect(managerState(manager).messageHandlers.has(manager.getAccountKey(account))).toBe(
+          false,
+        );
+      },
+    );
 
     it("keeps a restarted account connection when stale authentication resolves afterward", async () => {
       const authentication = createDeferred<string>();
@@ -291,7 +312,7 @@ describe("TwitchClientManager", () => {
         () => "cancelled" as const,
       );
 
-      await manager.disconnectAll();
+      await manager.disconnect(account);
       const currentConnection = manager.getClient(account);
 
       try {
@@ -300,7 +321,9 @@ describe("TwitchClientManager", () => {
         authentication.resolve("123456");
 
         expect(await staleOutcome).toBe("cancelled");
-        expect(await manager.getClient(account)).toBe(activeClient);
+        expect(managerState(manager).clients.get(manager.getAccountKey(account))).toBe(
+          activeClient,
+        );
         expect(mockConnect).toHaveBeenCalledOnce();
       } finally {
         authentication.resolve("123456");
@@ -321,14 +344,15 @@ describe("TwitchClientManager", () => {
         () => "connected" as const,
         () => "cancelled" as const,
       );
-      const otherManager = new TwitchClientManager(mockLogger);
-      const activeClient = await otherManager.getClient(testAccount2);
+      const activeClient = await manager.getClient(testAccount2);
 
-      await manager.disconnectAll();
+      await manager.disconnect(account);
       authentication.resolve("123456");
 
       expect(await staleOutcome).toBe("cancelled");
-      expect(await otherManager.getClient(testAccount2)).toBe(activeClient);
+      expect(managerState(manager).clients.get(manager.getAccountKey(testAccount2))).toBe(
+        activeClient,
+      );
       expect(mockConnect).toHaveBeenCalledOnce();
     });
 
@@ -432,8 +456,8 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
       const previous = vi.fn();
       const current = previous;
-      const cleanup = manager.onMessage(previous);
-      manager.onMessage(current);
+      const cleanup = manager.onMessage(testAccount, previous);
+      manager.onMessage(testAccount, current);
 
       cleanup();
       messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-current"));
@@ -447,7 +471,7 @@ describe("TwitchClientManager", () => {
     it("cleanup of the current handler stops delivery", async () => {
       await manager.getClient(testAccount);
       const handler = vi.fn();
-      const cleanup = manager.onMessage(handler);
+      const cleanup = manager.onMessage(testAccount, handler);
       cleanup();
       messageHandlers[0]?.("#testchannel", "testuser", "hello", ircMessage("msg-removed"));
 
@@ -455,18 +479,49 @@ describe("TwitchClientManager", () => {
     });
   });
 
-  describe("disconnectAll", () => {
-    it("disconnects the account and clears its message handler", async () => {
-      await manager.getClient(testAccount);
+  describe("disconnect", () => {
+    it("clears pending client message handlers when disconnect cancels connection", async () => {
+      mockConnect.mockImplementationOnce(() => {});
       const handler = vi.fn();
-      manager.onMessage(handler);
+      manager.onMessage(testAccount, handler);
 
-      await manager.disconnectAll();
-      expect(mockQuit).toHaveBeenCalledOnce();
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      await manager.disconnect(testAccount);
+
+      const key = manager.getAccountKey(testAccount);
+      expect(managerState(manager).messageHandlers.has(key)).toBe(false);
+      authSuccessHandlers[0]?.();
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
 
       messageHandlers[0]?.("#testchannel", "testuser", "stale", ircMessage("msg-stale"));
 
       expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("should only disconnect specified account when multiple accounts exist", async () => {
+      await manager.getClient(testAccount);
+      await manager.getClient(testAccount2);
+
+      await manager.disconnect(testAccount);
+
+      expect(mockQuit).toHaveBeenCalledTimes(1);
+
+      const key2 = manager.getAccountKey(testAccount2);
+      expect(managerState(manager).clients.has(key2)).toBe(true);
+    });
+  });
+
+  describe("disconnectAll", () => {
+    it("should disconnect all connected clients", async () => {
+      await manager.getClient(testAccount);
+      await manager.getClient(testAccount2);
+
+      await manager.disconnectAll();
+
+      expect(mockQuit).toHaveBeenCalledTimes(2);
+      expect(managerState(manager).clients.size).toBe(0);
+      expect(managerState(manager).messageHandlers.size).toBe(0);
     });
   });
 
@@ -568,7 +623,8 @@ describe("TwitchClientManager", () => {
     });
 
     it("should create client if not already connected", async () => {
-      await manager.disconnectAll();
+      // Clear the existing client
+      managerState(manager).clients.clear();
 
       // Reset connect call count for this specific test
       const connectCallCountBefore = mockConnect.mock.calls.length;
@@ -585,7 +641,7 @@ describe("TwitchClientManager", () => {
     beforeEach(() => {
       capturedMessage = null;
 
-      manager.onMessage((message) => {
+      manager.onMessage(testAccount, (message) => {
         capturedMessage = message;
       });
     });
@@ -634,12 +690,11 @@ describe("TwitchClientManager", () => {
       const messages1: TwitchChatMessage[] = [];
       const messages2: TwitchChatMessage[] = [];
 
-      const otherManager = new TwitchClientManager(mockLogger);
-      manager.onMessage((msg) => messages1.push(msg));
-      otherManager.onMessage((msg) => messages2.push(msg));
+      manager.onMessage(testAccount, (msg) => messages1.push(msg));
+      manager.onMessage(testAccount2, (msg) => messages2.push(msg));
 
       await manager.getClient(testAccount);
-      await otherManager.getClient(testAccount2);
+      await manager.getClient(testAccount2);
 
       const onMessage1 = messageHandlers[0];
       if (!onMessage1) {

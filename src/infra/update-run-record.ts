@@ -100,16 +100,11 @@ export function summarizeUpdateStepFailure(
 
 export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 
-/** Operational captures and in-memory recovery fields are outside the public run schema. */
+/** Operational capture receipts stay in the private ledger, not status or diagnostic exports. */
 export function toPublicUpdateRun(record: UpdateRunRecord): PublicUpdateRunRecord {
   const origin = { ...record.origin };
   delete origin.updateRecoveryCapture;
-  const verification = { ...record.verification };
-  if (verification.recovery?.serviceRestartSafe === false) {
-    verification.recovery = { ...verification.recovery };
-    delete verification.recovery.dataAtRisk;
-  }
-  return { ...record, origin, verification };
+  return { ...record, origin };
 }
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];

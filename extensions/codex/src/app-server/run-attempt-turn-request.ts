@@ -224,16 +224,13 @@ export async function prepareCodexAttemptTurnRequest(
       const inferenceThread = resourceState.thread;
       const registration = inferenceRoute.context.register({
         threadId: resourceState.thread.threadId,
-        text: joinPresentSections(
-          usesSupervisionConnection
-            ? undefined
-            : (buildCodexParentLocalInstructions(runtimeParams, {
-                personaInstructions: workspaceBootstrapContext.personaInstructions,
-                skillsInstructions: context.skillsInstructions,
-                memoryInstructions: workspaceBootstrapContext.memoryInstructions,
-              }) ?? undefined),
-          turnState.promptBuild.turnDeveloperInstructions,
-        ),
+        text: usesSupervisionConnection
+          ? ""
+          : (buildCodexParentLocalInstructions(runtimeParams, {
+              personaInstructions: workspaceBootstrapContext.personaInstructions,
+              skillsInstructions: context.skillsInstructions,
+              memoryInstructions: workspaceBootstrapContext.memoryInstructions,
+            }) ?? ""),
         signal: runAbortController.signal,
         assertCurrent: () => {
           params.hostCapabilities.assertActive();

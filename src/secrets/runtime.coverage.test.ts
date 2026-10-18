@@ -32,8 +32,7 @@ vi.mock("./channel-contract-api.js", () => ({
     COVERAGE_CHANNEL_CONTRACTS.get(channelId),
 }));
 
-vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
+vi.mock("./runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractPluginIds: ({ contract }: { contract: string }) => {
     if (contract === "webSearchProviders") {
       return [...COVERAGE_WEB_PROVIDER_PLUGIN_IDS.search];

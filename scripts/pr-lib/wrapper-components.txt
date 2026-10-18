@@ -1,5 +1,4 @@
 .github/workflows/pr-crabbox-gate-publisher.yml
-cli-invocation.mjs
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
@@ -67,12 +66,15 @@ packages/memory-host-sdk/src/host/config-utils.ts
 packages/memory-host-sdk/src/host/embedding-vector.ts
 packages/memory-host-sdk/src/host/error-utils.ts
 packages/memory-host-sdk/src/host/memory-schema-base.ts
+packages/memory-host-sdk/src/host/memory-schema-fts.ts
 packages/memory-host-sdk/src/host/memory-schema-provenance.ts
 packages/memory-host-sdk/src/host/memory-schema-recall.ts
 packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
 packages/memory-host-sdk/src/host/memory-schema.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
+packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
+packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
 packages/model-catalog-core/src/canonical-model-key.ts
 packages/model-catalog-core/src/configured-model-refs.ts
@@ -189,10 +191,8 @@ scripts/lib/numeric-options.mjs
 scripts/lib/official-external-channel-catalog.json
 scripts/lib/official-external-plugin-catalog.json
 scripts/lib/official-external-provider-catalog.json
-scripts/lib/openclaw-bun.json
 scripts/lib/package-dist-inventory-contract.mts
 scripts/lib/package-lifecycle-marker.mjs
-scripts/lib/pinned-bun.mts
 scripts/lib/plain-gh.mjs
 scripts/lib/plain-gh.sh
 scripts/lib/record-shared.mjs
@@ -222,7 +222,6 @@ scripts/lib/vitest-unhandled-errors.mts
 scripts/lib/vitest-worker-artifacts.mts
 scripts/lib/vitest-worker-cache-policy.mts
 scripts/lib/vitest-worker-declarations.mts
-scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
@@ -230,7 +229,6 @@ scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
 scripts/run-vitest.mts
-scripts/stage-openclaw-bun.sh
 scripts/test-projects.test-support.mts
 scripts/tsx.mjs
 scripts/verify-pr-hosted-gates.mjs
@@ -251,7 +249,6 @@ src/agents/agent-run-terminal-reply.ts
 src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
-src/agents/auth-profiles/authorization-contract.ts
 src/agents/auth-profiles/sqlite-json.ts
 src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/store-update-commit.ts
@@ -302,6 +299,7 @@ src/agents/tool-policy-match.ts
 src/agents/tool-policy-shared.ts
 src/agents/tool-policy.ts
 src/agents/tools/automations-tool-name.ts
+src/agents/tools/sessions-send-tokens.ts
 src/agents/utility-model-setting.ts
 src/agents/utils/git.ts
 src/agents/workspace-access.ts
@@ -353,26 +351,12 @@ src/agents/worktrees/run-end-lifecycle.ts
 src/agents/sandbox/registry-lifecycle.ts
 src/agents/sandbox/registry-publication.ts
 src/config/zod-schema.database.ts
-src/infra/database-engine/adapters.ts
 src/infra/database-engine/admission-scope.ts
-src/infra/database-engine/context.ts
 src/infra/database-engine/json-values.ts
 src/infra/database-engine/observation.ts
-src/infra/database-engine/open.ts
 src/infra/database-engine/physical-facts.ts
 src/infra/database-engine/policy.ts
 src/infra/database-engine/postgres-catalog.ts
-src/infra/database-engine/postgres-schema.ts
-src/infra/database-engine/postgres-search-schema.ts
-src/infra/database-engine/postgres-search.ts
-src/infra/database-engine/postgres-vector.ts
-src/infra/database-engine/search.ts
-src/infra/database-engine/sqlite-full-text.ts
-src/infra/database-engine/sqlite-search-schema.ts
-src/infra/database-engine/sqlite-vector-subprocess.ts
-src/infra/database-engine/sqlite-vector-types.ts
-src/infra/database-engine/sqlite-vector.ts
-src/infra/database-engine/vector-contract.ts
 src/infra/postgres-sync/connection.ts
 src/infra/postgres-sync/protocol.ts
 src/infra/postgres-sync/transaction.ts
@@ -404,7 +388,6 @@ src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
 src/auto-reply/reply/inbound-context-marker.ts
-src/auto-reply/reply/mixed-silent-reply-tokens.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
@@ -440,7 +423,6 @@ src/channels/plugins/setup-contract.ts
 src/channels/registry-lookup.ts
 src/channels/registry-normalize.ts
 src/channels/registry.ts
-src/claws/add-state-worker-contract.ts
 src/claws/provenance-secondary-references.ts
 src/cli/command-format.ts
 src/cli/daemon-cli/restart-health.types.ts
@@ -640,7 +622,6 @@ src/config/schema.walk.ts
 src/config/sensitive-paths.ts
 src/config/sessions/archive-compression.ts
 src/config/sessions/artifacts.ts
-src/config/sessions/transcript-file-names.ts
 src/config/sessions/auth-profile-override-provenance.ts
 src/config/sessions/goals-operations.types.ts
 src/config/sessions/group-display.ts
@@ -855,7 +836,6 @@ src/infra/agent-run-approval-leases.ts
 src/infra/agent-run-projection.ts
 src/infra/agent-run-registry-state.ts
 src/infra/agent-run-registry.ts
-src/infra/agent-run-terminal-writes.ts
 src/infra/agent-run-usage.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
@@ -897,7 +877,6 @@ src/infra/diagnostic-trace-context.ts
 src/infra/diagnostic-trace-propagation.ts
 src/infra/diagnostics-timeline.ts
 src/infra/directory-durability.ts
-src/infra/directory-watch-host.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-process-cache.ts
@@ -940,7 +919,6 @@ src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
 src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
-src/infra/gc-observer.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
 src/infra/gateway-owner-lease.worker.ts
@@ -1005,7 +983,6 @@ src/infra/net/proxy/managed-proxy-undici.ts
 src/infra/net/proxy/proxy-tls.ts
 src/infra/net/redirect-headers.ts
 src/infra/net/runtime-fetch.ts
-src/infra/net/ssrf-trusted-host-linklocal-exemptions.ts
 src/infra/net/ssrf.ts
 src/infra/net/undici-dispatcher-options.ts
 src/infra/net/undici-error-diagnostics.ts
@@ -1046,7 +1023,6 @@ src/infra/path-guards.ts
 src/infra/plain-object.ts
 src/infra/ports-lsof.ts
 src/infra/ports-netstat.ts
-src/infra/private-dir-mode.ts
 src/infra/private-directory-creation.ts
 src/infra/private-mode.ts
 src/infra/process-env.ts
@@ -1056,7 +1032,6 @@ src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
-src/infra/runtime-process-manifest.ts
 src/infra/runtime-process-url.ts
 src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
@@ -1163,7 +1138,6 @@ src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
-src/infra/sqlite-wal-checksum.ts
 src/infra/sqlite-wal-filesystem.ts
 src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
@@ -1242,7 +1216,6 @@ src/infra/update-runtime-staging.ts
 src/infra/update-snapshot-capacity-schema.ts
 src/infra/update-step-identity.ts
 src/infra/warning-filter.ts
-src/infra/windows-appcontainer-spawn.ts
 src/infra/windows-encoding.ts
 src/infra/windows-install-roots.ts
 src/infra/windows-port-pids.ts
@@ -1253,7 +1226,6 @@ src/infra/worker-cpu.ts
 src/infra/worker-diagnostic-script.ts
 src/infra/worker-idle-gc.ts
 src/infra/worker-memory.ts
-src/infra/worker-message-metrics.ts
 src/infra/worker-native-error.ts
 src/infra/worker-native-handle.ts
 src/infra/worker-native-lifecycle.ts
@@ -1275,11 +1247,7 @@ src/infra/zstd-codec.ts
 src/logger.ts
 src/logging/config.ts
 src/logging/console.ts
-src/logging/diagnostic-cpu-profile.ts
-src/logging/diagnostic-heap-profile.ts
-src/logging/diagnostic-profile.ts
 src/logging/diagnostic-support-redaction.ts
-src/logging/diagnostic-worker-gc-profile.ts
 src/logging/env-log-level.ts
 src/logging/json-console-line.ts
 src/logging/levels.ts
@@ -1348,7 +1316,6 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
-src/plugins/compat/activation-hint-records.ts
 src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
@@ -1387,7 +1354,6 @@ src/plugins/config-policy.ts
 src/plugins/config-state.ts
 src/plugins/control-plane-workspace.ts
 src/plugins/control-ui-assets.ts
-src/plugins/control-ui-build-manifest.ts
 src/plugins/current-plugin-metadata-snapshot.ts
 src/plugins/current-plugin-metadata-state.ts
 src/plugins/default-enablement.ts
@@ -1448,7 +1414,6 @@ src/plugins/manifest-command-aliases.ts
 src/plugins/manifest-config-groups.ts
 src/plugins/manifest-contract-eligibility.ts
 src/plugins/manifest-contract-keys.ts
-src/plugins/manifest-control-ui.ts
 src/plugins/manifest-install-owner.ts
 src/plugins/manifest-metadata-scan.ts
 src/plugins/manifest-model-id-normalization.ts
@@ -1543,7 +1508,6 @@ src/plugins/plugin-registry-id-normalizer.ts
 src/plugins/plugin-registry-snapshot.ts
 src/plugins/plugin-registry.ts
 src/plugins/plugin-return-value.ts
-src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
 src/plugins/plugin-runtime-artifact-selection.ts
@@ -1564,7 +1528,6 @@ src/plugins/plugin-source-references.ts
 src/plugins/plugin-source-verification.ts
 src/plugins/portable-icon-paths.ts
 src/plugins/prepared-message-tool-catalog.ts
-src/plugins/provider-availability-policy.ts
 src/plugins/provider-config-owner.ts
 src/plugins/provider-model-routes.ts
 src/plugins/provider-owner-index.ts
@@ -1590,9 +1553,7 @@ src/plugins/runtime-state-key.ts
 src/plugins/runtime-state.ts
 src/plugins/runtime-workspace-state.ts
 src/plugins/runtime.ts
-src/plugins/sdk-deprecated-imports.ts
 src/plugins/sdk-deprecation.ts
-src/plugins/sdk-deprecation-usage.ts
 src/plugins/runtime/execution-frame.ts
 src/plugins/runtime/gateway-context-binding-owner.ts
 src/plugins/runtime/gateway-context-binding.ts
@@ -1626,19 +1587,16 @@ src/process/output-drain.ts
 src/process/process-deadline.ts
 src/process/scoped-child-reaper.ts
 src/process/spawn-broker/child-completion.ts
-src/process/spawn-broker/child-diagnostics.ts
 src/process/spawn-broker/child.ts
 src/process/spawn-broker/cleanup.ts
 src/process/spawn-broker/context.ts
 src/process/spawn-broker/execa-client.ts
 src/process/spawn-broker/execa-message.ts
 src/process/spawn-broker/execa-protocol.ts
-src/process/spawn-broker/file-reads.ts
 src/process/spawn-broker/host.ts
 src/process/spawn-broker/ipc.ts
 src/process/spawn-broker/pipe.ts
 src/process/spawn-broker/protocol.ts
-src/process/spawn-broker/resource-authority.ts
 src/process/spawn-broker/resource-host.ts
 src/process/spawn-broker/resource-protocol.ts
 src/process/spawn-diagnostics.ts
@@ -1825,7 +1783,6 @@ src/state/openclaw-agent-execution.ts
 src/state/openclaw-agent-goal-operations-schema.ts
 src/state/openclaw-agent-json-predicate-schema.ts
 src/state/openclaw-agent-message-tool-outcome-schema.ts
-src/state/openclaw-agent-outbox-sequence-migration.ts
 src/state/openclaw-agent-participants-migration.ts
 src/state/openclaw-agent-pending-inputs-schema.ts
 src/state/openclaw-agent-progress-card-schema.ts
@@ -1869,7 +1826,6 @@ src/state/openclaw-state-db-contract.ts
 src/state/openclaw-state-db-cron-delivery-migration.ts
 src/state/openclaw-state-db-delivery-queue-backfill.ts
 src/state/openclaw-state-db-doctor-schema.ts
-src/state/openclaw-state-db-engine.ts
 src/state/openclaw-state-db-existing-schema.ts
 src/state/openclaw-state-db-existing-write.ts
 src/state/openclaw-state-db-failure.ts
@@ -1879,7 +1835,6 @@ src/state/openclaw-state-db-initialization.ts
 src/state/openclaw-state-db-integrity-admission.ts
 src/state/openclaw-state-db-legacy-backfills.ts
 src/state/openclaw-state-db-maintenance.ts
-src/state/openclaw-state-db-meeting-chronology-migration.ts
 src/state/openclaw-state-db-open.ts
 src/state/openclaw-state-db-operator-approval-migration.ts
 src/state/openclaw-state-db-permissions.ts
@@ -1899,7 +1854,6 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
-src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-version.ts
 src/state/openclaw-state-db-session-watch-migration.ts
 src/state/openclaw-state-db-snapshot-owner.ts
@@ -1907,7 +1861,6 @@ src/state/openclaw-state-db-startup-checkpoint.ts
 src/state/openclaw-state-db-table-retirements.ts
 src/state/openclaw-state-db-task-delivery-recovery.ts
 src/state/openclaw-state-db-transaction.ts
-src/state/postgres-schema.generated/runtime.ts
 src/state/openclaw-state-db.paths.ts
 src/state/openclaw-state-db.ts
 src/state/openclaw-state-feature-schema-ensure.ts
@@ -1932,7 +1885,6 @@ src/state/openclaw-state-lease-worker.ts
 src/state/openclaw-state-lease.ts
 src/state/openclaw-state-maintenance-context.ts
 src/state/openclaw-state-ownership.ts
-src/state/openclaw-state-ownership-preflight.ts
 src/state/openclaw-state-ownership-worker.ts
 src/state/openclaw-state-read-operation.ts
 src/state/openclaw-state-read-pool.ts
@@ -1954,7 +1906,6 @@ src/state/openclaw-state-worker-lease.ts
 src/state/openclaw-state-worker-memory-pressure.ts
 src/state/openclaw-state-worker-operation.ts
 src/state/openclaw-state-worker-owner.ts
-src/state/openclaw-state-worker-registry.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
@@ -2129,7 +2080,6 @@ src/config/sessions/session-accessor.sqlite-identity.ts
 src/config/sessions/session-accessor.sqlite-worker-coordination.ts
 src/config/sessions/session-accessor.sqlite-worker-transport.ts
 src/config/sessions/session-actor-replica.ts
-src/config/sessions/session-actor-replica-index.ts
 src/config/sessions/session-actor-replica-receipts.ts
 src/config/sessions/session-actor-bounded-history.ts
 src/config/sessions/session-actor-transcript-anchors.ts
@@ -2236,17 +2186,13 @@ packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/users-background.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
-packages/markdown-core/src/fences.ts
-packages/markdown-core/src/image-code-retention.ts
 packages/markdown-core/src/reasoning-tag-parser.ts
 packages/markdown-core/src/reasoning-tags.ts
 packages/media-core/src/base64.ts
-packages/media-core/src/inline-image-data-url.ts
 packages/memory-host-sdk/src/host/session-entry-projection.ts
 packages/memory-host-sdk/src/host/session-reset-recall.ts
 packages/memory-host-sdk/src/host/session-transcript-corpus-policy.ts
 packages/normalization-core/src/markdown-plain-text.ts
-packages/tool-call-repair/src/attempt.ts
 packages/tool-call-repair/src/contracts.ts
 packages/tool-call-repair/src/grammar.ts
 packages/tool-call-repair/src/index.ts
@@ -2267,8 +2213,6 @@ src/agents/failover/assistant-request-failure-copy.ts
 src/agents/failover/classification-rules.ts
 src/agents/failover/classify-core.ts
 src/agents/failover/context-overflow-tables.ts
-src/agents/failover/error.ts
-src/agents/failover/local-preparation-error.ts
 src/agents/failover/message-patterns.ts
 src/agents/failover/request-error-facets.ts
 src/agents/failover/signal-details.ts
@@ -2395,6 +2339,7 @@ src/config/sessions/transcript-message-equality.ts
 src/config/sessions/transcript-replay.ts
 src/config/sessions/transcript-visible-events.ts
 src/config/sessions/work-start-error.ts
+src/gateway/control-reply-text.ts
 src/gateway/payload-limits.ts
 src/gateway/server-constants.ts
 src/gateway/session-display-projection.ts
@@ -2445,7 +2390,6 @@ src/config/sessions/session-manual-compact-entry.ts
 src/config/sessions/session-manual-compact-selection.ts
 src/config/sessions/store-maintenance-plan.ts
 src/config/sessions/store-maintenance-preserve-snapshot.ts
-src/agents/auth-profiles/authorization-lifetime.ts
 src/agents/auth-profiles/constants.ts
 src/agents/auth-profiles/credential-schema.ts
 src/agents/auth-profiles/credential-write-custody.ts
@@ -2470,23 +2414,3 @@ src/state/user-model-account-id.ts
 src/state/user-profile-authority.ts
 src/state/user-profile-events.ts
 src/utils/normalize-secret-input.ts
-packages/gateway-protocol/src/schema/approval-id.ts
-packages/memory-host-sdk/src/host/openclaw-runtime-session-visibility.ts
-src/agents/delivery-evidence-values.ts
-src/agents/embedded-agent-runner/message-visibility.ts
-src/auto-reply/reply-payload.ts
-src/chat/canvas-render.ts
-src/chat/tool-content.ts
-src/gateway/chat-display-projection.canvas.ts
-src/gateway/chat-display-projection.commentary.ts
-src/gateway/chat-display-projection.sanitize.ts
-src/gateway/worker-environments/workspace-conflicts.ts
-src/infra/sibling-temp-file.ts
-src/interactive/payload.ts
-src/media/media-reference.ts
-src/media/store.shared.ts
-src/media/store.ts
-src/sessions/session-run-error-presentation.ts
-src/sessions/user-turn-media.ts
-src/shared/channel-read-authority.ts
-src/shared/tool-approval-reviews.ts

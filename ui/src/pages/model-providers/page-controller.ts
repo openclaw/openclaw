@@ -1,10 +1,23 @@
-import { i18n } from "../../i18n/lib/translate.ts";
-import type { SolidController, SolidControllerHost } from "../../lit/solid-controller-host.ts";
+import { I18nController } from "../../i18n/lib/lit-controller.ts";
+
+export interface PageLifecycle {
+  hostConnected?(): void;
+  hostDisconnected?(): void;
+  hostUpdate?(): void;
+  hostUpdated?(): void;
+}
+
+export interface ControllerHost {
+  addController(controller: PageLifecycle): void;
+  removeController(controller: PageLifecycle): void;
+  requestUpdate(): void;
+  readonly updateComplete: Promise<boolean>;
+}
 
 /** Keeps synchronous page owners and their subscriptions independent of the renderer. */
-export class ModelPageController implements SolidControllerHost {
-  private readonly controllers = new Set<SolidController>();
-  private stopLocale: (() => void) | undefined;
+export class ModelPageController implements ControllerHost {
+  private readonly controllers = new Set<PageLifecycle>();
+  protected readonly i18nController = new I18nController(this);
   private connected = false;
   private settle: ((settled: boolean) => void) | undefined;
   updateComplete = Promise.resolve(true);
@@ -24,14 +37,14 @@ export class ModelPageController implements SolidControllerHost {
     return this.connected;
   }
 
-  addController(controller: SolidController): void {
+  addController(controller: PageLifecycle): void {
     this.controllers.add(controller);
     if (this.connected) {
       controller.hostConnected?.();
     }
   }
 
-  removeController(controller: SolidController): void {
+  removeController(controller: PageLifecycle): void {
     this.controllers.delete(controller);
   }
 
@@ -46,8 +59,6 @@ export class ModelPageController implements SolidControllerHost {
 
   connect(): void {
     this.connected = true;
-    this.stopLocale?.();
-    this.stopLocale = i18n.subscribe(() => this.requestUpdate());
     for (const controller of this.controllers) {
       controller.hostConnected?.();
     }
@@ -71,8 +82,6 @@ export class ModelPageController implements SolidControllerHost {
 
   disconnect(): void {
     this.connected = false;
-    this.stopLocale?.();
-    this.stopLocale = undefined;
     for (const controller of this.controllers) {
       controller.hostDisconnected?.();
     }

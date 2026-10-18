@@ -275,6 +275,7 @@ describe("CronService.remove session cleanup", () => {
 
     // The cron owner releases pending cleanup after the real lifecycle mutation settles.
     await racePromiseWithAbortSignal(cleanupDone, signal);
+    expect(cronCleanup.hasPendingCronSessionCleanupForAgent("main")).toBe(false);
     expect(read(sessionKey)).toBeUndefined();
   });
 

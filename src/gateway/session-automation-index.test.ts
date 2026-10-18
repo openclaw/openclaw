@@ -4,6 +4,7 @@ import type { CronJob } from "../cron/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   invalidateSessionAutomationIndex,
+  claimSessionAutomationEpoch,
   registerSessionAutomationSource,
   sessionHasAutomation,
   unregisterSessionAutomationSource,
@@ -134,20 +135,24 @@ describe("session automation index", () => {
     }
   });
 
-  test("stopped services cannot clear a replacement registration", () => {
+  test("stale services cannot clobber or clear a replacement registration", () => {
     expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(false);
     const changes: unknown[] = [];
     const unsubscribe = sessionChanges.subscribe((change) => changes.push(change));
     try {
+      const staleEpoch = claimSessionAutomationEpoch();
       const staleSource = {
         getJobs: () => [job({ id: "stale" })],
         getDefaultAgentId: () => "main",
       };
+      const freshEpoch = claimSessionAutomationEpoch();
       const freshSource = {
         getJobs: () => [job({ id: "fresh" })],
         getDefaultAgentId: () => "main",
       };
-      registerSessionAutomationSource(freshSource);
+      registerSessionAutomationSource(freshSource, freshEpoch);
+      // Config-reload race: the older service's start resolves late.
+      registerSessionAutomationSource(staleSource, staleEpoch);
       expect(sessionHasAutomation("agent:main:cron:fresh", cfg)).toBe(true);
       expect(sessionHasAutomation("agent:main:cron:stale", cfg)).toBe(false);
       unregisterSessionAutomationSource(staleSource);

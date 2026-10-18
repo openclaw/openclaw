@@ -58,7 +58,7 @@ type MatrixDeliveryPlan = {
   transactionScopeId: string;
   partIndex: number;
   partCount: number;
-  events: readonly MatrixPreparedEvent[];
+  events: MatrixPreparedEvent[];
 };
 
 function createDeliveryPlanStore() {
@@ -200,7 +200,7 @@ export function createMatrixPlannedEvents(params: {
   events: readonly Omit<MatrixPreparedEvent, "transactionId">[];
 }): MatrixPreparedEvent[] {
   return params.events.map((event, index) => ({
-    ...event,
+    ...structuredClone(event),
     transactionId: transactionId(params.identity, index),
   }));
 }
@@ -240,7 +240,7 @@ export async function loadMatrixDeliveryPlan(
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
   }
   assertPlanIdentity(plan, params);
-  return plan;
+  return structuredClone(plan);
 }
 
 export async function persistMatrixDeliveryPlan(
@@ -262,13 +262,14 @@ export async function persistMatrixDeliveryPlan(
     );
   }
   const partCount = requirePartCount(params.identity.partCount);
-  for (const [index, event] of params.events.entries()) {
+  const events = params.events.map((event, index) => {
     if (event.transactionId !== transactionId(params.identity, index)) {
       throw new MatrixDeliveryPlanInvariantError(
         "Matrix durable delivery plan has an invalid transaction identifier",
       );
     }
-  }
+    return structuredClone(event);
+  });
   const plan: MatrixDeliveryPlan = {
     version: DELIVERY_PLAN_VERSION,
     queueId: params.identity.queueId,
@@ -281,11 +282,11 @@ export async function persistMatrixDeliveryPlan(
     transactionScopeId: params.transactionScopeId,
     partIndex: requireIndex(params.identity.partIndex, "part index"),
     partCount,
-    events: params.events,
+    events,
   };
-  const bytes = new TextEncoder().encode(JSON.stringify(plan));
   const store = createDeliveryPlanStore();
   await store.deleteExpired();
+  const bytes = new TextEncoder().encode(JSON.stringify(plan));
   if (await store.registerIfAbsent(planKey(params.identity), bytes, {})) {
     return plan;
   }

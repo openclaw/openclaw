@@ -1,11 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  advancePendingFinalDeliveryCompletion,
-  persistPendingFinalDeliveryMarker,
-} from "./pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
+import { persistPendingFinalDeliveryMarker } from "./pending-final-delivery-marker.js";
 
 const state = vi.hoisted(() => ({ applySessionEntryReplacements: vi.fn() }));
 
@@ -35,7 +31,6 @@ describe("persistPendingFinalDeliveryMarker", () => {
     ];
 
     const result = await persistPendingFinalDeliveryMarker({
-      admittedRecoverySource: capturePendingFinalRecoverySource(entry),
       agentId: "main",
       deliver: true,
       sessionStore: { main: entry },
@@ -64,45 +59,3 @@ describe("persistPendingFinalDeliveryMarker", () => {
     ).toEqual([deliveryId, undefined, deliveryId]);
   });
 });
-
-it.each(["matching", "wrong-intent", "wrong-delivery", "wrong-predecessor"])(
-  "advances only the original captured locator after compaction (%s)",
-  (mode) => {
-    const payload = { text: "original final" };
-    const completion = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      sessionId: "A",
-      storePath: "/private/sessions.json",
-      intentId: "intent",
-      deliveryId: "delivery",
-    };
-    setReplyPayloadMetadata(payload, { pendingFinalDeliveryCompletion: completion });
-    advancePendingFinalDeliveryCompletion({
-      payloads: [payload],
-      intentId: mode === "wrong-intent" ? "other" : "intent",
-      transition: {
-        previous: {
-          sessionId: mode === "wrong-predecessor" ? "other" : "A",
-          lifecycleRevision: "la",
-        },
-        current: { sessionId: "B", lifecycleRevision: "lb" },
-      },
-      entry: {
-        sessionId: "B",
-        lifecycleRevision: "lb",
-        updatedAt: 1,
-        pendingFinalDelivery: {
-          kind: "transport-only",
-          intentId: "intent",
-          createdAt: 1,
-          deliveries: [{ id: mode === "wrong-delivery" ? "other" : "delivery", state: "prepared" }],
-        },
-      },
-    });
-    expect(getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion).toEqual({
-      ...completion,
-      sessionId: mode === "matching" ? "B" : "A",
-    });
-  },
-);

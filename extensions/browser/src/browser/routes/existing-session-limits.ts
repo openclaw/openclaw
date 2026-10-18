@@ -73,7 +73,10 @@ export function admitExistingSessionAction(
       if (action.selector) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickSelector };
       }
-      if ((action.button && action.button !== "left") || action.modifiers?.length) {
+      if (
+        (action.button && action.button !== "left") ||
+        (Array.isArray(action.modifiers) && action.modifiers.length > 0)
+      ) {
         return { ok: false, error: EXISTING_SESSION_LIMITS.act.clickButtonOrModifiers };
       }
       break;

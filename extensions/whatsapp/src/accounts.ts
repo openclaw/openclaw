@@ -140,7 +140,7 @@ export function resolveWhatsAppMediaMaxBytes(
   account: Pick<ResolvedWhatsAppAccount, "mediaMaxMb">,
 ): number {
   const mediaMaxMb =
-    account.mediaMaxMb !== undefined && account.mediaMaxMb > 0
+    typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
   return Math.floor(mediaMaxMb * 1024 * 1024);

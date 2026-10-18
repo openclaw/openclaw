@@ -1,14 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteOptions } from "../../config/io.types.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
-import { invalidateGatewayRuntimeConfigSchema } from "../../config/runtime-schema.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { writeRestartSentinel } from "../../infra/restart-sentinel.js";
 import { scheduleGatewayRestart } from "../../infra/restart.js";
 import { resolveSuggestedWorkerProfile } from "../../plugins/worker-profile-suggestions.js";
-import { invalidateConfigGetResponseCache } from "../config-get-response.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
 import { resolveWorkerPlacementDestination } from "../worker-environments/placement-destination.js";
+import { clearConfigSchemaResponseCacheForTests } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
 import { environmentsHandlers } from "./environments.js";
 import { adoptSuggestedWorkerProfile } from "./environments.suggested-profile.js";
@@ -108,8 +107,7 @@ beforeEach(() => {
   );
 });
 afterEach(() => {
-  invalidateGatewayRuntimeConfigSchema();
-  invalidateConfigGetResponseCache();
+  clearConfigSchemaResponseCacheForTests();
   vi.clearAllMocks();
 });
 

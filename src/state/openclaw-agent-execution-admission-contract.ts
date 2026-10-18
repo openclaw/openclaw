@@ -28,6 +28,10 @@ export type OpenClawAgentDatabaseAdmissionExecution = {
   readonly path: string;
   assertCurrent(): void;
   captureGenerationClaim(): AgentDatabaseGenerationClaim;
-  /** Reuse the native owner's published preparation and schema proof. */
-  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Reuse native preparation; host handle admission explicitly requests current schema proof. */
+  prepare(
+    source: AgentDatabaseRequestExecutionSource,
+    signal?: AbortSignal,
+    options?: { readmitSchema: true },
+  ): Promise<void>;
 };

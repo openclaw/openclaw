@@ -127,7 +127,7 @@ describe("doctor.memory.status", () => {
       .mockImplementation(async () => makeDreamingStats());
   });
 
-  it.each(["cached", "selected-plugin"] as const)(
+  it.each(["probe", "unprobed", "cached", "selected-plugin"] as const)(
     "returns %s embedding readiness and dreaming configuration",
     async (mode) => {
       if (mode === "selected-plugin") {
@@ -159,19 +159,25 @@ describe("doctor.memory.status", () => {
           : {}),
       });
       const respond = vi.fn();
-      await invokeDoctorMemory("doctor.memory.status", respond, { params: {} });
+      await invokeDoctorMemory("doctor.memory.status", respond, {
+        params: mode === "probe" ? { probe: true } : {},
+      });
       const managerInput = mockCallArg(getMemorySearchManager);
       expect(managerInput.cfg).toBeDefined();
       expectRecordFields(managerInput, { agentId: "main", purpose: "status" });
       const payload = respondPayload(respond);
       expectRecordFields(payload, { agentId: "main", provider: "gemini" });
-      expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
-      expectRecordFields(
-        payload.embedding,
-        mode === "cached"
-          ? { ok: true, checked: true, cached: true }
-          : { ok: false, checked: false },
-      );
+      if (mode === "probe") {
+        expect(payload.embedding).toEqual({ ok: true });
+      } else {
+        expect(probeEmbeddingAvailability).not.toHaveBeenCalled();
+        expectRecordFields(
+          payload.embedding,
+          mode === "cached"
+            ? { ok: true, checked: true, cached: true }
+            : { ok: false, checked: false },
+        );
+      }
       const dreaming = expectRecordFields(payload.dreaming, {
         enabled: true,
         shortTermCount: 0,
@@ -796,6 +802,11 @@ describe("doctor.memory.dreamDiary", () => {
   });
 
   it.each([
+    {
+      filename: "DREAMS.md",
+      agentId: undefined,
+      content: "## Dream Diary\n- staged durable memory\n",
+    },
     { filename: "DREAMS.md", agentId: "research-analyst", content: "## Research Dreams\n" },
     { filename: "dreams.md", agentId: undefined, content: "lowercase diary\n" },
     { filename: undefined, agentId: undefined, content: undefined },

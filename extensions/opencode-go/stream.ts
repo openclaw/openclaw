@@ -1,8 +1,4 @@
-import { asPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import type {
-  ProviderRuntimeModel,
-  ProviderWrapStreamFnContext,
-} from "openclaw/plugin-sdk/plugin-entry";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
@@ -14,6 +10,7 @@ import {
   isOpencodeGoKimiNoReasoningModelId,
 } from "./provider-policy-api.js";
 import { stripOpencodeGoKimiReasoningPayload } from "./reasoning-sanitizer.js";
+import { createOpencodeGoStalledStreamWrapper } from "./stream-termination.js";
 
 function createOpencodeGoAttributionWrapper(
   baseStreamFn: NonNullable<ProviderWrapStreamFnContext["streamFn"]>,
@@ -103,17 +100,8 @@ export function createOpencodeGoWrapper(
   if (!wrapped) {
     return undefined;
   }
-  // The transport owns first-SSE timing; the runner owns creation/idle abort and
-  // cron failover. Do not hide its native stream/activity signal behind another pump.
-  return (model, context, options) => {
-    const runtimeModel: ProviderRuntimeModel = model;
-    const requestOptions =
-      model.provider === "opencode-go"
-        ? {
-            ...options,
-            firstEventTimeoutMs: asPositiveFiniteNumber(runtimeModel.requestTimeoutMs) ?? 300_000,
-          }
-        : options;
-    return wrapped(model, context, requestOptions);
-  };
+  // Outermost layer: provider-owned stalled SSE termination so the underlying
+  // OpenAI SDK request is aborted at the raw opencode-go boundary instead of
+  // waiting for the shared runtime stuck-session recovery.
+  return createOpencodeGoStalledStreamWrapper(wrapped);
 }

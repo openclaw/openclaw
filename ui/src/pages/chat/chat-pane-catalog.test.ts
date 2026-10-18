@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   SessionCatalogSession,
@@ -21,7 +22,7 @@ import {
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
 import * as chatThreadBuild from "./chat-thread-build.ts";
-import { renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -115,11 +116,7 @@ describe("catalog transcript cache", () => {
     const build = vi.spyOn(chatThreadBuild, "buildChatItems");
     const draw = () => {
       pane.render();
-      renderChatPropsInto(
-        container,
-        expectDefined(pane.chatProps, "rendered catalog props"),
-        context,
-      );
+      render(renderChat(expectDefined(pane.chatProps, "rendered catalog props")), container);
     };
 
     draw();

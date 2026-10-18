@@ -3,6 +3,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasDescendantRunAwaitingSettleFromRuns } from "../../agents/subagents/registry/subagent-registry-queries.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type * as SessionAccessor from "../../config/sessions/session-accessor.js";
 import type * as SessionEntryReadRuntime from "../../config/sessions/session-entry-read-runtime.js";
@@ -138,13 +139,18 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: maybeApplyTtsToPayloadMock,
 }));
 
-vi.mock("./subagent-followup.runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./subagent-followup.runtime.js")>();
+vi.mock("./subagent-followup-hints.js", () => ({
+  expectsSubagentFollowup: vi.fn().mockReturnValue(false),
+  isLikelyInterimCronMessage: vi.fn().mockReturnValue(false),
+}));
+
+vi.mock("./subagent-followup.runtime.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./subagent-followup.js")>("./subagent-followup.js");
   return {
-    ...actual,
     readDescendantSubagentFallbackReply: vi.fn().mockResolvedValue(undefined),
     waitForDescendantSubagentSummary: vi.fn().mockResolvedValue(undefined),
-    waitForDescendantSubagentResult: vi.fn(actual.waitForDescendantSubagentResult),
+    waitForDescendantSubagentResult: actual.waitForDescendantSubagentResult,
   };
 });
 
@@ -169,10 +175,10 @@ import {
 } from "./delivery-dispatch.test-fixtures.js";
 import { hasUnsettledCronDescendants } from "./delivery-subagent-registry.runtime.js";
 import { resolveDeliveryTarget } from "./delivery-target.js";
+import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import * as realFollowup from "./subagent-followup.js";
 import {
   readDescendantSubagentFallbackReply,
-  waitForDescendantSubagentResult,
   waitForDescendantSubagentSummary,
 } from "./subagent-followup.runtime.js";
 
@@ -258,11 +264,10 @@ describe("dispatchCronDelivery", () => {
       pendingEntry: null,
     });
     vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(false);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
-    vi.mocked(waitForDescendantSubagentResult).mockImplementation(
-      realFollowup.waitForDescendantSubagentResult,
-    );
     vi.mocked(retireSessionMcpRuntime).mockResolvedValue(true);
     bindOutboundSessionEntryMock.mockResolvedValue({});
     readSessionEntryInWorkerMock.mockResolvedValue({
@@ -300,6 +305,28 @@ describe("dispatchCronDelivery", () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  it("does not wait for descendants when a creatorless best-effort target is unresolved", async () => {
+    const params = makeBaseParams({ deliveryBestEffort: true, synthesizedText: "Result" });
+    params.resolvedDelivery = {
+      ok: false,
+      mode: "implicit",
+      error: new Error("No delivery route"),
+    };
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(true);
+
+    const result = await dispatchCronDelivery(params);
+
+    expect(result).toMatchObject({
+      disposition: { kind: "suppressed" },
+      delivered: false,
+      deliveryError: "No delivery route",
+    });
+    expect(hasUnsettledCronDescendants).not.toHaveBeenCalled();
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
   it("suppresses incomplete descendant output while settlement is queued", async () => {
@@ -405,18 +432,14 @@ describe("dispatchCronDelivery", () => {
       summary: "Report ready",
       output: [
         { text: "Report ready" },
-        {
-          text: "   ",
-          fallbackText: { text: "Report ready", replacesPayloadIndex: 0 },
-          channelData: buttons,
-        },
+        { fallbackText: { text: "Report ready", replacesPayloadIndex: 0 }, channelData: buttons },
       ],
     },
     {
-      name: "literal metadata text",
+      name: "silent metadata",
       input: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
       summary: SILENT_REPLY_TOKEN,
-      output: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
+      output: [{ channelData: buttons }],
     },
   ])("normalizes $name direct payloads", async ({ input, summary, output }) => {
     const state = await dispatchCronDelivery(structuredParams(input, summary));
@@ -425,50 +448,30 @@ describe("dispatchCronDelivery", () => {
     expectDelivered(state);
   });
 
-  it.each([true, false])(
-    "preserves the completed parent synthesis over settled children with bestEffort=%s",
-    async (deliveryBestEffort) => {
-      const text = "The combined report reconciles both child findings and recommends option B.";
-      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
-        "Partial child finding recommends option A.",
-      );
-      const state = await dispatchCronDelivery(
-        makeBaseParams({ synthesizedText: text, deliveryBestEffort }),
-      );
+  it.each([true, false])("suppresses stale interim text with bestEffort=%s", async (bestEffort) => {
+    vi.mocked(hasUnsettledCronDescendants)
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(bestEffort);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
 
-      expectDelivered(state);
-      expect(state).toMatchObject({ summary: text, outputText: text, synthesizedText: text });
-      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-      expectDeliveryCall(0, { payloads: [{ text }] });
-    },
-  );
+    const params = makeBaseParams({
+      synthesizedText: "on it, pulling everything together",
+      deliveryBestEffort: bestEffort,
+    });
+    const state = await dispatchCronDelivery(params);
 
-  it.each([true, false])(
-    "does not infer interim status from visible final prose with bestEffort=%s",
-    async (bestEffort) => {
-      vi.mocked(hasUnsettledCronDescendants)
-        .mockResolvedValueOnce(true)
-        .mockResolvedValue(bestEffort);
-      const text = "on it, pulling everything together";
-      const params = makeBaseParams({
-        synthesizedText: text,
-        deliveryBestEffort: bestEffort,
-      });
-      const state = await dispatchCronDelivery(params);
-
-      expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(bestEffort ? 0 : 1);
-      expect(state.deliveryAttempted).toBe(true);
-      expect(state.delivered).toBe(true);
-      expectDeliveryCall(0, { payloads: [{ text }] });
-    },
-  );
+    expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(bestEffort ? 0 : 1);
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(false);
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    if (!bestEffort) {
+      expect(state.deliveryError).toBe("cron descendants completed without a final reply");
+    }
+  });
 
   it("delivers a settled child's task-failure prose unchanged", async () => {
     const reply = "AUTOMATION_FAILED\nNo shell tool is available in this run.";
-    vi.mocked(waitForDescendantSubagentResult).mockResolvedValue({
-      disposition: "visible",
-      reply,
-    });
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(reply);
 
     const state = await dispatchCronDelivery(emptyParams(true));
 
@@ -490,23 +493,17 @@ describe("dispatchCronDelivery", () => {
           .mockResolvedValueOnce(true)
           .mockResolvedValueOnce(false);
       }
-      vi.mocked(waitForDescendantSubagentResult).mockImplementation(async () => {
-        vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(false);
-        return { disposition: "visible", reply: childReply };
-      });
+      vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(childReply);
+
       const params = emptyParams(true, deliveryBestEffort);
-      params.agentSessionKey = "agent:main:cron:daily-monitor";
-      params.runSessionKey = "agent:main:cron:daily-monitor:run:test-session-id";
-      vi.mocked(waitForDescendantSubagentResult).mockResolvedValue({ reply: childReply });
       params.resolvedDelivery = makeResolvedDelivery({ threadId });
 
       const state = await dispatchCronDelivery(params);
 
-      expect(waitForDescendantSubagentResult).toHaveBeenCalledExactlyOnceWith({
+      expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(activeDescendants ? 1 : 0);
+      expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
         sessionKey: params.runSessionKey,
         runStartedAt: params.runStartedAt,
-        timeoutMs: params.timeoutMs,
-        abortSignal: undefined,
       });
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
       expectDeliveryCall(0, {
@@ -517,8 +514,6 @@ describe("dispatchCronDelivery", () => {
       });
       expect(state.delivered).toBe(true);
       expect(state.deliveryAttempted).toBe(true);
-      expect(state).toMatchObject({ summary: childReply, outputText: childReply });
-      expect(state.disposition).toBeUndefined();
     },
   );
 
@@ -534,12 +529,7 @@ describe("dispatchCronDelivery", () => {
       error: "cron child-session handoff completed without a final assistant payload",
     },
   ])("fails an accepted spawn-only handoff when $name", async ({ activeDescendants, error }) => {
-    vi.mocked(hasUnsettledCronDescendants)
-      .mockReset()
-      .mockResolvedValue(activeDescendants > 0);
-    vi.mocked(waitForDescendantSubagentResult).mockResolvedValue(
-      activeDescendants > 0 ? undefined : {},
-    );
+    vi.mocked(hasUnsettledCronDescendants).mockResolvedValue(activeDescendants > 0);
     const params = emptyParams(true);
 
     const state = await dispatchCronDelivery(params);
@@ -552,7 +542,7 @@ describe("dispatchCronDelivery", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  describe("spawn-only handoff settlement", () => {
+  describe("spawn-only handoff without delivery", () => {
     const childReply = "[blocked] Unable to execute the command: no shell tool.";
     let runStartedAt = 0;
 
@@ -561,10 +551,8 @@ describe("dispatchCronDelivery", () => {
       // Production wait timings (5 s synthesis grace) under fake time.
       vi.stubEnv("OPENCLAW_TEST_FAST", "0");
       runStartedAt = Date.now();
-      // Use production settlement; only registry and Gateway I/O are fixed.
-      vi.mocked(waitForDescendantSubagentResult).mockImplementation(
-        realFollowup.waitForDescendantSubagentResult,
-      );
+      // Announce settlement runs for real too, so a no-delivery run routed through it
+      // shows its parent-synthesis wait and dropped silence.
       vi.mocked(waitForDescendantSubagentSummary).mockImplementation(
         realFollowup.waitForDescendantSubagentSummary,
       );
@@ -607,12 +595,7 @@ describe("dispatchCronDelivery", () => {
                 cleanup: "keep",
                 createdAt: runStartedAt,
                 execution: { status: "terminal", endedAt: settledAt, outcome: { status: "ok" } },
-                completion: {
-                  required: true,
-                  terminalReply,
-                  resultText:
-                    terminalReply?.disposition === "visible" ? terminalReply.text : undefined,
-                },
+                completion: { required: true, terminalReply },
               } as SubagentRunRecord,
             ],
       );
@@ -628,44 +611,40 @@ describe("dispatchCronDelivery", () => {
       return await state;
     }
 
-    it.each([
-      ["none", "visible"],
-      ["none", "silent"],
-      ["announce", "silent"],
-    ] as const)("records a settled %s / %s child", async (mode, kind) => {
-      const params = spawnOnlyJob({ mode });
-      const reply = childReply;
-      childSettlesAt(
-        kind === "visible" ? params.timeoutMs - 3_000 : 1_000,
-        kind === "silent"
-          ? { disposition: "silent" }
-          : {
-              disposition: "visible",
-              text: reply,
-            },
-      );
+    it.each(["visible", "silent", "legacy-marker"] as const)(
+      "records a settled %s child without delivery",
+      async (kind) => {
+        const params = spawnOnlyJob({ mode: "none" });
+        const reply =
+          kind === "legacy-marker"
+            ? "AUTOMATION_FAILED\nNo shell tool is available in this run."
+            : childReply;
+        childSettlesAt(
+          kind === "visible" ? params.timeoutMs - 3_000 : 1_000,
+          kind === "silent"
+            ? { disposition: "silent" }
+            : {
+                disposition: "visible",
+                text: reply,
+              },
+        );
 
-      const state = await dispatchUntilWatchdog(params);
+        const state = await dispatchUntilWatchdog(params);
 
-      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-      if (kind === "silent") {
-        expect(state.summary).toBeUndefined();
-      } else {
+        expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+        if (kind === "silent") {
+          expect(state.summary).toBeUndefined();
+        } else {
+          expect(state).toMatchObject({
+            outputText: reply,
+            summary: reply,
+            deliveryState: { status: "not-requested" },
+          });
+        }
         expect(state.disposition).toBeUndefined();
-        expect(state).toMatchObject({
-          outputText: reply,
-          summary: reply,
-          deliveryState: { status: "not-requested" },
-        });
-      }
-      if (mode === "announce") {
-        expect(state.disposition).toMatchObject({ kind: "suppressed" });
-        expect(state.deliverySuppressionReason).toBe("silent");
-      } else {
-        expect(state.disposition).toBeUndefined();
-      }
-      expectSessionDeleted();
-    });
+        expectSessionDeleted();
+      },
+    );
 
     it.each([
       {
@@ -746,10 +725,7 @@ describe("dispatchCronDelivery", () => {
     const runStartedAt = 1_000;
     const agentSessionKey = "agent:main:cron:daily-monitor";
     const runSessionKey = "agent:main:cron:daily-monitor:run:test-session-id";
-    vi.mocked(hasUnsettledCronDescendants)
-      .mockReset()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValue(false);
+    vi.mocked(isLikelyInterimCronMessage).mockReturnValue(true);
     vi.mocked(readDescendantSubagentFallbackReply).mockImplementation(async (params) =>
       params.sessionKey === runSessionKey
         ? "Run-scoped child result, everything finished successfully."
@@ -828,7 +804,7 @@ describe("dispatchCronDelivery", () => {
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
-  it("preserves a literal trailing-token caption and its notification media", async () => {
+  it("strips a silent caption but retains its notification media", async () => {
     const params = makeBaseParams({});
     params.deliveryPayloads = [
       { mediaUrl: "https://example.com/image.png", text: "All done\n\nNO_REPLY" },
@@ -842,46 +818,64 @@ describe("dispatchCronDelivery", () => {
     expectDelivered(state);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, {
-      payloads: [{ mediaUrl: "https://example.com/image.png", text: "All done\n\nNO_REPLY" }],
+      payloads: [{ mediaUrl: "https://example.com/image.png", text: undefined }],
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it("suppresses a late cron start without deleting its session", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
-    const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
-    params.job.deleteAfterRun = true;
-    params.beforeSessionDelete = vi.fn();
-    params.job.state = { nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1) };
-    const state = await dispatchCronDelivery(params);
-    const deliveryError = expect.stringContaining(
-      "scheduled at 2026-03-18T13:59:59.999Z, started 180m late",
-    );
-    expect(state).toMatchObject({
-      disposition: { kind: "suppressed" },
-      delivered: false,
-      deliveryAttempted: true,
-      deliveryError,
-    });
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.deliveryState).toMatchObject({
-      status: "not-delivered",
-      delivered: false,
-      error: deliveryError,
-    });
-    expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
-    expect(params.beforeSessionDelete).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
-  });
+  it.each(["late", "scheduled on time", "zero schedule"])(
+    "handles a %s cron start",
+    async (schedule) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
+      const late = schedule === "late";
+      const params = makeBaseParams({
+        synthesizedText: late ? "Yesterday's morning briefing." : "Long running report finished.",
+      });
+      const earlier = Date.now() - (3 * 60 * 60_000 + 1);
+      if (late) {
+        params.job.deleteAfterRun = true;
+        params.beforeSessionDelete = vi.fn();
+      } else {
+        params.runStartedAt = earlier;
+      }
+      params.job.state = { nextRunAtMs: schedule === "zero schedule" ? 0 : earlier };
+      const state = await dispatchCronDelivery(params);
+      if (!late) {
+        expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+        expectDelivered(state);
+        return;
+      }
+      const deliveryError = expect.stringContaining(
+        "scheduled at 2026-03-18T13:59:59.999Z, started 180m late",
+      );
+      expect(state).toMatchObject({
+        disposition: { kind: "suppressed" },
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError,
+      });
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+      expect(state.deliveryState).toMatchObject({
+        status: "not-delivered",
+        delivered: false,
+        error: deliveryError,
+      });
+      expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
+      expect(params.beforeSessionDelete).not.toHaveBeenCalled();
+      expect(callGateway).not.toHaveBeenCalled();
+    },
+  );
 
-  it.each(["retired", "survived", "archived"] as const)(
+  it.each(["deleted", "retired", "aborted", "survived", "archived"] as const)(
     "preserves run cleanup when its outcome is %s",
     async (outcome) => {
       const persistent = outcome === "survived" || outcome === "archived";
       const params = deletingRunParams(
         persistent ? "session:agent:main:cron:test-job" : "isolated",
       );
+      const abort = new AbortController();
+      params.abortSignal = abort.signal;
       if (outcome === "archived") {
         const error = Object.assign(new Error("session changed"), {
           name: "GatewayClientRequestError",
@@ -894,10 +888,18 @@ describe("dispatchCronDelivery", () => {
           lifecycleRevision: "test-lifecycle-revision",
           archivedAt: Date.now(),
         });
-      } else {
-        vi.mocked(callGateway).mockRejectedValueOnce(new Error("gateway down"));
+      } else if (outcome !== "deleted") {
+        vi.mocked(callGateway).mockImplementationOnce(async () => {
+          if (outcome === "aborted") {
+            abort.abort(new Error("cron run aborted"));
+          }
+          throw new Error("gateway down");
+        });
       }
       await dispatchCronDelivery(params);
+      if (outcome === "deleted") {
+        expectSessionDeleted();
+      }
       if (persistent) {
         expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
       }
@@ -913,8 +915,7 @@ describe("dispatchCronDelivery", () => {
   );
 
   it("skips deleteAfterRun cleanup for non-cron sessions", async () => {
-    const params = emptyParams();
-    params.skipDelivery = "silent";
+    const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     params.agentSessionKey = "agent:main:whatsapp:direct:+15551234567";
     params.job.deleteAfterRun = true;
 
@@ -931,6 +932,7 @@ describe("dispatchCronDelivery", () => {
     );
     expect(retireSessionMcpRuntime).not.toHaveBeenCalled();
   });
+
   it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
     const params = makeBaseParams({
       synthesizedText: "refused report",
@@ -955,14 +957,29 @@ describe("dispatchCronDelivery", () => {
     expect(callGateway).toHaveBeenCalledOnce();
   });
 
-  it("does not retry a permanent recipient error", async () => {
+  it.each([
+    [
+      "typed permanent rejection",
+      new PlatformMessageNotDispatchedError("payload rejected", {
+        cause: new Error("invalid payload"),
+        retryable: false,
+      }),
+      "payload rejected | OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED | invalid payload",
+    ],
+    [
+      "ambiguous send",
+      Object.assign(new Error("read ECONNRESET after send"), { code: "ECONNRESET" }),
+      "read ECONNRESET after send | ECONNRESET",
+    ],
+    ["permanent recipient error", new Error("chat not found"), "chat not found"],
+  ])("does not retry %s", async (_name, error, message) => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-    vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("chat not found"));
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(error);
     const state = await dispatchCronDelivery(
       makeBaseParams({ synthesizedText: "Do not duplicate me" }),
     );
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(state.deliveryState).toMatchObject({ status: "not-delivered", error: "chat not found" });
+    expect(state.deliveryState).toMatchObject({ status: "not-delivered", error: message });
   });
 
   it("does not retry after an earlier payload returned no identity", async () => {
@@ -1007,7 +1024,7 @@ describe("dispatchCronDelivery", () => {
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
-  it.each(["live", "stale"] as const)(
+  it.each(["completed", "live", "stale"] as const)(
     "settles a competing cron delivery whose pending owner is %s",
     async (owner) => {
       vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(
@@ -1017,14 +1034,17 @@ describe("dispatchCronDelivery", () => {
         .mocked(deliveryQueueSqlite.inspectDeliveryQueueReceipt)
         .mockResolvedValueOnce({ status: undefined, pendingEntry: null })
         .mockResolvedValueOnce({
-          status: "pending",
-          pendingEntry: {
-            id: "cross-process-cron-intent",
-            enqueuedAt: Date.now() - (owner === "stale" ? 60_000 : 0),
-            retryCount: 0,
-            platformSendStartedAt: Date.now() - (owner === "stale" ? 30_001 : 0),
-            recoveryState: "send_attempt_started",
-          },
+          status: owner === "completed" ? "completed" : "pending",
+          pendingEntry:
+            owner === "completed"
+              ? null
+              : {
+                  id: "cross-process-cron-intent",
+                  enqueuedAt: Date.now() - (owner === "stale" ? 60_000 : 0),
+                  retryCount: 0,
+                  platformSendStartedAt: Date.now() - (owner === "stale" ? 30_001 : 0),
+                  recoveryState: "send_attempt_started",
+                },
         });
       if (owner === "live") {
         status.mockResolvedValueOnce({ status: "completed", pendingEntry: null });
@@ -1115,25 +1135,25 @@ describe("dispatchCronDelivery", () => {
     expect(secondIntent).not.toBe(firstIntent);
   });
 
-  it("refuses a current-target completion without its source generation", async () => {
+  it("reports a failed notification without queuing target-session awareness", async () => {
+    const deliveryError = new Error(
+      "Call to 'sendMessage' failed! (400: Bad Request: message thread not found)",
+    );
+    vi.mocked(deliverOutboundPayloads).mockRejectedValue(deliveryError);
+
     const params = makeBaseParams({
-      synthesizedText: "must not escape before commit",
-      sessionTarget: "current",
+      synthesizedText: "This delivery will fail.",
+      runStartedAt: 1_000,
     });
-    params.resolvedDelivery = {
-      ok: false,
-      mode: "implicit",
-      error: new Error("No configured channels detected"),
-    };
-    params.sourceSessionGeneration = undefined;
+    params.resolvedDelivery = makeResolvedDelivery({ threadId: "42" });
     const state = await dispatchCronDelivery(params);
-    expect(state).toMatchObject({
-      delivered: false,
-      deliveryAttempted: false,
-      deliveryError: "current cron delivery is missing its source session binding",
+
+    expect(state.deliveryState).toMatchObject({
+      status: "not-delivered",
+      error: deliveryError.message,
     });
     expect(commitBackgroundResultToSessionMock).not.toHaveBeenCalled();
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
   it.each([true, false])(
@@ -1248,11 +1268,8 @@ describe("dispatchCronDelivery", () => {
         runStartedAt: descendant ? 3_500 : 2_500,
       });
       if (descendant) {
-        vi.mocked(hasUnsettledCronDescendants)
-          .mockReset()
-          .mockResolvedValueOnce(true)
-          .mockResolvedValue(false);
-        vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue("Final descendant reply");
+        vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+        vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue("Final descendant reply");
         params.synthesizedText = params.summary = params.outputText = "Example report";
         params.deliveryPayloads = [
           { text: "Example report", mediaUrl: "/tmp/allowed-media/report.png" },
@@ -1265,7 +1282,7 @@ describe("dispatchCronDelivery", () => {
       expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
       if (descendant) {
         expect(commitBackgroundResultToSessionMock.mock.calls.at(-1)?.[0]).toMatchObject({
-          text: expect.stringContaining("Final descendant reply"),
+          text: "Final descendant reply",
         });
       } else {
         expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
@@ -1275,10 +1292,7 @@ describe("dispatchCronDelivery", () => {
       }
       expectDeliveryCall(0, {
         payloads: descendant
-          ? [
-              { text: "Example report", mediaUrl: "/tmp/allowed-media/report.png" },
-              { text: "Final descendant reply" },
-            ]
+          ? [{ text: "Final descendant reply" }]
           : [{ mediaUrl: "https://example.com/report.png?token=redacted" }],
       });
     },
@@ -1419,15 +1433,15 @@ describe("dispatchCronDelivery", () => {
   );
 
   it.each([
-    ["literal skip token", "ANNOUNCE_SKIP", true, false, true, true],
-    ["literal silent token", SILENT_REPLY_TOKEN, true, true, false, true],
+    ["control token", "ANNOUNCE_SKIP", true, false, true, false],
+    ["structured silent cleanup", SILENT_REPLY_TOKEN, true, true, false, false],
     [
       "trailing text reply",
       "Nothing actionable found today.\n\nNO_REPLY",
       false,
       false,
       false,
-      true,
+      false,
     ],
     [
       "non-trailing mention",
@@ -1460,6 +1474,7 @@ describe("dispatchCronDelivery", () => {
       }
     },
   );
+
   describe("real outbound retry outcomes", () => {
     let harness: typeof import("./run.test-harness.js");
     let runCronIsolatedAgentTurn: typeof import("./run.js").runCronIsolatedAgentTurn;
@@ -1517,15 +1532,24 @@ describe("dispatchCronDelivery", () => {
         .mockResolvedValue([{ ok: true } as never]);
     });
 
-    it("suppresses all notification payloads vetoed by the channel adapter", async () => {
-      await withTempCronHome(async () => {
-        const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "text-message" }));
-        const sendPayload = vi.fn(async () => ({
-          channel: "telegram",
-          messageId: "structured-message",
-        }));
-        setActivePluginRegistry(
-          createTestRegistry([
+    it.each(["none", "text", "all"] as const)(
+      "preserves channel fallback and suppression at the adapter boundary with veto=%s",
+      async (veto) => {
+        await withTempCronHome(async () => {
+          const sent: ReplyPayload[] = [];
+          const sendText = vi.fn(async ({ text }: { text: string }) => {
+            sent.push({ text });
+            return { channel: "telegram", messageId: "transformed-message" };
+          });
+          const sendPayload = vi.fn(async ({ payload }: { payload: ReplyPayload }) => {
+            sent.push(payload);
+            return { channel: "telegram", messageId: "structured-message" };
+          });
+          const channelData =
+            veto === "text"
+              ? { telegram: { reaction: { emoji: "👍", replyToId: "123" } } }
+              : buttons;
+          const registry = createTestRegistry([
             {
               pluginId: "telegram",
               source: "test",
@@ -1534,19 +1558,41 @@ describe("dispatchCronDelivery", () => {
                   id: "telegram",
                   outbound: { deliveryMode: "direct", sendText, sendPayload },
                 }),
-                messaging: { transformReplyPayload: () => null },
+                messaging: {
+                  transformReplyPayload: ({ payload }: { payload: ReplyPayload }) =>
+                    veto === "all" || (veto === "text" && payload.text)
+                      ? null
+                      : {
+                          ...payload,
+                          ...(payload.text ? { text: payload.text + "!" } : {}),
+                          ...(payload.fallbackText
+                            ? {
+                                fallbackText: {
+                                  ...payload.fallbackText,
+                                  text: payload.fallbackText.text + "!",
+                                },
+                              }
+                            : {}),
+                        },
+                },
               },
             },
-          ]),
-        );
-        const state = await dispatchCronDelivery(
-          structuredParams([{ text: "Report" }, { channelData: buttons }], "Report"),
-        );
-        expect(state.delivered).toBe(false);
-        expect(sendText).not.toHaveBeenCalled();
-        expect(sendPayload).not.toHaveBeenCalled();
-      });
-    });
+          ]);
+          setActivePluginRegistry(registry);
+          const state = await dispatchCronDelivery(
+            structuredParams([{ text: "Report" }, { channelData }], "Report"),
+          );
+          expect(state.delivered).toBe(veto !== "all");
+          expect(sent).toHaveLength(veto === "all" ? 0 : veto === "text" ? 1 : 2);
+          if (veto === "none") {
+            expect(sent).toContainEqual(expect.objectContaining({ text: "Report!" }));
+          }
+          if (veto !== "all") {
+            expect(sent).toContainEqual(expect.objectContaining({ channelData }));
+          }
+        });
+      },
+    );
 
     it.for([
       { name: "best-effort retry", bestEffort: true, partialSend: false },

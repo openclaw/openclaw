@@ -117,10 +117,7 @@ export async function preserveDoctorOriginalState(params: {
     }
   } catch (error) {
     assertCurrent();
-    if (
-      hasCommandProcessCleanupError(error) ||
-      (error instanceof DoctorMaintenanceRefusalError && error.refusal.kind === "deferred")
-    ) {
+    if (hasCommandProcessCleanupError(error)) {
       throw error;
     }
     if (original?.ref) {

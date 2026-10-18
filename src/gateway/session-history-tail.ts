@@ -279,7 +279,6 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
   toolResultMaxChars?: number;
-  includePluginSteering?: boolean;
   max: number;
   maxBytes: number;
   offset?: number;
@@ -391,7 +390,6 @@ async function readIncrementalChatHistoryTailAttempt(params: {
       {
         subagentCoordination: params.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
-        includePluginSteering: params.includePluginSteering,
         maxChars: params.effectiveMaxChars,
         toolResultMaxChars: params.toolResultMaxChars,
         resolveCronJobName: params.resolveCronJobName,

@@ -160,15 +160,16 @@ describe("telegram actions contract", () => {
     const rules = rich?.rules.join("\n") ?? "";
 
     // The reply is also readable in Control UI, so ordinary lists and inline styling must be Markdown.
-    expect(rules).toContain("Ordinary lists, bold, italic, inline code and links = Markdown");
+    expect(rules).toContain("Ordinary lists, checkbox tasks");
+    expect(rules).toContain("`- [ ] todo`");
     expect(rules).toContain("`[label](url)`");
     expect(rules).toContain("authored HTML shows up as literal tags in Control UI");
     expect(rules).not.toMatch(/structured bullets|not literal bullets/);
 
-    // Telegram-only islands survive, and HTML lists stay scoped to checkbox tasks.
+    // Telegram-only islands survive, while lists prefer the cross-client Markdown form.
     expect(rules).toContain("`<details><summary>`");
-    expect(rules).toContain("HTML `<ul>`/`<ol>` only for checkbox tasks");
-    expect(rules).toContain('<ul><li><input type="checkbox" checked/>');
+    expect(rules).toContain("prefer Markdown lists over HTML `<ul>`/`<ol>`");
+    expect(rules).toContain("`- [x] done`");
   });
 
   it("exposes Telegram thread create CLI remapping through the exported plugin", () => {

@@ -7,16 +7,10 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
-import {
-  cronSourceIdentity,
-  cronSourceScheduleKey,
-  createCronSourceIdentity,
-  setCronSourceIdentity,
-} from "../source-schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
 import { hasCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
 import type { CronScheduleMaintenanceOptions } from "../store/runtime-worker.types.js";
-import { resolveCronStreamBatching } from "../stream-schedule.js";
+import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../stream-schedule.js";
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import {
@@ -114,18 +108,6 @@ export function resolveJobLastRunStatus(job: Pick<CronJob, "state">) {
   return job.state.lastRunStatus ?? job.state.lastStatus;
 }
 
-/** Resolves run end using the same persisted duration semantics as retry backoff. */
-export function resolveJobLastRunEndedAtMs(job: Pick<CronJob, "state">): number | undefined {
-  if (!isFiniteTimestamp(job.state.lastRunAtMs)) {
-    return undefined;
-  }
-  const lastDurationMs =
-    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
-      ? Math.max(0, Math.floor(job.state.lastDurationMs))
-      : 0;
-  return job.state.lastRunAtMs + lastDurationMs;
-}
-
 /** Resolves the retry backoff delay for a one-based consecutive error count. */
 export function errorBackoffMs(
   consecutiveErrors: number,
@@ -140,11 +122,7 @@ export function resolveJobErrorBackoffUntilMs(
   job: CronJob,
   scheduleMs = DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
 ): number | undefined {
-  if (resolveJobLastRunStatus(job) !== "error") {
-    return undefined;
-  }
-  const lastEndedAtMs = resolveJobLastRunEndedAtMs(job);
-  if (lastEndedAtMs === undefined) {
+  if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
     return undefined;
   }
   const consecutiveErrorsRaw = job.state.consecutiveErrors;
@@ -152,6 +130,11 @@ export function resolveJobErrorBackoffUntilMs(
     typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)
       ? Math.max(1, Math.floor(consecutiveErrorsRaw))
       : 1;
+  const lastDurationMs =
+    typeof job.state.lastDurationMs === "number" && Number.isFinite(job.state.lastDurationMs)
+      ? Math.max(0, Math.floor(job.state.lastDurationMs))
+      : 0;
+  const lastEndedAtMs = job.state.lastRunAtMs + lastDurationMs;
   return asDateTimestampMs(lastEndedAtMs + errorBackoffMs(consecutiveErrors, scheduleMs));
 }
 
@@ -348,11 +331,7 @@ export function isJobEnabled(job: Pick<CronJob, "enabled">): boolean {
 }
 
 export function isTimeScheduledJob(job: Pick<CronJob, "schedule">): boolean {
-  return (
-    job.schedule.kind !== "on-exit" &&
-    job.schedule.kind !== "stream" &&
-    job.schedule.kind !== "event"
-  );
+  return job.schedule.kind !== "on-exit" && job.schedule.kind !== "stream";
 }
 
 /** Computes the next run timestamp for enabled jobs across every/at/cron schedules. */
@@ -465,12 +444,12 @@ function normalizeJobTickState(params: {
     changed = true;
   }
 
-  if (cronSourceScheduleKey(job.schedule) !== undefined && !cronSourceIdentity(job)?.trim()) {
+  if (job.schedule.kind === "stream" && !job.state.streamSourceIdentity?.trim()) {
     // Identity is store-owned state. A hand-imported or pre-identity row must
     // not reach the watcher (which fails closed on a missing identity) or
     // admission (which would reject every batch); assign one like any other
     // repairable tick state.
-    setCronSourceIdentity(job, createCronSourceIdentity());
+    job.state.streamSourceIdentity = createCronStreamSourceIdentity();
     changed = true;
   }
 

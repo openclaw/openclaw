@@ -1,4 +1,11 @@
-import { isSilentReplyText } from "../../../auto-reply/tokens.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+  startsWithSilentToken,
+  stripLeadingSilentToken,
+  stripSilentToken,
+} from "../../../auto-reply/tokens.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
 import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -112,6 +119,18 @@ function buildAnnounceReplyInstruction(params: {
   return `A completed subagent task is ready for parent review. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION}${modelRouteInstruction} Otherwise send a truthful user-facing update unless this exact result is already visible to the user in this same turn. Keep this internal context private (don't mention system/log/stats/session details or announce type), and do not copy the internal event text verbatim.`;
 }
 
+function stripAndClassifyReply(text: string): string | null {
+  const hasLeadingSilentToken = startsWithSilentToken(text, SILENT_REPLY_TOKEN);
+  if (!hasLeadingSilentToken && !text.toLowerCase().includes(SILENT_REPLY_TOKEN.toLowerCase())) {
+    return text;
+  }
+  const result = stripSilentToken(
+    hasLeadingSilentToken ? stripLeadingSilentToken(text, SILENT_REPLY_TOKEN) : text,
+    SILENT_REPLY_TOKEN,
+  );
+  return !result || isSilentReplyText(result, SILENT_REPLY_TOKEN) ? null : result;
+}
+
 type SubagentAnnounceFlowParams = {
   childSessionKey: string;
   childAgentId?: string;
@@ -126,7 +145,10 @@ type SubagentAnnounceFlowParams = {
   cleanup: "delete" | "keep";
   roundOneReply?: string;
   terminalReply?: AgentRunTerminalReplySnapshot;
-  /** Cached pre-wake result for legacy runs without terminal facts. */
+  /**
+   * Fallback text preserved from the pre-wake run when a wake continuation
+   * completes with NO_REPLY despite an earlier final summary already existing.
+   */
   fallbackReply?: string;
   startedAt?: number;
   endedAt?: number;
@@ -214,12 +236,11 @@ async function runSubagentAnnounceFlowBound(
         ? childSessionEntry.sessionId.trim()
         : undefined;
     const settleTimeoutMs = Math.min(Math.max(params.timeoutMs, 1), 120_000);
-    const legacySilent = !params.terminalReply && isSilentReplyText(params.roundOneReply);
     let reply =
       params.terminalReply?.disposition === "visible"
         ? params.terminalReply.text
-        : params.terminalReply || legacySilent
-          ? undefined
+        : params.terminalReply?.disposition === "silent"
+          ? SILENT_REPLY_TOKEN
           : params.roundOneReply;
     const outcome: SubagentRunOutcome = params.outcome ?? { status: "unknown" };
     if (
@@ -237,13 +258,13 @@ async function runSubagentAnnounceFlowBound(
         }
       }
     }
+
     const failedTerminalOutcome = outcome.status === "error";
     const allowFailedOutputCapture =
       !failedTerminalOutcome || (!params.roundOneReply && !params.fallbackReply);
     if (failedTerminalOutcome && !params.terminalReply) {
       reply = undefined;
     }
-
     let requesterDepth = await getSubagentDepthFromSessionStoreInWorker(targetRequesterSessionKey, {
       cfg: getRuntimeConfig(),
       agentId: targetRequesterAgentId,
@@ -354,10 +375,14 @@ async function runSubagentAnnounceFlowBound(
       }
     }
 
-    const fallbackReply =
-      params.terminalReply || failedTerminalOutcome ? undefined : params.fallbackReply?.trim();
-    const visibleFallback =
-      fallbackReply && !isSilentReplyText(fallbackReply) ? fallbackReply : undefined;
+    const fallbackReply = failedTerminalOutcome
+      ? undefined
+      : normalizeOptionalString(params.fallbackReply);
+    const hasVisibleFallback =
+      Boolean(fallbackReply) && !isSilentReplyText(fallbackReply, SILENT_REPLY_TOKEN);
+    const cleanedFallbackReply = hasVisibleFallback
+      ? (stripAndClassifyReply(fallbackReply ?? "") ?? undefined)
+      : undefined;
 
     const childRun = subagentRuns.get(params.childRunId);
     if (childRun?.childSessionKey === params.childSessionKey && completionDeliveryAllowed()) {
@@ -366,10 +391,10 @@ async function runSubagentAnnounceFlowBound(
     }
 
     if (params.terminalReply?.disposition === "silent") {
-      if (!expectsCompletionMessage) {
+      if (!hasVisibleFallback && !expectsCompletionMessage) {
         return "delivered";
       }
-      reply = undefined;
+      reply = cleanedFallbackReply;
     }
     if (
       params.terminalReply?.disposition === "empty" &&
@@ -386,12 +411,11 @@ async function runSubagentAnnounceFlowBound(
       // Empty remains the authoritative terminal fact. Transcript text is a
       // timeout-only progress hint and must never reclassify silence as output.
       if (timeoutProgress) {
-        reply = timeoutProgress;
+        reply = stripAndClassifyReply(timeoutProgress) ?? undefined;
       }
     }
-    if (!params.terminalReply && (!ownResult || !childRun?.completion?.terminalReply)) {
+    if (!params.terminalReply) {
       if (
-        !legacySilent &&
         !reply &&
         allowFailedOutputCapture &&
         (await prepareChildSessionEffects()) &&
@@ -401,8 +425,8 @@ async function runSubagentAnnounceFlowBound(
           childAgentId: params.childAgentId,
         });
       }
+
       if (
-        !legacySilent &&
         !reply?.trim() &&
         allowFailedOutputCapture &&
         (await prepareChildSessionEffects()) &&
@@ -415,24 +439,38 @@ async function runSubagentAnnounceFlowBound(
           outcome,
         });
       }
-      if (!reply?.trim() && visibleFallback) {
-        reply = visibleFallback;
+
+      if (!reply?.trim() && hasVisibleFallback) {
+        reply = fallbackReply;
       }
-      if (legacySilent && !reply?.trim() && !expectsCompletionMessage) {
-        return "delivered";
+
+      if (isSilentReplyText(reply, SILENT_REPLY_TOKEN)) {
+        if (hasVisibleFallback && cleanedFallbackReply) {
+          reply = cleanedFallbackReply;
+        } else {
+          if (!expectsCompletionMessage || hasVisibleFallback) {
+            return "delivered";
+          }
+          reply = undefined;
+        }
+      } else if (reply) {
+        reply = stripAndClassifyReply(reply) ?? cleanedFallbackReply;
+        if (!reply) {
+          return "delivered";
+        }
       }
     }
 
     const childSessionCurrent = await prepareChildSessionEffects();
     if (!ownResult && (!childSessionCurrent || !childSessionEffectsAllowed())) {
-      reply =
-        params.terminalReply?.disposition === "visible"
-          ? (params.roundOneReply ?? params.terminalReply.text)
-          : params.terminalReply
-            ? undefined
-            : legacySilent
-              ? visibleFallback
-              : (params.roundOneReply ?? visibleFallback);
+      reply = params.roundOneReply ?? params.fallbackReply;
+      if (
+        expectsCompletionMessage &&
+        (params.terminalReply?.disposition === "silent" ||
+          isSilentReplyText(reply, SILENT_REPLY_TOKEN))
+      ) {
+        reply = hasVisibleFallback ? cleanedFallbackReply : undefined;
+      }
     }
 
     const statusLabel =

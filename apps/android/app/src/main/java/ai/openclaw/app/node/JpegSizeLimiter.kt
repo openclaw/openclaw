@@ -2,9 +2,7 @@ package ai.openclaw.app.node
 
 import android.graphics.Bitmap
 import android.graphics.Matrix
-import androidx.core.graphics.scale
 import androidx.exifinterface.media.ExifInterface
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import kotlin.math.max
 import kotlin.math.min
@@ -21,26 +19,6 @@ internal object JpegSizeLimiter {
   private const val MAX_SCALE_ATTEMPTS = 6
   private const val MAX_QUALITY_ATTEMPTS = 6
   private const val SCALE_STEP = 0.85
-
-  /** Keeps the caller's bitmap alive and recycles only temporary resized images. */
-  fun compressToLimit(
-    bitmap: Bitmap,
-    startQuality: Int,
-    maxBytes: Int,
-    errorMessage: String,
-    minQuality: Int = 20,
-    minSize: Int = 256,
-  ): JpegSizeLimiterResult =
-    compressToLimit(bitmap.width, bitmap.height, startQuality, maxBytes, minQuality, minSize) { width, height, quality ->
-      val working = if (width == bitmap.width && height == bitmap.height) bitmap else bitmap.scale(width, height)
-      try {
-        val out = ByteArrayOutputStream()
-        check(working.compress(Bitmap.CompressFormat.JPEG, quality, out)) { errorMessage }
-        out.toByteArray()
-      } finally {
-        if (working !== bitmap) working.recycle()
-      }
-    }
 
   fun readOrientation(open: () -> InputStream?): Int =
     try {
@@ -115,24 +93,24 @@ internal object JpegSizeLimiter {
     var height = initialHeight
     var lastSize = 0
 
-    for (scaleAttempt in 0..MAX_SCALE_ATTEMPTS) {
+    repeat(MAX_SCALE_ATTEMPTS + 1) { scaleAttempt ->
       var quality = clampedStartQuality
-      for (qualityAttempt in 0 until MAX_QUALITY_ATTEMPTS) {
+      repeat(MAX_QUALITY_ATTEMPTS) {
         val bytes = encode(width, height, quality)
         lastSize = bytes.size
         if (bytes.size <= maxBytes) return JpegSizeLimiterResult(bytes = bytes, width = width, height = height, quality = quality)
-        if (quality <= minQuality) break
+        if (quality <= minQuality) return@repeat
         quality = max(minQuality, (quality * 0.75).roundToInt())
       }
 
-      if (scaleAttempt == MAX_SCALE_ATTEMPTS) break
+      if (scaleAttempt == MAX_SCALE_ATTEMPTS) return@repeat
       val minScale = (minSize.toDouble() / min(width, height).toDouble()).coerceAtMost(1.0)
       val nextScale = max(SCALE_STEP, minScale)
-      val nextWidth = min(width, max(minSize, (width * nextScale).roundToInt()))
-      val nextHeight = min(height, max(minSize, (height * nextScale).roundToInt()))
-      if (nextWidth == width && nextHeight == height) break
-      width = nextWidth
-      height = nextHeight
+      val nextWidth = max(minSize, (width * nextScale).roundToInt())
+      val nextHeight = max(minSize, (height * nextScale).roundToInt())
+      if (nextWidth == width && nextHeight == height) return@repeat
+      width = min(nextWidth, width)
+      height = min(nextHeight, height)
     }
 
     throw IllegalStateException("CAMERA_TOO_LARGE: $lastSize bytes > $maxBytes bytes")

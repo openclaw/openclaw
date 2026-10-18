@@ -4,15 +4,10 @@ import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { stripMixedSilentReplyTokens } from "../auto-reply/reply/mixed-silent-reply-tokens.js";
-import { isSilentReplyText } from "../auto-reply/tokens.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
 import {
-  isSilentAssistantTranscriptMessage,
   parseAssistantTextSignature,
-  readAssistantTextBlocksForPhase,
-  readTerminalSourceReplyDeliveryMirror,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
 import {
@@ -24,6 +19,8 @@ import {
 import { projectAssistantCommentaryFallbacks } from "./chat-display-projection.commentary.js";
 import {
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  extractAssistantTextForSilentCheck,
+  hasAssistantDisplayableNonTextContent,
   hasTranscriptMediaFacts,
   isAssistantTextContentType,
   isProjectedForwardedMessage,
@@ -33,6 +30,10 @@ import {
   takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
+import {
+  isSuppressedControlReplyText,
+  stripSuppressedControlReplyToken,
+} from "./control-reply-text.js";
 import {
   projectWorkspaceResultConflict,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
@@ -332,20 +333,6 @@ const USAGE_FIELDS = [
   "total_tokens",
 ] as const;
 
-/** Counters can cover a whole multi-call turn; clients size context from an available marker. */
-function projectContextUsage(raw: unknown): Record<string, unknown> | undefined {
-  const record = readObjectRecord(raw);
-  const promptTokens = asFiniteNumber(record?.promptTokens);
-  const totalTokens = asFiniteNumber(record?.totalTokens);
-  return record?.state === "available" &&
-    promptTokens !== undefined &&
-    totalTokens !== undefined &&
-    promptTokens >= 0 &&
-    totalTokens >= promptTokens
-    ? { state: "available", promptTokens, totalTokens }
-    : undefined;
-}
-
 function sanitizeNumericMetadata(
   raw: unknown,
   fields: readonly string[],
@@ -369,12 +356,6 @@ function sanitizeNumericMetadata(
     const cost = sanitizeNumericMetadata(record.cost, COST_FIELDS);
     if (cost) {
       projected.cost = cost;
-    }
-  }
-  if (fields === USAGE_FIELDS) {
-    const contextUsage = projectContextUsage(record.contextUsage);
-    if (contextUsage) {
-      projected.contextUsage = contextUsage;
     }
   }
   return Object.keys(projected).length > 0 ? projected : undefined;
@@ -413,58 +394,6 @@ function projectWorkspaceConflictDetails(
   }
 }
 
-/** Prepares raw stored text before display transforms, retaining its visible disposition. */
-export function prepareAssistantHistoryMessage(message: unknown): unknown {
-  const entry = readObjectRecord(message);
-  if (
-    entry?.role !== "assistant" ||
-    entry.display === true ||
-    entry.display === false ||
-    readTerminalSourceReplyDeliveryMirror(entry) ||
-    isProjectedForwardedMessage(entry)
-  ) {
-    return message;
-  }
-  const field = typeof entry.text === "string" ? "text" : "content";
-  const inlineText = entry[field];
-  if (typeof inlineText !== "string" && !Array.isArray(entry.content)) {
-    return message;
-  }
-  const finalBlocks = readAssistantTextBlocksForPhase(entry, "final_answer");
-  const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
-  const rawText =
-    typeof inlineText === "string" ? inlineText : blocks.map((block) => block.text).join("");
-  if (isSilentReplyText(rawText)) {
-    return message;
-  }
-  const text = stripMixedSilentReplyTokens(rawText);
-  if (text === null) {
-    return message;
-  }
-  // History is projected more than once. The suffix is already prepared text,
-  // even when it is itself NO_REPLY or starts with another control-looking line.
-  if (typeof inlineText === "string") {
-    return { ...entry, [field]: text, display: true };
-  }
-  let remaining = rawText.length - text.length;
-  const replacements = new Map<unknown, unknown>();
-  for (const block of blocks) {
-    if (remaining === 0) {
-      break;
-    }
-    const consumed = Math.min(remaining, block.text.length);
-    replacements.set(block, { ...block, text: block.text.slice(consumed) });
-    remaining -= consumed;
-  }
-  return {
-    ...entry,
-    content: Array.isArray(entry.content)
-      ? entry.content.map((block) => replacements.get(block) ?? block)
-      : entry.content,
-    display: true,
-  };
-}
-
 export function sanitizeChatHistoryMessage(
   message: unknown,
   maxChars: number = DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
@@ -473,9 +402,8 @@ export function sanitizeChatHistoryMessage(
   if (!message || typeof message !== "object") {
     return { message, changed: false };
   }
-  const prepared = prepareAssistantHistoryMessage(message);
-  const entry = { ...(prepared as Record<string, unknown>) };
-  let changed = prepared !== message;
+  const entry = { ...(message as Record<string, unknown>) };
+  let changed = false;
   let truncated = false;
   if ("providerReplay" in entry) {
     delete entry.providerReplay;
@@ -485,7 +413,6 @@ export function sanitizeChatHistoryMessage(
   if (
     openClawMeta &&
     ("upstreamUserText" in openClawMeta ||
-      "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
       "media" in openClawMeta)
   ) {
@@ -493,8 +420,6 @@ export function sanitizeChatHistoryMessage(
     // It is not display data and can otherwise evict the visible row from history.
     const projectedMeta = { ...openClawMeta };
     delete projectedMeta.upstreamUserText;
-    // Captured model input is private replay state, not part of the display transcript.
-    delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
     if ("media" in projectedMeta) {
@@ -565,12 +490,15 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
 
-  const stripAssistantMedia =
+  const stripAssistantControlTokens =
     role === "assistant" && !shouldPreserveAssistantControlReplyText(entry);
 
   const projectText = (text: string) => {
-    const controlStripped = stripAssistantMedia
-      ? stripAssistantMediaDirectivesForDisplay(text, managedMedia.urls)
+    const controlStripped = stripAssistantControlTokens
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(text),
+          managedMedia.urls,
+        )
       : text;
     changed ||= controlStripped !== text;
     const res = truncateChatHistoryText(
@@ -610,13 +538,16 @@ export function sanitizeChatHistoryMessage(
       if (rawText !== undefined) {
         remainingText -= rawText.length + 1;
       }
-      const contentBlock = stripAssistantMedia ? readRecord(sanitized.block) : undefined;
+      const contentBlock = stripAssistantControlTokens ? readRecord(sanitized.block) : undefined;
       if (
         contentBlock &&
         isAssistantTextContentType(contentBlock.type) &&
         typeof contentBlock.text === "string"
       ) {
-        const text = stripAssistantMediaDirectivesForDisplay(contentBlock.text, managedMedia.urls);
+        const text = stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(contentBlock.text),
+          managedMedia.urls,
+        );
         if (text !== contentBlock.text) {
           sanitized.block = { ...contentBlock, text };
           sanitized.changed = true;
@@ -702,19 +633,17 @@ export function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (entry?.role !== "assistant") {
     return false;
   }
-  if (entry.display === false) {
-    return true;
-  }
-  if (entry.display === true || readTerminalSourceReplyDeliveryMirror(entry)) {
-    return false;
-  }
   if (isProjectedForwardedMessage(entry)) {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
     return !hasAssistantMixedToolVisibleText(message);
   }
-  return isSilentAssistantTranscriptMessage(message);
+  const text = extractAssistantTextForSilentCheck(message);
+  if (text === undefined || !isSuppressedControlReplyText(text)) {
+    return false;
+  }
+  return !hasAssistantDisplayableNonTextContent(message);
 }
 
 export function sanitizeChatHistoryMessages(
@@ -744,7 +673,9 @@ export function sanitizeChatHistoryMessages(
           maxChars,
           opts?.toolResultMaxChars,
         );
-        next.push(projected.message);
+        if (hasMediaFacts || !shouldDropAssistantHistoryMessage(projected.message)) {
+          next.push(projected.message);
+        }
       }
     }
     if (shouldDropAssistantHistoryMessage(message)) {
@@ -753,6 +684,10 @@ export function sanitizeChatHistoryMessages(
     }
     const res = sanitizeChatHistoryMessage(message, maxChars, opts?.toolResultMaxChars);
     changed ||= res.changed;
+    if (res.changed && shouldDropAssistantHistoryMessage(res.message)) {
+      changed = true;
+      continue;
+    }
     next.push(res.message);
   }
   return changed ? next : messages;

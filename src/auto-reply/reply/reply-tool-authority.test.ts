@@ -52,8 +52,6 @@ function toolAuthorityOverlay(
     runtimePluginToolGrant: run.run.runtimePluginToolGrant,
     toolsAllow: run.toolsAllow,
     disableTools: run.disableTools === true,
-    forceRestartSafeTools: run.forceRestartSafeTools,
-    forceCodeModeTools: run.forceCodeModeTools,
     traceAuthorized: run.run.traceAuthorized === true,
     approvalReviewerDeviceId: run.run.approvalReviewerDeviceId,
     clientCaps: run.run.clientCaps,
@@ -610,8 +608,6 @@ describe("reply tool authority", () => {
       { gatewayUiCommandTarget: undefined },
       { toolBindings: { browser: { clientId: "different-browser" } } },
       { permissionMode: "guarded" },
-      { forceRestartSafeTools: true },
-      { forceCodeModeTools: true },
     ] satisfies Partial<ReplyToolAuthorityOverlay>[]) {
       await expect(
         queueCurrentReplyRunMessage("session-projected-authority", "changed authority", {

@@ -1,8 +1,9 @@
 import { createMemo, untrack } from "solid-js";
-import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
+import { renderHubTabs } from "../../../components/hub-tabs.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { LitContent } from "../../../lit/solid-bridge.ts";
 import "../../../styles/dreams.css";
 import { renderAdvancedSection } from "./view-advanced.tsx";
 import { renderDiarySection } from "./view-diary.tsx";
@@ -67,23 +68,25 @@ export function renderDreaming(props: DreamingProps) {
   return (
     <div class="dreams-page">
       <div class="dreams__topbar">
-        <HubTabs<DreamingViewState["activeSubTab"]>
-          {...{
-            id: "dreams",
-            active: state.activeSubTab,
-            tabs: [
-              { value: "scene", label: t("dreaming.tabs.scene") },
-              { value: "diary", label: t("dreaming.tabs.diary") },
-              { value: "advanced", label: t("dreaming.tabs.advanced") },
-            ],
-            ariaLabel: t("memoryPage.tabs.dreams"),
-            panelId: "dreams-panel",
-            variant: "sub",
-            onSelect: (tab) => {
-              state.activeSubTab = tab;
-              props.onViewStateChange();
-            },
-          }}
+        <LitContent
+          render={() =>
+            renderHubTabs({
+              id: "dreams",
+              active: state.activeSubTab,
+              tabs: [
+                { value: "scene", label: t("dreaming.tabs.scene") },
+                { value: "diary", label: t("dreaming.tabs.diary") },
+                { value: "advanced", label: t("dreaming.tabs.advanced") },
+              ],
+              ariaLabel: t("memoryPage.tabs.dreams"),
+              panelId: "dreams-panel",
+              variant: "sub",
+              onSelect: (tab) => {
+                state.activeSubTab = tab;
+                props.onViewStateChange();
+              },
+            })
+          }
         />
       </div>
 

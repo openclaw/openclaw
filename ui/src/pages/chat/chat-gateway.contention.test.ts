@@ -76,8 +76,8 @@ describe("chat gateway state contention", () => {
       sessionKey: "main",
       runId: "run-1",
       state: "delta",
-      message: { role: "assistant", content: "Resumed" },
+      deltaText: "Resumed",
     });
-    expect(state.chatRunStartup).toMatchObject({ state: "status", phase: "answer" });
+    expect(state.chatRunStartup?.state).toBe("activity");
   });
 });

@@ -35,9 +35,7 @@ export type PlacementSessionIdentityProbe = {
 export async function readPlacementSessionIdentityEvidence(
   cfg: OpenClawConfig,
   input: readonly PlacementSessionIdentityProbe[],
-  signal?: AbortSignal,
 ): Promise<SessionIdentityEvidenceResult[]> {
-  signal?.throwIfAborted();
   const selected = captureSessionActorStorageOwner({});
   const capturedEnv = cloneEnvWithPlatformSemantics(
     selected
@@ -149,96 +147,85 @@ export async function readPlacementSessionIdentityEvidence(
     );
   });
   try {
-    await inventoryRead.withRead(
-      async (inventory, assertDiscoveryCurrent) => {
-        const agents = new Map(inventory.agents.map((agent) => [agent.agentId, agent]));
-        const groups = new Map<
-          string,
-          {
-            database: { agentId: string; path: string };
-            identities: SessionIdentityEvidenceIdentity[];
-            indexes: number[];
-          }
-        >();
-        for (const { probe, index } of disk) {
-          const observed = agents.get(normalizeAgentId(probe.agentId));
-          if (!observed || !observed.result.available) {
-            results[index] =
-              observed?.result.available === false && observed.result.reason === "database-missing"
-                ? { status: "absent" }
-                : { status: "unknown", reason: "read-failed" };
-            continue;
-          }
-          for (const { database } of observed.reads) {
-            const key = JSON.stringify(database);
-            const group = groups.get(key) ?? { database, identities: [], indexes: [] };
-            group.identities.push({
-              sessionId: probe.sessionId,
-              sessionKey: normalizeStoreSessionKey(probe.sessionKey),
-            });
-            group.indexes.push(index);
-            groups.set(key, group);
-          }
+    await inventoryRead.withRead(async (inventory, assertDiscoveryCurrent) => {
+      const agents = new Map(inventory.agents.map((agent) => [agent.agentId, agent]));
+      const groups = new Map<
+        string,
+        {
+          database: { agentId: string; path: string };
+          identities: SessionIdentityEvidenceIdentity[];
+          indexes: number[];
         }
-        const reads = [...groups.values()];
-        return await withSessionHistoryWorkerDatabases(
-          reads.map(({ database }) => ({ ...database, env })),
-          async (owners) => {
-            const assertCurrent = () => {
-              assertDiscoveryCurrent();
-              for (const owner of owners) {
-                owner.assertCurrent();
-              }
-            };
-            assertCurrent();
-            for (const [index, group] of reads.entries()) {
-              let evidence: SessionIdentityEvidenceResult[];
-              try {
-                evidence = await expectDefined(
-                  owners[index],
-                  "retained evidence reader",
-                ).readIdentityEvidence(
-                  {
-                    identities: group.identities,
-                    env: prepared.env,
-                    continuation: continuations.find(
-                      ({ path: continuationPath, owner }) =>
-                        continuationPath === group.database.path &&
-                        owner.receipt.agentId === group.database.agentId,
-                    )?.owner.receipt,
-                  },
-                  signal,
-                );
-              } catch (error) {
-                signal?.throwIfAborted();
-                assertCurrent();
-                if (error instanceof AggregateError) {
-                  throw error;
-                }
-                evidence = group.identities.map(() => ({
-                  status: "unknown",
-                  reason: "read-failed",
-                }));
-              }
+      >();
+      for (const { probe, index } of disk) {
+        const observed = agents.get(normalizeAgentId(probe.agentId));
+        if (!observed || !observed.result.available) {
+          results[index] =
+            observed?.result.available === false && observed.result.reason === "database-missing"
+              ? { status: "absent" }
+              : { status: "unknown", reason: "read-failed" };
+          continue;
+        }
+        for (const { database } of observed.reads) {
+          const key = JSON.stringify(database);
+          const group = groups.get(key) ?? { database, identities: [], indexes: [] };
+          group.identities.push({
+            sessionId: probe.sessionId,
+            sessionKey: normalizeStoreSessionKey(probe.sessionKey),
+          });
+          group.indexes.push(index);
+          groups.set(key, group);
+        }
+      }
+      const reads = [...groups.values()];
+      return await withSessionHistoryWorkerDatabases(
+        reads.map(({ database }) => ({ ...database, env })),
+        async (owners) => {
+          const assertCurrent = () => {
+            assertDiscoveryCurrent();
+            for (const owner of owners) {
+              owner.assertCurrent();
+            }
+          };
+          assertCurrent();
+          for (const [index, group] of reads.entries()) {
+            let evidence: SessionIdentityEvidenceResult[];
+            try {
+              evidence = await expectDefined(
+                owners[index],
+                "retained evidence reader",
+              ).readIdentityEvidence({
+                identities: group.identities,
+                env: prepared.env,
+                continuation: continuations.find(
+                  ({ path: continuationPath, owner }) =>
+                    continuationPath === group.database.path &&
+                    owner.receipt.agentId === group.database.agentId,
+                )?.owner.receipt,
+              });
+            } catch (error) {
               assertCurrent();
-              for (const [offset, evidenceResult] of evidence.entries()) {
-                const resultIndex = expectDefined(group.indexes[offset], "evidence subject");
-                if (
-                  results[resultIndex]?.status !== "current" &&
-                  evidenceResult.status !== "absent"
-                ) {
-                  results[resultIndex] = evidenceResult;
-                }
+              if (error instanceof AggregateError) {
+                throw error;
               }
+              evidence = group.identities.map(() => ({ status: "unknown", reason: "read-failed" }));
             }
             assertCurrent();
-            return results;
-          },
-        );
-      },
-      undefined,
-      signal,
-    );
+            for (const [offset, evidenceResult] of evidence.entries()) {
+              const resultIndex = expectDefined(group.indexes[offset], "evidence subject");
+              if (
+                results[resultIndex]?.status !== "current" &&
+                evidenceResult.status !== "absent"
+              ) {
+                results[resultIndex] = evidenceResult;
+              }
+            }
+          }
+          assertCurrent();
+          return results;
+        },
+      );
+    });
     inventoryRead.assertRegistryCurrent();
     for (const candidate of candidates) {
       if (!isSessionStoreReadCandidateCurrent(candidate)) {

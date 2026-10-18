@@ -9,15 +9,11 @@ export async function runPluginAssetCommand(params: {
   pluginId: string;
   phase: "build" | "copy";
 }): Promise<number> {
-  // The hook builds the package's own source tree. Release tooling pins
-  // TSX_TSCONFIG_PATH to its trusted checkout; inheriting it would map the
-  // packed tree's workspace imports onto the tooling's packages instead.
-  const { TSX_TSCONFIG_PATH: _toolingTsconfig, ...env } = process.env;
   try {
     return await runManagedCommand({
       bin: params.command,
       cwd: params.cwd,
-      env,
+      env: process.env,
       shell: true,
       stdio: "inherit",
       timeoutMs: PLUGIN_ASSET_HOOK_TIMEOUT_MS,

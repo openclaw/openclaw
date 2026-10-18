@@ -25,8 +25,6 @@ import {
   resolvePluginMetadataSnapshotAsync,
   type resolvePluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -252,12 +250,6 @@ export async function runSetupInferenceTurn(params: {
   }
 }
 
-export type SetupInferencePluginGeneration = {
-  config: OpenClawConfig;
-  metadataSnapshot: PluginMetadataSnapshot;
-  pluginRegistry: PluginRegistry;
-};
-
 /** Setup owns fresh package facts without replacing the Gateway's startup generation. */
 export async function loadSetupInferencePluginGeneration(params: {
   cache: PluginCache;
@@ -268,7 +260,7 @@ export async function loadSetupInferencePluginGeneration(params: {
   resolvePluginMetadataSnapshot?:
     | typeof resolvePluginMetadataSnapshot
     | typeof resolvePluginMetadataSnapshotAsync;
-}): Promise<SetupInferencePluginGeneration> {
+}) {
   // Revalidation must select the probed artifacts: switching a built Gateway
   // owner to source files would report drift even when neither tree changed.
   const preferBuiltPluginArtifacts = getPluginRuntimeLoadContext(

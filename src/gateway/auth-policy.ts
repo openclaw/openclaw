@@ -50,10 +50,14 @@ export function captureGatewayAuthPolicy(
     };
     policies.set(config, cached);
   }
-  const principalKey = contextualIngress
-    ? undefined
-    : stableStringify([role, verifiedIdentity, authMethod, authModeOverride, browserOrigin]);
-  let policy = principalKey === undefined ? undefined : cached.identities.get(principalKey);
+  const principalKey = stableStringify([
+    role,
+    verifiedIdentity,
+    authMethod,
+    authModeOverride,
+    browserOrigin,
+  ]);
+  let policy = contextualIngress ? undefined : cached.identities.get(principalKey);
   if (!policy) {
     const grant =
       role === "operator" && verifiedIdentity
@@ -111,7 +115,7 @@ export function captureGatewayAuthPolicy(
       verifiedIdentity,
       browserOrigin: browserOrigin && Object.freeze({ ...browserOrigin }),
     });
-    if (principalKey !== undefined) {
+    if (!contextualIngress) {
       cached.identities.set(principalKey, policy);
     }
   }

@@ -159,13 +159,7 @@ function createFilteredSessionController(
     },
     connected: true,
     activeRouteId: "sessions",
-    sessionCatalogRowsVisible: true,
-    navigationVisible: true,
-    navigationView: "sessions" as const,
-    sidebarAgentsMode: "chip" as const,
-    shouldPublishSessionData: () => true,
     getRouteSessionKey: () => context.gateway.snapshot.sessionKey.trim(),
-    childSessionParents: () => new Set(),
     sessionDataContext: context,
     addController: () => undefined,
     removeController: () => undefined,
@@ -179,7 +173,6 @@ function createFilteredSessionController(
     sidebarSessionOwnerFilter: () => membership,
     sessionCatalogIdsWithoutVisibleRows: () => [],
     querySelector: () => null,
-    samePresence: () => false,
   } satisfies SessionDataControllerHost;
   const controller = new SessionDataController(host);
 
@@ -699,13 +692,9 @@ describe("filtered sidebar session event refresh", () => {
   });
 
   it("retires an in-flight child snapshot when the status filter changes", async () => {
-    const { controller, host, list, selectStatusFilter } =
-      createFilteredSessionController("archived");
+    const { controller, list, selectStatusFilter } = createFilteredSessionController("archived");
     controller.hostConnected();
     await controller.refreshSidebarSessions();
-    const parents = vi
-      .spyOn(host, "childSessionParents")
-      .mockReturnValue(new Set(["agent:main:parent"]));
     let resolveChildPage!: (value: Awaited<ReturnType<typeof list>>) => void;
     const childPage = new Promise<Awaited<ReturnType<typeof list>>>((resolve) => {
       resolveChildPage = resolve;
@@ -715,7 +704,6 @@ describe("filtered sidebar session event refresh", () => {
     const pendingChildren = controller.loadChildSessions("agent:main:parent");
     expect(controller.loadingChildSessionKeys.has("agent:main:parent")).toBe(true);
 
-    parents.mockReturnValue(new Set());
     selectStatusFilter("all");
     resolveChildPage({
       ts: 2,

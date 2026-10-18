@@ -178,26 +178,22 @@ export async function tryDispatchAcpReplyCore(
   const identityPendingBeforeTurn = isSessionIdentityPending(
     resolveSessionIdentityFromMeta(acpResolution.kind === "ready" ? acpResolution.meta : undefined),
   );
-  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
-    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
-  );
-  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
-  const dispatchChannels = params.cfg.channels as
-    | Record<string, { defaultAccount?: unknown } | undefined>
-    | undefined;
-  const defaultDispatchAccount =
-    normalizedDispatchChannel == null
-      ? undefined
-      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
-  const effectiveDispatchAccountId =
-    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const hasBoundConversationForSession = async (): Promise<boolean> => {
-    const channel = normalizedDispatchChannel;
+    const channel =
+      normalizeOptionalLowercaseString(
+        params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+      ) ?? "";
     if (!channel) {
       return false;
     }
+    const accountId = normalizeOptionalLowercaseString(params.ctx.AccountId) ?? "";
+    const channels = params.cfg.channels as Record<
+      string,
+      { defaultAccount?: unknown } | undefined
+    >;
+    const configuredDefaultAccountId = channels?.[channel]?.defaultAccount;
     const normalizedAccountId =
-      normalizeOptionalLowercaseString(effectiveDispatchAccountId) ?? "default";
+      accountId || normalizeOptionalLowercaseString(configuredDefaultAccountId) || "default";
     const { listSessionBindingsBySessionAsync } = await loadDispatchAcpManagerRuntime();
     const bindings = await listSessionBindingsBySessionAsync(canonicalSessionKey);
     return bindings.some(
@@ -221,6 +217,19 @@ export async function tryDispatchAcpReplyCore(
         normalizeOptionalString(params.cfg.acp?.defaultAgent) ??
         resolveAgentIdFromSessionKey(canonicalSessionKey))
       : resolveAgentIdFromSessionKey(canonicalSessionKey);
+  const normalizedDispatchChannel = normalizeOptionalLowercaseString(
+    params.ctx.OriginatingChannel ?? params.ctx.Surface ?? params.ctx.Provider,
+  );
+  const explicitDispatchAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const dispatchChannels = params.cfg.channels as
+    | Record<string, { defaultAccount?: unknown } | undefined>
+    | undefined;
+  const defaultDispatchAccount =
+    normalizedDispatchChannel == null
+      ? undefined
+      : dispatchChannels?.[normalizedDispatchChannel]?.defaultAccount;
+  const effectiveDispatchAccountId =
+    explicitDispatchAccountId ?? normalizeOptionalString(defaultDispatchAccount);
   const preparedTtsPreferences = params.preparedTtsPreferences ?? (await prepareTtsPreferences());
   await input.withCurrent(() => {});
   const shouldDeferVisibleTextForTts = shouldDeferFinalTtsText({

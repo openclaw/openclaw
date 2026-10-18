@@ -1,9 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getReplyPayloadMetadata,
-  setReplyPayloadMetadata,
-} from "../../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import {
   markCoreTtsAttemptResult,
@@ -137,33 +134,17 @@ describe("prepareEmbeddedRunTerminal", () => {
   });
 
   it.each([
-    {
-      assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"],
-      expected: "Latest 😀",
-      expectedRaw: "  Latest 😀  ",
-    },
-    {
-      assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"],
-      expected: "Latest",
-      expectedRaw: "\ufeff\u2003Latest\u00a0",
-    },
+    { assistantTexts: ["Earlier", "  Latest 😀  ", "\t\r\n"], expected: "Latest 😀" },
+    { assistantTexts: ["Earlier", "\ufeff\u2003Latest\u00a0", "\u2028"], expected: "Latest" },
     { assistantTexts: ["Earlier", " \u200b "], expected: "Earlier" },
     { assistantTexts: [" \u200b\u200d\u2060 "], expected: undefined },
-    {
-      assistantTexts: ["  First line \n second line  "],
-      expected: "First line \n second line",
-      expectedRaw: "  First line \n second line  ",
-    },
-    {
-      assistantTexts: ["Earlier", " \ud800text\udc00 "],
-      expected: "\ud800text\udc00",
-      expectedRaw: " \ud800text\udc00 ",
-    },
+    { assistantTexts: ["  First line \n second line  "], expected: "First line \n second line" },
+    { assistantTexts: ["Earlier", " \ud800text\udc00 "], expected: "\ud800text\udc00" },
     { assistantTexts: ["", " \t\r\n", "\ufeff\u2003"], expected: undefined },
     { assistantTexts: [], expected: undefined },
   ])(
     "selects final fallback text without changing its source %#",
-    async ({ assistantTexts, expected, expectedRaw = expected }) => {
+    async ({ assistantTexts, expected }) => {
       const original = [...assistantTexts];
       const prepared = await prepareAttempt({
         attempt: attemptResult({
@@ -179,8 +160,8 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
 
-      expect(prepared.finalAssistantVisibleText).toBe(expected ?? "");
-      expect(prepared.finalAssistantRawText).toBe(expectedRaw);
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
+      expect(prepared.finalAssistantRawText).toBe(expected);
       expect(assistantTexts).toEqual(original);
     },
   );
@@ -222,7 +203,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
       const expected = keepAnswer ? "Completed answer." : undefined;
-      expect(prepared.finalAssistantVisibleText).toBe(expected ?? "");
+      expect(prepared.finalAssistantVisibleText).toBe(expected);
       expect(prepared.finalAssistantRawText).toBe(expected);
     },
   );
@@ -363,7 +344,7 @@ describe("prepareEmbeddedRunTerminal", () => {
         },
       });
 
-      expect(prepared.finalAssistantVisibleText).toBe("");
+      expect(prepared.finalAssistantVisibleText).toBeUndefined();
       expect(prepared.finalAssistantRawText).toBeUndefined();
     },
   );
@@ -565,19 +546,12 @@ describe("prepareEmbeddedRunTerminal", () => {
       ...assistantMessage("stop"),
       content: [{ type: "text" as const, text: finalText }],
     };
-    const completedPayload = setReplyPayloadMetadata(
+    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([
       { text: completedText },
-      { assistantMessageIndex: 0 },
-    );
-    const partialPayload = setReplyPayloadMetadata(
       { text: partialText },
-      { assistantMessageIndex: 1 },
-    );
-    payloadMocks.buildEmbeddedRunPayloads.mockReturnValueOnce([completedPayload, partialPayload]);
+    ]);
 
     const prepared = await prepareAttempt({
-      replyDeliveryState: "delivered",
-      sourceReplyDeliveryState: "missing",
       attempt: attemptResult({
         terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
         assistantTexts: [completedText, partialText],
@@ -606,10 +580,6 @@ describe("prepareEmbeddedRunTerminal", () => {
       }),
       { text: finalText },
     ]);
-    expect(getReplyPayloadMetadata(partialPayload)?.localTranscriptDeliveryConfirmed).toBe(true);
-    const [kept, text] = prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout!;
-    expect(getReplyPayloadMetadata(kept!)?.localTranscriptDeliveryConfirmed).toBe(true);
-    expect(getReplyPayloadMetadata(text!)?.localTranscriptDeliveryConfirmed).toBeUndefined();
   });
 
   it("does not recover stale session text after the current prompt times out", async () => {
@@ -638,7 +608,7 @@ describe("prepareEmbeddedRunTerminal", () => {
       },
     });
 
-    expect(prepared.finalAssistantVisibleText).toBe("");
+    expect(prepared.finalAssistantVisibleText).toBeUndefined();
     expect(prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout).toBeUndefined();
     expect(prepared.hasSuccessfulFinalAssistantAfterPromptTimeout).toBe(false);
   });
@@ -1054,6 +1024,16 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
       },
       rerouted: false,
     });
+  });
+
+  it("records producer source delivery without an extracted messaging target", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        sourceReplyDelivered: true,
+        messagingToolSentTargets: [],
+      },
+    });
+    expect(prepared.agentMeta.terminalReceipt?.sourceReplyDelivered).toBe(true);
   });
 
   it("marks a provider-only response route as rerouted", async () => {

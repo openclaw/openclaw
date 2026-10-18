@@ -32,8 +32,7 @@ type MentionConnection = {
   connectionRevision: number;
   profileId: string;
   gatewayInstanceId: string;
-  revision: number;
-  requestedRevision: number;
+  loaded: boolean;
   dismissing: Set<string>;
   refreshRequested: boolean;
   refreshPromise: Promise<void> | null;
@@ -80,16 +79,10 @@ export function createMentionsCapability(
     }
     try {
       const result = await owner.client.request<MentionsListResult>(method, params);
-      if (
-        !isCurrent(owner) ||
-        result.gatewayInstanceId !== owner.gatewayInstanceId ||
-        result.revision < owner.revision
-      ) {
+      if (!isCurrent(owner) || result.gatewayInstanceId !== owner.gatewayInstanceId) {
         return;
       }
-      owner.revision = result.revision;
-      // The Gateway can emit its changed revision while preparing this same snapshot.
-      owner.refreshRequested &&= owner.requestedRevision > result.revision;
+      owner.loaded = true;
       owner.retryAttempt = 0;
       publish({ phase: "ready", items: result.items, error: null });
     } catch (error) {
@@ -129,10 +122,10 @@ export function createMentionsCapability(
     if (!isCurrent(owner) || owner.retryTimer !== undefined) {
       return Promise.resolve();
     }
+    owner.refreshRequested = true;
     if (owner.refreshPromise) {
       return owner.refreshPromise;
     }
-    owner.refreshRequested = true;
     owner.refreshPromise = Promise.resolve().then(async () => {
       try {
         while (isCurrent(owner) && owner.retryTimer === undefined && owner.refreshRequested) {
@@ -156,7 +149,7 @@ export function createMentionsCapability(
       if (owner.refreshPromise) {
         return owner.refreshPromise;
       }
-      if (owner.revision >= 0 && !owner.refreshRequested) {
+      if (owner.loaded && !owner.refreshRequested) {
         return Promise.resolve();
       }
       return refreshOwner(owner);
@@ -191,8 +184,7 @@ export function createMentionsCapability(
       connectionRevision: gateway.connectionRevision,
       profileId,
       gatewayInstanceId,
-      revision: -1,
-      requestedRevision: -1,
+      loaded: false,
       dismissing: new Set(),
       refreshRequested: false,
       refreshPromise: null,
@@ -218,12 +210,10 @@ export function createMentionsCapability(
       payload?.gatewayInstanceId !== owner.gatewayInstanceId ||
       typeof payload.revision !== "number" ||
       !Number.isSafeInteger(payload.revision) ||
-      payload.revision < 0 ||
-      payload.revision <= Math.max(owner.revision, owner.requestedRevision)
+      payload.revision < 0
     ) {
       return;
     }
-    owner.requestedRevision = payload.revision;
     owner.refreshRequested = true;
     void refreshAutomatically(owner);
   });

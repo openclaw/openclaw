@@ -27,7 +27,6 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   threadId = 0;
   started = false;
   executionStopped = false;
-  private executionExitCode: number | undefined;
   private referenced = true;
   private stopping = false;
   private joined = false;
@@ -142,8 +141,8 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
       closed: () =>
         this.runInContext(() => {
           this.resourceClosed = true;
-          if (this.supervisorJoined || this.executionStopped) {
-            this.finishJoined(this.executionExitCode);
+          if (this.supervisorJoined) {
+            this.finishJoined(undefined);
           }
         }),
       failed: (error) => this.resourceFailed(error),
@@ -368,11 +367,7 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
     if (!this.executionStopped) {
       this.taskPort?.close();
       this.executionStopped = true;
-      this.executionExitCode = code;
       this.emit("execution-exit", code);
-    }
-    if (this.resourceClosed && !this.joined) {
-      this.finishJoined(code);
     }
   }
 

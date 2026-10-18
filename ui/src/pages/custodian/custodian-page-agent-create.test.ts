@@ -81,7 +81,7 @@ describe("custodian new-agent flow", () => {
     expect(request.mock.calls[0]?.[1]).toMatchObject({ welcomeVariant: "new-agent" });
   });
 
-  it("explains the missing capability and scope before sending an agent creation request", async () => {
+  it("does not misreport limited access as an outdated Gateway", async () => {
     const request = vi.fn();
     const { context } = createContext(request);
     context.gateway.snapshot.hello = {
@@ -93,12 +93,7 @@ describe("custodian new-agent flow", () => {
     await Promise.resolve();
 
     expect(request).not.toHaveBeenCalled();
-    const error = page.querySelector('[role="alert"]')?.textContent;
-    expect(error).toContain("openclaw.chat");
-    expect(error).toContain("operator.admin");
-    expect(error).toContain("Pair");
-    expect(error).toContain("reconnect");
-    expect(error).not.toContain("Update the Gateway");
+    expect(page.querySelector('[role="alert"]')).toBeNull();
   });
 
   it("refreshes the roster and opens the created agent hatch session", async () => {

@@ -28,7 +28,7 @@ import {
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
-import { readGlobalSingleton, resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { OpenClawQuarantineReadCleanupError } from "./openclaw-quarantine-error.js";
 import { readOpenClawDatabaseQuarantineFailure } from "./openclaw-quarantine-store.js";
 import {
@@ -67,9 +67,8 @@ import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
-const STATE_DATABASE_LIFECYCLE_KEY = Symbol.for("openclaw.stateDatabaseLifecycle");
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
-  STATE_DATABASE_LIFECYCLE_KEY,
+  Symbol.for("openclaw.stateDatabaseLifecycle"),
   () => ({
     cachedDatabases: new Map<string, CachedOpenClawStateDatabase>(),
     retainedDatabaseHandles: new Map<EngineConnection, StateDatabaseHandle>(),
@@ -313,12 +312,7 @@ function publishOpenClawStateDatabase(
   const { identity, admission } = asyncResources.publish(pathname);
   // Lifecycle settlement retains this projection after native disposal clears its identity.
   databaseIdentities.set(db, readTrackedStateDatabaseIdentity(db) ?? identity);
-  cachedDatabases.set(
-    pathname,
-    Object.assign(database, {
-      schemaFacts,
-    }),
-  );
+  cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
@@ -622,19 +616,6 @@ export function closeOpenClawStateDatabaseForTest(): void {
   terminalOpenLatch.clearAll();
 }
 
-/**
- * Owners that register with this cache must serve only the published lifecycle.
- * Every runtime chunk shares that lifecycle; only a retired module generation
- * (a re-evaluated test graph whose detached work outlived its file) can differ.
- */
-export function assertPublishedOpenClawStateDatabaseLifecycle(): void {
-  if (readGlobalSingleton(STATE_DATABASE_LIFECYCLE_KEY) !== stateDatabaseLifecycle) {
-    throw new Error(
-      "OpenClaw state database lifecycle is retired; its owners cannot serve the published lifecycle",
-    );
-  }
-}
-
 /** Process-wide owner for cached shared-state handles and terminal open failures. */
 export const openClawStateDatabaseCache = {
   assertOpenClawStateDatabaseFreshOpenAllowedAtPath,
@@ -771,7 +752,7 @@ function retainSqliteDatabaseRemovalExclusion(
 }
 
 /** Reconfirm an advisory worker failure on the live owner connection. */
-export async function confirmCachedOpenClawStateDatabaseIntegrity(
+export async function confirmOpenClawStateDatabaseIntegrity(
   pathname: string,
 ): Promise<SqliteIntegrityConfirmation> {
   const resolvedPath = resolveDatabasePath({ path: pathname });

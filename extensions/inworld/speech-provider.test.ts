@@ -53,7 +53,7 @@ describe("buildInworldSpeechProvider", () => {
     const blankRequest = { ...request, providerConfig: {}, timeoutMs: 5_000 };
 
     expect(
-      await provider.isConfiguredAsync?.({
+      provider.isConfigured({
         providerConfig: { apiKey: "   " },
         timeoutMs: 30_000,
       }),

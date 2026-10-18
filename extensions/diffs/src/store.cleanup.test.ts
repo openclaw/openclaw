@@ -67,7 +67,9 @@ describe("DiffArtifactStore bulk cleanup", () => {
     const heldId = "a".repeat(20);
     const failedId = "b".repeat(20);
     for (const id of [heldId, failedId]) {
-      await file(id, true);
+      await file(id);
+      await fixture.blobStore.register(id, new Uint8Array(), metadata, { ttlMs });
+      await expireDiffArtifactForTest(fixture.rootDir, id, ttlMs);
     }
     const heldDirectory = path.join(fixture.rootDir, heldId);
     const started = createDeferred<void>();

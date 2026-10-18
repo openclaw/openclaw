@@ -8,6 +8,7 @@ import {
   getGroupThreadTurn,
   recordGroupThreadReply,
 } from "../../auto-reply/group-thread-context.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type {
   ChannelMessageActionName,
@@ -96,7 +97,8 @@ export function prepareMessageToolGroupThread(
         mediaUrls: readStringArrayParam(args, "mediaUrls"),
       }
     : undefined;
-  if (sourceAction) {
+  const silent = Boolean(text && isSilentReplyPayloadText(text));
+  if (sourceAction && !silent) {
     // Native locations cannot carry the attribution caption used by other payloads.
     if (!text && hasSanitizedSendPayloadContent({ ...args, location: undefined })) {
       args.message = formatGroupThreadReply("");
@@ -110,6 +112,7 @@ export function prepareMessageToolGroupThread(
   let capturedReply: { observed: boolean; text?: string } | undefined;
   const threadAddressing = sourceAction ? resolveChannelThreadAddressing(channel) : undefined;
   return {
+    silent,
     async run(runAction: () => Promise<MessageActionResult>): Promise<MessageActionResult> {
       const captured = await captureGroupThreadToolReply(
         runAction,

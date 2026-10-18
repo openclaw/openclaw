@@ -1,22 +1,16 @@
 import { expect, it, vi, type Mock } from "vitest";
 import type { RunEmbeddedAgentInternalParams as AgentRunParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { mockAcceptedWaitingStatusRun } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import type { FollowupRun } from "./queue.js";
-import {
-  REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
-  type ReplyOperationRunState,
-} from "./reply-operation-run-state.js";
 
 type RequiredReplyFixture = {
   createMinimalRun: (params?: {
     opts?: InternalGetReplyOptions;
     blockStreamingEnabled?: boolean;
     currentInboundEventKind?: FollowupRun["currentInboundEventKind"];
-    sessionCtx?: { MessageSid?: string };
     runOverrides?: Partial<FollowupRun["run"]>;
   }) => {
     followupRun: FollowupRun;
@@ -31,7 +25,7 @@ export function registerRequiredReplyCompletionCases({
   createMinimalRun,
   state,
 }: RequiredReplyFixture): void {
-  it("reports missing output after filtering silentExpected narration", async () => {
+  it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
     const onReasoningStream = vi.fn();
@@ -53,25 +47,21 @@ export function registerRequiredReplyCompletionCases({
     expect(onReasoningStream).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
-    expect(res).toMatchObject({
-      text: "No answer was returned. Ask again if you still need one.",
-      isError: true,
-      isStatusNotice: true,
-    });
+    expect(res).toBeUndefined();
   });
 
   it.each(["required", "optional"] as const)(
-    "honors %s completion with a prepared silent outcome",
+    "honors %s completion despite silentExpected and bare NO_REPLY payloads",
     async (terminalReplyExpectation) => {
       const onPartialReply = vi.fn();
       const onBlockReply = vi.fn();
       const onReasoningStream = vi.fn();
       state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
         expect(params.silentExpected).toBe(true);
-        return {
-          payloads: [],
-          meta: { finalAssistantRawText: "NO_REPLY", terminalReply: { disposition: "silent" } },
-        };
+        await params.onReasoningStream?.({ text: "Reasoning:\nNO_REPLY" });
+        await params.onPartialReply?.({ text: "NO_REPLY" });
+        await params.onBlockReply?.({ text: "NO_REPLY" });
+        return { payloads: [{ text: "NO_REPLY" }], meta: { finalAssistantText: "NO_REPLY" } };
       });
 
       const { run } = createMinimalRun({
@@ -84,7 +74,12 @@ export function registerRequiredReplyCompletionCases({
       expect(onReasoningStream).not.toHaveBeenCalled();
       expect(onPartialReply).not.toHaveBeenCalled();
       expect(onBlockReply).not.toHaveBeenCalled();
-      expect(res).toBeUndefined();
+      if (terminalReplyExpectation === "required") {
+        const payloads = Array.isArray(res) ? res : [res];
+        expect(payloads).toContainEqual(expect.objectContaining({ isError: true }));
+      } else {
+        expect(res).toBeUndefined();
+      }
     },
   );
 
@@ -104,7 +99,7 @@ export function registerRequiredReplyCompletionCases({
 
     expect(payloadsResult).toContainEqual(
       expect.objectContaining({
-        text: "No answer was returned. Ask again if you still need one.",
+        text: expect.stringContaining("did not produce a visible reply"),
         isError: true,
         replyToId: "msg",
       }),
@@ -121,7 +116,7 @@ export function registerRequiredReplyCompletionCases({
     const payload = Array.isArray(result) ? result[0] : result;
 
     expect(payload).toMatchObject({
-      text: "No answer was returned. Ask again if you still need one.",
+      text: expect.stringContaining("did not produce a visible reply"),
       isError: true,
     });
     expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
@@ -152,25 +147,58 @@ export function registerRequiredReplyCompletionCases({
     expect(onBlockReply.mock.calls[0]?.[0]).toEqual(expect.objectContaining(payload));
     expect(payloads).toContainEqual(
       expect.objectContaining({
-        text: "No answer was returned. Ask again if you still need one.",
+        text: expect.stringContaining("did not produce a visible reply"),
         isError: true,
       }),
     );
   });
 
-  it("retains pending tool continuation without a terminal reply", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [],
-      meta: { pendingToolCalls: [{ name: "hosted_tool" }] },
-    });
-    const onPendingContinuation = vi.fn();
-    const { run } = createMinimalRun({
-      opts: { onPendingContinuation },
-      runOverrides: { terminalReplyExpectation: "required" },
-    });
-    await expect(run()).resolves.toBeUndefined();
-    expect(onPendingContinuation).toHaveBeenCalledOnce();
-  });
+  it.each([
+    {
+      label: "NO_REPLY",
+      pendingContinuation: false,
+      expectation: "required",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { finalAssistantVisibleText: "NO_REPLY" },
+      },
+      missing: true,
+    },
+    {
+      label: "optional NO_REPLY",
+      pendingContinuation: false,
+      expectation: "optional",
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+        meta: { finalAssistantVisibleText: "NO_REPLY" },
+      },
+      missing: false,
+    },
+    {
+      label: "pending tool continuation",
+      pendingContinuation: true,
+      expectation: "required",
+      result: { payloads: [], meta: { pendingToolCalls: [{ name: "hosted_tool" }] } },
+      missing: false,
+    },
+  ] as const)(
+    "settles $label according to its reply obligation",
+    async ({ result, pendingContinuation, expectation, missing }) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce(result);
+      const onPendingContinuation = vi.fn();
+      const { run } = createMinimalRun({
+        opts: { onPendingContinuation },
+        runOverrides: { terminalReplyExpectation: expectation },
+      });
+
+      if (missing) {
+        await expect(run()).resolves.toMatchObject({ isError: true });
+      } else {
+        await expect(run()).resolves.toBeUndefined();
+      }
+      expect(onPendingContinuation).toHaveBeenCalledTimes(pendingContinuation ? 1 : 0);
+    },
+  );
 
   it("delivers a required yield acknowledgment despite silentExpected in message-tool-only mode", async () => {
     await mockAcceptedWaitingStatusRun(state.runEmbeddedAgentMock, {
@@ -201,58 +229,20 @@ export function registerRequiredReplyCompletionCases({
   it.each([
     {
       label: "room event",
-      params: { currentInboundEventKind: "room_event" as const, opts: { isHeartbeat: false } },
+      params: { currentInboundEventKind: "room_event" as const },
     },
     {
       label: "internal handoff",
       params: {
-        opts: { isHeartbeat: false },
         runOverrides: {
           inputProvenance: { kind: "internal_system" as const, sourceTool: "restart-sentinel" },
         },
       },
     },
-    { label: "heartbeat", params: { opts: { isHeartbeat: true } } },
-  ])("completes optional empty $label turns without a chat notice", async ({ params }) => {
+  ])("keeps successful empty $label completions silent", async ({ params }) => {
     state.runEmbeddedAgentMock.mockResolvedValueOnce({ payloads: [], meta: {} });
-    const onAgentRunTerminalOutcome = vi.fn();
-    const runState: ReplyOperationRunState = {};
-    const { run } = createMinimalRun({
-      ...params,
-      opts: { ...params.opts, onAgentRunTerminalOutcome, [REPLY_OPERATION_RUN_STATE]: runState },
-    });
+    const { run } = createMinimalRun(params);
 
     await expect(run()).resolves.toBeUndefined();
-    expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("completed");
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("ok");
-  });
-
-  it("retains a failed heartbeat result without lifting its missing-answer notice", async () => {
-    const onAgentRunTerminalOutcome = vi.fn();
-    const runState: ReplyOperationRunState = {};
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [
-        setReplyPayloadMetadata(
-          {
-            text: "No answer was returned. Ask again if you still need one.",
-            isError: true,
-            isStatusNotice: true,
-          },
-          { assistantTranscriptOwned: true },
-        ),
-      ],
-      meta: {
-        error: {
-          kind: "incomplete_turn",
-          message: "No answer was returned. Ask again if you still need one.",
-        },
-      },
-    });
-    const { run } = createMinimalRun({
-      opts: { isHeartbeat: true, onAgentRunTerminalOutcome, [REPLY_OPERATION_RUN_STATE]: runState },
-    });
-    await expect(run()).resolves.toBeUndefined();
-    expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
-    expect(resolveReplyOperationAgentTurn(runState)).toBe("failed");
   });
 }

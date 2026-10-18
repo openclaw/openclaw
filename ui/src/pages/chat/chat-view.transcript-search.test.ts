@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
+import { renderChat } from "./chat-view-render.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
-import { createChatProps, disposeChatView, renderChatPropsInto } from "./chat-view.test-helpers.ts";
+import { createChatProps } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -19,7 +21,7 @@ beforeEach(() => {
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
-    disposeChatView(container);
+    render(null, container);
   }
   resetChatViewState();
   resetTranscriptTestDom();
@@ -39,9 +41,9 @@ function createPane(paneId = "primary") {
     runActive: true,
     onClearReply,
     onAbort,
-    onRequestUpdate: () => renderChatPropsInto(container, props),
+    onRequestUpdate: () => render(renderChat(props), container),
   });
-  renderChatPropsInto(container, props);
+  render(renderChat(props), container);
   const composer = expectDefined(
     container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
     "composer",

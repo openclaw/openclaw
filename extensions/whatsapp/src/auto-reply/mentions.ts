@@ -11,6 +11,7 @@ import {
   identitiesOverlap,
   type WhatsAppIdentity,
 } from "../identity.js";
+import { requireWhatsAppInboundAdmission } from "../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { isSelfChatMode } from "../targets-runtime.js";
 
@@ -42,7 +43,7 @@ function isBotMentionedFromTargets(
   const explicitSelfChatOverride = typeof mentionCfg.isSelfChat === "boolean";
   // Having our own number in allowFrom suppresses native self-mentions only in DMs.
   // Explicit caller overrides also apply to groups.
-  const admission = msg.admission;
+  const admission = requireWhatsAppInboundAdmission(msg);
   const isGroupConversation = admission.conversation.kind === "group";
   const isSelfChat = explicitSelfChatOverride
     ? Boolean(mentionCfg.isSelfChat)
@@ -82,7 +83,7 @@ export function debugMention(
     self: getSelfIdentity(msg, authDir),
   };
   const result = isBotMentionedFromTargets(msg, mentionCfg, mentionTargets);
-  const admission = msg.admission;
+  const admission = requireWhatsAppInboundAdmission(msg);
   const details = {
     from: admission.conversation.id,
     mentionedJids: msg.group?.mentions?.jids ?? null,

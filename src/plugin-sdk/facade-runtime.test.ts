@@ -330,8 +330,7 @@ describe("plugin-sdk facade runtime", () => {
     expect(load).toThrow(/Bundled plugin public surface access blocked.*disabled by default/);
     expect(listImportedBundledPluginFacadeIds()).toEqual([]);
 
-    const enabledConfig = { plugins: { entries: { fixture: { enabled: true } } } };
-    setRuntimeConfigSnapshot(enabledConfig, enabledConfig);
+    setRuntimeConfigSnapshot({}, { plugins: { entries: { fixture: { enabled: true } } } });
     expect(load()).toEqual({ marker: "runtime-api-enabled" });
     expect(listImportedBundledPluginFacadeIds()).toEqual(["fixture"]);
 

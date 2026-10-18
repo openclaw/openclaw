@@ -247,7 +247,7 @@ function CardModalContent(props: WorkboardProps) {
         label: editing() ? t("workboard.editCard") : t("workboard.newCard"),
         description: editing() ? t("workboard.editCardHelp") : t("workboard.newCardHelp"),
         style:
-          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.32);",
+          "--openclaw-modal-width: 700px; --openclaw-modal-max-height: calc(100dvh - 40px); --openclaw-modal-backdrop-filter: blur(1px); --wa-color-overlay-modal: rgba(0, 0, 0, 0.32);",
         onCancel: dismissDraft,
       }}
     >
@@ -447,7 +447,7 @@ function CardModalContent(props: WorkboardProps) {
               </section>
             ) : undefined}
           </div>
-          <openclaw-modal-actions class="workboard-modal__actions">
+          <div class="workboard-modal__actions">
             <button
               class="btn"
               type="button"
@@ -462,7 +462,7 @@ function CardModalContent(props: WorkboardProps) {
             >
               {editing() ? t("common.save") : t("common.create")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </form>
         <WorkboardErrorToast
           owner={state()}
@@ -515,7 +515,7 @@ export function CardDiscardDialog(props: {
         label: props.title,
         description: t("workboard.discardDraftHelp"),
         style:
-          "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --openclaw-modal-backdrop-color: rgba(0, 0, 0, 0.24);",
+          "--openclaw-modal-width: 400px; --openclaw-modal-backdrop-filter: none; --wa-color-overlay-modal: rgba(0, 0, 0, 0.24);",
         onCancel: () => {
           props.onKeepEditing();
           return true;
@@ -526,14 +526,14 @@ export function CardDiscardDialog(props: {
         <section class="workboard-discard">
           <h2>{props.title}</h2>
           <p>{t("workboard.discardDraftHelp")}</p>
-          <openclaw-modal-actions class="workboard-discard__actions">
+          <div class="workboard-discard__actions">
             <button class="btn" type="button" autofocus onClick={() => props.onKeepEditing()}>
               {t("workboard.keepEditing")}
             </button>
             <button class="btn danger" type="button" onClick={() => props.onDiscard()}>
               {t("workboard.discardDraft")}
             </button>
-          </openclaw-modal-actions>
+          </div>
         </section>
         {props.error ?? undefined}
       </>

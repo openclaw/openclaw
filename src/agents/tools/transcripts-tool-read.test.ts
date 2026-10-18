@@ -90,35 +90,38 @@ afterEach(async () => {
 });
 
 describe("transcripts read actions", () => {
-  it("retains write-time chronology when a skill changes the warm worker timezone", async () => {
-    const early = { ...session, sessionId: "early", startedAt: "2026-08-20T06:00:00Z" };
-    const late = { ...session, sessionId: "late", startedAt: "2026-08-20T09:00:00Z" };
-    const expected = [{ sessionId: "late" }, { sessionId: "early" }];
+  it("uses the active skill timezone after the database worker is already warm", async () => {
+    vi.stubEnv("TZ", undefined);
+    const local = { ...session, sessionId: "local", startedAt: "2026-08-20T06:00:00" };
+    const explicit = { ...session, sessionId: "explicit", startedAt: "2026-08-20T09:00:00Z" };
     let releaseSkill = () => {};
+    const expected = () =>
+      [local, explicit]
+        .toSorted((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+        .map(({ sessionId }) => ({ sessionId }));
     try {
-      await store.writeSession(early);
-      await store.writeSession(late);
+      await store.writeSession(local);
+      await store.writeSession(explicit);
+      const original = expected();
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
+        sessions: original,
       });
+      const timezone = original[0]?.sessionId === "local" ? "UTC" : "Pacific/Honolulu";
       releaseSkill = applySkillEnvOverridesFromSnapshot({
         snapshot: { prompt: "", skills: [{ name: "chronology" }] },
-        config: { skills: { entries: { chronology: { env: { TZ: "Pacific/Honolulu" } } } } },
+        config: { skills: { entries: { chronology: { env: { TZ: timezone } } } } },
       });
-      expect(process.env.TZ).toBe("Pacific/Honolulu");
+      expect(process.env.TZ).toBe(timezone);
+      expect(expected()).not.toEqual(original);
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
+        sessions: expected(),
       });
       const pending = store.listReadEntries({ limit: 2 });
       releaseSkill();
       releaseSkill = () => {};
-      expect(
-        (await pending).entries.map(({ session: descriptor }) => ({
-          sessionId: descriptor.sessionId,
-        })),
-      ).toEqual(expected);
+      await expect(pending).rejects.toThrow("Transcript timezone changed while reading");
       expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
-        sessions: expected,
+        sessions: original,
       });
     } finally {
       releaseSkill();

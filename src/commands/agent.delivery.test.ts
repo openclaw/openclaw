@@ -112,7 +112,7 @@ describe("deliverAgentCommandResult", () => {
         }
       : createResult(params.resultText);
 
-    const deliveryResult = await deliverAgentCommandResult({
+    await deliverAgentCommandResult({
       cfg,
       deps,
       runtime,
@@ -123,7 +123,7 @@ describe("deliverAgentCommandResult", () => {
       payloads: result.payloads,
     });
 
-    return { runtime, deliveryResult };
+    return { runtime };
   }
 
   beforeEach(() => {
@@ -202,41 +202,27 @@ describe("deliverAgentCommandResult", () => {
     expect(deliveryCall.session?.agentId).toBe("exec");
   });
 
-  it.each(["nested", "nested:agent:main:child"])(
-    "retains %s replies without logging them",
-    async (lane) => {
-      const runtime = createRuntime();
-      const { deliveryResult } = await runDelivery({
-        runtime,
-        resultText: "Private child reply\nsecond private line",
-        opts: {
-          message: "hello",
-          deliver: false,
-          lane,
-          sessionKey: "agent:ebao-next:quietchat:channel:1",
-          runId: "run-announce",
-          messageChannel: "webchat",
-        },
-        sessionEntry: undefined,
-      });
-
-      expect(deliveryResult.payloads).toEqual([
-        expect.objectContaining({ text: "Private child reply\nsecond private line" }),
-      ]);
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
-
-  it("prints interactive CLI replies through the output writer", async () => {
-    const runtime = { ...createRuntime(), writeStdout: vi.fn(), writeJson: vi.fn() };
-    const { deliveryResult } = await runDelivery({
+  it("prefixes per-session nested lanes with the same nested log context (#67502)", async () => {
+    const runtime = createRuntime();
+    await runDelivery({
       runtime,
-      resultText: "CLI reply",
-      opts: { message: "hello" },
+      resultText: "Child finished",
+      opts: {
+        message: "hello",
+        deliver: false,
+        lane: "nested:agent:ebao-next:quietchat:channel:1",
+        sessionKey: "agent:ebao-next:quietchat:channel:1",
+        runId: "run-announce",
+        messageChannel: "webchat",
+      },
+      sessionEntry: undefined,
     });
 
-    expect(deliveryResult.payloads).toEqual([expect.objectContaining({ text: "CLI reply" })]);
-    expect(runtime.writeStdout).toHaveBeenCalledWith("CLI reply");
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect((runtime.log as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+      [
+        "[agent:nested] session=agent:ebao-next:quietchat:channel:1 run=run-announce channel=webchat Child finished",
+      ],
+    ]);
   });
 });

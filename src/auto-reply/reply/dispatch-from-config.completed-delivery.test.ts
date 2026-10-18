@@ -46,10 +46,9 @@ describe("completed delivery through runner and dispatcher", () => {
       visible: "Shown.",
     },
     {
-      name: "explicit speech alongside a literal silence token",
+      name: "explicit speech alongside silence",
       source: "[[tts:text]]Speak this.[[/tts:text]]NO_REPLY",
       speech: "Speak this.",
-      visible: "NO_REPLY",
     },
     { name: "channel veto", source: "[[tts:text]]Do not speak.[[/tts:text]]", veto: true },
     {

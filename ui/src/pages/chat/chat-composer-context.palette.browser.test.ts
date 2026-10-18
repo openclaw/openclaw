@@ -1,9 +1,10 @@
+import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import "../../styles/chat/layout.css";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ContextNotice } from "./components/chat-composer-context.tsx";
+import { syncChatPickerOverlay } from "./components/chat-picker-overlay.ts";
 
 const rootStyle = document.documentElement.style;
 const previousStyle = rootStyle.cssText;
@@ -35,12 +36,9 @@ describe("mounted context usage palette", () => {
       );
       document.body.append(container);
       const details = container.querySelector("details")!;
-      details.querySelector("summary")!.click();
-      await waitForSolid(() =>
-        expect(container.querySelector("[data-anchored-overlay]")?.matches(":popover-open")).toBe(
-          true,
-        ),
-      );
+      details.open = true;
+      syncChatPickerOverlay(details);
+      await container.querySelector<WaPopup>("wa-popup")!.updateComplete;
       const ring = container.querySelector<HTMLElement>(".context-ring")!;
       ring.style.transition = "none";
       const fill = container.querySelector(".context-ring__fill")!;

@@ -607,22 +607,18 @@ describe("completion announcement", () => {
   });
 
   it.each(["NO_REPLY", "Scheduled report\nNO_REPLY"])(
-    "delivers prepared script text literally without a second control parser: %s",
+    "suppresses script control text before committing or adding an inspection link: %s",
     async (text) => {
       await withCompletionFixture("script", async (fixture) => {
         await expect(fixture.finalize({ text })).resolves.toMatchObject({
-          delivered: true,
-          deliveryAttempted: true,
+          delivered: false,
+          deliveryAttempted: false,
           deliveryError: undefined,
+          deliverySuppressionReason: "silent",
         });
-        const deliveredText = `${text}\nInspect: https://automation.example.test/automations?job=script-job&run=cron%3Ascript-job%3A1000`;
-        expect(fixture.sendText).toHaveBeenCalledWith(
-          expect.objectContaining({ text: deliveredText }),
-        );
+        expect(fixture.sendText).not.toHaveBeenCalled();
         expect(fixture.warn).not.toHaveBeenCalled();
-        expect(await fixture.messages(fixture.destination)).toEqual([
-          expect.objectContaining({ content: [{ type: "text", text: deliveredText }] }),
-        ]);
+        expect(await fixture.messages(fixture.destination)).toEqual([]);
         await fixture.assertNoOtherResults();
       });
     },

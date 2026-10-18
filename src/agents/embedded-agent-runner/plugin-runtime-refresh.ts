@@ -86,7 +86,6 @@ export function createEmbeddedAgentPluginRuntimeRefresh(
     return {
       meta: {
         durationMs: Date.now() - runInput.startedAtMs,
-        terminalReply: { disposition: "empty" },
         agentMeta: {
           sessionId: session.sessionId,
           provider: input.provider,

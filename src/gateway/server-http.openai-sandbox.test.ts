@@ -238,13 +238,7 @@ describe.each(endpointCases)("$name session sandbox boundary", (endpoint) => {
       if (!sandbox) {
         executeHostTool();
       }
-      return {
-        payloads: [{ text: "execution started" }],
-        meta: {
-          durationMs: 0,
-          terminalReply: { disposition: "visible", text: "execution started" },
-        },
-      };
+      return { payloads: [{ text: "execution started" }], meta: { durationMs: 0 } };
     });
 
     const response = await post({ endpoint, sessionKey });

@@ -20,7 +20,6 @@ import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-t
 import { stageSystemdService } from "./systemd-install.js";
 import { resolveSystemdUnitPath } from "./systemd-service-files.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
-import { seedCompletedRuntimePinMigration } from "./test-helpers/service-audit-runtime-pin.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -61,7 +60,6 @@ async function fixture(
     USERNAME: "operator",
     OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
   };
-  await seedCompletedRuntimePinMigration(env);
   vi.spyOn(process, "platform", "get").mockReturnValue(platform);
   const readFile = fs.readFile.bind(fs);
   if (platform === "linux") {

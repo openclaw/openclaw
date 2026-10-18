@@ -250,6 +250,35 @@ async function resolveAutoImageModelId(
   });
 }
 
+async function resolveKeyEntry(
+  params: AutoModelSelectionParams,
+): Promise<MediaUnderstandingModelConfig | null> {
+  const { cfg, providerRegistry, capability } = params;
+  const activeProvider = params.activeModel?.provider?.trim();
+  if (activeProvider) {
+    const model = params.activeModel?.model;
+    const activeEntry = await resolveAutoProviderModelEntry(params, activeProvider, () => model);
+    if (activeEntry) {
+      return activeEntry;
+    }
+  }
+  for (const providerId of resolveConfiguredKeyProviderOrder({
+    cfg,
+    providerRegistry,
+    capability,
+    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry({
+      capability,
+      providerRegistry,
+    }),
+  })) {
+    const entry = await resolveAutoProviderModelEntry(params, providerId, () => undefined);
+    if (entry) {
+      return entry;
+    }
+  }
+  return null;
+}
+
 function resolveImageModelFromAgentDefaults(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -359,7 +388,7 @@ async function* resolveAutoAudioEntries(
   // Advance lazily: unused providers must not refresh credentials, and an upload
   // failure must not silently disclose the same recording to another provider.
   for (const providerId of providers) {
-    const entry = await resolveAutoProviderModelEntry(params, providerId);
+    const entry = await resolveAutoProviderModelEntry(params, providerId, () => undefined);
     if (entry) {
       yield { entry };
     }
@@ -392,20 +421,15 @@ async function resolveAutoEntries(
     const activeEntry = await resolveAutoProviderModelEntry(
       prepared,
       activeProvider,
-      prepared.activeModel?.model,
+      () => prepared.activeModel?.model,
     );
     if (activeEntry) {
       return [{ entry: activeEntry }];
     }
   }
-  for (const providerId of resolveConfiguredKeyProviderOrder({
-    ...prepared,
-    fallbackProviders: resolveAutoMediaKeyProvidersFromRegistry(prepared),
-  })) {
-    const entry = await resolveAutoProviderModelEntry(prepared, providerId);
-    if (entry) {
-      return [{ entry }];
-    }
+  const keys = await resolveKeyEntry(prepared);
+  if (keys) {
+    return [{ entry: keys }];
   }
   return [];
 }
@@ -438,7 +462,7 @@ export async function resolveAutoImageModel(params: {
 async function resolveAutoProviderModelEntry(
   params: AutoModelSelectionParams,
   providerId: string,
-  selectedModel?: string,
+  readModel: () => string | undefined,
 ): Promise<MediaUnderstandingModelConfig | null> {
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!providerSupportsCapability(provider, params.capability)) {
@@ -453,14 +477,14 @@ async function resolveAutoProviderModelEntry(
   ) {
     return null;
   }
-  // Keep the selected model for this attempt; later selections pick up configuration changes.
-  // Audio always uses its provider default rather than the active chat model.
+  // Active selection reads its model after auth; key selection captures it before auth.
+  // Audio uses its provider default instead of the active chat model in either path.
   let model: string | undefined;
   if (params.capability === "image") {
     model = await resolveAutoImageModelId({
       ...params,
       providerId,
-      explicitModel: selectedModel,
+      explicitModel: readModel(),
     });
   } else if (params.capability === "audio") {
     model = resolveDefaultMediaModelFromRegistry({
@@ -469,7 +493,7 @@ async function resolveAutoProviderModelEntry(
     });
   } else {
     model =
-      selectedModel ??
+      readModel() ??
       resolveDefaultMediaModelFromRegistry({
         ...params,
         providerId,

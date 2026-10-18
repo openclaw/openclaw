@@ -1,4 +1,5 @@
 import type { RoutePeer } from "openclaw/plugin-sdk/routing";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSignalPeerId, resolveSignalRecipient, resolveSignalSender } from "./identity.js";
 import { normalizeSignalMessagingTarget } from "./normalize.js";
 import { looksLikeUuid } from "./uuid.js";
@@ -15,7 +16,8 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
   if (!normalized) {
     return null;
   }
-  if (normalized.startsWith("group:")) {
+  const lowered = normalizeLowercaseStringOrEmpty(normalized);
+  if (lowered.startsWith("group:")) {
     const groupId = normalized.slice("group:".length);
     return {
       peer: { kind: "group", id: groupId },
@@ -25,13 +27,26 @@ export function resolveSignalOutboundTarget(target: string): ResolvedSignalOutbo
     };
   }
 
+  if (lowered.startsWith("username:")) {
+    // Keep delivery and session identity on the canonical username target. Phone normalization
+    // would digit-strip the username and could collide with a real phone session.
+    return {
+      peer: { kind: "direct", id: normalized },
+      chatType: "direct",
+      from: `signal:${normalized}`,
+      to: `signal:${normalized}`,
+    };
+  }
+
   const recipient = normalized;
-  // Username targets already own their direct-chat identity; phone coercion would digit-strip them.
-  const sender = recipient.startsWith("username:")
-    ? null
-    : resolveSignalSender(
-        looksLikeUuid(recipient) ? { sourceUuid: recipient } : { sourceNumber: recipient },
-      );
+
+  const uuidCandidate = normalizeLowercaseStringOrEmpty(recipient).startsWith("uuid:")
+    ? recipient.slice("uuid:".length)
+    : recipient;
+  const sender = resolveSignalSender({
+    sourceUuid: looksLikeUuid(uuidCandidate) ? uuidCandidate : null,
+    sourceNumber: looksLikeUuid(uuidCandidate) ? null : recipient,
+  });
   const peerId = sender ? resolveSignalPeerId(sender) : recipient;
   const displayRecipient = sender ? resolveSignalRecipient(sender) : recipient;
   return {

@@ -45,7 +45,7 @@ type PreferenceScope = Pick<
   "source" | "client" | "connected" | "recoveryScope" | "connectionEpoch"
 > & { profileId: string | undefined };
 
-type PreferenceWriter = { write: Promise<void> };
+type PreferenceWriter = { selection: object; write: Promise<void> };
 type PreferenceWrites = {
   agents: Map<string, PreferenceWriter>;
   revision: object;
@@ -212,9 +212,10 @@ export class DraftPreferenceState {
     const writes = this.preferenceWrites(source);
     let writer = writes.agents.get(agentId);
     if (!writer) {
-      writer = { write: Promise.resolve() };
+      writer = { selection: {}, write: Promise.resolve() };
       writes.agents.set(agentId, writer);
     }
+    const capturedSelection = writer.selection;
     const ownsConnection = () =>
       Boolean(
         client &&
@@ -251,14 +252,22 @@ export class DraftPreferenceState {
       return (current.baseRef ?? "") === (expected.baseRef ?? "") ? "match" : "superseded";
     };
     return async (consume) => {
-      if (accepted && !ownsConnection()) {
+      if (accepted && (!ownsConnection() || writer.selection !== capturedSelection)) {
         return;
       }
+      // Model controls share persistence, but do not replace the submitted checkout intent.
+      const changesPlacement = Object.keys(patch).some(
+        (field) => !["model", "agentRuntime", "thinkingLevel", "fastMode"].includes(field),
+      );
+      const selection = changesPlacement ? {} : writer.selection;
+      writer.selection = selection;
       consume?.();
       if (!persist) {
         return;
       }
-      const isCurrent = () => ownsConnection() && (accepted || this.preferenceScope === scope);
+      const isCurrent = () =>
+        ownsConnection() &&
+        (accepted ? writer.selection === selection : this.preferenceScope === scope);
       // A disconnected controller must still fence work admitted to its Gateway queue.
       const queued = this.preferenceModeValue !== "local";
       const write = async () => {

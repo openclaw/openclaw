@@ -513,7 +513,9 @@ export async function buildAgentsApiToolSurface(
           executionBoundary = boundary;
           executedArgs = executedArguments;
           startedAt = invocationStartedAt;
-          const message = formatToolExecutionErrorMessage(error, "OpenClaw tool failed");
+          const message = sanitizeToolResult(
+            formatToolExecutionErrorMessage(error, "OpenClaw tool failed"),
+          );
           const disposition =
             getBeforeToolCallFailureDisposition(error) ??
             (signal.aborted ? "cancelled" : resolveToolExecutionErrorKind(error));
@@ -623,7 +625,9 @@ function serializeToolText(
       break;
     }
     const next =
-      block.type === "text" ? block.text : "[Image result omitted from Agents API function output]";
+      block.type === "text"
+        ? sanitizeToolResult(block.text)
+        : "[Image result omitted from Agents API function output]";
     text += `${text ? "\n" : ""}${sliceToolResultTextToBudget(next, maxChars - text.length)}`;
   }
   return sliceToolResultTextToBudget(text || "Tool completed with no text output.", maxChars);

@@ -12,9 +12,10 @@ function createToolWarning(text: string, toolName: string): ReplyPayload {
 }
 
 describe("resolveCronPayloadOutcome", () => {
-  it("keeps tool warnings fatal when the producer has no visible terminal output", () => {
+  it("keeps tool warnings fatal when terminal output is NO_REPLY", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [createToolWarning("⚠️ Bash failed: mount unavailable", "bash")],
+      finalAssistantVisibleText: "NO_REPLY",
       preferFinalAssistantVisibleText: true,
     });
     expect(result.hasFatalErrorPayload).toBe(true);

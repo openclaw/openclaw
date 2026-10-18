@@ -84,6 +84,17 @@ export function resolveSessionRowBadges(
           },
         )
       : "";
+  if (
+    !params.incognito &&
+    !pullRequestLabel &&
+    !params.hasApproval &&
+    attentionCount === 0 &&
+    !params.hasComposerDraft &&
+    !displayedPlacementState &&
+    !hasWorkspaceConflict
+  ) {
+    return [];
+  }
   const placementLabel = displayedPlacementState
     ? params.placementProviderId && params.placementProfileId
       ? [

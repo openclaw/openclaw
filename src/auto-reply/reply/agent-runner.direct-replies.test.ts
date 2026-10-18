@@ -116,7 +116,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: "No answer was returned. Ask again if you still need one.",
+      text: expect.stringContaining("did not produce a visible reply"),
     });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
@@ -192,7 +192,7 @@ describe("runReplyAgent direct replies and compaction notices", () => {
 
     expect(result).toMatchObject({
       isError: true,
-      text: "No answer was returned. Ask again if you still need one.",
+      text: expect.stringContaining("did not produce a visible reply"),
     });
   });
 });

@@ -1,5 +1,4 @@
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
-import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
 import { recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { createUpdateRunAdmissionReader } from "../infra/update-run-reader.js";
@@ -24,12 +23,6 @@ export function resolveDoctorUpdateAdmission(
     const runs = readRuns();
     const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
     if (admission.kind === "conflict") {
-      if (admission.reason === "ancestry-unverified") {
-        throw new DoctorMaintenanceRefusalError(admission.message, {
-          kind: "deferred",
-          reason: "admission-unavailable",
-        });
-      }
       throw new Error(admission.message);
     }
     return admission;

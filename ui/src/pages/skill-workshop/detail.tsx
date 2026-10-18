@@ -7,6 +7,7 @@ import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { undoMutationFor } from "./api.ts";
 import {
+  latestChanges,
   MutationButton,
   renderUses,
   WorkshopChangeText,
@@ -20,15 +21,10 @@ export function Detail(props: { view: WorkshopView }) {
   const viewer = () => props.view().viewer!;
   const target = () => viewer().target;
   const snapshot = () => props.view().snapshot!;
-  const skill = createMemo(() =>
-    snapshot().list.skills.find((entry) => entry.name === target().name),
-  );
-  const versions = createMemo(
-    () => snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [],
-  );
-  const history = createMemo(() =>
-    snapshot().changes.filter((change) => change.skillName === target().name),
-  );
+  const skill = () => snapshot().list.skills.find((entry) => entry.name === target().name);
+  const versions = () =>
+    snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [];
+  const history = () => snapshot().changes.filter((change) => change.skillName === target().name);
   const files = () => {
     const current = viewer();
     return target().versionId && current.status === "ready"
@@ -37,14 +33,14 @@ export function Detail(props: { view: WorkshopView }) {
           (current.status === "ready" ? current.result.files : [target().filePath]));
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
-  const description = createMemo(() => {
+  const description = () => {
     const current = viewer();
     const own =
       current.status === "ready" && current.target.filePath === "SKILL.md"
         ? splitFrontmatter(current.result.content).description
         : undefined;
     return target().versionId ? own : skill()?.description || own;
-  });
+  };
   const meta = () => {
     const current = skill();
     const created = history().findLast((entry) => entry.action === "create");
@@ -71,7 +67,9 @@ export function Detail(props: { view: WorkshopView }) {
   };
   const unused = () => {
     const current = skill();
-    return current ? unusedDays(current, history()[0], props.view().mode) : null;
+    return current
+      ? unusedDays(current, latestChanges(snapshot().changes).get(target().name), props.view().mode)
+      : null;
   };
   const tabs = () => {
     const listed = new Set(
@@ -327,10 +325,9 @@ function History(props: { view: WorkshopView }) {
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === name()),
   );
-  const versions = createMemo(
-    () => snapshot().list.archived.find((entry) => entry.name === name())?.versions ?? [],
-  );
-  const retained = createMemo(() => new Set(versions().map((version) => version.id)));
+  const versions = () =>
+    snapshot().list.archived.find((entry) => entry.name === name())?.versions ?? [];
+  const retained = () => new Set(versions().map((version) => version.id));
   const older = createMemo(() => {
     const listed = new Set(
       history()

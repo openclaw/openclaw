@@ -1,4 +1,8 @@
 schemaVersion: 1
 agent:
-  tools:
-    allow: [sessions_spawn]
+  model:
+    primary: acme/primary
+    fallbacks: [acme/fallback]
+  subagents:
+    allowAgents: [researcher, writer]
+    delegationMode: prefer

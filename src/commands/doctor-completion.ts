@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { CLI_NAME } from "../cli/cli-name.js";
 import {
@@ -71,7 +70,7 @@ async function generateCompletionCache(
   }
 
   const binPath = path.join(root, "openclaw.mjs");
-  const args = ["completion", "--write-state"];
+  const args = [...resolveRuntimeArgs(), binPath, "completion", "--write-state"];
   if (options.shell) {
     args.push("--shell", options.shell);
   }
@@ -82,12 +81,7 @@ async function generateCompletionCache(
   } else {
     delete env[COMPLETION_SKIP_PLUGIN_COMMANDS_ENV];
   }
-  const invocation = resolveOpenClawCliInvocation({
-    entryPath: binPath,
-    execArgv: resolveRuntimeArgs(),
-    args,
-  });
-  const result = spawnSync(invocation.command, invocation.args, {
+  const result = spawnSync(process.execPath, args, {
     cwd: root,
     env,
     encoding: "utf-8",

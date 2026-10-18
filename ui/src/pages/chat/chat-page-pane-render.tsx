@@ -6,6 +6,8 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
@@ -109,11 +111,7 @@ type SplitRenderOptions = {
   onResizeColumns: (columnIndex: number, ratio: number) => void;
   onResizeEnd: () => void;
 };
-export function createChatPageSnapshot(
-  layout: ChatSplitLayout,
-  options: SplitRenderOptions,
-  indicator: DropIndicator | null,
-) {
+export function renderChatPageSplitLayout(layout: ChatSplitLayout, options: SplitRenderOptions) {
   const cells = new Map(
     layout.columns.flatMap((column, columnIndex) =>
       column.panes.map(
@@ -134,9 +132,15 @@ export function createChatPageSnapshot(
       ),
     ),
   );
-  return { layout, options, cells, indicator };
+  return { layout, options, cells };
 }
-export type ChatPageSnapshot = ReturnType<typeof createChatPageSnapshot>;
+export function renderChatPageBody(
+  content: ReturnType<typeof renderChatPageSplitLayout>,
+  indicator: DropIndicator | null,
+) {
+  return { content, indicator };
+}
+export type ChatPageSnapshot = ReturnType<typeof renderChatPageBody>;
 
 function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey: string }) {
   const visible = () =>
@@ -150,10 +154,12 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     areUiSessionKeysEquivalent(props.sessionKey, props.options.data.sessionKey)
       ? props.options.data
       : undefined;
-  // Hidden retained panes keep the last route presentation.
-  const retainedRoute = createMemo<SessionChatRouteData | undefined>(
-    (previous) => routeData() ?? previous,
-  );
+  // Hidden retained panes keep the last route presentation, as Lit's noChange did.
+  let lastRoute: SessionChatRouteData | undefined;
+  const retainedRoute = createMemo(() => {
+    lastRoute = routeData() ?? lastRoute;
+    return lastRoute;
+  });
   // Canonicalization can omit the initial loading flag before this pane's startup settles.
   const routeLoadingSkeleton = createMemo<boolean>(
     (previous) => routeData()?.routeLoadingSkeleton ?? previous ?? false,
@@ -162,6 +168,15 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
     active()
       ? routeDraft(props.options.data, props.options.consumedDraftData, props.sessionKey)
       : undefined;
+  const presentationTitle = () => {
+    const context = props.options.context;
+    const resolved =
+      resolveSessionKey(props.sessionKey, context?.gateway?.snapshot?.hello) || props.sessionKey;
+    const row = context?.sessions?.presentation.result?.sessions.find((candidate) =>
+      areUiSessionKeysEquivalent(candidate.key, resolved),
+    );
+    return row ? resolveSessionDisplayName(resolved, row) : undefined;
+  };
   const pending = () =>
     props.options.context &&
     (routeData()?.creation?.admitted === false ||
@@ -222,6 +237,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
         )}
         dashboardExpanded={retainedRoute()?.dashboardExpanded === true}
         routeFace={retainedRoute()?.face}
+        presentationTitle={presentationTitle()}
         narrow={props.options.narrow}
         mergedChrome={props.options.mergedChrome && active()}
         navDrawerOpen={props.options.navDrawerOpen && active()}
@@ -316,9 +332,9 @@ function SplitDivider(props: {
   );
 }
 
-function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
-  const layout = () => props.snapshot.layout;
-  const options = () => props.snapshot.options;
+function SplitLayout(props: { content: ChatPageSnapshot["content"] }) {
+  const layout = () => props.content.layout;
+  const options = () => props.content.options;
   return (
     <div
       class={[
@@ -353,7 +369,7 @@ function SplitLayout(props: { snapshot: ChatPageSnapshot }) {
                   <>
                     <ChatPagePaneCell
                       options={expectDefined(
-                        props.snapshot.cells.get(pane().id),
+                        props.content.cells.get(pane().id),
                         "rendered split pane",
                       )}
                     />
@@ -384,7 +400,7 @@ export function ChatPageBody(props: { snapshot: ChatPageSnapshot | null }) {
     <Show when={props.snapshot}>
       {(snapshot) => (
         <div class="chat-split-view__drop-container">
-          <SplitLayout snapshot={snapshot()} />
+          <SplitLayout content={snapshot().content} />
           <Show when={snapshot().indicator}>
             {(indicator) => (
               <div

@@ -484,62 +484,56 @@ it("keeps cross-agent inheritance bound to a stored qualified parent", async () 
   });
 });
 
-it.each(["global", "unknown"])(
-  "inherits a raw %s parent from its physical store and refreshes its dependents",
-  async (sentinel) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const storePath = state.statePath("shared.sqlite");
-      let cfg = {
-        agents: {
-          ownership: "explicit" as const,
-          entries: { main: {}, work: {} },
-          defaults: { sessionStore: { agentId: "work" } },
-        },
-        session: { scope: "global" as const, store: storePath },
-      };
-      openOpenClawAgentDatabase({ agentId: "main", path: storePath });
-      const parent = {
-        sessionId: "work-parent",
-        updatedAt: 1,
-        providerOverride: "unit-test",
-        modelOverride: "before",
-      };
-      replaceSessionEntrySync({ agentId: "work", storePath, sessionKey: sentinel }, parent);
-      const key = "agent:main:child";
+it("inherits a raw sentinel parent from its physical store and refreshes its dependents", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = state.statePath("shared.sqlite");
+    let cfg = {
+      agents: {
+        ownership: "explicit" as const,
+        entries: { main: {}, work: {} },
+        defaults: { sessionStore: { agentId: "work" } },
+      },
+      session: { scope: "global" as const, store: storePath },
+    };
+    openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+    const parent = {
+      sessionId: "work-parent",
+      updatedAt: 1,
+      providerOverride: "unit-test",
+      modelOverride: "before",
+    };
+    replaceSessionEntrySync({ agentId: "work", storePath, sessionKey: "global" }, parent);
+    const key = "agent:main:child";
+    replaceSessionEntrySync(
+      { agentId: "main", storePath, sessionKey: key },
+      { sessionId: "child", updatedAt: Date.now(), parentSessionKey: "global" },
+    );
+    const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
+    try {
+      expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("before");
       replaceSessionEntrySync(
-        { agentId: "main", storePath, sessionKey: key },
-        { sessionId: "child", updatedAt: Date.now(), parentSessionKey: sentinel },
+        { agentId: "work", storePath, sessionKey: "global" },
+        { ...parent, modelOverride: "after" },
       );
-      const projection = await createSessionRowProjection({ cfg, getConfig: () => cfg });
-      try {
-        expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("before");
-        replaceSessionEntrySync(
-          { agentId: "work", storePath, sessionKey: sentinel },
-          { ...parent, modelOverride: "after" },
-        );
-        await projection.ensureMaterialized();
-        expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("after");
-        expect(projection.snapshot({ agentId: "work", key: sentinel }).row?.childSessions).toEqual([
-          key,
-        ]);
-        const oldOwner = projection.describe({ agentId: "work", key: sentinel })!;
-        cfg = {
-          ...cfg,
-          agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } },
-        };
-        sessionChanges.emit({ all: true, scope: "config" });
-        await projection.ensureMaterialized();
-        expect(projection.snapshot({ agentId: "work", key: sentinel }).row).toBeNull();
-        expect(projection.snapshot({ agentId: "main", key: sentinel }).row?.sessionId).toBe(
-          "work-parent",
-        );
-        expect(projection.isCurrent(oldOwner)).toBe(false);
-      } finally {
-        projection.dispose();
-      }
-    });
-  },
-);
+      await projection.ensureMaterialized();
+      expect(projection.snapshot({ agentId: "main", key }).row?.model).toBe("after");
+      expect(projection.snapshot({ agentId: "work", key: "global" }).row?.childSessions).toEqual([
+        key,
+      ]);
+      const oldOwner = projection.describe({ agentId: "work", key: "global" })!;
+      cfg = { ...cfg, agents: { ...cfg.agents, defaults: { sessionStore: { agentId: "main" } } } };
+      sessionChanges.emit({ all: true, scope: "config" });
+      await projection.ensureMaterialized();
+      expect(projection.snapshot({ agentId: "work", key: "global" }).row).toBeNull();
+      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.sessionId).toBe(
+        "work-parent",
+      );
+      expect(projection.isCurrent(oldOwner)).toBe(false);
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("assigns a newly committed unknown row to its logical store owner", async () => {
   const key = "unknown";

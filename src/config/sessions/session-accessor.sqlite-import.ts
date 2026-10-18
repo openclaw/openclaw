@@ -147,7 +147,7 @@ function importSqliteSessionRowsInTransaction(
         .select(transcriptEventJsonSql(database.db).as("event_json"))
         .where("session_id", "=", params.entry.sessionId),
     )) {
-      stage.addSeen(row.event_json, params.repairLegacyTranscript);
+      stage.addSeen(row.event_json);
     }
     transcriptEvents = appendTranscriptEventsInTransaction(
       database,

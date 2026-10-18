@@ -1,5 +1,3 @@
-import type { JSX } from "@solidjs/web";
-
 export type PickerOption = {
   value: string;
   label: string;
@@ -8,7 +6,7 @@ export type PickerOption = {
   disabled?: boolean;
 };
 
-export type PickerGroup = { id: string; label: string; leading?: JSX.Element };
+export type PickerGroup = { id: string; label: string; leading?: unknown };
 export type PickerParams<Option extends PickerOption> = {
   id?: string;
   label: string;
@@ -32,5 +30,5 @@ export type PickerParams<Option extends PickerOption> = {
   onOpen?: () => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
-  renderLeading?: (option: Option) => JSX.Element;
+  renderLeading?: (option: Option) => unknown;
 };

@@ -15,7 +15,7 @@ Default rulepack: ${DEFAULT_RULEPACK}
 `);
 }
 
-async function readRules(rulepackPath) {
+export async function readRules(rulepackPath) {
   const raw = await fs.readFile(rulepackPath, "utf8");
   const doc = parseDocument(raw, { keepSourceTokens: false });
   if (doc.errors.length > 0) {
@@ -105,12 +105,12 @@ export function validateRuleMetadata(rules) {
   return violations;
 }
 
-async function checkRulepack(rulepackPath = DEFAULT_RULEPACK) {
+export async function checkRulepack(rulepackPath = DEFAULT_RULEPACK) {
   const rules = await readRules(rulepackPath);
   return validateRuleMetadata(rules);
 }
 
-async function main(argv = process.argv.slice(2)) {
+export async function main(argv = process.argv.slice(2)) {
   if (argv.includes("--help") || argv.includes("-h")) {
     printHelp();
     return 0;

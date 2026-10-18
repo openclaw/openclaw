@@ -1,6 +1,5 @@
 import { recordSessionParticipant } from "../config/sessions/session-accessor.js";
 import type { SessionParticipantIdentity } from "../config/sessions/session-participant-identity.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runOutsideGatewayRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
@@ -8,7 +7,6 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeSessionKeyPreservingOpaquePeerIds } from "./session-key-utils.js";
 
 type ParticipantRecordingTarget = { agentId: string; sessionKey: string; storePath: string };
-const log = createSubsystemLogger("sessions/participants");
 const pendingRecordings = resolveGlobalSingleton(
   Symbol.for("openclaw.pendingSessionParticipantRecordings"),
   () => new Map<string, Set<Promise<void>>>(),
@@ -46,13 +44,6 @@ export function recordSessionParticipantBestEffort(params: {
   onError?: (error: unknown) => void;
 }): void {
   const promptedAt = params.promptedAt ?? Date.now();
-  const reportFailure = (error: unknown) => {
-    if (params.onError) {
-      params.onError(error);
-    } else {
-      log.warn(`failed to record session participant: ${String(error)}`);
-    }
-  };
   const work = trackAsyncWork(() =>
     runOutsideGatewayRootWorkAdmission(async () => {
       await Promise.resolve();
@@ -70,10 +61,10 @@ export function recordSessionParticipantBestEffort(params: {
           },
         );
       } catch (error) {
-        reportFailure(error);
+        params.onError?.(error);
       }
     }),
-  ).catch(reportFailure);
+  ).catch((error: unknown) => params.onError?.(error));
   const key = participantSessionKey(params);
   const pending = pendingRecordings.get(key) ?? new Set<Promise<void>>();
   pending.add(work);

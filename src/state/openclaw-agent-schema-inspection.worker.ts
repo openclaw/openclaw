@@ -43,7 +43,7 @@ process.on(
           type: "inspect-state";
           requestId: number;
           input: StateSchemaInspectionInput;
-          snapshot?: AgentSchemaInspectionSnapshot;
+          snapshot: AgentSchemaInspectionSnapshot;
         },
   ) => {
     if (request.type === "close") {
@@ -55,23 +55,17 @@ process.on(
       if (request.type === "inspect-state") {
         const { input, snapshot } = request;
         adoptSqliteSchemaContracts(input.schemaContracts ?? []);
-        const inspect = (database: DatabaseSync) => inspectStateDatabaseSchema(database, input);
-        let inspection;
-        if (snapshot) {
-          readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
-          inspection = withSqliteSourceReadDatabase(
-            snapshot.pathname,
-            "snapshot",
-            (database) => {
-              readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
-              return inspect(database);
-            },
-            { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
-          );
-          readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
-        } else {
-          inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
-        }
+        readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+        const inspection = withSqliteSourceReadDatabase(
+          snapshot.pathname,
+          "snapshot",
+          (database) => {
+            readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
+            return inspectStateDatabaseSchema(database, input);
+          },
+          { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS },
+        );
+        readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
         send({
           requestId,
           ok: true,
@@ -80,14 +74,10 @@ process.on(
             (contract) =>
               !input.schemaContracts?.some((prior) => prior.schemaSql === contract.schemaSql),
           ),
-          stateInspection: inspection
-            ? {
-                ...inspection,
-                inspectionErrors: inspection.inspectionErrors.map(
-                  serializeAgentSchemaInspectionError,
-                ),
-              }
-            : null,
+          stateInspection: {
+            ...inspection,
+            inspectionErrors: inspection.inspectionErrors.map(serializeAgentSchemaInspectionError),
+          },
         });
         return;
       }

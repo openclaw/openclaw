@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { prepareAgentRunTerminalReply } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isSilentReplyPayloadText } from "openclaw/plugin-sdk/reply-chunking";
 
 type SteeringAssistantPrefix = {
   itemId: string;
@@ -135,9 +135,7 @@ export class CodexSteeringAssistantSegments {
       return undefined;
     }
     const remainder = this.remainingText(itemId, text);
-    if (
-      prepareAgentRunTerminalReply({ rawText: remainder }).terminalReply.disposition !== "visible"
-    ) {
+    if (!remainder.trim() || isSilentReplyPayloadText(remainder)) {
       return undefined;
     }
     const prefix = this.persisted.get(itemId);

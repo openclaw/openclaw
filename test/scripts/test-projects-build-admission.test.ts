@@ -68,6 +68,7 @@ const qaRuntimeConsumers = listVitestRuntimeConsumerFiles([
 const patternFiles = createPatternFileHelper("plugin-build-selection-");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const e2eTarget = "test/openclaw-launcher-version.e2e.test.ts";
+const nativeHostTarget = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
 const e2eConfig = "test/vitest/vitest.e2e.config.ts";
 let originalArgv: string[];
 let originalExitCode: typeof process.exitCode;
@@ -758,7 +759,6 @@ describe("automatic exact-target admission", () => {
     { outcome: "SIGTERM", mode: "automatic" },
     { outcome: "success", mode: "explicit parallel" },
     { outcome: "success", mode: "full suite" },
-    { outcome: "success", mode: "local full suite" },
   ])(
     "joins the real Gateway plan barrier before later admission and disposal ($mode, $outcome)",
     async ({ outcome, mode }) => {
@@ -776,12 +776,6 @@ describe("automatic exact-target admission", () => {
         return worker;
       });
       const { runTestProjects } = await import("../../scripts/test-projects-run.mts");
-      if (mode === "local full suite") {
-        vi.stubEnv("CI", "");
-        vi.stubEnv("GITHUB_ACTIONS", "");
-        vi.stubEnv("OPENCLAW_VITEST_MAX_WORKERS", "");
-        vi.stubEnv("OPENCLAW_TEST_WORKERS", "");
-      }
       const gatewayFile =
         mode === "automatic"
           ? "src/gateway/call.test.ts"
@@ -804,7 +798,7 @@ describe("automatic exact-target admission", () => {
         // Hold the ordinary/Gateway/ordinary order; timing weights have separate coverage.
         vi.spyOn(planner, "orderFullSuiteSpecsForParallelRun").mockImplementation((specs) => specs);
       }
-      if (mode.endsWith("full suite")) {
+      if (mode === "full suite") {
         vi.spyOn(planner, "buildFullSuiteVitestRunPlans").mockReturnValue(
           configs.map((config, index) => ({
             config,
@@ -818,13 +812,10 @@ describe("automatic exact-target admission", () => {
       const releases = configs.map(() => createDeferred());
       const admissions = configs.map(() => createDeferred());
       const selected: string[] = [];
-      commands.reader.mockImplementation(({ pnpmArgs, env }) => {
+      commands.reader.mockImplementation(({ pnpmArgs }) => {
         const config = pnpmArgs[pnpmArgs.indexOf("--config") + 1];
         const index = configs.indexOf(config);
         expect(index).toBeGreaterThanOrEqual(0);
-        if (mode === "local full suite") {
-          expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(index === 1 ? "3" : "1");
-        }
         selected.push(config);
         events.push(`start:${index}`);
         admissions[index]!.resolve();
@@ -843,7 +834,7 @@ describe("automatic exact-target admission", () => {
       const exit = vi.fn(async () => {});
       const running = runTestProjects(
         exit,
-        mode.endsWith("full suite") ? outputArgs : [...barrierFiles, ...outputArgs],
+        mode === "full suite" ? outputArgs : [...barrierFiles, ...outputArgs],
       );
       try {
         for (let index = 0; index < 2; index++) {
@@ -1282,30 +1273,33 @@ describe("test-projects build admission", () => {
   const avatarTarget = "ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts";
   const mockUiTarget = "ui/src/e2e/chat-code-block-fences.e2e.test.ts";
 
-  it.each(["test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts"])(
-    "prepares cold UI before admitting the real Doctor fixture %s",
-    async (target) => {
-      const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
-      const ui = createPreparationGate<number>(commands.prepare);
-      commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
-      const entry = start([target]);
-      try {
-        await Promise.race([runtime.started, entry]);
-        expect(commands.uiAssets).not.toHaveBeenCalled();
-        expect(commands.reader).not.toHaveBeenCalled();
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        await Promise.race([ui.started, entry]);
-        expect(commands.reader).not.toHaveBeenCalled();
-        expect(commands.prepare.mock.lastCall?.[0].args).toEqual(["scripts/ui.js", "build"]);
-      } finally {
-        runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
-        ui.resolve(0);
-        await entry;
-      }
-      expect(await terminal.promise).toMatch(/^\[test\] passed /u);
-      expect(commands.reader).toHaveBeenCalled();
-    },
-  );
+  it.each([
+    "test/e2e/line-doctor-group-allowlist.built-cli.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/codex-auth-doctor-migration-product-proof.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/codex-auth-product-proof.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/doctor-auth-secretref-checks.e2e.test.ts",
+    "test/e2e/qa-lab/runtime/gateway-codex-refusal-product-proof.e2e.test.ts",
+  ])("prepares cold UI before admitting the real Doctor fixture %s", async (target) => {
+    const runtime = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+    const ui = createPreparationGate<number>(commands.prepare);
+    commands.uiAssets.mockReturnValueOnce({ kind: "missing-index", indexPath: null });
+    const entry = start([target]);
+    try {
+      await Promise.race([runtime.started, entry]);
+      expect(commands.uiAssets).not.toHaveBeenCalled();
+      expect(commands.reader).not.toHaveBeenCalled();
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      await Promise.race([ui.started, entry]);
+      expect(commands.reader).not.toHaveBeenCalled();
+      expect(commands.prepare.mock.lastCall?.[0].args).toEqual(["scripts/ui.js", "build"]);
+    } finally {
+      runtime.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+      ui.resolve(0);
+      await entry;
+    }
+    expect(await terminal.promise).toMatch(/^\[test\] passed /u);
+    expect(commands.reader).toHaveBeenCalled();
+  });
 
   it.each(["ready", "missing", "failed", "skip"])(
     "handles prebuilt Doctor UI with no runtime build-info: %s",
@@ -1617,6 +1611,8 @@ describe("test-projects build admission", () => {
 
   it.each([
     { args: ["--help=true"], prepare: false },
+    { args: ["-uh"], prepare: false },
+    { args: ["--help", "--help"], prepare: false },
     { args: ["--help", "false"], prepare: true },
     { args: ["--no-help"], prepare: true },
     { args: ["--version"], prepare: true },
@@ -1626,17 +1622,22 @@ describe("test-projects build admission", () => {
     { args: ["--mergeReports", "reports"], prepare: false },
     { args: ["--unknownOption"], prepare: false },
     { args: ["--passWithNoTests", "--passWithNoTests"], prepare: false },
+    { args: ["--help=true"], target: "test/vitest/vitest.ui-e2e.config.ts", prepare: false },
+    { args: ["--help=true"], target: e2eTarget, prepare: false },
     { args: ["--configLoader=", "runner"], prepare: true },
     { args: ["--isolate=", "false"], prepare: true },
-  ])("admits preparation from native controls only: $args", async ({ args, prepare }) => {
-    commands.prepare.mockResolvedValue(0);
-    await start([lifecycle, "--", ...args]);
-    await terminal.promise;
-    expect(commands.reader).toHaveBeenCalledOnce();
-    expect(commands.prepare).toHaveBeenCalledTimes(prepare ? 1 : 0);
-    expect(commands.prepareE2e).not.toHaveBeenCalled();
-    expect(Boolean(commands.reader.mock.calls[0]![0].workerRun)).toBe(prepare);
-  });
+  ])(
+    "admits preparation from native controls only: $args",
+    async ({ args, prepare, target = lifecycle }) => {
+      commands.prepare.mockResolvedValue(0);
+      await start([target, "--", ...args]);
+      await terminal.promise;
+      expect(commands.reader).toHaveBeenCalledOnce();
+      expect(commands.prepare).toHaveBeenCalledTimes(prepare ? 1 : 0);
+      expect(commands.prepareE2e).not.toHaveBeenCalled();
+      expect(Boolean(commands.reader.mock.calls[0]![0].workerRun)).toBe(prepare);
+    },
+  );
 
   it.each([
     { name: "serial success", parallel: false, outcome: "success", e2e: false },
@@ -1695,6 +1696,78 @@ describe("test-projects build admission", () => {
         expect(commands.prepare).not.toHaveBeenCalled();
       }
       expect(process.exitCode).toBe(outcome === "success" ? 0 : outcome === "exit" ? 7 : 2);
+    },
+  );
+
+  it.each([
+    ...[
+      modelTarget,
+      "extensions/browser/src/browser/extension-install.test.ts",
+      "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
+      "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
+    ].map((target) => ({ target, flag: "", build: false })),
+    ...["", "OPENCLAW_E2E_SKIP_BUILD", "OPENCLAW_E2E_USE_PREBUILT_DIST"].map((flag) => ({
+      target: runtimeTooling,
+      flag,
+      build: true,
+    })),
+  ])("prepares only the selected runtime: $target ($flag)", async ({ target, flag, build }) => {
+    if (flag) {
+      vi.stubEnv(flag, "1");
+    }
+    await start([target]);
+    expect(await terminal.promise).toMatch(/^\[test\] passed 1 Vitest shard/u);
+    if (build) {
+      expect(commands.prepare).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          env: expect.objectContaining({ OPENCLAW_BUILD_PRIVATE_QA: "" }),
+        }),
+      );
+    } else {
+      expect(commands.prepare).not.toHaveBeenCalled();
+    }
+    expect(commands.prepareE2e).not.toHaveBeenCalled();
+    expect(commands.reader).toHaveBeenCalledOnce();
+  });
+
+  it.each(["build", "failed build", "prebuilt"])(
+    "admits the built native-host integration after %s",
+    async (mode) => {
+      if (mode === "prebuilt") {
+        vi.stubEnv("OPENCLAW_E2E_USE_PREBUILT_DIST", "1");
+      }
+      const preparation = createPreparationGate<NodeJS.ProcessEnv>(commands.prepareE2e);
+      if (mode === "prebuilt") {
+        preparation.resolve({});
+      }
+      const entry = start([nativeHostTarget]);
+      try {
+        await Promise.race([preparation.started, entry]);
+        if (mode !== "prebuilt") {
+          expect(commands.reader).not.toHaveBeenCalled();
+          expect(commands.prepareE2e).toHaveBeenCalledOnce();
+        }
+      } finally {
+        if (mode === "failed build") {
+          preparation.reject(new Error("build failed"));
+        } else {
+          preparation.resolve({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" });
+        }
+        await entry;
+      }
+      expect(commands.prepare).not.toHaveBeenCalled();
+      expect(commands.prepareE2e).toHaveBeenCalledOnce();
+      expect(commands.reader).toHaveBeenCalledTimes(mode === "failed build" ? 0 : 1);
+      if (mode === "failed build") {
+        expect(process.exitCode).toBe(2);
+      } else {
+        expect(commands.reader).toHaveBeenCalledWith(
+          expect.objectContaining({
+            pnpmArgs: expect.arrayContaining(["--config", e2eConfig]),
+            env: expect.objectContaining({ OPENCLAW_E2E_USE_PREBUILT_DIST: "1" }),
+          }),
+        );
+      }
     },
   );
 

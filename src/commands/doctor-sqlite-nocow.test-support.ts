@@ -125,9 +125,6 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
         const applied = fixture.acls.get(pathname)!;
         fs.chmodSync(pathname, (fs.statSync(pathname).mode & 0o7000) | modeFromAcl(applied));
       }
-    } else if (command === "fuser" && argv[0]?.includes(".nocow-probe-") && !nativeSpawnSync) {
-      status = 0;
-      stdout = String(process.pid);
     } else if (command === "fuser" && fixture.fuserResult) {
       return fixture.fuserResult;
     } else if (command === "fuser" && !nativeSpawnSync) {
@@ -135,14 +132,13 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
       expect(argv.every((argument) => path.isAbsolute(argument))).toBe(true);
       status = fixture.tools === "busy" ? 0 : 1;
       stdout = fixture.tools === "busy" ? "12345" : "";
+    } else if (command === "mv" && argv[0] === "--help") {
+      stdout = fixture.tools === "unavailable" ? "mv" : "--exchange --no-copy";
     } else if (command === "mv") {
       expect(argv.slice(0, 4)).toEqual(["--exchange", "--no-copy", "-T", "--"]);
-      const preflight = String(argv.at(-2)).includes(".nocow-probe-");
-      if (!preflight) {
-        fixture.beforeExchange?.();
-        fixture.exchanges++;
-      }
-      if (fixture.tools === "unavailable" || (!preflight && fixture.tools === "exchange-failed")) {
+      fixture.beforeExchange?.();
+      fixture.exchanges++;
+      if (fixture.tools === "exchange-failed") {
         return { status: 1, stdout: "", stderr: "denied", pid: 0, output: [], signal: null };
       }
       const source = String(argv.at(-2));
@@ -151,7 +147,7 @@ export function createDoctorNoCowToolFixture(root: string, nativeSpawnSync?: typ
       fs.renameSync(target, temporary);
       fs.renameSync(source, target);
       fs.renameSync(temporary, source);
-      if (!preflight && fixture.tools === "exchange-timeout") {
+      if (fixture.tools === "exchange-timeout") {
         status = 1;
       }
     } else if (nativeSpawnSync) {

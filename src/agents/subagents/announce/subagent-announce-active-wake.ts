@@ -14,7 +14,7 @@ import {
   getSubagentRequesterSessionActivity as resolveRequesterSessionActivity,
   loadRequesterSessionEntry,
   resolveQueueSettings,
-  withSubagentRequesterDelivery,
+  withSubagentRequesterSource,
 } from "./subagent-announce-delivery.runtime.js";
 
 export const SOURCE_OWNER_CHANGED = Symbol("source_owner_changed");
@@ -145,10 +145,21 @@ export async function maybeSteerSubagentAnnounce(params: {
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }
   | { status: "none" | "dropped" | "source_owner_changed" }
 > {
-  return withSubagentRequesterDelivery(
+  return withSubagentRequesterSource(
     params.requesterSessionKey,
-    params,
-    maybeSteerSubagentAnnounceBound,
+    params.requesterAgentId,
+    async (isRequesterCurrent): Promise<Awaited<ReturnType<typeof maybeSteerSubagentAnnounce>>> => {
+      const guardedParams = isRequesterCurrent
+        ? {
+            ...params,
+            isSourceSessionEffectsAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionEffectsAllowed?.() !== false,
+            isSourceSessionAdmissionAllowed: () =>
+              isRequesterCurrent() && params.isSourceSessionAdmissionAllowed?.() !== false,
+          }
+        : params;
+      return maybeSteerSubagentAnnounceBound(guardedParams);
+    },
   );
 }
 

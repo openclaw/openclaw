@@ -55,41 +55,45 @@ export const legacyConfigRules: LegacyConfigRule[] = [
   },
 ];
 
-export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+function migrateLegacyOllamaLocalConfig(config: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
-} {
-  const provider = cfg.models?.providers?.[OLLAMA_PROVIDER_ID];
-  if (!provider || !isLegacyOllamaLocalConfig(provider, cfg)) {
-    return { config: cfg, changes: [] };
+} | null {
+  const provider = config.models?.providers?.[OLLAMA_PROVIDER_ID];
+  if (!isLegacyOllamaLocalConfig(provider, { ...config })) {
+    return null;
   }
 
-  const profiles = { ...cfg.auth?.profiles };
-  delete profiles[LEGACY_OLLAMA_PROFILE_ID];
-  const auth = { ...cfg.auth };
-  if (Object.keys(profiles).length > 0) {
-    auth.profiles = profiles;
-  } else {
-    delete auth.profiles;
-  }
-  const config: OpenClawConfig = {
-    ...cfg,
-    models: {
-      ...cfg.models,
-      providers: {
-        ...cfg.models?.providers,
-        [OLLAMA_PROVIDER_ID]: { ...provider, apiKey: OLLAMA_DEFAULT_API_KEY },
-      },
-    },
-    auth,
-  };
-  if (Object.keys(auth).length === 0) {
-    delete config.auth;
+  const nextConfig = structuredClone(config);
+  const nextModels = asObjectRecord(nextConfig.models) ?? {};
+  nextConfig.models = nextModels as OpenClawConfig["models"];
+  const nextProviders = asObjectRecord(nextModels.providers) ?? {};
+  nextModels.providers = nextProviders;
+  const nextProvider = asObjectRecord(nextProviders[OLLAMA_PROVIDER_ID]) ?? {};
+  nextProviders[OLLAMA_PROVIDER_ID] = nextProvider;
+  nextProvider.apiKey = OLLAMA_DEFAULT_API_KEY;
+  const nextAuth = asObjectRecord(nextConfig.auth);
+  const nextProfiles = asObjectRecord(nextAuth?.profiles);
+  if (nextAuth && nextProfiles) {
+    delete nextProfiles[LEGACY_OLLAMA_PROFILE_ID];
+    if (Object.keys(nextProfiles).length === 0) {
+      delete nextAuth.profiles;
+    }
+    if (Object.keys(nextAuth).length === 0) {
+      delete nextConfig.auth;
+    }
   }
   return {
-    config,
+    config: nextConfig,
     changes: [
       `Migrated models.providers.${OLLAMA_PROVIDER_ID}.apiKey to ${OLLAMA_DEFAULT_API_KEY} and removed the obsolete ${LEGACY_OLLAMA_PROFILE_ID} auth profile marker.`,
     ],
   };
+}
+
+export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  return migrateLegacyOllamaLocalConfig(cfg) ?? { config: cfg, changes: [] };
 }

@@ -63,7 +63,6 @@ export async function readSessionTranscriptAnchorsAsync(
   }
   signal?.throwIfAborted();
   const hot = readOwnedSessionTranscriptState(scope);
-  const retained = hot && readSessionActorTranscriptReplica(hot);
   if (scope.storePath) {
     const target = {
       agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey),
@@ -76,8 +75,7 @@ export async function readSessionTranscriptAnchorsAsync(
           hot,
           target,
           selection,
-          retained?.tail,
-          retained?.anchors,
+          readSessionActorTranscriptReplica(hot)?.tail,
         )) ??
       readSessionActorTranscriptAnchorsFromReplica(
         { ...target, sessionKey: scope.sessionKey },
@@ -118,7 +116,20 @@ export async function readSessionTranscriptAnchorsAsync(
     ...(scope.storePath ? { storePath: path.resolve(scope.storePath) } : {}),
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
-  const request = structuredClone(selection);
+  const request = {
+    entryIds: [...selection.entryIds],
+    activePathEntryId: selection.activePathEntryId,
+    afterSeq: selection.afterSeq,
+    includeMessagesForRunId: selection.includeMessagesForRunId,
+    includeSession: selection.includeSession,
+    includeHeader: selection.includeHeader,
+    includeWatermark: selection.includeWatermark,
+    includeMessagePresence: selection.includeMessagePresence,
+    includeMetadata: selection.includeMetadata,
+    contextValidation: selection.contextValidation && structuredClone(selection.contextValidation),
+    contextAuthority: selection.contextAuthority && structuredClone(selection.contextAuthority),
+    replayValidation: selection.replayValidation && { ...selection.replayValidation },
+  };
   const empty: SessionTranscriptAnchorFacts = {
     anchors: [],
     ...(request.includeMetadata

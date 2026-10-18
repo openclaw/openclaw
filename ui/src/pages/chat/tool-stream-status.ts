@@ -369,38 +369,6 @@ function handleLifecycleApprovalEvent(host: ToolStreamHost, payload: AgentEventP
 }
 
 export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayload): boolean {
-  if (
-    payload.stream === "run_status" &&
-    (payload.data.phase === "waiting_for_model" || payload.data.phase === "starting_model")
-  ) {
-    reconcileChatRunStartup(host, {
-      state: "status",
-      runId: payload.runId,
-      phase: payload.data.phase,
-      ...(payload.data.phase === "waiting_for_model"
-        ? { waitReason: payload.data.reason === "slot" ? "slot" : "response" }
-        : {}),
-      seq: payload.seq,
-    });
-    return true;
-  }
-  if (
-    payload.stream === "lifecycle" &&
-    payload.data.phase === "start" &&
-    host.chatRunStartup?.state === "status" &&
-    host.chatRunStartup.phase === "finishing"
-  ) {
-    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
-  }
-  if (payload.stream === "lifecycle" && payload.data.phase === "finishing") {
-    reconcileChatRunStartup(host, {
-      state: "status",
-      runId: payload.runId,
-      phase: "finishing",
-      seq: payload.seq,
-    });
-    return true;
-  }
   if (payload.stream === "lifecycle" && payload.data.phase === "fallback_step") {
     const model = toTrimmedString(payload.data.fallbackStepToModel);
     if (payload.data.fallbackStepFinalOutcome === "next_fallback" && model) {
@@ -431,17 +399,7 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
     return true;
   }
   if (payload.stream === "assistant") {
-    if ((payload.data.text || payload.data.delta) && payload.data.phase !== "commentary") {
-      reconcileChatRunStartup(host, {
-        state: "status",
-        runId: payload.runId,
-        phase: "answer",
-        seq: payload.seq,
-      });
-    } else {
-      // Reconnect snapshots retain the assistant sequence without copying its text.
-      reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
-    }
+    reconcileChatRunStartup(host, { state: "activity", runId: payload.runId, seq: payload.seq });
     return true;
   }
   if (payload.stream === "compaction") {

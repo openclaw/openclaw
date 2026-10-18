@@ -58,7 +58,6 @@ describe("Testbox lease freshness", () => {
         "scripts/testbox-lease-freshness.mts",
         ".github/actions/prepare-testbox-shell/action.yml",
         ".github/actions/prepare-testbox-shell/preserve-command-cwd.py",
-        ".github/actions/setup-android-toolchain/action.yml",
         ...(workflow ? [workflow] : []),
       ];
       for (const owner of owners) {
@@ -131,6 +130,11 @@ describe("Testbox lease freshness", () => {
   });
 
   it.each([
+    {
+      caller: "codex",
+      env: { CODEX_THREAD_ID: "session-one" },
+      changes: [{ CODEX_THREAD_ID: "session-two" }],
+    },
     {
       caller: "claude",
       env: { CODEX_THREAD_ID: undefined, CLAUDE_CODE_SESSION_ID: "session-one" },
@@ -301,6 +305,7 @@ describe("Testbox lease freshness", () => {
   });
 
   it.each([
+    { args: ["run", "--", "true"], exitCode: 0, retained: false },
     { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 0, retained: false },
     { args: ["run", "--keep-on-failure", "--", "task"], exitCode: 7, retained: true },
   ])("records retention=$retained for $args exiting $exitCode", ({ args, exitCode, retained }) => {

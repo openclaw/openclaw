@@ -1,8 +1,7 @@
+// Gateway Protocol schemas for cooperative host suspension.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
-// Gateway Protocol schemas for cooperative host suspension.
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 const SuspensionTokenSchema = Type.String({ minLength: 1, maxLength: 128, pattern: "\\S" });
 const CountSchema = Type.Integer({ minimum: 0 });
@@ -18,27 +17,32 @@ export type GatewayWriteCustody = Static<typeof GatewayWriteCustodySchema>;
 
 /** Public admission state only; never includes the controller's suspension token. */
 export const GatewaySuspensionSchema = closedObject({
-  phase: stringLiteralUnion(["accepting", "preparing", "draining", "prepared"]),
+  phase: Type.Union([
+    Type.Literal("accepting"),
+    Type.Literal("preparing"),
+    Type.Literal("draining"),
+    Type.Literal("prepared"),
+  ]),
 });
 export type GatewaySuspension = Static<typeof GatewaySuspensionSchema>;
 
 export const GatewaySuspendBlockerSchema = closedObject({
-  kind: stringLiteralUnion([
-    "queue",
-    "reply",
-    "embedded-run",
-    "background-exec",
-    "cron-run",
-    "agent-run",
-    "acp-run",
-    "media-generation",
-    "root-request",
-    "session-admission",
-    "session-mutation",
-    "chat-run",
-    "queued-turn",
-    "terminal-persistence",
-    "terminal-session",
+  kind: Type.Union([
+    Type.Literal("queue"),
+    Type.Literal("reply"),
+    Type.Literal("embedded-run"),
+    Type.Literal("background-exec"),
+    Type.Literal("cron-run"),
+    Type.Literal("agent-run"),
+    Type.Literal("acp-run"),
+    Type.Literal("media-generation"),
+    Type.Literal("root-request"),
+    Type.Literal("session-admission"),
+    Type.Literal("session-mutation"),
+    Type.Literal("chat-run"),
+    Type.Literal("queued-turn"),
+    Type.Literal("terminal-persistence"),
+    Type.Literal("terminal-session"),
   ]),
   count: CountSchema,
   message: Type.String(),
@@ -46,13 +50,13 @@ export const GatewaySuspendBlockerSchema = closedObject({
 
 export const GatewaySuspendPrepareParamsSchema = closedObject({
   requestId: SuspensionTokenSchema,
-  terminalPolicy: Type.Optional(stringLiteralUnion(["preserve", "terminate"])),
+  terminalPolicy: Type.Optional(Type.Union([Type.Literal("preserve"), Type.Literal("terminate")])),
   drain: Type.Optional(Type.Boolean()),
 });
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   status: Type.Literal("busy"),
-  reason: stringLiteralUnion(["active-work", "gateway-draining"]),
+  reason: Type.Union([Type.Literal("active-work"), Type.Literal("gateway-draining")]),
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
@@ -96,7 +100,9 @@ export const GatewaySuspendStatusRunningResultSchema = closedObject({
 export const GatewaySuspendStatusDrainingResultSchema = closedObject({
   status: Type.Literal("draining"),
   ownerId: Type.Optional(SuspensionTokenSchema),
-  phase: Type.Optional(stringLiteralUnion(["draining", "interrupting", "exiting"])),
+  phase: Type.Optional(
+    Type.Union([Type.Literal("draining"), Type.Literal("interrupting"), Type.Literal("exiting")]),
+  ),
   expiresAtMs: CountSchema,
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
@@ -138,7 +144,7 @@ export const GatewaySuspendHandoffParamsSchema = closedObject({
 });
 
 export const GatewaySuspendHandoffResultSchema = closedObject({
-  status: stringLiteralUnion(["armed", "committed"]),
+  status: Type.Union([Type.Literal("armed"), Type.Literal("committed")]),
   suspensionId: SuspensionTokenSchema,
   expiresAtMs: CountSchema,
 });

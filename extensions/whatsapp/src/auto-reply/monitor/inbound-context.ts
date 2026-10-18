@@ -13,6 +13,7 @@ import {
   type WhatsAppIdentity,
   type WhatsAppReplyContext,
 } from "../../identity.js";
+import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 
 export type GroupHistoryEntry = {
@@ -90,7 +91,7 @@ export function resolveVisibleWhatsAppReplyContext(
   if (!replyTo) {
     return null;
   }
-  const admission = params.msg.admission;
+  const admission = requireWhatsAppInboundAdmission(params.msg);
   const previewBody = [
     replyTo.body,
     formatMediaPlaceholderText(replyTo.media ? [replyTo.media] : []),

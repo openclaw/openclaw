@@ -4,9 +4,7 @@
 import { useSubagentControlFixture } from "../agents/subagents/registry/subagent-control.test-support.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
 import type { AgentWaitResult } from "../agents/run-wait.js";
-import { readSubagentRunAnnounceResult } from "../agents/subagents/announce/subagent-announce-output.js";
 import { resolveSubagentController } from "../agents/subagents/registry/subagent-control-scope.js";
 import { killAllControlledSubagentRuns } from "../agents/subagents/registry/subagent-control.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
@@ -21,7 +19,6 @@ import { writeSubagentSessionEntry } from "../agents/subagents/registry/subagent
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import { appendTranscriptMessage } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { publishSystemEventStoreResolver } from "../infra/system-event-ownership.js";
 import {
@@ -59,7 +56,7 @@ async function arrangePausedChild(
   childSessionKey = "agent:main:subagent:resume-child",
   lifecycleRevision?: string,
 ) {
-  const storePath = await writeSubagentSessionEntry({
+  await writeSubagentSessionEntry({
     stateDir: fixture.stateDir,
     agentId: "main",
     sessionKey: childSessionKey,
@@ -108,7 +105,7 @@ async function arrangePausedChild(
       assertAdmissionCurrent: vi.fn(() => ({ sessionId, lifecycleRevision, updatedAt: 1 })),
       ...overrides,
     });
-  return { cfg, caller, entry, resume, prepare, childSessionKey, storePath };
+  return { cfg, caller, entry, resume, prepare, childSessionKey };
 }
 
 it.each(["agent:main:subagent:resume-child"])(
@@ -201,26 +198,13 @@ it.each(["identity", "revision"] as const)(
       execution: { suppressSessionEffects: true },
     });
     expect(subagentRuns.get(nextRunId)?.childSessionIdentity).toEqual(originalIdentity);
-    const text = `${"Completed legacy task detail. ".repeat(200)}The legacy task is complete.`;
-    const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
-    await appendTranscriptMessage(
-      { agentId: "main", sessionKey: state.childSessionKey, sessionId, storePath: state.storePath },
-      {
-        message: {
-          role: "assistant",
-          content: text,
-          stopReason: "stop",
-          __openclaw: { runId: nextRunId },
-        },
-      },
-    );
     emitAgentEvent({
       runId: nextRunId,
       stream: "lifecycle",
       data: {
         phase: "end",
         endedAt: Date.now(),
-        terminalReply,
+        terminalReply: { disposition: "visible", text: "The legacy task is complete." },
       },
     });
     await fixture.settle();
@@ -228,18 +212,13 @@ it.each(["identity", "revision"] as const)(
       status: "terminal",
       outcome: { status: "ok" },
     });
-    expect(announce).toHaveBeenCalledTimes(1);
     expect(announce).toHaveBeenCalledWith(
       expect.objectContaining({
         childRunId: nextRunId,
         requesterSessionKey: parent,
-        terminalReply,
+        roundOneReply: "The legacy task is complete.",
       }),
     );
-    const completed = subagentRuns.get(nextRunId)!;
-    const prepared = await readSubagentRunAnnounceResult(completed);
-    expect(prepared.text).toBe(text);
-    expect(prepared.isCurrent()).toBe(true);
     expect(subagentRuns.get(nextRunId)?.cleanupCompletedAt).toBeDefined();
     expect(fixture.cleanup).not.toHaveBeenCalled();
   },
@@ -394,24 +373,11 @@ it("delivers a result once after the former synchronous wait window, through the
   await adopt();
   vi.setSystemTime(now + 60_000);
   expect(announce).not.toHaveBeenCalled();
-  const text = `${"Completed resumed task detail. ".repeat(200)}The resumed task is complete.`;
-  const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
-  await appendTranscriptMessage(
-    { agentId: "main", sessionKey: state.childSessionKey, sessionId, storePath: state.storePath },
-    {
-      message: {
-        role: "assistant",
-        content: text,
-        stopReason: "stop",
-        __openclaw: { runId: nextRunId },
-      },
-    },
-  );
   completion.resolve({
     status: "ok",
     startedAt: now,
     endedAt: Date.now(),
-    terminalReply,
+    terminalReply: { disposition: "visible", text: "The resumed task is complete." },
   });
   await fixture.settle();
   expect(announce).toHaveBeenCalledTimes(1);
@@ -419,12 +385,9 @@ it("delivers a result once after the former synchronous wait window, through the
     expect.objectContaining({
       childRunId: nextRunId,
       requesterSessionKey: parent,
-      terminalReply,
+      roundOneReply: "The resumed task is complete.",
     }),
   );
-  const prepared = await readSubagentRunAnnounceResult(subagentRuns.get(nextRunId)!);
-  expect(prepared.text).toBe(text);
-  expect(prepared.isCurrent()).toBe(true);
   emitAgentEvent({
     runId: previousRunId,
     stream: "lifecycle",

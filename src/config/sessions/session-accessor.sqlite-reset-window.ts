@@ -2,7 +2,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
-import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -73,7 +72,6 @@ function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boole
 }
 
 const resetMessageWindowCache = new Map<string, ResetMessageWindowCacheEntry>();
-const resetMessageWindowOwners = new WeakSet<ResetMessageWindowCacheEntry["database"]>();
 const MAX_RESET_MESSAGE_WINDOW_CACHE = 64;
 const MAX_CACHED_UNINDEXED_CONTROLS = 4096;
 
@@ -82,18 +80,6 @@ type VisibleMessageRange = MessageRangeSelection & {
 };
 
 function cacheResetMessageWindow(key: string, entry: ResetMessageWindowCacheEntry): void {
-  const { database } = entry;
-  if (!resetMessageWindowOwners.has(database)) {
-    registerNodeSqliteDisposeCallback(database, () => {
-      // Path-keyed windows must not retain closed handles or replaced database contents.
-      for (const [cachedKey, cached] of resetMessageWindowCache) {
-        if (cached.database === database) {
-          resetMessageWindowCache.delete(cachedKey);
-        }
-      }
-    });
-    resetMessageWindowOwners.add(database);
-  }
   resetMessageWindowCache.delete(key);
   resetMessageWindowCache.set(key, entry);
   pruneMapToMaxSize(resetMessageWindowCache, MAX_RESET_MESSAGE_WINDOW_CACHE);
@@ -256,7 +242,7 @@ function readLatestActiveBoundaryMetadata(
 
 function readBoundaryWindowFacts(
   projection: CurrentTranscriptProjection,
-  boundary: { seq: number; active_position: number },
+  seq: number,
   scope: BoundaryWindowScope,
 ) {
   const row = executeSqliteQueryTakeFirstSync(
@@ -268,19 +254,8 @@ function readBoundaryWindowFacts(
         /* kysely-allow-raw: window accounting needs original bytes, not summary or reset payloads. */
         sql<number>`${transcriptEventReadBytesSql()} + 1`.as("serialized_bytes"),
       ])
-      .select((eb) =>
-        eb
-          .selectFrom("session_transcript_active_events")
-          .select("message_position")
-          .where("session_id", "=", projection.resolved.sessionId)
-          .where("active_position", ">", boundary.active_position)
-          .where("message_position", "is not", null)
-          .orderBy("active_position", "asc")
-          .limit(1)
-          .as("post_boundary_message_position"),
-      )
       .where("session_id", "=", projection.resolved.sessionId)
-      .where("seq", "=", boundary.seq)
+      .where("seq", "=", seq)
       .limit(1),
   );
   if (!row) {
@@ -290,12 +265,7 @@ function readBoundaryWindowFacts(
   if (!isWindowBoundary(parsed.type, scope)) {
     throw new Error("Active transcript boundary has invalid payload");
   }
-  return {
-    firstKeptEntryId: parsed.firstKeptEntryId,
-    sizeBytes: row.serialized_bytes,
-    postBoundaryMessagePosition:
-      row.post_boundary_message_position ?? projection.state.activeMessageCount,
-  };
+  return { firstKeptEntryId: parsed.firstKeptEntryId, sizeBytes: row.serialized_bytes };
 }
 
 function findLatestResetMessageWindow(
@@ -308,7 +278,19 @@ function findLatestResetMessageWindow(
   if (!latestBoundary) {
     return null;
   }
-  const boundary = readBoundaryWindowFacts(projection, latestBoundary, scope);
+  const boundary = readBoundaryWindowFacts(projection, latestBoundary.seq, scope);
+  const postBoundaryMessagePosition =
+    executeSqliteQueryTakeFirstSync(
+      projection.database.db,
+      db
+        .selectFrom("session_transcript_active_events")
+        .select("message_position")
+        .where("session_id", "=", projection.resolved.sessionId)
+        .where("active_position", ">", latestBoundary.active_position)
+        .where("message_position", "is not", null)
+        .orderBy("active_position", "asc")
+        .limit(1),
+    )?.message_position ?? projection.state.activeMessageCount;
   const keptMessagePositions: number[] = [];
   const includesBoundary = latestBoundary.event_type === "compaction";
   let contextPrefixEventCount = includesBoundary ? 1 : 0;
@@ -408,7 +390,7 @@ function findLatestResetMessageWindow(
     contextPrefixEventCount,
     keptMessagePositions,
     contextPrefixSizeBytes,
-    postBoundaryMessagePosition: boundary.postBoundaryMessagePosition,
+    postBoundaryMessagePosition,
     boundaryActivePosition: latestBoundary.active_position,
   };
 }

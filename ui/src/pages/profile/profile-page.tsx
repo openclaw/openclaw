@@ -36,6 +36,7 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { assertUploadsEnabled } from "../../lib/uploads.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
 import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
@@ -315,7 +316,7 @@ function accessSummary(scopes: readonly string[] | null) {
   );
 }
 
-export function ProfilePage() {
+function ProfilePageContent() {
   const context = useApplication();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ProfileState(context, () => setRevision((value) => value + 1));
@@ -367,7 +368,7 @@ export function ProfilePage() {
   };
 
   return (
-    <openclaw-profile-page>
+    <>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
@@ -527,6 +528,10 @@ export function ProfilePage() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </openclaw-profile-page>
+    </>
   );
 }
+
+export const ProfilePage = defineSolidBridge("openclaw-profile-page", ProfilePageContent, {
+  properties: {},
+});

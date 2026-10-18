@@ -1,27 +1,23 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import {
-  paintChatPullRequests,
-  clearChatPullRequests,
-  publication,
-  sessionBranch,
-} from "./chat-pull-requests.test-support.ts";
-import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
+import { publication, sessionBranch } from "./chat-pull-requests.test-support.ts";
+import { renderChatPullRequests } from "./chat-pull-requests.ts";
 
 describe("GitHub publication account controls", () => {
   let container: HTMLDivElement;
 
-  function paint(props: Partial<ChatPullRequestsProps>) {
-    paintChatPullRequests(
-      {
+  function paint(props: Partial<Parameters<typeof renderChatPullRequests>[0]>) {
+    render(
+      renderChatPullRequests({
         pullRequests: [],
         status: "ready",
         onDismiss: () => {},
         ...props,
-      },
+      }),
       container,
     );
   }
@@ -32,7 +28,7 @@ describe("GitHub publication account controls", () => {
   });
 
   afterEach(() => {
-    clearChatPullRequests(container);
+    render(null, container);
     container.remove();
   });
 

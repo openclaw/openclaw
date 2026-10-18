@@ -20,34 +20,20 @@ const nodeHostMocks = vi.hoisted(() => ({
   userShellPaths: new Map<string, string>(),
 }));
 
-vi.mock("./command-rpc.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./command-rpc.js")>();
+vi.mock("./command-rpc.js", async () => {
   const { codexCatalogSourceForClient, getCodexCatalogSource, recordCodexCatalogResponseSource } =
     await import("./session-catalog-source.js");
   return {
-    ...actual,
-    codexControlRequest: async (
-      ...args: Parameters<typeof import("./command-rpc.js").codexControlRequest>
-    ) => {
-      let response = await commandRpcMocks.codexControlRequest(...args);
-      const source =
-        getCodexCatalogSource(response) ??
-        codexCatalogSourceForClient(commandRpcMocks.codexControlRequest);
-      if (args[1] === "thread/list" && args[3]?.catalogPreview) {
-        const [{ projectCodexCatalogNativeResponse }, { sanitizeTerminalText }] = await Promise.all(
-          [
-            import("./session-catalog-native-projection.js"),
-            import("openclaw/plugin-sdk/text-chunking"),
-          ],
-        );
-        response = projectCodexCatalogNativeResponse(
+    codexControlRequest: async (...args: unknown[]) => {
+      const response = await commandRpcMocks.codexControlRequest(...args);
+      if (typeof args[1] === "string") {
+        recordCodexCatalogResponseSource(
+          args[1],
           response,
-          sanitizeTerminalText,
-          args[3].catalogPreviewCache,
-          args[3].catalogRows,
+          getCodexCatalogSource(response) ??
+            codexCatalogSourceForClient(commandRpcMocks.codexControlRequest),
         );
       }
-      recordCodexCatalogResponseSource(args[1], response, source);
       return response;
     },
   };

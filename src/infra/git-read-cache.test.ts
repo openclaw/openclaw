@@ -15,16 +15,7 @@ const readRevision = vi.fn<() => Promise<string | null>>();
 beforeEach(() => {
   readRevision.mockResolvedValue("unchanged");
   vi.mocked(runGitWorkerOperation).mockImplementation((operation, options) =>
-    operation.type === "checkout.revision"
-      ? readRevision()
-      : operation.type === "pull-request.branch-comparison"
-        ? Promise.resolve({
-            statsBase: null,
-            creatable: false,
-            equalPushedTips: false,
-            complete: true,
-          })
-        : gitRead(operation, options),
+    operation.type === "checkout.revision" ? readRevision() : gitRead(operation, options),
   );
 });
 
@@ -239,7 +230,8 @@ describe("typed Git read ownership", () => {
         },
       };
       const first = runGitReadOperation(operation);
-      await vi.waitFor(() => expect(gitRead).toHaveBeenCalledOnce());
+      await Promise.resolve();
+      await Promise.resolve();
       vi.advanceTimersByTime(freshnessMs - 1_000);
       const earlier = { creatable: true, stats: { additions: 1, deletions: 0, changedFiles: 1 } };
       if (!pendingAtExpiry) {

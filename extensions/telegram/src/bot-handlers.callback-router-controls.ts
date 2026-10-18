@@ -1,5 +1,8 @@
 import type { CallbackQuery, Message } from "grammy/types";
-import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
+import {
+  resolveApprovalOverGateway,
+  type ApprovalResolveResult,
+} from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -143,7 +146,7 @@ export function createTelegramCallbackApprovalRuntime(params: {
     receipt: Parameters<typeof buildTelegramLegacyApprovalTerminalText>[0],
   ) => await terminalizeApprovalMessage(buildTelegramLegacyApprovalTerminalText(receipt));
 
-  const resolveApproval = telegramDeps.resolveApproval;
+  const resolveApproval = telegramDeps.resolveApproval ?? resolveApprovalOverGateway;
 
   const resolveCanonicalApproval = async (
     approvalCallback: TelegramApprovalCallback,

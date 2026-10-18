@@ -10,7 +10,6 @@ import {
   ProjectsSearchRemoteResultSchema,
   validateProjectsAddParams,
   validateProjectsListParams,
-  validateProjectsCheckoutOptionsParams,
   validateProjectsRegisterParams,
   validateProjectsRemoveParams,
   validateProjectsSearchRemoteParams,
@@ -19,17 +18,6 @@ import {
 
 describe("project protocol schemas", () => {
   it("validates project method inputs as closed objects", () => {
-    expect(validateProjectsCheckoutOptionsParams({ projectId: "project", agentId: "main" })).toBe(
-      true,
-    );
-    expect(validateProjectsCheckoutOptionsParams({ projectId: "project" })).toBe(false);
-    expect(
-      validateProjectsCheckoutOptionsParams({
-        projectId: "project",
-        agentId: "main",
-        cwd: "/private",
-      }),
-    ).toBe(false);
     expect(validateProjectsListParams({})).toBe(true);
     expect(validateProjectsListParams({ includeObserved: true })).toBe(true);
     expect(validateProjectsListParams({ includeObserved: false })).toBe(true);

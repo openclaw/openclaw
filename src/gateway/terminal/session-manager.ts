@@ -120,11 +120,21 @@ export class TerminalSessionManager {
       code: "limit",
       message: `terminal session limit reached (${this.maxSessions})`,
     });
-    // Reserve pooled capacity, not individual victims; choose the idle shell only
-    // after its replacement spawns successfully.
-    if (this.sessions.size + this.opening >= this.maxSessions + this.idleAgentSessions().length) {
-      return sessionLimitReached();
+    // Agent shells outlive commands. Under pressure, reserve an idle viewer-free
+    // victim, but keep it alive until its replacement backend successfully spawns.
+    let evictionCandidate: TerminalSession | undefined;
+    if (this.sessions.size + this.opening >= this.maxSessions) {
+      evictionCandidate = this.claimLongestIdleAgentSession();
+      if (!evictionCandidate) {
+        return sessionLimitReached();
+      }
     }
+    const releaseEvictionClaim = () => {
+      if (evictionCandidate) {
+        evictionCandidate.evictionClaimed = false;
+        evictionCandidate = undefined;
+      }
+    };
     // Reserve capacity before spawn yields to concurrent opens.
     this.opening += 1;
     this.spawning += 1;
@@ -140,8 +150,10 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       abort: (message) => {
         pending.abortMessage ??= message;
-        // A hung spawn releases capacity now; abortMessage kills any late backend.
+        // A hung spawn must release capacity and its victim claim immediately;
+        // the abortMessage check still kills any backend that eventually arrives.
         releaseReservation();
+        releaseEvictionClaim();
       },
     };
     const abortPending = () => {
@@ -166,6 +178,7 @@ export class TerminalSessionManager {
       this.spawning -= 1;
       releaseReservation();
       this.untrackPendingOpen(request.owner, pending, request.viewerConnId);
+      releaseEvictionClaim();
       request.signal?.removeEventListener("abort", abortPending);
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, code: "spawn_failed", message };
@@ -177,22 +190,33 @@ export class TerminalSessionManager {
     request.signal?.removeEventListener("abort", abortPending);
     if (pending.abortMessage) {
       // A cancelled spawn cannot register an orphaned PTY.
+      releaseEvictionClaim();
       backend.onExit(() => this.untrackPendingOpen(request.owner, pending, request.viewerConnId));
       // Keep tracking until exit even if kill fails; archive must not commit early.
       killTerminalBackend(backend);
       return { ok: false, code: "closed", message: pending.abortMessage };
     }
     this.untrackPendingOpen(request.owner, pending, request.viewerConnId);
-    if (this.sessions.size >= this.maxSessions) {
-      const victim = this.idleAgentSessions()[0];
-      if (!victim) {
-        killTerminalBackend(backend);
-        return sessionLimitReached();
+    if (evictionCandidate) {
+      // Revalidate the victim after spawn: it may have exited or gained a viewer.
+      // Eviction and replacement registration stay in one synchronous window.
+      releaseEvictionClaim();
+      // Include outstanding reservations: out-of-order spawns must not exceed the cap,
+      // even if a reserved replacement later fails.
+      if (this.sessions.size + this.opening >= this.maxSessions) {
+        // Activity during spawn can change the idle ranking; the released victim
+        // rejoins the pool and may still be selected.
+        const victim = this.claimLongestIdleAgentSession();
+        if (!victim) {
+          killTerminalBackend(backend);
+          return sessionLimitReached();
+        }
+        victim.evictionClaimed = false;
+        log.info(
+          `evicted idle agent terminal session under pool pressure: id=${victim.id} agent=${victim.agentId} idleMs=${Date.now() - victim.lastActivityAtMs}`,
+        );
+        this.finalize(victim, "closed", {});
       }
-      log.info(
-        `evicted idle agent terminal session under pool pressure: id=${victim.id} agent=${victim.agentId} idleMs=${Date.now() - victim.lastActivityAtMs}`,
-      );
-      this.finalize(victim, "closed", {});
     }
 
     const sessionId = randomUUID();
@@ -610,14 +634,26 @@ export class TerminalSessionManager {
     }
   }
 
-  /** Viewer-free agent PTYs may be evicted under pool pressure. */
-  private idleAgentSessions(): TerminalSession[] {
-    return Array.from(this.sessions.values())
-      .filter(
-        (session) =>
-          !session.closed && session.owner?.kind === "agent" && session.viewers.size === 0,
-      )
-      .toSorted((left, right) => left.lastActivityAtMs - right.lastActivityAtMs);
+  /** Viewer-free agent PTYs may be evicted; concurrent opens claim distinct victims. */
+  private claimLongestIdleAgentSession(): TerminalSession | undefined {
+    let candidate: TerminalSession | undefined;
+    for (const session of this.sessions.values()) {
+      if (
+        session.closed ||
+        session.evictionClaimed ||
+        session.owner?.kind !== "agent" ||
+        session.viewers.size > 0
+      ) {
+        continue;
+      }
+      if (!candidate || session.lastActivityAtMs < candidate.lastActivityAtMs) {
+        candidate = session;
+      }
+    }
+    if (candidate) {
+      candidate.evictionClaimed = true;
+    }
+    return candidate;
   }
 
   private removeViewer(session: TerminalSession, connId: string): boolean {

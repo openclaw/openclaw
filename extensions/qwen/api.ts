@@ -1,4 +1,5 @@
 export {
+  applyQwenNativeStreamingUsageCompat,
   buildQwenDefaultModelDefinition,
   buildQwenModelDefinition,
   buildQwenModelCatalogForBaseUrl,
@@ -28,6 +29,7 @@ export {
   type QwenTokenPlanRegion,
   resolveQwenTokenPlanBaseUrl,
   QWEN_MODEL_CATALOG,
+  applyModelStudioNativeStreamingUsageCompat,
   buildModelStudioDefaultModelDefinition,
   buildModelStudioModelDefinition,
   isNativeModelStudioBaseUrl,

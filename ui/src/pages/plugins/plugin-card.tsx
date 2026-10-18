@@ -69,6 +69,10 @@ export function renderPluginAuthor(
   );
 }
 
+export function renderPluginCardSummary(summary: string): JSX.Element {
+  return <PluginCardSummary summary={summary} />;
+}
+
 export function PluginCardSummary(props: { summary: string }): JSX.Element {
   return <p class="installed-plugins-card__summary">{props.summary}</p>;
 }

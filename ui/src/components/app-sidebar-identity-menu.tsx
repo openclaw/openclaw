@@ -30,7 +30,7 @@ type SidebarIdentityMenuParams = {
   canPairDevice: boolean;
   basePath: string;
   gatewayVersion: string | null;
-  updateAvailable: boolean;
+  updateAttentionDismissed: boolean;
   profileViewer?: PresenceViewer;
   canRetryConnection: boolean;
   themeMode: ThemeMode;
@@ -176,21 +176,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
           />
         ),
       }),
-      {
-        ...renderSidebarMenuAction("command:updates", titleForRoute("updates"), "download", {
-          details: params.updateAvailable ? (
-            <span
-              class="agent-select__badge sidebar-identity-menu__update-badge"
-              aria-hidden="true"
-            >
-              {t("updates.sidebar.availableBadge")}
-            </span>
-          ) : undefined,
-        }),
-        label: params.updateAvailable
-          ? `${titleForRoute("updates")}. ${t("updates.sidebar.availableTitle")}`
-          : titleForRoute("updates"),
-      },
       renderSidebarMenuAction("command:usage", titleForRoute("usage"), "coins"),
       {
         kind: "content",
@@ -251,6 +236,7 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
                 variant="identity"
                 basePath={params.basePath}
                 gatewayVersion={params.gatewayVersion}
+                updateAttentionDismissed={params.updateAttentionDismissed}
                 menuAttributes={menuAttributes}
               />
             ),
@@ -320,9 +306,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
             break;
           case `${COMMAND_VALUE_PREFIX}settings`:
             params.onNavigate("appearance");
-            break;
-          case `${COMMAND_VALUE_PREFIX}updates`:
-            params.onNavigate("updates");
             break;
           case `${COMMAND_VALUE_PREFIX}usage`:
             params.onNavigate("usage");

@@ -629,7 +629,7 @@ describe("update-cli", () => {
   });
 
   it.each([{ json: false, handoff: undefined, expectedExitCode: 1 }])(
-    "attempts recovery after Git mutation throws and preserves failed readiness (json=$json)",
+    "leaves the stopped Gateway down when Git mutation throws without a recovery verdict (json=$json)",
     async ({ json, handoff, expectedExitCode }) => {
       mockStoppedManagedGitGateway();
       setTty(true);
@@ -656,7 +656,7 @@ describe("update-cli", () => {
         withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, () => updateCommand({ json })),
       ).rejects.toEqual(new ExitError(expectedExitCode));
       expect(serviceStop).toHaveBeenCalledOnce();
-      expect(freshRestartCalls()).toHaveLength(1);
+      expect(freshRestartCalls()).toHaveLength(0);
       expectNoSideEffects(serviceStart, serviceRestart);
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(triageCommand).toHaveBeenCalledTimes(json ? 0 : 1);
@@ -676,17 +676,14 @@ describe("update-cli", () => {
             expect.objectContaining({ name: "post-stop-checks", exitCode: 0 }),
             recoveryVerificationStep([
               {
-                check: "gateway-recovery",
-                code: "gateway-probe-failed",
-                message:
-                  "Failed to restart managed gateway service after failed update: Error: Service runtime: status=stopped, state=stopped",
+                check: "settled",
+                code: "timeout",
+                message: "Gateway remains stopped after interrupted mutation.",
               },
             ]),
           ],
         },
       });
-      expect(getLogOutput()).not.toMatch(/keep the gateway stopped/i);
-      expect(getLogOutput()).toContain("openclaw update repair");
       if (!json) {
         const recovery = expectDefined(
           triageCommand.mock.calls[0]?.[1]?.recovery,

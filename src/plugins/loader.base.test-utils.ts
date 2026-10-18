@@ -10,7 +10,7 @@ import { getContextEngineRegistration } from "../context-engine/registry.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
-  hasInternalHookListeners,
+  getRegisteredEventKeys,
   triggerInternalHook,
 } from "../hooks/internal-hooks.js";
 import { withEnv } from "../test-utils/env.js";
@@ -1824,7 +1824,7 @@ describe("loadOpenClawPlugins", () => {
       "loaded",
     );
     expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
-    expect(hasInternalHookListeners("gateway", "startup")).toBe(false);
+    expect(getRegisteredEventKeys()).toStrictEqual([]);
 
     clearInternalHooks();
   });

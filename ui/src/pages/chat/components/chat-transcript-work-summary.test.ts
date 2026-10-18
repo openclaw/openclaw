@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
+import { nothing, render } from "lit";
 import { afterEach, beforeEach, expect, it, onTestFinished } from "vitest";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import { createChatThreadHarness } from "./chat-message-native.test-support.tsx";
+import { renderChatThread } from "./chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -29,14 +30,13 @@ it("keeps the focused work summary toggle through expansion updates", async () =
   };
   const transcript = createTestTranscript();
   const container = document.body.appendChild(document.createElement("div"));
-  const thread = createChatThreadHarness(container, transcript);
   const rerender = () => {
-    thread.render(props);
+    render(renderChatThread(props, transcript), container);
     transcript.hostUpdated();
   };
   props.onRequestUpdate = rerender;
   onTestFinished(() => {
-    thread.unmount();
+    render(nothing, container);
     transcript.hostDisconnected();
   });
   rerender();

@@ -1,8 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ConnectParams } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import {
   listDevicePairing as listFixtureDevicePairing,
   rejectDevicePairing,
@@ -139,7 +138,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
     mode: "node",
     deviceFamily: "Apple Watch",
   } satisfies ConnectParams["client"];
-  test.for([
+  test.each([
     {
       name: "embedded WebSocket",
       watchHttp: false,
@@ -170,26 +169,14 @@ export function registerControlUiMobileBootstrapSuite(): void {
     },
   ])(
     "voice-node $name enforces reconnect metadata and Talk access",
-    async ({ watchHttp, client, operatorClient, allowed }, { signal }) => {
+    async ({ watchHttp, client, operatorClient, allowed }) => {
       const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
       const { VOICE_NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } =
         await import("../shared/device-bootstrap-profile.js");
-      const pairing = await import("../infra/device-pairing.js");
-      const { getPairedDevice, listDevicePairing } = pairing;
+      const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
       const { identityPath, identity } = await createOperatorIdentityFixture(
         "openclaw-bootstrap-voice-node-",
       );
-      const recordAccess = pairing.recordPairedDeviceAccess;
-      const metadataRecorded = createDeferred();
-      const recordMetadata = vi
-        .spyOn(pairing, "recordPairedDeviceAccess")
-        .mockImplementation((deviceId, patch, ...args) => {
-          const recording = recordAccess(deviceId, patch, ...args);
-          if (deviceId === identity.deviceId && patch.platform === operatorClient.platform) {
-            void recording.then(metadataRecorded.resolve, metadataRecorded.reject);
-          }
-          return recording;
-        });
       const sockets: Awaited<ReturnType<typeof openWs>>[] = [];
 
       try {
@@ -313,6 +300,7 @@ export function registerControlUiMobileBootstrapSuite(): void {
           return;
         }
         expect(operatorReconnect.ok).toBe(true);
+        expect((await getPairedDevice(identity.deviceId))?.platform).toBe(operatorClient.platform);
         expect((await rpcReq(wsOperator, "health")).ok).toBe(true);
         const talkMode = await rpcReq(wsOperator, "talk.mode", {
           enabled: true,
@@ -323,13 +311,8 @@ export function registerControlUiMobileBootstrapSuite(): void {
         const adminMutation = await rpcReq(wsOperator, "set-heartbeats", { enabled: false });
         expect(adminMutation.ok).toBe(false);
         expect(adminMutation.error?.message ?? "").toContain("missing scope");
-        if (client.platform !== operatorClient.platform) {
-          await withinTest(metadataRecorded.promise, signal);
-        }
-        expect((await getPairedDevice(identity.deviceId))?.platform).toBe(operatorClient.platform);
         wsOperator.close();
       } finally {
-        recordMetadata.mockRestore();
         for (const socket of sockets) {
           socket.close();
         }

@@ -132,13 +132,12 @@ export async function prepareDoctorInteractiveMaintenance(params: {
 export async function prepareDoctorMaintenanceArchives(
   databasePreflight: DoctorDatabasePreflight | undefined,
   runtime: RuntimeEnv,
-  preflightOptions: { preserveSourceArtifacts?: true } = {},
 ): Promise<DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"]> {
   let discovery: DoctorDatabasePreflight["agentDatabaseMigrationDiscovery"];
   try {
     const { prepareDoctorDatabasePreflight } =
       await import("../commands/doctor-database-preflight.js");
-    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight(preflightOptions)))
+    discovery = (databasePreflight ?? (await prepareDoctorDatabasePreflight()))
       .agentDatabaseMigrationDiscovery;
     if (discovery) {
       const { prepareCanonicalTranscriptArchiveMigrations } =

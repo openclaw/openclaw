@@ -16,10 +16,7 @@ describe("child completion title data", () => {
           task: source === "task" ? title : "Original delegated task",
           label: source === "label" ? title : undefined,
           createdAt: 1,
-          completion: {
-            resultText: "actual result",
-            terminalReply: { disposition: "visible", text: "actual result" },
-          },
+          completion: { resultText: "actual result" },
           execution: { outcome: { status: "ok" } },
         },
       ]);
@@ -38,10 +35,7 @@ describe("child completion title data", () => {
       taskName: "resume_worker",
       task: "Retrieve the delegated result",
       createdAt: 1,
-      completion: {
-        resultText: "old result",
-        terminalReply: { disposition: "visible" as const, text: "old result" },
-      },
+      completion: { resultText: "old result" },
       execution: { outcome: { status: "ok" as const } },
     };
     const resumed = {
@@ -49,10 +43,7 @@ describe("child completion title data", () => {
       runId: "resumed-run",
       generation: 2,
       task: "The operator is resuming this task. Finish now by replying exactly NEW_RESULT.",
-      completion: {
-        resultText: "NEW_RESULT",
-        terminalReply: { disposition: "visible" as const, text: "NEW_RESULT" },
-      },
+      completion: { resultText: "NEW_RESULT" },
     };
     const findings = buildChildCompletionFindings(
       dedupeLatestChildCompletionRows([original, resumed]),
@@ -71,10 +62,7 @@ describe("child completion title data", () => {
         label: "<".repeat(20_000),
         task: "delegated task",
         createdAt: 1,
-        completion: {
-          resultText: result,
-          terminalReply: { disposition: "visible", text: result },
-        },
+        completion: { resultText: result },
         execution: { outcome: { status: "ok" } },
       },
     ]);

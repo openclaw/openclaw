@@ -421,12 +421,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     summaryLine: baseBodyTrimmedRaw,
     ...(queuedToolsAllow !== undefined ? { toolsAllow: queuedToolsAllow } : {}),
     ...(opts?.disableTools !== undefined ? { disableTools: opts.disableTools } : {}),
-    ...(opts?.forceRestartSafeTools !== undefined
-      ? { forceRestartSafeTools: opts.forceRestartSafeTools }
-      : {}),
-    ...(opts?.forceCodeModeTools !== undefined
-      ? { forceCodeModeTools: opts.forceCodeModeTools }
-      : {}),
     enqueuedAt: Date.now(),
     currentTurnImagesPrepared: true as const,
     images: currentTurnImages.images,
@@ -511,7 +505,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       authProfileIdSource,
       thinkingCatalog,
       thinkLevel: resolvedThinkLevel,
-      thinkingExplicit: params.thinkingExplicit,
       thinkLevelOverride,
       ...(() => {
         if (useFastReplyRuntime) {
@@ -525,9 +518,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           sessionEntry: preparedSessionState.sessionEntry,
         });
         return {
-          fastMode: params.resolvedFastModeOverride
-            ? params.resolvedFastMode
-            : fastModeState.requestMode,
+          fastMode: params.resolvedFastMode ?? fastModeState.mode,
           fastModeAutoOnSeconds:
             params.resolvedFastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds,
           ...(params.resolvedFastModeOverride ? { fastModeOverride: true } : {}),

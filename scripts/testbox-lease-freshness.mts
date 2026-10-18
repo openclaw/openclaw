@@ -18,7 +18,6 @@ const DEPENDENCY_INPUTS = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yam
 const ENVIRONMENT_INPUTS = [
   ".crabbox.yaml",
   ".github/actions/prepare-testbox-shell",
-  ".github/actions/setup-android-toolchain",
   ".node-version",
   "scripts/crabbox-wrapper.mjs",
   "scripts/crabbox-wrapper.mts",

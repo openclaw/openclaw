@@ -107,7 +107,14 @@ export function normalizeWorkerMachineOptions(
       defaultSystems.add(option.os);
     }
   }
-  return value;
+  return value.map((option) => ({
+    id: option.id,
+    label: option.label,
+    ...(option.os === undefined ? {} : { os: option.os }),
+    ...(option.cpu === undefined ? {} : { cpu: option.cpu }),
+    ...(option.memoryGb === undefined ? {} : { memoryGb: option.memoryGb }),
+    ...(option.default === undefined ? {} : { default: option.default }),
+  }));
 }
 
 export function normalizeWorkerOperatingSystems(
@@ -133,7 +140,12 @@ export function normalizeWorkerOperatingSystems(
     }
     ids.add(option.id);
     hasDefault ||= option.default === true;
-    systems.push(option);
+    systems.push({
+      id: option.id,
+      label: option.label,
+      ...(option.default === undefined ? {} : { default: option.default }),
+      ...(option.disabledReason === undefined ? {} : { disabledReason: option.disabledReason }),
+    });
   }
   return systems;
 }

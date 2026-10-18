@@ -8,13 +8,21 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveUsageCostWorkerDayBucket } from "../../infra/session-cost-usage-worker-runtime.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { readSessionRowChangeRevision } from "../../sessions/session-row-changes.js";
-import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
-import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
+import {
+  AsyncWorkScope,
+  getAsyncWorkSignal,
+  trackAsyncWork,
+} from "../../shared/async-work-scope.js";
+import {
+  createUsageAggregateAccumulator,
+  UNKNOWN_USAGE_CREATOR_KEY,
+} from "../../shared/usage-aggregates.js";
 import { buildUsageOverview, selectUsageOverviewPage } from "../../shared/usage-overview.js";
 import { extractQueryTerms } from "../../shared/usage-query.js";
 import type {
@@ -30,12 +38,9 @@ import {
 } from "../../utils/delivery-context.read.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
-import type { projectSessionActor } from "../session-identity-projection.js";
+import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import {
-  getSessionRowProjection,
-  requireSessionRowProjection,
-} from "../session-row-projection-access.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
@@ -60,10 +65,9 @@ import {
   loadCostUsageSummaryCached,
   loadSessionsUsageSnapshotCached,
 } from "./usage-result-cache.js";
-import { loadUsageSessionSummaries, withUsageRequestBudget } from "./usage-session-loading.js";
+import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import {
   loadUsageSessionContext,
-  projectUsageCreator,
   resolveSessionUsageTarget,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
@@ -134,6 +138,89 @@ function resolveUsageDateRangeOrRespond(
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
+function projectUsageCreator(
+  session: UsageSessionSelection,
+  profiles: Parameters<typeof projectSessionActor>[1],
+  config: OpenClawConfig,
+): SessionUsageCreator {
+  const entry = session.storeEntry ?? session.creatorEntry;
+  const actor = entry?.createdActor;
+  if (!actor) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const projected = projectSessionActor(
+    actor,
+    profiles,
+    config,
+    Boolean(sessionCreatorProfileId(actor)),
+  );
+  if (!projected?.id && actor.type !== "system") {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const identity = projected?.identity;
+  const origin = sessionDeliveryOrigin(entry);
+  const channel = sessionDeliveryChannel(entry);
+  if (actor.type === "human" && actor.source !== "profile" && !channel) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const key =
+    identity?.type === "profile"
+      ? JSON.stringify(["profile", identity.id])
+      : actor.type === "human"
+        ? JSON.stringify([
+            "human",
+            actor.source,
+            session.agentId,
+            channel ?? null,
+            origin?.accountId ?? null,
+            projected?.id,
+          ])
+        : actor.type === "agent"
+          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
+          : JSON.stringify(["system", projected?.id ?? null]);
+  return { key, ...(projected ? { actor: projected } : {}) };
+}
+
+function withUsageRequestBudget(
+  handler: GatewayRequestHandlers[string],
+): GatewayRequestHandlers[string] {
+  return async (request) => {
+    const parent = AbortSignal.any(
+      [getAsyncWorkSignal(), request.signal].filter(
+        (signal): signal is AbortSignal => signal !== undefined,
+      ),
+    );
+    const work = new AsyncWorkScope();
+    const cancel = () => work.beginClose(parent?.reason);
+    const timer = setTimeout(
+      () =>
+        work.beginClose(
+          new Error(
+            "Usage request exceeded its 15-second budget; narrow the date range or select a session.",
+          ),
+        ),
+      15_000,
+    );
+    timer.unref?.();
+    parent?.addEventListener("abort", cancel, { once: true });
+    if (parent?.aborted) {
+      cancel();
+    }
+    try {
+      await trackAsyncWork(() => work.track(() => handler(request)));
+    } finally {
+      clearTimeout(timer);
+      // Refreshes already queued by this read keep their original connection lifetime.
+      void trackAsyncWork(() =>
+        AsyncWorkScope.runWhenAllIdle(
+          () => [work],
+          () => work.drain(),
+        ),
+      ).finally(() => parent?.removeEventListener("abort", cancel));
+    }
+  };
+}
+
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
     // Only clients with bounded retry machinery may receive an incomplete cold result.
@@ -201,7 +288,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }, budget) => {
+  "sessions.usage": withUsageRequestBudget(async ({ respond, params, context, client }) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -307,20 +394,15 @@ export const usageHandlers: GatewayRequestHandlers = {
           const now = Date.now();
           const loadedAccessRevision = readGatewayAccessRevision();
           const loadedSessionRevision = readSessionRowChangeRevision();
-          const visibleEntries = await budget.read(
-            () =>
-              selectUsageSessions({
-                config,
-                projection: requireSessionRowProjection(context),
-                agentId: effectiveAgentId,
-                specificKey,
-                groupingMode,
-                startMs,
-                endMs,
-                visibilityFilter,
-              }),
-            () => [],
-          );
+          const visibleEntries = await selectUsageSessions({
+            config,
+            agentId: effectiveAgentId,
+            specificKey,
+            groupingMode,
+            startMs,
+            endMs,
+            visibilityFilter,
+          });
           const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
           const matchedEntries = visibleEntries.map((entry) => ({
             entry,
@@ -341,15 +423,11 @@ export const usageHandlers: GatewayRequestHandlers = {
               (term) => term.key?.toLowerCase() === "has" && term.value.toLowerCase() === "context",
             )
           ) {
-            await budget.read(
-              () => loadUsageSessionContext(mergedEntries, visibilityFilter),
-              () => undefined,
-            );
+            await loadUsageSessionContext(mergedEntries, visibilityFilter);
           }
           const sessions: SessionUsageEntry[] = [];
           const { summaries, computing, cacheStatus } = await loadUsageSessionSummaries({
             entries: mergedEntries,
-            read: budget.read,
             config,
             startMs,
             endMs,
@@ -398,15 +476,7 @@ export const usageHandlers: GatewayRequestHandlers = {
           return {
             updatedAt: now,
             sessions,
-            cacheStatus: budget.exhausted()
-              ? {
-                  cachedFiles: 0,
-                  pendingFiles: 0,
-                  staleFiles: 0,
-                  ...cacheStatus,
-                  status: "partial" as const,
-                }
-              : cacheStatus,
+            cacheStatus,
             sources: visibleEntries,
             accessRevision: loadedAccessRevision,
             sessionRevision: loadedSessionRevision,
@@ -449,7 +519,6 @@ export const usageHandlers: GatewayRequestHandlers = {
     try {
       const profiles = await prepareSessionSharingProfiles(client ?? null);
       const prepareUnavailableSources = async () => {
-        const signal = getAsyncWorkSignal();
         for (const session of result.sessions) {
           const source = sourceFor(session);
           if (
@@ -461,7 +530,6 @@ export const usageHandlers: GatewayRequestHandlers = {
           ) {
             continue;
           }
-          signal?.throwIfAborted();
           contextReads.set(source, undefined);
           try {
             const prepared = await prepareSessionMutationFacts({
@@ -469,10 +537,6 @@ export const usageHandlers: GatewayRequestHandlers = {
               sessionKey: session.key,
               agentId: session.agentId,
             });
-            if (signal?.aborted) {
-              prepared.release();
-              signal.throwIfAborted();
-            }
             contextReads.set(source, prepared);
           } catch (error) {
             if (!(error instanceof SessionMutationFactsUnavailableError)) {
@@ -530,7 +594,7 @@ export const usageHandlers: GatewayRequestHandlers = {
       // Refill once after an access change. Continued churn may shorten the page, never extend the scan.
       let visible: SessionUsageEntry[] | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        await budget.read(prepareUnavailableSources, () => undefined);
+        await prepareUnavailableSources();
         visible = readVisibleRows();
         const selected = visible.filter((row) => !creatorKey || row.creatorKey === creatorKey);
         const pageSources = (
@@ -549,18 +613,8 @@ export const usageHandlers: GatewayRequestHandlers = {
           break;
         }
         visible = undefined;
-        const hydrated = await budget.read(
-          async () => {
-            await loadUsageSessionContext(pageSources, visibilityFilter);
-            return true;
-          },
-          () => false,
-        );
-        if (hydrated) {
-          pageSources.forEach((source) => hydratedSources.add(source));
-        } else {
-          break;
-        }
+        await loadUsageSessionContext(pageSources, visibilityFilter);
+        pageSources.forEach((source) => hydratedSources.add(source));
         result = {
           ...result,
           sessions: result.sessions.map((row) => {
@@ -576,7 +630,7 @@ export const usageHandlers: GatewayRequestHandlers = {
         };
       }
       if (!visible) {
-        await budget.read(prepareUnavailableSources, () => undefined);
+        await prepareUnavailableSources();
         visible = readVisibleRows();
       }
       const creatorOptions = new Map<string, SessionUsageCreator>();
@@ -602,36 +656,23 @@ export const usageHandlers: GatewayRequestHandlers = {
             totals: accumulator.totals,
             aggregates: accumulator.finish(),
           };
-      const partial = budget.exhausted()
-        ? { reason: "time-budget" as const, message: budget.hint }
-        : undefined;
-      if (partial && "overview" in slice) {
-        slice.overview.queryWarnings.push(partial.message);
-      }
       getAsyncWorkSignal()?.throwIfAborted();
-      respond(true, {
-        ...slice,
-        sessions: slice.sessions.map((row) => {
-          const source = sourceFor(row);
-          return source && hydratedSources.has(source)
-            ? row
-            : Object.assign({}, row, { hasContextWeight: false, contextWeight: undefined });
-        }),
-        updatedAt: result.updatedAt,
-        startDate: formatDateLabel(startMs, dateInterpretation),
-        endDate: formatDateLabel(endMs, dateInterpretation),
-        creatorOptions: [...creatorOptions.values()],
-        cacheStatus: partial
-          ? {
-              cachedFiles: 0,
-              pendingFiles: 0,
-              staleFiles: 0,
-              ...result.cacheStatus,
-              status: "partial",
-            }
-          : result.cacheStatus,
-        ...(partial ? { partial } : {}),
-      });
+      respond(
+        true,
+        {
+          ...slice,
+          sessions: slice.sessions.filter((row) => {
+            const source = sourceFor(row);
+            return source && hydratedSources.has(source);
+          }),
+          updatedAt: result.updatedAt,
+          startDate: formatDateLabel(startMs, dateInterpretation),
+          endDate: formatDateLabel(endMs, dateInterpretation),
+          creatorOptions: [...creatorOptions.values()],
+          cacheStatus: result.cacheStatus,
+        },
+        undefined,
+      );
     } finally {
       contextReads.forEach((read) => read?.release());
     }

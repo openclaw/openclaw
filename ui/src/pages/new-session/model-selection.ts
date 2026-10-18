@@ -82,23 +82,7 @@ export abstract class NewSessionModelSelection {
   thinkingLevel = "";
   fastMode: FastMode | undefined;
 
-  private readonly listeners = new Set<() => void>();
-  protected readonly notify = () => {
-    for (const listener of this.listeners) {
-      listener();
-    }
-    this.requestUpdate();
-  };
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
-
-  constructor(
-    private readonly onSelectionChange: ModelSelectionChange,
-    private readonly requestUpdate: () => void,
-  ) {}
+  constructor(private readonly onSelectionChange: ModelSelectionChange) {}
 
   protected resetSelection(model = "") {
     this.selected = model;
@@ -111,16 +95,10 @@ export abstract class NewSessionModelSelection {
   }
 
   protected applyModelSelection(selection: ReturnType<typeof reconcileDraftModelSelection>) {
-    const changed =
-      this.selected !== selection.model ||
-      this.agentRuntime !== selection.agentRuntime ||
-      this.thinkingLevel !== selection.thinkingLevel ||
-      this.fastMode !== selection.fastMode;
     this.selected = selection.model;
     this.agentRuntime = selection.agentRuntime;
     this.thinkingLevel = selection.thinkingLevel;
     this.fastMode = selection.fastMode;
-    return changed;
   }
 
   draftSelection(agentId: string): DurableDraftModelSelection | undefined {
@@ -211,7 +189,7 @@ export abstract class NewSessionModelSelection {
     persistRepair: boolean,
   ) {
     if (!preference) {
-      return false;
+      return;
     }
     const selection = reconcileDraftModelSelection({
       model: preference.model ?? "",
@@ -220,11 +198,10 @@ export abstract class NewSessionModelSelection {
       fastMode: preference.fastMode,
       ...options,
     });
-    const changed = this.applyModelSelection(selection);
+    this.applyModelSelection(selection);
     if (selection.repaired && persistRepair) {
       this.persistSelection(preference.agentRuntime ? (this.agentRuntime ?? "") : undefined);
     }
-    return changed;
   }
 
   protected selectModelIntent(

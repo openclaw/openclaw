@@ -117,8 +117,8 @@ vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   },
 }));
 
-vi.mock("../../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership-preflight.js")>()),
+vi.mock("../../state/openclaw-state-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/openclaw-state-ownership.js")>()),
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
@@ -516,12 +516,13 @@ describe("update plugin lifecycle lease boundaries", () => {
   );
 
   it.each([
-    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw" },
-    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw" },
-    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw-source" },
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw", resumed: true },
+    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: true },
+    { installedVersion: "2026.8.27", previousInstallRoot: "/tmp/openclaw", resumed: false },
+    { installedVersion: VERSION, previousInstallRoot: "/tmp/openclaw-source", resumed: true },
   ])(
-    "keeps already-current $installedVersion convergence owned by its runtime from $previousInstallRoot",
-    async ({ installedVersion, previousInstallRoot }) => {
+    "keeps already-current $installedVersion convergence owned by its runtime from $previousInstallRoot (resumed=$resumed)",
+    async ({ installedVersion, previousInstallRoot, resumed }) => {
       const needsTargetRuntime =
         installedVersion !== VERSION || previousInstallRoot !== "/tmp/openclaw";
       vi.mocked(readPackageVersion).mockResolvedValue(installedVersion);
@@ -538,8 +539,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       vi.mocked(continuePostCoreUpdateInFreshProcess).mockImplementation(async () => {
         record("target-convergence");
         return {
-          resumed: true,
-          pluginUpdate: { ...successfulPluginUpdate, changed: false },
+          resumed,
+          ...(resumed ? { pluginUpdate: { ...successfulPluginUpdate, changed: false } } : {}),
         };
       });
 
@@ -581,10 +582,11 @@ describe("update plugin lifecycle lease boundaries", () => {
         expect(mocks.events).toContain("plugin-update:true");
       }
       expect(completePostCorePluginUpdate).not.toHaveBeenCalled();
-      expect(result.resultWithPostUpdate).toMatchObject({
-        status: "skipped",
-        reason: "already-current",
-      });
+      expect(result.resultWithPostUpdate).toMatchObject(
+        resumed
+          ? { status: "skipped", reason: "already-current" }
+          : { status: "error", reason: "post-core-update-failed" },
+      );
     },
   );
 
@@ -644,7 +646,7 @@ describe("update plugin lifecycle lease boundaries", () => {
     );
   });
 
-  it.each(["live", "unset selectors"] as const)(
+  it.each(["copied", "live", "unset selectors"] as const)(
     "preserves the %s invocation environment through a failed phase",
     async (source) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", "/fixture/invocation-state");

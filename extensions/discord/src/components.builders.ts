@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildDiscordComponentCustomId as buildDiscordComponentCustomIdImpl } from "./component-custom-id.js";
 import { mapButtonStyle, normalizeModalFieldName } from "./components.parse.js";
 import type {
@@ -96,7 +97,10 @@ function createButtonComponent(params: { spec: DiscordComponentButtonSpec; modal
     return { component: new DynamicLinkButton() };
   }
   const componentId = createShortId("btn_");
-  const internalCustomId = params.spec.internalCustomId?.trim() || undefined;
+  const internalCustomId =
+    typeof params.spec.internalCustomId === "string" && params.spec.internalCustomId.trim()
+      ? params.spec.internalCustomId.trim()
+      : undefined;
   const customId =
     internalCustomId ??
     buildDiscordComponentCustomIdImpl({
@@ -134,7 +138,9 @@ function createSelectComponent(params: { spec: DiscordComponentSelectSpec }): {
   component: DiscordSelectMenu;
   entry: DiscordComponentEntry;
 } {
-  const type = params.spec.type ?? "string";
+  const type = normalizeLowercaseStringOrEmpty(
+    params.spec.type ?? "string",
+  ) as DiscordComponentSelectType;
   const componentId = createShortId("sel_");
   const customId = buildDiscordComponentCustomIdImpl({ componentId });
   const options = params.spec.options ?? [];

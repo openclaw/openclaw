@@ -3,7 +3,6 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithGatewayDetachedWorkContinuation } from "../process/gateway-work-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
-import type { GitWorkerOperations } from "./git-worker-contract.js";
 import { runGitWorkerOperation } from "./git-worker.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 
@@ -69,7 +68,6 @@ function createReadCache<Input, Output>(
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
-  retain: (value: Output) => boolean = () => true,
 ) {
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
@@ -151,7 +149,7 @@ function createReadCache<Input, Output>(
               next.value = value;
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (freshnessMs === 0 || !retain(value)) {
+            if (freshnessMs === 0) {
               remove(key, next);
             }
             return value;
@@ -204,26 +202,7 @@ function createReadCache<Input, Output>(
 }
 
 function createReadCaches() {
-  const comparisons = createReadCache<
-    GitWorkerOperations["pull-request.branch-comparison"]["input"],
-    GitWorkerOperations["pull-request.branch-comparison"]["output"]
-  >(
-    (input, signal) =>
-      runGitWorkerOperation({ type: "pull-request.branch-comparison", input }, { signal }),
-    Number.POSITIVE_INFINITY,
-    structuredClone,
-    (input, signal) =>
-      runGitWorkerOperation(
-        { type: "checkout.revision", input: { ...input, scope: "refs" } },
-        { signal },
-      ),
-    (input) => input.root,
-    undefined,
-    // Missing objects can arrive without moving refs; retry incomplete comparisons.
-    (value) => value.complete,
-  );
   return {
-    comparisons,
     identities: createReadCache(
       (input: GitReadOperations["repository.identities"]["input"], signal) =>
         runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
@@ -249,28 +228,14 @@ function createReadCaches() {
       structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
-          { type: "checkout.revision", input: { root: input.root, scope: "context" } },
+          { type: "checkout.revision", input: { root: input.root, includeIndex: false } },
           { signal },
         ),
       (input) => input.root,
     ),
     branchFacts: createReadCache(
-      async (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) => {
-        try {
-          const { refreshIndex: _, ...comparisonInput } = input;
-          const comparison = await comparisons.read(comparisonInput, { signal, refresh: true });
-          return await runGitWorkerOperation(
-            { type: "pull-request.branch-facts", input: { ...input, comparison } },
-            { signal },
-          );
-        } catch {
-          signal.throwIfAborted();
-          log.warn(
-            "PR comparison unavailable; fetch repository history and retry. Dependent comparisons skipped.",
-          );
-          return { creatable: false, stats: null };
-        }
-      },
+      (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) =>
+        runGitWorkerOperation({ type: "pull-request.branch-facts", input }, { signal }),
       // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
       structuredClone,
@@ -278,7 +243,7 @@ function createReadCaches() {
         runGitWorkerOperation(
           {
             type: "checkout.revision",
-            input: { ...input, scope: "worktree" },
+            input: { ...input, includeIndex: true },
           },
           { signal },
         ),

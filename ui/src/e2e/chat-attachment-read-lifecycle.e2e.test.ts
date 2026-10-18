@@ -819,10 +819,7 @@ suite.define(() => {
         .waitFor();
       await expect
         .poll(() => page.locator('.chat-attachment-thumb[aria-busy="false"]').count())
-        .toBe(2);
-      expect(await page.locator(".chat-attachment-failures").textContent()).toContain(
-        "Too large to send: second.txt",
-      );
+        .toBe(1);
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {

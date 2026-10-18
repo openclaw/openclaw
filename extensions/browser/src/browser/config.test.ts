@@ -477,25 +477,25 @@ describe("browser config", () => {
 
     it.each([
       {
-        name: "defaults local managed profiles to headless without a display",
+        name: "falls back to headless for local managed Linux profiles without display",
         config: {},
         profileName: "openclaw",
-        expected: { headless: true, source: "default" },
+        expected: { headless: true, source: "linux-display-fallback" },
       },
       {
-        name: "does not change remote CDP default mode",
+        name: "does not apply the no-display fallback to remote CDP profiles",
         config: withProfile("remote", { cdpUrl: "http://10.0.0.42:9222" }),
         profileName: "remote",
         expected: { headless: false, source: "default" },
       },
       {
-        name: "lets explicit profile headless=false beat the headless default",
+        name: "lets explicit profile headless=false beat the Linux no-display fallback",
         config: withProfile("openclaw", { cdpPort: 18800, headless: false }, { headless: true }),
         profileName: "openclaw",
         expected: { headless: false, source: "profile" },
       },
       {
-        name: "lets explicit global headless=false beat the headless default",
+        name: "lets explicit global headless=false beat the Linux no-display fallback",
         config: { headless: false },
         profileName: "openclaw",
         expected: { headless: false, source: "config" },

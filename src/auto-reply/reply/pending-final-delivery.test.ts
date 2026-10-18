@@ -78,21 +78,22 @@ describe("sanitizePendingFinalDeliveryText", () => {
     expect(sanitizePendingFinalDeliveryText(text)).toBe("Visible reply");
   });
 
-  it.each(["NO_REPLY", '"NO_REPLY"', '{"action":"NO_REPLY"}', "NO_REPLY."])(
-    "preserves prepared text without reinterpreting it: %s",
-    (text) => expect(sanitizePendingFinalDeliveryText(text)).toBe(text),
-  );
+  it("drops silent reply sentinel payloads", () => {
+    expect(sanitizePendingFinalDeliveryText(" NO_REPLY ")).toBe("");
+    expect(sanitizePendingFinalDeliveryText('"NO_REPLY"')).toBe("");
+    expect(sanitizePendingFinalDeliveryText('{"action":"NO_REPLY"}')).toBe("");
+  });
 
-  it.each(["NO_REPLYThe user is saying hello", "HEARTBEAT_OK NO_REPLY"])(
-    "preserves mixed silent tokens in recovery text: %s",
-    (text) => {
-      expect(sanitizePendingFinalDeliveryText(text)).toBe(text);
-    },
-  );
+  it("strips mixed silent reply sentinels like normal delivery", () => {
+    expect(sanitizePendingFinalDeliveryText("NO_REPLYThe user is saying hello")).toBe(
+      "The user is saying hello",
+    );
+    expect(sanitizePendingFinalDeliveryText("HEARTBEAT_OK NO_REPLY")).toBe("HEARTBEAT_OK");
+  });
 
-  it("preserves a prepared leading control-looking line", () => {
-    expect(sanitizePendingFinalDeliveryText("NO_REPLY\nAnswer.\n    Code.")).toBe(
-      "NO_REPLY\nAnswer.\n    Code.",
+  it("strips newline-separated leading silent tokens from recovery text", () => {
+    expect(sanitizePendingFinalDeliveryText("NO_REPLY\n\nThe user is saying hello")).toBe(
+      "The user is saying hello",
     );
   });
 });
@@ -170,15 +171,15 @@ describe("normalizePendingFinalRecoveryPayloads", () => {
     ).toBeUndefined();
   });
 
-  it("preserves ordinary prose previously treated as silence", () => {
+  it("omits payloads that normal delivery suppresses", () => {
     expect(
       buildRecoverablePendingFinalDeliveryText([
         { text: "No channel reply." },
         { text: "visible final" },
       ]),
-    ).toBe("No channel reply.\n\nvisible final");
-    expect(buildRecoverablePendingFinalDeliveryText([{ text: "No channel reply." }])).toBe(
-      "No channel reply.",
-    );
+    ).toBe("visible final");
+    expect(
+      buildRecoverablePendingFinalDeliveryText([{ text: "No channel reply." }]),
+    ).toBeUndefined();
   });
 });

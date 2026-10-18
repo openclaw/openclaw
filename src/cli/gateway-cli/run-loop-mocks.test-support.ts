@@ -17,7 +17,6 @@ import {
   createRuntimeWithExitSignal,
   createSignaledStart,
   originalPlatformDescriptor,
-  runGatewayLoop,
   type UpdateRespawnResultFixture,
   setPlatform,
   waitForStart,
@@ -372,6 +371,8 @@ async function runLoopWithStart(params: {
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
 }) {
+  vi.resetModules();
+  const { runGatewayLoop } = await import("./run-loop.test-support.js");
   const loopPromise = runGatewayLoop({
     start: params.start as unknown as Parameters<typeof runGatewayLoop>[0]["start"],
     runtime: params.runtime,

@@ -18,8 +18,6 @@ type FakeMatrixEventParams = {
   decryptionFailureReason?: DecryptionFailureCode;
 };
 
-export type MatrixEventDecryptor = (event: FakeMatrixEvent) => Promise<void>;
-
 export class FakeMatrixEvent extends EventEmitter {
   private readonly roomId: string;
   private readonly eventId: string;

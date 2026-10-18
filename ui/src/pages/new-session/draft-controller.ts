@@ -3,11 +3,11 @@ import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-u
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { t } from "../../i18n/index.ts";
+import { showToast } from "../../lib/toast.ts";
 import {
   SubscriptionsController,
   type ControllerHost,
-} from "../../lib/subscriptions-controller.ts";
-import { showToast } from "../../lib/toast.ts";
+} from "../../lit/subscriptions-controller.ts";
 import { reviewPrivateComposerDraft } from "../chat/components/private-composer-recovery-dialog.tsx";
 import { isTarget as isCatalogTarget } from "./catalog-target.ts";
 import type { DraftPreferenceOptions } from "./draft-gateway-contract.ts";

@@ -31,7 +31,6 @@ import {
   DispatchReplyOperationAbortedError,
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
-import { createDispatchCommentaryProgress } from "./dispatch-from-config.commentary.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -42,8 +41,8 @@ import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.
 import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.session-metadata.js";
 import {
+  captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
-  sendReplyWithTranscriptMirror,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -132,20 +131,67 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     isDispatchFinalReplySessionWriterAuthorized(payload, sessionKey);
   const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) =>
     finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
-  const { flushPendingCommentaryProgress, noteCommentaryProgress } =
-    createDispatchCommentaryProgress({
-      shouldSendToolSummaries: shouldSendToolSummariesAsync,
-      shouldSuppressDelivery: shouldSuppressProgressDelivery,
-      isAborted: () => state.isDispatchOperationAborted(),
-      isFinalDeliveryStarted: () => finalReplyDeliveryStarted,
-      assertCurrent: () => state.assertProgressCurrent(),
-      send: shouldRouteToOriginating
-        ? sendPayloadAsync
-        : (payload) => {
-            markInboundDedupeReplayUnsafe();
-            turnLedger.sendQueued("tool", payload);
-          },
-    });
+  // Durable inter-tool commentary lane: with verbose progress on, preamble
+  // items become standalone progress messages like tool summaries. The latest
+  // text per item id is buffered (snapshot producers re-emit the same item)
+  // and flushed when the producer moves on, always before the final reply.
+  let pendingCommentaryProgress: { itemId?: string; text: string } | null = null;
+  const flushedCommentaryItems = new Set<string>();
+  const deliverCommentaryProgressMessage = async (text: string) => {
+    if (!(await shouldSendToolSummariesAsync()) || (await shouldSuppressProgressDelivery())) {
+      return;
+    }
+    if (state.isDispatchOperationAborted()) {
+      return;
+    }
+    const payload: ReplyPayload = { text: `💬 ${text}` };
+    if (shouldSuppressLateTextOnlyToolProgress(payload)) {
+      return;
+    }
+    state.assertProgressCurrent();
+    if (shouldRouteToOriginating) {
+      await sendPayloadAsync(payload);
+    } else {
+      markInboundDedupeReplayUnsafe();
+      turnLedger.sendQueued("tool", payload);
+    }
+  };
+  const flushPendingCommentaryProgress = async () => {
+    const pending = pendingCommentaryProgress;
+    pendingCommentaryProgress = null;
+    const text = pending?.text.trim();
+    if (!text) {
+      return;
+    }
+    if (pending?.itemId) {
+      flushedCommentaryItems.add(pending.itemId);
+    }
+    await deliverCommentaryProgressMessage(text);
+  };
+  const noteCommentaryProgress = async (payload: { itemId?: string; progressText?: string }) => {
+    const itemId = payload.itemId?.trim() || undefined;
+    if (finalReplyDeliveryStarted || (itemId && flushedCommentaryItems.has(itemId))) {
+      return;
+    }
+    const text = payload.progressText ?? "";
+    const updatesBufferedItem =
+      pendingCommentaryProgress !== null &&
+      ((pendingCommentaryProgress.itemId !== undefined &&
+        pendingCommentaryProgress.itemId === itemId) ||
+        pendingCommentaryProgress.text.trim() === text.trim());
+    if (!text.trim()) {
+      // Empty commentary with an item id means the producer retracted that
+      // item; drop it if it has not been sent yet.
+      if (updatesBufferedItem) {
+        pendingCommentaryProgress = null;
+      }
+      return;
+    }
+    if (pendingCommentaryProgress && !updatesBufferedItem) {
+      await flushPendingCommentaryProgress();
+    }
+    pendingCommentaryProgress = { itemId, text };
+  };
   const shouldSuppressMessageToolOnlyTextErrorProgress = async (payload: ReplyPayload) => {
     if (
       state.sourceReplyDeliveryMode !== "message_tool_only" ||
@@ -219,17 +265,21 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const sendTrackedBlockReply = (operation: ReplyDispatchOperation) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
-    const delivery = sendReplyWithTranscriptMirror({
+    const mirror = commandBlockMirror(payload);
+    const captureToken = mirror ? {} : undefined;
+    const deliveredMirror = captureDeliveredTranscriptMirror({
       dispatcher,
-      cfg,
-      metadata: commandBlockMirror(payload),
-      payload,
+      metadata: mirror,
+      captureToken,
       kind: "block",
-      send: () =>
-        operation.kind === "prepared"
-          ? turnLedger.sendPreparedQueued("block", operation.plan)
-          : turnLedger.sendQueued("block", payload),
     });
+    if (captureToken) {
+      setReplyPayloadMetadata(payload, { finalDeliveryCapture: captureToken });
+    }
+    const delivery =
+      operation.kind === "prepared"
+        ? turnLedger.sendPreparedQueued("block", operation.plan)
+        : turnLedger.sendQueued("block", payload);
     recordBlockOutcome(
       payload,
       delivery.queued
@@ -239,6 +289,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           })) ?? Promise.resolve({ outcome: "failed-deliver" }))
         : Promise.resolve({ outcome: "cancelled" }),
     );
+    if (mirror && delivery.queued && delivery.outcome) {
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        if ((await delivery.outcome) === "delivered") {
+          await mirrorDeliveredReplyToTranscript({ metadata: deliveredMirror(), cfg });
+        }
+      });
+    }
     return delivery;
   };
   const recordRoutedBlockReplyDelivery = (
@@ -528,18 +585,37 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     throwIfFinalDeliveryAborted();
     markInboundDedupeReplayUnsafe();
-    const { queued: queuedFinal, outcome: dispatcherOutcome } = sendReplyWithTranscriptMirror({
-      dispatcher,
-      cfg,
-      metadata: transcriptMirror,
-      payload: normalizedPayload,
-      send: (reply) => {
-        if (deferFinalTtsText && reply.mediaUrl && reply.text?.trim()) {
-          attachReplyDispatchUndeliveredFallback(reply, buildCaptionedFinalTextFallback(reply));
+    const finalDeliveryCapture = transcriptMirror ? {} : undefined;
+    const deliveredTranscriptMirror = transcriptMirror
+      ? captureDeliveredTranscriptMirror({
+          dispatcher,
+          metadata: transcriptMirror,
+          captureToken: finalDeliveryCapture,
+        })
+      : undefined;
+    if (finalDeliveryCapture) {
+      setReplyPayloadMetadata(normalizedPayload, { finalDeliveryCapture });
+    }
+    if (deferFinalTtsText && normalizedPayload.mediaUrl && normalizedPayload.text?.trim()) {
+      attachReplyDispatchUndeliveredFallback(
+        normalizedPayload,
+        buildCaptionedFinalTextFallback(normalizedPayload),
+      );
+    }
+    const { queued: queuedFinal, outcome: dispatcherOutcome } = turnLedger.sendQueued(
+      "final",
+      normalizedPayload,
+    );
+    if (queuedFinal && deliveredTranscriptMirror && dispatcherOutcome) {
+      // The common settle owner runs this after successful delivery or
+      // cancellation. Keeping reconciliation out of the reply operation avoids
+      // creating another operation/idle cycle during delivery settlement.
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        if ((await dispatcherOutcome) === "delivered") {
+          await mirrorDeliveredReplyToTranscript({ metadata: deliveredTranscriptMirror(), cfg });
         }
-        return turnLedger.sendQueued("final", reply);
-      },
-    });
+      });
+    }
     return {
       blockDeliveryOutcome: sourceRecovery ? blockDeliveryOutcome : undefined,
       pendingBlock,
@@ -570,8 +646,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       },
     });
     const beforeDispatchResult = await traceReplyPhase("reply.before_dispatch_hooks", () =>
-      runWithDispatchLifecycleAdmission(() =>
-        runWithDispatchAbortSignal(
+      runWithDispatchLifecycleAdmission(async () => {
+        return await runWithDispatchAbortSignal(
           getPreDispatchAbortSignal(),
           () => {
             const hookContext = state.hookState.hookContext;
@@ -607,8 +683,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
             );
           },
           trackDispatchLifecycleWork,
-        ),
-      ),
+        );
+      }),
     );
     if (beforeDispatchResult?.handled) {
       takeover = {

@@ -14,7 +14,6 @@ import {
 } from "./primitives.js";
 import { SessionVisibilitySchema } from "./sessions-sharing-values.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 import { WorkerAdmissionHandshakeSchema } from "./worker-admission.js";
 
 export { GATEWAY_SERVER_CAPS } from "../server-capabilities.js";
@@ -99,7 +98,9 @@ export const HelloOkSchema = closedObject({
     version: NonEmptyString,
     buildId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
     bootId: Type.Optional(Type.String({ minLength: 1, maxLength: 96 })),
-    controlUiBuildSource: Type.Optional(stringLiteralUnion(["bundled", "configured"])),
+    controlUiBuildSource: Type.Optional(
+      Type.Union([Type.Literal("bundled"), Type.Literal("configured")]),
+    ),
     connId: NonEmptyString,
   }),
   features: closedObject({
@@ -118,14 +119,14 @@ export const HelloOkSchema = closedObject({
   pluginSurfaceUrls: Type.Optional(Type.Record(NonEmptyString, NonEmptyString)),
   auth: closedObject({
     method: Type.Optional(
-      stringLiteralUnion([
-        "none",
-        "token",
-        "password",
-        "tailscale",
-        "device-token",
-        "bootstrap-token",
-        "trusted-proxy",
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("token"),
+        Type.Literal("password"),
+        Type.Literal("tailscale"),
+        Type.Literal("device-token"),
+        Type.Literal("bootstrap-token"),
+        Type.Literal("trusted-proxy"),
       ]),
     ),
     deviceToken: Type.Optional(NonEmptyString),
@@ -133,7 +134,14 @@ export const HelloOkSchema = closedObject({
     recoveryScope: Type.Optional(NonEmptyString),
     role: NonEmptyString,
     scopes: Type.Array(NonEmptyString),
-    sessionCap: Type.Optional(stringLiteralUnion(["write", "suggest", "view", "none"])),
+    sessionCap: Type.Optional(
+      Type.Union([
+        Type.Literal("write"),
+        Type.Literal("suggest"),
+        Type.Literal("view"),
+        Type.Literal("none"),
+      ]),
+    ),
     issuedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     deviceTokens: Type.Optional(
       Type.Array(

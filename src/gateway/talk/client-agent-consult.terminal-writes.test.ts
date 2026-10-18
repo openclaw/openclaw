@@ -52,10 +52,7 @@ it.each([false, true])(
       );
       writeContext.track(persistence);
       captured.resolve({ admitted, writeContext, persistence });
-      return {
-        payloads: [{ text: "Answer" }],
-        meta: { durationMs: 0, terminalReply: { disposition: "visible", text: "Answer" } },
-      };
+      return { payloads: [{ text: "Answer" }], meta: { durationMs: 0 } };
     });
     const controller = new AbortController();
     const sessionKey = `agent:main:talk-terminal-${abort}`;
@@ -102,13 +99,16 @@ it.each([false, true])(
       if (abort) {
         controller.abort();
         expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-      }
-      expect(settled).toBe(false);
-      commit.resolve();
-      await persistence;
-      if (abort) {
+        expect(() => writeContext.run(() => writeContext.assertCurrent())).toThrow(
+          "Terminal write owner changed before commit",
+        );
+        commit.resolve();
+        await expect(persistence).rejects.toThrow("Terminal write owner changed before commit");
         await expect(run).rejects.toMatchObject({ name: "AbortError" });
       } else {
+        expect(settled).toBe(false);
+        commit.resolve();
+        await persistence;
         await expect(run).resolves.toEqual({ text: "Answer" });
       }
       expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();

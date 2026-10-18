@@ -6,7 +6,11 @@ import {
   type MusicGenerationRequest,
 } from "openclaw/plugin-sdk/music-generation";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
-import { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  postJsonRequest,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -39,7 +43,7 @@ function buildFalMusicRequestBody(
     return {
       prompt: req.prompt,
       ...(req.instrumental === true ? { instrumental: true } : {}),
-      ...(req.durationSeconds !== undefined
+      ...(typeof req.durationSeconds === "number"
         ? { [isStableAudio ? "seconds_total" : "duration"]: req.durationSeconds }
         : {}),
     };
@@ -52,7 +56,7 @@ function buildFalMusicRequestBody(
     ...(lyrics ? { lyrics } : {}),
     ...(req.instrumental === true ? { is_instrumental: true } : {}),
     ...(!lyrics && req.instrumental !== true ? { lyrics_optimizer: true } : {}),
-    ...(req.durationSeconds !== undefined ? { duration: req.durationSeconds } : {}),
+    ...(typeof req.durationSeconds === "number" ? { duration: req.durationSeconds } : {}),
     audio_setting: {
       sample_rate: 44_100,
       bitrate: 256_000,
@@ -116,7 +120,7 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveFalHttpRequestConfig({ req, capability: "audio" });
       const model = normalizeOptionalString(req.model) ?? DEFAULT_FAL_MUSIC_MODEL;
-      const payload = await postJsonResponse<unknown>({
+      const { response, release } = await postJsonRequest({
         url: `${baseUrl}/${model}`,
         headers,
         body: buildFalMusicRequestBody(req, model),
@@ -124,36 +128,41 @@ export function buildFalMusicGenerationProvider(): MusicGenerationProvider {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
-        errorLabel: "fal music generation failed",
-        responseLabel: "fal music generation",
       });
-      const [candidate] = extractGeneratedMusicFileCandidates(payload);
-      if (!candidate) {
-        throw new Error("fal music generation response missing audio output");
+
+      try {
+        await assertOkOrThrowHttpError(response, "fal music generation failed");
+        const payload = await readProviderJsonResponse<unknown>(response, "fal music generation");
+        const [candidate] = extractGeneratedMusicFileCandidates(payload);
+        if (!candidate) {
+          throw new Error("fal music generation response missing audio output");
+        }
+        const track = await downloadGeneratedMusicAsset({
+          candidate,
+          timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+          fetchFn: fetch,
+          provider: "fal",
+          requestFailedMessage: "fal generated music download failed",
+          maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
+        });
+        const lyrics = isRecord(payload) ? normalizeOptionalString(payload.lyrics) : undefined;
+        return {
+          tracks: [track],
+          model,
+          ...(lyrics ? { lyrics: [lyrics] } : {}),
+          metadata: {
+            ...resolveFalMusicMetadata(payload),
+            ...(track.metadata?.url ? { audioUrl: track.metadata.url } : {}),
+            instrumental: req.instrumental === true,
+            ...(req.format ? { requestedFormat: req.format } : {}),
+            ...(typeof req.durationSeconds === "number"
+              ? { requestedDurationSeconds: req.durationSeconds }
+              : {}),
+          },
+        };
+      } finally {
+        await release();
       }
-      const track = await downloadGeneratedMusicAsset({
-        candidate,
-        timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-        fetchFn: fetch,
-        provider: "fal",
-        requestFailedMessage: "fal generated music download failed",
-        maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
-      });
-      const lyrics = isRecord(payload) ? normalizeOptionalString(payload.lyrics) : undefined;
-      return {
-        tracks: [track],
-        model,
-        ...(lyrics ? { lyrics: [lyrics] } : {}),
-        metadata: {
-          ...resolveFalMusicMetadata(payload),
-          ...(track.metadata?.url ? { audioUrl: track.metadata.url } : {}),
-          instrumental: req.instrumental === true,
-          ...(req.format ? { requestedFormat: req.format } : {}),
-          ...(req.durationSeconds !== undefined
-            ? { requestedDurationSeconds: req.durationSeconds }
-            : {}),
-        },
-      };
     },
   };
 }

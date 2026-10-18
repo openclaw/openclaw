@@ -4,13 +4,8 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
-import { matchesTranscriptEvent } from "../../../sessions/transcript-visible-record.js";
-import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import {
   registryRuntimeMock,
-  findTranscriptEventMock,
-  listedRequesterRuns,
-  sessionStore,
   setSessionStore,
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
@@ -31,21 +26,6 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
 describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
   beforeEach(() => {
     setRuntimeConfigSnapshot(getRuntimeConfig());
-    findTranscriptEventMock.mockImplementation(async ({ sessionId }, match) => {
-      const child = listedRequesterRuns().find(
-        (entry) => sessionStore[entry.childSessionKey]?.sessionId === sessionId,
-      );
-      const event = {
-        type: "message",
-        message: {
-          role: "assistant",
-          display: true,
-          content: [{ type: "text", text: child?.completion?.resultText }],
-          __openclaw: { runId: child?.runId },
-        },
-      };
-      return child && matchesTranscriptEvent(event, match) ? { event } : undefined;
-    });
   });
 
   afterEach(() => {
@@ -63,8 +43,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
     single: boolean;
     marked?: boolean;
   }) =>
-    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) => {
-      const child = makeSettledChild({
+    (single ? ["run-b"] : ["run-a", "run-b"]).map((runId, index) =>
+      makeSettledChild({
         runId,
         ...(!mixed || index === 0
           ? { completionTarget: "parent" as const, completionRequesterSessionId: "sess-main" }
@@ -72,9 +52,6 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
         completion: {
           required: true,
           resultText: index === 0 ? "private marker" : "public sibling",
-          terminalReply: prepareAgentRunTerminalReply({
-            rawText: index === 0 ? "private marker" : "public sibling",
-          }).terminalReply,
         },
         requesterSettleWake: {
           status: "pending",
@@ -88,10 +65,8 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
               }
             : {}),
         },
-      });
-      sessionStore[child.childSessionKey] = { sessionId: `session-${runId}` };
-      return child;
-    });
+      }),
+    );
 
   it.each([
     { name: "delivered private pair", mixed: false, single: false, yielded: false },
@@ -189,11 +164,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled private batches", () => {
         completionTarget: "parent",
         completionRequesterSessionId: "sess-main",
         delivery: { status: "pending" },
-        completion: {
-          required: true,
-          resultText: "private marker",
-          terminalReply: { disposition: "visible", text: "private marker" },
-        },
+        completion: { required: true, resultText: "private marker" },
         requesterSettleWake: {
           status: "pending",
           attemptCount: 1,

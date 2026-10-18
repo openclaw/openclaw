@@ -613,6 +613,6 @@ export function createReadToolDefinition(
 export function createReadTool(
   cwd: string,
   options?: ReadToolOptions,
-): AgentTool<typeof readToolInputSchema, ReadToolDetails> {
+): AgentTool<typeof readToolInputSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
 }

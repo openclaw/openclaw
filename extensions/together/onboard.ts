@@ -17,7 +17,7 @@ const togetherPreset = {
     providerId: "together",
     api: "openai-completions",
     baseUrl: TOGETHER_BASE_URL,
-    catalogModels: TOGETHER_MODEL_CATALOG,
+    catalogModels: () => structuredClone(TOGETHER_MODEL_CATALOG),
     aliases: [{ modelRef: TOGETHER_DEFAULT_MODEL_REF, alias: "Together AI" }],
   }),
 } satisfies Parameters<typeof createProviderConnectionPresetAppliers<[]>>[0];

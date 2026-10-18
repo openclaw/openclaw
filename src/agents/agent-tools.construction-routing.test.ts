@@ -108,6 +108,16 @@ describe("createOpenClawCodingTools cron scope", () => {
     },
   );
 
+  it("scopes cron-triggered jobs to self-removal", () => {
+    const tools = createOpenClawCodingTools({
+      trigger: "cron",
+      jobId: "job-current",
+    });
+
+    expect(tools.map((tool) => tool.name)).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
+  });
+
   it("keeps self-scoped automation inspection available without sender ownership", () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",

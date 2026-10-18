@@ -71,17 +71,14 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
           },
         ],
       };
-      const requestedReasoning = "low" as const;
       let sentEffort: unknown;
       const options = {
         apiKey: OPENAI_KEY,
-        reasoning: requestedReasoning,
+        reasoning: "low" as const,
         maxTokens: 256,
         toolChoice: "required" as const,
         onPayload(payload: unknown) {
-          // Managed reasoning tool turns on api.openai.com reroute to Responses (#166182).
-          const body = payload as { reasoning_effort?: unknown; reasoning?: { effort?: unknown } };
-          sentEffort = transport === "direct" ? body.reasoning_effort : body.reasoning?.effort;
+          sentEffort = (payload as { reasoning_effort?: unknown }).reasoning_effort;
         },
       };
       const stream = await (transport === "direct"
@@ -89,8 +86,7 @@ const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
         : createOpenAICompletionsTransportStreamFn()(model, toolContext, options));
       const result = await stream.result();
       expect(result.errorMessage).toBeUndefined();
-      // Managed Responses keeps the requested effort; direct Completions applies the model policy.
-      expect(sentEffort).toBe(transport === "direct" ? effort : requestedReasoning);
+      expect(sentEffort).toBe(effort);
       expect(result.stopReason).toBe("toolUse");
       expect(result.content.filter((block) => block.type === "toolCall")).toMatchObject([
         { name: "probe", arguments: {} },

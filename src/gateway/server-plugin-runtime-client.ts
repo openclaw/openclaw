@@ -38,7 +38,6 @@ export function createSyntheticPluginRuntimeClient(
       | "internalDeliverySuppressText"
       | "internalDeliverySuppressErrors"
       | "pluginRuntimeOwnerId"
-      | "pluginApprovalRequestOwnerId"
       | "nodeInvokeApprovalSessionKey"
       | "pluginSubagentRequester"
       | "runtimePluginToolGrant"
@@ -92,9 +91,6 @@ export function createSyntheticPluginRuntimeClient(
         : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
-      ...(params?.pluginApprovalRequestOwnerId
-        ? { pluginApprovalRequestOwnerId: params.pluginApprovalRequestOwnerId }
-        : {}),
       ...(params?.nodeInvokeApprovalSessionKey
         ? { nodeInvokeApprovalSessionKey: params.nodeInvokeApprovalSessionKey }
         : {}),

@@ -153,6 +153,7 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     }
 
     await this.ensureStartedForCryptoControlPlane();
+    await this.ensureCryptoSupportInitialized();
     const crypto = this.client.getCrypto() as MatrixCryptoBootstrapApi | undefined;
     if (crypto) {
       await trustMatrixOwnIdentity(crypto);

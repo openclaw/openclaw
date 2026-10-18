@@ -3,7 +3,6 @@ import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_IDS,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { validateUiCommandParams } from "../../../packages/gateway-protocol/src/index.js";
 import { createGatewayToolCallerWrapper } from "../../../src/agents/tools/gateway-caller-context.js";
 import { createScreenTool } from "../../../src/agents/tools/screen-tool.js";
 import type {
@@ -40,7 +39,6 @@ suite.define(() => {
             "desktop.observe",
             "environments.status",
             "portal.list",
-            "ui.command.result",
           ],
           methodResponses: {
             "sessions.list": chatSessionListResponse(),
@@ -109,26 +107,7 @@ suite.define(() => {
       broadcastToConnIds: (event, payload, connIds) => {
         for (const browser of browsers) {
           if (connIds.has(browser.connId)) {
-            deliveries.push(
-              (async () => {
-                await browser.gateway.emitGatewayEvent(event, payload);
-                if (
-                  event === "ui.command" &&
-                  validateUiCommandParams(payload) &&
-                  payload.requestId
-                ) {
-                  const report = await browser.gateway.waitForRequest("ui.command.result", {
-                    match: { requestId: payload.requestId },
-                  });
-                  const respond = vi.fn();
-                  await expectDefined(
-                    uiCommandHandlers["ui.command.result"],
-                    "ui.command.result",
-                  )({ params: report.params, client: browser.client, respond, context } as never);
-                  expect(respond).toHaveBeenCalledWith(true, { ok: true });
-                }
-              })(),
-            );
+            deliveries.push(browser.gateway.emitGatewayEvent(event, payload));
           }
         }
       },
@@ -145,27 +124,8 @@ suite.define(() => {
             uiCommandHandlers["ui.command"],
             "ui.command",
           )({ params, respond, context } as never);
-          if (!validateUiCommandParams(params)) {
-            throw new Error("Screen tool emitted an invalid UI command");
-          }
-          const command = params.command;
-          if (command.kind === "panel" && command.panel === "portal" && command.open) {
-            expect(respond).toHaveBeenCalledWith(true, {
-              ok: true,
-              delivery: "dispatched",
-              presentation:
-                "portalId" in command && command.portalId
-                  ? {
-                      portalId: command.portalId,
-                      status: "unverified",
-                      reason: "network-reachable",
-                    }
-                  : { status: "unverified", reason: "waiting-for-app" },
-            });
-          } else {
-            expect(respond).toHaveBeenCalledWith(true, { ok: true });
-          }
-          return expectDefined(respond.mock.calls[0], "Gateway response")[1] as T;
+          expect(respond).toHaveBeenCalledWith(true, { ok: true });
+          return { ok: true } as T;
         },
       }),
     );

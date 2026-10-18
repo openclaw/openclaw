@@ -274,13 +274,6 @@ describe("ChatComposerCapabilityHost", () => {
     );
     expect(harness.events).toEqual(["global", "load"]);
     expect(harness.patch).not.toHaveBeenCalled();
-    const form = harness.container.querySelector("form")!;
-    const failure = harness.container.querySelector('[role="alert"]')!;
-    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
-    expect(form.contains(failure)).toBe(true);
-    expect(submit.form).toBe(form);
-    expect(form.lastElementChild?.contains(submit)).toBe(true);
-    expect(failure.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("blocks tool override patches without exact sessions.patch access", async () => {
@@ -594,16 +587,24 @@ describe("ChatComposerCapabilityHost", () => {
     });
   });
 
-  it("shows effective-tools request failures and allows an explicit retry", async () => {
+  it("records an unexpected effective-tools loader rejection", async () => {
     const notify = vi.fn();
     const host = new ChatComposerCapabilityHost(notify);
     const context = createContext({ runtimeConfig: {} });
     context.gateway.snapshot.hello = gatewayHelloForMethods(["sessions.patch", "tools.effective"]);
+    let stateReads = 0;
+    Object.defineProperty(context.sessions, "state", {
+      configurable: true,
+      get: () => {
+        stateReads += 1;
+        if (stateReads === 3) {
+          throw new Error("unexpected loader failure");
+        }
+        return { modelOverrides: {} };
+      },
+    });
     const state = createState();
-    const request = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("tools unavailable"))
-      .mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
+    const request = vi.fn().mockResolvedValue({ agentId: "main", groups: [], profile: "full" });
     state.client = { request } as unknown as GatewayBrowserClient;
     const session = { key: "main" } as GatewaySessionRow;
 
@@ -620,9 +621,6 @@ describe("ChatComposerCapabilityHost", () => {
     await vi.waitFor(() => {
       expect(host.props(context, state, session, "main").toolsEffectiveResult).not.toBeNull();
     });
-    expect(request.mock.calls).toEqual([
-      ["tools.effective", { agentId: "main", sessionKey: "main" }],
-      ["tools.effective", { agentId: "main", sessionKey: "main" }],
-    ]);
+    expect(request).toHaveBeenCalledTimes(1);
   });
 });

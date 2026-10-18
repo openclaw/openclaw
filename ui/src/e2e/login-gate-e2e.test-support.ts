@@ -425,7 +425,7 @@ export async function renderLoginGate(
   return gateway;
 }
 
-async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+export async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
   await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");

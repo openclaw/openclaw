@@ -38,15 +38,12 @@ export async function initializeManagedWorktreeTestRepository(root: string): Pro
   return await addRemote(root, repo);
 }
 
-export function useManagedWorktreeTestRepository(
-  prepare?: (repo: string) => Promise<void>,
-): (root: string) => Promise<string> {
+export function useManagedWorktreeTestRepository(): (root: string) => Promise<string> {
   const templateDirs = useAutoCleanupTempDirTracker(afterAll);
   let templateRoot: string;
   beforeAll(async () => {
     templateRoot = templateDirs.make("openclaw-worktree-template-");
-    const repo = await initializeManagedWorktreeTestRepository(templateRoot);
-    await prepare?.(repo);
+    await initializeManagedWorktreeTestRepository(templateRoot);
   });
 
   // Copy the initial push too. Each case owns independent Git metadata and a

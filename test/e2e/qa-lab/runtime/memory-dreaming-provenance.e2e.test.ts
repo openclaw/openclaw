@@ -220,9 +220,8 @@ describe("memory provenance through a real Gateway", () => {
         repoRoot: path.resolve(import.meta.dirname, "../../../.."),
         providerBaseUrl: `${mock.baseUrl}/v1`,
         providerMode: "mock-openai",
-        // Cron captures a stored account; the QA harness stages one for openai.
-        primaryModel: "openai/gpt-5.6-luna",
-        alternateModel: "openai/gpt-5.6-luna-alt",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
         transportBaseUrl: "http://127.0.0.1:9",
         controlUiEnabled: false,
         enabledPluginIds: ["memory-core"],

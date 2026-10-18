@@ -7,10 +7,10 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
-import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
 import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import * as modelCatalog from "../../lib/model-catalog-store.ts";
-import { SubscriptionsController } from "../../lib/subscriptions-controller.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
+import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { UsageRefreshPolicy } from "../usage/refresh-policy.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import {
@@ -106,7 +106,6 @@ export class ModelProvidersController extends ModelPageController {
   };
   private logoutConfirmation: AbortController | null = null;
   private pendingConnection = false;
-  private pendingCredentialInvalidation = false;
 
   setState<Key extends keyof ModelProvidersState>(key: Key, value: ModelProvidersState[Key]) {
     if (!Object.is(this.state[key], value)) {
@@ -121,8 +120,10 @@ export class ModelProvidersController extends ModelPageController {
   private routeDataObserved = false;
   // Global config writes survive agent switches; their card state does not.
   private agentEpoch = 0;
+  private coreCatalogGeneration = 0;
   private readonly core = new ModelProviderCoreLoader(this, {
     onStart: (reason) => {
+      this.coreCatalogGeneration = this.core.catalogGeneration;
       this.supplemental.beginCoreRefresh(reason === "forced");
       if (reason === "forced") {
         this.querySelectorAll<ModelAccountUsageElement>("openclaw-model-account-usage").forEach(
@@ -131,9 +132,12 @@ export class ModelProvidersController extends ModelPageController {
       }
     },
     onComplete: ({ client, data }) => {
-      // A page refresh settles its feedback; an overlapping picker Retry is best effort.
-      this.core.resetCatalog();
-      this.supplemental.adoptCoreData(client, data);
+      const preserveCatalogDiagnostics =
+        this.state.data !== null && this.core.catalogGeneration !== this.coreCatalogGeneration;
+      if (!preserveCatalogDiagnostics) {
+        this.core.resetCatalog();
+      }
+      this.supplemental.adoptCoreData(client, data, { preserveCatalogDiagnostics });
     },
     onCatalogComplete: (result) => {
       if (this.state.data) {
@@ -144,6 +148,7 @@ export class ModelProvidersController extends ModelPageController {
         });
       }
     },
+    refreshPublication: () => void this.refresh("publication"),
   });
   private readonly refreshPolicy = new UsageRefreshPolicy({
     isLoading: () =>
@@ -164,7 +169,7 @@ export class ModelProvidersController extends ModelPageController {
     setDataClient: (client) => (this.dataClient = client),
     refreshPolicy: this.refreshPolicy,
   });
-  private readonly gateway = new GatewayPageBinding(() => this.requestUpdate(), {
+  private readonly gateway = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => this.resetConnectionState(),
     invalidateRequests: () => this.invalidateRequests(),
@@ -240,20 +245,13 @@ export class ModelProvidersController extends ModelPageController {
       this.setMessage("add", null);
     },
     canContinue: () => this.mutationBlockedReason() === null,
-    refresh: (providerId) => this.refresh("replacement", providerId),
+    refresh: () => this.refresh("replacement"),
   });
   private readonly subscriptions = new SubscriptionsController(this)
     .effect(
       () => this.context?.gateway,
       (gateway) =>
-        modelCatalog.subscribeModelCatalogChanges(gateway, () => {
-          // A picker can outlive other clients' credential writes, even without signing in.
-          if (this.login.busy) {
-            this.pendingCredentialInvalidation = true;
-          } else {
-            void this.refresh("publication");
-          }
-        }),
+        modelCatalog.subscribeModelCatalogChanges(gateway, () => void this.refresh("publication")),
     )
     .effect(
       () => this.context?.gateway,
@@ -290,18 +288,12 @@ export class ModelProvidersController extends ModelPageController {
   private previousRouteData: ModelProvidersRouteData | undefined;
   private previousLoaderPending: boolean | undefined;
 
-  override connect() {
-    this.gateway.connect();
-    super.connect();
-  }
-
   override disconnect() {
     // Pending orders belong to this page; a delayed save must not dispatch
     // them after navigation over a replacement page's newer order.
     this.profileActions.resetOrders();
     this.subscriptions.clear();
     this.refreshPolicy.dispose();
-    this.gateway.dispose();
     super.disconnect();
   }
 
@@ -317,7 +309,7 @@ export class ModelProvidersController extends ModelPageController {
     const loaderChanged = this.loaderPending !== this.previousLoaderPending;
     this.previousRouteData = data;
     this.previousLoaderPending = this.loaderPending;
-    if (routeChanged && data) {
+    if ((routeChanged || loaderChanged) && data) {
       if (data.connect && !previous?.connect) {
         this.pendingConnection = true;
       }
@@ -341,9 +333,6 @@ export class ModelProvidersController extends ModelPageController {
       }
       this.ensureInitialData();
     }
-    if (loaderChanged && !this.loaderPending) {
-      this.supplemental.resume();
-    }
   }
 
   override afterUpdate() {
@@ -354,9 +343,6 @@ export class ModelProvidersController extends ModelPageController {
     if (this.pendingConnection && this.state.data && this.canMutate() && !this.core.loading) {
       this.pendingConnection = false;
       void this.login.open();
-    }
-    if (this.pendingCredentialInvalidation && !this.login.busy) {
-      void this.refresh("replacement");
     }
   }
 
@@ -421,7 +407,6 @@ export class ModelProvidersController extends ModelPageController {
   }
 
   private resetAgentScopeState() {
-    this.pendingCredentialInvalidation = false;
     this.login.reset();
     this.setState("busy", {});
     this.setState("messages", {});
@@ -459,7 +444,7 @@ export class ModelProvidersController extends ModelPageController {
     this.ensureInitialData();
   }
 
-  private refresh(reason: ModelProviderRefreshReason, providerId?: string): Promise<void> {
+  private refresh(reason: ModelProviderRefreshReason): Promise<void> {
     if (!this.state.selectedAgentId) {
       return Promise.resolve();
     }
@@ -468,20 +453,7 @@ export class ModelProvidersController extends ModelPageController {
       this.refreshPolicy.markLoadDeferred();
       return Promise.resolve();
     }
-    // Another client's write is outside the selected owner, so reconcile every provider.
-    const crossClient = this.pendingCredentialInvalidation;
-    this.pendingCredentialInvalidation = false;
-    const reconcile = providerId !== undefined || crossClient;
-    const target = reconcile && this.state.data ? this.state.data : undefined;
-    return this.core.refresh(
-      client,
-      this.state.selectedAgentId,
-      reason,
-      target && {
-        providerId: crossClient ? undefined : providerId,
-        data: target,
-      },
-    );
+    return this.core.refresh(client, this.state.selectedAgentId, reason);
   }
 
   private setBusy = (key: string, value: boolean) =>
@@ -667,7 +639,7 @@ export class ModelProvidersController extends ModelPageController {
       installedAgents: undefined,
       providerQuery: this.state.providerQuery,
       onProviderQueryChange: (value) => this.setState("providerQuery", value),
-      onConnectProvider: () => void this.login.connectProvider(values.configuredModels),
+      onConnectProvider: () => void this.login.open(undefined, undefined, { allowSetup: true }),
       usageClient: !this.mutationBlockedReason() && usageAvailable ? gatewaySnapshot.client : null,
       usageAgentId: this.state.selectedAgentId,
       connected: gatewaySnapshot.phase === "connected",
@@ -711,7 +683,7 @@ export class ModelProvidersController extends ModelPageController {
           ? this.context.agents.refreshList()
           : Promise.all([
               this.context.runtimeConfig.refresh({ background: true }),
-              this.refresh("forced", this.core.retryProvider),
+              this.refresh("forced"),
             ])),
       onOpenKeyEditor: (provider) => {
         this.setState("keyEditorProvider", provider);

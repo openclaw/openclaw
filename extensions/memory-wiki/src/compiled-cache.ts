@@ -292,6 +292,12 @@ function parseSnapshot(
   }
 }
 
+export function resolveMemoryWikiCompiledCacheGeneration(
+  snapshot: MemoryWikiCompiledCacheSnapshot,
+): string {
+  return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+}
+
 export function createMemoryWikiCompiledCacheStore(
   openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => PluginBlobStore<TMetadata>,
   options: { onReadError?: (error: unknown) => void } = {},
@@ -352,6 +358,7 @@ export function createMemoryWikiCompiledCacheStore(
       this: void,
       config: ResolvedMemoryWikiConfig,
       snapshot: MemoryWikiCompiledCacheSnapshot,
+      generation: string,
       publicationId: string,
     ) {
       const ownerId = resolveMemoryWikiCompiledCacheOwnerId(config);
@@ -361,13 +368,16 @@ export function createMemoryWikiCompiledCacheStore(
         throw new Error(`Memory Wiki vault is not active: ${vaultPath}`);
       }
       const serialized = JSON.stringify(snapshot);
+      if (createHash("sha256").update(serialized).digest("hex") !== generation) {
+        throw new Error("Memory Wiki compiled cache generation does not match its snapshot.");
+      }
       const metadata: CompiledCacheMetadata = {
         version: COMPILED_CACHE_VERSION,
         ownerId,
         vaultPath,
         vaultGeneration: activeVault.vaultGeneration,
         publicationId,
-        generation: createHash("sha256").update(serialized).digest("hex"),
+        generation,
         encoding: "gzip-json",
       };
       await store.register(publicationKey(ownerId, publicationId), gzipSync(serialized), metadata);
@@ -385,18 +395,32 @@ export function createMemoryWikiCompiledCacheStore(
         return;
       }
       const durableIdentity = await loadDurableIdentity();
+      if (durableIdentity.compiledCachePublicationId) {
+        try {
+          await store.lookup(publicationKey(ownerId, durableIdentity.compiledCachePublicationId));
+        } catch (error) {
+          options.onReadError?.(error);
+          throw error;
+        }
+      }
+      const confirmedIdentity = await loadDurableIdentity();
       if (resolveActiveVault(config) !== activeVault) {
         return;
       }
-      if (!durableIdentity.vaultGeneration) {
+      if (
+        !confirmedIdentity.vaultGeneration ||
+        confirmedIdentity.vaultGeneration !== durableIdentity.vaultGeneration ||
+        confirmedIdentity.compiledCachePublicationId !== durableIdentity.compiledCachePublicationId
+      ) {
         activeVaults.delete(ownerId);
         return;
       }
-      // Lifecycle refresh owns identity changes; reads validate the selected blob.
+      // SQLite is observed before the durable identity reread. A cross-process write that
+      // races this boundary stays unreadable until the next lifecycle refresh.
       activeVaults.set(ownerId, {
         path: activeVault.path,
-        vaultGeneration: durableIdentity.vaultGeneration,
-        compiledCachePublicationId: durableIdentity.compiledCachePublicationId ?? undefined,
+        vaultGeneration: confirmedIdentity.vaultGeneration,
+        compiledCachePublicationId: confirmedIdentity.compiledCachePublicationId ?? undefined,
         reconciled: true,
       });
     },
@@ -503,6 +527,7 @@ export async function reconcileMemoryWikiCompiledCacheOwner(
 export async function writeMemoryWikiCompiledCache(
   config: ResolvedMemoryWikiConfig,
   snapshot: MemoryWikiCompiledCacheSnapshot,
+  generation: string,
   publicationId: string,
   parentPublicationId: string | null,
   validatePublication: () => Promise<void>,
@@ -510,7 +535,12 @@ export async function writeMemoryWikiCompiledCache(
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
-  const { activeVault, serializedSnapshot } = await store.write(config, snapshot, publicationId);
+  const { activeVault, serializedSnapshot } = await store.write(
+    config,
+    snapshot,
+    generation,
+    publicationId,
+  );
   try {
     await validatePublication();
   } catch (error) {
@@ -561,7 +591,7 @@ export async function writeMemoryWikiCompiledCache(
     // Own the persisted payload, not compiler strings whose slices can retain entire
     // source pages. Reuse the serialized snapshot to detach every nested string
     // without changing its JSON representation (including lone surrogates).
-    // SAFETY: The store serialized this typed snapshot and derived its generation before writing.
+    // SAFETY: The store serialized this typed snapshot and verified its generation before writing.
     snapshot: JSON.parse(serializedSnapshot) as MemoryWikiCompiledCacheSnapshot,
   });
   dashboardStates.delete(dashboardStateKey(config));

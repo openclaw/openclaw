@@ -5,7 +5,6 @@ import type {
 } from "./openclaw-state-lease-context.js";
 import { OpenClawStateLeaseError } from "./openclaw-state-lease-error.js";
 import type { OpenClawStateLeaseDatabase } from "./openclaw-state-lease-storage.js";
-import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 export type OpenClawStateLeaseOptions = {
@@ -31,16 +30,13 @@ export type OpenClawStateLeaseInvocation<T> =
   | {
       kind: "native";
       options: OpenClawStateLeaseOptions;
-      run: (lease: OpenClawStateLeaseContext, identity: OpenClawStateLeaseIdentity) => Promise<T>;
+      run: (lease: OpenClawStateLeaseContext) => Promise<T>;
     }
   | {
       kind: "worker";
       options: OpenClawStateLeaseOptions;
       context: OpenClawStateWorkerContext;
-      run: (
-        lease: OpenClawStateAsyncLeaseContext,
-        identity: OpenClawStateLeaseIdentity,
-      ) => Promise<T>;
+      run: (lease: OpenClawStateAsyncLeaseContext) => Promise<T>;
     };
 
 const MIN_LEASE_MS = 1_000;

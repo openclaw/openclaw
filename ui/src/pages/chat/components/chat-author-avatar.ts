@@ -1,22 +1,94 @@
-import type { ChannelSenderAvatarSource } from "../../../lib/chat/channel-sender-avatar.ts";
+import { html, nothing, type TemplateResult } from "lit";
+import {
+  renderIdentityAvatar,
+  identityAvatarClass,
+  renderAgentIdentityAvatar,
+  renderIdentityAvatarImage,
+  type IdentityAvatarView,
+} from "../../../components/identity-avatar-view.ts";
+import "../../../components/channel-avatar.ts";
+import {
+  resolveChannelSenderAvatarUrl,
+  type ChannelSenderAvatarSource,
+} from "../../../lib/chat/channel-sender-avatar.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
-import type { IdentityAvatarInput } from "../../../lib/identity-avatar.ts";
-import { emptyLegacyContent, solidContent } from "../../../lit/solid-content.tsx";
-import { ChatAuthorAvatar } from "./chat-author-avatar-view.tsx";
+import { readAvatarGatewayContext } from "../../../lib/identity-avatar-context.ts";
+import {
+  resolveAvatar,
+  type IdentityAvatarInput,
+  type ResolvedIdentityAvatar,
+} from "../../../lib/identity-avatar.ts";
 
-export { ChatAuthorAvatar, UserAvatarSlot } from "./chat-author-avatar-view.tsx";
+function renderInitialsAvatar(
+  avatar: Extract<ResolvedIdentityAvatar, { kind: "initials" }>,
+  fallback = false,
+) {
+  const hue = avatar.colorSeed % 360;
+  return html`
+    <span
+      class="chat-author-avatar__initials ${fallback ? "chat-author-avatar__fallback" : ""}"
+      style=${`--chat-author-avatar-hue: ${hue}`}
+      aria-hidden="true"
+    >
+      ${avatar.initials}
+    </span>
+  `;
+}
 
-/** Adapter for the remaining Lit transcript and reply templates. */
+/** Small author marker shared by transcript bubbles and the pending-send queue. */
 export function renderChatAuthorAvatar(
   sender: IdentityAvatarInput | null | undefined,
   className = "chat-author-avatar",
   agentAvatar?: { avatar?: string | null; textAvatar?: string | null },
   channelAvatar?: ChannelSenderAvatarSource,
-) {
-  if (!sender || !formatSenderLabel(sender)) {
-    return emptyLegacyContent;
+): TemplateResult | typeof nothing {
+  const label = formatSenderLabel(sender);
+  if (!sender || !label) {
+    return nothing;
   }
-  return solidContent(ChatAuthorAvatar, { sender, class: className, agentAvatar, channelAvatar });
+  if (sender.identity?.type === "agent") {
+    const avatar = resolveAvatar(sender);
+    return html`<span class=${className} role="img" aria-label=${label} title=${label}>
+      ${renderAgentIdentityAvatar({
+        id: sender.identity.id,
+        avatar: agentAvatar?.avatar ?? (avatar.kind === "profile" ? avatar.url : null),
+        textAvatar: agentAvatar?.textAvatar,
+      })}
+    </span>`;
+  }
+  return renderIdentityAvatar(sender, (view) => {
+    const gateway = readAvatarGatewayContext();
+    const channelPhoto = resolveChannelSenderAvatarUrl(
+      sender,
+      channelAvatar,
+      gateway.resourceBasePath,
+    );
+    const resolved = channelPhoto
+      ? html`<openclaw-channel-avatar
+          .routeUrl=${channelPhoto}
+          .authTokens=${gateway.authTokens}
+          .authReady=${Boolean(gateway.origin)}
+          .fallback=${renderInitialsAvatar(view.fallback)}
+        ></openclaw-channel-avatar>`
+      : view.imageUrl
+        ? html`
+            ${renderIdentityAvatarImage({
+              view,
+              fallbackSelector: ".chat-author-avatar",
+              className: "chat-author-avatar__image",
+              ariaHidden: true,
+            })}${renderInitialsAvatar(view.fallback, true)}
+          `
+        : renderInitialsAvatar(view.fallback);
+    return html`<span
+      class=${identityAvatarClass("chat-author-avatar", view)}
+      role="img"
+      aria-label=${label}
+      title=${label}
+    >
+      ${resolved}
+    </span>`;
+  });
 }
 
 export function resolveChatDefaultAvatarPlacement(
@@ -24,4 +96,31 @@ export function resolveChatDefaultAvatarPlacement(
   userId?: string | null,
 ): "footer" | "gutter" {
   return isDirectSession && !userId ? "footer" : "gutter";
+}
+
+/**
+ * The avatar URL may 404 or be unreachable (missing upload, dead Gravatar,
+ * stale configured URL); swap to initials instead of a broken image. Lit
+ * reuses DOM parts, so a load must clear a prior identity's error state.
+ */
+export function renderUserAvatarSlot(view: IdentityAvatarView, label: string) {
+  const initialsAvatar = html`<div
+    class="chat-avatar user chat-avatar--sender-initials"
+    style=${`background: hsl(${view.fallback.colorSeed % 360} 48% 42%)`}
+    role="img"
+    aria-label="${label}"
+  >
+    ${view.fallback.initials}
+  </div>`;
+  if (!view.imageUrl) {
+    return initialsAvatar;
+  }
+  return html`<span class=${identityAvatarClass("chat-avatar-slot", view)}>
+    ${renderIdentityAvatarImage({
+      view,
+      fallbackSelector: ".chat-avatar-slot",
+      className: "chat-avatar user",
+      alt: label,
+    })}${initialsAvatar}
+  </span>`;
 }

@@ -6,7 +6,6 @@ import {
   releaseMainSessionRecoveryOwner,
   type MainSessionRecoveryOwnerLease,
 } from "../../agents/main-session-recovery/main-session-recovery-store.js";
-import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import { mergeSessionEntry, type SessionEntry } from "../../config/sessions.js";
 import {
   acquireSessionActorStorage,
@@ -47,8 +46,6 @@ import type { AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
 type AgentTurnStartRequest = {
   privateCompletion?: true;
-  /** Trusted input-owner policy; not accepted from the wire request. */
-  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   assertAdmissionCurrent?: () => void;
   assertInputCommitAllowed?: () => void;
@@ -65,7 +62,6 @@ export function createAgentTurnService(
 ) {
   const startTurn = async ({
     privateCompletion,
-    replyExpectation,
     settleWakeReplay,
     assertAdmissionCurrent,
     assertInputCommitAllowed,
@@ -230,7 +226,6 @@ export function createAgentTurnService(
           | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
           | undefined;
         let cfgForAgent: OpenClawConfig | undefined;
-        let freshChild = false;
         let sessionStorePath: string | undefined;
         let resolvedSessionKey = requestedSessionKey;
         let resolvedSessionAgentId: string | undefined;
@@ -330,7 +325,6 @@ export function createAgentTurnService(
             touchInteraction,
           } = preparedSession;
           cfgForAgent = cfgLocal;
-          freshChild = preparedSession.freshChild;
           sessionStorePath = storePath;
           // Authorize the canonical session the run will actually target — covering
           // keyless requests whose default/effective session is resolved only here —
@@ -501,7 +495,6 @@ export function createAgentTurnService(
           ...runFacts,
           ...session,
           cfgForAgent,
-          freshChild,
           resolvedSessionKey,
           requestedSessionKey,
           activeSessionAgentId,
@@ -531,7 +524,6 @@ export function createAgentTurnService(
             preparedOffloadedRefs = [];
           },
           privateCompletion,
-          replyExpectation,
           settleWakeReplay,
           abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
           acquireGatewayWorkAdmission: admissionController.acquire,

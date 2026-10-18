@@ -1,25 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, flush } from "solid-js";
+import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
-import { HubTabs, type HubTabsProps } from "./solid/hub-tabs.tsx";
+import { renderHubTabs } from "./hub-tabs.ts";
 
-function mountTabs(props: HubTabsProps<string>, container: HTMLElement) {
-  mountSolid(() => createComponent(HubTabs, props), { container });
-  flush();
-}
+afterEach(() => document.body.replaceChildren());
 
-afterEach(() => {
-  cleanupSolid();
-  document.body.replaceChildren();
-});
-
-describe("HubTabs", () => {
+describe("renderHubTabs", () => {
   it("renders counts, badges, and the reduced sub variant", () => {
     const container = document.createElement("div");
-    mountTabs(
-      {
+    render(
+      renderHubTabs({
         id: "example",
         active: "files",
         tabs: [
@@ -30,7 +21,7 @@ describe("HubTabs", () => {
         panelId: "example-panel",
         variant: "sub",
         onSelect: () => undefined,
-      },
+      }),
       container,
     );
     expect(container.querySelector('[role="tablist"]')?.classList).toContain("hub-tabs--sub");
@@ -43,15 +34,15 @@ describe("HubTabs", () => {
     const container = document.createElement("div");
     document.body.append(container);
     try {
-      mountTabs(
-        {
+      render(
+        renderHubTabs({
           id: "example",
           active: "files",
           tabs: [{ value: "files", label: "Files" }],
           ariaLabel: "Example sections",
           panelId: "example-panel",
           onSelect: () => undefined,
-        },
+        }),
         container,
       );
       const group = container.querySelector<HTMLElement>('[role="tablist"]');
@@ -68,8 +59,8 @@ describe("HubTabs", () => {
       const onSelect = vi.fn();
       const onActivate = vi.fn();
       const container = document.createElement("div");
-      mountTabs(
-        {
+      render(
+        renderHubTabs({
           id: "example",
           active: "first",
           requestedActive,
@@ -82,7 +73,7 @@ describe("HubTabs", () => {
           panelId: "example-panel",
           onSelect,
           onActivate,
-        },
+        }),
         container,
       );
 
@@ -114,8 +105,8 @@ describe("HubTabs", () => {
 
   it("preserves an intentional no-selection state", () => {
     const container = document.createElement("div");
-    mountTabs(
-      {
+    render(
+      renderHubTabs({
         id: "example",
         active: null,
         tabs: [
@@ -125,7 +116,7 @@ describe("HubTabs", () => {
         ariaLabel: "Example sections",
         panelId: "example-panel",
         onSelect: () => undefined,
-      },
+      }),
       container,
     );
 
@@ -142,8 +133,8 @@ describe("HubTabs", () => {
     container.dir = dir;
     document.body.append(container);
     const onSelect = vi.fn();
-    mountTabs(
-      {
+    render(
+      renderHubTabs({
         id: "keyboard",
         active: "first",
         tabs: [
@@ -155,7 +146,7 @@ describe("HubTabs", () => {
         ariaLabel: "Routes",
         panelId: "route-panel",
         onSelect,
-      },
+      }),
       container,
     );
     await Promise.resolve();

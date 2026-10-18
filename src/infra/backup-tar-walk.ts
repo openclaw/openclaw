@@ -9,7 +9,6 @@ import { hasErrnoCode } from "./errno.js";
 export async function* walkBackupTar(params: {
   tar: Pick<typeof import("tar"), "Header" | "Pax">;
   paths: readonly string[];
-  signal?: AbortSignal;
   skip: (sourcePath: string) => boolean;
   filter: (sourcePath: string, stat: Stats) => boolean;
   onEntry: (sourcePath: string, header: HeaderData) => void;
@@ -25,7 +24,6 @@ export async function* walkBackupTar(params: {
     }
   };
   async function* visit(sourcePath: string, parent?: Directory): AsyncGenerator<Buffer> {
-    params.signal?.throwIfAborted();
     params.onProgress(sourcePath);
     if (params.skip(sourcePath)) {
       return;
@@ -95,7 +93,6 @@ export async function* walkBackupTar(params: {
         params.onVanished(sourcePath);
         return;
       }
-      params.signal?.throwIfAborted();
       const directory = stat.isDirectory();
       let mode = ((stat.mode & 0o7777) | 0o600) & ~0o22;
       if (directory) {
@@ -121,10 +118,8 @@ export async function* walkBackupTar(params: {
       if (handle) {
         let position = 0;
         while (position < stat.size) {
-          params.signal?.throwIfAborted();
           const buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, stat.size - position));
           const { bytesRead } = await handle.read(buffer, 0, buffer.length, position);
-          params.signal?.throwIfAborted();
           if (!bytesRead) {
             throw Object.assign(new Error("encountered unexpected EOF"), {
               code: "EOF",

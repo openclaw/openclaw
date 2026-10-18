@@ -51,7 +51,12 @@ export function SessionPanelGroups<Row>(props: {
 }) {
   return (
     <>
-      <section class={`chat-${props.kind}__running`}>
+      <section
+        class={{
+          "chat-processes__running": props.kind === "processes",
+          "chat-subagents__running": props.kind === "subagents",
+        }}
+      >
         <h3 class={{ "chat-subagents__section-title": props.kind === "subagents" }}>
           {t(`chat.${props.kind}Panel.running`, { count: String(props.running.length) })}
         </h3>
@@ -61,12 +66,27 @@ export function SessionPanelGroups<Row>(props: {
           </For>
         </div>
         {!props.running.length && (
-          <div class={`chat-${props.kind}__empty`}>{t(`chat.${props.kind}Panel.noRunning`)}</div>
+          <div
+            class={{
+              "chat-processes__empty": props.kind === "processes",
+              "chat-subagents__empty": props.kind === "subagents",
+            }}
+          >
+            {t(`chat.${props.kind}Panel.noRunning`)}
+          </div>
         )}
       </section>
-      <section class={`chat-${props.kind}__finished`}>
+      <section
+        class={{
+          "chat-processes__finished": props.kind === "processes",
+          "chat-subagents__finished": props.kind === "subagents",
+        }}
+      >
         <button
-          class={`chat-${props.kind}__finished-toggle`}
+          class={{
+            "chat-processes__finished-toggle": props.kind === "processes",
+            "chat-subagents__finished-toggle": props.kind === "subagents",
+          }}
           type="button"
           aria-expanded={props.finishedOpen ? "true" : "false"}
           aria-controls={props.finishedId}

@@ -35,7 +35,6 @@ import {
   PanelTypeOption,
   sidebarPanelType,
   readRegionHostedTabs,
-  readRegionPanelHost,
 } from "./chat-sidebar-region-header.tsx";
 import type { RegionProps, RegionElement, RegionMethods } from "./chat-sidebar-region-types.ts";
 
@@ -442,7 +441,9 @@ export const ChatSidebarRegion = defineSolidBridge<RegionProps, RegionMethods>(
     },
     methods: {
       deliverPanelEvent: (host, slot, event) => {
-        const panel = readRegionPanelHost(host, slot);
+        const panel = host.parentElement?.querySelector(
+          `[data-panel-slot="${slot}"]`,
+        )?.firstElementChild;
         if (
           !(panel instanceof HTMLElement) ||
           !("handleToggleRequest" in panel) ||

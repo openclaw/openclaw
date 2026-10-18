@@ -201,11 +201,6 @@ export function createGatewayHttpRequestHandler(
         sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
         return undefined;
       }
-      // Share documents and images stay fetchable for previews, but never invite
-      // indexing, including static, unavailable, and rejected responses.
-      if (isControlUiSharePath(requestPath, controlUiRouteBasePath)) {
-        res.setHeader("X-Robots-Tag", "noindex, nofollow");
-      }
       const remoteRoute = remoteIngress
         ? resolveRemoteControlUiHttpRoute(
             req,

@@ -8,7 +8,6 @@ import {
 } from "../../lib/sessions/navigation-handoff.ts";
 import {
   findUiSessionRow,
-  SESSION_COMPOSER_FOCUS_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
 import {
@@ -68,22 +67,21 @@ export function findCachedShortSession(
   location: RouteLocation,
   target: Extract<SessionPathTarget, { kind: "short" }>,
 ): CachedShortSession | undefined {
-  const search = new URLSearchParams(location.search);
-  const locationKey = search.get(SESSION_NAVIGATION_KEY_PARAM)?.trim();
+  const locationKey = new URLSearchParams(location.search)
+    .get(SESSION_NAVIGATION_KEY_PARAM)
+    ?.trim();
   const handoffKey = consumeSessionNavigationHandoff(context.gateway, location.pathname);
   const carriedKey = locationKey ?? handoffKey;
   const carriedByCurrentNavigation = Boolean(handoffKey && handoffKey === carriedKey);
   if (carriedKey) {
-    const preserveHandoffForCanonicalReload = () => {
-      // Navigation-key cleanup can precede the pane consuming its draft/focus
-      // hint. Carry this validated key through both same-connection reloads.
-      if (locationKey || search.get("draft") || search.get(SESSION_COMPOSER_FOCUS_PARAM) === "1") {
-        prepareSessionNavigationHandoff(context.gateway, location.pathname, carriedKey);
+    const preserveLocationKeyForCanonicalReload = () => {
+      if (locationKey) {
+        prepareSessionNavigationHandoff(context.gateway, location.pathname, locationKey);
       }
     };
     const carried = findUiSessionRow(context, carriedKey, target.agentId);
     if (carried && findLocalSessionReference([carried], target)) {
-      preserveHandoffForCanonicalReload();
+      preserveLocationKeyForCanonicalReload();
       return { sessionKey: carried.key, row: carried };
     }
     const carriedUuid = sessionKeyUuid(carriedKey);
@@ -94,7 +92,7 @@ export function findCachedShortSession(
       carriedAgentId &&
       normalizeAgentId(carriedAgentId) === normalizeAgentId(target.agentId)
     ) {
-      preserveHandoffForCanonicalReload();
+      preserveLocationKeyForCanonicalReload();
       return { sessionKey: carriedKey };
     }
   }

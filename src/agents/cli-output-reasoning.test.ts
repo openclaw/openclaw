@@ -2,17 +2,25 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { CliThinkingProgress } from "./cli-output-contracts.js";
 import { createCliJsonlStreamingParser } from "./cli-output-stream.js";
-import {
-  claudeBlockStart,
-  claudeBlockStop,
-  claudeInputJsonDelta,
-  claudeStreamEvent,
-  claudeTextDelta,
-  joinJsonlFrames,
-} from "./cli-output.test-helpers.js";
+import { claudeStreamEvent, claudeTextDelta, joinJsonlFrames } from "./cli-output.test-helpers.js";
 
 function claudeMessageStart(id?: string) {
   return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
+}
+
+function claudeBlockStart(contentBlock: Record<string, unknown>, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_start",
+    ...(index === undefined ? {} : { index }),
+    content_block: contentBlock,
+  });
+}
+
+function claudeBlockStop(index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_stop",
+    ...(index === undefined ? {} : { index }),
+  });
 }
 
 function claudeThinkingDelta(thinking: string, index?: number | string) {
@@ -20,6 +28,14 @@ function claudeThinkingDelta(thinking: string, index?: number | string) {
     type: "content_block_delta",
     ...(index === undefined ? {} : { index }),
     delta: { type: "thinking_delta", thinking },
+  });
+}
+
+function claudeInputJsonDelta(partialJson: string, index?: number) {
+  return claudeStreamEvent({
+    type: "content_block_delta",
+    ...(index === undefined ? {} : { index }),
+    delta: { type: "input_json_delta", partial_json: partialJson },
   });
 }
 

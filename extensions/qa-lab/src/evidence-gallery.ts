@@ -125,7 +125,7 @@ async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {
-  const repoRoot = params.repoRoot;
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const raw = params.inputPath.trim();
   if (!raw) {
     throw new QaEvidenceGalleryError("Evidence path is required.", 400);
@@ -386,7 +386,7 @@ async function collectDeclaredQaEvidenceArtifactFiles(params: {
   summaryEntries: readonly QaEvidenceSummaryEntry[];
   artifacts: readonly (readonly QaEvidenceArtifact[])[];
 }): Promise<Set<string>> {
-  const repoRoot = params.repoRoot;
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidenceDir = path.dirname(params.evidencePath);
   const allowed = new Set<string>();
   for (const entryArtifacts of params.artifacts) {
@@ -544,6 +544,7 @@ async function buildProducerContextFile(params: {
 }
 
 async function buildArtifactView(params: {
+  allowedArtifactFiles: ReadonlySet<string>;
   artifactIndex: number;
   artifact: QaEvidenceArtifact;
   evidenceDir: string;
@@ -565,10 +566,14 @@ async function buildArtifactView(params: {
   const displayPath =
     (realFileRepoPath ? sanitizeGalleryText(realFileRepoPath, params) : null) ??
     sanitizeGalleryText(params.artifact.path, params);
-  const exists = realFile !== null;
+  const exists = realFile !== null && params.allowedArtifactFiles.has(realFile);
   return {
     exists,
-    error: exists ? null : "Evidence artifact not found.",
+    error: exists
+      ? null
+      : realFile
+        ? "Evidence artifact is not declared by this evidence summary."
+        : "Evidence artifact not found.",
     href: exists
       ? artifactHref(params.hrefEvidencePath, {
           artifactIndex: params.artifactIndex,
@@ -733,7 +738,7 @@ async function candidateProducerRoots(params: {
   repoRoot: string;
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }) {
-  const repoRoot = params.repoRoot;
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidenceDir = path.dirname(params.evidencePath);
   const roots = new Set<string>([evidenceDir]);
   for (const entry of params.summaryEntries) {
@@ -789,8 +794,10 @@ async function buildProducerContext(params: {
   if (!rootPath) {
     return null;
   }
-  const repoRoot = params.repoRoot;
-  const evidenceDir = path.dirname(params.evidencePath);
+  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const evidenceDir = path.dirname(
+    await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot }),
+  );
   const allowedRoots = [repoRoot, evidenceDir];
   const producerPaths = Object.fromEntries(
     UX_MATRIX_PRODUCER_FILES.map((file) => [file.key, path.join(rootPath, file.path)]),
@@ -900,11 +907,20 @@ export async function buildQaEvidenceGalleryModel(params: {
   };
   const effectiveEntries = new Set(getEffectiveQaEvidenceEntries(summary));
   const projectedArtifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
+  // Resolve the declared-artifact allowlist once; buildArtifactView then only checks membership
+  // instead of re-reading the evidence file and re-collecting the allowlist per artifact.
   const evidenceDir = path.dirname(evidencePath);
+  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
+    evidencePath,
+    repoRoot,
+    summaryEntries: summary.entries,
+    artifacts: projectedArtifacts,
+  });
   const artifactTasks = projectedArtifacts.flatMap((entryArtifacts, entryIndex) =>
     entryArtifacts.map(
       (artifact, artifactIndex) => () =>
         buildArtifactView({
+          allowedArtifactFiles,
           artifact,
           artifactIndex,
           evidenceDir,

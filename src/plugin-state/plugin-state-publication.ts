@@ -1,11 +1,24 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { randomUUID } from "node:crypto";
+import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
-import type { SqliteCommitReceipt } from "../infra/sqlite-commit-receipt.js";
+import {
+  createSqliteCommitReceipt,
+  hasSqliteCommitReceiptCoverage,
+  type SqliteCommitReceipt,
+  type SqliteCommitSource,
+  type SqliteCommittedFact,
+} from "../infra/sqlite-commit-receipt.js";
+import {
+  publishSqliteCommittedState,
+  stageSqliteCommittedPublication,
+  stageSqliteTransactionState,
+} from "../infra/sqlite-post-commit.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../infra/sqlite-worker-contract.js";
 import {
   deferSqliteWorkerCommitReceipt,
@@ -13,17 +26,18 @@ import {
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { readTrackedStateDatabaseIdentity } from "../state/openclaw-state-db-handle.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  createKeyedStateDomainPublication,
-  type StateDomainChange,
-} from "../state/state-domain-publication.js";
 
 type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
-type PluginStateChange = StateDomainChange<PluginStateRow>;
+type PluginStateChange =
+  | { kind: "committed"; receipt: Receipt }
+  | { kind: "unknown"; identity: string | symbol }
+  | { kind: "pending" | "settled"; identity: string | symbol; operationId: string };
 
 /** Descriptive read dependencies; these snapshots never grant mutation authority. */
 export type PluginStateReadDependency = {
@@ -42,31 +56,47 @@ type PluginStateReadCapture = {
 };
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
+  sources: new WeakMap<DatabaseSync, SqliteCommitSource>(),
+  capture: new AsyncLocalStorage<Map<string, SqliteCommittedFact<PluginStateRow>>>(),
   reads: new AsyncLocalStorage<PluginStateReadCapture>(),
+  installingFacts: 0,
   pending: new Map<string | symbol, Set<string>>(),
   unavailable: new Set<string | symbol>(),
+  facts: new Set<(change: PluginStateChange) => void>(),
+  observers: new Set<(change: PluginStateChange) => void>(),
 }));
 
-const publication = createKeyedStateDomainPublication<PluginStateRow>({
-  domain: "plugin-state",
-  isFact: (key, fact) =>
-    fact.kind === "absent" ||
-    (fact.kind === "postimage" &&
-      isRow(fact.value) &&
-      pluginStatePublicationKey(fact.value) === key),
-  invalidReceiptMessage: "Plugin state commit receipt is invalid",
-  installFailureMessage: "Plugin state fact installation failed",
-  mutationDuringInstallMessage: "Plugin state cannot mutate during fact installation",
-  closedMessage: "Plugin state publication is closed",
-  changedOwnerMessage: "Plugin state receipt changed owner",
-});
+function sourceFor(db: EngineConnection): SqliteCommitSource {
+  const anchor = sqlPublicationAnchor(db);
+  let source = state.sources.get(anchor);
+  if (!source) {
+    source = {
+      identity: readTrackedStateDatabaseIdentity(anchor)?.key ?? Symbol("untracked-plugin-state"),
+      incarnation: randomUUID(),
+    };
+    state.sources.set(anchor, source);
+  }
+  return source;
+}
 
 /** Match SQLite text binding without changing public comparison-token scopes. */
 export function pluginStatePublicationKey(row: EntryKey): string {
   return JSON.stringify([row.plugin_id, row.namespace, toUSVString(row.entry_key)]);
 }
 
-publication.subscribeFacts((change) => {
+function captureReceipt(
+  db: EngineConnection,
+  facts: ReadonlyMap<string, SqliteCommittedFact<PluginStateRow>>,
+) {
+  return createSqliteCommitReceipt({
+    source: sourceFor(db),
+    domain: "plugin-state",
+    keys: [...facts.keys()],
+    readFact: (key) => facts.get(key)!,
+  });
+}
+
+function install(change: PluginStateChange): void {
   if (change.kind === "pending") {
     const pending = state.pending.get(change.identity) ?? new Set<string>();
     pending.add(change.operationId);
@@ -80,15 +110,39 @@ publication.subscribeFacts((change) => {
   } else if (change.kind === "unknown") {
     state.unavailable.add(change.identity);
   }
-});
+  const errors: unknown[] = [];
+  state.installingFacts++;
+  try {
+    notifyListeners(state.facts, change, (error) => errors.push(error));
+  } finally {
+    state.installingFacts--;
+  }
+  if (errors.length) {
+    throw new AggregateError(errors, "Plugin state fact installation failed");
+  }
+}
+
+function publication(receipt: Receipt) {
+  let change: PluginStateChange = { kind: "committed", receipt };
+  return {
+    installFacts: () => install(change),
+    invalidate() {
+      change = { kind: "unknown", identity: receipt.source.identity };
+      install(change);
+    },
+    notify: () => notifyListeners(state.observers, change),
+  };
+}
 
 /** Owns committed-fact staging and observation; raw/foreign authority remains separate. */
 export const pluginStatePublication = {
   stagePostimage: stagePluginStatePostimage,
   stageDeletions: stagePluginStateDeletions,
   /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
-  subscribeFacts: publication.subscribeFacts,
-  subscribe: publication.subscribe,
+  subscribeFacts: (listener: (change: PluginStateChange) => void) =>
+    registerListener(state.facts, listener),
+  subscribe: (listener: (change: PluginStateChange) => void) =>
+    registerListener(state.observers, listener),
 };
 
 /** Record the actual keyed store read without opening or inspecting another database. */
@@ -192,23 +246,58 @@ export async function capturePluginStateReadDependencies<T>(read: () => Promise<
   }
 }
 
+function stage(db: EngineConnection, facts: Map<string, SqliteCommittedFact<PluginStateRow>>) {
+  if (!facts.size) {
+    return;
+  }
+  if (state.installingFacts) {
+    throw new Error("Plugin state cannot mutate during fact installation");
+  }
+  const anchor = sqlPublicationAnchor(db);
+  const capture = state.capture.getStore();
+  if (capture) {
+    const previous = new Map([...facts.keys()].map((key) => [key, capture.get(key)]));
+    stageSqliteTransactionState(anchor, {
+      stage: () => {
+        for (const [key, fact] of facts) {
+          capture.set(key, fact);
+        }
+      },
+      commit() {},
+      rollback: () => {
+        for (const [key, fact] of previous) {
+          if (fact) {
+            capture.set(key, fact);
+          } else {
+            capture.delete(key);
+          }
+        }
+      },
+    });
+  }
+  const next = publication(captureReceipt(db, facts));
+  if (!stageSqliteCommittedPublication(anchor, next) && !db.isTransaction) {
+    publishSqliteCommittedState(next);
+  }
+}
+
 function stagePluginStatePostimage(db: EngineConnection, row: PluginStateRow): void {
-  publication.stageFacts(
-    db,
-    new Map([[pluginStatePublicationKey(row), { kind: "postimage", value: { ...row } }]]),
-  );
+  stage(db, new Map([[pluginStatePublicationKey(row), { kind: "postimage", value: { ...row } }]]));
 }
 
 /** DELETE RETURNING captures exact tombstones, including eviction and whole-namespace clear. */
 function stagePluginStateDeletions(db: EngineConnection, rows: readonly EntryKey[]): void {
-  publication.stageDeletions(db, rows.map(pluginStatePublicationKey));
+  stage(db, new Map(rows.map((row) => [pluginStatePublicationKey(row), { kind: "absent" }])));
 }
 
 export type PluginStateCommitReceipt = Receipt;
 
 /** Lend exact staged facts to a compound owner's existing settlement receipt. */
 export function capturePluginStateReceipt<T>(db: EngineConnection, write: () => T) {
-  return publication.capture(db, write);
+  return state.capture.run(new Map(), () => ({
+    result: write(),
+    receipt: captureReceipt(db, state.capture.getStore()!),
+  }));
 }
 
 /** Capture the whole native transaction before COMMIT, including keys changed by retention. */
@@ -247,6 +336,33 @@ function isRow(value: unknown): value is PluginStateRow {
   );
 }
 
+function readReceipt(value: unknown): Receipt {
+  if (
+    !isRecord(value) ||
+    !isRecord(value.source) ||
+    typeof value.source.identity !== "string" ||
+    typeof value.source.incarnation !== "string" ||
+    !(value.facts instanceof Map) ||
+    !hasSqliteCommitReceiptCoverage(value, {
+      source: { identity: value.source.identity, incarnation: value.source.incarnation },
+      domain: "plugin-state",
+      keys: [...value.facts.keys()],
+    }) ||
+    ![...value.facts].every(
+      ([key, fact]) =>
+        typeof key === "string" &&
+        (fact.kind === "absent" ||
+          (fact.kind === "postimage" &&
+            isRow(fact.value) &&
+            pluginStatePublicationKey(fact.value) === key)),
+    )
+  ) {
+    throw new Error("Plugin state commit receipt is invalid");
+  }
+  // SAFETY: The private transport envelope, exact keys and every row field were checked above.
+  return value as Receipt;
+}
+
 /** External effects cannot use facts while a writer is pending or its outcome is unknown. */
 export function assertPluginStatePublicationSettled(identity: string): void {
   if (state.pending.has(identity) || state.unavailable.has(identity)) {
@@ -259,20 +375,82 @@ export function beginPluginStatePublication(
   identity: () => string | symbol,
   assertCurrent?: () => void,
 ) {
+  const operationId = randomUUID();
+  const superseded = new Set<string>();
+  let installing = false;
+  let unknown = false;
+  let finished = false;
+  const unsubscribe = pluginStatePublication.subscribeFacts((change) => {
+    if (installing) {
+      return;
+    }
+    if (change.kind === "committed" && change.receipt.source.identity === identity()) {
+      for (const key of change.receipt.facts.keys()) {
+        superseded.add(key);
+      }
+    } else if (change.kind === "unknown" && change.identity === identity()) {
+      unknown = true;
+    }
+  });
   const pendingIdentity = identity();
-  const pending = publication.begin({
-    identity: pendingIdentity,
-    assertCurrent() {
-      assertCurrent?.();
-      if (identity() !== pendingIdentity) {
-        throw new Error("Plugin state receipt changed owner");
+  try {
+    install({ kind: "pending", identity: pendingIdentity, operationId });
+  } catch (error) {
+    unsubscribe();
+    try {
+      install({ kind: "settled", identity: pendingIdentity, operationId });
+    } catch {
+      // The writer never started; retain the original observer failure after clearing denial.
+    }
+    throw error;
+  }
+  return {
+    install(facts: unknown) {
+      try {
+        assertCurrent?.();
+        if (finished) {
+          throw new Error("Plugin state publication is closed");
+        }
+        if (isRecord(facts) && facts.kind === "unknown" && facts.identity === identity()) {
+          install({ kind: "unknown", identity: identity() });
+          return;
+        }
+        const receipt = readReceipt(facts);
+        if (receipt.source.identity !== identity()) {
+          throw new Error("Plugin state receipt changed owner");
+        }
+        installing = true;
+        publishSqliteCommittedState(
+          publication({
+            ...receipt,
+            facts: new Map(
+              [...receipt.facts].map(([key, fact]) => [
+                key,
+                unknown || superseded.has(key) ? { kind: "unknown" } : fact,
+              ]),
+            ),
+          }),
+        );
+      } catch (error) {
+        install({ kind: "unknown", identity: identity() });
+        throw error;
+      } finally {
+        installing = false;
       }
     },
-  });
-  return {
-    install: pending.committed,
     finish(outcome: "completed" | "unknown") {
-      pending.finish(outcome === "completed", true);
+      if (finished) {
+        return;
+      }
+      finished = true;
+      unsubscribe();
+      try {
+        if (outcome === "unknown") {
+          install({ kind: "unknown", identity: identity() });
+        }
+      } finally {
+        install({ kind: "settled", identity: pendingIdentity, operationId });
+      }
     },
   };
 }

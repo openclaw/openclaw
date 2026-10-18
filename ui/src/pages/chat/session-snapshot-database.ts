@@ -169,14 +169,16 @@ export async function deleteSessionSnapshotEntries(
     return;
   }
   try {
-    await new Promise<void>((resolve, reject) => {
+    await new Promise<void>((resolve) => {
       const names = [
         CHAT_SNAPSHOT_STORE_NAME,
         CHAT_SNAPSHOT_METADATA_STORE_NAME,
         SIDEBAR_SNAPSHOT_STORE_NAME,
       ];
       const transaction = database.transaction(names, "readwrite");
-      void transactionComplete(transaction).then(resolve, reject);
+      for (const event of ["complete", "error", "abort"]) {
+        transaction.addEventListener(event, () => resolve(), byPrefix ? { once: true } : undefined);
+      }
       for (const name of names) {
         const store = transaction.objectStore(name);
         if (!byPrefix && name !== SIDEBAR_SNAPSHOT_STORE_NAME) {
@@ -202,7 +204,7 @@ export async function deleteSessionSnapshotEntries(
       }
     });
   } catch (error) {
-    // Scope clearing reports failures; single-record invalidation is best effort.
+    // Scope clearing reports setup failures; single-record invalidation is best effort.
     if (byPrefix) {
       throw error;
     }

@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import type { Result } from "@openclaw/normalization-core/result";
 import { ensureMessageToolRunOutcomeSchema } from "../state/openclaw-agent-message-tool-outcome-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
@@ -13,9 +14,7 @@ import {
   assertTransactionUsable,
   runSqliteImmediateTransactionSync,
 } from "./sqlite-transaction.js";
-import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
-import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
 
 export type MessageToolRunOutcomeWorkerOperations = {
   record: {
@@ -26,10 +25,14 @@ export type MessageToolRunOutcomeWorkerOperations = {
 
 export function bindSqliteWorkerBackend(
   _input: undefined,
-  context: SqliteWorkerDatabaseContext,
+  context: {
+    databasePath: string;
+    database: DatabaseSync;
+    admit(stage: "transaction" | "commit"): void;
+  },
 ): SqliteWorkerBackend<MessageToolRunOutcomeWorkerOperations> {
   const db = context.database;
-  return bindSqliteWorkerDatabase<MessageToolRunOutcomeWorkerOperations>(db, {
+  return {
     execute(command) {
       try {
         runSqliteImmediateTransactionSync(
@@ -63,5 +66,12 @@ export function bindSqliteWorkerBackend(
         return { ok: false, error: failure };
       }
     },
-  });
+    assertSettled() {
+      assertTransactionUsable(db);
+      if (db.isTransaction) {
+        throw new Error("Message-tool outcome transaction did not settle");
+      }
+    },
+    close() {},
+  };
 }

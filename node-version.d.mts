@@ -4,8 +4,6 @@ export type NodeReleaseVersion = {
   patch: number;
 };
 
-export const MINIMUM_BUN_VERSION: NodeReleaseVersion;
-
 export function parseNodeReleaseVersion(value: unknown): NodeReleaseVersion | null;
 export function isNodeVersionAtLeast(
   version: NodeReleaseVersion | null,

@@ -21,7 +21,10 @@ import type {
   PendingRequesterSettleWakeCommit,
   SubagentLifecycleWakeContext,
 } from "./subagent-registry-lifecycle-context.js";
-import { buildSafeLifecycleErrorMeta } from "./subagent-registry-lifecycle-log.js";
+import {
+  buildSafeLifecycleErrorMeta,
+  maskLifecycleIdentifier,
+} from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -514,8 +517,8 @@ export function scheduleRequesterSettleWake(
             ) {
               params.warn("requester settle wake failed", {
                 error: safeError,
-                runId,
-                requesterSessionKey,
+                runId: maskLifecycleIdentifier(runId, "run"),
+                requesterSessionKey: maskLifecycleIdentifier(requesterSessionKey, "session"),
               });
             }
             const current = params.runs.get(runId);
@@ -567,7 +570,7 @@ export function scheduleRequesterSettleWake(
             } catch (settleError) {
               params.warn("failed to persist requester settle wake rejection", {
                 error: buildSafeLifecycleErrorMeta(settleError),
-                runId,
+                runId: maskLifecycleIdentifier(runId, "run"),
               });
             }
           }
@@ -578,7 +581,7 @@ export function scheduleRequesterSettleWake(
         if (!isGatewayRestartDrainError(error)) {
           params.warn("requester settle wake admission failed", {
             error: buildSafeLifecycleErrorMeta(error),
-            runId,
+            runId: maskLifecycleIdentifier(runId, "run"),
           });
         }
       })

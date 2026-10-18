@@ -17,7 +17,6 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
-import * as gitWorkerContext from "../../infra/git-worker-context.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import {
@@ -36,7 +35,6 @@ import {
   withWorktreeBasePreparation,
   type WorktreeBasePreparation,
 } from "./base-ref.js";
-import { readRepositoryBranches } from "./branches.runtime.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
 import { hasWorktreeUnknownOutcome } from "./errors.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -100,26 +98,13 @@ describe("ManagedWorktreeService branch discovery", () => {
     return await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", message);
   }
 
-  function admitBranchSuggestionCache() {
-    vi.spyOn(gitWorkerContext, "gitFilesystemEnvironmentRevision").mockReturnValue("test-env");
-  }
-
-  async function expectWarmBranchAdmission(
-    checkout: string,
-    resetCommands?: () => void,
-    readBranches = readRepositoryBranches,
-  ) {
-    if (readBranches === readRepositoryBranches) {
-      admitBranchSuggestionCache();
-    }
-    const first = await readBranches(checkout, { includeRepositoryStatus: true });
+  async function expectWarmBranchAdmission(checkout: string, resetCommands?: () => void) {
+    const first = await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true });
     expect(first.repositoryStatus).toBe("git");
     resetCommands?.();
-    expect(await readBranches(checkout, { includeRepositoryStatus: true })).toEqual(first);
-  }
-
-  function expireBranchSuggestions() {
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 30_001);
+    expect(
+      await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
+    ).toEqual(first);
   }
 
   beforeEach(async () => {
@@ -720,41 +705,32 @@ describe("ManagedWorktreeService branch discovery", () => {
     },
   );
 
-  it("reuses branch suggestions until expiry, then observes loose, packed, tag, and HEAD changes", async () => {
-    admitBranchSuggestionCache();
+  it("reuses unchanged branch inventories and observes loose, packed, tag, and HEAD changes", async () => {
     const linked = path.join(root, "linked");
     await git(repo, "worktree", "add", "-b", "tasks/selected", linked, "HEAD");
     const run = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
-    const first = await readRepositoryBranches(linked);
+    const first = await service.listRepositoryBranches(linked);
     expect(first.headBranch).toBe("tasks/selected");
     run.mockClear();
-    expect(await readRepositoryBranches(linked)).toEqual(first);
+    expect(await service.listRepositoryBranches(linked)).toEqual(first);
     expect(run).toHaveBeenCalledTimes(0);
 
     await git(repo, "branch", "tasks/added");
-    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
-      name: "tasks/added",
-      kind: "local",
-    });
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(linked)).branches).toContainEqual({
+    expect((await service.listRepositoryBranches(linked)).branches).toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "pack-refs", "--all", "--prune");
     await git(repo, "branch", "-d", "tasks/added");
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(linked)).branches).not.toContainEqual({
+    expect((await service.listRepositoryBranches(linked)).branches).not.toContainEqual({
       name: "tasks/added",
       kind: "local",
     });
     await git(repo, "tag", "tasks/selected");
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBe("heads/tasks/selected");
     await git(linked, "switch", "--detach");
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(linked)).headBranch).toBeUndefined();
-    expect((await readRepositoryBranches(repo)).headBranch).toBe("main");
+    expect((await service.listRepositoryBranches(linked)).headBranch).toBeUndefined();
+    expect((await service.listRepositoryBranches(repo)).headBranch).toBe("main");
 
     const commit = await git(repo, "rev-parse", "HEAD");
     const refs = path.join(repo, ".git", "refs", "heads", "fleet");
@@ -764,23 +740,21 @@ describe("ManagedWorktreeService branch discovery", () => {
         fs.writeFile(path.join(refs, String(index).padStart(4, "0")), `${commit}\n`),
       ),
     );
-    expireBranchSuggestions();
-    const fleet = await readRepositoryBranches(repo);
+    const fleet = await service.listRepositoryBranches(repo);
     run.mockClear();
-    expect(await readRepositoryBranches(repo)).toEqual(fleet);
+    expect(await service.listRepositoryBranches(repo)).toEqual(fleet);
     expect(run).toHaveBeenCalledTimes(0);
     await fs.unlink(path.join(refs, "0000"));
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(repo)).branches).not.toContainEqual({
+    expect((await service.listRepositoryBranches(repo)).branches).not.toContainEqual({
       name: "fleet/0000",
       kind: "local",
     });
   });
 
-  it("reuses inventories with more than 1,024 pack metadata files and refreshes expired suggestions", async () => {
+  it("reuses inventories with more than 1,024 pack metadata files and refreshes changed refs", async () => {
     const packs = path.join(repo, ".git", "objects", "pack");
     await fs.mkdir(packs, { recursive: true });
-    // Git ignores keep markers during discovery.
+    // Git ignores keep markers during discovery; all still participate in the revision.
     await Promise.all(
       Array.from({ length: 1_100 }, (_, index) =>
         fs.writeFile(path.join(packs, `pack-${index}.keep`), "synthetic keep marker\n"),
@@ -790,15 +764,14 @@ describe("ManagedWorktreeService branch discovery", () => {
     await expectWarmBranchAdmission(repo, () => run.mockClear());
     expect(run).toHaveBeenCalledTimes(0);
     await git(repo, "branch", "new-branch");
-    expireBranchSuggestions();
-    expect((await readRepositoryBranches(repo)).branches).toContainEqual({
+    expect((await service.listRepositoryBranches(repo)).branches).toContainEqual({
       name: "new-branch",
       kind: "local",
     });
   });
 
   it.each(["missing loose", "corrupt loose", "missing pack", "missing index", "corrupt pack"])(
-    "rejects a %s HEAD object when branch suggestions refresh",
+    "rejects a %s HEAD object after a branch-list cache hit",
     async (damage) => {
       const head = await git(repo, "rev-parse", "HEAD");
       let object = path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2));
@@ -822,20 +795,21 @@ describe("ManagedWorktreeService branch discovery", () => {
       } else {
         await fs.writeFile(object, Buffer.alloc((await fs.stat(object)).size));
       }
-      expireBranchSuggestions();
 
       await expect(
-        readRepositoryBranches(repo, { includeRepositoryStatus: true }),
+        service.listRepositoryBranches(repo, { includeRepositoryStatus: true }),
       ).resolves.toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });
-      await expect(readRepositoryBranches(repo)).rejects.toThrow("Git metadata is unavailable");
+      await expect(service.listRepositoryBranches(repo)).rejects.toThrow(
+        "Git metadata is unavailable",
+      );
     },
   );
 
   it.each(["global", "worktree", "included", "environment", "relative", "parameters"])(
-    "observes changed %s config on branch suggestion refresh",
+    "observes changed %s config after warming checkout admission",
     async (source) => {
       let config = path.join(root, "global.gitconfig");
       if (source === "worktree") {
@@ -851,27 +825,22 @@ describe("ManagedWorktreeService branch discovery", () => {
         config = path.join(root, "included.gitconfig");
         vi.stubEnv("GIT_CONFIG_PARAMETERS", `'include.path=${config}'`);
       }
-      const readBranches =
-        source === "environment"
-          ? service.listRepositoryBranches.bind(service)
-          : readRepositoryBranches;
-      await expectWarmBranchAdmission(repo, undefined, readBranches);
+      await expectWarmBranchAdmission(repo);
       if (source === "environment") {
         config = path.join(root, "redirected.gitconfig");
         vi.stubEnv("GIT_CONFIG_GLOBAL", config);
       }
       await fs.writeFile(config, "[malformed\n");
-      if (source !== "environment") {
-        expireBranchSuggestions();
-      }
-      expect(await readBranches(repo, { includeRepositoryStatus: true })).toEqual({
-        branches: [],
-        repositoryStatus: "unavailable",
-      });
+      expect(await service.listRepositoryBranches(repo, { includeRepositoryStatus: true })).toEqual(
+        {
+          branches: [],
+          repositoryStatus: "unavailable",
+        },
+      );
     },
   );
 
-  it("supports tag HEADs and alternate object storage through native Git refresh", async () => {
+  it("keeps tag peeling and alternate object storage under native Git admission", async () => {
     const head = await git(repo, "rev-parse", "HEAD");
     await git(repo, "tag", "-a", "tag-head", "-m", "tagged commit");
     const tag = await git(repo, "rev-parse", "tag-head");
@@ -882,9 +851,10 @@ describe("ManagedWorktreeService branch discovery", () => {
       await expectWarmBranchAdmission(checkout);
     }
     await fs.unlink(path.join(repo, ".git", "objects", head.slice(0, 2), head.slice(2)));
-    expireBranchSuggestions();
     for (const checkout of [repo, alternate]) {
-      expect(await readRepositoryBranches(checkout, { includeRepositoryStatus: true })).toEqual({
+      expect(
+        await service.listRepositoryBranches(checkout, { includeRepositoryStatus: true }),
+      ).toEqual({
         branches: [],
         repositoryStatus: "unavailable",
       });

@@ -1,9 +1,10 @@
-import { For, Show, createSignal, createUniqueId, onCleanup } from "solid-js";
+import { For, Show, createSignal, createUniqueId } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Popover, type PopoverHandle } from "../../../components/solid/popover.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import type { ChatSourcePreview } from "../../../lib/chat/source-previews.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
 import { readLinkFavicon, type LinkFaviconFetcher } from "../link-favicon-cache.ts";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -104,15 +105,14 @@ function SourceCard(props: {
   );
 }
 
-export function ChatSourcePreviews(props: SourcePreviewsProps) {
+function ChatSourcePreviews(
+  props: SourcePreviewsProps,
+  host: SolidBridgeElement<SourcePreviewsProps>,
+) {
   const [revision, setRevision] = createSignal(0);
   const [failedFavicons, setFailedFavicons] = createSignal<ReadonlySet<string>>(new Set<string>());
-  let active = true;
-  onCleanup(() => {
-    active = false;
-  });
   const refreshFavicons = () => {
-    if (active) {
+    if (host.isConnected) {
       setRevision((value) => value + 1);
     }
   };
@@ -124,35 +124,36 @@ export function ChatSourcePreviews(props: SourcePreviewsProps) {
     return url && !failedFavicons().has(url) ? url : null;
   };
   return (
-    <Show when={props.sources.length > 0}>
-      <openclaw-chat-sources>
-        <div
-          class="chat-source-strip"
-          role="group"
-          aria-label={t("chat.messages.sourcePreviews.label")}
-        >
-          <div class="chat-source-strip__label">{t("chat.messages.sourcePreviews.label")}</div>
-          <div class="chat-source-strip__cards">
-            <For each={props.sources} keyed={(source) => source.url}>
-              {(source) => (
-                <SourceCard
-                  source={source()}
-                  favicon={favicon(source())}
-                  onImageError={(url) => setFailedFavicons((failed) => new Set([...failed, url]))}
-                />
-              )}
-            </For>
-          </div>
-        </div>
-      </openclaw-chat-sources>
-    </Show>
+    <div
+      class="chat-source-strip"
+      role="group"
+      aria-label={t("chat.messages.sourcePreviews.label")}
+    >
+      <div class="chat-source-strip__label">{t("chat.messages.sourcePreviews.label")}</div>
+      <div class="chat-source-strip__cards">
+        <For each={props.sources} keyed={(source) => source.url}>
+          {(source) => (
+            <SourceCard
+              source={source()}
+              favicon={favicon(source())}
+              onImageError={(url) => setFailedFavicons((failed) => new Set([...failed, url]))}
+            />
+          )}
+        </For>
+      </div>
+    </div>
   );
 }
 
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
-    }
+defineSolidBridge<SourcePreviewsProps>("openclaw-chat-sources", ChatSourcePreviews, {
+  properties: {
+    sources: { default: [], attribute: false },
+    fetchFavicon: { default: undefined, attribute: false },
+  },
+});
+
+declare global {
+  interface HTMLElementTagNameMap {
+    "openclaw-chat-sources": SolidBridgeElement<SourcePreviewsProps>;
   }
 }

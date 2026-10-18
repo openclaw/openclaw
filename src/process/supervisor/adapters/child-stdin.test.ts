@@ -2,23 +2,6 @@ import { Writable } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { createManagedChildStdin } from "./child-stdin.js";
 
-it("delivers remote EOF once when shutdown callers overlap", () => {
-  const stream = new Writable({
-    write(_chunk, _encoding, callback) {
-      callback();
-    },
-  });
-  const end = vi.fn();
-  const stdin = createManagedChildStdin(stream, end)!;
-  try {
-    stdin.end();
-    stdin.end();
-    expect(end).toHaveBeenCalledOnce();
-  } finally {
-    stream.destroy();
-  }
-});
-
 it.each(["ECANCELED", "ERR_STREAM_DESTROYED", "EIO"])(
   "preserves remote pipe closure when buffered writes fail with %s",
   async (code) => {

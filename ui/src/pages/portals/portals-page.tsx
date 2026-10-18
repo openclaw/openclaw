@@ -226,13 +226,12 @@ function PortalContent(props: { controller: PortalsController }) {
     (environment() &&
       environment()!.status !== "starting" &&
       environment()!.status !== "available");
-  const selectedPortal = createMemo(() =>
+  const selectedPortal = () =>
     props.controller.portals.find(
       (portal) =>
         portal.id ===
         (props.controller.presentation().requestedPortalId ?? props.controller.selectedPortalId),
-    ),
-  );
+    );
   return (
     <Show
       when={
@@ -332,9 +331,6 @@ export const PortalsPage = defineSolidBridge<PortalsPageProps, PortalsPageMethod
           event instanceof CustomEvent ? (event.detail as PortalPanelToggleDetail) : null;
         if (detail?.open === false) {
           return;
-        }
-        if (detail?.requestId) {
-          controllers.get(host)?.observePresentation(detail.requestId, detail.portalId);
         }
         if (
           detail?.portalId &&

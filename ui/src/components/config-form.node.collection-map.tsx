@@ -3,8 +3,9 @@ import { For, Show, createMemo } from "solid-js";
 import { containsRedactedSentinel } from "../lib/config-form-utils.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import {
-  ConfigCollectionDraft,
-  type ConfigCollectionDraftHandle,
+  openCollectionDraft,
+  ConfigCollectionDraftHost,
+  type ConfigFormCollectionDraftCommit,
   type ConfigFormCollectionDraftProps,
 } from "./config-form-collection-draft.tsx";
 import { defaultValue, NO_SAFE_DEFAULT } from "./config-form.constraints.ts";
@@ -159,7 +160,6 @@ function ConfigMapRow(
 }
 
 export function ConfigMapField(props: MapProps): JSX.Element {
-  let draft!: ConfigCollectionDraftHandle;
   const content = createMemo(() => resolveMapContent(props.params));
   return (
     <Show when={content().visible}>
@@ -176,9 +176,9 @@ export function ConfigMapField(props: MapProps): JSX.Element {
               class="btn btn--sm"
               aria-controls={content().draftId}
               disabled={props.params.disabled}
-              onClick={() => {
+              onClick={(event) => {
                 if (content().entryDefault === NO_SAFE_DEFAULT) {
-                  draft.openDraft();
+                  openCollectionDraft(event, content().draftId);
                   return;
                 }
                 const nextValue = { ...props.params.value };
@@ -190,7 +190,7 @@ export function ConfigMapField(props: MapProps): JSX.Element {
                 }
                 nextValue[key] = content().entryDefault;
                 if (props.params.onPatch(props.params.path, nextValue) === false) {
-                  draft.openDraft();
+                  openCollectionDraft(event, content().draftId);
                 }
               }}
             >
@@ -198,21 +198,25 @@ export function ConfigMapField(props: MapProps): JSX.Element {
             </button>
           </div>
         </div>
-        <ConfigCollectionDraft
-          {...content().draftProps}
+        <ConfigCollectionDraftHost
           id={content().draftId}
-          ref={(handle) => (draft = handle)}
-          onCommit={({ key, value }) =>
-            Boolean(
-              key &&
-              !Object.hasOwn(props.params.value, key) &&
-              !props.params.reservedKeys.has(key) &&
+          props={content().draftProps}
+          onConfig-collection-draft-commit={(
+            event: CustomEvent<ConfigFormCollectionDraftCommit>,
+          ) => {
+            const key = event.detail.key;
+            if (
+              !key ||
+              Object.hasOwn(props.params.value, key) ||
+              props.params.reservedKeys.has(key) ||
               props.params.onPatch(props.params.path, {
                 ...props.params.value,
-                [key]: value,
-              }) !== false,
-            )
-          }
+                [key]: event.detail.value,
+              }) === false
+            ) {
+              event.preventDefault();
+            }
+          }}
         />
         <Show when={content().visibleEntries.length > 0}>
           <div class="settings-subrows">

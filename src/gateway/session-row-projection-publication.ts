@@ -333,17 +333,13 @@ export function subscribeSessionRowPublications({
 }): Array<() => void> {
   return [
     pluginStatePublication.subscribeFacts((change) => {
-      if (change.kind === "pending" || change.kind === "settled") {
-        return;
-      }
       const changed: records.Row[] = [];
-      // Plugin writes are frequent; avoid an iterator result for every resident row.
-      rows.forEach((row) => {
+      for (const row of rows.values()) {
         if (
-          !row.runtimeOwnershipDependencies?.length ||
+          !row.runtimeOwnershipDependencies ||
           !pluginStateReadDependenciesAffected(row.runtimeOwnershipDependencies, change)
         ) {
-          return;
+          continue;
         }
         records.invalidateDatabaseFacts(
           row,
@@ -355,7 +351,7 @@ export function subscribeSessionRowPublications({
         );
         dirty.add(records.identity(row));
         changed.push(row);
-      });
+      }
       if (changed.length > 0) {
         advanceRevision();
         revisions.invalidate(true);

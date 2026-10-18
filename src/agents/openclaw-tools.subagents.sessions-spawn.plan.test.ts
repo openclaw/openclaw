@@ -180,32 +180,18 @@ describe("subagent thinking precedence", () => {
       expected: "off",
       override: undefined,
     },
-    {
-      name: "explicit request over requester subagent default",
-      requester: "low",
-      target: "medium",
-      global: "high",
-      caller: "off",
-      requestOverride: "xhigh",
-      expected: "xhigh",
-      override: "xhigh",
-    },
-  ])(
-    "preserves $name",
-    ({ requester, target, global, caller, requestOverride, expected, override }) => {
-      expect(
-        resolveSubagentThinkingOverride({
-          cfg: { agents: { defaults: { subagents: { thinking: global } } } },
-          requesterAgentConfig: { subagents: { thinking: requester } },
-          targetAgentConfig: { subagents: { thinking: target } },
-          thinkingOverrideRaw: requestOverride,
-          callerThinkingRaw: caller,
-        }),
-      ).toEqual({
-        status: "ok",
-        thinkingOverride: override,
-        initialSessionPatch: expected === undefined ? {} : { thinkingLevel: expected },
-      });
-    },
-  );
+  ])("preserves $name", ({ requester, target, global, caller, expected, override }) => {
+    expect(
+      resolveSubagentThinkingOverride({
+        cfg: { agents: { defaults: { subagents: { thinking: global } } } },
+        requesterAgentConfig: { subagents: { thinking: requester } },
+        targetAgentConfig: { subagents: { thinking: target } },
+        callerThinkingRaw: caller,
+      }),
+    ).toEqual({
+      status: "ok",
+      thinkingOverride: override,
+      initialSessionPatch: { thinkingLevel: expected },
+    });
+  });
 });

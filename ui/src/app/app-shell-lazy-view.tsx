@@ -1,7 +1,7 @@
 import { Dynamic, type JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, Show } from "solid-js";
 import type { RouteId } from "../app-routes.ts";
-import { LazyElementModal } from "../components/solid/lazy-view-error.tsx";
+import { renderLazyElementModal } from "../components/lazy-view-error.ts";
 import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
@@ -15,6 +15,7 @@ import {
   KEYBOARD_SHORTCUTS_ELEMENT,
 } from "./lazy-custom-element.ts";
 import type { LazyRenderer } from "./lazy-renderer.ts";
+import { LitRouteHost } from "./lit-route-host.tsx";
 import { normalizeChatSendShortcut } from "./settings.ts";
 
 /** Unported elements receive properties explicitly until their own lanes land. */
@@ -102,24 +103,39 @@ export function ShellLazyOverlays(props: {
         when={paletteLoading()}
         fallback={
           <Show
-            when={pendingDebug() && state().debugRenderer}
+            when={pendingDebug()}
             fallback={
-              <Show when={!pendingDebug() || state().debugFrameFailed}>
-                <LazyElementModal
-                  state={state().lazy}
-                  onRetry={() => props.host.lazyCustomElements.retry()}
-                  onClose={() => props.host.lazyCustomElements.close()}
-                />
-              </Show>
+              <LitRouteHost
+                renderValue={() => {
+                  state();
+                  return renderLazyElementModal(props.host.lazyCustomElements);
+                }}
+              />
             }
           >
-            {(renderer) => (
-              <Dynamic
-                component={renderer()}
-                host={props.host}
-                state={pendingDebug()!}
-                mode={state().debugMode}
-              />
+            {(pending) => (
+              <Show
+                when={state().debugRenderer}
+                fallback={
+                  <Show when={state().debugFrameFailed}>
+                    <LitRouteHost
+                      renderValue={() => {
+                        state();
+                        return renderLazyElementModal(props.host.lazyCustomElements);
+                      }}
+                    />
+                  </Show>
+                }
+              >
+                {(renderer) => (
+                  <Dynamic
+                    component={renderer()}
+                    host={props.host}
+                    state={pending()}
+                    mode={state().debugMode}
+                  />
+                )}
+              </Show>
             )}
           </Show>
         }

@@ -12,8 +12,7 @@ import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
-import { ownsCronSource } from "../source-schedule.js";
-import { appendCronPayloadText } from "../stream-schedule.js";
+import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
   CronJob,
   CronJobExecutionResult,
@@ -68,10 +67,13 @@ export async function executeJobCore(
     // Defense in depth over the locked admission checks: stream-origin work must
     // carry both the source definition and logical identity, and both must still
     // match the execution snapshot.
+    const currentKey =
+      job.schedule.kind === "stream" ? cronStreamScheduleKey(job.schedule) : undefined;
     if (
       options.streamScheduleKey === undefined ||
       options.streamSourceIdentity === undefined ||
-      !ownsCronSource(job, options.streamScheduleKey, options.streamSourceIdentity)
+      currentKey !== options.streamScheduleKey ||
+      job.state.streamSourceIdentity !== options.streamSourceIdentity
     ) {
       return { status: "skipped", error: "stream batch source no longer current" };
     }

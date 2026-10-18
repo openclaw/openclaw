@@ -9,7 +9,7 @@ function createTargetedSyncOwner(sessionsDirtyFiles: Set<string>) {
     sessionsDirty: false,
     sessionsFullRetryDirty: false,
     sessionsReconcileDirty: false,
-    syncOutcomes: { recordFailure: vi.fn() },
+    syncOutcomes: { recordActiveFailure: vi.fn() },
     endSyncProviderGeneration: vi.fn(),
     syncArchiveFiles: vi.fn(async () => {}),
     activateFallbackProvider: vi.fn(async (_reason: string) => false),
@@ -66,7 +66,7 @@ describe("memory targeted session sync", () => {
     expect(result).toBe(true);
     expect(owner.sessionsDirty).toBe(true);
     expect(owner.requestSessionIndexRetry).toHaveBeenCalledWith(true);
-    expect(owner.syncOutcomes.recordFailure).toHaveBeenCalledWith(
+    expect(owner.syncOutcomes.recordActiveFailure).toHaveBeenCalledWith(
       expect.objectContaining({ message: "embedding backend failed" }),
     );
     expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
@@ -86,7 +86,7 @@ describe("memory targeted session sync", () => {
 
     expect(result).toBe(true);
     expect(owner.sessionsDirty).toBe(true);
-    expect(owner.syncOutcomes.recordFailure).not.toHaveBeenCalled();
+    expect(owner.syncOutcomes.recordActiveFailure).not.toHaveBeenCalled();
     expect(sessionsDirtyFiles.size).toBe(0);
   });
 });

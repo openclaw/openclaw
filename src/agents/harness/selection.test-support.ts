@@ -89,7 +89,6 @@ export async function withOwnedHarnessGeneration<Registered, Result>(
 }
 
 export const privateHarnessParamCases = [
-  { field: "thinkingExplicit", value: false },
   {
     field: "runtimePluginToolGrant",
     value: { pluginId: "grant-owner", toolNames: ["optional_tool"] },

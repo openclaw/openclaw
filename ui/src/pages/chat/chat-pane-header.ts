@@ -1,3 +1,5 @@
+import { html, nothing, type TemplateResult } from "lit";
+import { createRef } from "lit/directives/ref.js";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -31,13 +33,10 @@ import {
   canSplitSessionView,
 } from "../../lib/sessions/session-menu-navigation.ts";
 import { resolveSessionWorkspace } from "../../lib/sessions/workspace.ts";
-import { emptyLegacyContent, solidContent } from "../../lit/solid-content.tsx";
 import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
-import { PaneHeaderPresence, PaneHeaderSessionMenu } from "./chat-pane-header-view.tsx";
-import type { PaneDetailsProps } from "./chat-pane-header-view.tsx";
 import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -70,7 +69,7 @@ import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { isSidebarSlotVisible, type SidebarLayout, type SidebarSlotId } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneHeader extends ChatPaneDiscussion {
-  protected readonly headerDetailsRef: { value?: ChatDetails } = {};
+  protected readonly headerDetailsRef = createRef<ChatDetails>();
   private headerMenuRow?: GatewaySessionRow;
   private headerWorkspace?: ReturnType<typeof createChatPaneRails>["sessionWorkspace"];
   private headerAgentWorkspace?: string;
@@ -134,8 +133,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
-    subagentStop: unknown = emptyLegacyContent,
-    detailsControl?: PaneDetailsProps,
+    subagentStop: TemplateResult | typeof nothing = nothing,
+    detailsControl: TemplateResult | typeof nothing = nothing,
     panelControls?: {
       openPanelSlot: (slot: SidebarSlotId) => void;
       closePanelSlot: (slot: SidebarSlotId) => void;
@@ -312,16 +311,6 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       () => {
         const callbacks = this.headerPanelCallbacks;
         const actions: HeaderPanelAction[] = [];
-        const represented = new Set<SidebarSlotId>();
-        const addPanelAction = (slot: SidebarSlotId | null, action: HeaderPanelAction) => {
-          actions.push({
-            ...action,
-            shortcut: panelDefinitions.find((definition) => definition.slot === slot)?.shortcut,
-          });
-          if (slot) {
-            represented.add(slot);
-          }
-        };
         for (const [id, label, icon, onActivate] of [
           [
             "terminal",
@@ -355,7 +344,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           ],
         ] as const) {
           if (onActivate) {
-            addPanelAction(id === "changes" ? null : id, {
+            actions.push({
               id,
               label,
               icon,
@@ -364,7 +353,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             });
           }
         }
-        addPanelAction("workspace", {
+        actions.push({
           id: "session-files",
           label: t(
             sessionWorkspace.collapsed
@@ -375,7 +364,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           active: !sessionWorkspace.collapsed,
           onActivate: callbacks.files,
         });
-        addPanelAction("companion", {
+        actions.push({
           id: "session-companion",
           label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
           icon: icons.spark,
@@ -385,7 +374,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         if (!catalog) {
           for (const slot of ["subagents", "processes"] as const) {
             const subagents = slot === "subagents";
-            addPanelAction(slot, {
+            actions.push({
               id: `session-${slot}`,
               label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
               icon: subagents ? icons.bot : icons.terminal,
@@ -398,6 +387,22 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             });
           }
         }
+        const actionSlots = new Map<string, SidebarSlotId>([
+          ["terminal", "terminal"],
+          ["browser", "browser"],
+          ["desktop", "desktop"],
+          ["discussion", "discussion"],
+          ["session-files", "workspace"],
+          ["session-companion", "companion"],
+          ["session-subagents", "subagents"],
+          ["session-processes", "processes"],
+        ]);
+        const represented = new Set(
+          actions.flatMap((action) => {
+            const slot = actionSlots.get(action.id);
+            return slot ? [slot] : [];
+          }),
+        );
         for (const definition of panelDefinitions) {
           if (
             !panelControls ||
@@ -408,7 +413,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
             continue;
           }
           const slot = definition.slot;
-          addPanelAction(slot, {
+          actions.push({
             id: `panel-${slot}`,
             label: definition.label,
             icon: definition.icon,
@@ -421,6 +426,11 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               }
             },
           });
+          actionSlots.set(`panel-${slot}`, slot);
+        }
+        for (const action of actions) {
+          const slot = actionSlots.get(action.id);
+          action.shortcut = panelDefinitions.find((candidate) => candidate.slot === slot)?.shortcut;
         }
         return actions;
       },
@@ -582,21 +592,27 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onCloseSidePanel: (slot) => panelControls?.closePanelSlot(slot),
       detailsControl,
       onOpenDetails:
-        detailsControl === undefined
+        detailsControl === nothing
           ? undefined
           : (source) => this.headerDetailsRef.value?.open(source),
       runAction: subagentStop,
       presence: viewers?.length
-        ? solidContent(PaneHeaderPresence, { staticUsers: viewers, personActivity })
-        : emptyLegacyContent,
+        ? html`<openclaw-viewer-facepile
+            class="chat-pane__presence"
+            .staticUsers=${viewers}
+            .maxVisible=${4}
+            .personActivity=${personActivity}
+            variant="session"
+          ></openclaw-viewer-facepile>`
+        : nothing,
       sharingControl:
         sharing &&
         (!canManageChatSessionSharing(sharing.session) || !sharing.openDisabledReason) &&
         (!this.narrow || !canManageChatSessionSharing(sharing.session))
           ? renderChatSessionSharing(sharing)
-          : emptyLegacyContent,
+          : nothing,
       publicAccessIndicator:
-        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : emptyLegacyContent,
+        this.narrow && sharing ? renderChatSessionPublicIndicator(sharing) : nothing,
       placementControl: renderChatPanePlacement({
         session: row,
         placementStartupStatus,
@@ -611,45 +627,42 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       }),
       sessionMenuAction:
         row && this.state
-          ? solidContent(PaneHeaderSessionMenu, {
-              session: this.headerSessionMenuData(row, pinnable),
-              worktreePath:
-                row.execNode || !isNativeLocalGateway() ? null : (workspace.root ?? null),
-              onboarding: this.onboarding,
-              preferencesBrowserOnly:
+          ? html`<openclaw-chat-header-session-menu
+              .session=${this.headerSessionMenuData(row, pinnable)}
+              .worktreePath=${row.execNode || !isNativeLocalGateway() ? null : workspace.root}
+              .onboarding=${this.onboarding}
+              .preferencesBrowserOnly=${
                 this.context.runtimeConfig?.state.connected &&
-                this.context.runtimeConfig.canPatch === false,
-              compact: this.narrow,
-              copyMarkdownAllowed: canCopySessionMarkdown(this.context.gateway.snapshot),
-              splitAllowed: canSplitSessionView(),
-              settings: this.state.settings,
-              bubbleModeEnabled: this.context.config.current.chatBubblesEnabled === true,
-              mainKey: resolveUiConfiguredMainKey({
-                agentsList: this.context.agents.state.agentsList,
-                hello: this.context.gateway.snapshot.hello,
-              }),
-              boardWidgetMenu,
-              sessionActions: this.headerSessionActions.read(
+                this.context.runtimeConfig.canPatch === false
+              }
+              .compact=${this.narrow}
+              .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
+              .splitAllowed=${canSplitSessionView()}
+              .settings=${this.state.settings}
+              .bubbleModeEnabled=${this.context.config.current.chatBubblesEnabled === true}
+              .mainKey=${resolveUiConfiguredMainKey({ agentsList: this.context.agents.state.agentsList, hello: this.context.gateway.snapshot.hello })}
+              .boardWidgetMenu=${boardWidgetMenu}
+              .sessionActions=${this.headerSessionActions.read(
                 this.context,
                 row,
                 placement.reclaimDisabledReason,
                 this.onHeaderAction,
-              ),
-              sharing,
-              groups: knownGroups,
-              currentOwner: row.owner?.actor ?? null,
-              actionDisabledReasons,
-              forkDisabled: this.state.sessionsLoading || row.modelSelectionLocked === true,
-              forkFromLastCompleted: row.hasActiveRun === true,
-              archiveAllowed,
-              archiveShortcut: this.active && this.presented && !this.onboarding,
-              deleteAllowed,
-              onOpen: this.onHeaderMenuOpen,
-              onOpenCommandPalette: this.onHeaderCommandPalette,
-              onSettingsChange: this.onHeaderSettingsChange,
-              onAction: this.onHeaderAction,
-            })
-          : emptyLegacyContent,
+              )}
+              .sharing=${sharing}
+              .groups=${knownGroups}
+              .currentOwner=${row.owner?.actor ?? null}
+              .actionDisabledReasons=${actionDisabledReasons}
+              .forkDisabled=${this.state.sessionsLoading || row.modelSelectionLocked === true}
+              .forkFromLastCompleted=${row.hasActiveRun === true}
+              .archiveAllowed=${archiveAllowed}
+              .archiveShortcut=${this.active && this.presented && !this.onboarding}
+              .deleteAllowed=${deleteAllowed}
+              .onOpen=${this.onHeaderMenuOpen}
+              .onOpenCommandPalette=${this.onHeaderCommandPalette}
+              .onSettingsChange=${this.onHeaderSettingsChange}
+              .onAction=${this.onHeaderAction}
+            ></openclaw-chat-header-session-menu>`
+          : nothing,
       onBeginRename: () => row && this.beginHeaderRename(row),
       onRenameInput: (value) => {
         this.headerRenameValue = value;
@@ -686,14 +699,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       onClosePane: this.onClosePane,
     });
     const continueCommand = this.currentContinueInTerminalCommand(row);
-    return [
-      header,
+    return html`${header}${
       continueCommand
         ? renderContinueInTerminalDialog({
             command: continueCommand,
             onClose: () => this.closeContinueInTerminalDialog(),
           })
-        : emptyLegacyContent,
-    ];
+        : nothing
+    }`;
   }
 }

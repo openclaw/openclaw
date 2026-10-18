@@ -3,7 +3,6 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginDeclaredSurfaceSchema, PluginOperatorGrantsSchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 const OfficialClawName = Type.String({ pattern: "^@openclaw/[a-z0-9][a-z0-9._-]*$" });
 const ClawArtifactIntegrity = Type.String({ pattern: "^sha256-[A-Za-z0-9+/]{43}=$" });
@@ -50,7 +49,7 @@ const ClawsCatalogContentsSchema = closedObject({
   integrations: Type.Array(
     closedObject({
       name: NonEmptyString,
-      kind: stringLiteralUnion(["plugin", "mcpServer"]),
+      kind: Type.Union([Type.Literal("plugin"), Type.Literal("mcpServer")]),
       version: Type.Optional(NonEmptyString),
     }),
   ),
@@ -80,12 +79,12 @@ export const ClawsCatalogDetailSchema = closedObject({
 export const ClawsCatalogDetailResultSchema = closedObject({ detail: ClawsCatalogDetailSchema });
 export const ClawsCatalogPreviewParamsSchema = closedObject({
   ...ClawCatalogCoordinateSchema.properties,
-  kind: stringLiteralUnion(["instruction", "skill"]),
+  kind: Type.Union([Type.Literal("instruction"), Type.Literal("skill")]),
   name: NonEmptyString,
 });
 export const ClawsCatalogPreviewResultSchema = closedObject({
   preview: closedObject({
-    kind: stringLiteralUnion(["instruction", "skill"]),
+    kind: Type.Union([Type.Literal("instruction"), Type.Literal("skill")]),
     name: NonEmptyString,
     content: Type.String(),
   }),
@@ -96,19 +95,21 @@ export const ClawsStatusParamsSchema = closedObject({
 });
 
 export const ClawResourceStatusSchema = closedObject({
-  kind: stringLiteralUnion([
-    "agent",
-    "workspace-file",
-    "skill",
-    "plugin",
-    "mcp-server",
-    "cron-job",
+  kind: Type.Union([
+    Type.Literal("agent"),
+    Type.Literal("workspace-file"),
+    Type.Literal("skill"),
+    Type.Literal("plugin"),
+    Type.Literal("mcp-server"),
+    Type.Literal("cron-job"),
   ]),
   id: NonEmptyString,
   state: NonEmptyString,
   reason: Type.Optional(NonEmptyString),
-  relationship: Type.Optional(stringLiteralUnion(["managed", "referenced"])),
-  origin: Type.Optional(stringLiteralUnion(["claw-introduced", "pre-existing"])),
+  relationship: Type.Optional(Type.Union([Type.Literal("managed"), Type.Literal("referenced")])),
+  origin: Type.Optional(
+    Type.Union([Type.Literal("claw-introduced"), Type.Literal("pre-existing")]),
+  ),
   independentOwner: Type.Optional(Type.Boolean()),
 });
 
@@ -116,22 +117,26 @@ export const ClawStatusEntrySchema = closedObject({
   agentId: NonEmptyString,
   name: NonEmptyString,
   version: NonEmptyString,
-  sourceKind: stringLiteralUnion(["package", "development"]),
-  status: stringLiteralUnion([
-    "pending",
-    "workspace_ready",
-    "config_committed",
-    "complete",
-    "partial",
+  sourceKind: Type.Union([Type.Literal("package"), Type.Literal("development")]),
+  status: Type.Union([
+    Type.Literal("pending"),
+    Type.Literal("workspace_ready"),
+    Type.Literal("config_committed"),
+    Type.Literal("complete"),
+    Type.Literal("partial"),
   ]),
-  agentState: stringLiteralUnion(["present", "modified", "missing"]),
-  bootstrapState: stringLiteralUnion([
-    "pending",
-    "complete",
-    "missing",
-    "modified",
-    "unsafe",
-    "unknown",
+  agentState: Type.Union([
+    Type.Literal("present"),
+    Type.Literal("modified"),
+    Type.Literal("missing"),
+  ]),
+  bootstrapState: Type.Union([
+    Type.Literal("pending"),
+    Type.Literal("complete"),
+    Type.Literal("missing"),
+    Type.Literal("modified"),
+    Type.Literal("unsafe"),
+    Type.Literal("unknown"),
   ]),
   orphaned: Type.Boolean(),
   addedAtMs: Type.Integer({ minimum: 0 }),
@@ -158,7 +163,7 @@ export const ClawPluginReviewSchema = closedObject({
   pluginId: NonEmptyString,
   ref: NonEmptyString,
   version: NonEmptyString,
-  ownerAction: stringLiteralUnion(["install", "reuse"]),
+  ownerAction: Type.Union([Type.Literal("install"), Type.Literal("reuse")]),
   integrity: ClawArtifactIntegrity,
   declaredCapabilities: PluginDeclaredSurfaceSchema,
   capabilityGrants: PluginOperatorGrantsSchema,
@@ -226,7 +231,7 @@ export const ClawsRemoveApplyParamsSchema = closedObject({
   planIntegrity: NonEmptyString,
 });
 
-const ClawMemorySourceSchema = stringLiteralUnion(["memory", "sessions"]);
+const ClawMemorySourceSchema = Type.Union([Type.Literal("memory"), Type.Literal("sessions")]);
 
 const ClawConfiguredAccessSnapshotSchema = closedObject({
   tools: closedObject({
@@ -236,10 +241,10 @@ const ClawConfiguredAccessSnapshotSchema = closedObject({
     explicitDeny: Type.Array(NonEmptyString),
   }),
   sandbox: closedObject({
-    mode: stringLiteralUnion(["off", "non-main", "all"]),
-    scope: stringLiteralUnion(["session", "agent", "shared"]),
-    workspaceAccess: stringLiteralUnion(["none", "ro", "rw"]),
-    backend: stringLiteralUnion(["docker", "ssh", "other"]),
+    mode: Type.Union([Type.Literal("off"), Type.Literal("non-main"), Type.Literal("all")]),
+    scope: Type.Union([Type.Literal("session"), Type.Literal("agent"), Type.Literal("shared")]),
+    workspaceAccess: Type.Union([Type.Literal("none"), Type.Literal("ro"), Type.Literal("rw")]),
+    backend: Type.Union([Type.Literal("docker"), Type.Literal("ssh"), Type.Literal("other")]),
   }),
   filesystem: closedObject({ workspaceOnly: Type.Boolean() }),
   heartbeat: closedObject({
@@ -279,20 +284,20 @@ export const ClawConfiguredAccessSchema = closedObject({
   current: Type.Optional(ClawConfiguredAccessSnapshotSchema),
   desired: Type.Optional(ClawConfiguredAccessSnapshotSchema),
   unresolved: Type.Array(
-    stringLiteralUnion([
-      "runtime-tools",
-      "sandbox-runtime",
-      "memory-runtime",
-      "subagent-runtime",
-      "scheduler-runtime",
+    Type.Union([
+      Type.Literal("runtime-tools"),
+      Type.Literal("sandbox-runtime"),
+      Type.Literal("memory-runtime"),
+      Type.Literal("subagent-runtime"),
+      Type.Literal("scheduler-runtime"),
     ]),
   ),
 });
 
 const ClawScheduledDeclarationSchema = closedObject({
   schedule: closedObject({ cron: NonEmptyString, timezone: NonEmptyString }),
-  session: stringLiteralUnion(["main", "isolated"]),
-  delivery: stringLiteralUnion(["none", "last-channel"]),
+  session: Type.Union([Type.Literal("main"), Type.Literal("isolated")]),
+  delivery: Type.Union([Type.Literal("none"), Type.Literal("last-channel")]),
   messageDigest: NonEmptyString,
 });
 
@@ -315,8 +320,8 @@ export const ClawScheduledJobsSchema = closedObject({
 });
 
 const ClawOwnershipEffectSchema = closedObject({
-  relationship: stringLiteralUnion(["managed", "referenced"]),
-  origin: stringLiteralUnion(["claw-introduced", "pre-existing"]),
+  relationship: Type.Union([Type.Literal("managed"), Type.Literal("referenced")]),
+  origin: Type.Union([Type.Literal("claw-introduced"), Type.Literal("pre-existing")]),
   independentOwner: Type.Boolean(),
   affectedClawCount: Type.Integer({ minimum: 0 }),
 });
@@ -329,7 +334,11 @@ const ClawSkillArtifactSchema = closedObject({
 });
 
 const ClawMcpDeclarationSchema = closedObject({
-  transport: stringLiteralUnion(["stdio", "sse", "streamable-http"]),
+  transport: Type.Union([
+    Type.Literal("stdio"),
+    Type.Literal("sse"),
+    Type.Literal("streamable-http"),
+  ]),
   command: Type.Optional(NonEmptyString),
   arguments: Type.Optional(Type.Array(NonEmptyString)),
   url: Type.Optional(NonEmptyString),
@@ -338,7 +347,7 @@ const ClawMcpDeclarationSchema = closedObject({
   environment: Type.Optional(
     Type.Array(closedObject({ name: NonEmptyString, sourceName: NonEmptyString })),
   ),
-  authentication: stringLiteralUnion(["none", "oauth"]),
+  authentication: Type.Union([Type.Literal("none"), Type.Literal("oauth")]),
   toolFilter: Type.Optional(
     closedObject({
       include: Type.Optional(Type.Array(NonEmptyString)),
@@ -390,7 +399,7 @@ export const ClawManifestDisclosureSchema = closedObject({
 
 export const ClawLifecyclePlanResultSchema = closedObject({
   schemaVersion: Type.Literal("openclaw.clawsGatewayPlan.v1"),
-  operation: stringLiteralUnion(["add", "update", "remove"]),
+  operation: Type.Union([Type.Literal("add"), Type.Literal("update"), Type.Literal("remove")]),
   planIntegrity: NonEmptyString,
   target: closedObject({
     agentId: Type.Optional(NonEmptyString),
@@ -436,7 +445,11 @@ export const ClawLifecyclePlanResultSchema = closedObject({
       ready: Type.Boolean(),
       requirements: Type.Array(
         closedObject({
-          kind: stringLiteralUnion(["environment", "oauth", "plugin-setup"]),
+          kind: Type.Union([
+            Type.Literal("environment"),
+            Type.Literal("oauth"),
+            Type.Literal("plugin-setup"),
+          ]),
           owner: NonEmptyString,
         }),
       ),

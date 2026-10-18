@@ -81,6 +81,26 @@
             }
           },
           {
+            "id": "gpt-5-nano",
+            "name": "GPT-5 Nano",
+            "api": "openai-responses",
+            "provider": "opencode",
+            "baseUrl": "https://opencode.ai/zen/v1",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "cost": { "input": 0.05, "output": 0.4, "cacheRead": 0.005, "cacheWrite": 0 },
+            "contextWindow": 400000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "thinkingLevelMap": { "off": null },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["minimal", "low", "medium", "high"],
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
             "id": "gemini-3.6-flash",
             "name": "Gemini 3.6 Flash",
             "api": "google-generative-ai",
@@ -131,7 +151,7 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "supportedReasoningEfforts": ["none", "low", "high", "max"],
+              "supportedReasoningEfforts": ["max"],
               "maxTokensField": "max_tokens",
               "supportsDeveloperRole": false,
               "supportsStrictMode": false,
@@ -188,7 +208,7 @@
   "mediaUnderstandingProviderMetadata": {
     "opencode": {
       "capabilities": ["image"],
-      "defaultModels": { "image": "minimax-m3" }
+      "defaultModels": { "image": "gpt-5-nano" }
     }
   },
   "configGroups": [

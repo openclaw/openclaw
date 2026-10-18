@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type {
   ResponseOutputItem,
   ResponseOutputMessage,
+  ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
 import { calculateCost } from "../model-utils.js";
@@ -125,17 +126,25 @@ export function createResponsesTerminalController(params: {
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
-  const pendingReasoning = new Set<number>();
+  const unsettledReasoning = new Set<number>();
   const deferredToolCompletions: Extract<AssistantMessageEvent, { type: "toolcall_end" }>[] = [];
-  const recordPendingReasoning = (contentIndex: number) => {
-    pendingReasoning.add(contentIndex);
+  const recordReasoningReplayReadiness = (contentIndex: number, ready: boolean) => {
+    if (ready) {
+      unsettledReasoning.delete(contentIndex);
+    } else {
+      unsettledReasoning.add(contentIndex);
+    }
   };
   const releaseDeferredToolCompletions = () => {
+    if (output.stopReason === "error" || output.stopReason === "aborted") {
+      return;
+    }
+    // Terminal settlement closes metadata updates even when optional ciphertext is absent.
     for (const event of deferredToolCompletions) {
       stream.push(event);
     }
     deferredToolCompletions.length = 0;
-    pendingReasoning.clear();
+    unsettledReasoning.clear();
   };
   let rejectedToolCallId: string | undefined;
   const recordIncompleteToolCall = (
@@ -146,7 +155,7 @@ export function createResponsesTerminalController(params: {
     rejectedToolCallId =
       streamed?.block.id ?? (item.call_id ? resolveResponsesToolCallId(item) : undefined);
   };
-  const settleReasoning = (items: ResponseOutputItem[]) => {
+  const backfillReasoning = (items: ResponseOutputItem[]) => {
     for (const [outputIndex, item] of items.entries()) {
       if (item.type !== "reasoning") {
         continue;
@@ -156,11 +165,22 @@ export function createResponsesTerminalController(params: {
       if (block?.type !== "thinking") {
         continue;
       }
-      // Continuation retains this terminal item, whose ciphertext can differ from item.done.
-      block.thinkingSignature = JSON.stringify(
-        normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
-      );
-      if (item.encrypted_content && options?.reasoningReplayMetadata) {
+      if (!block.thinkingSignature) {
+        block.thinkingSignature = JSON.stringify(
+          normalizeOpenAIResponsesReasoningReplayItem(item, model.api),
+        );
+      }
+      if (!item.encrypted_content) {
+        continue;
+      }
+      const stored = JSON.parse(block.thinkingSignature) as ResponseReasoningItem;
+      if (!stored.encrypted_content) {
+        block.thinkingSignature = JSON.stringify({
+          ...stored,
+          encrypted_content: item.encrypted_content,
+        });
+      }
+      if (options?.reasoningReplayMetadata) {
         Object.assign(block, {
           [OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY]: options.reasoningReplayMetadata,
         });
@@ -246,9 +266,9 @@ export function createResponsesTerminalController(params: {
       partial: output,
     };
     if (toolCall.async) {
-      for (const index of pendingReasoning) {
+      for (const index of unsettledReasoning) {
         if (index < contentIndex) {
-          // Persistence freezes async prefixes; wait for the terminal reasoning snapshot.
+          // Persistence freezes async prefixes; publish readiness after their replay payload settles.
           deferredToolCompletions.push(completion);
           return;
         }
@@ -368,7 +388,7 @@ export function createResponsesTerminalController(params: {
     terminalEventType: "response.completed" | "response.incomplete",
     rejectedToolCall: { error: unknown } | undefined,
   ) => {
-    settleReasoning(response.output ?? []);
+    backfillReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
     const terminal = resolveResponsesTerminalStopReason({
       status: response.status,
@@ -434,6 +454,15 @@ export function createResponsesTerminalController(params: {
         : undefined);
     if (failure) {
       const error = output.errorMessage ? new Error(output.errorMessage) : failure.error;
+      if (
+        terminalEventType === "response.incomplete" &&
+        output.stopReason === "length" &&
+        incompleteReason === "max_output_tokens" &&
+        error instanceof IncompleteToolCallError
+      ) {
+        // Earlier validated calls still settle when a later call reaches the output ceiling.
+        releaseDeferredToolCompletions();
+      }
       throw error;
     }
   };
@@ -443,7 +472,7 @@ export function createResponsesTerminalController(params: {
     recordIncompleteToolCall,
     recoverTerminalOutput,
     emitToolCallCompletion,
-    recordPendingReasoning,
+    recordReasoningReplayReadiness,
     releaseDeferredToolCompletions,
   };
 }

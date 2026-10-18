@@ -48,7 +48,6 @@ function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
 ): GatewayRequestHandlerOptions {
-  const cfg = { channels: { whatsapp: { enabled: true } } };
   return {
     req: { type: "req", id: "req-1", method: "web.login.start", params },
     params,
@@ -59,15 +58,13 @@ function createOptions(
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
-      getRuntimeConfig: vi.fn(() => cfg),
-      isConfigReloadSettled: () => true,
+      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
 }
 
 function createRunningWhatsappContext() {
-  const cfg = { channels: { whatsapp: { enabled: true } } };
   const startChannel = vi.fn();
   const stopChannel = vi.fn();
   return {
@@ -77,8 +74,7 @@ function createRunningWhatsappContext() {
       stopChannel,
       startChannel,
       getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
-      getRuntimeConfig: vi.fn(() => cfg),
-      isConfigReloadSettled: () => true,
+      getRuntimeConfig: vi.fn(() => ({ channels: { whatsapp: { enabled: true } } })),
     } as unknown as GatewayRequestHandlerOptions["context"],
   };
 }
@@ -218,7 +214,6 @@ describe("webHandlers web.login.start", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start"],
         gateway: { loginWithQrStart },
       },
@@ -255,7 +250,6 @@ describe("webHandlers web.login.start", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start"],
         gateway,
       },
@@ -269,7 +263,6 @@ describe("webHandlers web.login.start", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
-      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -291,13 +284,11 @@ describe("webHandlers web.login.start", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: whatsappLogin, loginWithQrWait: vi.fn() },
       },
       {
         id: "openclaw-weixin",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: weixinLogin, loginWithQrWait: vi.fn() },
       },
@@ -312,7 +303,6 @@ describe("webHandlers web.login.start", () => {
       force: false,
       timeoutMs: undefined,
       verbose: false,
-      assertCredentialPersistenceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -326,7 +316,6 @@ describe("webHandlers web.login.start", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start"],
         gateway: { loginWithQrStart: whatsappLogin },
       },
@@ -343,102 +332,17 @@ describe("webHandlers web.login.start", () => {
     );
   });
 
-  it.each(["web.login.start", "web.login.wait"] as const)(
-    "%s rejects an ambiguous account before plugin or listener effects",
-    async (method) => {
-      const login = vi.fn();
-      mocks.listChannelPlugins.mockReturnValue([
-        {
-          id: "whatsapp",
-          config: { listAccountIds: () => ["account-a", "account-b"] },
-          gatewayMethods: [method],
-          gateway: { loginWithQrStart: login, loginWithQrWait: login },
-        },
-      ]);
-      const { context, stopChannel, startChannel } = createRunningWhatsappContext();
-      const respond = vi.fn();
-
-      await invokeWeb(method, {}, { context, respond });
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringMatching(/accountId.*account-a, account-b/),
-        }),
-      );
-      expect(login).not.toHaveBeenCalled();
-      expect(stopChannel).not.toHaveBeenCalled();
-      expect(startChannel).not.toHaveBeenCalled();
-    },
-  );
-
-  it("revokes deferred credential writes when the account configuration changes", async () => {
-    let persist: (() => void) | undefined;
-    const writeCredentials = vi.fn();
-    mocks.listChannelPlugins.mockReturnValue([
-      {
-        id: "whatsapp",
-        config: { listAccountIds: () => ["account-a", "account-b"] },
-        gatewayMethods: ["web.login.start"],
-        gateway: {
-          loginWithQrStart: async (params: { assertCredentialPersistenceCurrent: () => void }) => {
-            persist = () => {
-              params.assertCredentialPersistenceCurrent();
-              writeCredentials();
-            };
-            return { qrDataUrl: "data:image/png;base64,QQ==" };
-          },
-        },
-      },
-    ]);
-    const { context } = createRunningWhatsappContext();
-    await invokeWeb("web.login.start", { accountId: "account-b" }, { context });
-    expectDefined(persist, "credential writer")();
-    vi.mocked(context.getRuntimeConfig).mockReturnValue({ channels: {} });
-
-    expect(() => expectDefined(persist, "credential writer")()).toThrow("changed during login");
-    expect(writeCredentials).toHaveBeenCalledOnce();
-  });
-
-  it("keeps an omitted account omitted for the plugin so environment-selected profiles survive", async () => {
-    const loginWithQrStart = vi.fn().mockResolvedValue({ qrDataUrl: "data:image/png;base64,QQ==" });
-    mocks.listChannelPlugins.mockReturnValue([
-      {
-        id: "zalouser",
-        config: {
-          listAccountIds: () => ["work"],
-          defaultAccountId: () => "work",
-        },
-        gatewayMethods: ["web.login.start"],
-        gateway: { loginWithQrStart },
-      },
-    ]);
-    const { context, stopChannel } = createRunningWhatsappContext();
-    const respond = vi.fn();
-
-    await invokeWeb("web.login.start", { channel: "zalouser" }, { respond, context });
-
-    expect(loginWithQrStart).toHaveBeenCalledWith(
-      expect.objectContaining({ accountId: undefined }),
-    );
-    expect(stopChannel).toHaveBeenCalledWith("zalouser", "work");
-  });
-
   it("keeps the legacy first-provider fallback when channel is omitted", async () => {
     const whatsappLogin = vi.fn().mockResolvedValue({ message: "whatsapp" });
     const weixinLogin = vi.fn();
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start"],
         gateway: { loginWithQrStart: whatsappLogin },
       },
       {
         id: "openclaw-weixin",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start"],
         gateway: { loginWithQrStart: weixinLogin },
       },
@@ -462,7 +366,6 @@ describe("webHandlers web.login.wait", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.wait"],
         gateway: { loginWithQrWait },
       },
@@ -502,13 +405,11 @@ describe("webHandlers web.login.wait", () => {
     mocks.listChannelPlugins.mockReturnValue([
       {
         id: "whatsapp",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: vi.fn(), loginWithQrWait: whatsappWait },
       },
       {
         id: "openclaw-weixin",
-        config: { listAccountIds: () => ["default"] },
         gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: vi.fn(), loginWithQrWait: weixinWait },
       },

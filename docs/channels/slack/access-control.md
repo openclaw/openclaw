@@ -211,10 +211,8 @@ restart the Slack monitor. The Gateway remains running.
     - `skills`
     - `systemPrompt`
     - `tools`, `toolsBySender`
-    - `toolsBySender` key format: `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
-      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries; prefer
-      `id:` keys when granting extra tools because `username:` and `name:` match mutable sender
-      attributes)
+    - `toolsBySender` key format: `channel:`, `id:`, `e164:`, `username:`, `name:`, or `"*"` wildcard
+      (run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries)
 
     <a id="bot-created-threads" />
     `requireMentionInBotThreads` overrides mention gating only in threads whose root message was sent by this bot. Set it to `false` to allow unmentioned replies there while keeping `requireMention: true` for the rest of the channel. Set it to `true` to require a mention in those threads even when implicit reply or thread-participation mentions are enabled. Authorized text commands keep their existing bypass.

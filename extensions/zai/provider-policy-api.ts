@@ -4,6 +4,7 @@ import type {
   ProviderThinkingProfile,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ZaiReasoningEffort = "low" | "high" | "max";
 type ZaiThinkingLevel = NonNullable<ProviderWrapStreamFnContext["thinkingLevel"]>;
@@ -25,8 +26,8 @@ const ZAI_REASONING_EFFORT_MAPS: Record<
   },
 };
 
-function resolveGlmReasoningEffortVersion(modelId: string): "5.2" | "5.3" | undefined {
-  const normalized = modelId.trim().toLowerCase();
+function resolveGlmReasoningEffortVersion(modelId?: string | null): "5.2" | "5.3" | undefined {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
   if (normalized.startsWith("glm-5.3")) {
     return "5.3";
   }
@@ -43,7 +44,7 @@ export function resolveZaiReasoningEffort(
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
-): ProviderThinkingProfile & { defaultLevel: ZaiThinkingLevel } {
+): ProviderThinkingProfile {
   const version = resolveGlmReasoningEffortVersion(ctx.modelId);
   if (version === "5.3") {
     return {

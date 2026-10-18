@@ -57,20 +57,12 @@ it.each(["rollback", "rollback during recovery"] as const)(
       await expect(
         replaceSessionEntry(scope, { sessionId: "pending", updatedAt: 1 }),
       ).resolves.toMatchObject({ sessionId: "pending" });
-      const inventoryError = new Error("inventory failed");
       const inventory = vi
         .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
-        .mockRejectedValueOnce(inventoryError);
-      const handle = createEmbeddedRunHandle({ abort: vi.fn() });
-      setActiveEmbeddedRun("pending", handle, scope.sessionKey, undefined, "doomed");
-      try {
-        await expect(
-          deleteGatewayAgent("doomed", false, createDirectChatContext({ getRuntimeConfig })),
-        ).rejects.toBe(inventoryError);
-        expect(handle.abort).not.toHaveBeenCalled();
-      } finally {
-        clearActiveEmbeddedRun("pending", handle, scope.sessionKey);
-      }
+        .mockRejectedValueOnce(new Error("inventory failed"));
+      await expect(
+        deleteGatewayAgent("doomed", false, createDirectChatContext({ getRuntimeConfig })),
+      ).rejects.toThrow("inventory failed");
       inventory.mockRestore();
       expect(await deletionJournals.readAgentDeletionJournalAsync("doomed")).toMatchObject({
         phase: "draining",

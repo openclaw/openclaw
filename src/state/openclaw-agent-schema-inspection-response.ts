@@ -23,11 +23,9 @@ export type AgentSchemaInspectionResponse =
       requestId: number;
       ok: true;
       inspection: (Omit<AgentSchemaInspection, "failure"> & { failure?: InspectionError }) | null;
-      stateInspection?:
-        | (Omit<StateSchemaInspection, "inspectionErrors"> & {
-            inspectionErrors: InspectionError[];
-          })
-        | null;
+      stateInspection?: Omit<StateSchemaInspection, "inspectionErrors"> & {
+        inspectionErrors: InspectionError[];
+      };
       schemaContracts?: StateSchemaInspection["schemaContracts"];
     };
 

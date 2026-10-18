@@ -174,7 +174,7 @@ export class BrowserPanelPresentation
   }
 
   get hostedTabs() {
-    return browserPanelHostedTabs(this.browserPanelController.tabs, this.ownerDocument);
+    return browserPanelHostedTabs(this.browserPanelController.tabs);
   }
 
   get activeHostedTabId(): string | null {

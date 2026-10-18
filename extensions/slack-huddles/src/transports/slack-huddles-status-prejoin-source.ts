@@ -45,7 +45,7 @@ export const slackHuddleStatusPrelude: Parameters<
     let pageTeam;
     try {
       pageTeam = new URL(location.href).pathname.match(/^\\/(?:client|huddle)\\/([TE][A-Z0-9]{8,})\\//)?.[1];
-    } catch { /* An unparseable page URL cannot establish workspace membership. */ }
+    } catch {}
     if (pageTeam) {
       (window.__openclawSlackHuddleWorkspaces ||= {})[expectedIdentity] = pageTeam;
       workspaceBound = true;
@@ -115,8 +115,7 @@ export const slackHuddleStatusPrelude: Parameters<
     /^\\/(?:signin|workspace-signin|get-started|check-login|ssb\\/signin)(?:\\/|$)/i.test(location.pathname);
   let microphonePermissionState;
   if (allowMicrophone && navigator.permissions?.query) {
-    try { microphonePermissionState = (await navigator.permissions.query({ name: "microphone" })).state; }
-    catch { /* Unsupported permission queries leave permission state unknown. */ }
+    try { microphonePermissionState = (await navigator.permissions.query({ name: "microphone" })).state; } catch {}
   }
   if (committedOwnerConflict && !canMutateSession) {
     manualAction = manualActionFor("slack-session-conflict", "This Slack tab is owned by another active huddle session.");

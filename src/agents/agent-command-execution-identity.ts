@@ -30,7 +30,6 @@ import {
 } from "./command/types.js";
 import { commitMainSessionRecovery } from "./main-session-recovery/main-session-recovery-store.js";
 import type { MainSessionRecoveryCommand } from "./main-session-recovery/main-session-recovery-types.js";
-import { capturePendingFinalRecoverySource } from "./pending-final-recovery-source.js";
 
 export type AgentCommandAdmissionIngress = ExecutionIdentityAdmissionFacts["ingress"];
 
@@ -131,7 +130,6 @@ export function prepareAgentCommandExecutionIdentity(params: {
   lifecycleGeneration: string;
 }) {
   const { opts, prepared } = params;
-  const pendingFinalRecoverySource = capturePendingFinalRecoverySource(prepared.sessionEntry);
   const operationalRunInstance =
     opts.operationalRunInstance ?? createOperationalRunInstanceRef(prepared.runId);
   const admissionFacts = getAgentCommandAdmissionFacts(params.opts.runContext ?? params.opts);
@@ -198,7 +196,6 @@ export function prepareAgentCommandExecutionIdentity(params: {
     : preparedAdmission;
   return Object.freeze({
     ...admission,
-    pendingFinalRecoverySource,
     // Observational events do not await consumers. Finish their recovery write
     // before releasing the admission; explicit close remains immediate.
     finish: async () => {

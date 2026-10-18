@@ -268,10 +268,7 @@ describe("gateway agent caller authority custody", () => {
         commands.set(expectDefined(opts.runId, "command run ID missing"), opts);
         await finishCommands.promise;
         opts.abortSignal?.throwIfAborted();
-        return {
-          payloads: [{ text: "done" }],
-          meta: { durationMs: 1, terminalReply: { disposition: "visible", text: "done" } },
-        };
+        return { payloads: [{ text: "done" }], meta: { durationMs: 1 } };
       },
     );
     const callers: Array<ReturnType<typeof captureGatewayDeviceRevocation>> = [];

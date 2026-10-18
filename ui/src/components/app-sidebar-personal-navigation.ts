@@ -1,3 +1,4 @@
+import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import { parseSidebarEntry, type NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
@@ -10,7 +11,6 @@ import type {
   SessionListSnapshot,
 } from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
-import type { SolidController, SolidControllerHost } from "../lit/solid-controller-host.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
 import { buildReconciledSidebarZone } from "./app-sidebar-session-navigation-logic.ts";
 import type { SidebarSessionNavigationState } from "./app-sidebar-session-navigation-logic.ts";
@@ -87,14 +87,14 @@ export function hidePersonalSidebarCatalog(
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export class SidebarPinnedSessions implements SolidController {
+export class SidebarPinnedSessions implements ReactiveController {
   private source?: ApplicationContext["sessions"];
   private scope: SessionConnectionScope | null = null;
   private readonly requested = new Map<string, "pending" | "settled">();
   private readonly rows = new Map<string, GatewaySessionRow>();
 
   constructor(
-    private readonly host: SolidControllerHost & {
+    private readonly host: ReactiveControllerHost & {
       readonly isConnected: boolean;
       readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
       readonly sessionData: Pick<SessionDataController, "requestSessionDataUpdate">;

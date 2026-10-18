@@ -90,7 +90,6 @@ let restore: () => void;
 beforeEach(() => {
   const originals = [
     [globalThis, sqliteSelectionKey],
-    [globalThis, "__openclawStandaloneRootUrl"],
     [process, "versions"],
     [process, "platform"],
   ] as const;
@@ -125,7 +124,6 @@ export function mockBunSqliteNativeBoundary(
     exists?: (pathname: string) => boolean;
     probe?: (pathname: string) => LibraryProbe;
     select?: (pathname: string) => void;
-    standaloneRootUrl?: string;
   } = {},
 ) {
   native.enabled = true;
@@ -139,14 +137,6 @@ export function mockBunSqliteNativeBoundary(
   );
   native.select = vi.fn(options.select ?? (() => {}));
   Reflect.deleteProperty(globalThis, sqliteSelectionKey);
-  if (options.standaloneRootUrl === undefined) {
-    Reflect.deleteProperty(globalThis, "__openclawStandaloneRootUrl");
-  } else {
-    Object.defineProperty(globalThis, "__openclawStandaloneRootUrl", {
-      configurable: true,
-      value: options.standaloneRootUrl,
-    });
-  }
   Object.defineProperty(process, "versions", {
     configurable: true,
     value: { ...process.versions, bun: (options.isBun ?? true) ? "fixture" : undefined },

@@ -67,7 +67,9 @@ function resolveApiMaxCompletionTokens(params: {
   }
   const contextWindow = normalizePositiveInt(params.apiModel.model_spec?.availableContextTokens);
   const knownMaxTokens =
-    params.knownMaxTokens === undefined ? undefined : Math.floor(params.knownMaxTokens);
+    typeof params.knownMaxTokens === "number" && Number.isFinite(params.knownMaxTokens)
+      ? Math.floor(params.knownMaxTokens)
+      : undefined;
   const hardCap = knownMaxTokens ?? VENICE_DISCOVERY_HARD_MAX_TOKENS;
   const fallbackContextWindow = knownMaxTokens ?? VENICE_DEFAULT_CONTEXT_WINDOW;
   return Math.min(raw, contextWindow ?? fallbackContextWindow, hardCap);
@@ -97,7 +99,9 @@ function projectVeniceModels(
     if (catalogEntry) {
       const definition: ModelDefinitionConfig = {
         ...catalogEntry,
-        cost: liveCost ?? catalogEntry.cost,
+        input: [...catalogEntry.input],
+        cost: liveCost ?? { ...catalogEntry.cost },
+        ...(catalogEntry.compat ? { compat: { ...catalogEntry.compat } } : {}),
       };
       if (apiMaxTokens !== undefined) {
         definition.maxTokens = apiMaxTokens;

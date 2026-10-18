@@ -176,17 +176,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
         await nextTurn();
         expect.soft(closeSettled).toBe(false);
         held.resolve();
-        const response = await harness.awaitResponseFrame("held");
-        if (boundary !== "family rejection") {
-          expect.soft(response).toMatchObject({
-            ok: false,
-            error: {
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "gateway-restarting" },
-            },
-          });
-        }
+        await harness.awaitResponseFrame("held");
         await dispatch;
         await closing;
         expect.soft(handler).not.toHaveBeenCalled();
@@ -251,11 +241,7 @@ describe("Gateway request entry lifetime", { concurrent: false }, () => {
           expect.objectContaining({
             id: "waiting",
             ok: false,
-            error: expect.objectContaining({
-              code: "UNAVAILABLE",
-              retryable: true,
-              details: { reason: "gateway-restarting" },
-            }),
+            error: expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
           }),
         );
         expect(harness.close).not.toHaveBeenCalled();

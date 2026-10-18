@@ -2,18 +2,26 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS } from "./api.js";
-import {
-  listGuilds,
-  searchDiscordGuildMembers,
-  type DiscordGuildMember,
-  type DiscordGuildSummary,
-} from "./guilds.js";
+import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, fetchDiscord } from "./api.js";
+import { listGuilds, type DiscordGuildSummary } from "./guilds.js";
 import {
   filterDiscordGuilds,
   parseDiscordAllowlistInput,
   resolveDiscordAllowlistToken,
 } from "./resolve-allowlist-common.js";
+
+type DiscordUser = {
+  id: string;
+  username: string;
+  discriminator?: string;
+  global_name?: string;
+  bot?: boolean;
+};
+
+type DiscordMember = {
+  user: DiscordUser;
+  nick?: string | null;
+};
 
 export type DiscordUserResolution = {
   input: string;
@@ -25,7 +33,7 @@ export type DiscordUserResolution = {
   note?: string;
 };
 
-function scoreDiscordMember(member: DiscordGuildMember, query: string): number {
+function scoreDiscordMember(member: DiscordMember, query: string): number {
   const q = query.toLowerCase();
   const user = member.user;
   const candidates = [user.username, user.global_name, member.nick]
@@ -84,12 +92,20 @@ export async function resolveDiscordUserAllowlist(params: {
       guildName: parsed.guild,
     });
 
-    let best: { member: DiscordGuildMember; guild: DiscordGuildSummary; score: number } | null =
-      null;
+    let best: { member: DiscordMember; guild: DiscordGuildSummary; score: number } | null = null;
     let matches = 0;
 
     for (const guild of guildList) {
-      const members = await searchDiscordGuildMembers(token, fetcher, guild.id, query, 25);
+      const paramsObj = new URLSearchParams({
+        query,
+        limit: "25",
+      });
+      const members = await fetchDiscord<DiscordMember[]>(
+        `/guilds/${guild.id}/members/search?${paramsObj.toString()}`,
+        token,
+        fetcher,
+        { timeoutMs: DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS },
+      );
       for (const member of members) {
         const score = scoreDiscordMember(member, query);
         if (score === 0) {

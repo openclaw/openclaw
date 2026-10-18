@@ -10,18 +10,11 @@ export function installPopoverPolyfill(): () => void {
   const matchesDescriptor: TypedPropertyDescriptor<Element["matches"]> =
     Object.getOwnPropertyDescriptor(Element.prototype, "matches")!;
   const matches = matchesDescriptor.value!;
-  const opened = new WeakMap<Element, CSSStyleDeclaration | undefined>();
-  const close = (element: Element) => {
-    const style = opened.get(element);
-    if (style?.getPropertyValue("display") === "block" && !style.getPropertyPriority("display")) {
-      style.removeProperty("display");
-    }
-    opened.delete(element);
-  };
+  const opened = new WeakSet<Element>();
   const toggle = (element: HTMLElement, open: boolean) => {
     // Removing a native popover (or its attribute) already closes it.
     if (!open && (!element.isConnected || !element.hasAttribute("popover"))) {
-      close(element);
+      opened.delete(element);
       return;
     }
     if (opened.has(element) === open) {
@@ -47,11 +40,9 @@ export function installPopoverPolyfill(): () => void {
       return;
     }
     if (open) {
-      const style = element.style.getPropertyValue("display") ? undefined : element.style;
-      style?.setProperty("display", "block");
-      opened.set(element, style);
+      opened.add(element);
     } else {
-      close(element);
+      opened.delete(element);
     }
     element.dispatchEvent(event("toggle"));
   };
@@ -61,7 +52,7 @@ export function installPopoverPolyfill(): () => void {
     value(this: Element, selector: string) {
       if (selector === ":popover-open") {
         if (!this.isConnected || !this.hasAttribute("popover")) {
-          close(this);
+          opened.delete(this);
           return false;
         }
         return opened.has(this);

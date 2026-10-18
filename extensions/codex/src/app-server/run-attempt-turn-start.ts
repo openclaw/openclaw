@@ -25,7 +25,8 @@ import type {
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import { assertCodexBindingMayBeReplaced, clearCodexBindingForClient } from "./session-binding.js";
 import {
-  resolveCodexTurnStartError,
+  CodexUsageLimitPromptError,
+  formatCodexTurnStartUsageLimitError,
   markCodexAuthProfileBlockedFromRateLimits,
 } from "./usage-limit-error.js";
 import { buildCodexUserPromptMessage } from "./user-prompt-message.js";
@@ -130,7 +131,7 @@ export async function startCodexAttemptTurn(
       }
     }
     if (started === undefined) {
-      const startupFailure = await resolveCodexTurnStartError({
+      const usageLimitError = await formatCodexTurnStartUsageLimitError({
         client: resourceState.client,
         error: turnStartError,
         errorNotification: state.latestStartupErrorNotification,
@@ -138,7 +139,7 @@ export async function startCodexAttemptTurn(
         timeoutMs: appServer.requestTimeoutMs,
         signal: runAbortController.signal,
       });
-      const message = startupFailure?.message ?? formatErrorMessage(turnStartError);
+      const message = usageLimitError?.message ?? formatErrorMessage(turnStartError);
       if (!params.providerReviewAcknowledgment && isInvalidCodexImagePayloadError(message)) {
         await clearCodexBindingAfterInvalidImagePayload(
           bindingStore,
@@ -196,23 +197,33 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      if (!startupFailure) {
+      if (usageLimitError) {
+        await markCodexAuthProfileBlockedFromRateLimits({
+          params,
+          authProfileId: startupAuthProfileId,
+          rateLimits: usageLimitError.rateLimitsForProfile,
+        });
+      } else {
         throw turnStartError;
       }
-      await markCodexAuthProfileBlockedFromRateLimits({
+      const result = buildCodexTurnStartFailureResult({
         params,
-        authProfileId: startupAuthProfileId,
-        rateLimits: startupFailure.rateLimitsForProfile,
+        message,
+        ...(usageLimitError
+          ? { promptError: new CodexUsageLimitPromptError(usageLimitError.message) }
+          : {}),
+        messagesSnapshot,
+        systemPromptReport,
       });
-      return {
-        result: buildCodexTurnStartFailureResult({
-          params,
-          message,
-          promptError: startupFailure.promptError,
-          messagesSnapshot,
-          systemPromptReport,
-        }),
-      };
+      if (!usageLimitError) {
+        result.codexAppServerFailure = {
+          kind: "client_closed_before_turn_completed",
+          transport: appServer.start.transport,
+          threadId: resourceState.thread.threadId,
+          replaySafe: true,
+        };
+      }
+      return { result };
     }
   }
   if (!started) {

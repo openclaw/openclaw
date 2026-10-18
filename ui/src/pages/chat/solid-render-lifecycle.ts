@@ -8,6 +8,7 @@ import {
 
 export type SolidRenderLifecycle<T> = RenderLifecycle & {
   readonly snapshot: Accessor<T>;
+  readonly commitGeneration: number;
 };
 
 type CommitTask = {
@@ -26,6 +27,7 @@ export function createSolidRenderLifecycle<T>(options: {
   let disposed = false;
   let requestedGeneration = 0;
   let committedRequest = -1;
+  let commitGeneration = 0;
   const tasks = new Set<CommitTask>();
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const frame = createParkedProjection(
@@ -131,6 +133,7 @@ export function createSolidRenderLifecycle<T>(options: {
         return;
       }
       committedRequest = next.frame.generation;
+      commitGeneration += 1;
       notifyRenderLifecycleForTest(options.host, "commit");
       runTasks();
     },
@@ -138,6 +141,9 @@ export function createSolidRenderLifecycle<T>(options: {
 
   return {
     snapshot: () => frame().value,
+    get commitGeneration() {
+      return commitGeneration;
+    },
     invalidate,
     afterCommit: enqueue,
   };

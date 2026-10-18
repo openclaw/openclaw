@@ -663,18 +663,14 @@ extension OpenClawChatViewModel {
         durableSessionSettingsExpectation: OpenClawChatSessionSettingsExpectation? = nil) async
     {
         guard isCurrentSession(attempt.draft.session) else { return }
-        let restartRejected = Self.isRestartRejectedSend(error)
         if let durableSessionSettingsExpectation,
            attempt.encodedAttachments.isEmpty,
-           !(error is GatewayResponseError) || restartRejected,
+           !(error is GatewayResponseError),
            !(error is OpenClawChatSendOwnershipError)
         {
             runMessageScopesByRunID.removeValue(forKey: attempt.runId)
             clearPendingRun(attempt.runId)
-            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError) && !restartRejected
-            if restartRejected {
-                applyTransportHealth(false)
-            }
+            let deliveryIsAmbiguous = !(error is OpenClawChatTransportSendError)
             let preserved = await preserveFailedLiveSend(
                 runId: attempt.runId,
                 text: attempt.draft.outgoingMessageText,

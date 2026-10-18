@@ -4,7 +4,10 @@ import { URL } from "node:url";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
 import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { detectMime } from "@openclaw/media-core/mime";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asPositiveFiniteNumber,
+  resolveNonNegativeIntegerOption,
+} from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { resolveRootPath } from "../infra/boundary-path.js";
@@ -62,7 +65,10 @@ import {
   createBoundedReadTextPage,
   formatReadContinuationNotice,
 } from "./sessions/tools/read-page.js";
-import type { ReadToolContinuation } from "./sessions/tools/tool-contracts.js";
+import {
+  ReadToolContinuationSchema,
+  type ReadToolContinuation,
+} from "./sessions/tools/tool-contracts.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./sessions/tools/truncate.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
 import {
@@ -104,7 +110,7 @@ export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryC
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
 function eraseSessionFileTool<TParameters extends TSchema, TDetails>(
   tool: AgentTool<TParameters, TDetails>,
-): AnyAgentTool<TDetails> {
+): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
@@ -152,16 +158,23 @@ function getToolResultText(result: AgentToolResult<unknown>): string | undefined
   return textBlocks.length > 0 ? textBlocks.join("\n") : undefined;
 }
 
-function getReadResultContent(result: AgentToolResult<ReadToolDetails>): string | undefined {
+function getReadResultContent(result: AgentToolResult<unknown>): string | undefined {
   const details = result.details;
-  return details.kind === "text" || details.kind === "truncated" ? details.content : undefined;
+  return details &&
+    typeof details === "object" &&
+    "kind" in details &&
+    (details.kind === "text" || details.kind === "truncated") &&
+    "content" in details &&
+    typeof details.content === "string"
+    ? details.content
+    : undefined;
 }
 
 function withToolResultText(
-  result: AgentToolResult<ReadToolDetails>,
+  result: AgentToolResult<unknown>,
   text: string,
   fileContent?: string,
-): AgentToolResult<ReadToolDetails> {
+): AgentToolResult<unknown> {
   let replaced = false;
   const nextContent: ToolContentBlock[] = result.content.map((block) => {
     if (!replaced && block.type === "text") {
@@ -181,29 +194,44 @@ function withToolResultText(
 }
 
 function extractReadTruncationDetails(
-  result: AgentToolResult<ReadToolDetails>,
+  result: AgentToolResult<unknown>,
 ): ReadTruncationDetails | null {
   const details = result.details;
-  if (details.kind !== "truncated") {
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
+    return null;
+  }
+  const truncation = details.truncation;
+  if (!truncation || typeof truncation !== "object") {
+    return null;
+  }
+  const record = truncation as Record<string, unknown>;
+  if (record.truncated !== true) {
     return null;
   }
   return {
-    ...details.truncation,
-    continuation: details.continuation,
+    truncated: true,
+    outputLines: resolveNonNegativeIntegerOption(record.outputLines, 0),
+    totalLines: resolveNonNegativeIntegerOption(record.totalLines, 0),
+    continuation: extractReadContinuation(details),
   };
 }
 
+function extractReadContinuation(details: object): ReadToolContinuation | undefined {
+  const candidate = "continuation" in details ? details.continuation : undefined;
+  return Value.Check(ReadToolContinuationSchema, candidate) ? candidate : undefined;
+}
+
 function withReadContinuation(
-  result: AgentToolResult<ReadToolDetails>,
+  result: AgentToolResult<unknown>,
   text: string,
   continuation: ReadToolContinuation,
   fileContent: string,
   initialOffset: number,
   truncation?: ReadToolTruncationDetails,
-): AgentToolResult<ReadToolDetails> {
-  const authoritative =
-    result.details.kind === "truncated" ? result.details.truncation : truncation;
-  if (!authoritative) {
+): AgentToolResult<unknown> {
+  const details = result.details && typeof result.details === "object" ? result.details : {};
+  const authoritative = ("truncation" in details ? details.truncation : undefined) ?? truncation;
+  if (!authoritative || typeof authoritative !== "object") {
     return withToolResultText(result, text);
   }
   return {
@@ -226,14 +254,42 @@ function stripReadContinuationNotice(text: string): string {
   return text.replace(READ_CONTINUATION_NOTICE_RE, "");
 }
 
+function stripReadTruncationContentDetails(
+  result: AgentToolResult<unknown>,
+): AgentToolResult<unknown> {
+  const details = result.details;
+  if (!details || typeof details !== "object" || !("truncation" in details)) {
+    return result;
+  }
+
+  const truncationRaw = details.truncation;
+  if (!truncationRaw || typeof truncationRaw !== "object") {
+    return result;
+  }
+
+  const truncation = truncationRaw as Record<string, unknown>;
+  if (!Object.hasOwn(truncation, "content")) {
+    return result;
+  }
+
+  const { content: _content, ...restTruncation } = truncation;
+  return {
+    ...result,
+    details: {
+      ...details,
+      truncation: restTruncation,
+    },
+  };
+}
+
 async function executeReadWithAdaptivePaging(params: {
-  base: AnyAgentTool<ReadToolDetails>;
+  base: AnyAgentTool;
   toolCallId: string;
   args: Record<string, unknown>;
   signal?: AbortSignal;
   maxBytes: number;
   modelBudget?: ToolResultBudget;
-}): Promise<AgentToolResult<ReadToolDetails>> {
+}): Promise<AgentToolResult<unknown>> {
   const userLimit = params.args.limit;
   // Presence owns the slice: the native reader clamps non-positive limits to
   // one line, which must not become permission to follow additional pages.
@@ -246,7 +302,7 @@ async function executeReadWithAdaptivePaging(params: {
     typeof params.args.cursor === "number"
       ? { kind: "cursor", offset: initialOffset, cursor: params.args.cursor, ...initialLimit }
       : { kind: "line", offset: initialOffset, ...initialLimit };
-  let firstResult: AgentToolResult<ReadToolDetails> | undefined;
+  let firstResult: AgentToolResult<unknown> | undefined;
   let aggregatedText = "";
   let aggregatedContent = "";
   let aggregatedBytes = 0;
@@ -277,7 +333,8 @@ async function executeReadWithAdaptivePaging(params: {
     const pageContinuation = truncation?.continuation;
     const pageText =
       pageContinuation || reachedEof ? stripReadContinuationNotice(rawText) : rawText;
-    // File data is independent of display notices; image/missing outcomes have only display text.
+    // Native readers own file data independently of display notices. Only injected
+    // readers without structured text need the legacy display-text adaptation.
     const structuredContent = getReadResultContent(pageResult);
     const pageContent = structuredContent ?? pageText;
     const delimiter = aggregatedText && pageText && next.kind === "line" ? "\n" : "";
@@ -375,9 +432,9 @@ function rewriteReadImageHeader(text: string, mimeType: string): string {
 }
 
 async function normalizeReadImageResult(
-  result: AgentToolResult<ReadToolDetails>,
+  result: AgentToolResult<unknown>,
   filePath: string,
-): Promise<AgentToolResult<ReadToolDetails>> {
+): Promise<AgentToolResult<unknown>> {
   const content = result.content;
   const image = content.find((block): block is ImageContentBlock => block.type === "image");
   if (!image) {
@@ -417,12 +474,28 @@ async function normalizeReadImageResult(
 }
 
 function normalizeReadResultDetails(
-  result: AgentToolResult<ReadToolDetails>,
+  result: AgentToolResult<unknown>,
 ): AgentToolResult<ReadToolDetails> {
-  if (result.details.kind !== "image") {
-    return result;
+  const currentDetails =
+    result.details && typeof result.details === "object"
+      ? (result.details as Record<string, unknown>)
+      : undefined;
+  if (
+    currentDetails?.status === "not_found" &&
+    typeof currentDetails.path === "string" &&
+    currentDetails.optional === true
+  ) {
+    return {
+      ...result,
+      details: {
+        kind: "not_found",
+        status: "not_found",
+        path: currentDetails.path,
+        optional: true,
+      },
+    };
   }
-  // Sanitization may resize an image or replace it with a diagnostic text block.
+
   const displayText = getToolResultText(result) ?? "";
   const image = result.content.find((block): block is ImageContentBlock => block.type === "image");
   if (image) {
@@ -432,7 +505,24 @@ function normalizeReadResultDetails(
     };
   }
 
-  return { ...result, details: { kind: "text", content: displayText } };
+  const text = getReadResultContent(result) ?? displayText;
+  const truncation = currentDetails?.truncation;
+  if (currentDetails && truncation && typeof truncation === "object") {
+    const continuation = extractReadContinuation(currentDetails);
+    if (!continuation) {
+      return { ...result, details: { kind: "text", content: text } };
+    }
+    return {
+      ...result,
+      details: {
+        kind: "truncated",
+        content: text,
+        truncation: truncation as ReadToolTruncationDetails,
+        continuation,
+      },
+    };
+  }
+  return { ...result, details: { kind: "text", content: text } };
 }
 
 function resolveContainerPathCandidate(filePath: string): string {
@@ -731,8 +821,8 @@ async function assertSandboxPathWithinAnyRoot(params: {
 }
 
 /** Wrap a file tool with workspace guards and optional container path mapping. */
-export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
-  tool: AnyAgentTool<TDetails>,
+export function wrapToolWorkspaceRootGuardWithOptions(
+  tool: AnyAgentTool,
   root: string,
   options?: {
     additionalRoots?: readonly string[];
@@ -747,7 +837,7 @@ export function wrapToolWorkspaceRootGuardWithOptions<TDetails>(
     bridge?: SandboxFsBridge;
     readPathValidation?: "bridge";
   },
-): AnyAgentTool<TDetails> {
+): AnyAgentTool {
   // v2026.9.4 exposed bridges without descriptors. Preserve their host-root
   // admission until a future breaking SDK contract can require pathMappings.
   const declaredMappings = options?.bridge?.pathMappings;
@@ -937,9 +1027,9 @@ export function createHostWorkspaceEditTool(root: string, options?: HostWorkspac
 }
 
 export function createOpenClawReadTool(
-  base: AnyAgentTool<ReadToolDetails>,
+  base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
-): AnyAgentTool<ReadToolDetails> {
+): AnyAgentTool {
   const modelBudget = resolveToolResultBudget(options?.modelContextWindowTokens);
   return {
     ...base,
@@ -967,20 +1057,21 @@ export function createOpenClawReadTool(
         maxBytes: resolveAdaptiveReadMaxBytes(options),
         modelBudget,
       });
-      const normalizedResult = await normalizeReadImageResult(result, filePath);
+      const strippedDetailsResult = stripReadTruncationContentDetails(result);
+      const normalizedResult = await normalizeReadImageResult(strippedDetailsResult, filePath);
       const sanitizedResult = await sanitizeToolResultImages(
         normalizedResult,
         `read:${filePath}`,
         options?.imageSanitization,
       );
-      return normalizeReadResultDetails({ ...sanitizedResult, details: normalizedResult.details });
+      return normalizeReadResultDetails(sanitizedResult);
     },
   };
 }
 
 /** Serve exact non-filesystem skill locators before workspace path guards run. */
 export function wrapReadToolWithSkillContent(
-  tool: AnyAgentTool<ReadToolDetails>,
+  tool: AnyAgentTool,
   skills: readonly SkillReadContent[] | undefined,
   options?: OpenClawReadToolOptions & {
     cwd?: string;
@@ -988,7 +1079,7 @@ export function wrapReadToolWithSkillContent(
     instructionPaths?: readonly string[];
     instructionDeliveryCache?: SkillInstructionDeliveryCache;
   },
-): AnyAgentTool<ReadToolDetails> {
+): AnyAgentTool {
   const cwd = options?.cwd ?? process.cwd();
   const resolveInstructionPath = (filePath: string): string => {
     if (filePath.startsWith("node://")) {
@@ -1017,7 +1108,7 @@ export function wrapReadToolWithSkillContent(
     return tool;
   }
   const instructionDeliveryCache = options?.instructionDeliveryCache;
-  const alreadyDeliveredResult = (): AgentToolResult<ReadToolDetails> => {
+  const alreadyDeliveredResult = (): AgentToolResult<unknown> => {
     const text =
       "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
     return {
@@ -1034,7 +1125,7 @@ export function wrapReadToolWithSkillContent(
     }
     return content;
   };
-  let virtualRead: AnyAgentTool<ReadToolDetails> | undefined;
+  let virtualRead: AnyAgentTool | undefined;
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
@@ -1102,7 +1193,13 @@ export function wrapReadToolWithSkillContent(
       try {
         const result = await instructionTool.execute(toolCallId, instructionArgs, signal, onUpdate);
         const details = result.details;
-        const detailsKind = details.kind;
+        const detailsKind =
+          details &&
+          typeof details === "object" &&
+          "kind" in details &&
+          typeof details.kind === "string"
+            ? details.kind
+            : undefined;
         if (detailsKind === "truncated") {
           resetDelivery();
           const text =

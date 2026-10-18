@@ -42,18 +42,17 @@ import {
   filterVisibleProjectedHistoryMessages,
   mergeTtsSupplementMessages,
   projectForwardedMessages,
-  projectPluginSteeringMessage,
   toProjectedMessages,
 } from "./chat-display-projection.history.js";
 import { mapChatDisplayMessages } from "./chat-display-projection.map.js";
 import {
-  prepareAssistantHistoryMessage,
   sanitizeChatHistoryContentBlock,
   sanitizeChatHistoryMessage,
   sanitizeChatHistoryMessages,
   shouldDropAssistantHistoryMessage,
 } from "./chat-display-projection.sanitize.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
+import { isSuppressedControlReplyText } from "./control-reply-text.js";
 import type {
   CurrentUserProfileDisplay,
   CurrentUserProfileDisplayResolver,
@@ -64,7 +63,6 @@ import { projectTranscriptImageArtifacts } from "./transcript-image-artifacts.js
 export type ChatDisplayProjectionOptions = {
   resolveCronJobName?: (jobId: string) => string | undefined;
   includeCommentaryFallbacks?: boolean;
-  includePluginSteering?: boolean;
   maxChars?: number;
   toolResultMaxChars?: number;
   activity?: false;
@@ -281,7 +279,7 @@ function hasVisibleAssistantDisplayContent(message: Record<string, unknown>): bo
     string,
     unknown
   >;
-  if (shouldDropAssistantHistoryMessage(message)) {
+  if (shouldDropAssistantHistoryMessage(sanitized)) {
     return false;
   }
   if (hasAssistantDisplayableNonTextContent(sanitized) || hasTranscriptMediaFacts(sanitized)) {
@@ -302,7 +300,11 @@ function hasVisibleAssistantReplyText(message: Record<string, unknown>): boolean
       return false;
     }
     const visible = text.trim();
-    return visible.length > 0 && visible !== STREAM_ERROR_FALLBACK_TEXT;
+    return (
+      visible.length > 0 &&
+      visible !== STREAM_ERROR_FALLBACK_TEXT &&
+      !isSuppressedControlReplyText(visible)
+    );
   });
 }
 
@@ -513,7 +515,7 @@ export function prepareChatHistoryRecoveryMessages(
   options?: ChatHistoryRecoveryOptions,
 ) {
   const projectedMessages = messages.map((original) => {
-    const message = projectTranscriptImageArtifacts(prepareAssistantHistoryMessage(original));
+    const message = projectTranscriptImageArtifacts(original);
     const entry = asOptionalRecord(message);
     const failureRunId = readSessionTranscriptFailureRunId(entry);
     if (failureRunId) {
@@ -580,12 +582,7 @@ export function projectChatDisplayMessagesWithState(
       (message) => asOptionalRecord(message.openclawStreamFallback)?.source === "segment",
     );
   const filtered = filterVisibleProjectedHistoryMessages(
-    projectForwardedMessages(
-      options?.includePluginSteering
-        ? mapChatDisplayMessages(sanitizedMessages, projectPluginSteeringMessage)
-        : sanitizedMessages,
-      options?.resolveCronJobName,
-    ),
+    projectForwardedMessages(sanitizedMessages, options?.resolveCronJobName),
     options?.turnBoundaryPending,
   );
   const displayMessages = sanitizeChatHistoryMessages(

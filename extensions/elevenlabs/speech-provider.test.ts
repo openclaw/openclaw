@@ -105,6 +105,7 @@ describe("elevenlabs speech provider", () => {
             : {
                 handled: true,
                 overrides: {
+                  ...currentOverrides,
                   voiceSettings: { ...currentOverrides.voiceSettings, ...expected },
                 },
               },
@@ -126,7 +127,7 @@ describe("elevenlabs speech provider", () => {
     const providerConfig = { apiKey: "   " };
     const blankRequest = { ...request, providerConfig };
 
-    expect(await provider.isConfiguredAsync?.(blankRequest)).toBe(false);
+    expect(provider.isConfigured(blankRequest)).toBe(false);
     await expect(
       provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
     ).rejects.toThrow("ElevenLabs API key missing");

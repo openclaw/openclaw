@@ -49,7 +49,6 @@ describe("reply model level cancellation", () => {
       await expect(survivor).resolves.toEqual({
         resolvedThinkLevel: "off",
         resolvedReasoningLevel: "off",
-        thinkingExplicit: false,
       });
       expect(continueReply).not.toHaveBeenCalled();
       expect(resolveDefaultReasoningLevel).toHaveBeenCalledTimes(stage === "thinking" ? 1 : 2);
@@ -80,7 +79,6 @@ describe("reply model level cancellation", () => {
         await expect(resolver()).resolves.toEqual({
           resolvedThinkLevel: "low",
           resolvedReasoningLevel: "off",
-          thinkingExplicit: false,
         });
         expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
         controller.abort();

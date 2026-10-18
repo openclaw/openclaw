@@ -1,7 +1,5 @@
 import type { FoldedItem, Turn } from "@muse-code/sdk";
-import { emitAgentHarnessAttemptEvent } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
-  embeddedAgentLog,
   projectAgentToolActivity,
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessAttemptResult,
@@ -44,16 +42,10 @@ export async function consumeTurn(
   const streamed = new Map<string, string>();
   const emitted = new Map<string, number>();
   const settled = new Set<string>();
-  const foregroundItems = new Set<string>();
-  let answerRecorded = false;
-  let finalizing = false;
   let visibleText = "";
   let lastToolError: AgentHarnessAttemptResult["lastToolError"];
   let messageStarted = false;
   let streamQueue = Promise.resolve();
-  const emitEvent = (
-    event: Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0],
-  ) => emitAgentHarnessAttemptEvent(params, event, { label: "Muse", log: embeddedAgentLog });
   const emitField = (item: FoldedItem, field: string, value: string) => {
     streamQueue = streamQueue.then(async () => {
       const key = `${item.itemId}:${field}`;
@@ -68,7 +60,7 @@ export async function consumeTurn(
           messageStarted = true;
           await params.onAssistantMessageStart?.();
         }
-        await emitEvent({ stream: "assistant", data: { itemId: item.itemId, delta, text: value } });
+        await params.onAgentEvent?.({ stream: "assistant", data: { delta, text: value } });
       } else if (item.kind === "reasoning" && (field === "text" || field.startsWith("summary."))) {
         await params.onReasoningStream?.({ text: delta });
       }
@@ -91,31 +83,6 @@ export async function consumeTurn(
     for await (const item of turn.items()) {
       const first = !items.has(item.itemId);
       items.set(item.itemId, item);
-      if (item.kind !== "reminderChild" && item.kind !== "userMessage") {
-        if (item.status === "inProgress") {
-          foregroundItems.add(item.itemId);
-        } else {
-          foregroundItems.delete(item.itemId);
-        }
-        if (first) {
-          answerRecorded = false;
-          finalizing = false;
-        }
-      }
-      // Post-answer reminder generation is Muse's background work, not another
-      // model response. A completed text item alone cannot establish this: it
-      // may be followed by foreground tools.
-      if (
-        first &&
-        item.kind === "reminderChild" &&
-        item.status === "inProgress" &&
-        answerRecorded &&
-        foregroundItems.size === 0 &&
-        !finalizing
-      ) {
-        await emitEvent({ stream: "lifecycle", data: { phase: "finishing" } });
-        finalizing = true;
-      }
       if (first) {
         for (const [key, value] of streamed) {
           if (key.startsWith(`${item.itemId}:`)) {
@@ -124,7 +91,7 @@ export async function consumeTurn(
         }
       }
       if (item.kind === "toolCall" && first) {
-        await emitEvent({
+        await params.onAgentEvent?.({
           stream: "item",
           data: projectAgentToolActivity({
             toolCallId: item.callId ?? item.itemId,
@@ -180,7 +147,7 @@ export async function consumeTurn(
           result: item.visibleOutput,
           isError: item.status !== "completed",
         });
-        await emitEvent({
+        await params.onAgentEvent?.({
           stream: "item",
           data: projectAgentToolActivity({ toolCallId: id, name: toolName, phase: "result" }),
         });
@@ -202,7 +169,7 @@ export async function consumeTurn(
         );
         await params.onReasoningEnd?.();
       } else if (item.kind !== "userMessage") {
-        await emitEvent({
+        await params.onAgentEvent?.({
           stream: "item",
           data: {
             type: String(item.kind),
@@ -214,9 +181,6 @@ export async function consumeTurn(
       }
       if (messages.length) {
         await record(item.itemId, messages);
-        if (item.kind === "agentMessage") {
-          answerRecorded = true;
-        }
       }
     }
   })();

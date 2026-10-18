@@ -113,7 +113,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   let preambleItemId: string | undefined;
   let preambleAt: number | undefined;
   let narrationText = "";
-  let modelWaitText = "";
   let finalReplyStarted = false;
   const isTurnActive = () => params.active && !finalReplyStarted;
   const canUpdateProgress = () =>
@@ -132,9 +131,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
   };
 
   const resolveStatusText = (): { text: string; format?: "plain" } => {
-    if (modelWaitText) {
-      return { text: modelWaitText, format: "plain" };
-    }
     if (transferredStatus) {
       return transferredStatus;
     }
@@ -211,7 +207,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     preambleItemId = undefined;
     preambleAt = undefined;
     narrationText = "";
-    modelWaitText = "";
     diffStatTracker.reset();
     lastStartRendered = false;
   };
@@ -471,7 +466,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     getText: () => formatDraftText(),
     markFinalReplyStarted() {
       finalReplyStarted = true;
-      modelWaitText = "";
       // Final delivery must disarm the delayed start before async delivery work.
       // Queued turns reopen the gate through beginNewTurn().
       gate?.cancel();
@@ -479,7 +473,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     },
     markFinalReplyDelivered() {
       finalReplyStarted = true;
-      modelWaitText = "";
       clearPreambleExpiryTimer();
     },
     // Authoritative queued admission may force reset after a silent turn;
@@ -514,7 +507,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
       clearProgressState(true);
     },
     cancel() {
-      modelWaitText = "";
       gate?.cancel();
       clearPreambleExpiryTimer();
     },
@@ -534,16 +526,6 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     pushToolProgress: noteProgress,
     ...progressEventHandlers,
     pushItemEvent: async (payload: Parameters<typeof progressEventHandlers.pushItemEvent>[0]) => {
-      if (payload.kind === "model-wait") {
-        if (!canUpdateProgress()) {
-          return false;
-        }
-        // Backend waits override the headline only; the prior work status stays intact.
-        modelWaitText = payload.phase === "end" ? "" : (payload.progressText ?? "");
-        return modelWaitText
-          ? await startAndRender({ flush: true })
-          : await renderAfterRetraction();
-      }
       if (params.showWorkStatus && quietProgress && canUpdateProgress()) {
         const status = projectChannelWorkStatus(payload);
         const current = lines.find(

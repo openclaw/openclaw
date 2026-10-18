@@ -24,7 +24,6 @@ const commandTransport = vi.hoisted(() => ({
   hostCwd: process.cwd(),
   npmPrefix: "",
 }));
-export const sqliteHostPlatform = commandTransport.hostPlatform;
 
 const isMacosAclInspection = vi.hoisted(
   () => (command: string, args: readonly string[]) =>
@@ -45,6 +44,7 @@ const isPlistStdinConversion = vi.hoisted(
     args[5] === "-",
 );
 
+const sqliteHostPlatform = process.platform;
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 
@@ -88,8 +88,7 @@ const sourceRuntimeCompletion = vi.hoisted(() =>
   vi.fn<typeof import("./update-cli/update-command-runtime.js").completeSourceUpdateRuntime>(),
 );
 const pluginAvailabilityPreflight = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
+vi.mock("../daemon/service-process-membership.js", () => ({
   inspectServiceProcessMembershipSync: vi.fn(() => "outside"),
 }));
 
@@ -245,8 +244,8 @@ vi.mock("../state/openclaw-database-preflight.js", () => ({
   preflightOpenClawDatabaseSchemas: databasePreflightMocks.preflightOpenClawDatabaseSchemas,
 }));
 
-vi.mock("../state/openclaw-state-ownership-preflight.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../state/openclaw-state-ownership-preflight.js")>()),
+vi.mock("../state/openclaw-state-ownership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../state/openclaw-state-ownership.js")>()),
   assertOpenClawStateWriteAllowedAtPath: vi.fn(async () => undefined),
 }));
 
@@ -749,6 +748,7 @@ export {
   serviceStop,
   sourceRuntimeCompletion,
   spawn,
+  sqliteHostPlatform,
   stateSchemaVersions,
   suspendScheduledTaskAutoStartForUpdate,
   syncPluginsForUpdateChannel,

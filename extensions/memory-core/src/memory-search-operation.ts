@@ -48,7 +48,7 @@ export async function searchMemoryForCli(
   assertCurrent?.();
   const status = await readMemorySearchManagerStatus(manager);
   const staleness = resolveMemorySearchStaleness(status, agentId);
-  let warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
+  const warning = [staleness?.warning, readRebuildWarning()].filter(Boolean).join(" ");
   const pluginConfig = asNullableRecord(cfg.plugins?.entries?.["memory-core"]?.config) ?? {};
   if (resolveMemoryDreamingConfig({ cfg, pluginConfig }).enabled) {
     const dreaming = resolveMemoryDeepDreamingConfig({ cfg, pluginConfig });
@@ -67,11 +67,7 @@ export async function searchMemoryForCli(
             withMemoryMutationAuthority(assertCurrent, record),
           )
         : record()
-    ).catch((error: unknown) => {
-      warning = [warning, `Memory recall recording failed: ${formatErrorMessage(error)}`]
-        .filter(Boolean)
-        .join(" ");
-    });
+    ).catch(() => {});
   }
   assertCurrent?.();
   return { results, ...staleness, ...(warning ? { warning } : {}) };

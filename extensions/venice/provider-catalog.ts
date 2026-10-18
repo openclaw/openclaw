@@ -5,6 +5,6 @@ export function buildStaticVeniceProvider(): ModelProviderConfig {
   return {
     baseUrl: VENICE_BASE_URL,
     api: "openai-completions",
-    models: VENICE_MODEL_CATALOG,
+    models: structuredClone(VENICE_MODEL_CATALOG),
   };
 }

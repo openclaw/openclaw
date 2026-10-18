@@ -166,7 +166,6 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
       "collectErrorGraphCandidates",
       "collectNestedErrorCandidates",
       "extractErrorCodeOrErrno",
-      "formatErrorStackWithMessage",
       "readErrorCauses",
       "stringifyNonErrorCause",
       "toErrorObject",
@@ -621,8 +620,7 @@ function auditDefaultCanonicalExports(repoRoot: string, parser: API): CanonicalC
   const exportsByFile = new Map(
     auditedModules.map((file) => {
       const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
-      using retainedSource = parser.createSourceFile(file, source);
-      const exportedNames = findExportedCallableNames(retainedSource.sourceFile);
+      const exportedNames = findExportedCallableNames(parser.createSourceFile(file, source));
       if (!mixedModules.has(file)) {
         return [file, exportedNames] as const;
       }
@@ -688,12 +686,11 @@ export async function runCoercionHelperDeclarationGuard(
         if (!BANNED_HELPER_NAME_PATTERN.test(result.value.source)) {
           continue;
         }
-        using retainedSource = parser.createSourceFile(result.value.file, result.value.source);
         declarations.push(
           ...findBannedCoercionHelperDeclarations(
             result.value.source,
             result.value.file,
-            retainedSource.sourceFile,
+            parser.createSourceFile(result.value.file, result.value.source),
           ),
         );
       }

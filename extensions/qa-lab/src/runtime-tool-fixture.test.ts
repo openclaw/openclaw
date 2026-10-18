@@ -286,6 +286,11 @@ describe("runtime tool fixture", () => {
       label: "JSON-encoded provider arguments",
       encode: (input: string) => JSON.stringify({ input }),
     },
+    {
+      label: "executed provider arguments with an empty mirrored input",
+      encode: (input: string) => ({ input }),
+      shadowInput: true,
+    },
   ])("verifies linked $label without weakening workspace containment", async (testCase) => {
     const { encode } = testCase;
     const env = await makeEnv();
@@ -293,6 +298,7 @@ describe("runtime tool fixture", () => {
     await writeCodexNativePatchEvidence(env, "patch rejected: writing outside of the project", {
       happyArguments: encode(runtimePatchAddInput()),
       failureArguments: encode(runtimePatchUpdateInput()),
+      ...("shadowInput" in testCase ? { happyInput: {}, failureInput: {} } : {}),
     });
 
     await expect(runNativePatchFixture(env)).resolves.toContain(
@@ -750,6 +756,7 @@ describe("runtime tool fixture mock request linking", () => {
     ).rejects.toThrow("expected mock happy-path tool output for read");
   });
   it.each([
+    ["happy-path file", runtimePatchAddInput("runtime-tool-fixture-wrong.txt"), undefined],
     [
       "failure-path replacement",
       undefined,

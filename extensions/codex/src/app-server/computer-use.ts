@@ -96,6 +96,7 @@ type CodexComputerUseInspectionParams = Omit<
 };
 
 type ExplicitManagedComputerUseInstallContext = {
+  client: CodexAppServerClient;
   agentDir: string;
   codexHome: string;
   command: string;
@@ -558,6 +559,7 @@ async function resolveExplicitManagedComputerUseInstallContext(
     return undefined;
   }
   return {
+    client: params.client,
     agentDir: params.agentDir,
     codexHome,
     command,

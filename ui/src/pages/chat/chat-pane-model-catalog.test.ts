@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { render } from "lit";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow, ModelCatalogResult } from "../../api/types.ts";
@@ -15,7 +16,6 @@ import {
   publishModelCatalogResult,
 } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
-import { renderPaneLegacyContent } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
@@ -62,7 +62,7 @@ describe("chat pane composer controls", () => {
       state.sessionKey = "agent:main:main";
       state.chatModelCatalogInitialized = false;
       const container = document.createElement("div");
-      const draw = () => renderPaneLegacyContent(composerControls(state), container);
+      const draw = () => render(composerControls(state), container);
       onTestFinished(() => {
         checking.resolve({ models: [] });
         retireChatMetadataRequests(state);
@@ -138,7 +138,7 @@ describe("chat pane composer controls", () => {
   ])(
     "revalidates the $label configured model catalog when the picker opens",
     async ({ cachedCatalog }) => {
-      const container = document.body.appendChild(document.createElement("div"));
+      const container = document.createElement("div");
       const catalog = createDeferred<ModelCatalogResult>();
       const session: GatewaySessionRow = {
         key: "main",
@@ -154,17 +154,15 @@ describe("chat pane composer controls", () => {
           : catalog.promise,
       );
       const client = createTestGatewayClient(request);
-      const requestUpdate = vi.fn();
       const state = makeChatHost({
         client,
         connectionEpoch: 1,
         sessionKey: "main",
         sessionsResult: { ...createSessionsListResult(), sessions: [session] },
-        requestUpdate,
+        requestUpdate: vi.fn(),
       }) as unknown as ChatPageHost;
       state.chatModelSwitchPromises = {};
       onTestFinished(() => {
-        container.remove();
         retireChatMetadataRequests(state);
         state.sessions.dispose();
       });
@@ -179,12 +177,9 @@ describe("chat pane composer controls", () => {
         expect(state.chatModelCatalog).toEqual(cachedCatalog.models);
         expect(request).not.toHaveBeenCalled();
         await initialized;
-        requestUpdate.mockClear();
-        await refreshChatModelCatalogOnDemand(state);
-        expect(requestUpdate).not.toHaveBeenCalled();
         invalidateModelCatalogCache(client, scope);
       }
-      renderPaneLegacyContent(composerControls(state), container);
+      render(composerControls(state), container);
 
       const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
       picker!.open = true;
@@ -198,7 +193,7 @@ describe("chat pane composer controls", () => {
         sessionKey: "main",
       });
       expect(state.chatModelsLoading).toBe(!cachedCatalog);
-      renderPaneLegacyContent(composerControls(state), container);
+      render(composerControls(state), container);
       if (cachedCatalog) {
         expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
         expect(
@@ -271,7 +266,7 @@ describe("chat pane composer controls", () => {
     expect(host.chatModelCatalog).toEqual([cachedModel]);
     expect(host.chatModelsLoading).toBe(false);
     const container = document.createElement("div");
-    renderPaneLegacyContent(composerControls(host), container);
+    render(composerControls(host), container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
     expect(container.textContent).not.toContain("Loading models…");

@@ -20,10 +20,13 @@ import {
   shouldHandleNavigationClick,
 } from "../../../lib/navigation-click.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { solidContent } from "../../../lit/solid-content.tsx";
+import { LitContent } from "../../../lit/solid-content.tsx";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
 import { ChatCommentPins } from "./chat-comment-pins.tsx";
-import { CHAT_HISTORY_BOUNDARY_HEIGHT_PX, ChatHistoryBoundary } from "./chat-history-boundary.tsx";
+import {
+  CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
+  renderChatHistoryBoundary,
+} from "./chat-history-boundary.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   handleTranscriptContextMenu,
@@ -32,8 +35,7 @@ import {
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
-import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
-import { ChatWelcome } from "./chat-welcome.tsx";
+import { renderWelcomeState, resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 
 const EMPTY_ENTRY_KEYS: ReadonlyMap<string, string> = new Map();
 
@@ -96,7 +98,7 @@ export function ChatThread(input: {
   const historyHeader = () =>
     input.props.historyPagination
       ? {
-          template: solidContent(ChatHistoryBoundary, input.props.historyPagination),
+          template: renderChatHistoryBoundary(input.props.historyPagination),
           height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
         }
       : null;
@@ -110,14 +112,14 @@ export function ChatThread(input: {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
-            <ChatHistoryBoundary {...input.props.historyPagination} />
+          {isEmpty() && !showLoadingSkeleton() ? (
+            <LitContent value={historyHeader()?.template} />
           ) : undefined}
           {showLoadingSkeleton() ? (
             <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
           ) : undefined}
           {isEmpty() && !showLoadingSkeleton() && !searchOpen() ? (
-            <ChatWelcome {...input.props} onModelSetup={undefined} />
+            <LitContent value={renderWelcomeState({ ...input.props, onModelSetup: undefined })} />
           ) : undefined}
           {isEmpty() && searchOpen() ? (
             <div class="agent-chat__empty">{t("chat.thread.noMatches")}</div>

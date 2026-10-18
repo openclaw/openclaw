@@ -5,7 +5,6 @@ import type {
   TalkConfigResult,
 } from "@openclaw/gateway-protocol";
 import type { SchemaContract } from "../../../../../packages/gateway-protocol/src/schema-contract.js";
-import type { RealtimeVoiceCloseOptions } from "../../../../../src/talk/provider-types.js";
 import { VOICE_TRANSCRIPT_QUEUE_POLICY } from "../../../../../src/talk/voice-transcript.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import { t } from "../../../i18n/index.ts";
@@ -127,12 +126,12 @@ export class RealtimeTalkSession {
             this.closed ||
             lifecycleGeneration !== this.lifecycleGeneration
           ) {
-            transport.stop({ disposition: "detach" });
+            transport.stop();
             return;
           }
           this.transport = transport;
         } catch (error) {
-          transport.stop({ disposition: "detach" });
+          transport.stop();
           throw error;
         } finally {
           if (this.pendingStartup === transport) {
@@ -403,9 +402,9 @@ export class RealtimeTalkSession {
     );
   }
 
-  stop(options: RealtimeVoiceCloseOptions = {}): Promise<void> {
+  stop(): Promise<void> {
     try {
-      return this.retireTransport(options);
+      return this.retireTransport();
     } finally {
       this.callbacks.onStatus?.("idle");
     }
@@ -419,9 +418,7 @@ export class RealtimeTalkSession {
     return this.closed ? undefined : this.selectedTransport;
   }
 
-  private retireTransport(
-    options: RealtimeVoiceCloseOptions = { disposition: "detach" },
-  ): Promise<void> {
+  private retireTransport(): Promise<void> {
     this.lifecycleGeneration += 1;
     this.closed = true;
     this.videoOperation += 1;
@@ -434,10 +431,10 @@ export class RealtimeTalkSession {
     this.selectedTransport = undefined;
     this.pendingStartup = null;
     try {
-      completions.push(Promise.resolve(pendingStartup?.stop({ ...options, emitClosed: false })));
+      completions.push(Promise.resolve(pendingStartup?.stop({ emitClosed: false })));
     } finally {
       try {
-        completions.push(Promise.resolve(transport?.stop(options)));
+        completions.push(Promise.resolve(transport?.stop()));
       } finally {
         if (detached) {
           completions.push(this.closeLogicalVoiceSession(detached));

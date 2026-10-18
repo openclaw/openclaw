@@ -14,7 +14,7 @@ import {
   vi,
 } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   loadSessionEntry,
@@ -135,8 +135,6 @@ async function emitLifecycleAssistantReply(params: {
   const text = params.resolveText(commandParams.extraSystemPrompt);
   const message = {
     role: "assistant",
-    phase: "final_answer",
-    stopReason: "stop",
     content: [{ type: "text", text }],
     ...(params.includeTimestamp ? { timestamp: Date.now() } : {}),
   };
@@ -148,9 +146,6 @@ async function emitLifecycleAssistantReply(params: {
     },
     {
       cwd: "/tmp",
-      runId,
-      expectedSessionId: sessionId,
-      touchSessionEntry: false,
       updateMode: "none",
       messages: [{ message, now: Date.now() }],
     },
@@ -163,7 +158,7 @@ async function emitLifecycleAssistantReply(params: {
       phase: "end",
       startedAt,
       endedAt: Date.now(),
-      terminalReply: prepareAgentRunTerminalReply({ rawText: text }).terminalReply,
+      terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
     },
   });
 }
@@ -205,9 +200,8 @@ beforeAll(async () => {
   } finally {
     captureKernel.mockRestore();
   }
-  // Prepare real handlers before RPC deadlines; cold module loading is fixture setup.
+  // Prepare the real history handler before the RPC deadline starts.
   await import("./server-methods/chat.js");
-  await import("./server-methods/sessions-create.js");
 });
 
 beforeEach(async () => {
@@ -277,9 +271,6 @@ describe("sessions_send gateway loopback", () => {
 
   it("returns reply when lifecycle ends before agent.wait", async () => {
     const body = "    const first = 1;\n        const second = 2;";
-    await writeSessionStore({
-      entries: { main: { sessionId: "main", updatedAt: Date.now() } },
-    });
     const spy = agentCommandMock as unknown as Mock<
       (opts: AgentCommandGatewayIngressOpts) => Promise<void>
     >;

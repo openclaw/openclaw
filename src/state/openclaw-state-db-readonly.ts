@@ -39,7 +39,6 @@ import type {
   OpenClawStateDatabaseOptions,
   OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
-import { assertStateFileSnapshotAllowed, isStatePostgres } from "./openclaw-state-db-engine.js";
 import {
   assertStateReadSchema,
   openOpenClawStateReadOnlyLocation,
@@ -116,7 +115,6 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     reuseCleanClose?: boolean;
   } = {},
 ): Promise<T> {
-  assertStateFileSnapshotAllowed();
   const pathname = resolveReadOnlyPath(options);
   const current = stateSnapshotReads.getStore();
   if ((current?.active && current.path === pathname) || !existingPathOrUndefined(pathname)) {
@@ -243,18 +241,11 @@ export async function withDisposableOpenClawStateReads<T>(
 }
 
 function requiresArtifactPreservingSnapshot(pathname: string): boolean {
-  // PostgreSQL reads use the admitted connection's read-only transaction, never a copied anchor.
-  if (isStatePostgres()) {
-    return false;
-  }
-  const required =
+  return (
     isArtifactPreservingStateRead("shared", pathname) &&
     !isUpdateRehearsalPrivateDatabase(pathname, process.env) &&
-    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname);
-  if (required) {
-    assertStateFileSnapshotAllowed();
-  }
-  return required;
+    !disposableStateReads.getStore()?.some((scope) => scope.active && scope.path === pathname)
+  );
 }
 
 type ScopedRead = ReturnType<typeof openOpenClawStateReadOnlyLocation>;
@@ -343,9 +334,6 @@ function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
     (requiresArtifactPreservingSnapshot(pathname) ||
       isUpdateRehearsalPrivateDatabase(pathname, process.env))
   ) {
-    return { reused: false };
-  }
-  if (isStatePostgres() && !currentAuthority) {
     return { reused: false };
   }
   return withCachedOpenClawStateDatabaseReadOnly(
@@ -615,7 +603,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   options: OpenClawStateDatabaseOptions = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
-  assertStateFileSnapshotAllowed();
   if (openStateSchemaReadAdmission) {
     return withExistingOpenClawStateDatabaseCurrentReadOnly(
       operation,
@@ -653,17 +640,12 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
       pathname,
       options.env ?? process.env,
     );
-    const directRead =
-      (isStatePostgres() || options.allowNativeRead) &&
-      !isArtifactPreservingStateRead() &&
-      !openStateSchemaReadAdmission;
-    if (!directRead) {
-      assertStateFileSnapshotAllowed();
-    }
     return withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      directRead ? pathname : prepareSqliteReadOnlyLocationSync(pathname),
+      options.allowNativeRead && !isArtifactPreservingStateRead() && !openStateSchemaReadAdmission
+        ? pathname
+        : prepareSqliteReadOnlyLocationSync(pathname),
       openStateSchemaReadAdmission,
     );
   });
@@ -674,7 +656,6 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T | undefined> {
-  assertStateFileSnapshotAllowed();
   return withArtifactPreservingStateReads(async () => {
     const pathname = resolveReadOnlyPath(options);
     const reused = withOpenClawStateDatabaseReadOnlyIfOpen(operation, pathname);

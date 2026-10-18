@@ -132,7 +132,6 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
   tsxStep("check-plugin-sdk-exports", "scripts/check-plugin-sdk-exports.mts"),
   {
     ...nodeStep("ui:build", ["scripts/ui.js", "build"]),
-    env: { OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS: "1" },
     // The UI owner caches its bundles and refreshes release identity before publication.
     cache: undefined,
   },
@@ -428,7 +427,7 @@ function resolveBuildAllStepOnCacheHit(step: BuildAllStep) {
   };
 }
 
-function formatBuildAllDuration(durationMs: number) {
+export function formatBuildAllDuration(durationMs: number) {
   const clampedMs = Math.max(0, durationMs);
   const roundedMs =
     clampedMs < 1000
@@ -653,7 +652,6 @@ export async function runBuildAllSteps(
       (step) =>
         step.label.startsWith("tsdown") ||
         step.label === "external-plugins:local-dist" ||
-        step.label === "runtime-postbuild" ||
         step.label === "write-unified-entry-dts" ||
         step.label === "write-plugin-sdk-entry-dts",
     ) + 1;

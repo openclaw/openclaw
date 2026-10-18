@@ -415,9 +415,7 @@ describe("server-owned pending input pagination", () => {
 
       await vi.waitFor(() => {
         expect(getChatPendingInputs(host)?.before).toBe(21);
-        expect(getChatPendingInputs(host)?.page).toEqual(
-          order === "refresh-first" ? olderPage : refreshedOlderPage,
-        );
+        expect(getChatPendingInputs(host)?.page).toEqual(refreshedOlderPage);
       });
       expect(host.chatMessages).toEqual([canonical]);
       expect(host.chatQueue).toEqual([]);

@@ -49,7 +49,6 @@ export type ChatDetailsProps = Pick<
     pullRequestsBranchDismissed?: boolean;
     pullRequestsStatus?: ControlUiSessionPullRequestSnapshot["status"];
     onOpenSessionDiff?: () => void;
-    onOpenWorkspace?: () => void;
     onDismissPullRequest?: (pullRequest: ControlUiSessionPullRequest) => void;
     onDismissPullRequestsBranch?: (branch: ControlUiSessionBranch) => void;
     githubPublication?: GitHubPublicationView;

@@ -16,7 +16,6 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import { isImageWithMediaPayload } from "../media-payload.js";
-import { preparedRequestSuffix } from "../provider-options.js";
 import { transformProviderMessages } from "../provider-transcript-transform.js";
 import {
   describeToolResultMediaPlaceholder,
@@ -331,8 +330,7 @@ function convertResponsesMessagesWithStyle(
       ? transformProviderMessages(source, model, normalizeToolCallId)
       : getAiTransportHost().transformTransportMessages(source, model, normalizeToolCallId, {
           normalizeSameModelToolCallIds: shouldNormalizeSameModelToolCallIds,
-          preserveUnframedToolResults:
-            replayPlan.preserveUnframedToolResults || preparedRequestSuffix.has(context),
+          preserveUnframedToolResults: replayPlan.preserveUnframedToolResults,
         });
   // Results are durable when jobs finish, but Responses continuation must replay
   // every output fragment before adding results to that response's input suffix.
@@ -576,15 +574,8 @@ function convertResponsesMessagesWithStyle(
       const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
       const hasImages = msg.content.some(isImageWithMediaPayload);
       const separatorIndex = msg.toolCallId.indexOf("|");
-      const rawCallId =
+      const callId =
         separatorIndex === -1 ? msg.toolCallId : msg.toolCallId.slice(0, separatorIndex);
-      const callId = preparedRequestSuffix.has(context)
-        ? preparedRequestSuffix.toolCallId(
-            context,
-            rawCallId,
-            normalizeToolCallId(rawCallId, model, model),
-          )
-        : rawCallId;
       let output: string | ResponseFunctionCallOutputItemList = hasText
         ? textResult
         : (mediaPlaceholder ?? "(no output)");

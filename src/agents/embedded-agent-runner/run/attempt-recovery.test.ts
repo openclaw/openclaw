@@ -313,6 +313,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     { label: "voice output", preToolText: "[[audio_as_voice]]" },
     { label: "tool media", toolMediaUrls: ["https://example.com/result.png"] },
     { label: "source reply already delivered", sourceReplyDelivered: true },
+    { label: "silent cron tool result", trigger: "cron", toolResultText: "NO_REPLY" },
   ])("preserves $label after a length stop", async ({ label: _label, ...scenario }) => {
     const { recovery, continueFromCurrentTranscript } = await recoverAfterTransportDrop({
       ...emptyLengthScenario,
@@ -580,13 +581,13 @@ describe("recoverEmbeddedRunAttempt", () => {
       expectedSleepMs: 9_897_000,
     },
     {
-      label: "stops same-profile retries past the cap without model fallback",
+      label: "still sleeps the same floor with no fallback",
       errorMessage: "429 rate_limit_exceeded; Retry-After: 9897",
       fallbackConfigured: false,
       replaySafe: true,
       providerRetryMaxDelayMs: 30_000,
-      expectedAction: "proceed",
-      expectedSleepMs: undefined,
+      expectedAction: "retry",
+      expectedSleepMs: 9_897_000,
     },
     {
       label: "keeps a floor inside the cap on the same model",

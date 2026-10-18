@@ -111,6 +111,7 @@ export class UsagePageModel {
       this.refreshPolicy.interrupt();
       this.usageRequest.cancel();
       this.details.cancel();
+      this.usageExportRequest.cancel();
     },
     onSnapshot: (change) => this.handleGatewaySnapshot(change),
     onPageActivation: () => this.refreshPolicy.request("focus"),
@@ -358,10 +359,7 @@ export class UsagePageModel {
     };
   }
 
-  private isCurrentQuery(
-    query: SessionUsageQuery,
-    projection: "all" | "roster" | "calendar" = "all",
-  ): boolean {
+  private isCurrentRosterQuery(query: SessionUsageQuery): boolean {
     const current = this.currentQuery;
     return (
       query.startDate === current.startDate &&
@@ -371,21 +369,24 @@ export class UsagePageModel {
       query.agentId === current.agentId &&
       query.creatorKey === current.creatorKey &&
       query.query === current.query &&
-      (projection === "calendar" ||
-        JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
+      JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays) &&
       JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
-      (projection === "roster" ||
-        JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
-      (projection === "calendar" ||
-        (JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
-          query.offset === current.offset &&
-          query.sort === current.sort &&
-          query.sortDirection === current.sortDirection))
+      JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys) &&
+      query.offset === current.offset &&
+      query.sort === current.sort &&
+      query.sortDirection === current.sortDirection
+    );
+  }
+
+  private isCurrentQuery(query: SessionUsageQuery): boolean {
+    return (
+      this.isCurrentRosterQuery(query) &&
+      JSON.stringify(query.selectedSessions) === JSON.stringify(this.currentQuery.selectedSessions)
     );
   }
 
   private get usageRosterResult(): SessionsUsageResult | null {
-    return this.usageSnapshot && this.isCurrentQuery(this.usageSnapshot.query, "roster")
+    return this.usageSnapshot && this.isCurrentRosterQuery(this.usageSnapshot.query)
       ? this.usageSnapshot.result
       : null;
   }
@@ -397,10 +398,24 @@ export class UsagePageModel {
   }
 
   private get usageCalendarSummary(): CostUsageSummary | null {
+    const previous = this.usageSnapshot?.query;
+    const current = this.currentQuery;
+    if (
+      !previous ||
+      previous.startDate !== current.startDate ||
+      previous.endDate !== current.endDate ||
+      previous.scope !== current.scope ||
+      previous.timeZone !== current.timeZone ||
+      previous.agentId !== current.agentId ||
+      previous.creatorKey !== current.creatorKey ||
+      previous.query !== current.query ||
+      JSON.stringify(previous.selectedHours) !== JSON.stringify(current.selectedHours) ||
+      JSON.stringify(previous.selectedSessions) !== JSON.stringify(current.selectedSessions)
+    ) {
+      return null;
+    }
     // Day selection changes totals, but the same calendar remains available for Shift-click.
-    return this.usageSnapshot && this.isCurrentQuery(this.usageSnapshot.query, "calendar")
-      ? this.usageSnapshot.costSummary
-      : null;
+    return this.usageSnapshot?.costSummary ?? null;
   }
 
   private get usageCreatorOptions() {

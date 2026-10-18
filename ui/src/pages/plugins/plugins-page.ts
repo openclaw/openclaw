@@ -260,7 +260,8 @@ export class PluginsPageController {
       event.key !== "Escape" ||
       isComposingKeyboardEvent(event) ||
       document.querySelector(".shell-nav[aria-modal='true']") ||
-      registryFor(document).stack.at(-1)?.open
+      registryFor(document).stack.at(-1)?.open ||
+      (event.target instanceof Element && event.target.closest("wa-dropdown[open]"))
     ) {
       return;
     }

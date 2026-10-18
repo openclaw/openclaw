@@ -2,9 +2,13 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { StorageLocationsListResultSchema } from "./storage.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
-const BackupKindSchema = stringLiteralUnion(["archive", "sqlite-snapshot", "git", "external"]);
+const BackupKindSchema = Type.Union([
+  Type.Literal("archive"),
+  Type.Literal("sqlite-snapshot"),
+  Type.Literal("git"),
+  Type.Literal("external"),
+]);
 const BytesSchema = Type.Integer({ minimum: 0 });
 export const BackupRunLocationSchema = closedObject({
   name: Type.String(),
@@ -20,7 +24,7 @@ export const BackupRunRecordSchema = closedObject({
   id: Type.String(),
   createdAt: Type.Number(),
   archivePath: Type.String(),
-  status: stringLiteralUnion(["ok", "failed"]),
+  status: Type.Union([Type.Literal("ok"), Type.Literal("failed")]),
   kind: BackupKindSchema,
   target: Type.Optional(Type.String()),
   namespace: Type.Optional(Type.String()),
@@ -48,7 +52,7 @@ export const BackupStatusResultSchema = closedObject({
   schedules: Type.Array(
     closedObject({
       id: Type.String(),
-      mode: stringLiteralUnion(["git", "offsite"]),
+      mode: Type.Union([Type.Literal("git"), Type.Literal("offsite")]),
       target: Type.String(),
       namespace: Type.Optional(Type.String()),
       enabled: Type.Boolean(),

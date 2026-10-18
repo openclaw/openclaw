@@ -57,6 +57,9 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
   const source = (await factory.homesForAgent("main"))[0]!;
   expect(source.localSessionsRoot).toBeUndefined();
   const control = factory.forRequest("main", source);
+  const preview = vi.fn(() => {
+    throw new Error("Unchanged resident rows must not reparse native previews");
+  });
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   try {
     await control.initialize();
@@ -69,6 +72,7 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     const knownPreview = known.preview;
     const sanitize = vi.spyOn(terminalText, "sanitizeTerminalText");
     Object.defineProperty(known, "preview", { get: () => knownPreview });
+    Object.defineProperty(hidden, "preview", { get: preview });
     known.name = null;
     known.status = { type: "idle" };
     known.path = `${known.path}.zst`;
@@ -115,8 +119,8 @@ it("reconciles remote membership without reparsing unchanged visible or hidden p
     expect(commandRpcMocks.codexControlRequest.mock.calls[1]?.[2]).toMatchObject({
       useStateDbOnly: true,
     });
+    expect(preview).not.toHaveBeenCalled();
     expect(sanitize.mock.calls.map(([value]) => value)).not.toContain(knownPreview);
-    expect(sanitize.mock.calls.map(([value]) => value)).not.toContain("Hidden native execution");
   } finally {
     try {
       await factory.stop();

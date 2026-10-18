@@ -53,7 +53,6 @@ function projectionInput(
     agentId: "main",
     connectionIdentity,
     listSource,
-    listLoaded: true,
     subtitle: {
       sidebarLiveActivity: true,
       showPreview: true,
@@ -118,59 +117,6 @@ describe("SidebarSessionProjection created order", () => {
 });
 
 describe("SidebarSessionProjection child expansion", () => {
-  it("reveals newly added children while preserving a manual collapse through ordinary updates", () => {
-    const projection = new SidebarSessionProjection();
-    const parent = sessionRow("parent", { childSessionKeys: ["first", "second"] });
-    projection.project(projectionInput([sessionRow(parent.key)]));
-    projection.project(projectionInput([parent]));
-    expect(projection.children.isExpanded(parent.key)).toBe(true);
-    expect(projection.children.toggle(parent.key)).toEqual({ expanded: false });
-
-    projection.project(
-      projectionInput([sessionRow(parent.key, { childSessionKeys: ["second", "first"] })]),
-    );
-    expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-    // Compare identities, not counts: one child can replace another between snapshots.
-    const replacement = sessionRow(parent.key, { childSessionKeys: ["second", "third"] });
-    projection.project(projectionInput([replacement]));
-    expect(projection.children.isExpanded(parent.key)).toBe(true);
-
-    projection.children.showMore(parent.key);
-    projection.project(
-      projectionInput([
-        sessionRow(parent.key, { childSessionKeys: ["second", "third", "fourth"] }),
-      ]),
-    );
-    expect(projection.children.isFullyShown(parent.key)).toBe(true);
-  });
-
-  it("keeps existing children collapsed when the list replaces a route placeholder", () => {
-    const projection = new SidebarSessionProjection();
-    projection.project(projectionInput([sessionRow("parent")], { listLoaded: false }));
-    const parent = sessionRow("parent", { childSessionKeys: ["first", "second"] });
-    projection.project(projectionInput([parent]));
-    expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-    projection.project(
-      projectionInput([sessionRow(parent.key, { childSessionKeys: ["first", "second", "third"] })]),
-    );
-    expect(projection.children.isExpanded(parent.key)).toBe(true);
-  });
-
-  it("baselines restored collapsed children before revealing later additions", () => {
-    const projection = new SidebarSessionProjection();
-    const parent = sessionRow("parent", { childSessionKeys: ["first"] });
-    projection.children.restore([{ key: parent.key, childrenDisplayMode: "collapsed-by-user" }]);
-    projection.project(projectionInput([parent]));
-    expect(projection.children.isExpanded(parent.key)).toBe(false);
-
-    projection.project(
-      projectionInput([sessionRow(parent.key, { childSessionKeys: ["first", "second"] })]),
-    );
-    expect(projection.children.isExpanded(parent.key)).toBe(true);
-  });
-
   it("preserves restored expansion through the live handoff but clears it on a later connection", () => {
     const projection = new SidebarSessionProjection();
     const rows = [
@@ -180,50 +126,50 @@ describe("SidebarSessionProjection child expansion", () => {
       sessionRow("untouched", { containsActiveDescendant: true }),
     ];
     projection.project(projectionInput([]));
-    projection.children.restore([
+    projection.restoreChildrenDisplay([
       { key: "expanded", childrenDisplayMode: "expanded" },
       { key: "fully-shown", childrenDisplayMode: "expanded-fully" },
       { key: "collapsed", childrenDisplayMode: "collapsed-by-user" },
-      { key: "untouched", childrenDisplayMode: projection.children.capture("untouched") },
+      { key: "untouched", childrenDisplayMode: projection.captureChildrenDisplay("untouched") },
     ]);
-    expect(projection.children.isExpanded("expanded")).toBe(true);
-    expect(projection.children.isFullyShown("fully-shown")).toBe(true);
+    expect(projection.isChildrenExpanded("expanded")).toBe(true);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(true);
     const liveConnection = {};
     projection.project(
       projectionInput(rows, { connectionIdentity: liveConnection, listSource: {} }),
     );
-    expect(projection.children.isExpanded("expanded")).toBe(true);
-    expect(projection.children.isFullyShown("fully-shown")).toBe(true);
-    expect(projection.children.isExpanded("collapsed")).toBe(false);
-    expect(projection.children.isExpanded("untouched")).toBe(true);
+    expect(projection.isChildrenExpanded("expanded")).toBe(true);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(true);
+    expect(projection.isChildrenExpanded("collapsed")).toBe(false);
+    expect(projection.isChildrenExpanded("untouched")).toBe(true);
     projection.project(projectionInput(rows, { connectionIdentity: {} }));
-    expect(projection.children.isExpanded("expanded")).toBe(false);
-    expect(projection.children.isFullyShown("fully-shown")).toBe(false);
-    expect(projection.children.isExpanded("collapsed")).toBe(true);
+    expect(projection.isChildrenExpanded("expanded")).toBe(false);
+    expect(projection.isChildrenFullyShown("fully-shown")).toBe(false);
+    expect(projection.isChildrenExpanded("collapsed")).toBe(true);
   });
 
   it("keeps an explicitly collapsed parent closed when a later descendant becomes active", () => {
     const projection = new SidebarSessionProjection();
     const active = sessionRow("parent", { containsActiveDescendant: true });
     projection.project(projectionInput([active]));
-    expect(projection.children.toggle(active.key)).toEqual({ expanded: false });
+    expect(projection.toggleChildren(active)).toEqual({ expanded: false });
 
     projection.project(projectionInput([sessionRow("parent")]));
     projection.project(projectionInput([active]));
 
-    expect(projection.children.isExpanded("parent")).toBe(false);
+    expect(projection.isChildrenExpanded("parent")).toBe(false);
   });
 
   it("forgets expansion when a session disappears before returning", () => {
     const projection = new SidebarSessionProjection();
     const parent = sessionRow("parent");
     projection.project(projectionInput([parent]));
-    projection.children.toggle(parent.key);
+    projection.toggleChildren(parent);
 
     projection.project(projectionInput([]));
     projection.project(projectionInput([parent]));
 
-    expect(projection.children.isExpanded(parent.key)).toBe(false);
+    expect(projection.isChildrenExpanded(parent.key)).toBe(false);
   });
 });
 

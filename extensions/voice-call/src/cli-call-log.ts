@@ -1,3 +1,4 @@
+// Voice Call plugin module implements cli call log commands.
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";

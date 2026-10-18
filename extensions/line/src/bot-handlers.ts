@@ -609,6 +609,7 @@ async function handlePostbackEvent(
   context: LineHandlerContext,
 ): Promise<void> {
   const data = event.postback.data;
+  logVerbose(`line: received postback: ${data}`);
 
   const decision = await resolveLineEventAdmission(event, context);
   if (!decision) {

@@ -1,7 +1,6 @@
 import { toInboundMediaFactsWithMetadata } from "openclaw/plugin-sdk/channel-inbound";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { mimeTypeFromFilePath, normalizeMimeType } from "openclaw/plugin-sdk/media-mime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import { shouldIncludeSupplementalContext } from "openclaw/plugin-sdk/security-runtime";
@@ -10,11 +9,8 @@ import type { SlackAttachment, SlackFile, SlackMessageEvent } from "../../types.
 import { resolveSlackUserAllowed } from "../allow-list.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
-import {
-  resolveSlackChannelHistory,
-  resolveSlackThreadHistory,
-  type SlackThreadStarter,
-} from "../thread.js";
+import { resolveSlackChannelHistory, resolveSlackThreadHistory } from "../thread.js";
+import { resolveSlackMessageContent } from "./prepare-content.js";
 import { isSlackThreadAuthorCurrentBot } from "./prepare-thread-context-root.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
@@ -22,7 +18,6 @@ const SLACK_HISTORY_MEDIA_MAX_ATTACHMENTS = 4;
 const SLACK_HISTORY_MEDIA_MAX_BYTES = 10 * 1024 * 1024;
 const SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS = 1_000;
 const SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS = 3_000;
-const loadSlackMediaModule = createLazyRuntimeModule(() => import("../media.js"));
 
 export async function resolveSlackRoomHistory(params: {
   ctx: SlackMonitorContext;
@@ -112,7 +107,16 @@ export async function resolveSlackRoomHistory(params: {
               maxAttachments: mediaRemaining,
               assertCurrent: params.assertCurrent,
               abortSignal: params.abortSignal,
-              message,
+              message: {
+                type: "message",
+                channel: params.message.channel,
+                ts: message.ts,
+                user: message.userId,
+                bot_id: message.botId,
+                text: message.text,
+                files: message.files,
+                attachments: message.attachments,
+              },
             })
           : { media: [], attempted: 0 };
       params.assertCurrent();
@@ -178,7 +182,7 @@ function sliceSlackHistoryAttachmentCandidates(
 
 async function resolveSlackHistoryMedia(params: {
   ctx: SlackMonitorContext;
-  message: SlackThreadStarter;
+  message: SlackMessageEvent;
   eventScope?: SlackEventScope;
   maxAttachments: number;
   assertCurrent: () => void;
@@ -201,20 +205,21 @@ async function resolveSlackHistoryMedia(params: {
         (attachment.files?.length ?? 0),
       0,
     );
-  const { resolveSlackAttachmentContent } = await loadSlackMediaModule();
-  const content = await resolveSlackAttachmentContent({
-    files,
-    attachments,
+  const content = await resolveSlackMessageContent({
+    message: { ...params.message, files, attachments },
+    isThreadReply: false,
+    threadStarter: null,
+    isBotMessage: Boolean(params.message.bot_id),
     client: params.eventScope?.client ?? params.ctx.app.client,
-    token: params.ctx.botToken,
-    maxBytes: Math.min(params.ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
-    readIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
-    totalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
+    botToken: params.ctx.botToken,
+    mediaMaxBytes: Math.min(params.ctx.mediaMaxBytes, SLACK_HISTORY_MEDIA_MAX_BYTES),
+    mediaReadIdleTimeoutMs: SLACK_HISTORY_MEDIA_IDLE_TIMEOUT_MS,
+    mediaTotalTimeoutMs: SLACK_HISTORY_MEDIA_TOTAL_TIMEOUT_MS,
     assertCurrent: params.assertCurrent,
     abortSignal: params.abortSignal,
   });
   return {
-    media: await toInboundMediaFactsWithMetadata(content?.media, {
+    media: await toInboundMediaFactsWithMetadata(content?.effectiveDirectMedia, {
       kind: "image",
       messageId: params.message.ts,
     }),

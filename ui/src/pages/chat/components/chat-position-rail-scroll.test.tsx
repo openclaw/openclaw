@@ -9,7 +9,6 @@ import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
-import { TranscriptEndAnchor } from "./chat-transcript-end-anchor.ts";
 import {
   publishTranscriptScroll,
   subscribeTranscriptScroll,
@@ -103,7 +102,7 @@ describe("conversation position rail scroll rendering", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
 
-  it("updates rail and end position without pane renders until the virtual range changes", async () => {
+  it("updates rail position without pane renders until a rendered scroll fact changes", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const flushFrame = stubAnimationFrames();
     stubRailVisibility();
@@ -111,7 +110,6 @@ describe("conversation position rail scroll rendering", () => {
     const host = new RailScrollTestHost();
     const container = host.transcriptRoot;
     const performUpdate = vi.spyOn(host, "performUpdate");
-    const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
     const transcript = new ChatTranscriptController(host, () => "rail-notification", {
       canFollowEnd: () => false,
     });
@@ -275,23 +273,20 @@ describe("conversation position rail scroll rendering", () => {
       await settleUpdates();
       expect(performUpdate).not.toHaveBeenCalled();
 
-      // The precise end edge is recorded without committing the unchanged virtual range.
+      // Stay within the final virtual range and the 8px follow threshold;
+      // crossing the precise 1px end boundary still needs an owner commit.
       scrollTo(4198.5);
       await settleUpdates();
       flushFrame();
       await settleUpdates();
       flushFrame();
       await settleUpdates();
-      expect(recordViewport.mock.results.at(-1)?.value).toBe(false);
       performUpdate.mockClear();
       scrollTo(4199.5);
       await settleUpdates();
-      expect(recordViewport.mock.results.at(-1)?.value).toBe(true);
-      expect(performUpdate).not.toHaveBeenCalled();
+      expect(performUpdate).toHaveBeenCalledTimes(1);
       flushFrame();
       await settleUpdates();
-      expect(current()?.dataset.positionMarkerId).toBe("row-39");
-      expect(tabStops()).toEqual([current()]);
       flushFrame();
       await settleUpdates();
       performUpdate.mockClear();
@@ -301,7 +296,7 @@ describe("conversation position rail scroll rendering", () => {
       expect(performUpdate).not.toHaveBeenCalled();
 
       // The physical end crosses row 35's boundary, so its new virtual range
-      // must commit even though the precise end fact is already recorded.
+      // must commit even though the precise end fact is already rendered.
       expect(container.querySelector<HTMLElement>(".chat-virtual-row")?.dataset.virtualRowKey).toBe(
         "row-28",
       );

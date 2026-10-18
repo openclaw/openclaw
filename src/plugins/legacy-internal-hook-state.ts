@@ -15,6 +15,10 @@ export function listLegacyPluginInternalHooks(event: string): InternalHookHandle
     .map((registration) => registration.handler);
 }
 
+export function listLegacyPluginInternalHookEventKeys(): string[] {
+  return [...new Set(listActiveRegistrations().map((registration) => registration.event))];
+}
+
 export function clearLegacyPluginInternalHooks(): void {
   const context = getPluginRegistrationContext();
   (context?.registry ?? requireActivePluginRegistry()).legacyInternalHooks.length = 0;

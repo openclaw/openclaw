@@ -130,15 +130,14 @@ export class MatrixVerificationManager {
     }
   }
 
-  private emitVerificationSummary(session: MatrixVerificationSession): MatrixVerificationSummary {
+  private emitVerificationSummary(session: MatrixVerificationSession): void {
     const summary = this.buildVerificationSummary(session);
     this.opts.onSummaryChanged?.(summary);
-    return summary;
   }
 
-  private touchVerificationSession(session: MatrixVerificationSession): MatrixVerificationSummary {
+  private touchVerificationSession(session: MatrixVerificationSession): void {
     session.updatedAtMs = Date.now();
-    return this.emitVerificationSummary(session);
+    this.emitVerificationSummary(session);
   }
 
   private observeVerificationOperation(
@@ -147,9 +146,7 @@ export class MatrixVerificationManager {
     onError?: () => void,
   ): Promise<void> {
     return operation
-      .then(() => {
-        this.touchVerificationSession(session);
-      })
+      .then(() => this.touchVerificationSession(session))
       .catch((err: unknown) => {
         onError?.();
         session.error = formatErrorMessage(err);
@@ -411,7 +408,8 @@ export class MatrixVerificationManager {
     const requestObj = request;
     for (const existing of this.verificationSessions.values()) {
       if (existing.request === requestObj) {
-        return this.touchVerificationSession(existing);
+        this.touchVerificationSession(existing);
+        return this.buildVerificationSummary(existing);
       }
     }
     const txId = request.transactionId?.trim();
@@ -421,7 +419,8 @@ export class MatrixVerificationManager {
           existing.request = request;
           this.ensureVerificationRequestTracked(existing);
           this.attachRequestVerifier(existing, request);
-          return this.touchVerificationSession(existing);
+          this.touchVerificationSession(existing);
+          return this.buildVerificationSummary(existing);
         }
       }
     }
@@ -443,7 +442,8 @@ export class MatrixVerificationManager {
     this.maybeAutoAcceptInboundRequest(session);
     this.attachRequestVerifier(session, request);
     this.maybeAutoStartInboundSas(session);
-    return this.emitVerificationSummary(session);
+    this.emitVerificationSummary(session);
+    return this.buildVerificationSummary(session);
   }
 
   listVerifications(): MatrixVerificationSummary[] {
@@ -485,7 +485,8 @@ export class MatrixVerificationManager {
   async acceptVerification(id: string): Promise<MatrixVerificationSummary> {
     const session = this.findVerificationSession(id);
     await session.request.accept();
-    return this.touchVerificationSession(session);
+    this.touchVerificationSession(session);
+    return this.buildVerificationSummary(session);
   }
 
   async cancelVerification(
@@ -494,7 +495,8 @@ export class MatrixVerificationManager {
   ): Promise<MatrixVerificationSummary> {
     const session = this.findVerificationSession(id);
     await session.request.cancel(params);
-    return this.touchVerificationSession(session);
+    this.touchVerificationSession(session);
+    return this.buildVerificationSummary(session);
   }
 
   async startVerification(
@@ -542,7 +544,8 @@ export class MatrixVerificationManager {
     await this.confirmSasForSession(session, callbacks);
     // Join the done exchange and cross-signing uploads before the operator's next /keys/query.
     await session.verifyPromise;
-    return this.touchVerificationSession(session);
+    this.touchVerificationSession(session);
+    return this.buildVerificationSummary(session);
   }
 
   mismatchVerificationSas(id: string): MatrixVerificationSummary {
@@ -550,7 +553,8 @@ export class MatrixVerificationManager {
     const callbacks = this.requireSasCallbacks(session, "mismatch");
     this.clearSasAutoConfirmTimer(session);
     callbacks.mismatch();
-    return this.touchVerificationSession(session);
+    this.touchVerificationSession(session);
+    return this.buildVerificationSummary(session);
   }
 
   confirmVerificationReciprocateQr(id: string): MatrixVerificationSummary {
@@ -564,7 +568,8 @@ export class MatrixVerificationManager {
     }
     session.reciprocateQrCallbacks = callbacks;
     callbacks.confirm();
-    return this.touchVerificationSession(session);
+    this.touchVerificationSession(session);
+    return this.buildVerificationSummary(session);
   }
 
   getVerificationSas(id: string): MatrixShowSasCallbacks["sas"] {

@@ -242,13 +242,7 @@ describe("native completion final-effect authority", () => {
           "Expected real registered completion input recorder",
         );
         expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return {
-          payloads: [{ text: "Child received", mediaUrl: null }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Child received" },
-          },
-        };
+        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
       });
       try {
         await pair.complete(0);
@@ -352,13 +346,7 @@ describe("native completion final-effect authority", () => {
           "Expected real native completion input recorder",
         );
         expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-        return {
-          payloads: [{ text: "Child received", mediaUrl: null }],
-          meta: {
-            durationMs: 1,
-            terminalReply: { disposition: "visible", text: "Child received" },
-          },
-        };
+        return { payloads: [{ text: "Child received", mediaUrl: null }], meta: { durationMs: 1 } };
       });
       expect(context.dedupe.has(`agent:${completion.idempotencyKey}`)).toBe(false);
       const delivery = completion.deliver();

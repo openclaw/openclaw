@@ -43,11 +43,7 @@ export const emptyLengthScenario = {
   }),
 } satisfies TransportDropScenario;
 
-export const outputLimitScenarios = [
-  outputLimitScenario,
-  emptyLengthScenario,
-  { ...emptyLengthScenario, trigger: "cron" as const, toolResultText: "NO_REPLY" },
-];
+export const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
 
 export type TransportDropScenario = {
   config?: OpenClawConfig;

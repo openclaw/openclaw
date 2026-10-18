@@ -1,10 +1,11 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { createMemo, For, Show, untrack } from "solid-js";
-import { HubTabs } from "../../../components/solid/hub-tabs.tsx";
+import { renderHubTabs } from "../../../components/hub-tabs.ts";
 import { MarkdownHtml } from "../../../components/solid/markdown-html.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { LitContent } from "../../../lit/solid-bridge.ts";
 import { DiaryEmpty, DreamingAction } from "./view-shared.tsx";
-import type { DreamingProps, DreamingViewState } from "./view-types.ts";
+import type { DreamingProps } from "./view-types.ts";
 import {
   ImportedInsightsContent,
   renderWikiPreviewOverlay,
@@ -232,25 +233,27 @@ export function renderDiarySection(props: DreamingProps) {
         <div class="dreams-diary__chrome">
           <div class="dreams-diary__header">
             <span class="dreams-diary__title">{t("dreaming.diary.title")}</span>
-            <HubTabs<DreamingViewState["activeDiarySubTab"]>
-              {...{
-                id: "dream-diary",
-                active: activeDiarySubTab(),
-                tabs: [
-                  { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
-                  { value: "insights", label: t("dreaming.wiki.insightsTab") },
-                  { value: "wiki", label: t("dreaming.wiki.wikiTab") },
-                ],
-                ariaLabel: t("dreaming.diary.title"),
-                panelId: "dream-diary-panel",
-                variant: "sub",
-                onSelect: (tab) => {
-                  state.wikiPreview = null;
-                  state.activeDiarySubTab = tab;
-                  state.diaryPage = 0;
-                  props.onViewStateChange();
-                },
-              }}
+            <LitContent
+              render={() =>
+                renderHubTabs({
+                  id: "dream-diary",
+                  active: activeDiarySubTab(),
+                  tabs: [
+                    { value: "dreams", label: t("dreaming.wiki.dreamsTab") },
+                    { value: "insights", label: t("dreaming.wiki.insightsTab") },
+                    { value: "wiki", label: t("dreaming.wiki.wikiTab") },
+                  ],
+                  ariaLabel: t("dreaming.diary.title"),
+                  panelId: "dream-diary-panel",
+                  variant: "sub",
+                  onSelect: (tab) => {
+                    state.wikiPreview = null;
+                    state.activeDiarySubTab = tab;
+                    state.diaryPage = 0;
+                    props.onViewStateChange();
+                  },
+                })
+              }
             />
             <DreamingAction
               label={

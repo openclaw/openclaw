@@ -60,37 +60,30 @@ const CUSTOM_ENDPOINT_CAPABILITIES: RealtimeVoiceProviderCapabilities = {
   supportsBrowserSession: false,
 };
 
-function prepareOpenAIRealtimeVoiceConfig({
-  rawConfig,
-  surface,
-  autoRespondToAudio,
-  requiredCapabilities,
-}: RealtimeVoiceProviderResolveConfigContext): OpenAIRealtimeVoiceProviderConfig {
-  const config = normalizeProviderConfig(rawConfig);
-  // Live delegates natively; GA still owns manually triggered replies and video.
-  if (
-    !config.model &&
-    (surface === "browser-session" || surface === "gateway-relay") &&
-    (config.baseUrl ||
-      config.azureEndpoint ||
-      config.azureDeployment ||
-      autoRespondToAudio === false ||
-      requiredCapabilities?.supportsVideoFrames === true)
-  ) {
-    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
-  }
-  return config;
-}
-
-// Retained for public synchronous SDK calls through 2026-12-31.
 function resolveOpenAIRealtimeVoiceConfig(
-  params: RealtimeVoiceProviderResolveConfigContext,
+  {
+    cfg,
+    rawConfig,
+    agentId,
+    surface,
+    autoRespondToAudio,
+    requiredCapabilities,
+  }: RealtimeVoiceProviderResolveConfigContext,
   context: OpenAIRealtimeHost,
 ): OpenAIRealtimeVoiceProviderConfig {
-  const { cfg, agentId, surface } = params;
-  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  const config = normalizeProviderConfig(rawConfig);
   if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
     return config;
+  }
+  // Live delegates natively; GA still owns manually triggered replies and video.
+  if (
+    config.baseUrl ||
+    config.azureEndpoint ||
+    config.azureDeployment ||
+    autoRespondToAudio === false ||
+    requiredCapabilities?.supportsVideoFrames === true
+  ) {
+    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
   }
   const platformConfigured = hasOpenAIRealtimePlatformAuthInput(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -104,13 +97,29 @@ function resolveOpenAIRealtimeVoiceConfig(
 }
 
 async function resolveOpenAIRealtimeVoiceConfigAsync(
-  params: RealtimeVoiceProviderResolveConfigContext,
+  {
+    cfg,
+    rawConfig,
+    agentId,
+    surface,
+    autoRespondToAudio,
+    requiredCapabilities,
+  }: RealtimeVoiceProviderResolveConfigContext,
   context: OpenAIRealtimeHost,
 ): Promise<OpenAIRealtimeVoiceProviderConfig> {
-  const { cfg, agentId, surface } = params;
-  const config = prepareOpenAIRealtimeVoiceConfig(params);
+  const config = normalizeProviderConfig(rawConfig);
   if (config.model || (surface !== "browser-session" && surface !== "gateway-relay")) {
     return config;
+  }
+  // Live delegates natively; GA still owns manually triggered replies and video.
+  if (
+    config.baseUrl ||
+    config.azureEndpoint ||
+    config.azureDeployment ||
+    autoRespondToAudio === false ||
+    requiredCapabilities?.supportsVideoFrames === true
+  ) {
+    return { ...config, model: OPENAI_REALTIME_DEFAULT_MODEL };
   }
   const platformConfigured = await hasOpenAIRealtimePlatformAuthInputAsync(
     { configuredApiKey: config.apiKey, cfg, agentId },
@@ -363,7 +372,7 @@ async function createOpenAIRealtimeBrowserSession(
     ...(offerHeaders ? { offerHeaders } : {}),
     model,
     voice,
-    ...(clientSecret.expiresAt !== undefined ? { expiresAt: clientSecret.expiresAt } : {}),
+    ...(typeof clientSecret.expiresAt === "number" ? { expiresAt: clientSecret.expiresAt } : {}),
   };
 }
 
@@ -383,7 +392,6 @@ export function buildOpenAIRealtimeVoiceProvider(
     voices: OPENAI_REALTIME_VOICES,
     autoSelectOrder: 10,
     capabilities: OPENAI_REALTIME_CAPABILITIES,
-    // Retained for public synchronous SDK calls through 2026-12-31.
     resolveConfig: (params) => resolveOpenAIRealtimeVoiceConfig(params, context),
     resolveConfigAsync: (params) => resolveOpenAIRealtimeVoiceConfigAsync(params, context),
     isConfigured: ({ cfg, providerConfig, agentId }) => {
@@ -507,7 +515,6 @@ export function buildOpenAIRealtimeVoiceProvider(
     );
   };
   const internalApi: InternalRealtimeVoiceProviderApi = {
-    // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
       const config = normalizeProviderConfig(providerConfig);
       if (config.baseUrl || config.azureEndpoint || config.azureDeployment) {

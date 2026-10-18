@@ -37,12 +37,15 @@ function resolveFastModeSelection(
   input: Pick<FastModeSelectInput, "sessionsResult"> & Partial<FastModeSelectInput>,
 ) {
   return resolveChatFastModeSelectState({
+    activeRunId: null,
     catalog: [],
     connected: true,
     currentModelOverride: "",
     fastModeTarget: input.sessionsResult?.sessions[0],
     gatewayAvailable: true,
     loading: false,
+    sending: false,
+    stream: null,
     ...input,
   });
 }
@@ -495,13 +498,16 @@ describe("chat-model-select-state", () => {
     expect(selection.defaultLabel).toContain("Automatic model");
     expect(
       resolveChatFastModeSelectState({
+        activeRunId: null,
         catalog,
         connected: true,
         currentModelOverride: "anthropic/automatic",
         fastModeTarget: sessionsResult.sessions[0],
         gatewayAvailable: true,
         loading: false,
+        sending: false,
         sessionsResult,
+        stream: null,
       }),
     ).toMatchObject({ supported: supportsFastMode, disabled: !supportsFastMode });
   });

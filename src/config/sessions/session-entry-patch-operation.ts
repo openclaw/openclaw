@@ -101,7 +101,6 @@ type SessionEntryPatchStep = (
       recoverySourceRunId?: string;
       executionRunId: string;
       executionGeneration: string;
-      terminalRunId?: string;
     }
   | {
       kind: "compaction-accounting";
@@ -168,7 +167,7 @@ export function reduceSessionBookkeeping(
   return reducer satisfies never;
 }
 
-export function reduceSessionEntryPatch(
+function reduceSessionEntryPatch(
   operation: SessionEntryPatchStep,
   entry: SessionEntry,
   existingEntry: SessionEntry | undefined,
@@ -324,9 +323,7 @@ export function reduceSessionEntryPatch(
           entry,
           recordTerminalSource: true,
           terminalSourceRunId: operation.recoverySourceRunId,
-          terminalRunId:
-            operation.terminalRunId ??
-            (entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId),
+          terminalRunId: entry.restartRecoveryDeliveryRunId ? undefined : operation.executionRunId,
         }),
         restartRecoveryRuns: remainingRuns?.length ? remainingRuns : undefined,
         ...(terminalPending ? { pendingFinalDelivery: undefined } : {}),
@@ -350,7 +347,7 @@ export function reduceSessionEntryPatch(
               status: terminalPending ? ("failed" as const) : ("done" as const),
             }
           : {}),
-        updatedAt: endedAt ?? entry.updatedAt,
+        updatedAt: endedAt ?? Date.now(),
       };
     }
   }

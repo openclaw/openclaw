@@ -85,15 +85,12 @@ function prepareAuthFailoverRun(
     order: { openai: [failedProfile, backupProfile] },
   });
   mockedResolveAuthProfileOrder.mockReturnValue([failedProfile, backupProfile]);
-  mockedGetApiKeyForModel.mockImplementation(async (params = {}) => {
-    const { profileId } = params;
-    return {
-      apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
-      profileId: profileId ?? failedProfile,
-      source: "test",
-      mode: "api-key",
-    };
-  });
+  mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => ({
+    apiKey: profileId === backupProfile ? "backup-api-key" : "failed-api-key",
+    profileId: profileId ?? failedProfile,
+    source: "test",
+    mode: "api-key",
+  }));
   return (params: Parameters<typeof runEmbeddedAgent>[0]) => {
     runtimeConfig.setRuntimeConfigSnapshot(params.config ?? {});
     return runEmbeddedAgent(params);
@@ -250,8 +247,7 @@ describe("native harness auth failover", () => {
       let modelRef = { provider: "openai", model: "gpt-5.6-luna" };
       const runEmbeddedAgent = prepareAuthFailoverRun(true, { nativeModelRef: () => modelRef });
       const params = await createNativeHostRunParams();
-      mockedGetApiKeyForModel.mockImplementation(async (authParams = {}) => {
-        const { profileId } = authParams;
+      mockedGetApiKeyForModel.mockImplementation(async ({ profileId } = {}) => {
         modelRef = {
           ...modelRef,
           [field]: field === "model" ? "gpt-5.6-sol" : "different-native-provider",
@@ -294,38 +290,6 @@ describe("native harness auth failover", () => {
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
     expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
-
-  it.each(["thrown", "returned"])(
-    "does not rotate or mark profiles for a %s local context timeout",
-    async (surface) => {
-      const runEmbeddedAgent = prepareAuthFailoverRun();
-      const { WorkerTaskError } = await import("@openclaw/worker-runtime");
-      const { ContextPreparationTimeoutError } =
-        await import("../failover/local-preparation-error.js");
-      const failure = new ContextPreparationTimeoutError(
-        new WorkerTaskError("worker task timed out", "timeout"),
-      );
-      if (surface === "thrown") {
-        mockedRunEmbeddedAttempt.mockRejectedValueOnce(failure);
-      } else {
-        mockedRunEmbeddedAttempt.mockResolvedValueOnce(
-          makeAttemptResult({ promptError: failure, promptErrorSource: "precheck" }),
-        );
-      }
-      await expect(
-        runEmbeddedAgent({
-          ...createOverflowRunParams(state),
-          provider: "openai",
-          model: "gpt-5.6-sol",
-          agentHarnessId: "codex",
-          authProfileId: failedProfile,
-          authProfileIdSource: "auto",
-        }),
-      ).rejects.toBe(failure);
-      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
-      expect(mockedMarkAuthProfileFailure).not.toHaveBeenCalled();
-    },
-  );
 
   it.each([
     [

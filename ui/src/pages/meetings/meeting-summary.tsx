@@ -2,8 +2,8 @@ import type { TranscriptsGetResult } from "@openclaw/gateway-protocol";
 import MarkdownIt from "markdown-it";
 import { Show } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
-import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { sanitizedHtml } from "../../lib/solid-dom.ts";
 import type { TranscriptsViewProps } from "./view-types.ts";
 
 const summaryParser = new MarkdownIt("commonmark");
@@ -84,9 +84,11 @@ export function MeetingSummary(props: {
           </p>
           <Show when={markdown()} keyed>
             {(content) => (
-              <SanitizedHtml
+              <div
                 class="meetings-notes markdown"
-                html={toSanitizedMarkdownHtml(content, { mode: "document", remoteImages: false })}
+                ref={sanitizedHtml(() =>
+                  toSanitizedMarkdownHtml(content, { mode: "document", remoteImages: false }),
+                )}
               />
             )}
           </Show>

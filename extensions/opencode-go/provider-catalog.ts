@@ -114,7 +114,10 @@ export function normalizeOpencodeGoResolvedModel(
   if (!isOpencodeGoKimiNoReasoningModelId(model.id)) {
     return undefined;
   }
-  const compat = model.compat;
+  const compat =
+    model.compat && typeof model.compat === "object" && !Array.isArray(model.compat)
+      ? model.compat
+      : undefined;
   if (!model.reasoning && !compat?.supportsReasoningEffort) {
     return undefined;
   }

@@ -98,11 +98,6 @@ export type CodexStartOrResumeThreadParams = Omit<
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
-  /**
-   * Runs synchronously when `signal` ends a wait for a previous owner's exit
-   * before `client` wrote thread state, so the caller may keep `client`.
-   */
-  onPrewriteHandoffCancelled?: () => void;
   timing?: CodexThreadLifecycleTimingOptions;
 };
 
@@ -112,5 +107,4 @@ export type CodexThreadResumePreparation = {
   assertCurrent: () => void;
   dispose: () => void;
   settledSystemError: boolean;
-  waitForUnload: () => Promise<boolean>;
 };

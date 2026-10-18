@@ -15,16 +15,8 @@ export type SystemRunDeniedReason =
   | "allowlist-miss"
   | "execution-plan-miss"
   | "companion-unavailable"
-  | "timeout"
-  | "response-lost"
   | "cwd-unavailable"
   | "permission:screenRecording";
-
-const transportErrorCodes: Partial<Record<SystemRunDeniedReason, string>> = {
-  "companion-unavailable": "UNAVAILABLE",
-  timeout: "TIMEOUT",
-  "response-lost": "UNKNOWN",
-};
 
 export function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
   switch (reason) {
@@ -33,8 +25,6 @@ export function normalizeDeniedReason(reason: string | null | undefined): System
     case "allowlist-miss":
     case "execution-plan-miss":
     case "companion-unavailable":
-    case "timeout":
-    case "response-lost":
     case "cwd-unavailable":
     case "permission:screenRecording":
       return reason;
@@ -65,11 +55,13 @@ export async function sendSystemRunDenied(
   });
   await opts.sendInvokeResult({
     ok: false,
-    // A missing or late companion reply can follow execution; it is not a policy denial.
+    // A missing companion reply can follow execution; it is not a policy denial.
     error: {
       code: permissionDetails
         ? "PERMISSION_MISSING"
-        : (transportErrorCodes[reason] ?? "SYSTEM_RUN_DENIED"),
+        : reason === "companion-unavailable"
+          ? "UNAVAILABLE"
+          : "SYSTEM_RUN_DENIED",
       message,
       ...(permissionDetails ? { details: permissionDetails } : {}),
     },

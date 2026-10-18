@@ -44,19 +44,6 @@ export class ScopeUpgradeCoordinator {
 
   constructor(scheduler: GatewayScheduler) {
     this.scheduler = scheduler.scope();
-    // Observer reads end at the scheduler fence; received execution can retain
-    // its authority until restart recovery has been recorded.
-    if (this.scheduler.signal.aborted) {
-      void this.close();
-    } else {
-      this.scheduler.signal.addEventListener(
-        "abort",
-        () => {
-          void this.close();
-        },
-        { once: true },
-      );
-    }
   }
 
   private bindGatewayLifetime(): void {
@@ -161,11 +148,7 @@ export class ScopeUpgradeCoordinator {
         }
       });
     }
-    const observerSignal = getAsyncWorkSignal();
-    return await racePromiseWithAbortSignal(
-      entry.resultPromise,
-      observerSignal ? AbortSignal.any([observerSignal, this.work.signal]) : this.work.signal,
-    );
+    return await racePromiseWithAbortSignal(entry.resultPromise, getAsyncWorkSignal());
   }
 
   private async waitForResult(entry: UpgradeEntry): Promise<ScopeUpgradeWaitResult | null> {

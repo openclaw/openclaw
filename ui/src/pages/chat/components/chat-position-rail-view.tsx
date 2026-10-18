@@ -1,11 +1,12 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo, onCleanup, untrack } from "solid-js";
+import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { LitContent } from "../../../lit/solid-content.tsx";
+import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
@@ -152,10 +153,10 @@ export function ChatPositionRailView(props: PositionRailViewParams) {
         <div class="chat-position-rail__preview-header">
           <Show
             when={previewMarker()?.role === "assistant" && props.assistant}
-            fallback={<ChatAuthorAvatar sender={previewSender()} />}
+            fallback={<LitContent value={renderChatAuthorAvatar(previewSender())} />}
           >
             <span class="chat-author-avatar" role="img" aria-label={assistantLabel()}>
-              <AgentIdentityAvatar agent={props.assistant!} />
+              <LitContent value={renderAgentIdentityAvatar(props.assistant!)} />
             </span>
           </Show>
           <span class="chat-position-rail__preview-label">{previewLabel()}</span>

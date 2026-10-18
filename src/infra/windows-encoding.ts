@@ -2,7 +2,6 @@
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
-import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 import { getWindowsCmdExePath, queryWindowsRegistryValue } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
@@ -108,7 +107,6 @@ function resolveWindowsSystemEncoding(): string | null {
 }
 
 function probeWindowsEncoding(command: () => string, args: string[]): string | null {
-  assertAppContainerSpawnSupported();
   try {
     const result = spawnSync(command(), args, {
       env: resolveDiagnosticProcessEnv(),

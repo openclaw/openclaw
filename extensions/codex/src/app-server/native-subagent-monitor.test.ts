@@ -718,7 +718,7 @@ describe("CodexNativeSubagentMonitor", () => {
         { timeoutMs: 5_000 },
       ),
     );
-    expect(oldestRelease).toHaveBeenCalledExactlyOnceWith("thread-oldest", undefined, undefined);
+    expect(oldestRelease).toHaveBeenCalledExactlyOnceWith("thread-oldest");
     expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false);
     await expect(
       consumeCodexAppServerLiveThread(client as never, "child-thread"),

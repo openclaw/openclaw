@@ -12,6 +12,8 @@ export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
 export const MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS = 2_000;
 
+class MatrixQaHarnessTimeoutError extends Error {}
+
 export type MatrixQaHarnessFiles = {
   outputDir: string;
   composeFile: string;
@@ -52,7 +54,7 @@ export async function withMatrixQaHarnessTimeout<T>(
   task: Promise<T>,
 ): Promise<T> {
   return await raceWithTimeout(task, timeoutMs, () => {
-    throw new Error(`${label} timed out after ${timeoutMs}ms`);
+    throw new MatrixQaHarnessTimeoutError(`${label} timed out after ${timeoutMs}ms`);
   });
 }
 
@@ -80,30 +82,46 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const probeController = new AbortController();
     let reachableCandidate: string | undefined;
+    let probeConsumedDeadline = false;
     const requestTimeoutMs = Math.min(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS, remainingMs);
     try {
-      // Probe both paths in parallel so a stalled peer cannot delay a healthy one.
-      reachableCandidate = await Promise.any(
-        candidateBaseUrls.map(async (baseUrl) => {
-          if (
-            await isMatrixVersionsReachable(
-              baseUrl,
-              params.fetchImpl,
-              AbortSignal.timeout(Math.max(1, requestTimeoutMs)),
-              probeController.signal,
-            )
-          ) {
-            return baseUrl;
-          }
-          throw new Error("Matrix versions endpoint unreachable");
-        }),
+      // Race both network paths so neither stalled probe can starve or delay
+      // a healthy peer. The outer deadline also bounds injected fetch fakes.
+      reachableCandidate = await withMatrixQaHarnessTimeout(
+        "Matrix health checks",
+        remainingMs,
+        Promise.any(
+          candidateBaseUrls.map(async (baseUrl) => {
+            const requestTimeoutSignal = AbortSignal.timeout(Math.max(1, requestTimeoutMs));
+            if (
+              await isMatrixVersionsReachable(
+                baseUrl,
+                params.fetchImpl,
+                requestTimeoutSignal,
+                probeController.signal,
+              )
+            ) {
+              return baseUrl;
+            }
+            if (requestTimeoutMs === remainingMs && requestTimeoutSignal.aborted) {
+              probeConsumedDeadline = true;
+            }
+            throw new Error("Matrix versions endpoint unreachable");
+          }),
+        ),
       );
-    } catch {
+    } catch (error) {
+      // The outer timeout covers injected fetches that ignore abort signals.
+      // Request timeouts record the same deadline fact before rejecting.
+      probeConsumedDeadline ||= error instanceof MatrixQaHarnessTimeoutError;
     } finally {
       probeController.abort();
     }
     if (reachableCandidate) {
       return reachableCandidate;
+    }
+    if (probeConsumedDeadline) {
+      break;
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {

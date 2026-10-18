@@ -314,9 +314,9 @@ function itemObservedOutputText(
   }
   if (item.type === "mcpToolCall") {
     return item.error
-      ? JSON.stringify(item.error, null, 2)
+      ? stringifyJsonValue(item.error)
       : item.result
-        ? JSON.stringify(item.result, null, 2)
+        ? stringifyJsonValue(item.result)
         : undefined;
   }
   return undefined;
@@ -331,6 +331,14 @@ export function itemTranscriptResultText(
     return output;
   }
   const result = itemToolResult(item);
-  const resultText = result ? JSON.stringify(result, null, 2) : undefined;
+  const resultText = result ? stringifyJsonValue(result) : undefined;
   return resultText ?? itemStatus(item);
+}
+
+function stringifyJsonValue(value: unknown): string | undefined {
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return undefined;
+  }
 }

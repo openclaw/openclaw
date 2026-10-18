@@ -54,10 +54,11 @@ export async function prepareSessionWorkerPlacementPatchValidation(
           placement: placement?.current(),
           readRuntime:
             runtime && entry
-              ? () => resolveWorkerPlacementCapabilities(runtime(params.cfg, entry))
+              ? () => resolveWorkerPlacementCapabilities(runtime.read(params.cfg, entry))
               : undefined,
         }),
       release: () => {
+        runtime?.[Symbol.dispose]();
         placement?.release();
       },
     };

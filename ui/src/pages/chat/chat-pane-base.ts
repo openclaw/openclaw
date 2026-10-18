@@ -41,13 +41,13 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
+import { PollController } from "../../lit/poll-controller.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
 import {
   ControllerHost,
   SubscriptionsController,
   viewState,
-} from "../../lib/subscriptions-controller.ts";
-import { PollController } from "../../lit/poll-controller.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lit/presentation-binding.ts";
+} from "../../lit/subscriptions-controller.ts";
 import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -66,6 +66,7 @@ import { SessionParticipationTracker } from "./chat-pane-state.ts";
 import { ChatStateController } from "./chat-state-controller.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { requestChatPageUpdate } from "./chat-state-render.ts";
+import { resolveChatAgentId } from "./chat-state-route.ts";
 import type { ChatTypingActorState } from "./chat-typing-presence.ts";
 import { getChatComposerState } from "./components/chat-composer-state.ts";
 import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
@@ -74,6 +75,7 @@ import type { ChatSessionSharingState } from "./components/chat-session-sharing.
 import { getTranscriptState } from "./components/chat-thread-interactions.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.tsx";
+import { hasDirectSessionRun } from "./run-lifecycle.ts";
 import { canAutoFollowChat, handleChatScrollTakeover } from "./scroll.ts";
 import {
   cacheChatSessionSnapshot,
@@ -371,6 +373,7 @@ export abstract class ChatPaneBase extends ControllerHost {
     replacementSessionKey: string,
     preserveDraft?: boolean,
   ) => void;
+  @viewState() presentationTitle: string | undefined;
   @viewState() narrow = false;
   @viewState() mergedChrome = false;
   @viewState() navDrawerOpen = false;
@@ -405,7 +408,15 @@ export abstract class ChatPaneBase extends ControllerHost {
   );
 
   get runActivity() {
-    return this.chatState.projectRunActivity(this.state);
+    const state = this.state;
+    return state?.connected
+      ? {
+          client: state.client,
+          agentId: resolveChatAgentId(state),
+          working: hasDirectSessionRun(state),
+          completion: state.chatRunStatus,
+        }
+      : null;
   }
   protected readonly composerCapabilities = new ChatComposerCapabilityHost(() =>
     this.requestUpdate(),
@@ -651,6 +662,7 @@ export abstract class ChatPaneBase extends ControllerHost {
   protected historyObserverArmed = false;
   protected historyAutoLoadBlocked = false;
   protected historyIntentTimer: number | null = null;
+  protected historyTouchY: number | null = null;
   protected transcriptScrollTop: number | null = null;
   // Older cursors already requested this session. A provider that cycles cursors
   // (c1 -> c2 -> c1) on empty/duplicate pages would otherwise loop forever, since

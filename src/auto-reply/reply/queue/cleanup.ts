@@ -152,22 +152,9 @@ export function prepareSessionFollowupCleanup(params: {
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      const onSettlementError = (error: unknown) => {
+      completeFollowupRuns(detached, (error) => {
         defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-      };
-      for (const source of detached) {
-        for (const correlation of source.deliveryCorrelations ?? []) {
-          try {
-            const end = correlation.begin();
-            if (typeof end === "function") {
-              end({ visibleReplySent: false, failed: true });
-            }
-          } catch (error) {
-            onSettlementError(error);
-          }
-        }
-      }
-      completeFollowupRuns(detached, onSettlementError);
+      });
       // Settlement of accepted removals is unconditional; later effects need current authority.
       params.assertCurrent();
       if (

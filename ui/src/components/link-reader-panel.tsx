@@ -1,4 +1,3 @@
-import { insert } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
@@ -9,8 +8,8 @@ import {
   onSettled,
 } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
-import { nativeListener } from "../lib/solid-native-listener.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge, LitContent, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { solidContent } from "../lit/solid-content.tsx";
 import { DockResizer } from "./dock-layout-solid.tsx";
 import { LinkReaderContent } from "./link-reader-content.tsx";
 import {
@@ -33,24 +32,19 @@ import { PanelIconButton } from "./solid/panel-icon-button.tsx";
 const panelStyles = `@scope (openclaw-link-reader-panel) { ${linkReaderViewStyles.map((style) => style.replace(/:host\(([^)]+)\)/gu, ":scope$1").replaceAll(":host", ":scope")).join("\n")} }`;
 
 function HostedAction(props: { owner: LinkReaderPanelOwner; revision: number }) {
-  const activate = nativeListener("click", () => props.owner.createTab());
-  const label = () => t("linkReader.newTab");
   return (
-    <button
-      ref={activate}
+    <PanelIconButton
       class="rail-header__action bp-icon"
-      type="button"
-      aria-label={label()}
-      title={label()}
+      label={t("linkReader.newTab")}
+      icon={<Icon name="plus" />}
+      onClick={() => props.owner.createTab()}
       disabled={
         (void props.revision,
         props.owner.tabs.length >= LINK_READER_TAB_LIMIT ||
           !props.owner.available ||
           !props.owner.readers.length)
       }
-    >
-      <Icon name="plus" />
-    </button>
+    />
   );
 }
 
@@ -117,16 +111,12 @@ function PanelView(
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const owner = new LinkReaderPanelOwner(host, host, () => setRevision((value) => value + 1));
   owners.set(host, owner);
-  // The panel owns this action while the sidebar hosts its DOM.
-  const hostedActions = document.createElement("span");
-  hostedActions.style.display = "contents";
-  insert(hostedActions, <HostedAction owner={owner} revision={revision()} />);
   Object.defineProperties(host, {
     hostedTabs: { configurable: true, get: () => owner.hostedTabs },
     activeHostedTabId: { configurable: true, get: () => owner.activeHostedTabId },
     hostedActions: {
       configurable: true,
-      get: () => hostedActions,
+      get: () => solidContent(HostedAction, { owner, revision: revision() }),
     },
   });
   owner.connect();
@@ -160,7 +150,6 @@ function PanelView(
     () => owner.afterRender(),
   );
   onCleanup(() => {
-    hostedActions.remove();
     owner.dispose();
     owners.delete(host);
   });
@@ -176,7 +165,7 @@ function PanelView(
       label: item.label,
       url: item.url,
       title: item.title,
-      icon: item.icon,
+      icon: <LitContent render={() => item.icon} />,
       className: item.className,
       domId: item.id + "-label",
       closeLabel: t("linkReader.closeTab", { title: item.label }),

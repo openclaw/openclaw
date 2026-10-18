@@ -282,7 +282,7 @@ export function createTelegramEventBindings({
           telegramDeps.enqueueRoutedSystemEvent(text, route, {
             contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
           });
-          logVerbose(`telegram: reaction event enqueued chat=${chatId} message=${messageId}`);
+          logVerbose(`telegram: reaction event enqueued: ${text}`);
         }
       } catch (err) {
         runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));

@@ -9,11 +9,7 @@ import {
 } from "../../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
-import {
-  resolveRequesterOriginForChild,
-  resolveSpawnRequesterConversationTarget,
-  type SpawnRequesterConversationSource,
-} from "../../spawn-requester-origin.js";
+import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -23,9 +19,11 @@ import {
   isHeartbeatEnabledForSessionAgent,
 } from "./acp-spawn-heartbeat.js";
 
-type AcpSpawnRequesterContext = SpawnRequesterConversationSource & {
+type AcpSpawnRequesterContext = {
   agentChannel?: string;
   agentAccountId?: string;
+  agentTo?: string;
+  agentThreadId?: string | number;
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
 };
@@ -98,11 +96,14 @@ export async function resolveAcpSpawnRequesterState(params: {
       : false,
   ]);
   params.assertActive?.();
-  const requesterConversation = resolveSpawnRequesterConversationTarget(params.ctx);
+  const hasThreadContext =
+    typeof params.ctx.agentThreadId === "string"
+      ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
+      : params.ctx.agentThreadId != null;
   return {
     isSubagentSession,
     hasActiveSubagentBinding,
-    hasThreadContext: requesterConversation.threadId != null,
+    hasThreadContext,
     heartbeatEnabled: isHeartbeatEnabledForSessionAgent({
       cfg: params.cfg,
       requesterAgentId: params.requesterAgentId,
@@ -115,8 +116,8 @@ export async function resolveAcpSpawnRequesterState(params: {
       requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,
-      requesterTo: requesterConversation.to,
-      requesterThreadId: requesterConversation.threadId,
+      requesterTo: params.ctx.agentTo,
+      requesterThreadId: params.ctx.agentThreadId,
       requesterGroupSpace: params.ctx.agentGroupSpace,
       requesterMemberRoleIds: params.ctx.agentMemberRoleIds,
     }),

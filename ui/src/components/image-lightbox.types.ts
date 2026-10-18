@@ -6,8 +6,7 @@ export type ImageLightboxItem = {
   width?: number;
   height?: number;
   release?: () => void;
-  loadDisplayImage?: () => Promise<ImageLightboxItem | null>;
-  readOriginalBlob?: () => Promise<Blob>;
+  loadFullResolution?: () => Promise<ImageLightboxItem | null>;
   gallery?: ImageLightboxGallery;
   /** The source owner connects only the selected player and releases on navigation/close. */
   connectVideo?: (

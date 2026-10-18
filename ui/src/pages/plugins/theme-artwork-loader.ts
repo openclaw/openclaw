@@ -1,11 +1,6 @@
 import { matchControlUiResourceUrl } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
-import {
-  fetchProxiedIconBlobUrl,
-  SVG_ARTWORK_MIME_TYPES,
-  THEME_BACKGROUND_MIME_TYPES,
-  type PluginThemeArtworkFetchParams,
-} from "./icon-loader.ts";
+import { fetchProxiedIconBlobUrl, type PluginThemeArtworkFetchParams } from "./icon-loader.ts";
 
 // Content-addressed hits are stable; failed loads may recover on the next request.
 const themeArtwork = new Map<string, Promise<string | null>>();
@@ -31,7 +26,7 @@ export function loadPluginThemeArtwork(
       signal: params.signal ?? AbortSignal.timeout(15_000),
     },
     `${resourceBasePath}${params.url}`,
-    params.background ? THEME_BACKGROUND_MIME_TYPES : SVG_ARTWORK_MIME_TYPES,
+    true,
   )
     .catch(() => null)
     .then((source) => {

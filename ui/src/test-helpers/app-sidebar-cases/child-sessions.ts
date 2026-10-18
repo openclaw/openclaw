@@ -75,7 +75,10 @@ describe("AppSidebar agent chip", () => {
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
     expect(toggle?.textContent?.trim()).toContain("2");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
+
+    toggle?.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
     await waitForFast(() =>
       expect(sidebar.querySelectorAll(".sidebar-recent-session--child")).toHaveLength(2),
@@ -245,7 +248,7 @@ describe("AppSidebar agent chip", () => {
     await settleLitElement(sidebar);
 
     const toggle = sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]");
-    expect(toggle?.getAttribute("aria-expanded")).toBe("true");
+    toggle?.click();
     await waitForFast(() => expect(harness.list).toHaveBeenCalledOnce());
     await waitForFast(() =>
       expect(sidebar.querySelector('[data-session-key="agent:worker:child"]')).not.toBeNull(),
@@ -307,9 +310,7 @@ describe("AppSidebar agent chip", () => {
       },
     });
     await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(harness.list.mock.calls[1]?.[0]).toMatchObject({
@@ -370,9 +371,7 @@ describe("AppSidebar agent chip", () => {
       });
     publishParent(10);
     await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
 
     await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
     expect(sidebar.querySelector(".sidebar-recent-session--child")).toBeNull();
@@ -419,9 +418,7 @@ describe("AppSidebar agent chip", () => {
       },
     });
     await settleLitElement(sidebar);
-    expect(
-      sidebar.querySelector("[data-child-session-toggle]")?.getAttribute("aria-expanded"),
-    ).toBe("true");
+    sidebar.querySelector<HTMLButtonElement>("[data-child-session-toggle]")?.click();
     await waitForFast(() => expect(original.list).toHaveBeenCalledOnce());
 
     const replacement = createSessionsHarness("main", ["agent:main:parent"]);

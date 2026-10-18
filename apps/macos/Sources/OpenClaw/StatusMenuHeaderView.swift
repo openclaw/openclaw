@@ -17,16 +17,10 @@ struct StatusMenuHeaderView: View {
     private let nodesStore = NodesStore.shared
     private let nodeChannelStatus = MacNodeChannelStatusStore.shared
     private let dashboardManager = DashboardManager.shared
-    private let onCheckForUpdates: (@MainActor () -> Void)?
 
-    init(
-        state: AppState,
-        isSleeping: Bool = false,
-        onCheckForUpdates: (@MainActor () -> Void)? = nil)
-    {
+    init(state: AppState, isSleeping: Bool = false) {
         self._state = Bindable(wrappedValue: state)
         self.isSleeping = isSleeping
-        self.onCheckForUpdates = onCheckForUpdates
     }
 
     var body: some View {
@@ -82,14 +76,8 @@ struct StatusMenuHeaderView: View {
         let problems = self.problemLines
         if !problems.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(problems.indices, id: \.self) { index in
-                    let problem = problems[index]
-                    self.statusLine(
-                        label: problem.label,
-                        diagnostic: problem.diagnostic,
-                        color: problem.color,
-                        onCheckForUpdates: index == problems.count - 1 && self.shouldOfferAppUpdate
-                            ? self.onCheckForUpdates : nil)
+                ForEach(problems, id: \.label) { problem in
+                    self.statusLine(label: problem.label, diagnostic: problem.diagnostic, color: problem.color)
                 }
             }
         }
@@ -286,24 +274,23 @@ struct StatusMenuHeaderView: View {
         return (String(localized: "Mac capabilities offline"), nil, .orange)
     }
 
-    private var shouldOfferAppUpdate: Bool {
-        guard self.state.connectionMode != .unconfigured,
-              case .connected = self.controlChannel.state
-        else { return false }
-        return self.nodeChannelStatus.state.operatorStatusLine?.recoveryAction == .checkForUpdates
-    }
+    private func statusLine(label: String, diagnostic: String? = nil, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(color)
+                .lineLimit(diagnostic == nil ? 3 : 2)
 
-    private func statusLine(
-        label: String,
-        diagnostic: String? = nil,
-        color: Color,
-        onCheckForUpdates: (@MainActor () -> Void)? = nil) -> some View
-    {
-        StatusMenuProblemLineView(
-            label: label,
-            diagnostic: diagnostic,
-            color: color,
-            onCheckForUpdates: onCheckForUpdates)
+            if let diagnostic {
+                Text(diagnostic)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+        .help(diagnostic.map { "\(label)\n\($0)" } ?? label)
     }
 
     private func pairingRow(_ label: String) -> some View {
@@ -333,37 +320,5 @@ struct StatusMenuHeaderView: View {
         } catch {
             await self.loadBrowserEnabled()
         }
-    }
-}
-
-@MainActor
-struct StatusMenuProblemLineView: View {
-    let label: String
-    let diagnostic: String?
-    let color: Color
-    let onCheckForUpdates: (@MainActor () -> Void)?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(self.label)
-                .font(.caption)
-                .foregroundStyle(self.color)
-                .lineLimit(self.diagnostic == nil ? 3 : 2)
-
-            if let diagnostic = self.diagnostic {
-                Text(diagnostic)
-                    .font(.caption2.monospaced())
-                    .foregroundStyle(.secondary)
-                    .lineLimit(4)
-                    .textSelection(.enabled)
-            }
-            if let onCheckForUpdates = self.onCheckForUpdates {
-                Button(String(localized: "Update"), action: onCheckForUpdates)
-                    .font(.caption.weight(.semibold))
-                    .buttonStyle(.link)
-            }
-        }
-        .fixedSize(horizontal: false, vertical: true)
-        .help(self.diagnostic.map { "\(self.label)\n\($0)" } ?? self.label)
     }
 }

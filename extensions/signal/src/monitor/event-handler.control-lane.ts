@@ -117,20 +117,41 @@ export function resolveSignalControlLaneKey(
 }
 
 export function createSignalPendingInboundRegistry(accountId: string) {
-  const trackedEntries = new Map<SignalInboundEntry, TrackedSignalInboundLane>();
+  const trackedEntries = new WeakMap<SignalInboundEntry, TrackedSignalInboundLane>();
+  const countsByConversation = new Map<string, Map<string, number>>();
 
   const track = (entry: SignalInboundEntry) => {
+    if (trackedEntries.has(entry)) {
+      return;
+    }
     const conversationKey = resolveSignalInboundConversationKey(accountId, entry);
     const inboundKey = resolveSignalInboundDebounceKey(accountId, entry);
     if (!conversationKey || !inboundKey) {
       return;
     }
+    const counts = countsByConversation.get(conversationKey) ?? new Map<string, number>();
+    counts.set(inboundKey, (counts.get(inboundKey) ?? 0) + 1);
+    countsByConversation.set(conversationKey, counts);
     trackedEntries.set(entry, { conversationKey, inboundKey });
   };
 
   const complete = (entries: SignalInboundEntry[]) => {
     for (const entry of entries) {
+      const tracked = trackedEntries.get(entry);
+      if (!tracked) {
+        continue;
+      }
       trackedEntries.delete(entry);
+      const counts = countsByConversation.get(tracked.conversationKey);
+      const nextCount = (counts?.get(tracked.inboundKey) ?? 0) - 1;
+      if (nextCount > 0) {
+        counts?.set(tracked.inboundKey, nextCount);
+        continue;
+      }
+      counts?.delete(tracked.inboundKey);
+      if (counts?.size === 0) {
+        countsByConversation.delete(tracked.conversationKey);
+      }
     }
   };
 
@@ -144,13 +165,7 @@ export function createSignalPendingInboundRegistry(accountId: string) {
     }
     // Group members have distinct normal debounce keys, but stop applies to the shared session.
     // Cancel every still-tracked sender lane before core interrupts the active run.
-    const inboundKeys = new Set<string>();
-    for (const tracked of trackedEntries.values()) {
-      if (tracked.conversationKey === conversationKey) {
-        inboundKeys.add(tracked.inboundKey);
-      }
-    }
-    for (const inboundKey of inboundKeys) {
+    for (const inboundKey of countsByConversation.get(conversationKey)?.keys() ?? []) {
       cancelKey(inboundKey);
     }
   };

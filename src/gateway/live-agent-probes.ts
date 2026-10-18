@@ -8,7 +8,6 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { resolveOpenClawCliInvocation } from "../../cli-invocation.mjs";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runExec } from "../process/exec.js";
 
@@ -156,19 +155,17 @@ export async function runOpenClawCliJson<T>(args: string[], env: NodeJS.ProcessE
   const hasBuildOutput = ["entry.js", "entry.mjs"].some((entry) =>
     fs.existsSync(path.join(process.cwd(), "dist", entry)),
   );
-  const [entryPath, ...argsForEntry] = resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput);
-  const invocation = resolveOpenClawCliInvocation({
-    entryPath,
-    execArgv: [],
-    args: argsForEntry,
-  });
-  const { stdout, stderr } = await runExec(invocation.command, invocation.args, {
-    baseEnv: childEnv,
-    cwd: process.cwd(),
-    logOutput: false,
-    maxBuffer: 1024 * 1024,
-    timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
-  });
+  const { stdout, stderr } = await runExec(
+    process.execPath,
+    resolveOpenClawCliProcessArgs(cliArgs, hasBuildOutput),
+    {
+      baseEnv: childEnv,
+      cwd: process.cwd(),
+      logOutput: false,
+      maxBuffer: 1024 * 1024,
+      timeoutMs: OPENCLAW_CLI_CHILD_TIMEOUT_MS,
+    },
+  );
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error(

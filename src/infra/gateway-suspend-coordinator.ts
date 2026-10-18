@@ -56,6 +56,7 @@ type GatewaySuspendCoordinatorEntryBase = {
   reopenAdmission: () => boolean;
   warn?: (message: string) => void;
   timer?: ReturnType<typeof setTimeout>;
+  timerGeneration?: number;
 };
 
 type HeldGatewaySuspension = GatewaySuspendCoordinatorEntryBase & {
@@ -109,6 +110,7 @@ function schedulerRecoveryResult(): GatewaySchedulerRecoveryResult {
 }
 
 function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
+  entry.timerGeneration = (entry.timerGeneration ?? 0) + 1;
   if (entry.timer) {
     clearTimeout(entry.timer);
     entry.timer = undefined;
@@ -117,8 +119,9 @@ function clearEntryTimer(entry: GatewaySuspendCoordinatorEntry): void {
 
 function scheduleResume(entry: GatewaySuspendCoordinatorEntry, delayMs: number): void {
   clearEntryTimer(entry);
+  const generation = entry.timerGeneration;
   entry.timer = setTimeout(() => {
-    if (COORDINATOR_STATE.current === entry) {
+    if (entry.timerGeneration === generation && COORDINATOR_STATE.current === entry) {
       resumeAndReopen(entry);
     }
   }, delayMs);

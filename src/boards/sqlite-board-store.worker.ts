@@ -1,6 +1,8 @@
 import { withSqlitePostCommitPublications } from "../infra/sqlite-post-commit.js";
-import { runSqliteWorkerTransactionSync } from "../infra/sqlite-transaction.js";
-import { bindSqliteWorkerDatabase } from "../infra/sqlite-worker-binding.js";
+import {
+  assertTransactionUsable,
+  runSqliteWorkerTransactionSync,
+} from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
@@ -44,8 +46,12 @@ export function bindSqliteWorkerBackend(
     throw new Error("Board publication lost its canonical database owner");
   }
   ensureBoardSchema(database);
-  return bindSqliteWorkerDatabase<BoardWriteOperations>(database.db, {
+  let closed = false;
+  return {
     execute(command) {
+      if (closed) {
+        throw new Error("Board publication scope is closed");
+      }
       if (input && command.input.sessionKey !== input.sessionKey) {
         throw new BoardValidationError("invalid_operation", "board session changed; retry");
       }
@@ -99,5 +105,14 @@ export function bindSqliteWorkerBackend(
         ),
       };
     },
-  });
+    assertSettled() {
+      assertTransactionUsable(database.db);
+      if (database.db.isTransaction) {
+        throw new Error("Board publication left an unsettled transaction");
+      }
+    },
+    close() {
+      closed = true;
+    },
+  };
 }

@@ -863,11 +863,19 @@ describe("PR metadata through REST", () => {
     );
 
     it.each([
-      { fixture: { authorSources: null }, calls: 0 },
-      { fixture: { authorSources: {} }, calls: 0 },
-      { fixture: { authorSources: [source(1), source(1)] }, calls: 0 },
-      { fixture: { authorSources: [{ oid: "main", changesTree: true }] }, calls: 0 },
-      { fixture: { authorSources: [{ oid: sha(1) }] }, calls: 0 },
+      null,
+      {},
+      [source(1), source(1)],
+      [{ oid: "main", changesTree: true }],
+      [{ oid: sha(1) }],
+    ])("rejects invalid source selections before reading GitHub: %j", (authorSources) => {
+      const result = readPrMetadata({ authorSources }, command);
+      expect(result.status).toBe(65);
+      expect(result.stdout).toBe("");
+      expect(result.calls).toEqual([]);
+    });
+
+    it.each([
       ...[
         null,
         {},
@@ -878,21 +886,15 @@ describe("PR metadata through REST", () => {
         [{ ...record(1), author: undefined }],
         [{ ...record(1), author: { login: "bot", type: null } }],
         [{ ...record(1), commit: { author: { name: null, email: "author1@example.com" } } }],
-      ].map((page) => ({
-        fixture: { authorSources: [source(1)], authorPages: [page] },
-        calls: 1,
-      })),
-      {
-        fixture: { authorSources: [source(1), source(2)], authorPages: [[record(2), record(2)]] },
-        calls: 1,
-      },
+      ].map((page) => ({ authorSources: [source(1)], authorPages: [page] })),
+      { authorSources: [source(1), source(2)], authorPages: [[record(2), record(2)]] },
     ])(
-      "rejects invalid author selections or evidence after $calls reads without retrying: $fixture",
-      ({ fixture, calls }) => {
+      "rejects malformed, unbound, or duplicate author evidence without retrying: %j",
+      (fixture) => {
         const result = readPrMetadata(fixture, command);
         expect(result.status).toBe(65);
         expect(result.stdout).toBe("");
-        expect(result.calls).toHaveLength(calls);
+        expect(result.calls).toHaveLength(1);
       },
     );
   });

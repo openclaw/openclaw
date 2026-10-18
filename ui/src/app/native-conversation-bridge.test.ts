@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ApplicationContext } from "./context.ts";
 import { createNativeConversationBridge } from "./native-conversation-bridge.ts";
@@ -49,7 +48,6 @@ function fixture(features: string[] = []) {
       presentation: { result: { sessions: [row] } },
       state: { result: { sessions: [row] } },
       subscribe,
-      isRunVisuallyActive: isSessionRunActive,
     },
     agents: { state: { agentsList: null } },
     agentSelection: { state: { selectedId: "main" } },
@@ -228,20 +226,16 @@ describe("native conversation contract", () => {
           : [],
       );
       const menu = document.createElement("openclaw-chat-header-session-menu");
-      const rendered = createDeferred<boolean>();
-      const openMenu = vi.fn(() => true);
-      Object.defineProperty(menu, "updateComplete", { value: rendered.promise });
-      menu.openMenu = openMenu;
+      const dropdown = document.createElement("wa-dropdown");
+      dropdown.open = false;
+      menu.append(dropdown);
       pane.append(menu);
       await flush();
-      expect(openMenu).not.toHaveBeenCalled();
+      expect(dropdown.open).toBe(owner === "current");
       if (owner === "current") {
         expect(results()).toEqual([]);
-      }
-      rendered.resolve(true);
-      await flush();
-      expect(openMenu).toHaveBeenCalledTimes(owner === "current" ? 1 : 0);
-      if (owner === "current") {
+        dropdown.dispatchEvent(new Event("wa-after-show"));
+        await flush();
         expect(results()).toMatchObject([{ requestId: "request-1", ok: true }]);
       } else {
         expect(results()).toHaveLength(owner === "retired" ? 0 : 1);

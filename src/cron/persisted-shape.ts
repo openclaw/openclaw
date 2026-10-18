@@ -6,7 +6,6 @@ import {
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
 import { parseAbsoluteTimeMs } from "./parse.js";
-import { isCronEventSchedule } from "./source-schedule.js";
 import { isSystemOwnedCronPayloadKind, type CronJobState } from "./types.js";
 
 const CRON_STATE_TIMESTAMP_FIELDS = [
@@ -91,12 +90,8 @@ export function getInvalidPersistedCronJobReason(
     scheduleKind !== "every" &&
     scheduleKind !== "cron" &&
     scheduleKind !== "on-exit" &&
-    scheduleKind !== "stream" &&
-    scheduleKind !== "event"
+    scheduleKind !== "stream"
   ) {
-    return "invalid-schedule";
-  }
-  if (scheduleKind === "event" && !isCronEventSchedule(schedule)) {
     return "invalid-schedule";
   }
   if (scheduleKind === "at") {
@@ -171,8 +166,7 @@ export function getInvalidPersistedCronJobReason(
       typeof script !== "string" ||
       script.trim().length === 0 ||
       scheduleKind === "at" ||
-      scheduleKind === "on-exit" ||
-      scheduleKind === "event"
+      scheduleKind === "on-exit"
     ) {
       return "invalid-trigger";
     }
@@ -204,9 +198,6 @@ export function getInvalidPersistedCronJobReason(
     (payloadKind === "systemEvent" || payloadKind === "agentTurn" || payloadKind === "script") &&
     (typeof requiredText !== "string" || (payloadKind !== "systemEvent" && !requiredText.trim()))
   ) {
-    return "invalid-payload";
-  }
-  if (scheduleKind === "event" && payloadKind !== "agentTurn") {
     return "invalid-payload";
   }
   if (payloadKind === "command") {

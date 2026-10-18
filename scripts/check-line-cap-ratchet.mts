@@ -136,7 +136,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       "--name-only",
       "-z",
       "--diff-filter=ACMR",
-      "--no-renames",
+      "--find-renames",
       ...(args.staged ? ["--cached"] : []),
       base,
     ]);
@@ -144,6 +144,14 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       changes.push(...gitPaths(root, ["ls-files", "--others", "--exclude-standard", "-z"]));
     }
     const paths = [...new Set(changes)].filter((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file));
+    const renames = listRatchetRenames(root, base, args.staged, []);
+    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
+    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
+    const baseSources = loadRatchetSources(
+      root,
+      paths.map((file) => oldPaths.get(file) ?? file).filter((file) => basePaths.has(file)),
+      base,
+    );
     const headSources = args.staged
       ? loadRatchetSources(root, paths)
       : new Map(paths.map((file) => [file, fs.readFileSync(path.join(root, file), "utf8")]));
@@ -175,18 +183,11 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     fs.mkdirSync(path.join(scratch, ".git"));
     const after = collectViolations(path.join(scratch, "head"), headSources, config);
     // Only over-cap head files need an inherited allowance. A broken base must
-    // not block a valid repair; partial clones must not fetch unused base blobs.
-    const renames = after.size > 0 ? listRatchetRenames(root, base, args.staged, []) : [];
-    const oldPaths = new Map(renames.map(({ from, to }) => [to, from]));
-    const basePaths = new Set(gitPaths(root, ["ls-tree", "-r", "--name-only", "-z", base]));
+    // not block a valid repair that already satisfies the current cap.
     const debtPaths = new Set([...after.keys()].map((file) => oldPaths.get(file) ?? file));
     const before = collectViolations(
       path.join(scratch, "base"),
-      loadRatchetSources(
-        root,
-        [...debtPaths].filter((file) => basePaths.has(file)),
-        base,
-      ),
+      new Map([...baseSources].filter(([file]) => debtPaths.has(file))),
       config,
     );
     const increased = compareLineCapViolations(after, before, renames);

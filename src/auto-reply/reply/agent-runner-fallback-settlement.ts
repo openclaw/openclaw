@@ -5,7 +5,6 @@ import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import { resolveReplyExpectation } from "../../agents/reply-completion.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -18,7 +17,7 @@ import type {
   AgentFallbackCycleResult,
 } from "./agent-runner-fallback-cycle.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
-import { isStrandedPrivateMessageToolFinal } from "./private-message-tool-final.js";
+import { classifyPrivateMessageToolFinal } from "./private-message-tool-final.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 
 /** Settles abort, lifecycle, and terminal failure state after fallback execution. */
@@ -133,22 +132,20 @@ export async function settleAgentFallbackCycle(params: {
         opts: turn.opts,
       })
     : undefined;
+  const finalText = runResult.meta?.finalAssistantVisibleText?.trim() ?? "";
   const successfulSourceReplyDelivery = hasCompletedSourceReplyDeliveryEvidence(runResult);
   const hasPendingContinuation =
-    runResult.meta?.yielded === true ||
-    runResult.meta?.continuationPending === true ||
-    (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
+    runResult.meta?.yielded === true || (runResult.meta?.pendingToolCalls?.length ?? 0) > 0;
   const privateFinalTerminalReply =
     !hasPendingContinuation &&
-    isStrandedPrivateMessageToolFinal({
-      replyExpectation: resolveReplyExpectation(turn.followupRun.run),
+    classifyPrivateMessageToolFinal({
       sourceReplyDeliveryMode: sourceReplyPolicy?.sourceReplyDeliveryMode,
       sendPolicyDenied: sourceReplyPolicy?.sendPolicyDenied === true,
       successfulSourceReplyDelivery,
       isHeartbeat: turn.isHeartbeat,
       isRoomEvent: turn.sessionCtx.InboundEventKind === "room_event",
-      terminalReply: runResult.meta?.terminalReply,
-    })
+      finalText,
+    }) === "short"
       ? ({ disposition: "empty", code: "message-tool-not-called" } as const)
       : undefined;
   const terminalRunFailed =
@@ -174,9 +171,6 @@ export async function settleAgentFallbackCycle(params: {
     turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
-    if (privateFinalTerminalReply) {
-      runResult.meta.terminalReply = privateFinalTerminalReply;
-    }
     settledLifecycleTerminal?.emit(
       "end",
       runResult,

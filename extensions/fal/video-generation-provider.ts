@@ -17,11 +17,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeVideoGenerationDuration,
-  type GeneratedVideoAsset,
-  type VideoGenerationProvider,
-  type VideoGenerationRequest,
+import type {
+  GeneratedVideoAsset,
+  VideoGenerationProvider,
+  VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import { resolveFalHttpRequestConfig } from "./http-config.js";
 
@@ -89,21 +88,23 @@ function readFalVideoPayload(payload: unknown) {
     throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
   }
   return {
-    video: video
+    video: isRecord(video)
       ? {
           url: normalizeFalVideoUrl(video.url),
           content_type: normalizeOptionalString(video.content_type),
         }
       : undefined,
-    videos: videos?.map((entry) => {
-      if (!isRecord(entry)) {
-        throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
-      }
-      return {
-        url: normalizeFalVideoUrl(entry.url),
-        content_type: normalizeOptionalString(entry.content_type),
-      };
-    }),
+    videos: Array.isArray(videos)
+      ? videos.map((entry) => {
+          if (!isRecord(entry)) {
+            throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+          }
+          return {
+            url: normalizeFalVideoUrl(entry.url),
+            content_type: normalizeOptionalString(entry.content_type),
+          };
+        })
+      : undefined,
     prompt: normalizeOptionalString(payload.prompt),
     seed: typeof payload.seed === "number" ? payload.seed : undefined,
   };
@@ -125,7 +126,7 @@ function readFalQueueResponse(payload: unknown) {
     detail: normalizeOptionalString(payload.detail),
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
-    error: error ? { message: normalizeOptionalString(error.message) } : undefined,
+    error: isRecord(error) ? { message: normalizeOptionalString(error.message) } : undefined,
   };
 }
 
@@ -197,10 +198,10 @@ function resolveFalDuration(
   durationSeconds: number | undefined,
   model: string,
 ): number | string | undefined {
-  const duration = normalizeVideoGenerationDuration({ durationSeconds });
-  if (duration === undefined) {
+  if (typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds)) {
     return undefined;
   }
+  const duration = Math.max(1, Math.round(durationSeconds));
   if (isFalSeedance2Model(model)) {
     return SEEDANCE_2_DURATION_SECONDS.includes(
       duration as (typeof SEEDANCE_2_DURATION_SECONDS)[number],
@@ -246,7 +247,7 @@ function applyFalSeedanceControls(
   if (duration) {
     body.duration = duration;
   }
-  if (isFalSeedance2Model(model) && req.audio !== undefined) {
+  if (isFalSeedance2Model(model) && typeof req.audio === "boolean") {
     body.generate_audio = req.audio;
   }
 }
@@ -538,7 +539,7 @@ export function buildFalVideoGenerationProvider(): VideoGenerationProvider {
         metadata: {
           ...(submitted.request_id ? { requestId: submitted.request_id } : {}),
           ...(videoPayload.prompt ? { prompt: videoPayload.prompt } : {}),
-          ...(videoPayload.seed !== undefined ? { seed: videoPayload.seed } : {}),
+          ...(typeof videoPayload.seed === "number" ? { seed: videoPayload.seed } : {}),
         },
       };
     },

@@ -440,7 +440,7 @@ export async function runNodeCommand(
     env: {
       ...process.env,
       OPENCLAW_RUNNER_LOG: "0",
-      OPENCLAW_VITEST_RUNTIME: "node",
+      OPENCLAW_VITEST_RUNTIME: undefined,
       ...env,
     },
     execPath: process.execPath,

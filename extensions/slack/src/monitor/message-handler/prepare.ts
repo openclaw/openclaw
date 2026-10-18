@@ -810,7 +810,8 @@ export async function prepareSlackMessage(params: {
   const textForCommandDetection = stripSlackMentionsForCommandDetection(message.text ?? "");
   const hasControlCommandInMessage = hasControlCommand(textForCommandDetection, cfg);
   const hasAbortRequest = isAbortRequestText(textForCommandDetection);
-  const channelUsersAllowlistConfigured = isRoom && (channelConfig?.users?.length ?? 0) > 0;
+  const channelUsersAllowlistConfigured =
+    isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
   const resolveMessageIngress = async (
     contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
     threadId?: string,

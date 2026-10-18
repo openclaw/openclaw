@@ -1,9 +1,9 @@
 import type { WorkerConfig } from "./config.js";
 import type { ModelCache } from "./model-loader.js";
 import { UnsupportedInputError } from "./models/types.js";
-import { OnnxWorkerError, type WorkerReply, type WorkerRequest } from "./protocol.js";
+import { OnnxWorkerError, parseWorkerRequest, type WorkerReply } from "./protocol.js";
 
-let config: WorkerConfig;
+let config: WorkerConfig | undefined;
 let cache: ModelCache | undefined;
 let stopping = false;
 let finalExitCode = 0;
@@ -49,16 +49,15 @@ function send(reply: WorkerReply): void {
   });
 }
 
-function onMessage(request: WorkerRequest): void {
+function onMessage(value: unknown): void {
   if (stopping) {
     return;
   }
-  if (request.kind === "init") {
-    // The private parent sends initialization before operations on the same FIFO IPC channel.
-    config = request.config;
+  if (activeTask) {
+    stop(1);
     return;
   }
-  activeTask = handle(request);
+  activeTask = handle(value);
   void activeTask
     .catch(() => stop(1))
     .finally(() => {
@@ -68,7 +67,19 @@ function onMessage(request: WorkerRequest): void {
 process.on("disconnect", () => stop(0));
 process.on("message", onMessage);
 
-async function handle(request: Exclude<WorkerRequest, { kind: "init" }>): Promise<void> {
+async function handle(value: unknown): Promise<void> {
+  const request = parseWorkerRequest(value);
+  if (request.kind === "init") {
+    if (config) {
+      throw new Error("Already initialized");
+    }
+    config = request.config;
+    send({ kind: "ready" });
+    return;
+  }
+  if (!config) {
+    throw new Error("Invalid worker admission");
+  }
   try {
     if (!cache) {
       let implementation;
@@ -86,7 +97,7 @@ async function handle(request: Exclude<WorkerRequest, { kind: "init" }>): Promis
         }
         await cache.get(model);
       }
-      send({ kind: "warmed" });
+      send({ kind: "warmed", id: request.id });
     } else {
       const model = await cache.get(request.model);
       const results = [];
@@ -96,11 +107,12 @@ async function handle(request: Exclude<WorkerRequest, { kind: "init" }>): Promis
         }
         results.push(await model.classify(input));
       }
-      send({ kind: "results", results });
+      send({ kind: "results", id: request.id, results });
     }
   } catch (error) {
     send({
       kind: "error",
+      id: request.id,
       code:
         error instanceof UnsupportedInputError
           ? "unsupported-input"

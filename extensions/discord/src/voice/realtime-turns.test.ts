@@ -555,11 +555,19 @@ defineDiscordVoiceTests(
       expectUserMessageIncludes("wake answer");
     });
 
-    it("does not acknowledge an unfinished fuzzy name that the final wake gate rejects", async () => {
+    it.each([
+      {
+        name: "unfinished fuzzy name",
+        chunks: ["Mostly", " because the task is still running."],
+      },
+      {
+        name: "name inside a long transcript",
+        chunks: ["ordinary discussion ".repeat(30), `OpenClaw, ${"x".repeat(230)}`],
+      },
+    ])("does not acknowledge $name that the final wake gate rejects", async ({ chunks }) => {
       const { entry, bridgeParams } = await createWakeNameFixture();
       beginSpeakerTurn(entry);
       bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-      const chunks = ["Mostly", " because the task is still running."];
       for (const chunk of chunks) {
         bridgeParams?.onTranscript?.("user", chunk, false);
       }

@@ -365,7 +365,7 @@ function hasConfiguredModelOverride(
   override: "context" | "cost",
 ): boolean {
   const providers = config?.models?.providers;
-  if (!providers) {
+  if (!providers || typeof providers !== "object") {
     return false;
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
@@ -373,12 +373,14 @@ function hasConfiguredModelOverride(
   return Object.entries(providers).some(
     ([providerId, providerConfig]) =>
       normalizeLowercaseStringOrEmpty(providerId) === normalizedProvider &&
-      providerConfig.models?.some(
+      Array.isArray(providerConfig?.models) &&
+      providerConfig.models.some(
         (model) =>
           normalizeLowercaseStringOrEmpty(model?.id) === normalizedModelId &&
           (override === "cost"
             ? model?.cost !== undefined
-            : (model.contextTokens ?? 0) > 0 || (model.contextWindow ?? 0) > 0),
+            : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+              (typeof model?.contextWindow === "number" && model.contextWindow > 0)),
       ),
   );
 }
@@ -401,9 +403,11 @@ function normalizeAnthropicResolvedModel(
   if (exactContextWindow && !model.reasoning) {
     patch.reasoning = true;
   }
-  const imageRefs = [contractModelId, model.name];
+  const imageRefs = [contractModelId, model.name].filter(
+    (value): value is string => typeof value === "string",
+  );
   if (imageRefs.some(matchesAnthropicModernModel)) {
-    if (!model.input.includes("image")) {
+    if (!Array.isArray(model.input) || !model.input.includes("image")) {
       patch.input = ["text", "image"];
     }
     const sidePx = imageRefs.some((id) => supportsClaudeNativeXhighEffort({ id })) ? 2576 : 1568;
@@ -463,7 +467,9 @@ function normalizeAnthropicResolvedModel(
       : Math.max(model.contextWindow ?? 0, fixedContextWindow);
     const contextTokens = exactContextWindow
       ? fixedContextWindow
-      : Math.max(model.contextTokens ?? fixedContextWindow, fixedContextWindow);
+      : typeof model.contextTokens === "number"
+        ? Math.max(model.contextTokens, fixedContextWindow)
+        : fixedContextWindow;
     if (contextWindow !== model.contextWindow || contextTokens !== model.contextTokens) {
       patch.contextWindow = contextWindow;
       patch.contextTokens = contextTokens;

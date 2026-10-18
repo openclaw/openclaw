@@ -21,11 +21,16 @@ import {
   readItem,
 } from "./event-projector-values.js";
 import type { CodexNativePreToolUseFailure } from "./native-hook-relay.js";
+import {
+  isCodexNotificationForTurn,
+  readCodexNotificationThreadId,
+} from "./notification-correlation.js";
 import { CODEX_APP_SERVER_OPT_OUT_NOTIFICATION_METHODS } from "./notification-policy.js";
 import type { CodexApprovalKind } from "./plugin-approval-roundtrip.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
-  type CodexPreparedServerNotification,
+  type CodexServerNotification,
   type CodexThreadItem,
   type CodexTurn,
   type JsonObject,
@@ -84,7 +89,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     return this.nativeToolLifecycleProjector.getActiveMcpToolCall(serverName);
   }
 
-  recordMcpToolCallReceipt(notification: CodexPreparedServerNotification): void {
+  recordMcpToolCallReceipt(notification: CodexServerNotification): void {
     if (!this.projectionClosed) {
       this.nativeToolLifecycleProjector.recordMcpToolCallReceipt(notification);
     }
@@ -137,7 +142,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     this.nativeToolLifecycleProjector.recordPreToolUseFailure(failure);
   }
 
-  async handleNotification(notification: CodexPreparedServerNotification): Promise<void> {
+  async handleNotification(notification: CodexServerNotification): Promise<void> {
     if (this.projectionClosed) {
       return;
     }
@@ -155,14 +160,14 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       notification.method === "configWarning"
     ) {
       // Codex warnings are process- or thread-scoped and never carry a turn id.
-      const warningThreadId = notification.threadId;
+      const warningThreadId = readCodexNotificationThreadId(params);
       if (
         (notification.method === "guardianWarning" && warningThreadId !== this.threadId) ||
         (warningThreadId && warningThreadId !== this.threadId)
       ) {
         return;
       }
-    } else if (notification.threadId !== this.threadId || notification.turnId !== this.turnId) {
+    } else if (!isCodexNotificationForTurn(params, this.threadId, this.turnId)) {
       return;
     }
     if (
@@ -234,7 +239,7 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
         break;
       }
       case "turn/completed":
-        await this.handleTurnCompleted(notification.completedTurn);
+        await this.handleTurnCompleted(params);
         break;
       case "rawResponse/completed":
         this.usageProjection.record(params, this.params.hostCapabilities.reportOutputTokens);
@@ -555,7 +560,8 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
     });
   }
 
-  private async handleTurnCompleted(turn: CodexTurn | undefined): Promise<void> {
+  private async handleTurnCompleted(params: JsonObject): Promise<void> {
+    const turn = readCodexTurnCompletedNotification(params)?.turn;
     if (!turn || turn.id !== this.turnId) {
       return;
     }
@@ -655,19 +661,11 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
       item?.type === "agentMessage"
         ? this.assistantProjection.assistantTextByItem.get(item.id)
         : undefined;
-    if (
-      streamed &&
-      typeof item?.text === "string" &&
-      item.text.startsWith(streamed) &&
-      (notification || item.text !== streamed)
-    ) {
-      await this.assistantProjection.handleAssistantDelta(
-        {
-          itemId: item.id,
-          delta: item.text.slice(streamed.length),
-        },
-        true,
-      );
+    if (streamed && typeof item?.text === "string" && item.text.startsWith(streamed)) {
+      await this.assistantProjection.handleAssistantDelta({
+        itemId: item.id,
+        delta: item.text.slice(streamed.length),
+      });
     }
     const asyncMessage = this.assistantProjection.recordItemCompleted(
       item,

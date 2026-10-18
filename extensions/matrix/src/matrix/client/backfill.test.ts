@@ -1,13 +1,13 @@
 import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, expect, it, vi } from "vitest";
-import { getMatrixRuntime } from "../../runtime.js";
 import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   createMatrixMonitorTaskRunner,
   getMatrixMonitorTaskSignal,
 } from "../monitor/task-runner.js";
 import { probeMatrix } from "../probe.js";
+import { MatrixClient } from "../sdk.js";
 import { backfillMatrixAuthDeviceIdAfterStartup, resolveMatrixAuth } from "./config.js";
 
 vi.mock("../credentials-read.js", () => ({
@@ -20,7 +20,7 @@ vi.mock("../credentials.js", () => ({
 
 afterEach(() => vi.restoreAllMocks());
 
-it("authenticates identity, login, and probe outcomes without opening probe state (#61317)", async () => {
+it("retires real transient clients after identity, login, and probe outcomes", async () => {
   let requests = 0;
   let rejectLogin = false;
   const server = http.createServer((request, response) => {
@@ -42,6 +42,18 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
   });
   const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   installMatrixTestRuntime({ logging: { getChildLogger: () => logger } });
+  const stop = vi.spyOn(MatrixClient.prototype, "stopWithoutPersist");
+  let disposed = 0;
+  const expectRetired = async () => {
+    expect(stop).toHaveBeenCalledTimes(++disposed);
+    const client = stop.mock.contexts[disposed - 1];
+    if (!(client instanceof MatrixClient)) {
+      throw new Error("Expected the retired transient client");
+    }
+    await expect(client.doRequest("GET", "/_matrix/client/v3/account/whoami")).rejects.toThrow(
+      "no longer active",
+    );
+  };
   try {
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -67,6 +79,7 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
       deviceId: "FIXTURE",
       allowPrivateNetwork: true,
     });
+    await expectRetired();
     const homeserver = `http://127.0.0.1:${address.port}`;
     const loginConfig = {
       channels: {
@@ -82,24 +95,17 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
       userId: "@fixture:example.org",
       accessToken: "synthetic-token",
     });
+    await expectRetired();
     rejectLogin = true;
     await expect(resolveMatrixAuth({ cfg: loginConfig, env: {} })).rejects.toMatchObject({
       statusCode: 401,
     });
-    const state = getMatrixRuntime().state;
-    const stateAccess = [
-      vi.spyOn(state, "openKeyedStore"),
-      vi.spyOn(state, "openKeyedStoreV2"),
-      vi.spyOn(state, "openSyncKeyedStore"),
-      vi.spyOn(state, "openBlobStore"),
-    ];
+    await expectRetired();
     for (const outcome of ["success", "mismatch", "unauthorized"] as const) {
       const result = await probeMatrix({
         homeserver,
         accessToken: outcome === "unauthorized" ? "expired-token" : "synthetic-token",
         userId: outcome === "mismatch" ? "@other:example.org" : "@fixture:example.org",
-        deviceId: "FIXTURE",
-        accountId: "ops",
         allowPrivateNetwork: true,
       });
       expect(result.ok).toBe(outcome === "success");
@@ -109,9 +115,7 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
       if (outcome === "mismatch") {
         expect(result.error).toContain("does not match configured userId");
       }
-    }
-    for (const open of stateAccess) {
-      expect(open).not.toHaveBeenCalled();
+      await expectRetired();
     }
     expect(requests).toBe(6);
   } finally {
@@ -122,7 +126,7 @@ it("authenticates identity, login, and probe outcomes without opening probe stat
   }
 });
 
-it("cancels an in-flight whoami request and joins backfill on monitor retirement", async () => {
+it("cancels an in-flight SDK whoami request and joins backfill on monitor retirement", async () => {
   const received = createDeferred<void>();
   let requestClosed = false;
   const server = http.createServer((request, response) => {

@@ -221,12 +221,10 @@ export async function syncWorkspaceSkills(params: {
     assertCurrent?.();
     const target = await root(targetSkillsDir, { assertBeforeMutation: assertCurrent });
     assertCurrent?.();
-    await target.write(".gitignore", "*\n", { mode: 0o644, durable: false });
-    assertCurrent?.();
     const manifest = parseSyncedSkillsManifest(await tryReadJson<unknown>(manifestPath));
     assertCurrent?.();
-    const sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
-    const skillsVersion = getSkillsSnapshotVersion(sourceWorkspace);
+    let sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
+    let skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
     const expectedManifestKey =
       skillsSnapshot?.version === skillsVersion
         ? resolveSyncedSkillsManifestKey({
@@ -259,12 +257,23 @@ export async function syncWorkspaceSkills(params: {
       ...(skillsSnapshot?.skillFilter ? { skillFilter: skillsSnapshot.skillFilter } : {}),
       ...(skillsSnapshot?.skillOverrides ? { skillOverrides: skillsSnapshot.skillOverrides } : {}),
     };
-    const entries = await prepareWorkspaceSkills(sourceWorkspace, {
-      ...loadOptions,
-      executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
-      executionWorkspaceFileHost,
-    });
-    assertCurrent?.();
+    let entries: SkillEntry[];
+    for (;;) {
+      sourceVersion = getSkillsResourceVersion(sourceWorkspace, sourceScope);
+      skillsVersion = getSkillsSnapshotVersion(skillRoots?.agentWorkspaceDir ?? sourceDir);
+      entries = await prepareWorkspaceSkills(skillRoots?.agentWorkspaceDir ?? sourceDir, {
+        ...loadOptions,
+        executionWorkspaceDir: skillRoots?.executionWorkspaceDir,
+        executionWorkspaceFileHost,
+      });
+      assertCurrent?.();
+      if (
+        getSkillsSnapshotVersion(sourceWorkspace) === skillsVersion &&
+        getSkillsResourceVersion(sourceWorkspace, sourceScope) === sourceVersion
+      ) {
+        break;
+      }
+    }
     if (skillsSnapshot?.librarySelections?.length) {
       const selectedNames = new Set(skillsSnapshot.skills.map((skill) => skill.name));
       const selectedEntries = await prepareSkillLibrarySelection(
@@ -331,7 +340,7 @@ export async function syncWorkspaceSkills(params: {
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
     for (const child of children) {
-      if (child !== ".gitignore" && !preservedDestinations.has(child)) {
+      if (!preservedDestinations.has(child)) {
         const stat = await fsp.lstat(path.join(targetSkillsDir, child));
         assertCurrent?.();
         if (stat.isDirectory()) {

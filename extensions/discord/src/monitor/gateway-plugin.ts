@@ -256,7 +256,7 @@ function createGatewayPlugin(params: {
         }).catch(() => {});
       };
       captureEvent(() => ({ direction: "local", kind: "ws-open" }));
-      socket.on("message", (data: unknown) => {
+      socket.on?.("message", (data: unknown) => {
         emitTransportActivity();
         captureEvent(() => ({
           direction: "inbound",
@@ -264,7 +264,8 @@ function createGatewayPlugin(params: {
           payload: Buffer.isBuffer(data) ? data : Buffer.from(String(data)),
         }));
       });
-      socket.on("close", (code: number, closeReason: Buffer) => {
+      socket.on?.("close", (code: number, reason: Buffer) => {
+        const closeReason = Buffer.isBuffer(reason) ? reason : Buffer.from(String(reason ?? ""));
         captureEvent(() => ({
           direction: "local",
           kind: "ws-close",
@@ -288,7 +289,7 @@ function createGatewayPlugin(params: {
           );
         }
       });
-      socket.on("error", (error: Error) => {
+      socket.on?.("error", (error: Error) => {
         lastTransportError = describeDiscordGatewayTransportError(error);
         captureEvent(() => ({
           direction: "local",
@@ -301,7 +302,13 @@ function createGatewayPlugin(params: {
           ),
         );
       });
-      socket.binaryType = "arraybuffer";
+      if ("binaryType" in socket) {
+        try {
+          socket.binaryType = "arraybuffer";
+        } catch {
+          // Ignore runtimes that expose a readonly binaryType.
+        }
+      }
       return socket;
     }
   }

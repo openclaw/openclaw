@@ -229,21 +229,17 @@ it("counts caller-visible conversations once through direct and delegated work b
         ownerSessionCounts: expected(8, 1),
       });
       clearAgentRunContext(runIds[0]);
-      const completedChild = createSubagentRunRecord({
-        ...childRun,
-        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
-      });
-      subagentRuns.set(completedChild.runId, completedChild);
-      subagentRuns.commitOwnership(completedChild);
+      childRun.execution = { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } };
+      subagentRuns.commitOwnership(childRun);
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(8, 1),
       });
-      const completedGrandchild = createSubagentRunRecord({
-        ...grandchildRun,
-        execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
-      });
-      subagentRuns.set(completedGrandchild.runId, completedGrandchild);
-      subagentRuns.commitOwnership(completedGrandchild);
+      grandchildRun.execution = {
+        status: "terminal",
+        endedAt: Date.now(),
+        outcome: { status: "ok" },
+      };
+      subagentRuns.commitOwnership(grandchildRun);
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(8, 0),
       });

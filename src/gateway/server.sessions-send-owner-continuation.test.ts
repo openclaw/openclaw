@@ -10,7 +10,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import { prepareAgentCommandExecutionIdentity } from "../agents/agent-command-execution-identity.js";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import { buildAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
 import type { AgentCommandGatewayIngressOpts } from "../agents/command/types.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -296,7 +296,6 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
         }
         text = "parent complete";
       }
-      const { terminalReply } = prepareAgentRunTerminalReply({ rawText: text });
       emitAgentEvent({
         runId,
         stream: "lifecycle",
@@ -304,14 +303,14 @@ it.for(["success", "child error", "owner revoked", "owner reassigned", "new user
           phase: "end",
           startedAt: 1,
           endedAt: Date.now(),
-          terminalReply,
+          terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
         },
       });
       return {
         payloads: [{ text, mediaUrl: null }],
         meta: {
           durationMs: 1,
-          terminalReply,
+          terminalReply: buildAgentRunTerminalReplySnapshot({ visibleText: text, rawText: text }),
         },
       };
     });

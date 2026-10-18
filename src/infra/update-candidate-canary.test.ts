@@ -283,7 +283,7 @@ describe("update candidate canary", () => {
     },
   );
 
-  it.each([true])(
+  it.each([false, true])(
     "identifies legacy Doctor writes even if later validation fails (%s)",
     async (failsValidation) => {
       runtimeError = failsValidation;

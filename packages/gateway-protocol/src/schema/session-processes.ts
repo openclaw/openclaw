@@ -2,7 +2,6 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export const SESSION_PROCESSES_MAX_ROWS = 50;
 export const SESSION_PROCESS_NAME_MAX_CHARS = 160;
@@ -14,7 +13,12 @@ export const SessionProcessSummarySchema = closedObject({
   processId: NonEmptyString,
   instanceId: NonEmptyString,
   name: Type.String({ maxLength: SESSION_PROCESS_NAME_MAX_CHARS }),
-  status: stringLiteralUnion(["running", "completed", "failed", "killed"]),
+  status: Type.Union([
+    Type.Literal("running"),
+    Type.Literal("completed"),
+    Type.Literal("failed"),
+    Type.Literal("killed"),
+  ]),
   startedAt: Type.Number(),
   endedAt: Type.Optional(Type.Number()),
   tail: Type.String({ maxLength: SESSION_PROCESS_TAIL_MAX_CHARS }),

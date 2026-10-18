@@ -616,6 +616,34 @@ describe("createComputerTool node resolution", () => {
     },
   );
 
+  it("resolves and executes on a capable non-Mac node", async () => {
+    const platform = "windows";
+    const nodeId = `${platform}-1`;
+    listNodesMock.mockResolvedValue([
+      {
+        nodeId,
+        displayName: `${platform} desktop`,
+        platform,
+        connected: true,
+        commands: ["computer.act", "screen.snapshot"],
+      },
+    ]);
+    callGatewayToolMock.mockImplementation(async (_method, _opts, body) =>
+      (body as { command?: string }).command === "computer.act"
+        ? { payload: { ok: true } }
+        : screenshotPayload(),
+    );
+    const tool = createComputerTool();
+
+    await expect(tool.execute("call", { action: "type", text: "hello" })).resolves.toBeDefined();
+    expect(callGatewayToolMock).toHaveBeenCalledWith(
+      "node.invoke",
+      expect.anything(),
+      expect.objectContaining({ nodeId, command: "computer.act" }),
+      { signal: undefined },
+    );
+  });
+
   it.each([
     {
       name: "no computer-capable node is connected",
@@ -699,8 +727,8 @@ describe("createComputerTool node resolution", () => {
     );
   });
 
-  it("prepares blank selectors before validation and resolves a capable Windows node", async () => {
-    listNodesMock.mockResolvedValue([macComputerNode({ platform: "windows" })]);
+  it("prepares blank selectors before validation and reaches the same node as omitted selectors", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
     callGatewayToolMock.mockResolvedValue(screenshotPayload());
     for (const selectors of [
       {},
@@ -722,5 +750,17 @@ describe("createComputerTool node resolution", () => {
         { signal: undefined },
       );
     }
+  });
+
+  it("leaves nonblank invalid targets for validation and unknown nodes for resolution", async () => {
+    listNodesMock.mockResolvedValue([macComputerNode()]);
+    const tool = createComputerTool();
+    const invalidTarget = { action: "screenshot", target: "foo" };
+    expect(Value.Check(tool.parameters, tool.prepareArguments?.(invalidTarget))).toBe(false);
+    const unknownNode = { action: "screenshot", node: "unknown-node" };
+    await expect(tool.execute("call", tool.prepareArguments?.(unknownNode))).rejects.toThrow(
+      /unknown node/,
+    );
+    expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 });

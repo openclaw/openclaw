@@ -926,13 +926,13 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
       const lease = vi
         .spyOn(stateLease, "withOpenClawStateLease")
         .mockImplementation((options, run) =>
-          acquire(options, async (owned, identity) => {
+          acquire(options, async (owned) => {
             updateUserGitHubConnection(
               owner(),
               () => current,
               () => owned.assertOwned(),
             );
-            return run(owned, identity);
+            return run(owned);
           }),
         );
       try {

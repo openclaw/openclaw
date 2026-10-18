@@ -1,7 +1,7 @@
 // Discord tests pin guild/channel ScopeTree policy precedence.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { afterEach, describe, expect, it } from "vitest";
-import { setDiscordPolicyBindings } from "./channel-policy-state.js";
+import { setDiscordChannelPolicyBindings } from "./channel-policy-state.js";
 import {
   resolveDiscordGroupRequireMention,
   resolveDiscordGroupToolPolicy,
@@ -13,8 +13,8 @@ function createCfg(discord: Record<string, unknown>): OpenClawConfig {
 
 describe("discord group policy", () => {
   afterEach(() => {
-    setDiscordPolicyBindings("default", []);
-    setDiscordPolicyBindings("work", []);
+    setDiscordChannelPolicyBindings("default", []);
+    setDiscordChannelPolicyBindings("work", []);
   });
 
   it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {
@@ -33,7 +33,9 @@ describe("discord group policy", () => {
         },
       },
     });
-    setDiscordPolicyBindings("default", [{ guildKey: "guild", channelKey, channelId: "246" }]);
+    setDiscordChannelPolicyBindings("default", [
+      { guildKey: "guild", channelKey, channelId: "246" },
+    ]);
     const context = { cfg, groupSpace: "guild", groupChannel: `#${channelKey.replace(/^#/, "")}` };
 
     // A thread or renamed channel can share the display name, but not the resolved id.
@@ -65,7 +67,9 @@ describe("discord group policy", () => {
         channels: { ops: { requireMention: false, tools: { allow: ["exec"] } } },
       },
     };
-    setDiscordPolicyBindings("work", [{ guildKey: "guild", channelKey: "ops", channelId: "246" }]);
+    setDiscordChannelPolicyBindings("work", [
+      { guildKey: "guild", channelKey: "ops", channelId: "246" },
+    ]);
     const context = {
       cfg: createCfg({ guilds, accounts: { work: { guilds } } }),
       groupSpace: "guild",
@@ -81,7 +85,7 @@ describe("discord group policy", () => {
   });
 
   it("prefers an id entry over a matching name entry", () => {
-    setDiscordPolicyBindings("default", [
+    setDiscordChannelPolicyBindings("default", [
       { guildKey: "guild", channelKey: "ops", channelId: "246" },
     ]);
     const context = {

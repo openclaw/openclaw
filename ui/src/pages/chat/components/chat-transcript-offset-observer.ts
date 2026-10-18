@@ -12,6 +12,8 @@ import {
 } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-session.ts";
 
+type TranscriptScrollRenderState = { atEnd: boolean; touchActive: boolean };
+
 /** State shared by native input observation and transcript commands. */
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
@@ -21,7 +23,7 @@ export class TranscriptOffsetState {
     | null = null;
   touching = false;
   touchScrolling = false;
-  renderedTouchActive = false;
+  renderedScrollState = { atEnd: false, touchActive: false };
   maintenanceScrollOffset: number | null = null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null = null;
   syncNativeOffset: (() => void) | null = null;
@@ -30,6 +32,10 @@ export class TranscriptOffsetState {
 
   get touchActive(): boolean {
     return this.touching || this.touchScrolling;
+  }
+
+  renderState(atEnd: boolean): TranscriptScrollRenderState {
+    return { atEnd, touchActive: this.touchActive };
   }
 }
 
@@ -49,12 +55,13 @@ export function isTranscriptProgrammaticScroll(
   state: TranscriptOffsetState,
   element: HTMLDivElement | null,
 ): boolean {
+  // Lit’s listener can precede the offset observer. Read the committed viewport
+  // so the final event publishes settled follow policy.
+  const distanceFromEnd = (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0);
   return (
-    state.pendingScrollOffset !== null ||
     isTranscriptMaintenanceScroll(state, element) ||
-    (state.scrollCommand !== null &&
-      (maxTranscriptScrollOffset(element) ?? 0) - (element?.scrollTop ?? 0) >
-        CHAT_TRANSCRIPT_END_THRESHOLD_PX)
+    state.pendingScrollOffset !== null ||
+    (state.scrollCommand !== null && distanceFromEnd > CHAT_TRANSCRIPT_END_THRESHOLD_PX)
   );
 }
 
@@ -111,7 +118,7 @@ type OffsetOwner = {
   cancelScroll(): void;
   onLayoutCorrection(before: number, after: number): void;
   requestUpdate(): void;
-  onOffset(): void;
+  onOffset(): boolean;
   onReaderScroll(towardEnd?: boolean): void;
   onComposerLayout(changed: boolean): void;
 };
@@ -211,10 +218,12 @@ export function observeTranscriptOffset(
       programmatic,
     });
     callback(offset, scrolling);
-    owner.onOffset();
+    const atEnd = owner.onOffset();
     // Range/isScrolling and pane follow policy already invalidate themselves.
-    // The rail observes offsets directly; only touch-held history needs a pane commit.
-    if (owner.state.touchActive !== owner.state.renderedTouchActive) {
+    // The rail observes offsets directly; only changed lifecycle gates need a pane commit.
+    const rendered = owner.state.renderedScrollState;
+    const current = owner.state.renderState(atEnd);
+    if (current.atEnd !== rendered.atEnd || current.touchActive !== rendered.touchActive) {
       owner.requestUpdate();
     }
   };

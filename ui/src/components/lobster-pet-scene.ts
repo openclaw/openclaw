@@ -193,17 +193,9 @@ export class LobsterComposerGeometry {
     const root = composer?.closest(".new-session-page__draft") ?? composer;
     if (root) {
       this.mutation = new MutationObserver((records) => {
-        // Popup teardown can report descendants after their ancestry is gone.
-        // The attached removal target still records real in-flow geometry changes.
         if (
           records.some(
-            (record) =>
-              record.target.isConnected &&
-              record.target !== this.host &&
-              !this.host.contains(record.target) &&
-              !(
-                record.target instanceof Element ? record.target : record.target.parentElement
-              )?.closest("[popover]"),
+            (record) => record.target !== this.host && !this.host.contains(record.target),
           )
         ) {
           this.scheduleMeasure();
@@ -256,11 +248,9 @@ export class LobsterComposerGeometry {
     }
     const footer = composer.querySelector(".agent-chat__composer-footer");
     const editor = composer.querySelector("textarea");
-    // These boxed groups already protect every footer control. Descendant
-    // buttons include entire hidden catalogs, not additional collision lanes.
     const controls = Array.from(
       footer?.querySelectorAll(
-        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions",
+        ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, [role=button]",
       ) ?? [],
     );
     const root = composer.closest(".new-session-page__draft");

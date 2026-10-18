@@ -1,18 +1,22 @@
 import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
 import type { SolidRouteProps } from "../../app-route-types.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
-import { SessionBackgroundView } from "../../components/session-background-view.tsx";
-import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
+import { renderLazyViewError } from "../../components/lazy-view-error.ts";
+import { renderSessionBackground } from "../../components/session-background-view.ts";
+import "../../components/web-awesome-popover.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { defineSolidBridge } from "../../lit/solid-bridge.ts";
+import { LitContent, solidContent } from "../../lit/solid-content.tsx";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-surface.css";
 import "../../styles/new-session.css";
 import "../../styles/new-session-attachment-panel.css";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
+import type { SidebarContent } from "../chat/components/chat-sidebar-content-types.ts";
+import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationStatus, NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -22,7 +26,6 @@ import { isWorktreeNameValid } from "./create-params.ts";
 import { CreationComposer } from "./creation-composer-render.tsx";
 import { DraftError, NewSessionBody } from "./draft-body.solid.tsx";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
-import { DraftWelcome } from "./draft-welcome.tsx";
 import {
   NewSessionIncognitoControl,
   NewSessionIncognitoNotice,
@@ -187,6 +190,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   };
   // Both draft presentations share one preparation per revision, not one per binding.
   const options = createMemo(() => page().composerOptions());
+  // The retained Lit slot must not republish identical Solid inputs on each
+  // draft edit; the revision accessor already carries the changed state.
+  const draftProps = { page, revision, options };
   createEffect(revision, () =>
     untrack(() => {
       owner.updated();
@@ -211,12 +217,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       owner.submission.setVisibility(visibility),
   };
   const completed = () => page().submission.completedSubmission;
-  const creationComposer = createMemo(() => {
-    const submission = page().submission;
-    const composer = submission.creationComposer;
-    // Rollback restores the initial composer; keep a second one only for retained input.
-    return submission.pendingMessage || composer?.hasInput ? composer : undefined;
-  });
   const userId = () => {
     const identity = page().context?.gateway.snapshot.selfUser?.identity;
     return identity?.type === "profile" ? identity.id : null;
@@ -238,10 +238,6 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     };
   };
   const panel = () => page().attachmentPanel;
-  const panelError = () => {
-    const state = page().attachmentPanelLoader.visibleState;
-    return state?.status === "error" ? state : undefined;
-  };
   const lightbox = () => page().imageLightbox;
   const panelContent = () => {
     const attachment = panel();
@@ -250,15 +246,9 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
   return (
     <>
       <div
-        class={[
-          "new-session-page",
-          {
-            chat: Boolean(page().submission.pendingMessage),
-            "new-session-page--incognito": page().submission.visibility === "incognito",
-          },
-        ]}
+        class={`new-session-page ${page().submission.pendingMessage ? "chat" : ""} ${page().submission.visibility === "incognito" ? "new-session-page--incognito" : ""}`}
       >
-        <SessionBackgroundView context={page().context} surface="new-session" />
+        <LitContent value={renderSessionBackground(page().context, "new-session")} />
         <Show when={!catalog.isTarget(page().data)}>
           <NewSessionIncognitoControl
             submission={visibilityControl}
@@ -281,10 +271,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
             <Show
               when={Boolean(completed())}
               fallback={
-                <DraftWelcome
-                  sessions={page().context?.sessions}
-                  options={page().welcomeOptions()}
-                  composer={<DraftBlock page={page} revision={revision} options={options} />}
+                <LitContent
+                  value={renderWelcomeState({
+                    ...page().welcomeOptions(),
+                    composer: solidContent(DraftBlock, draftProps),
+                  })}
                 />
               }
             >
@@ -294,7 +285,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
           onOpenImage={owner.setImageLightbox}
         />
         <CreationComposer
-          composer={creationComposer()}
+          composer={page().submission.creationComposer}
           onOpenImage={owner.setImageLightbox}
           renderRevision={revision()}
         />
@@ -310,8 +301,7 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
               mediaKind={item().kind ?? "image"}
               gallery={item().gallery}
               connectVideo={item().connectVideo}
-              loadDisplayImage={item().loadDisplayImage}
-              readOriginalBlob={item().readOriginalBlob}
+              loadFullResolution={item().loadFullResolution}
               src={item().src}
               originalSrc={item().originalSrc ?? ""}
               imageTitle={item().title}
@@ -325,21 +315,26 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
       <Show when={panel()}>
         <aside class="new-session-attachment-panel">
           <Show
-            when={panelError()}
+            when={page().attachmentPanelLoader.visibleState?.status === "error"}
             fallback={
               <Show when={page().attachmentPanelLoader.visibleState}>
                 <div role="status">{t("common.loading")}</div>
               </Show>
             }
           >
-            {(state) => (
-              <LazyViewError
-                error={state().error}
-                stale={state().stale}
-                onRetry={() => owner.attachmentPanelLoader.retry()}
-                onClose={owner.closeAttachmentPanel}
-              />
-            )}
+            <LitContent
+              value={(() => {
+                const state = page().attachmentPanelLoader.visibleState;
+                return state?.status === "error"
+                  ? renderLazyViewError({
+                      error: state.error,
+                      stale: state.stale,
+                      onRetry: () => owner.attachmentPanelLoader.retry(),
+                      onClose: owner.closeAttachmentPanel,
+                    })
+                  : undefined;
+              })()}
+            />
           </Show>
           <openclaw-chat-detail-panel
             prop:content={panelContent()}
@@ -373,11 +368,17 @@ defineSolidBridge<
   },
 });
 
+// These hosts remain custom elements so the detail panel keeps its lazy registration.
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-new-session-page": HTMLAttributes<PageHost> & {
         "prop:data"?: NewSessionRouteData | undefined;
+      };
+      "openclaw-chat-detail-panel": HTMLAttributes<
+        HTMLElementTagNameMap["openclaw-chat-detail-panel"]
+      > & {
+        "prop:content"?: SidebarContent | null;
       };
     }
   }

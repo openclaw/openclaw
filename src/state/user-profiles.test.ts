@@ -17,10 +17,8 @@ import {
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
 import { readUserProfileVersion } from "./user-profile-events.js";
-import {
-  getUserProfileListItem,
-  readUserProfileSnapshotSync,
-} from "./user-profile-list-item.test-support.js";
+import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { getUserProfileListItem } from "./user-profile-list-item.test-support.js";
 import { getUserProfileDisplay, prepareUserProfileCatalog } from "./user-profile-list.js";
 import {
   linkEmail,

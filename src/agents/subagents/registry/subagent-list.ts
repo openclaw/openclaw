@@ -73,7 +73,7 @@ export function captureSubagentListReadContext(
   return {
     now,
     recentMinutes,
-    view,
+    view: structuredClone(view),
     childSessionsByController,
     pendingDescendants,
     execution,

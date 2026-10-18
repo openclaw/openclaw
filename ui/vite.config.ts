@@ -5,8 +5,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { brotliCompress, constants as zlibConstants } from "node:zlib";
+import { brotliCompressSync, constants as zlibConstants } from "node:zlib";
 import { gzip } from "pako";
 import {
   runnerImport,
@@ -32,9 +31,9 @@ import {
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
-import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -78,23 +77,21 @@ const controlUiPrecompressedAssetExtensions = new Set([
   ".webmanifest",
 ]);
 
-const compressBrotli = promisify(brotliCompress);
-
-export async function createControlUiPrecompressedAssetVariants(
+export function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
-): Promise<Array<{ fileName: string; source: Buffer }>> {
+): Array<{ fileName: string; source: Buffer }> {
   if (
     !fileName.startsWith("assets/") ||
     !controlUiPrecompressedAssetExtensions.has(path.extname(fileName).toLowerCase())
   ) {
     return [];
   }
-  const body = typeof source === "string" ? Buffer.from(source) : source;
+  const body = typeof source === "string" ? Buffer.from(source) : Buffer.from(source);
   return [
     {
       fileName: `${fileName}.br`,
-      source: await compressBrotli(body, {
+      source: brotliCompressSync(body, {
         params: { [zlibConstants.BROTLI_PARAM_QUALITY]: 9 },
       }),
     },
@@ -560,19 +557,13 @@ export async function refreshControlUiBuildOutput(
   fs.writeFileSync(swPath, updated);
 }
 
-function controlUiBuildOutputPlugin(
-  buildInfo: ControlUiBuildInfo,
-  copiedInputs: Set<string>,
-): Plugin {
+function controlUiBuildOutputPlugin(buildInfo: ControlUiBuildInfo): Plugin {
   let publicDir: string | false = false;
   return {
     name: "control-ui-build-output",
     apply: "build",
     configResolved(config) {
       publicDir = (config.build.copyPublicDir && config.publicDir) || false;
-      for (const file of config.configFileDependencies) {
-        copiedInputs.add(file);
-      }
     },
     transformIndexHtml: {
       order: "post",
@@ -595,14 +586,14 @@ function controlUiBuildOutputPlugin(
       let sidecars = 0;
       let lastProgressAt = performance.now();
       logger.info("Control UI precompression: starting");
-      const compressAsset = async (output: (typeof bundle)[string]) => {
+      for (const output of Object.values(bundle)) {
         // Vite's post-build import analysis rewrites lazy preload markers in a
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
         const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        const variants = await createControlUiPrecompressedAssetVariants(output.fileName, source);
+        const variants = createControlUiPrecompressedAssetVariants(output.fileName, source);
         if (variants.length === 0) {
-          return;
+          continue;
         }
         for (const variant of variants) {
           fs.writeFileSync(path.join(buildOutDir, variant.fileName), variant.source);
@@ -618,21 +609,9 @@ function controlUiBuildOutputPlugin(
           );
           lastProgressAt = now;
         }
-      };
-      const outputs = Object.values(bundle);
-      for (let index = 0; index < outputs.length; index += 4) {
-        // Bound native compression memory and join every writer before failed-build cleanup.
-        const results = await Promise.allSettled(
-          outputs.slice(index, index + 4).map(compressAsset),
-        );
-        for (const result of results) {
-          if (result.status === "rejected") {
-            throw result.reason;
-          }
-        }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
+      const inputs = [...this.getModuleIds()]
         .map((file) => file.split("?")[0])
         .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
         .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
@@ -698,7 +677,6 @@ export default function controlUiViteConfig(
       ? createControlUiDevGateway(process.env.OPENCLAW_UI_DEV_GATEWAY_URL)
       : undefined;
   const staticImports = new Map<string, readonly string[]>();
-  const copiedInputs = new Set<string>();
   const resolveModulePreloadDependencies: ResolveModulePreloadDependenciesFn = (
     filename,
     deps,
@@ -740,7 +718,7 @@ export default function controlUiViteConfig(
     publicDir: path.resolve(here, "public"),
     css: {
       postcss: {
-        plugins: [controlUiHoverGuardPlugin()],
+        plugins: [controlUiHoverGuardPlugin(), controlUiWebAwesomePageRulePlugin()],
       },
     },
     optimizeDeps: {
@@ -800,9 +778,8 @@ export default function controlUiViteConfig(
       },
       controlUiSocialCardPlugin(),
       controlUiLocaleModulesPlugin(),
-      controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
-      controlUiBuildOutputPlugin(buildInfo, copiedInputs),
+      controlUiBuildOutputPlugin(buildInfo),
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {

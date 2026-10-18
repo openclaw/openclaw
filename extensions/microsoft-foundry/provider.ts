@@ -64,10 +64,16 @@ function normalizeFoundryModel<
   capabilities: ReturnType<typeof resolveFoundryModelCapabilities>,
   preserveExplicitReasoningEffort: boolean,
 ) {
-  const explicitSupportsReasoningEffort = model.compat?.supportsReasoningEffort;
+  const explicitSupportsReasoningEffort =
+    typeof model.compat?.supportsReasoningEffort === "boolean"
+      ? model.compat.supportsReasoningEffort
+      : undefined;
   const explicitMaxTokensField =
-    model.compat?.maxTokensField ??
-    (preserveExplicitReasoningEffort ? "max_completion_tokens" : undefined);
+    typeof model.compat?.maxTokensField === "string"
+      ? model.compat.maxTokensField
+      : preserveExplicitReasoningEffort
+        ? "max_completion_tokens"
+        : undefined;
   return {
     ...model,
     name: capabilities.modelName,
@@ -113,7 +119,7 @@ export function buildMicrosoftFoundryProvider(): ProviderPlugin {
         !providers ||
         !providerConfig ||
         !providerConfig.baseUrl?.trim() ||
-        !providerConfig.models ||
+        !Array.isArray(providerConfig.models) ||
         !ctx.model.startsWith(`${PROVIDER_ID}/`)
       ) {
         return;

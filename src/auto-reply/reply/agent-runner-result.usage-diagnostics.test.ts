@@ -3,6 +3,7 @@ import {
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { createReplyOperation } from "./reply-run-registry.js";
@@ -62,10 +63,9 @@ it("emits usage diagnostics for a deliberate silent reply", async () => {
       kind: "settled",
       status: "ok",
       result: {
-        payloads: [],
+        payloads: [{ text: SILENT_REPLY_TOKEN }],
         meta: {
           durationMs: 1,
-          terminalReply: { disposition: "silent" },
           agentMeta: {
             sessionId,
             provider: "openai",

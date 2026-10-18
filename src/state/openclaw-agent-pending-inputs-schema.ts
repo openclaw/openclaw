@@ -45,7 +45,7 @@ export const ensureSessionInputCompletionsSchema = createSqliteSchemaEnsurer(
   { tables: [SESSION_INPUT_COMPLETIONS_TABLE] },
 );
 
-function ensurePendingInputConsumptionColumn(db: DatabaseSync): void {
+export function ensurePendingInputConsumptionColumn(db: DatabaseSync): void {
   ensureColumn(db, SESSION_PENDING_INPUTS_TABLE, "consumed_event_id TEXT");
 }
 

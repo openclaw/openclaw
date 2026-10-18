@@ -412,7 +412,7 @@ it.for([
         ownsAdmittedInstance: true,
         hasDelegatedAuthority: true,
         isControlUiVisible: true,
-        terminalReplyExpectation: "result-required",
+        terminalReplyExpectation: "required",
         injectionVersion: 2,
         supportsTranscriptCommitWait: true,
       });

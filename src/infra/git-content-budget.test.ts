@@ -103,17 +103,7 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
       runGitWorkerOperation(
         {
           type: "pull-request.branch-facts",
-          input: {
-            root: "canceled",
-            branch: "main",
-            mergedHeads: [],
-            comparison: {
-              statsBase: null,
-              creatable: false,
-              equalPushedTips: false,
-              complete: true,
-            },
-          },
+          input: { root: "canceled", branch: "main", mergedHeads: [] },
         },
         { git: gitCommands, signal: abortQueued.signal },
       ),

@@ -21,11 +21,7 @@ let cacheEpochMs = Date.now();
 function localGitReads() {
   return vi
     .mocked(runGitWorkerOperation)
-    .mock.calls.filter(
-      ([operation]) =>
-        operation.type !== "checkout.revision" &&
-        operation.type !== "pull-request.branch-comparison",
-    );
+    .mock.calls.filter(([operation]) => operation.type !== "checkout.revision");
 }
 
 beforeEach(() => {
@@ -51,9 +47,6 @@ describe("watched session PR retention", () => {
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
-      if (operation.type === "pull-request.branch-comparison") {
-        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      }
       if (operation.type === "checkout.revision") {
         return revision;
       }
@@ -234,9 +227,6 @@ describe("watched session PR retention", () => {
     ]);
     const signals = new Set<AbortSignal>();
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
-      if (operation.type === "pull-request.branch-comparison") {
-        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      }
       if (operation.type === "checkout.revision") {
         return "unchanged";
       }
@@ -322,9 +312,6 @@ describe("watched session PR retention", () => {
       { match: "/repos/openclaw/openclaw", response: () => githubJson({ fork: false }) },
     ]);
     vi.mocked(runGitWorkerOperation).mockImplementation(async (operation) => {
-      if (operation.type === "pull-request.branch-comparison") {
-        return { statsBase: null, creatable: false, equalPushedTips: false, complete: true };
-      }
       if (operation.type === "checkout.revision") {
         return branch;
       }

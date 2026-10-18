@@ -324,13 +324,26 @@ function isWithinCollapseWindow(operationAt: number, configAt: number): boolean 
   return delay >= 0 && delay <= COLLAPSE_MAX_DELAY_MS;
 }
 
-function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCandidate): boolean {
+function appendPendingCollapse(
+  pending: readonly PendingCollapse[],
+  marker: PendingCollapse,
+): PendingCollapse[] {
+  const next = [...pending, marker];
+  // Keep the cursor bounded. A dropped marker can reveal a rare duplicate
+  // config-write row, but never hides a newer visible history entry.
+  return next.length <= MAX_PENDING_COLLAPSES ? next : next.slice(-MAX_PENDING_COLLAPSES);
+}
+
+function consumePendingCollapse(
+  pending: readonly PendingCollapse[],
+  candidate: ChangeCandidate,
+): { pending: PendingCollapse[]; suppressed: boolean } {
   if (
     candidate.entry.kind !== "config-write" ||
     candidate.entry.source !== "system-agent" ||
     !candidate.transition
   ) {
-    return false;
+    return { pending: [...pending], suppressed: false };
   }
   const sequence = candidate.position.sequence;
   let markerIndex = -1;
@@ -348,10 +361,12 @@ function consumePendingCollapse(pending: PendingCollapse[], candidate: ChangeCan
     }
   }
   if (markerIndex < 0) {
-    return false;
+    return { pending: [...pending], suppressed: false };
   }
-  pending.splice(markerIndex, 1);
-  return true;
+  return {
+    pending: pending.filter((_, index) => index !== markerIndex),
+    suppressed: true,
+  };
 }
 
 function mergeCandidates(params: {
@@ -371,7 +386,7 @@ function mergeCandidates(params: {
   let configIndex = 0;
   let systemBefore: number | undefined;
   let configBefore: number | undefined;
-  const pendingCollapse = [...params.pendingCollapse];
+  let pendingCollapse = [...params.pendingCollapse];
   const entries: ChangeCandidate[] = [];
 
   while (true) {
@@ -387,10 +402,14 @@ function mergeCandidates(params: {
       break;
     }
 
-    if (next === config && consumePendingCollapse(pendingCollapse, config)) {
-      configBefore = config.position.sequence;
-      configIndex += 1;
-      continue;
+    if (next === config) {
+      const collapse = consumePendingCollapse(pendingCollapse, config);
+      pendingCollapse = collapse.pending;
+      if (collapse.suppressed) {
+        configBefore = config.position.sequence;
+        configIndex += 1;
+        continue;
+      }
     }
     if (entries.length >= params.limit) {
       break;
@@ -401,11 +420,7 @@ function mergeCandidates(params: {
       systemBefore = system.position.sequence;
       systemIndex += 1;
       if (system.pendingCollapse) {
-        pendingCollapse.push(system.pendingCollapse);
-        // Dropped markers can reveal duplicate config rows, never hide newer history.
-        if (pendingCollapse.length > MAX_PENDING_COLLAPSES) {
-          pendingCollapse.shift();
-        }
+        pendingCollapse = appendPendingCollapse(pendingCollapse, system.pendingCollapse);
       }
     } else {
       configBefore = config!.position.sequence;

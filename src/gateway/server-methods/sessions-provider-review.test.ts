@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import {
   readProviderReviewAcknowledgment,
   retireProviderReviewAcknowledgment,
@@ -152,7 +151,6 @@ describe("registered provider review continuation", () => {
       deliver: false,
     });
     expect(readProviderReviewAcknowledgment(acknowledgment).review.id).toBe("review-a");
-    await loadOrCreateProcessDeviceIdentityAsync();
     const normalized = await normalizeChatSendRequest({
       params: chatOptions.params,
       client: chatOptions.client,

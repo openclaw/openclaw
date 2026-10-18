@@ -194,16 +194,7 @@ describe("cron model schema regressions", () => {
       "systemEvent",
       "agentTurn",
     ]);
-    for (const key of [
-      "command",
-      "cwd",
-      "mode",
-      "match",
-      "batchMs",
-      "maxBatchBytes",
-      "source",
-      "options",
-    ]) {
+    for (const key of ["command", "cwd", "mode", "match", "batchMs", "maxBatchBytes"]) {
       expect(propertyAt(disabled.parameters, `job.schedule.${key}`)).toBeUndefined();
     }
     for (const key of ["script", "toolBudget"]) {
@@ -213,7 +204,6 @@ describe("cron model schema regressions", () => {
     expect(disabled.description).toContain("say it is unsupported");
     expect(disabled.description).not.toContain("TRIGGER (condition watcher");
     expect(disabled.description).not.toContain('kind:"stream"');
-    expect(disabled.description).not.toContain('kind:"event"');
     expect(disabled.description).not.toContain('kind:"script"');
   });
 

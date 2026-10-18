@@ -83,18 +83,6 @@ export function createPluginApprovalHandlers(
       const reject = (message: string) =>
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       const p = params;
-      const hostApprovalOwnerId = normalizeOptionalString(
-        client?.internal?.pluginApprovalRequestOwnerId,
-      );
-      const claimedPluginId = normalizeOptionalString(p.pluginId);
-      if (hostApprovalOwnerId && claimedPluginId && claimedPluginId !== hostApprovalOwnerId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "plugin approval owner does not match host"),
-        );
-        return;
-      }
       const twoPhase = p.twoPhase === true;
       const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
       const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
@@ -164,10 +152,7 @@ export function createPluginApprovalHandlers(
       };
       const turnSource = trustedAgentRuntime ?? p;
       const request: PluginApprovalRequestPayload = {
-        pluginId:
-          trustedAgentRuntime?.approvalOwnerPluginId ??
-          hostApprovalOwnerId ??
-          sanitizeMeta(p.pluginId),
+        pluginId: trustedAgentRuntime?.approvalOwnerPluginId ?? sanitizeMeta(p.pluginId),
         title: sanitizedTitle,
         description: sanitizedDescription,
         scope: p.scope ? sanitizeApprovalScope(p.scope) : null,
@@ -221,7 +206,7 @@ export function createPluginApprovalHandlers(
         record.executionIdentityToken = trustedAgentRuntime.executionIdentity;
       }
       bindApprovalRequesterMetadata({ record, client });
-      if (client?.internal?.approvalRuntime === true || hostApprovalOwnerId) {
+      if (client?.internal?.approvalRuntime === true) {
         bindApprovalReviewerDeviceIds({
           record,
           deviceIds: p.approvalReviewerDeviceIds,

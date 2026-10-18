@@ -1,14 +1,12 @@
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
-import {
-  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
-  type SsrFPolicy,
-} from "openclaw/plugin-sdk/ssrf-runtime";
-import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runChannelProbe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { resolveValidatedMatrixHomeserverUrl } from "./client/url-validation.js";
-import { resolveMatrixLocalTimeoutMs } from "./sdk/client-support.js";
+
+const loadMatrixProbeRuntimeDeps = createLazyRuntimeModule(() => import("./client.js"));
 
 export type MatrixProbe = BaseProbeResult & {
   status?: number | null;
@@ -41,33 +39,30 @@ export async function probeMatrix(params: {
       if (!params.accessToken?.trim()) {
         return { ...result, error: "missing access token" };
       }
+      const { createMatrixClient } = await loadMatrixProbeRuntimeDeps();
       const inputUserId = normalizeOptionalString(params.userId);
-      const homeserver = await resolveValidatedMatrixHomeserverUrl(params.homeserver, {
-        dangerouslyAllowPrivateNetwork: params.allowPrivateNetwork,
-      });
-      const { MatrixAuthedHttpClient } = await import("./sdk/http-client.js");
-      const client = new MatrixAuthedHttpClient({
-        homeserver,
+      const client = await createMatrixClient({
+        homeserver: params.homeserver,
+        // A seeded userId makes getUserId() a local getter; probes must force whoami auth.
+        userId: undefined,
         accessToken: params.accessToken,
-        ssrfPolicy:
-          params.ssrfPolicy ??
-          ssrfPolicyFromDangerouslyAllowPrivateNetwork(params.allowPrivateNetwork),
+        deviceId: params.deviceId,
+        persistStorage: false,
+        localTimeoutMs: params.timeoutMs,
+        accountId: params.accountId,
+        allowPrivateNetwork: params.allowPrivateNetwork,
+        ssrfPolicy: params.ssrfPolicy,
         dispatcherPolicy: params.dispatcherPolicy,
       });
-      const identity = await client.requestJson({
-        method: "GET",
-        endpoint: "/_matrix/client/v3/account/whoami",
-        timeoutMs: resolveMatrixLocalTimeoutMs(params.timeoutMs),
-      });
-      const userId =
-        isRecord(identity) && typeof identity.user_id === "string" ? identity.user_id.trim() : "";
-      if (!userId) {
-        throw new Error("Matrix whoami did not return user_id");
+      try {
+        const userId = await client.getUserId();
+        if (inputUserId && inputUserId !== userId) {
+          return { ...result, error: "Matrix access token user does not match configured userId" };
+        }
+        return { ...result, ok: true, userId };
+      } finally {
+        await client.stopWithoutPersist();
       }
-      if (inputUserId && inputUserId !== userId) {
-        return { ...result, error: "Matrix access token user does not match configured userId" };
-      }
-      return { ...result, ok: true, userId };
     },
     (error) => ({
       ok: false,

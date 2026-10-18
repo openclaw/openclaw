@@ -17,7 +17,6 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import { runCronCommandJob } from "./command-runner.js";
-import { normalizeCronJobPatch } from "./normalize.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import type { CronEvent } from "./service.js";
@@ -121,9 +120,7 @@ async function createCommandWebhook(
     async () => {},
   );
   const enqueueSystemEvent = vi.fn();
-  const clock = createGatewaySchedulerClock(Date.now());
   const cron = createService(storePath, {
-    scheduler: createTestGatewayScheduler(clock.clock),
     sendCronFailureAlert,
     runCronFailureRepair,
     enqueueSystemEvent,
@@ -156,7 +153,6 @@ async function createCommandWebhook(
     delivery: { mode: "webhook", to: `http://127.0.0.1:${address.port}/hook` },
   });
   return {
-    clock,
     cron,
     job,
     requests,
@@ -378,56 +374,6 @@ describe("CronService persists delivered status", () => {
           runningAtMs: undefined,
         });
         expect(cron.getJob(job.id)?.state.lastDeliveryError).toContain(diagnostic);
-      } finally {
-        await close();
-      }
-    },
-  );
-
-  it.each([0, 9])(
-    "counts a completed core failure after webhook cancellation with %s prior failures",
-    async (consecutiveErrors) => {
-      const { clock, cron, job, requestBody, finished, sendCronFailureAlert, close } =
-        await createCommandWebhook({
-          timeoutSeconds: 0,
-          runCommandJob: async () => ({
-            status: "error",
-            error: "command exited with code 1",
-            ...(consecutiveErrors === 0
-              ? { errorClassification: { kind: "permanent" as const } }
-              : {}),
-          }),
-        });
-      try {
-        await cron.update(job.id, {
-          state: { consecutiveErrors },
-          failureAlert: { after: 1, channel: "telegram", to: "123" },
-        });
-        clock.setTime(job.state.nextRunAtMs!);
-        const run = cron.run(job.id, "due");
-        expect(JSON.parse(await requestBody)).toMatchObject({
-          status: "error",
-          error: "command exited with code 1",
-        });
-        expect(abortActiveCronTaskRuns("Cancelled during webhook delivery.")).toBe(1);
-        await run;
-        expect(await finished).toMatchObject({
-          status: "error",
-          error: "command exited with code 1",
-          deliveryStatus: "unknown",
-        });
-        const updated = await cron.readJob(job.id);
-        expect(updated?.state.consecutiveErrors).toBe(consecutiveErrors + 1);
-        expect(updated?.state.lastDeliveryError).toContain("Cancelled during webhook delivery.");
-        expect(updated?.enabled).toBe(consecutiveErrors === 0);
-        if (consecutiveErrors === 9) {
-          expect(updated?.state.autoDisabled).toMatchObject({
-            reason: "consecutive-failures",
-            consecutiveErrors: 10,
-          });
-        } else {
-          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-        }
       } finally {
         await close();
       }
@@ -716,11 +662,11 @@ describe("cron payload conversion", () => {
         toolsAllow: ["read"],
       });
 
-      expect(() =>
-        normalizeCronJobPatch({
-          payload: { kind: "command", argv: ["echo"], env: null },
+      await expect(
+        cron.update(job.id, {
+          payload: { kind: "command", argv: ["echo"], env: null as never },
         }),
-      ).toThrow("command env");
+      ).rejects.toThrow("command env");
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual({
         kind: "agentTurn",
         message: "after",

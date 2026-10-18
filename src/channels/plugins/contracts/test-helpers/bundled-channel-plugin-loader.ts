@@ -6,11 +6,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { listBundledChannelPluginMetadata } from "../../../../plugins/bundled-channel-runtime.js";
 import {
   loadBundledPluginFacade,
   resolveBundledPluginPublicModulePath,
 } from "../../../../test-utils/bundled-plugin-public-surface.js";
+import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } from "../../bundled.js";
 import type { ChannelId } from "../../channel-id.types.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 
@@ -218,10 +218,7 @@ async function resolveBundledChannelPluginFromSurface(
 }
 
 export function listBundledChannelPluginIds(): readonly ChannelId[] {
-  return listBundledChannelPluginMetadata()
-    .filter((metadata) => (metadata.manifest.channels?.length ?? 0) > 0)
-    .map((metadata) => metadata.manifest.id)
-    .toSorted((left, right) => left.localeCompare(right));
+  return listCatalogBundledChannelPluginIds() as ChannelId[];
 }
 
 /** Returns a bundled channel plugin from its generated public API artifact. */

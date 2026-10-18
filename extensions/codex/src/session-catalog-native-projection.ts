@@ -11,9 +11,28 @@ import {
   truncateCodexCatalogPreview,
 } from "./session-catalog-parsing.js";
 import { copyCodexCatalogSource } from "./session-catalog-source.js";
-import type { CodexCatalogNativePage, CodexCatalogNativeThread } from "./session-catalog-types.js";
 
 export const CODEX_CATALOG_NATIVE_PAGE_LIMIT = 64;
+type CodexCatalogNativeThread = Pick<
+  CodexThread,
+  | "id"
+  | "projectId"
+  | "sessionId"
+  | "ephemeral"
+  | "name"
+  | "cwd"
+  | "modelProvider"
+  | "cliVersion"
+  | "path"
+  | "originator"
+  | "createdAt"
+  | "updatedAt"
+  | "recencyAt"
+  | "preview"
+  | "source"
+  | "gitInfo"
+  | "status"
+>;
 export type CodexCatalogPreviewCache = (
   thread: Pick<CodexThread, "id" | "path" | "updatedAt" | "recencyAt">,
 ) => string | undefined;
@@ -134,7 +153,7 @@ export function projectCodexCatalogNativeResponse(
   sanitize: typeof sanitizeTerminalText,
   cachedPreview?: CodexCatalogPreviewCache,
   remainingRows = CODEX_CATALOG_NATIVE_PAGE_LIMIT,
-): CodexCatalogNativePage {
+): JsonObject {
   if (!Array.isArray(response.data) || response.data.length > CODEX_CATALOG_NATIVE_PAGE_LIMIT) {
     throw new Error("Codex catalog response exceeds its native page limit");
   }
@@ -144,7 +163,7 @@ export function projectCodexCatalogNativeResponse(
   const data = response.data
     .slice(0, limit)
     .map((thread) => projectCodexCatalogNativeThread(thread, sanitize, cachedPreview));
-  const page: CodexCatalogNativePage = { data };
+  const page: JsonObject = { data };
   for (const field of ["nextCursor", "backwardsCursor"] as const) {
     const value = response[field];
     if (value === null) {
@@ -167,9 +186,9 @@ export function reuseCodexCatalogPreview(
 ): string | undefined {
   const preview = cachedPreview?.({
     id: thread.id,
-    path: thread.path ?? null,
-    updatedAt: thread.updatedAt ?? null,
-    recencyAt: thread.recencyAt ?? null,
+    path: typeof thread.path === "string" ? thread.path : null,
+    updatedAt: typeof thread.updatedAt === "number" ? thread.updatedAt : null,
+    recencyAt: typeof thread.recencyAt === "number" ? thread.recencyAt : null,
   });
   return preview !== undefined &&
     preview.length <= 500 &&

@@ -130,8 +130,8 @@ export async function resolveApprovedWorkerModel(params: ResolveApprovedWorkerMo
     if (!approved) {
       return undefined;
     }
-    const { lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy } = approved;
-    const sessionEntry = { ...approved.sessionEntry };
+    const { sessionEntry, lifecycleConfig, agentDir, workspaceDir, resolved, harnessPolicy } =
+      approved;
     const agentRuntimeId =
       harnessPolicy.runtimeSource !== "implicit" ||
       lifecycleConfig.plugins?.entries?.codex?.enabled === true

@@ -26,6 +26,7 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import type { TelegramCommandDispatch } from "./bot-native-command-dispatch.js";
 import { buildTelegramRoutingTarget } from "./bot/helpers.js";
 
@@ -190,7 +191,9 @@ export async function executeTelegramLoginCommand(params: {
         }),
       });
       const loginResult = await runProviderChannelLoginFlow({
-        runLoginFlow: dispatch.telegramDeps.runModelsAuthLoginFlow,
+        runLoginFlow:
+          dispatch.telegramDeps.runModelsAuthLoginFlow ??
+          defaultTelegramNativeCommandDeps.runModelsAuthLoginFlow,
         choice: loginChoice,
         agentId: dispatch.route.agentId,
         config: dispatch.runtimeCfg,

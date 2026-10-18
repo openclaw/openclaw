@@ -386,9 +386,9 @@ describe("sendMessage", () => {
         },
       },
       {
-        name: "prepared literal NO_REPLY",
+        name: "exact NO_REPLY",
         content: "NO_REPLY",
-        expectedPayloads: [{ text: "NO_REPLY", mediaUrl: null, mediaUrls: [] }],
+        expectedPayloads: [],
         expectedMirror: {
           text: "NO_REPLY",
           mediaUrls: undefined,
@@ -397,18 +397,9 @@ describe("sendMessage", () => {
       {
         name: "JSON NO_REPLY",
         content: '{\n  "action": "NO_REPLY"\n}',
-        expectedPayloads: [{ text: '{\n  "action": "NO_REPLY"\n}', mediaUrl: null, mediaUrls: [] }],
+        expectedPayloads: [],
         expectedMirror: {
           text: '{\n  "action": "NO_REPLY"\n}',
-          mediaUrls: undefined,
-        },
-      },
-      {
-        name: "quoted NO_REPLY",
-        content: '"NO_REPLY"',
-        expectedPayloads: [{ text: '"NO_REPLY"', mediaUrl: null, mediaUrls: [] }],
-        expectedMirror: {
-          text: '"NO_REPLY"',
           mediaUrls: undefined,
         },
       },
@@ -418,7 +409,7 @@ describe("sendMessage", () => {
         mediaUrl: "https://example.com/c.png",
         expectedPayloads: [
           {
-            text: "NO_REPLY",
+            text: "",
             mediaUrl: "https://example.com/c.png",
             mediaUrls: ["https://example.com/c.png"],
           },

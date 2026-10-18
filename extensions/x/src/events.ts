@@ -1,5 +1,4 @@
 import { nextTick } from "node:process";
-import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   XApiError,
@@ -135,10 +134,25 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
   }
 }
 
+function wait(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted();
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error("X event source aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+
 export async function waitForXBudgetReset(until: number, signal: AbortSignal): Promise<void> {
   while (Date.now() < until) {
     // A billing-cycle pause can exceed the maximum delay accepted by setTimeout.
-    await sleepWithAbort(until - Date.now(), signal);
+    await wait(Math.min(until - Date.now(), 2_147_483_647), signal);
   }
   signal.throwIfAborted();
 }
@@ -338,7 +352,7 @@ async function receiveStream(
         if (drainRequested) {
           return;
         }
-        await sleepWithAbort(backfillMs, signal);
+        await wait(backfillMs, signal);
         if (signal.aborted || drainRequested) {
           return;
         }
@@ -518,7 +532,7 @@ export async function runXEvents(
           options.onStatus?.({ message: "mentions poll failed; retrying after the poll interval" });
         }
         const pollWait = Math.max(15, options.pollSeconds ?? 60) * 1000;
-        await sleepWithAbort(
+        await wait(
           streamPausedUntil > Date.now()
             ? Math.min(pollWait, streamPausedUntil - Date.now())
             : pollWait,
@@ -542,7 +556,7 @@ export async function runXEvents(
           streamBackoffMs: backoffMs,
           message: "activity stream reconnect backoff",
         });
-        await sleepWithAbort(backoffMs, options.signal);
+        await wait(backoffMs, options.signal);
         backoffMs = Math.min(backoffMs * 2, 60_000);
       }
     }

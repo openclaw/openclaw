@@ -1,7 +1,8 @@
+import { render } from "lit";
 import { describe, expect, it } from "vitest";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { GroupedMessage } from "./chat-message-bubble-view.tsx";
+import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender } from "./chat-message-markdown.ts";
 import { StreamGroupParts } from "./chat-message-stream-view.tsx";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
@@ -52,15 +53,13 @@ describe("GitHub reference presentation parity", () => {
           { container },
         );
       } else {
-        mountSolid(
-          () => (
-            <GroupedMessage
-              preparation={prepareChatMessageRender(message)}
-              messageKey="reply"
-              options={{ ...context, isStreaming: false, showReasoning: false }}
-            />
-          ),
-          { container },
+        render(
+          renderGroupedMessage(prepareChatMessageRender(message), "reply", {
+            ...context,
+            isStreaming: false,
+            showReasoning: false,
+          }),
+          container,
         );
       }
       expect(

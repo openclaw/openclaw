@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/param-readers";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
+  asNullableObjectRecord,
   normalizeOptionalString,
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,7 +20,10 @@ import {
   wrapBrowserExternalText,
 } from "./browser-tool.snapshot.js";
 import { EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS } from "./browser/act-policy.js";
-import type { BrowserBatchAbort } from "./browser/client-actions-types.js";
+import type {
+  BrowserBatchAbort,
+  BrowserBatchActionResult,
+} from "./browser/client-actions-types.js";
 import {
   browserAct,
   browserConsoleMessages,
@@ -31,14 +35,13 @@ import {
   browserWaitForDownload,
 } from "./browser/client-actions.js";
 import type { BrowserClientTarget } from "./browser/client-request.js";
-import { browserTabs, type BrowserTab, type BrowserTabsResult } from "./browser/client.js";
+import { browserTabs, type BrowserTabsResult } from "./browser/client.js";
 import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_AI_SNAPSHOT_MAX_CHARS,
 } from "./browser/constants.js";
 
 type BrowserActRequest = Parameters<typeof browserAct>[1];
-type BrowserActResponse = Awaited<ReturnType<typeof browserAct>>;
 
 function normalizePositiveTimeoutMs(value: unknown): number | undefined {
   return readPositiveIntegerParam({ value }, "value", {
@@ -57,7 +60,8 @@ function withLocalActTimeout(
   usesChromeMcp: boolean,
 ): BrowserActRequest {
   if (
-    ("timeoutMs" in request && request.timeoutMs !== undefined) ||
+    normalizePositiveTimeoutMs("timeoutMs" in request ? request.timeoutMs : undefined) !==
+      undefined ||
     (usesChromeMcp && !EXISTING_SESSION_TIMEOUT_OVERRIDE_KINDS.has(request.kind))
   ) {
     return request;
@@ -78,10 +82,19 @@ function withLocalActTimeout(
   }
 }
 
-function formatAgentTab(source: BrowserTab): Record<string, unknown> {
+function formatAgentTab(tab: unknown): Record<string, unknown> {
+  const source = asNullableObjectRecord(tab);
+  if (!source) {
+    return { value: tab };
+  }
   const targetId = readStringValue(source.targetId);
   const tabId = readStringValue(source.tabId);
-  const webExtensionTabId = source.webExtensionTabId;
+  const webExtensionTabId =
+    typeof source.webExtensionTabId === "number" &&
+    Number.isSafeInteger(source.webExtensionTabId) &&
+    source.webExtensionTabId >= 0
+      ? source.webExtensionTabId
+      : undefined;
   const label = readStringValue(source.label);
   const suggestedTargetId = readStringValue(source.suggestedTargetId) ?? label ?? tabId ?? targetId;
   return {
@@ -91,7 +104,10 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
     ...(label ? { label } : {}),
     title: source.title,
     url: source.url,
-    ...(source.urlUnavailableReason ? { urlUnavailableReason: source.urlUnavailableReason } : {}),
+    ...(source.urlUnavailableReason === "navigation_blocked" ||
+    source.urlUnavailableReason === "navigation_check_failed"
+      ? { urlUnavailableReason: source.urlUnavailableReason }
+      : {}),
     type: source.type,
     ...(targetId ? { targetId } : {}),
     ...(source.wsUrl ? { wsUrl: source.wsUrl } : {}),
@@ -100,7 +116,7 @@ function formatAgentTab(source: BrowserTab): Record<string, unknown> {
 
 function formatTabsToolResult(result: {
   running: boolean;
-  tabs: BrowserTab[];
+  tabs: unknown[];
 }): AgentToolResult<unknown> {
   const formattedTabs = result.tabs.map(formatAgentTab);
   const wrapped = wrapBrowserExternalJson({
@@ -172,10 +188,34 @@ export async function executeTabsAction(params: {
   return formatTabsToolResult({ running: result.running, tabs });
 }
 
-function actObservedNavigation(result: BrowserActResponse): boolean {
+/** Validate the /act wire payload's abort summary once for note and page-state decisions. */
+function readBrowserBatchAbort(result: unknown): BrowserBatchAbort | null {
+  const aborted = asNullableObjectRecord(asNullableObjectRecord(result)?.aborted);
+  if (!aborted) {
+    return null;
+  }
+  const { reason, afterAction, url, skipped } = aborted;
+  if (
+    (reason !== "navigation" && reason !== "closed") ||
+    typeof afterAction !== "number" ||
+    typeof url !== "string" ||
+    typeof skipped !== "number"
+  ) {
+    return null;
+  }
+  return { reason, afterAction, url, skipped };
+}
+
+function actObservedNavigation(result: unknown, aborted: BrowserBatchAbort | null): boolean {
+  if (aborted?.reason === "navigation") {
+    return true;
+  }
+  const results = (result as { results?: unknown } | null | undefined)?.results;
   return (
-    result.aborted?.reason === "navigation" ||
-    result.results?.some((entry) => entry.navigated === true) === true
+    Array.isArray(results) &&
+    results.some(
+      (entry) => (entry as Partial<BrowserBatchActionResult> | undefined)?.navigated === true,
+    )
   );
 }
 
@@ -201,7 +241,7 @@ export async function executeConsoleAction(params: {
     ...wrapped.safeDetails,
     targetId: readStringValue(result.targetId),
     url: readStringValue(result.url),
-    messageCount: result.messages.length,
+    messageCount: Array.isArray(result.messages) ? result.messages.length : undefined,
   });
 }
 
@@ -327,7 +367,9 @@ export async function executeDownloadAction(
           ...options,
           path: readStringParam(input, "path"),
         });
-  await params.onTabActivity?.(readStringValue(result.targetId) ?? targetId);
+  await params.onTabActivity?.(
+    readStringValue((result as { targetId?: unknown }).targetId) ?? targetId,
+  );
   return formatBrowserExternalToolResult({ kind: "download", payload: result });
 }
 
@@ -351,18 +393,15 @@ export async function executeActAction(params: {
     : withLocalActTimeout(request, params.usesChromeMcp);
   // resolvedTargetId is the id the act actually ran against (retry paths swap
   // it), so page-state capture must use it rather than the original request's.
-  const finishActResult = async (
-    result: BrowserActResponse,
-    resolvedTargetId: string | undefined,
-  ) => {
-    const aborted = result.aborted;
+  const finishActResult = async (result: unknown, resolvedTargetId: string | undefined) => {
+    const aborted = readBrowserBatchAbort(result);
     const onTabResult =
       effectiveRequest.kind === "close" || aborted?.reason === "closed"
         ? params.onTabClose
         : params.onTabActivity;
     await onTabResult?.(resolvedTargetId);
     const formatted = formatActToolResult(result, aborted);
-    if (!actObservedNavigation(result)) {
+    if (!actObservedNavigation(result, aborted)) {
       return formatted;
     }
     // Batch aborts snapshot at navigation commit, so a slow page can still be
@@ -382,7 +421,9 @@ export async function executeActAction(params: {
     });
     return {
       result,
-      targetId: readStringValue(result.targetId) ?? readStringValue(actionRequest.targetId),
+      targetId:
+        readStringValue((result as { targetId?: unknown }).targetId) ??
+        readStringValue(actionRequest.targetId),
     };
   };
   let dispatched: Awaited<ReturnType<typeof dispatchAct>>;
@@ -406,7 +447,10 @@ export async function executeActAction(params: {
         return { running: false, tabs: [] };
       });
       const tabs = availability.tabs;
-      const freshTargetId = tabs.length === 1 ? readStringValue(tabs[0]?.targetId) : undefined;
+      const freshTargetId =
+        tabs.length === 1
+          ? readStringValue((tabs[0] as { targetId?: unknown } | undefined)?.targetId)
+          : undefined;
       const retryRequest =
         freshTargetId && normalizeOptionalString(effectiveRequest.targetId)
           ? { ...effectiveRequest, targetId: freshTargetId }
@@ -448,7 +492,7 @@ export async function executeActAction(params: {
 
 function formatActToolResult(
   result: unknown,
-  aborted: BrowserBatchAbort | undefined,
+  aborted: BrowserBatchAbort | null,
 ): AgentToolResult<unknown> {
   const formatted = formatBrowserExternalToolResult({ kind: "act", payload: result });
   if (!aborted) {

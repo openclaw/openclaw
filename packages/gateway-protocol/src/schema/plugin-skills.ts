@@ -2,7 +2,6 @@ import { Type, type Static } from "typebox";
 import { lazyCompile } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { SKILL_LIBRARY_MAX_FILE_BYTES, SKILL_LIBRARY_MAX_FILES } from "./skill-library.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 const name = Type.String({ minLength: 1, maxLength: 256 });
 const filePath = Type.String({ minLength: 1, maxLength: 512 });
@@ -27,7 +26,13 @@ export const PluginsSkillsReadParamsSchema = Type.Union([
 export const PluginSkillFileSchema = closedObject({
   path: filePath,
   sizeBytes: Type.Integer({ minimum: 0 }),
-  status: stringLiteralUnion(["ready", "deferred", "binary", "too-large", "unavailable"]),
+  status: Type.Union([
+    Type.Literal("ready"),
+    Type.Literal("deferred"),
+    Type.Literal("binary"),
+    Type.Literal("too-large"),
+    Type.Literal("unavailable"),
+  ]),
   content: Type.Optional(Type.String({ maxLength: SKILL_LIBRARY_MAX_FILE_BYTES })),
 });
 export const PluginsSkillsReadResultSchema = closedObject({

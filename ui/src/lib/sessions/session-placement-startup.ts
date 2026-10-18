@@ -266,6 +266,15 @@ export async function deleteSessionPlacementDraft(
   agentId: string,
   recovered = false,
 ): Promise<string | undefined> {
+  return deletePlacementDraft(requests, key, agentId, recovered);
+}
+
+async function deletePlacementDraft(
+  requests: SessionPlacementRequests,
+  key: string,
+  agentId: string,
+  recovered: boolean,
+): Promise<string | undefined> {
   const { client } = requests;
   if (!client) {
     return "gateway unavailable during draft cleanup";

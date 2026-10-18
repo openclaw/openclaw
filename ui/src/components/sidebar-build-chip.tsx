@@ -1,4 +1,4 @@
-import type { JSX as SolidJSX } from "@solidjs/web";
+import type { JSX } from "@solidjs/web";
 import { pathForRoute } from "../app-route-paths.ts";
 import { CONTROL_UI_BUILD_INFO, type ControlUiBuildInfo } from "../build-info.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
@@ -6,7 +6,7 @@ import { formatDateTimeMs } from "../lib/format.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./tooltip.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
+import { defineSolidBridge } from "../lit/solid-bridge.ts";
 import {
   formatSettingsBuildLabel,
   formatSidebarBuildSubtitle,
@@ -17,6 +17,7 @@ import type { MenuItemBindings } from "./solid/menu.tsx";
 export type SidebarBuildChipProps = {
   basePath: string;
   gatewayVersion: string | null;
+  updateAttentionDismissed: boolean;
   onNavigate?: (routeId: "about") => void;
   variant: "identity" | "settings";
   menuAttributes?: MenuItemBindings;
@@ -26,10 +27,10 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
   host.style.display = "contents";
   function renderContent() {
     const text =
-      props.variant === "settings"
+      props.variant === "settings" || props.updateAttentionDismissed
         ? formatSettingsBuildLabel(CONTROL_UI_BUILD_INFO, props.gatewayVersion)
         : formatSidebarBuildSubtitle(CONTROL_UI_BUILD_INFO);
-    if (!text) {
+    if (!text && !props.updateAttentionDismissed) {
       return null;
     }
     return (
@@ -39,7 +40,11 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           class="sidebar-footer-build"
           href={pathForRoute("about", props.basePath)}
           role={props.variant === "identity" ? "menuitem" : undefined}
-          aria-label={t("aboutPage.artifactDetails")}
+          aria-label={
+            props.updateAttentionDismissed
+              ? `${t("aboutPage.artifactDetails")}. ${t("updates.sidebar.availableTitle")}`
+              : t("aboutPage.artifactDetails")
+          }
           onClick={(event) => {
             const onClick = props.menuAttributes?.onClick;
             if (onClick) {
@@ -54,6 +59,11 @@ function SidebarBuildChipContent(props: SidebarBuildChipProps, host: HTMLElement
           }}
         >
           {text ? <span class="sidebar-footer-build__text">{text}</span> : null}
+          {props.updateAttentionDismissed ? (
+            <span class="agent-select__badge sidebar-footer-build__update">
+              {t("updates.sidebar.availableTitle")}
+            </span>
+          ) : null}
         </a>
         <div slot="content" class="sidebar-hover-card sidebar-build-hover-card">
           {renderSidebarServerDetails(CONTROL_UI_BUILD_INFO, props.gatewayVersion)}
@@ -71,30 +81,13 @@ export const SidebarBuildChip = defineSolidBridge<SidebarBuildChipProps>(
     properties: {
       basePath: { default: "", attribute: false },
       gatewayVersion: { default: null, attribute: false },
+      updateAttentionDismissed: { default: false, attribute: false },
       onNavigate: { default: undefined, attribute: false },
       variant: { default: "identity", attribute: false },
       menuAttributes: { default: undefined, attribute: false },
     },
   },
 );
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-sidebar-build-chip": SolidBridgeElement<SidebarBuildChipProps>;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-sidebar-build-chip": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-sidebar-build-chip"]
-      > & {
-        [K in keyof SidebarBuildChipProps as `prop:${K}`]?: SidebarBuildChipProps[K];
-      };
-    }
-  }
-}
 
 const COPY_FEEDBACK_MS = 1_500;
 
@@ -114,7 +107,7 @@ async function copyBuildCommit(button: HTMLButtonElement, commit: string, idleLa
 function renderSidebarServerDetails(
   info: ControlUiBuildInfo,
   gatewayVersion: string | null,
-): SolidJSX.Element {
+): JSX.Element {
   const commit = info.commit?.slice(0, 12) ?? null;
   const builtAtMs = info.builtAt ? Date.parse(info.builtAt) : Number.NaN;
   const builtAt = Number.isFinite(builtAtMs)

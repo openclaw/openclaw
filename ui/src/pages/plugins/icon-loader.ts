@@ -3,8 +3,6 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 
 const ALLOWED_PLUGIN_ICON_MIME_TYPES = new Set(["image/png", "image/svg+xml", "image/x-icon"]);
-export const SVG_ARTWORK_MIME_TYPES = new Set(["image/svg+xml"]);
-export const THEME_BACKGROUND_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 type PluginIconAuthSource = Parameters<typeof resolveControlUiAuthCandidates>[0];
 
 type FetchProxiedIconParams = {
@@ -28,7 +26,7 @@ function cancelUnreadResponseBody(response: Response): void {
 export async function fetchProxiedIconBlobUrl(
   params: FetchProxiedIconParams,
   routeUrl: string,
-  allowedTypes: ReadonlySet<string> = ALLOWED_PLUGIN_ICON_MIME_TYPES,
+  svgOnly = false,
 ): Promise<string | null> {
   if (!hasSameOriginGatewayTransport(params.gatewayUrl)) {
     return null;
@@ -59,7 +57,10 @@ export async function fetchProxiedIconBlobUrl(
     }
     const contentType =
       response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
-    if (!allowedTypes.has(contentType)) {
+    if (
+      !ALLOWED_PLUGIN_ICON_MIME_TYPES.has(contentType) ||
+      (svgOnly && contentType !== "image/svg+xml")
+    ) {
       cancelUnreadResponseBody(response);
       return null;
     }
@@ -91,7 +92,7 @@ export function fetchPluginActivityIconBlobUrl(
     params.pluginId,
   );
   const routeUrl = params.tool ? `${path}?tool=${encodeURIComponent(params.tool)}` : path;
-  return fetchProxiedIconBlobUrl(params, routeUrl, SVG_ARTWORK_MIME_TYPES);
+  return fetchProxiedIconBlobUrl(params, routeUrl, true);
 }
 
 export function fetchCatalogIconBlobUrl(
@@ -112,11 +113,7 @@ export function fetchLinkFaviconBlobUrl(
   );
 }
 
-export type PluginThemeArtworkFetchParams = {
-  url: string;
-  /** Canvas backgrounds are raster images; every other theme artwork kind is SVG. */
-  background?: boolean;
-} & Partial<FetchProxiedIconParams>;
+export type PluginThemeArtworkFetchParams = { url: string } & Partial<FetchProxiedIconParams>;
 
 export function fetchPluginThemeArtworkBlobUrl(
   params: PluginThemeArtworkFetchParams,

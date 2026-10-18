@@ -590,23 +590,7 @@ it.each(["unknown", "delivered"] as const)(
       abortedLastRun: false,
       lastRunId: sourceRunId,
       restartRecoveryTerminalRunIds: ["previous-source", sourceRunId],
-      restartRecoveryTerminalDeliveryEvidence: [
-        previousEvidence,
-        ...(deliveryState === "delivered"
-          ? [
-              {
-                runId: sourceRunId,
-                transcriptRunId: runId,
-                captured: true,
-                deliveryStatus: {
-                  status: "sent",
-                  resultCount: 1,
-                  payloadOutcomes: [{ index: 0, status: "sent" }],
-                },
-              },
-            ]
-          : []),
-      ],
+      restartRecoveryTerminalDeliveryEvidence: [previousEvidence],
     });
     expect(settled?.pendingFinalDelivery).toBeUndefined();
     expect(settled?.pendingDeliveryNotice).toEqual(

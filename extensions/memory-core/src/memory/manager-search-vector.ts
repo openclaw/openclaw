@@ -19,6 +19,7 @@ function resolveProviderModels(primary: string, aliases: string[] | undefined): 
 }
 
 export async function searchVector(params: {
+  vectorTable: string;
   providerModel: string;
   providerModelAliases?: string[];
   queryVec: number[];
@@ -43,6 +44,7 @@ export async function searchVector(params: {
     }
     const response = await params.runVectorKnn(
       {
+        vectorTable: params.vectorTable,
         providerModels,
         queryVec: params.queryVec,
         limit: params.limit,

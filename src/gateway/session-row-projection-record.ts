@@ -23,7 +23,6 @@ import type { readSessionRowFacts } from "./server-methods/session-placement-rea
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
-import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import * as rowProjection from "./session-utils-row.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
@@ -476,13 +475,6 @@ export function present(
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;
-  // Naming belongs to the in-flight owner, not persisted or materialized row state.
-  row.titlePending =
-    sessionTitleRequests.get({
-      storePath: record.storeTarget.storePath,
-      sessionKey: record.key,
-      sessionId: record.entry.sessionId,
-    }) !== undefined;
   // Undefined omits wire fields without converting each presented row to dictionary storage.
   if (!options.includeDerivedTitles) {
     row.derivedTitle = undefined;
@@ -543,10 +535,7 @@ export function index(
   updateIndex(byKey, `key:${row.key}`, id, deleting);
   updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
   updateIndex(byKey, logical(row.agentId, row.key), id, deleting);
-  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
-  if (row.key === "global" || row.key === "unknown") {
-    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
-  }
+  updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
   for (const parent of row.parents) {
     updateIndex(byParent, parent, id, deleting);
   }
@@ -674,18 +663,13 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
-  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
-  // Selection and profile indexes retain entry identity until its metadata changes.
-  if (!entryChanged && row.entry) {
-    lineage.entry = row.entry;
-  }
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
     !isDeepStrictEqual(row.parents, parents) ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
-    entryChanged;
+    !isDeepStrictEqual(entry, row.entry);
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||

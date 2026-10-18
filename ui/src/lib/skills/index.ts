@@ -241,6 +241,25 @@ export async function loadSkills(
   }
 }
 
+async function loadCurrentSkillsForOperation(
+  state: SkillsState,
+  client: GatewayBrowserClient,
+  operation: ActiveSkillOperation,
+  clearMessages = false,
+) {
+  let shouldClearMessages = clearMessages;
+  // Reconciliation can change scope while a status request is pending. Keep
+  // the operation owner until one response belongs to the current scope.
+  while (ownsSkillOperation(state, client, operation)) {
+    const isCurrentAgent = captureSkillsAgentScope(state);
+    await loadSkills(state, { clearMessages: shouldClearMessages, operation });
+    shouldClearMessages = false;
+    if (!ownsSkillOperation(state, client, operation) || isCurrentAgent()) {
+      return;
+    }
+  }
+}
+
 export async function refreshSkills(state: SkillsState, loadAgents: () => Promise<void>) {
   const client = state.client;
   if (!client || !state.connected || state.skillsLoading || state.skillOperation) {
@@ -255,11 +274,7 @@ export async function refreshSkills(state: SkillsState, loadAgents: () => Promis
     if (!ownsSkillOperation(state, client, operation)) {
       return;
     }
-    const isCurrentAgent = captureSkillsAgentScope(state);
-    await loadSkills(state, { clearMessages: true, operation });
-    if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
-      await loadSkills(state, { operation });
-    }
+    await loadCurrentSkillsForOperation(state, client, operation, true);
   } finally {
     releaseSkillOperation(state, operation);
   }
@@ -440,7 +455,7 @@ async function runSkillMutation(
     }
   } finally {
     if (ownsSkillOperation(state, client, operation) && !isCurrentAgent()) {
-      await loadSkills(state, { operation });
+      await loadCurrentSkillsForOperation(state, client, operation);
     }
     releaseSkillOperation(state, operation);
   }

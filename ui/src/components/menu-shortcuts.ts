@@ -1,9 +1,13 @@
 import { resolveAsciiShortcutKey } from "../lib/keyboard-shortcuts.ts";
+import { handlePeopleMenuKeydown } from "./searchable-people-menu.ts";
 
 // Single-letter context-menu shortcuts. Items opt in via data-shortcut plus a
 // rendered hint; menu hosts route non-Escape keydowns here so a bare letter
 // clicks the matching enabled item and disabled items swallow nothing.
 export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): boolean {
+  if (handlePeopleMenuKeydown(event)) {
+    return true;
+  }
   if (
     event.metaKey ||
     event.ctrlKey ||
@@ -22,13 +26,14 @@ export function activateMenuShortcut(root: ParentNode, event: KeyboardEvent): bo
   if (!key) {
     return false;
   }
-  const item = Array.from(root.querySelectorAll<HTMLElement>(`[data-shortcut="${key}"]`)).find(
-    (candidate) =>
-      !candidate.matches(":disabled") &&
-      candidate.getAttribute("aria-disabled") !== "true" &&
-      candidate.closest('[role="menu"]')?.matches(":popover-open"),
+  const item = root.querySelector<HTMLElement & { disabled?: boolean }>(`[data-shortcut="${key}"]`);
+  if (!item || item.disabled || item.getAttribute("aria-disabled") === "true") {
+    return false;
+  }
+  const parentItem = item.closest<HTMLElement & { submenuOpen?: boolean }>(
+    'wa-dropdown-item:not([slot="submenu"])',
   );
-  if (!item) {
+  if (item.getAttribute("slot") === "submenu" && parentItem?.submenuOpen !== true) {
     return false;
   }
   event.preventDefault();

@@ -26,6 +26,7 @@ import type { TelegramDraftStream } from "./draft-stream.js";
 import type { DraftLaneState } from "./lane-delivery-text-deliverer.js";
 import { hasTelegramNetworkErrorCode, TelegramRequestNotStartedError } from "./network-errors.js";
 import { renderTelegramProgressDraftPreview } from "./progress-draft-preview.js";
+import { editMessageTelegram } from "./send.js";
 
 type BufferedDispatchParams = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -183,12 +184,17 @@ export async function settleFailedFinalDelivery(turn: Turn): Promise<void> {
     if (turn.isSuperseded()) {
       return;
     }
-    await turn.telegramDeps.editMessageTelegram(turn.context.chatId, messageId, text, {
-      api: turn.bot.api,
-      cfg: turn.cfg,
-      accountId: turn.context.route.accountId,
-      linkPreview: turn.telegramCfg.linkPreview,
-    });
+    await (turn.telegramDeps.editMessageTelegram ?? editMessageTelegram)(
+      turn.context.chatId,
+      messageId,
+      text,
+      {
+        api: turn.bot.api,
+        cfg: turn.cfg,
+        accountId: turn.context.route.accountId,
+        linkPreview: turn.telegramCfg.linkPreview,
+      },
+    );
     turn.answerLane.finalized = true;
     turn.deliveryState.markDelivered();
     await turn.previewLifecycle.observeDelivery(
@@ -394,9 +400,7 @@ export async function handleItemEvent(
       turn.progressCompositor.resetActivity();
     }
     rendered =
-      (payload.kind === "preamble" ||
-        payload.kind === "model-wait" ||
-        (await canPushToolProgress(turn))) &&
+      (payload.kind === "preamble" || (await canPushToolProgress(turn))) &&
       (await turn.progressCompositor.pushItemEvent(payload));
   });
   return rendered;

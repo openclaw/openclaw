@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import {
   ErrorCodes,
@@ -8,8 +9,6 @@ import {
 import { closedObject } from "./closed-object.js";
 import type { ErrorShape } from "./frames.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 export {
   ErrorCodes,
@@ -116,7 +115,7 @@ export const ClawHubRiskAcknowledgementRequiredErrorDetailsSchema = closedObject
 
 export const ClawReviewRequiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED),
-  kind: stringLiteralUnion(["plugin", "skill"]),
+  kind: Type.Union([Type.Literal("plugin"), Type.Literal("skill")]),
 });
 
 /** Structured details emitted by method-level failures. */

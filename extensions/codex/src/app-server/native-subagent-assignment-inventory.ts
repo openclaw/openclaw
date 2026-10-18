@@ -102,7 +102,6 @@ export class CodexNativeSubagentAssignmentInventory {
       !assignment ||
       !state.assignmentStore ||
       child.nativeCompletionDelivered ||
-      child.completionDeliveryAbandoned ||
       child.subscriptionClosed
     ) {
       return;
@@ -129,7 +128,8 @@ export class CodexNativeSubagentAssignmentInventory {
 
   settle(state: ParentState, child: ChildState): void {
     const assignment = this.fact(child);
-    // Disconnection and interrupted execution leave locators for registration.
+    // Disconnection, interrupted execution, and an exhausted delivery retry do
+    // not acknowledge the result. Leave their durable locators for registration.
     if (
       !assignment ||
       !state.assignmentStore ||
@@ -141,27 +141,6 @@ export class CodexNativeSubagentAssignmentInventory {
       await state.assignmentStore?.consume(assignment, () =>
         this.dependencies.assertCurrent(state),
       );
-    });
-  }
-
-  abandon(state: ParentState, child: ChildState, assertCurrent: () => void): Promise<void> {
-    return this.enqueue(state, async () => {
-      const assignment = this.fact(child);
-      if (!assignment || !state.assignmentStore || !child.pendingCompletion) {
-        return;
-      }
-      if (
-        !(await state.assignmentStore.consume(
-          assignment,
-          () => {
-            this.dependencies.assertCurrent(state);
-            assertCurrent();
-          },
-          { status: child.pendingCompletion.status },
-        ))
-      ) {
-        throw new Error("Undeliverable native assignment was not retired.");
-      }
     });
   }
 
@@ -204,27 +183,14 @@ export class CodexNativeSubagentAssignmentInventory {
           continue;
         }
         const recovery = await this.dependencies.readHistory(assignment);
-        const pending = await store.read();
+        await store.assertCurrentAsync();
         if (!this.dependencies.isCurrent(state) || !custody.isCurrent()) {
           return;
         }
         if (!recovery || recovery.parentThreadId !== assignment.nativeParentThreadId) {
           continue;
         }
-        const surviving = pending.find(
-          (entry) =>
-            entry.childThreadId === assignment.childThreadId &&
-            entry.nativeParentThreadId === assignment.nativeParentThreadId &&
-            matchesNativeAssignmentLifecycle(entry.owner, assignment.owner) &&
-            ((entry.nativeTurnId === assignment.nativeTurnId &&
-              (entry.nativeTurnId !== undefined || entry.runId === assignment.runId)) ||
-              (recovery.nativeTurnId !== undefined &&
-                entry.nativeTurnId === recovery.nativeTurnId &&
-                (assignment.nativeTurnId === undefined || entry.runId === assignment.runId))),
-        );
-        if (surviving) {
-          await this.dependencies.restore(state, surviving, recovery, custody);
-        }
+        await this.dependencies.restore(state, assignment, recovery, custody);
       }
     } catch (error) {
       embeddedAgentLog.warn("Native pending assignments remain for reconciliation", {

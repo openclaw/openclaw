@@ -99,11 +99,11 @@ export function resolveIMessageAccount(params: {
     (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||
     merged.dmPolicy ||
     merged.groupPolicy ||
-    merged.includeAttachments !== undefined ||
+    typeof merged.includeAttachments === "boolean" ||
     (merged.attachmentRoots && merged.attachmentRoots.length > 0) ||
     (merged.remoteAttachmentRoots && merged.remoteAttachmentRoots.length > 0) ||
-    merged.mediaMaxMb !== undefined ||
-    merged.textChunkLimit !== undefined ||
+    typeof merged.mediaMaxMb === "number" ||
+    typeof merged.textChunkLimit === "number" ||
     (merged.groups && Object.keys(merged.groups).length > 0),
   );
   return {

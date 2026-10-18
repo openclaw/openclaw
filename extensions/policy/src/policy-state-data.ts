@@ -137,6 +137,9 @@ function pushMemorySessionTranscriptIndexing(
   const agents = asNonArrayRecord(cfg.agents);
   collectPolicyConfiguredAgents(agents).forEach((configured) => {
     const { agentId, value: rawAgent } = configured;
+    if (!isRecord(rawAgent)) {
+      return;
+    }
     const memorySearch = asNonArrayRecord(rawAgent.memory).search;
     const local = readMemorySessionSettings(memorySearch);
     const agentSessionMemory = isRecord(memorySearch)

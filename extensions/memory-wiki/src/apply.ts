@@ -4,7 +4,7 @@ import {
   withTrailingNewline,
 } from "openclaw/plugin-sdk/memory-host-markdown";
 import { readFiniteNumberParam } from "openclaw/plugin-sdk/param-readers";
-import { root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   asNonArrayRecord,
   normalizeSingleOrTrimmedStringList,
@@ -22,9 +22,9 @@ import {
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
-import { resolveQueryableWikiPageByLookup } from "./query-page-lookup.js";
 import { readQueryableWikiPages } from "./query-pages.js";
-import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
+import { resolveQueryableWikiPageByLookup } from "./query.js";
+import { readExistingWikiPage } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
@@ -118,7 +118,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
       ...(Array.isArray(params.claims) ? { claims: normalizeMutationClaims(params.claims) } : {}),
       ...(params.contradictions ? { contradictions: params.contradictions } : {}),
       ...(params.questions ? { questions: params.questions } : {}),
-      ...(confidence !== undefined ? { confidence } : {}),
+      ...(typeof confidence === "number" ? { confidence } : {}),
       ...(params.status ? { status: params.status } : {}),
     };
   }
@@ -175,6 +175,10 @@ function buildSynthesisBody(params: {
   return ensureHumanNotesBlock(withGenerated);
 }
 
+function isMissingWikiPageError(error: unknown): boolean {
+  return error instanceof FsSafeError && error.code === "not-found";
+}
+
 async function writeWikiPage(params: {
   rootDir: string;
   relativePath: string;
@@ -229,7 +233,7 @@ async function applyCreateSynthesisMutation(params: {
       ...(params.mutation.claims ? { claims: normalizeWikiClaims(params.mutation.claims) } : {}),
       ...(contradictions ? { contradictions } : {}),
       ...(questions ? { questions } : {}),
-      ...(params.mutation.confidence !== undefined
+      ...(typeof params.mutation.confidence === "number"
         ? { confidence: params.mutation.confidence }
         : {}),
       status: params.mutation.status?.trim() || "active",
@@ -270,7 +274,7 @@ function buildUpdatedFrontmatter(params: {
   }
   if (params.mutation.confidence === null) {
     delete frontmatter.confidence;
-  } else if (params.mutation.confidence !== undefined) {
+  } else if (typeof params.mutation.confidence === "number") {
     frontmatter.confidence = params.mutation.confidence;
   }
   if (params.mutation.status?.trim()) {

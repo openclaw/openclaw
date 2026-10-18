@@ -71,7 +71,7 @@ export function runCiManifestFixture(options: {
   androidCiCapabilities?: boolean;
   androidAccessNativeCapability?: boolean;
   nativeI18nCapabilities?: boolean;
-  macosNodeParts?: boolean | 2;
+  macosNodeParts?: boolean;
   windowsPlanner?: boolean;
   openClawKitTests?: boolean;
   protocolCoverage?: boolean;
@@ -417,12 +417,7 @@ export function runCiManifestFixture(options: {
             : {}),
           ...(iosBuildCapability ? { "ios:build": "true" } : {}),
           ...(macosNodeParts
-            ? Object.fromEntries(
-                (macosNodeParts === 2 ? [1, 2] : [1, 2, 3]).map((part) => [
-                  `test:macos:ci:${part}`,
-                  "true",
-                ]),
-              )
+            ? Object.fromEntries([1, 2, 3].map((part) => [`test:macos:ci:${part}`, "true"]))
             : {}),
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
@@ -440,7 +435,6 @@ export function runCiManifestFixture(options: {
         options.changedPlannerSource ??
           `
           export { hasQaSmokeAffectingChange } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-qa-smoke-scope.mts")).href)};
-          export { isCiDocumentationPath } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};
           export const createChangedNodeTestShards = (changedPaths, options = {}) => {
             console.log("changed-node-plan-options:" + JSON.stringify(options));
             if (options.releaseFastLane && changedPaths.includes("scripts/lib/ci-node-test-plan.mts")) {
@@ -546,7 +540,7 @@ export function runCiManifestFixture(options: {
     if (options.releaseFastLaneSelection) {
       appendFileSync(
         path.join(scriptsDir, "ci-changed-node-test-plan.mts"),
-        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/ci-changed-scope.mjs")).href)};\n`,
+        `\nexport { resolveReleaseFastLaneScope } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href)};\n`,
       );
     }
     if (options.bundledPlanner) {

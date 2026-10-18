@@ -8,6 +8,11 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { createSqliteSchemaEnsurer } from "../../infra/sqlite-schema-ensure.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
+import type { CronJob } from "../types.js";
+import {
+  CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
+  hasCanonicalCronDeliveryMode,
+} from "./delivery-codec.js";
 import { cronStoreKey } from "./key.js";
 import {
   receiptFromRow,
@@ -16,6 +21,7 @@ import {
   type CronRunReceiptRow,
 } from "./run-receipt-read.js";
 import type { CronRunReceiptWriteSchema } from "./run-receipt-write-admission.js";
+import { CronRunReceiptRevisionError } from "./run-receipt.types.js";
 import type {
   CronRunReceiptHandle,
   CronRunReceiptRecoveryCandidate,
@@ -23,6 +29,9 @@ import type {
 } from "./run-receipt.types.js";
 
 export { CronRunReceiptRevisionError } from "./run-receipt.types.js";
+
+/** The worker owns request, activation and terminal receipt transitions. */
+type ResolveReceiptAgentId<Job = CronJob> = (job: Job) => string;
 
 const CRON_RUN_RECEIPT_TERMINAL_RETENTION = 64;
 const CRON_RUN_RECEIPT_DELETE_BATCH_SIZE = 500;
@@ -64,6 +73,28 @@ function activeRow(db: EngineConnection, key: string, jobId?: string) {
     // A direct transaction can be the first receipt user after upgrade.
     ensureCronRunReceiptSchema(db);
     return find();
+  }
+}
+
+function validateCurrentReceiptJob<Job>(
+  job: Job | undefined,
+  params: {
+    handle: Pick<CronRunReceiptHandle, "agentId" | "receiptId">;
+    resolveAgentId: ResolveReceiptAgentId<Job>;
+  },
+): Job {
+  if (!job) {
+    throw new CronRunReceiptRevisionError(params.handle.receiptId, "cron job was removed");
+  }
+  if (params.resolveAgentId(job) !== params.handle.agentId) {
+    throw new CronRunReceiptRevisionError(params.handle.receiptId);
+  }
+  return job;
+}
+
+function assertCronRunDelivery(hasCanonicalMode: boolean, receiptId: string): void {
+  if (!hasCanonicalMode) {
+    throw new CronRunReceiptRevisionError(receiptId, CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE);
   }
 }
 
@@ -119,14 +150,19 @@ function pruneTerminalReceipts(
   }
 }
 
-/** The receipt key and active-job unique index arbitrate claims in one write. */
+/** Inserts a receipt after the queue has admitted its current job and free slot. */
 export function claimCronRunReceiptInDatabase(params: {
   database: EngineConnection;
   handle: CronRunReceiptHandle;
+  job: CronJob | undefined;
   requestRunId?: string;
-}): CronRunReceiptHandle | undefined {
+  receiptSchema: CronRunReceiptWriteSchema;
+  resolveAgentId: ResolveReceiptAgentId;
+}): CronRunReceiptHandle {
   const { handle } = params;
-  const claimed = executeSqliteQueryTakeFirstSync(
+  const job = validateCurrentReceiptJob(params.job, params);
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), handle.receiptId);
+  executeSqliteQuerySync(
     params.database,
     query(params.database)
       .insertInto("cron_run_receipts")
@@ -151,11 +187,9 @@ export function claimCronRunReceiptInDatabase(params: {
         started_at_ms: handle.startedAtMs,
         finished_at_ms: null,
         error_text: null,
-      }))
-      .onConflict((conflict) => conflict.doNothing())
-      .returning("receipt_id"),
+      })),
   );
-  return claimed ? handle : undefined;
+  return { ...handle };
 }
 
 export function findActiveCronRunReceiptInDatabase(params: {
@@ -178,8 +212,12 @@ export function listActiveCronRunReceiptJobIdsInDatabase(
 export function activateCronRunReceiptInDatabase(params: {
   database: EngineConnection;
   handle: CronRunReceiptHandle;
+  job: CronJob;
   startedAtMs: number;
+  resolveAgentId: ResolveReceiptAgentId;
 }): CronRunReceiptHandle {
+  const job = validateCurrentReceiptJob(params.job, params);
+  assertCronRunDelivery(hasCanonicalCronDeliveryMode(job.delivery), params.handle.receiptId);
   executeSqliteQuerySync(
     params.database,
     query(params.database)

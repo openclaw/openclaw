@@ -3,9 +3,8 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { PluginDiscoveryCatalogFactsSchema, PluginDiscoveryEntrySchema } from "./plugins.js";
 import { NonEmptyString } from "./primitives.js";
-import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const CatalogKindSchema = stringLiteralUnion(["plugin", "skill"]);
+export const CatalogKindSchema = Type.Union([Type.Literal("plugin"), Type.Literal("skill")]);
 const CatalogCursorSchema = Type.String({ minLength: 1, maxLength: 4096 });
 const CatalogPageSizeSchema = Type.Integer({ minimum: 1, maximum: 100 });
 
@@ -38,7 +37,7 @@ export const CatalogEntrySchema = Type.Union([CatalogPluginEntrySchema, CatalogS
 export const CatalogBrowseParamsSchema = closedObject({
   kind: CatalogKindSchema,
   query: Type.Optional(Type.String({ maxLength: 200 })),
-  feed: Type.Optional(stringLiteralUnion(["catalog", "trending"])),
+  feed: Type.Optional(Type.Union([Type.Literal("catalog"), Type.Literal("trending")])),
   officialOnly: Type.Optional(Type.Boolean()),
   pageSize: Type.Optional(CatalogPageSizeSchema),
   cursor: Type.Optional(CatalogCursorSchema),
@@ -46,7 +45,7 @@ export const CatalogBrowseParamsSchema = closedObject({
 });
 export const CatalogBrowseResultSchema = closedObject({
   items: Type.Array(CatalogEntrySchema),
-  mode: stringLiteralUnion(["catalog", "trending", "search"]),
+  mode: Type.Union([Type.Literal("catalog"), Type.Literal("trending"), Type.Literal("search")]),
   nextCursor: Type.Optional(CatalogCursorSchema),
   searchLimit: Type.Optional(Type.Integer({ minimum: 1 })),
   remoteError: Type.Optional(Type.String()),

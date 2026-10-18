@@ -117,7 +117,7 @@ export function formatUpdateRunOwnership(record: UpdateRunRecord): string {
 export type UpdateRepairDriverAdmission =
   | { kind: "continuation"; run: UpdateRunRecord }
   | { kind: "recovery"; runs: UpdateRunRecord[] }
-  | { kind: "conflict"; reason: "ancestry-unverified" | "driver-conflict"; message: string };
+  | { kind: "conflict"; message: string };
 
 export function inspectUpdateRepairDriverAdmission(
   runs: UpdateRunRecord[],
@@ -132,7 +132,6 @@ export function inspectUpdateRepairDriverAdmission(
       // A captured continuation remains relevant after its driver terminalizes it.
       return {
         kind: "conflict",
-        reason: check === "ancestry-unverified" ? "ancestry-unverified" : "driver-conflict",
         message:
           check === "ancestry-unverified"
             ? formatUnverifiedUpdateRunAncestry(run)

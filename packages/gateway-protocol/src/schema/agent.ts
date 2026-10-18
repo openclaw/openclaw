@@ -1,9 +1,8 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
-import { stringLiteralUnion } from "./string-literal-union.js";
 
 /**
  * Agent and channel-action gateway schemas.
@@ -74,7 +73,12 @@ export const AgentEventSchema = closedObject({
   ),
 });
 
-const MessageActionReplyModeSchema = stringLiteralUnion(["off", "first", "all", "batched"]);
+const MessageActionReplyModeSchema = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("first"),
+  Type.Literal("all"),
+  Type.Literal("batched"),
+]);
 
 /** Caller-supplied routing hints. Authorization must use trusted runtime context. */
 const MessageActionToolContextSchema = closedObject({
@@ -99,7 +103,7 @@ const MessageActionReplyFactsSchema = Type.Union([
   closedObject({
     replyToId: NonEmptyString,
     source: Type.Literal("implicit"),
-    mode: stringLiteralUnion(["first", "all"]),
+    mode: Type.Union([Type.Literal("first"), Type.Literal("all")]),
   }),
 ]);
 
@@ -175,7 +179,7 @@ export const ConversationListItemSchema = closedObject({
   conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
   channel: NonEmptyString,
   accountId: NonEmptyString,
-  kind: stringLiteralUnion(["direct", "group", "channel"]),
+  kind: Type.Union([Type.Literal("direct"), Type.Literal("group"), Type.Literal("channel")]),
   target: NonEmptyString,
   threadId: Type.Optional(NonEmptyString),
   label: Type.Optional(NonEmptyString),
@@ -197,7 +201,12 @@ export const ConversationSendParamsSchema = closedObject({
 });
 
 export const ConversationSendResultSchema = closedObject({
-  status: stringLiteralUnion(["sent", "queued", "suppressed", "unknown"]),
+  status: Type.Union([
+    Type.Literal("sent"),
+    Type.Literal("queued"),
+    Type.Literal("suppressed"),
+    Type.Literal("unknown"),
+  ]),
   conversationRef: Type.String({ pattern: CONVERSATION_REF_PATTERN }),
   channel: NonEmptyString,
   messageId: Type.Optional(NonEmptyString),
@@ -291,8 +300,6 @@ export const AgentParamsSchema = closedObject({
   replyTo: Type.Optional(Type.String()),
   sessionId: Type.Optional(Type.String()),
   sessionKey: Type.Optional(Type.String()),
-  // CLI callers preserve named-session creation while the Gateway owns lookup.
-  createSessionIfMissing: Type.Optional(Type.Boolean()),
   // Backend-owned continuations can bind work to an already-admitted transcript.
   expectedExistingSessionId: Type.Optional(NonEmptyString),
   // Null binds the original generation before a lifecycle revision was assigned.
@@ -318,10 +325,16 @@ export const AgentParamsSchema = closedObject({
   // bundle MCP resources after the run instead of keeping them warm.
   cleanupBundleMcpOnRunEnd: Type.Optional(Type.Boolean()),
   modelRun: Type.Optional(Type.Boolean()),
-  promptMode: Type.Optional(stringLiteralUnion(["full", "minimal", "none"])),
+  promptMode: Type.Optional(
+    Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
+  ),
   extraSystemPrompt: Type.Optional(Type.String()),
-  bootstrapContextMode: Type.Optional(stringLiteralUnion(["full", "lightweight"])),
-  bootstrapContextRunKind: Type.Optional(stringLiteralUnion(["default", "heartbeat", "cron"])),
+  bootstrapContextMode: Type.Optional(
+    Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
+  ),
+  bootstrapContextRunKind: Type.Optional(
+    Type.Union([Type.Literal("default"), Type.Literal("heartbeat"), Type.Literal("cron")]),
+  ),
   acpTurnSource: Type.Optional(Type.Literal("manual_spawn")),
   internalRuntimeHandoffId: Type.Optional(NonEmptyString),
   // Enabled backend recovery supplies only capture/retry mode. Disabled collection omits it;
@@ -333,8 +346,10 @@ export const AgentParamsSchema = closedObject({
   internalEvents: Type.Optional(Type.Array(AgentInternalEventSchema)),
   inputProvenance: Type.Optional(InputProvenanceSchema),
   suppressPromptPersistence: Type.Optional(Type.Boolean()),
-  sessionEffects: Type.Optional(stringLiteralUnion(["visible", "internal"])),
-  sourceReplyDeliveryMode: Type.Optional(stringLiteralUnion(["automatic", "message_tool_only"])),
+  sessionEffects: Type.Optional(Type.Union([Type.Literal("visible"), Type.Literal("internal")])),
+  sourceReplyDeliveryMode: Type.Optional(
+    Type.Union([Type.Literal("automatic"), Type.Literal("message_tool_only")]),
+  ),
   disableMessageTool: Type.Optional(Type.Boolean()),
   swarmCollector: Type.Optional(Type.Boolean()),
   swarmOutputSchema: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
@@ -374,7 +389,7 @@ export const AgentWaitParamsSchema = closedObject({
 /** Wake request from external schedulers or devices into an agent session. */
 export const WakeParamsSchema = Type.Object(
   {
-    mode: stringLiteralUnion(["now", "next-heartbeat"]),
+    mode: Type.Union([Type.Literal("now"), Type.Literal("next-heartbeat")]),
     text: NonEmptyString,
     // Typed field; misspelled variants remain opaque metadata because wake
     // senders already rely on additionalProperties.

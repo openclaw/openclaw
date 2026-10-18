@@ -1,6 +1,6 @@
 import { runWithLocalStateOwner } from "./local-state-owner.js";
 
-// Add's planning and application both read or mutate Gateway-owned state.
+// Planning and inspection can also migrate config or reconcile Claw provenance.
 export function offlineClawAction<Args extends unknown[]>(
   command: string,
   action: (...args: Args) => Promise<void>,

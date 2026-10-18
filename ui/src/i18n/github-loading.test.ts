@@ -6,11 +6,11 @@ const loadI18n = useLazyEnglishTest();
 it.each([
   {
     surface: "publication",
-    load: () => import("../pages/chat/components/chat-github-publication.tsx"),
+    load: () => import("../pages/chat/components/chat-github-publication.ts"),
   },
   {
     surface: "pull requests",
-    load: () => import("../pages/chat/components/chat-pull-requests.tsx"),
+    load: () => import("../pages/chat/components/chat-pull-requests.ts"),
   },
   {
     surface: "connections",

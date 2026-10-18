@@ -171,7 +171,15 @@ class OpenShellFsBridge implements SandboxFsBridge {
       target: to,
       allowFinalSymlinkForUnlink: false,
     });
-    await assertRenameSupported(from, to);
+    await assertRenameSourceSupported(from.hostPath);
+    if (from.mountHostRoot !== to.mountHostRoot) {
+      throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
+    }
+    await assertSameDeviceRenameSupported({
+      fromHostPath: from.hostPath,
+      root: from.mountHostRoot,
+      toHostPath: to.hostPath,
+    });
     await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
     const root = await fsRoot(from.mountHostRoot);
     const fromRelativePath = relativeToRoot(from, from.hostPath);
@@ -412,11 +420,8 @@ function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {
   return relativePath ? `.${path.sep}${relativePath}` : "";
 }
 
-async function assertRenameSupported(
-  from: ResolvedMountPath,
-  to: ResolvedMountPath,
-): Promise<void> {
-  const stats = await fsPromises.lstat(from.hostPath);
+async function assertRenameSourceSupported(fromHostPath: string): Promise<void> {
+  const stats = await fsPromises.lstat(fromHostPath);
   if (stats.isSymbolicLink()) {
     throw new Error("Sandbox symlink rename sources are not supported by the local mirror bridge");
   }
@@ -425,14 +430,19 @@ async function assertRenameSupported(
       "Sandbox hardlinked rename sources are not supported by the local mirror bridge",
     );
   }
-  if (from.mountHostRoot !== to.mountHostRoot) {
-    throw new Error("OpenShell cross-root mirror renames require pinned fs-safe support");
-  }
+}
+
+async function assertSameDeviceRenameSupported(params: {
+  fromHostPath: string;
+  root: string;
+  toHostPath: string;
+}): Promise<void> {
+  const sourceStats = await fsPromises.lstat(params.fromHostPath);
   const destinationParentStats = await nearestExistingDirectoryStats({
-    root: from.mountHostRoot,
-    targetPath: path.dirname(to.hostPath),
+    root: params.root,
+    targetPath: path.dirname(params.toHostPath),
   });
-  if (stats.dev !== destinationParentStats.dev) {
+  if (sourceStats.dev !== destinationParentStats.dev) {
     throw new Error("OpenShell cross-device mirror renames require pinned fs-safe support");
   }
 }

@@ -140,14 +140,7 @@ function fixture() {
   return {
     read,
     wait,
-    params: {
-      root: "C:\\openclaw",
-      config: {},
-      env,
-      opts: { run },
-      gatewayPort: 18789,
-      waitForStartup: false,
-    },
+    params: { root: "C:\\openclaw", config: {}, env, opts: { run }, gatewayPort: 18789 },
   };
 }
 
@@ -183,7 +176,7 @@ describe("managed Windows update after the startup canary", () => {
     { json: false, observedStartupMs: 900_000, timeoutMs: undefined },
     { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000 },
   ])(
-    "records the bounded observation budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
+    "records and refreshes the canonical readiness budget (json=$json, startup=$observedStartupMs, timeout=$timeoutMs)",
     async ({ json, observedStartupMs, timeoutMs }) => {
       const { deadlineMs: budgetMs, derivation } = resolveGatewayStartupTiming("win32", {
         observedStartupMs,
@@ -216,18 +209,14 @@ describe("managed Windows update after the startup canary", () => {
         expect(f.wait()?.detail).toMatch(/service|Scheduled Task/i);
         expect(f.wait()?.detail).toMatch(/listener|identity/i);
 
-        await vi.advanceTimersByTimeAsync(30_000);
         probe.release();
-        await expect(pending).resolves.toBe(false);
+        await vi.advanceTimersByTimeAsync(30_000);
 
-        const waiting = f
-          .read()
-          .steps.find((step) => step.step === "warning:previous gateway verification")!;
-        expect(waiting.status).toBe("completed");
+        const waiting = f.wait()!;
         expect(waiting.detail).toContain("Gateway RPC health probe timed out");
-        expect(waiting.detail).toContain("continuing with readiness unverified");
+        expect(waiting.detail).toContain("4242");
+        expect(waiting.detail).toContain(String(budgetMs - 30_000));
         expect(waiting.startedAtMs).toBe(startedAt);
-        expect(waiting.endedAtMs).toBe(startedAt + 30_000);
         expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
         expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
         expect(defaultRuntime[json ? "error" : "log"]).toHaveBeenCalledWith(
@@ -291,14 +280,10 @@ describe("managed Windows update after the startup canary", () => {
     }
   });
 
-  it("bounds a stalled native observation and records the operator next step", async () => {
+  it("records a warning and an operator next step when its explicit readiness budget expires", async () => {
     const f = fixture();
-    const probe = holdRuntimeProbe();
     const pending = verifyPreviousGatewayForUpdate({ ...f.params, timeoutMs: 1_000 });
-    await awaitProbe(probe.entered, pending);
-    await vi.advanceTimersByTimeAsync(1_000);
-    probe.release();
-    await expect(pending).resolves.toBe(false);
+    await Promise.all([expect(pending).resolves.toBe(false), vi.advanceTimersByTimeAsync(1_000)]);
 
     const warning = f
       .read()

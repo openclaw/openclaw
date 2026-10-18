@@ -1,7 +1,6 @@
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withLegacyCanonicalSessionValidationTriggers } from "./openclaw-agent-canonical-validation-migration.js";
 import { withoutAgentJsonPredicateColumns } from "./openclaw-agent-json-predicate-schema.js";
-import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import { withLegacySessionParticipantsSchema } from "./openclaw-agent-participants-migration.js";
 import { AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL } from "./openclaw-agent-progress-card-schema.js";
 import { withLegacyAgentStorageSchema } from "./openclaw-agent-storage-schema.js";
@@ -30,9 +29,7 @@ export const AGENT_V14_CORE_SCHEMA_SQL = withLegacySessionParticipantsSchema(
   withLegacyAgentStorageSchema(
     withLegacyCanonicalSessionValidationTriggers(
       withoutAgentJsonPredicateColumns(
-        withoutOutboxEnqueueSequence(
-          AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
-        ),
+        AGENT_SCHEMA_WITHOUT_PROGRESS_CARD_SQL.replace(sessionSharingSchema, ""),
       ),
     ),
   ),

@@ -7,11 +7,14 @@ import {
 } from "openclaw/plugin-sdk/media-mime";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfiguredAsync } from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
+  assertOkOrThrowHttpError,
   createProviderOperationDeadline,
   pollProviderOperationJson,
-  postJsonResponse,
-  resolveProviderApiKeyHttpRequestConfig,
+  postJsonRequest,
+  readProviderJsonResponse,
+  resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -224,25 +227,38 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
       if ((req.inputVideos?.length ?? 0) > 0) {
         throw new Error("DeepInfra video generation does not support video reference inputs.");
       }
+      const auth = await resolveApiKeyForProvider({
+        provider: "deepinfra",
+        cfg: req.cfg,
+        agentDir: req.agentDir,
+        store: req.authStore,
+      });
+      if (!auth.apiKey) {
+        throw new Error("DeepInfra API key missing");
+      }
+
       const model = normalizeDeepInfraModelRef(req.model, defaultModel);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        await resolveProviderApiKeyHttpRequestConfig({
-          req,
-          missingApiKeyMessage: "DeepInfra API key missing",
-          baseUrl: resolveDeepInfraVideoBaseUrl(req),
-          defaultBaseUrl: DEEPINFRA_BASE_URL,
-          provider: "deepinfra",
-          capability: "video",
-          request: sanitizeConfiguredModelProviderRequest(
-            req.cfg?.models?.providers?.deepinfra?.request,
-          ),
-        });
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "DeepInfra video generation",
       });
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl: resolveDeepInfraVideoBaseUrl(req),
+          defaultBaseUrl: DEEPINFRA_BASE_URL,
+          defaultHeaders: {
+            Authorization: `Bearer ${auth.apiKey}`,
+            "Content-Type": "application/json",
+          },
+          provider: "deepinfra",
+          capability: "video",
+          transport: "http",
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.deepinfra?.request,
+          ),
+        });
 
-      const submitted = await postJsonResponse<DeepInfraVideoJob>({
+      const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
         headers,
         body: buildDeepInfraVideoBody(req, model),
@@ -253,8 +269,17 @@ export function buildDeepInfraVideoGenerationProvider(options?: {
         fetchFn: fetch,
         allowPrivateNetwork,
         dispatcherPolicy,
-        errorLabel: "DeepInfra video generation failed",
       });
+      let submitted: DeepInfraVideoJob;
+      try {
+        await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
+        submitted = await readProviderJsonResponse<DeepInfraVideoJob>(
+          response,
+          "DeepInfra video generation failed",
+        );
+      } finally {
+        await release();
+      }
 
       const jobId = normalizeOptionalString(submitted.id);
       if (!jobId) {

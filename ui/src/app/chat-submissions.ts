@@ -31,7 +31,6 @@ type PendingChatCreate = Readonly<{
   message: RetainedMessage | null;
   canDisplay: () => boolean;
   composer?: CreationComposer;
-  displayName?: string;
 }>;
 
 export type ApplicationChatSubmissions = ReturnType<typeof createChatSubmissions>;
@@ -108,7 +107,6 @@ export function createChatSubmissions() {
     get creation(): Readonly<{ sessionKey: string; admitted: boolean }> | undefined {
       return pendingCreate?.creation;
     },
-    readCreate: () => (pendingCreate?.canDisplay() ? pendingCreate : undefined),
     readCreateMessage: (sessionKey: string) =>
       pendingCreate?.creation.sessionKey === sessionKey && pendingCreate.canDisplay()
         ? pendingCreate.message

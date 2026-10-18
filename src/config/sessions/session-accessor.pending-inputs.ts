@@ -199,7 +199,6 @@ export function bindSessionPendingInputSources(
 }
 
 type PendingInputStageOptions = PendingInputRequest & {
-  lifecycleAdmission?: import("./restart-resume.js").SessionInputLifecycleAdmission;
   onCommitted?: (receipt: SessionPendingInputReceipt) => void;
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
@@ -250,7 +249,6 @@ export function stageSessionPendingInput(
       const store = await preparePendingInputStore(
         captured,
         options.authority?.assertLifetimeCurrent ?? options.assertCurrent,
-        options.lifecycleAdmission,
       );
       const accept = () =>
         stagePreparedPendingInput(captured, options, preparedRequest, lifecycleGeneration, store);

@@ -11,10 +11,11 @@ import {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { AttachmentCardHeader, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
+import { defineSolidBridge, LitContent } from "../../../lit/solid-bridge.ts";
 import {
   openAttachmentCardFromClick,
+  renderAttachmentCardHeader,
+  renderCompactAttachmentCard,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
 import { safeMediaAttachmentHref } from "./chat-attachment-href.ts";
@@ -98,6 +99,7 @@ function ChatAudioPlayerContent(
   let mediaElement: HTMLAudioElement | null = null;
   let waveformElement: HTMLElement | null = null;
   let waveformResizeObserver: ResizeObserver | null = null;
+  let playRequest: Promise<void> | null = null;
   let releaseWaveformBlob: (() => void) | undefined;
   let waveformController: AbortController | null = null;
   let waveformAttempted = false;
@@ -374,13 +376,22 @@ function ChatAudioPlayerContent(
     if (media.paused) {
       adoptPreparedAudioForPlayback();
       claimChatAudioPlayback(media, cancelPendingResume);
-      // Invoke play in the click task so strict browser media policies retain user activation.
       const playback = media.play();
       const failed = () => {
         releaseChatAudioPlayback(media);
         updateState({ playing: false });
       };
-      void playback.then(() => prepareWaveformAudio().catch(() => undefined)).catch(failed);
+      if (!playRequest) {
+        // Invoke play in the click task so strict browser media policies retain user activation.
+        playRequest = playback
+          .then(() => prepareWaveformAudio().catch(() => undefined))
+          .catch(failed)
+          .finally(() => {
+            playRequest = null;
+          });
+      } else {
+        void playback.catch(failed);
+      }
     } else {
       media.pause();
     }
@@ -544,7 +555,11 @@ function ChatAudioPlayerContent(
         }
       >
         <Show when={!props.voiceNote}>
-          <AttachmentCardHeader {...card()} visualMode="preview-with-favicon" />
+          <LitContent
+            render={() =>
+              renderAttachmentCardHeader({ ...card(), visualMode: "preview-with-favicon" })
+            }
+          />
         </Show>
         <Show
           when={sourceState().readiness !== "preparing"}
@@ -634,7 +649,10 @@ function ChatAudioPlayerContent(
     <Show
       when={sourceState().readiness !== "unavailable"}
       fallback={
-        <Show when={props.voiceNote} fallback={<CompactAttachmentCard {...card()} />}>
+        <Show
+          when={props.voiceNote}
+          fallback={<LitContent render={() => renderCompactAttachmentCard(card())} />}
+        >
           <div class="chat-assistant-attachment-card chat-assistant-attachment-card--voice-note">
             <div class="chat-audio-player" role="group" aria-label={t("chat.messages.voiceNote")}>
               <span class="chat-assistant-attachment-card__reason" role="status">

@@ -15,7 +15,13 @@ import type {
   OpenClawPluginServiceContext,
 } from "../api.js";
 import { isInternalDiagnosticEventMetadata, redactSensitiveText } from "../api.js";
-import { seconds, type LabelSet } from "./prometheus-format.js";
+import {
+  escapeHelp,
+  formatLabels,
+  formatPrometheusNumber,
+  seconds,
+  type LabelSet,
+} from "./prometheus-format.js";
 import {
   AGENT_DURATION_BUCKETS_SECONDS,
   createPrometheusMetricStore,
@@ -45,6 +51,52 @@ function safeErrorMessage(err: unknown): string {
       .replace(/[\r\n\t\u2028\u2029]/gu, " "),
     500,
   );
+}
+
+function renderPrometheusMetrics(store: PrometheusMetricStore): string {
+  const snapshot = store.snapshot();
+  const lines: string[] = [];
+  const emitted = new Set<string>();
+
+  const emitHeader = (name: string, type: "counter" | "gauge" | "histogram", help: string) => {
+    if (emitted.has(name)) {
+      return;
+    }
+    emitted.add(name);
+    lines.push(`# HELP ${name} ${escapeHelp(help)}`);
+    lines.push(`# TYPE ${name} ${type}`);
+  };
+
+  for (const [type, entries] of [
+    ["counter", snapshot.counters],
+    ["gauge", snapshot.gauges],
+  ] as const) {
+    entries.sort(([left], [right]) => left.localeCompare(right));
+    for (const [key, sample] of entries) {
+      const name = key.split("|", 1)[0] ?? "";
+      emitHeader(name, type, sample.help);
+      lines.push(`${name}${formatLabels(sample.labels)} ${formatPrometheusNumber(sample.value)}`);
+    }
+  }
+
+  snapshot.histograms.sort(([left], [right]) => left.localeCompare(right));
+  for (const [key, sample] of snapshot.histograms) {
+    const name = key.split("|", 1)[0] ?? "";
+    emitHeader(name, "histogram", sample.help);
+    for (let index = 0; index < sample.buckets.length; index += 1) {
+      lines.push(
+        `${sample.bucketPrefixes[index]}${formatPrometheusNumber(sample.counts[index] ?? 0)}`,
+      );
+    }
+    lines.push(
+      `${sample.bucketPrefixes[sample.buckets.length]}${formatPrometheusNumber(sample.count)}`,
+    );
+    lines.push(`${name}_sum${sample.labels} ${formatPrometheusNumber(sample.sum)}`);
+    lines.push(`${name}_count${sample.labels} ${formatPrometheusNumber(sample.count)}`);
+  }
+
+  lines.push("");
+  return lines.join("\n");
 }
 
 function webhookLabels(
@@ -549,7 +601,7 @@ function createMetricsHandler(store: PrometheusMetricStore): OpenClawPluginHttpR
       return true;
     }
 
-    const body = store.render();
+    const body = renderPrometheusMetrics(store);
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
     res.setHeader("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
@@ -659,7 +711,7 @@ export function createDiagnosticsPrometheusExporter() {
 
   return {
     handler: createMetricsHandler(store),
-    render: store.render,
+    render: () => renderPrometheusMetrics(store),
     service,
   };
 }

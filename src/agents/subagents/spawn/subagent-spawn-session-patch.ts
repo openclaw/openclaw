@@ -247,7 +247,7 @@ export async function createInitialSubagentSession(input: {
               runSetupScript: false,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
-              onTitleStateChanged: () =>
+              onTitlePersisted: () =>
                 emitSessionLifecycleEvent({
                   sessionKey: params.childSessionKey,
                   reason: "title",

@@ -14,7 +14,6 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import type {
   SessionGroupCatalogMutation,
-  SessionGroupCatalogMutationResult,
   SessionGroupCatalogAdmission,
   SessionGroupCatalogSnapshot,
   SessionGroupMembershipSnapshot,
@@ -206,16 +205,9 @@ export function mutateSessionGroupCatalog(
   const mutation = structuredClone(input);
   const context = captureOpenClawStateWorkerContext({ env });
   const catalog = bindCatalog(context.admission);
-  const write = async (): Promise<SessionGroupCatalogMutationResult> => {
+  const write = async () => {
     context.admission.assertCurrent();
     assertCurrent?.();
-    // Join preceding mutations before consuming the owner's committed catalog.
-    if (
-      mutation.kind === "register" &&
-      catalog.snapshot?.groups.some(({ name }) => name === mutation.name)
-    ) {
-      return { changed: false, snapshot: catalog.snapshot };
-    }
     // A concurrent initial read must not reinstall facts from before this commit.
     catalog.revision += 1;
     try {

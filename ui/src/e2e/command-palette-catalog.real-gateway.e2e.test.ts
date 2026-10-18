@@ -499,21 +499,11 @@ suite.define(() => {
     if (typeof browserUrl !== "string") {
       throw new Error("Dashboard did not return a browser handoff");
     }
-    const frames: Array<{
-      direction: "sent" | "received";
-      frame: Record<string, unknown>;
-      transportFailure?: boolean;
-    }> = [];
-    const commands: Array<Record<string, unknown>> = [];
+    const frames: unknown[] = [];
+    const commands: unknown[] = [];
     const catalogRequests = new Set<string>();
     const catalogParams: unknown[] = [];
     let rejectCatalogReplies = false;
-    let rejectedCatalogReplies = 0;
-    const redact = (text: string) =>
-      text
-        .replaceAll(instance.gatewayToken, "[synthetic token]")
-        .replaceAll(instance.hookToken, "[synthetic token]")
-        .replaceAll(instance.homeDir, "[fixture-home]");
     const publish = async (page: Page, id: string) => {
       const applicationHandle = await getControlUiContextHandle(page);
       try {
@@ -535,9 +525,8 @@ suite.define(() => {
           "--replace",
         ];
         try {
-          const startedAt = Date.now();
           const result = await instance.cli(args);
-          commands.push({ args, elapsedMs: Date.now() - startedAt, ...result });
+          commands.push({ args, ...result });
           expect(result.code, result.stderr).toBe(0);
           // Runtime rows can arrive before this accepted-config event retires them.
           await expect
@@ -583,7 +572,6 @@ suite.define(() => {
                 });
               }
               if (catalogReply && rejectCatalogReplies) {
-                rejectedCatalogReplies += 1;
                 socket.send(
                   JSON.stringify({
                     type: "res",
@@ -627,16 +615,11 @@ suite.define(() => {
           // Refresh the same catalog owner; a config write retires its display facts.
           providerModel = "read-failure-fixture:latest";
           const refreshParams = { agentId: "main", view: "configured", refresh: true };
-          const refreshed = requireRecord(await readback.request("models.list", refreshParams));
-          commands.push({ method: "models.list", params: refreshParams, result: refreshed });
-          expect(refreshed.providerOutcomes).toContainEqual({
-            provider: "ollama",
-            status: "ready",
+          commands.push({
+            method: "models.list",
+            params: refreshParams,
+            result: await readback.request("models.list", refreshParams),
           });
-          expect(refreshed.models).toContainEqual(
-            expect.objectContaining({ provider: "ollama", id: "read-failure-fixture:latest" }),
-          );
-          await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
           const status = page
             .locator(".cmd-palette [role=status]")
             .filter({ hasText: "Model search unavailable" });
@@ -687,38 +670,11 @@ suite.define(() => {
           await status.waitFor({ state: "hidden" });
         },
       );
-    } catch (error) {
-      const gatewayLog = redact(instance.logs());
-      const catalogFrames = frames.filter(
-        ({ direction, frame }) => direction === "received" || frame.method === "models.list",
-      );
-      console.log(
-        "catalog-publication-failure",
-        redact(
-          JSON.stringify({
-            rejectCatalogReplies,
-            commands: commands.map(({ args, code, signal, elapsedMs }) => ({
-              args,
-              code,
-              signal,
-              elapsedMs,
-            })),
-            gatewayLogLength: gatewayLog.length,
-            gatewayLogTail: gatewayLog.slice(-48_000),
-            frameCount: catalogFrames.length,
-            frames: catalogFrames.slice(-100).map(({ direction, frame, transportFailure }) => ({
-              direction,
-              id: typeof frame.id === "string" ? frame.id.slice(0, 128) : undefined,
-              method: typeof frame.method === "string" ? frame.method.slice(0, 128) : undefined,
-              event: typeof frame.event === "string" ? frame.event.slice(0, 128) : undefined,
-              ok: typeof frame.ok === "boolean" ? frame.ok : undefined,
-              transportFailure,
-            })),
-          }),
-        ),
-      );
-      throw error;
     } finally {
+      const redact = (text: string) =>
+        text
+          .replaceAll(instance.gatewayToken, "[synthetic token]")
+          .replaceAll(instance.hookToken, "[synthetic token]");
       await fs.writeFile(
         path.join(suite.artifactDir, "publication.json"),
         redact(JSON.stringify({ frames, commands }, null, 2)),

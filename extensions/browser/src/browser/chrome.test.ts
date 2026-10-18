@@ -10,6 +10,7 @@ import { diagnoseChromeCdp, formatChromeCdpDiagnostic } from "./chrome.diagnosti
 import {
   getChromeWebSocketEndpoint,
   isChromeCdpOwnedByPid,
+  isChromeCdpReady,
   isChromeReachable,
   ManagedChromeCleanupError,
   stopOpenClawChrome,
@@ -331,6 +332,27 @@ describe("browser chrome helpers", () => {
     });
   });
 
+  it("uses HTTP discovery before readiness checks for a bare ws:// CDP URL", async () => {
+    await withMockChromeCdpServer({
+      wsPath: "/devtools/browser/READY",
+      reply: replyWithBrowserVersion,
+      run: async (baseUrl) => {
+        const url = new URL(baseUrl);
+        const wsOnlyBase = `ws://${url.host}?token=abc`;
+        const onDiagnostic = vi.fn();
+        await expect(
+          isChromeCdpReady(wsOnlyBase, 300, 400, undefined, { onDiagnostic }),
+        ).resolves.toBe(true);
+        expect(onDiagnostic).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+            wsUrl: `ws://${url.host}/devtools/browser/READY?token=abc`,
+          }),
+        );
+      },
+    });
+  });
+
   it("falls back to the bare WebSocket root when discovered Browserless endpoint rejects readiness", async () => {
     await withMockChromeCdpServer({
       wsPath: "/",
@@ -371,6 +393,13 @@ describe("browser chrome helpers", () => {
         });
       },
     });
+  });
+
+  it("returns the original ws:// URL from getChromeWebSocketUrl when /json/version provides no debugger URL", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({})));
+    await expect(getChromeWebSocketUrl("ws://127.0.0.1:12345", 50)).resolves.toBe(
+      "ws://127.0.0.1:12345",
+    );
   });
 
   it("verifies the exact managed browser pid through CDP SystemInfo", async () => {

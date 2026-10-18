@@ -96,6 +96,22 @@ type ReplayMutation<T> = {
   publish?: (result: T) => void;
 };
 
+function prepareReplayCompletion(
+  receipt: SignedReceipt,
+  body: MessageBody | undefined,
+  key: Uint8Array,
+  rng: (length: number) => Uint8Array,
+): () => Pick<ReefReplayRecord, "receipt" | "body"> {
+  const input = structuredClone({ receipt, body });
+  let prepared: Pick<ReefReplayRecord, "receipt" | "body"> | undefined;
+  // Freeze input before yielding and reuse ciphertext if a competing write wins.
+  return () =>
+    (prepared ??= {
+      receipt: input.receipt,
+      ...(input.body ? { body: encryptReplayBody(input.body, key, rng) } : {}),
+    });
+}
+
 export class ReefSqliteReplayStore implements ReplayStore {
   readonly #bodyKey: Uint8Array;
   readonly #rng: (length: number) => Uint8Array;
@@ -230,7 +246,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
       throw new Error("receipt id does not match replay claim");
     }
     validateReplayCompletion(receipt, body);
-    let completion: Pick<ReefReplayRecord, "receipt" | "body"> | undefined;
+    const completion = prepareReplayCompletion(receipt, body, this.#bodyKey, this.#rng);
     const key = reefReplayStoreKey(peer, id);
     await this.#mutate(key, () => {
       const owner = this.#claimOwners.get(key);
@@ -240,11 +256,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
             return { value: existing, result: false };
           }
           const { claimOwner: _claimOwner, claimExpiresAt: _claimExpiresAt, ...rest } = existing;
-          completion ??= {
-            receipt,
-            ...(body ? { body: encryptReplayBody(body, this.#bodyKey, this.#rng) } : {}),
-          };
-          return { value: { ...rest, state: "completed", ...completion }, result: true };
+          return { value: { ...rest, state: "completed", ...completion() }, result: true };
         },
         publish: (completed) => {
           if (!completed) {
@@ -293,10 +305,10 @@ export class ReefSqliteReplayStore implements ReplayStore {
       }
       return existing.body
         ? {
-            receipt: existing.receipt,
+            receipt: structuredClone(existing.receipt),
             body: decryptReplayBody(existing.body, this.#bodyKey),
           }
-        : { receipt: existing.receipt };
+        : { receipt: structuredClone(existing.receipt) };
     };
     const key = reefReplayStoreKey(peer, id);
     return this.#enqueue(async () => read(await this.#store.lookup(key)));

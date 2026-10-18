@@ -82,8 +82,7 @@ export function startWorktreeMaintenance(params: {
     }
   };
   const owner: MaintenanceOwner = {
-    request: (options = {}) => {
-      const { jobId, retryDeferred } = options;
+    request: ({ jobId, retryDeferred } = {}) => {
       assertActive();
       if (jobId) {
         if (!receipt || receipt.jobId !== jobId) {

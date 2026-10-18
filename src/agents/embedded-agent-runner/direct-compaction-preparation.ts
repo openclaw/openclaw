@@ -111,12 +111,8 @@ export async function prepareDirectCompactionAttempt(
     workspaceDir: resolvedWorkspace,
     pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
-  const fail = (
-    reason: string,
-    err?: unknown,
-    explicitReasonClass?: "compaction_model_unresolved",
-  ): EmbeddedAgentCompactResult => {
-    const failureReason = explicitReasonClass ?? classifyCompactionReason(reason);
+  const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
+    const failureReason = classifyCompactionReason(reason);
     const failure = err ? describeFailoverError(err) : undefined;
     const detail =
       failureReason === "unknown" ? formatUnknownCompactionReasonDetail(reason) : undefined;
@@ -156,10 +152,7 @@ export async function prepareDirectCompactionAttempt(
   const { model, error, authStorage, modelRegistry } = modelResolution;
   if (!model) {
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
-    return {
-      ok: false as const,
-      result: fail(reason, undefined, "compaction_model_unresolved"),
-    };
+    return { ok: false as const, result: fail(reason) };
   }
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native

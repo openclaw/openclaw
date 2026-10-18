@@ -19,7 +19,7 @@ import {
   resolveDiscordComponentSpec,
   sendDiscordComponentMessageLazy,
 } from "./outbound-components.js";
-import { createDiscordOutboundSendContext } from "./outbound-send-context.js";
+import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { hasDiscordMessageCreateAmbiguity } from "./retry.js";
 import {
   createDiscordSendReceipt,
@@ -57,6 +57,26 @@ export async function sendDiscordOutboundPayload(params: {
     text: ctx.payload.text ?? "",
   });
   const mediaUrls = resolvePayloadMediaUrls(payload);
+  const sendContext = await createDiscordPayloadSendContext(ctx);
+  const deliveryOptions = (reply = sendContext.resolveReply()) => ({
+    reply,
+    accountId: ctx.accountId ?? undefined,
+    silent: ctx.silent ?? undefined,
+    cfg: ctx.cfg,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertPlatformSendAuthorized: ctx.assertDirectAdapterHandoff,
+  });
+  const formattedDeliveryOptions = (reply = sendContext.resolveReply()) => ({
+    ...deliveryOptions(reply),
+    ...sendContext.formatting,
+  });
+  const mediaDeliveryOptions = (mediaUrl: string) => ({
+    mediaUrl,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    ...formattedDeliveryOptions(),
+  });
   const payloadContext = { ...ctx, payload };
   const deliveredResults: DiscordSendResult[] = [];
   let createdThreadId: string | undefined;
@@ -77,7 +97,6 @@ export async function sendDiscordOutboundPayload(params: {
       });
     }
   };
-  const sendContext = await createDiscordOutboundSendContext(payloadContext);
   const completeResult = <T extends { receipt?: DiscordSendResult["receipt"] }>(result: T): T =>
     createdThreadId
       ? {
@@ -90,6 +109,10 @@ export async function sendDiscordOutboundPayload(params: {
       : result;
   const completeDelivery = (result: DiscordSendResult) =>
     attachChannelToResult("discord", toDiscordOutboundDeliveryResult(completeResult(result)));
+  const onDeliveryResult = async (result: DiscordSendResult) =>
+    await payloadContext.onDeliveryResult?.(
+      attachChannelToResult("discord", toDiscordOutboundDeliveryResult(result)),
+    );
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
     // Defer voice failure until independent remainder sends finish while preserving progress.
@@ -98,11 +121,12 @@ export async function sendDiscordOutboundPayload(params: {
     let lastResult = createDiscordUnknownPayloadResult(sendContext.target);
     try {
       const voiceUrl = expectDefined(mediaUrls.at(0), "non-empty Discord voice media URLs");
-      lastResult = await sendContext.sendVoice(
-        sendContext.target,
-        voiceUrl,
-        sendContext.voiceOptions(voiceReply),
-      );
+      lastResult = await sendContext.sendVoice(sendContext.target, voiceUrl, {
+        ...deliveryOptions(voiceReply),
+        mediaAccess: ctx.mediaAccess,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+      });
     } catch (err) {
       // A lost create response can hide a committed voice; a text retry has a different nonce.
       if (hasDiscordMessageCreateAmbiguity(err)) {
@@ -121,17 +145,19 @@ export async function sendDiscordOutboundPayload(params: {
       if (fallbackText) {
         await sendContext.send(sendContext.target, fallbackText, {
           verbose: false,
-          ...sendContext.options(voiceReply),
+          ...formattedDeliveryOptions(voiceReply),
+          onDeliveryResult,
         });
       }
       voiceFailure = { error: err };
     }
     if (!voiceFailure) {
-      await sendContext.onDeliveryResult?.(lastResult);
+      await onDeliveryResult(lastResult);
       if (payload.text?.trim()) {
         lastResult = await sendContext.send(sendContext.target, payload.text, {
           verbose: false,
-          ...sendContext.options(),
+          ...formattedDeliveryOptions(),
+          onDeliveryResult,
         });
       }
     }
@@ -139,7 +165,8 @@ export async function sendDiscordOutboundPayload(params: {
       try {
         lastResult = await sendContext.send(sendContext.target, "", {
           verbose: false,
-          ...sendContext.mediaOptions(mediaUrl),
+          ...mediaDeliveryOptions(mediaUrl),
+          onDeliveryResult,
         });
       } catch (err) {
         if (!voiceFailure) {
@@ -183,26 +210,29 @@ export async function sendDiscordOutboundPayload(params: {
     sendNoMedia: async () =>
       componentSpec
         ? await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-            ...sendContext.options(),
+            ...formattedDeliveryOptions(),
             filename,
+            onDeliveryResult,
           })
         : await sendContext.send(sendContext.target, payload.text ?? "", {
             verbose: false,
             components: nativeComponents,
             embeds,
             filename,
-            ...sendContext.options(),
+            ...formattedDeliveryOptions(),
+            onDeliveryResult,
           }),
     send: async ({ text, mediaUrl, isFirst }) => {
       if (componentSpec && isFirst) {
         return await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-          ...sendContext.mediaOptions(mediaUrl),
+          ...mediaDeliveryOptions(mediaUrl),
           filename,
+          onDeliveryResult,
         });
       }
       return await sendContext.send(sendContext.target, text, {
         verbose: false,
-        ...sendContext.mediaOptions(mediaUrl),
+        ...mediaDeliveryOptions(mediaUrl),
         ...(!componentSpec
           ? {
               components: isFirst ? nativeComponents : undefined,
@@ -210,6 +240,7 @@ export async function sendDiscordOutboundPayload(params: {
               filename: isFirst ? filename : undefined,
             }
           : {}),
+        onDeliveryResult,
       });
     },
   });

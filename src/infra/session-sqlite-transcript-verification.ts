@@ -26,13 +26,12 @@ export function verifyTranscriptEvents(
       readTranscriptFingerprint(source.path),
       source.originalPath,
     )((event) => stage.append(0, seq++, JSON.stringify(canonicalizeTranscriptEventMedia(event))));
-    const repair = stage.repairLegacyTranscript(0);
-    // Historical receipts require exact payloads; retries accept only recognized branch repair.
-    if (
-      (mode === "ordered" && (repair.repaired || !repair.recognized)) ||
-      (repair.branchRepaired && !repair.recognized)
-    ) {
-      return undefined;
+    if (mode === "ordered") {
+      const repair = stage.repairLegacyTranscript(0);
+      // Receipt adoption retains its original order and branch-repair contract.
+      if (repair.repaired || !repair.recognized) {
+        return undefined;
+      }
     }
     const db = getSessionKysely(database);
     const sqliteEvents = executeSqliteQueryTakeFirstSync(
@@ -54,7 +53,8 @@ export function verifyTranscriptEvents(
           .orderBy("seq", "asc"),
       )) {
         if (mode !== "ordered") {
-          const entry = stage.addSeen(event.event_json, true);
+          stage.addSeen(event.event_json);
+          const entry: unknown = JSON.parse(event.event_json);
           if (isRecord(entry) && typeof entry.id === "string") {
             stage.addSeen(`id\0${entry.id}`);
           }
@@ -71,7 +71,7 @@ export function verifyTranscriptEvents(
     }
     if (mode === "ordered" || expected.done) {
       validate();
-      return expected.done ? { events: repair.events, missingEvents: 0, sqliteEvents } : undefined;
+      return expected.done ? { events: seq, missingEvents: 0, sqliteEvents } : undefined;
     }
     let missingEvents = 0;
     let firstMissing: string | undefined;
@@ -96,12 +96,15 @@ export function verifyTranscriptEvents(
       firstMissing ??= id;
       missingEvents += 1;
     }
-    // Appending must not require reconstruction or discard unrecognized history.
-    if (missingEvents > 0 && (repair.branchRepaired || !repair.recognized)) {
-      return undefined;
+    if (missingEvents > 0) {
+      const repair = stage.repairLegacyTranscript(0);
+      // Missing history must be appendable without discarding or rewriting original rows.
+      if (repair.repaired || !repair.recognized) {
+        return undefined;
+      }
     }
     validate();
-    return { events: repair.events, missingEvents, sqliteEvents };
+    return { events: seq, missingEvents, sqliteEvents };
   });
 }
 

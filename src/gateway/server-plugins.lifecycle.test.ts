@@ -247,8 +247,8 @@ describe("gateway plugin instance bindings", () => {
           const adapter = watcher.attach(options);
           return {
             ...adapter,
-            async start() {
-              await adapter.start();
+            start() {
+              adapter.start();
               queueMicrotask(() => watcher.emit("ready"));
             },
           };

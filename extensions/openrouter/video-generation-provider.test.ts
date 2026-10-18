@@ -1,5 +1,4 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { getProviderHttpMocks } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import {
   expectExplicitVideoGenerationCapabilities,
   expectUnifiedModelCatalogEntries,
@@ -21,28 +20,63 @@ const {
   resolveApiKeyForProviderMock,
   resolveProviderHttpRequestConfigMock,
   waitProviderOperationPollIntervalMock,
-} = getProviderHttpMocks();
+} = vi.hoisted(() => ({
+  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+  fetchWithTimeoutGuardedMock: vi.fn(),
+  postJsonRequestMock: vi.fn(),
+  resolveApiKeyForProviderMock: vi.fn(async () => ({ apiKey: "openrouter-key" })),
+  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => {
+    const request = params.request as
+      | {
+          allowPrivateNetwork?: boolean;
+          auth?:
+            | { mode: "provider-default" }
+            | { mode: "authorization-bearer"; token: string }
+            | {
+                mode: "header";
+                headerName: string;
+                value: string;
+                prefix?: string;
+              };
+          headers?: Record<string, string>;
+        }
+      | undefined;
+    const headers = new Headers(params.defaultHeaders as HeadersInit | undefined);
+    for (const [key, value] of Object.entries(request?.headers ?? {})) {
+      headers.set(key, value);
+    }
+    if (request?.auth?.mode === "authorization-bearer") {
+      headers.set("Authorization", `Bearer ${request.auth.token}`);
+    } else if (request?.auth?.mode === "header") {
+      headers.delete("Authorization");
+      headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
+    }
+    return {
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: request?.allowPrivateNetwork === true,
+      headers,
+      dispatcherPolicy: undefined,
+      requestConfig: {},
+    };
+  }),
+  waitProviderOperationPollIntervalMock: vi.fn(async () => {}),
+}));
 
-resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
-waitProviderOperationPollIntervalMock.mockResolvedValue(undefined);
-resolveProviderHttpRequestConfigMock.mockImplementation((params) => {
-  const request = params.request;
-  const headers = new Headers(params.defaultHeaders);
-  for (const [key, value] of Object.entries(request?.headers ?? {})) {
-    headers.set(key, value);
-  }
-  if (request?.auth?.mode === "authorization-bearer") {
-    headers.set("Authorization", `Bearer ${request.auth.token}`);
-  } else if (request?.auth?.mode === "header") {
-    headers.delete("Authorization");
-    headers.set(request.auth.headerName, `${request.auth.prefix ?? ""}${request.auth.value}`);
-  }
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  resolveApiKeyForProvider: resolveApiKeyForProviderMock,
+}));
+
+vi.mock("openclaw/plugin-sdk/provider-http", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+    "openclaw/plugin-sdk/provider-http",
+  );
   return {
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: request?.allowPrivateNetwork === true,
-    headers,
-    dispatcherPolicy: undefined,
-    requestConfig: {},
+    ...actual,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    fetchWithTimeoutGuarded: fetchWithTimeoutGuardedMock,
+    postJsonRequest: postJsonRequestMock,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    waitProviderOperationPollInterval: waitProviderOperationPollIntervalMock,
   };
 });
 
@@ -225,13 +259,6 @@ describe("openrouter video generation provider", () => {
   });
 
   afterEach(resetVideoMocks);
-
-  it("rejects a duration that rounds to zero before submission", async () => {
-    await expect(generateVideo({ prompt: "a lobster", durationSeconds: 0.4 })).rejects.toThrow(
-      "durationSeconds must be a positive duration",
-    );
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-  });
 
   it("declares explicit mode capabilities", () => {
     const provider = buildOpenRouterVideoGenerationProvider();

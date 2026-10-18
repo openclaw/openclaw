@@ -11,6 +11,8 @@ import { observeSqliteWalPeriodicWork } from "../../infra/sqlite-wal-scheduler.t
 import { configureSqliteWalMaintenance } from "../../infra/sqlite-wal.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { drainAgentDatabaseResources } from "../../state/openclaw-agent-db-resources.js";
@@ -92,10 +94,18 @@ function createFixture() {
   return { database, databaseOptions: { ...options, path: database.path } };
 }
 
-test.each(["reclaim", "resource-close", "shared-state-close"] as const)(
+test.each([
+  "reclaim",
+  "resource-close",
+  "shared-state-close",
+  "resource-close-replaced",
+  "resource-close-removed",
+] as const)(
   "reclaims pages off-thread and applies current checkpoint receipts (%s)",
   async (recovery) => {
     const { database, databaseOptions } = createFixture();
+    const staleReceipt =
+      recovery === "resource-close-replaced" || recovery === "resource-close-removed";
     const databasePathKey = sqliteReaderDatabasePathKey(database.path);
     database.db.exec(`INSERT INTO cache_entries(scope, key, blob, updated_at)
     VALUES ('wal-proof', 'pages', zeroblob(4194304), 1);
@@ -149,6 +159,30 @@ test.each(["reclaim", "resource-close", "shared-state-close"] as const)(
           },
         });
       });
+    const nativeStopped = createDeferredCore();
+    const releaseReceipt = createDeferredCore();
+    const openStore = workerStore.openAgentDatabaseSqliteWorkerStore;
+    const delayReceipt = staleReceipt
+      ? vi
+          .spyOn(workerStore, "openAgentDatabaseSqliteWorkerStore")
+          .mockImplementation((options, custody) =>
+            openStore(options, {
+              ...custody,
+              onNativeStopped(stopped, readReceipt, readOpenRefused) {
+                custody.onNativeStopped?.(
+                  sqliteReaderDatabasePathKey(options.databasePath) === databasePathKey
+                    ? stopped.then(async () => {
+                        nativeStopped.resolve();
+                        await releaseReceipt.promise;
+                      })
+                    : stopped,
+                  readReceipt,
+                  readOpenRefused,
+                );
+              },
+            }),
+          )
+      : undefined;
     let following: Promise<void> | undefined;
     try {
       reader.exec("BEGIN");
@@ -236,19 +270,44 @@ test.each(["reclaim", "resource-close", "shared-state-close"] as const)(
           closing = closing.then(() => {
             closeSettled = true;
           });
+          if (staleReceipt) {
+            await Promise.race([nativeStopped.promise, closing]);
+            expect(closeSettled).toBe(false);
+            expect(database.db.isOpen).toBe(false);
+            expect(reader.isOpen).toBe(false);
+            expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
+            // Native close has released the handles and lease; receipt publication is still gated.
+            const retiredPath = `${database.path}.retired`;
+            fs.renameSync(database.path, retiredPath);
+            if (recovery === "resource-close-replaced") {
+              fs.copyFileSync(retiredPath, database.path);
+            }
+            releaseReceipt.resolve();
+          }
           await closing;
           expect(closeSettled).toBe(true);
           const walPath = `${database.path}-wal`;
           expect(fs.existsSync(walPath) ? fs.statSync(walPath).size : 0).toBe(0);
-          expect(observed).toContain("complete");
+          if (staleReceipt) {
+            expect(observed).not.toContain("complete");
+            expect(relayedCompletions).toEqual([]);
+            expect(budget.checkpointBlocked).toBe(deferredCheckpoint);
+          } else {
+            expect(observed).toContain("complete");
+          }
         } finally {
+          releaseReceipt.resolve();
           await Promise.allSettled([closing]);
           unsubscribe();
         }
       }
-      expect(relayedCompletions.length).toBeGreaterThan(0);
-      expect(budget.checkpointBlocked).toBeUndefined();
+      if (!staleReceipt) {
+        expect(relayedCompletions.length).toBeGreaterThan(0);
+        expect(budget.checkpointBlocked).toBeUndefined();
+      }
     } finally {
+      releaseReceipt.resolve();
+      delayReceipt?.mockRestore();
       if (reader.isOpen) {
         if (reader.isTransaction) {
           reader.exec("ROLLBACK");

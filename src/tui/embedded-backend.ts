@@ -327,7 +327,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         key: opts.sessionKey,
         ...loadOptions,
       });
-      this.scheduler.signal.throwIfAborted();
       const activeSessionId = resolveActiveEmbeddedRunSessionId(canonicalKey);
       if (activeSessionId) {
         const claimed = await claimPendingEmbeddedAgentQuestionAnswer(
@@ -401,7 +400,17 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
     this.runs.set(runId, run);
 
-    const runPromise = (run.promise = this.runTurn(runId, run, opts));
+    const runPromise = (run.promise = this.runTurn({
+      runId,
+      sessionKey: opts.sessionKey,
+      agentId: opts.agentId,
+      message: opts.message,
+      thinking: opts.thinking,
+      deliver: opts.deliver,
+      timeoutMs: opts.timeoutMs,
+      controller,
+      queuedAfter,
+    }));
 
     if (isQueueCommand) {
       // Queue directives are control-plane mutations. Complete them before
@@ -1188,80 +1197,102 @@ export class EmbeddedTuiBackend implements TuiBackend {
     run.lifecycleYielded = isAgentLifecycleYieldedWaiting(evt.data);
   }
 
-  private async runTurn(runId: string, run: LocalRunState, opts: ChatSendOptions) {
-    // This turn owns its state until finally; stop waits for owned promises before clearing runs.
-    const { controller, queuedAfter } = run;
+  private async runTurn(params: {
+    runId: string;
+    sessionKey: string;
+    agentId?: string;
+    message: string;
+    thinking?: string;
+    deliver?: boolean;
+    timeoutMs?: number;
+    controller: AbortController;
+    queuedAfter?: QueuedSessionRun;
+  }) {
     try {
-      if (queuedAfter) {
+      const recheckPreparedRuntimeAtAdmission = params.queuedAfter !== undefined;
+      if (params.queuedAfter) {
         try {
           await Promise.race([
-            waitForQueuedLocalRun(queuedAfter, runId),
-            waitForAbortSignal(controller.signal),
+            waitForQueuedLocalRun(params.queuedAfter, params.runId),
+            waitForAbortSignal(params.controller.signal),
           ]);
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error);
-          this.emitChatTerminal(
-            runId,
-            run,
-            "error",
-            `previous run did not finish cleanly: ${errorMessage}`,
-          );
+          const run = this.runs.get(params.runId);
+          if (run) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.emitChatTerminal(
+              params.runId,
+              run,
+              "error",
+              `previous run did not finish cleanly: ${errorMessage}`,
+            );
+          }
           return;
         }
-        if (controller.signal.aborted) {
-          this.emitChatTerminal(runId, run, "aborted");
+        if (params.controller.signal.aborted) {
+          const run = this.runs.get(params.runId);
+          if (run) {
+            this.emitChatTerminal(params.runId, run, "aborted");
+          }
           return;
         }
       }
-      delete run.queuedAfter;
-      let message = opts.message;
-      if (run.pendingQueue) {
-        await waitForQueueDebounce(run.pendingQueue, controller.signal);
-        if (controller.signal.aborted) {
-          this.emitChatTerminal(runId, run, "aborted");
+      const activeRun = this.runs.get(params.runId);
+      delete activeRun?.queuedAfter;
+      let message = params.message;
+      if (activeRun?.pendingQueue) {
+        await waitForQueueDebounce(activeRun.pendingQueue, params.controller.signal);
+        if (params.controller.signal.aborted) {
+          this.emitChatTerminal(params.runId, activeRun, "aborted");
           return;
         }
-        message = buildLocalQueuedPrompt(run.pendingQueue);
-        delete run.pendingQueue;
+        message = buildLocalQueuedPrompt(activeRun.pendingQueue);
+        delete activeRun.pendingQueue;
       }
-      if (queuedAfter) {
+      if (recheckPreparedRuntimeAtAdmission) {
         // A turn may have queued behind another local run while a config write published a new
         // generation. Recheck at actual model admission so it cannot use stale facts.
         await this.preparedModelRuntime.waitUntilReady();
-        if (controller.signal.aborted) {
-          this.emitChatTerminal(runId, run, "aborted");
+        if (params.controller.signal.aborted) {
+          if (activeRun) {
+            this.emitChatTerminal(params.runId, activeRun, "aborted");
+          }
           return;
         }
       }
-      if (run.question) {
+      if (activeRun?.question) {
         const result = await this.runBtwTurn({
-          runId,
-          sessionKey: opts.sessionKey,
-          ...(opts.agentId ? { agentId: opts.agentId } : {}),
-          question: run.question,
-          timeoutMs: opts.timeoutMs,
-          controller,
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          question: activeRun.question,
+          timeoutMs: params.timeoutMs,
+          controller: params.controller,
         });
-        if (controller.signal.aborted) {
-          this.emitChatTerminal(runId, run, "aborted");
+        const run = this.runs.get(params.runId);
+        if (!run) {
+          return;
+        }
+        if (params.controller.signal.aborted) {
+          this.emitChatTerminal(params.runId, run, "aborted");
           return;
         }
         this.emit("chat.side_result", {
           kind: "btw",
-          runId,
+          runId: params.runId,
           sessionKey: result.sessionKey,
           agentId: run.agentId,
           question: run.question,
           text: result.text,
           ...(result.isError ? { isError: true } : {}),
         });
-        this.emitChatTerminal(runId, run, "final");
+        this.emitChatTerminal(params.runId, run, "final");
         return;
       }
-      const loadOptions = opts.agentId ? { agentId: opts.agentId } : undefined;
+      const loadOptions = params.agentId ? { agentId: params.agentId } : undefined;
       const { agentId, canonicalKey, entry } = await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: getRuntimeConfig(),
-        key: opts.sessionKey,
+        key: params.sessionKey,
         ...loadOptions,
       });
       const result = await agentCommandFromIngress(
@@ -1274,22 +1305,26 @@ export class EmbeddedTuiBackend implements TuiBackend {
           sessionKey: canonicalKey,
           agentId,
           ...(entry?.sessionId ? { sessionId: entry.sessionId } : {}),
-          thinking: opts.thinking,
-          deliver: opts.deliver,
+          thinking: params.thinking,
+          deliver: params.deliver,
           channel: INTERNAL_MESSAGE_CHANNEL,
           runContext: {
             messageChannel: INTERNAL_MESSAGE_CHANNEL,
           },
-          timeout: timeoutSecondsFromMs(opts.timeoutMs),
-          runId,
-          abortSignal: controller.signal,
+          timeout: timeoutSecondsFromMs(params.timeoutMs),
+          runId: params.runId,
+          abortSignal: params.controller.signal,
           allowModelOverride: false,
         },
         silentRuntime,
         this.deps,
       );
+      const run = this.runs.get(params.runId);
+      if (!run) {
+        return;
+      }
       if (
-        this.projectTerminalOutcome(runId, run, result?.meta ?? {}, {
+        this.projectTerminalOutcome(params.runId, run, result?.meta ?? {}, {
           visibleText: payloadText(result?.payloads),
         })
       ) {
@@ -1306,20 +1341,24 @@ export class EmbeddedTuiBackend implements TuiBackend {
         const stopReason =
           run.lifecycleStopReason ??
           (typeof result?.meta?.stopReason === "string" ? result.meta.stopReason : undefined);
-        this.emitChatTerminal(runId, run, "final", stopReason);
+        this.emitChatTerminal(params.runId, run, "final", stopReason);
       }
     } catch (error) {
+      const run = this.runs.get(params.runId);
+      if (!run) {
+        return;
+      }
       const errorMessage = error instanceof Error ? error.message : String(error);
       const outcome = findAgentRunTerminalOutcome(error);
       this.projectTerminalOutcome(
-        runId,
+        params.runId,
         run,
         outcome ?? { status: "error", error: errorMessage },
         outcome ? { terminalOutcome: outcome } : {},
       );
     } finally {
-      run.markQueuedRunReady();
-      this.runs.delete(runId);
+      this.runs.get(params.runId)?.markQueuedRunReady();
+      this.runs.delete(params.runId);
     }
   }
 }

@@ -58,12 +58,7 @@ async function captureAttempt(codeModeOverride: boolean, sessionStore: string) {
       };
     },
   });
-  expect(
-    result.terminal.kind,
-    result.terminal.kind === "failed"
-      ? `${result.terminal.source}: ${result.terminal.error instanceof Error ? result.terminal.error.stack : String(result.terminal.error)}`
-      : undefined,
-  ).toBe("ok");
+  expect(result.terminal.kind).toBe("ok");
   if (!captured) {
     throw new Error("Expected a provider submission after history and prompt preparation");
   }

@@ -2,4 +2,3 @@
 export { createTeamReportsHttpHandler } from "./src/http.js";
 export { listWorkSessions } from "./src/work-sessions.js";
 export { createTeamReportsStore } from "./src/store.js";
-export { teamReportsDatabasePortApi } from "./database-port-api.js";

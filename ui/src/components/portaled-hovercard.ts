@@ -85,43 +85,10 @@ export class PortaledHovercardController {
   };
 
   readonly handleCardKeyDown = (event: KeyboardEvent) => {
-    if (
-      event.defaultPrevented ||
-      event.isComposing ||
-      event.keyCode === 229 ||
-      (event.key !== "Escape" && event.key !== "Tab") ||
-      (event.key === "Tab" && (event.altKey || event.ctrlKey || event.metaKey))
-    ) {
+    if (event.key !== "Escape" && event.key !== "Tab") {
       return;
     }
     const focusables = this.focusables();
-    const focused = event.composedPath()[0];
-    if (event.key === "Tab" && focused instanceof HTMLElement) {
-      const tooltip = focused.closest("openclaw-tooltip[open]");
-      const content = tooltip?.querySelector(":scope > [slot=content]");
-      if (tooltip && content) {
-        const owned = focusables.filter(
-          (element) => element.closest("openclaw-tooltip") === tooltip,
-        );
-        const trigger = owned.findLast((element) => !content.contains(element));
-        const first = owned.find((element) => content.contains(element));
-        // WebKit does not reliably cross from a slotted trigger into the
-        // nested top-layer surface. Bridge only that boundary; native Tab
-        // still owns traversal within the inspection and the card.
-        const destination = event.shiftKey
-          ? focused === first
-            ? trigger
-            : undefined
-          : focused === trigger
-            ? first
-            : undefined;
-        if (destination) {
-          event.preventDefault();
-          destination.focus();
-          return;
-        }
-      }
-    }
     const edge = event.shiftKey ? focusables[0] : focusables.at(-1);
     if (event.key === "Tab" && document.activeElement !== edge) {
       return;
@@ -186,15 +153,7 @@ export class PortaledHovercardController {
 
   focusables(): HTMLElement[] {
     // Decorative avatar twins opt out; cards share the same keyboard traversal contract.
-    return [
-      ...(this.card?.querySelectorAll<HTMLElement>(
-        'a[href]:not([tabindex="-1"]), button:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
-      ) ?? []),
-    ].filter((element) => {
-      // Slotted inspection controls join native Tab traversal only while their tooltip is open.
-      const content = element.closest('[slot="content"]');
-      return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
-    });
+    return [...(this.card?.querySelectorAll<HTMLElement>('a[href]:not([tabindex="-1"])') ?? [])];
   }
 
   scheduleOpen(delay: number, open: () => void, trigger = this.trigger): void {

@@ -119,7 +119,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
     vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
 
-    const config = {
+    getRuntimeConfigMock.mockReturnValue({
       plugins: {
         allow: [" CODEX "],
         deny: ["CoDeX"],
@@ -132,8 +132,7 @@ describe("createCodexSupervisionToolsMcpServer", () => {
           },
         },
       },
-    };
-    getRuntimeConfigMock.mockReturnValue(config);
+    });
     await serveCodexSupervisionToolsMcp();
 
     const context = acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context;
@@ -151,8 +150,5 @@ describe("createCodexSupervisionToolsMcpServer", () => {
       },
     });
     expect(context?.config?.plugins?.entries).not.toHaveProperty(" CODEX ");
-    expect(config.plugins.entries[" CODEX "].config.supervision.enabled).toBe(false);
-    expect(config.plugins.allow).toEqual([" CODEX "]);
-    expect(config.plugins.deny).toEqual(["CoDeX"]);
   });
 });

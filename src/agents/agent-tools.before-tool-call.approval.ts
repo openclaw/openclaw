@@ -35,7 +35,6 @@ import type {
   HookOutcome,
 } from "./agent-tools.before-tool-call.types.js";
 import { registerActiveEmbeddedRunHumanInputWaitForRun } from "./embedded-agent-runner/run-state.js";
-import { hasInProcessGatewayToolCaller } from "./tools/gateway-caller-availability.js";
 import { withGatewayToolApprovalOwner } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -321,8 +320,6 @@ async function requestPluginToolApprovalDecision(
       );
     }
 
-    // A hosted in-process request can await its own decision without a second approval-scoped RPC.
-    const singlePhase = hasInProcessGatewayToolCaller();
     gatewayApprovalPhase = "request";
     const requestResult: {
       id?: string;
@@ -347,9 +344,9 @@ async function requestPluginToolApprovalDecision(
               ? { approvalReviewerDeviceIds: [params.ctx.approvalReviewerDeviceId] }
               : {}),
             timeoutMs,
-            twoPhase: !singlePhase,
+            twoPhase: true,
           },
-          { expectFinal: singlePhase, signal: params.signal },
+          { expectFinal: false, signal: params.signal },
         ),
     );
     gatewayApprovalPhase = "none";

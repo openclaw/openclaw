@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -159,31 +158,20 @@ describe("placement session retirement", () => {
   it("reuses local session evidence until invalidated, including a receipt during discovery", async () => {
     const placement = localPlacement("session-current");
     const harness = createHarness([placement]);
-    const uninstall = harness.retirement.installMaintenancePreservation({
-      prepareMaintenancePlacements: async () => ({
-        placements: [],
-        assertCurrent: () => {},
-        release: () => {},
-      }),
-    });
-    try {
-      harness.resolveSessionEvidence.mockResolvedValue("current");
-      await harness.retirement.reconcile();
-      await harness.retirement.reconcile();
-      expect(harness.listAsync).toHaveBeenCalledTimes(1);
+    harness.resolveSessionEvidence.mockResolvedValue("current");
+    await harness.retirement.reconcile();
+    await harness.retirement.reconcile();
+    expect(harness.listAsync).toHaveBeenCalledTimes(1);
 
-      sessionChanges.emit({ all: true, scope: "config" });
-      harness.listAsync.mockImplementationOnce(async () => {
-        sessionChanges.emit({ all: true, scope: "stores" });
-        return [placement];
-      });
-      await harness.retirement.reconcile();
-      harness.resolveSessionEvidence.mockResolvedValue("absent");
-      await harness.retirement.reconcile();
-      expect(harness.placements.has(placement.sessionId)).toBe(false);
-    } finally {
-      uninstall();
-    }
+    harness.retirement.invalidateAll();
+    harness.listAsync.mockImplementationOnce(async () => {
+      harness.retirement.invalidateAll();
+      return [placement];
+    });
+    await harness.retirement.reconcile();
+    harness.resolveSessionEvidence.mockResolvedValue("absent");
+    await harness.retirement.reconcile();
+    expect(harness.placements.has(placement.sessionId)).toBe(false);
   });
 
   it("retires an exact local placement after its session disappears", async () => {
@@ -302,13 +290,13 @@ describe("placement session retirement", () => {
 
     expect(harness.listAsync).toHaveBeenCalledOnce();
     expect(harness.createSessionEvidenceResolver).toHaveBeenCalledOnce();
-    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith([first, second], undefined);
+    expect(harness.createSessionEvidenceResolver).toHaveBeenCalledWith([first, second]);
 
     harness.resolveSessionEvidence.mockResolvedValue("absent");
     harness.retirement.markPending(first.sessionId);
     await harness.retirement.reconcile();
 
-    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first], undefined);
+    expect(harness.createSessionEvidenceResolver).toHaveBeenLastCalledWith([first]);
     expect(harness.placements.has(first.sessionId)).toBe(false);
     expect(harness.placements.has(second.sessionId)).toBe(true);
     expect(harness.listAsync).toHaveBeenCalledOnce();

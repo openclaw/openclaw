@@ -1,5 +1,5 @@
 import type { Question } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, createUniqueId, For } from "solid-js";
+import { createEffect, createSignal, createUniqueId, For } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
@@ -28,12 +28,11 @@ function Shortcut(props: { value: number }) {
 
 export function QuestionOptions(props: QuestionOptionsProps) {
   const implicit = () => props.question.resource?.selection === "implicit";
-  const options = createMemo(() =>
+  const options = () =>
     props.question.options.filter(
       (option) => !implicit() || props.selected.has(option.value ?? option.label),
-    ),
-  );
-  const hasThumbnails = createMemo(() => options().some((option) => option.thumbnail));
+    );
+  const hasThumbnails = () => options().some((option) => option.thumbnail);
   return (
     <>
       {props.question.options.length > 0 && (

@@ -151,7 +151,13 @@ export function createDirFetchTool(): AnyAgentTool {
       }
       const files: UnpackedFileEntry[] = [];
       for (const { relativePath: relPath, path: absPath } of walked.entries) {
-        const { size } = await fs.stat(absPath);
+        let size;
+        try {
+          const st = await fs.stat(absPath);
+          size = st.size;
+        } catch {
+          continue;
+        }
         const mimeType = mimeFromExtension(relPath);
         const fileSha256 = (await sha256File(absPath)).digest;
         files.push({ relPath, size, mimeType, sha256: fileSha256, localPath: absPath });

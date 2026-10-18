@@ -70,7 +70,7 @@ export const execSchema = Type.Object({
     }),
   ),
   host: optionalStringEnum(EXEC_TOOL_HOST_VALUES, {
-    description: "Omit: named node or configured host. auto: configured host.",
+    description: "Omit/auto: inherit configured host.",
   }),
   ask: Type.Optional(
     Type.String({
@@ -80,7 +80,7 @@ export const execSchema = Type.Object({
   ),
   node: Type.Optional(
     Type.String({
-      description: "Node id/name; implies host=node if host is omitted. Other hosts conflict.",
+      description: "Node id/name for host=node.",
     }),
   ),
 });
@@ -100,7 +100,7 @@ export function createExecSchema(
   return Type.Object({
     ...execSchema.properties,
     host: optionalStringEnum(hosts, {
-      description: `Omit: named node or configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}). auto: configured host.`,
+      description: `Omit/auto: inherit configured host (${configuredTarget === "auto" ? (sandboxAvailable ? "sandbox" : "gateway") : configuredTarget}).`,
     }),
   });
 }

@@ -7,7 +7,7 @@ import {
   createManagerIndexFixture,
   memoryIndexFixtureWriter,
 } from "./manager-index.test-support.js";
-import * as knnSubprocess from "./manager-search-knn.js";
+import * as knnSubprocess from "./manager-search-knn-subprocess.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -73,7 +73,7 @@ describe("memory search provenance enrichment", () => {
 
     const prepare = db.prepare.bind(db);
     const queries = vi.spyOn(db, "prepare").mockImplementation(prepare);
-    const knn = vi.spyOn(knnSubprocess, "searchMemoryVectorIndex");
+    const knn = vi.spyOn(knnSubprocess, "runVectorKnnInSubprocess");
     try {
       const results = await manager.search(entry.query, {
         lexicalOnly: !semantic,

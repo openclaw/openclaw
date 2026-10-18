@@ -14,7 +14,6 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { markCanonicalSessionValidationPending } from "../../../config/sessions/session-canonical-key.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { prepareGatewayStartupSessions } from "../../../gateway/server-startup-session-migration.js";
@@ -30,7 +29,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   closeOpenClawAgentDatabasesAsync,
-  runOpenClawAgentWriteTransaction,
+  openOpenClawAgentDatabase,
 } from "../../../state/openclaw-agent-db.js";
 import { createRecoveryRuntimeFixture } from "../../main-session-recovery/main-session-recovery-runtime.test-support.js";
 import { transitionMainSessionRecovery } from "../../main-session-recovery/main-session-recovery-state.js";
@@ -65,7 +64,7 @@ vi.mock("../../../gateway/session-utils.fs.js", () => ({
 }));
 
 describe("subagent parent recovery — durable yielded continuation", () => {
-  const fixture = useSubagentRestartRecoveryFixture({ reuseDatabaseWorkers: true });
+  const fixture = useSubagentRestartRecoveryFixture();
   const { activateGatewayRuntime, dispatchAgent, gatewayRuntime } = fixture;
 
   it.each([
@@ -574,18 +573,12 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           { cwd: fixture.stateDir, message },
         );
       }
+      const { db } = openOpenClawAgentDatabase({ agentId: parentAgentId });
       // The old writer persisted running for both turns; only a new start cleared yielded timing.
-      runOpenClawAgentWriteTransaction(
-        (database) => {
-          database.db
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(json_remove(entry_json, '$.restartRecoveryRuns'), '$.status', 'running') WHERE session_key = ?",
-            )
-            .run(parentKey);
-          markCanonicalSessionValidationPending(database, [parentKey]);
-        },
-        { agentId: parentAgentId },
-      );
+      db.prepare(
+        "UPDATE session_nodes SET entry_json = json_set(json_remove(entry_json, '$.restartRecoveryRuns'), '$.status', 'running') WHERE session_key = ?",
+      ).run(parentKey);
+      db.prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?").run(parentKey);
       await closeOpenClawAgentDatabasesAsync(fixture.stateDir);
       await prepareGatewayStartupSessions({
         cfg: getRuntimeConfig(),

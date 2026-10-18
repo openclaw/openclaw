@@ -61,7 +61,6 @@ function openReader(
     : undefined;
   runInNewContext(document.querySelector("script")!.textContent!, {
     document,
-    window: dom.window,
     location: { protocol: location.protocol, host: location.host, hash: location.hash, replace },
     localStorage: storage ?? localStorage,
     sessionStorage: storage ?? sessionStorage,

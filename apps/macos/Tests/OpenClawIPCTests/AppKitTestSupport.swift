@@ -7,22 +7,20 @@ import Testing
 @MainActor
 enum AppKitTestSupport {
     /// Rendered suites share one process and must initialize AppKit only once.
-    private static let initializedApplication: NSApplication = {
+    private static let initializedApplication: (application: NSApplication, didSetActivationPolicy: Bool) = {
         let application = NSApplication.shared
         let didSetActivationPolicy = application.setActivationPolicy(.accessory)
-        let policy = application.activationPolicy()
-        print("AppKit activation: setter=\(didSetActivationPolicy) policy=\(policy.rawValue)")
-        #expect(policy == .accessory)
+        #expect(didSetActivationPolicy)
         application.finishLaunching()
-        return application
+        return (application, didSetActivationPolicy)
     }()
 
     static var application: NSApplication {
-        self.initializedApplication
+        self.initializedApplication.application
     }
 
-    static var hasAccessoryActivationPolicy: Bool {
-        self.application.activationPolicy() == .accessory
+    static var didSetActivationPolicy: Bool {
+        self.initializedApplication.didSetActivationPolicy
     }
 
     static func startApplication() async throws {

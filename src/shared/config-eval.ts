@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { getOrCreatePromise } from "./lazy-promise.js";
-import { isOsRequirementSatisfied, type RequirementsMetadata } from "./requirements.js";
+import type { RequirementsMetadata } from "./requirements.js";
 
 /** Checks a config path with fallback defaults only when the path is unresolved. */
 export function isConfigPathTruthyWithDefaults(
@@ -44,11 +44,11 @@ export function evaluateRuntimeEligibility(
     isConfigPathTruthy: (pathStr: string) => boolean;
   },
 ): boolean {
+  const osList = params.os ?? [];
   if (
-    !isOsRequirementSatisfied(params.os ?? [], [
-      params.platform ?? process.platform,
-      ...(params.remotePlatforms ?? []),
-    ])
+    osList.length > 0 &&
+    !osList.includes(params.platform ?? process.platform) &&
+    !params.remotePlatforms?.some((platform) => osList.includes(platform))
   ) {
     return false;
   }
@@ -106,6 +106,7 @@ function resolveBinarySearch(cache = resolveBinaryCache()) {
   return {
     cache,
     isWindows,
+    pathExt: isWindows ? process.env.PATHEXT : undefined,
     parts: cache.path.split(path.delimiter).filter(Boolean),
     extensions: isWindows ? windowsPathExtensions(process.env.PATHEXT) : [""],
   };
@@ -145,12 +146,16 @@ export function hasBinary(bin: string): boolean {
 export async function prepareBinaryAvailability(
   bins: Iterable<string>,
   assertCurrent?: () => void,
-): Promise<{ hasBinary: (bin: string) => boolean }> {
+): Promise<{ hasBinary: (bin: string) => boolean; isCurrent: () => boolean }> {
   const search = resolveBinarySearch();
   const cwd = process.cwd();
   const pending = new Set(bins).values();
   const available = new Set<string>();
   let failure: { error: unknown } | undefined;
+  const isCurrent = () =>
+    (process.env.PATH ?? "") === search.cache.path &&
+    (search.isWindows ? process.env.PATHEXT : undefined) === search.pathExt &&
+    process.cwd() === cwd;
   const probe = async (bin: string) => {
     for (const candidate of binaryCandidates(search, bin)) {
       if (failure) {
@@ -170,14 +175,16 @@ export async function prepareBinaryAvailability(
         continue;
       }
       assertCurrent?.();
-      available.add(bin);
+      if (isCurrent()) {
+        available.add(bin);
+      }
       return;
     }
   };
   const worker = async () => {
     try {
       for (;;) {
-        if (failure) {
+        if (failure || !isCurrent()) {
           return;
         }
         assertCurrent?.();
@@ -197,5 +204,5 @@ export async function prepareBinaryAvailability(
     throw failure.error;
   }
   assertCurrent?.();
-  return { hasBinary: (bin) => available.has(bin) };
+  return { hasBinary: (bin) => available.has(bin), isCurrent };
 }

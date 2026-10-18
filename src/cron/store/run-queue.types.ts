@@ -1,4 +1,3 @@
-import type { CronEventAdmission } from "../event-source.js";
 import type { CronJob } from "../types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 
@@ -6,7 +5,6 @@ export type CronRunRequestContext = {
   receiptId: string;
   mode: "scheduled" | "force" | "if-enabled" | "on-exit";
   onExitSchedule?: { kind: "on-exit"; command: string; cwd?: string };
-  event?: CronEventAdmission;
 };
 
 export type CronQueuedRun = { job: CronJob; runReceipt: CronRunReceiptHandle };
@@ -14,7 +12,6 @@ export type CronSkippedRequest = {
   job?: CronJob;
   runReceipt: CronRunReceiptHandle;
   error: string;
-  eventInvalidated?: true;
 };
 
 export type CronRunQueueOperations = {

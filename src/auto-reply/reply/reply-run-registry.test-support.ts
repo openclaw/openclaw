@@ -1,28 +1,21 @@
 import "./reply-run-registry.js";
-import { markDiagnosticRunProgress } from "../../logging/diagnostic-run-activity.js";
-import { replyRunState } from "./reply-run-registry.state.js";
+
+type ReplyRunRegistryTestApi = {
+  resetReplyRunRegistry(): void;
+};
+
+function getTestApi(): ReplyRunRegistryTestApi {
+  const api = (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.replyRunRegistryTestApi")
+  ];
+  if (!api) {
+    throw new Error("reply run registry test API is unavailable");
+  }
+  return api as ReplyRunRegistryTestApi;
+}
 
 export const testing = {
   resetReplyRunRegistry(): void {
-    for (const [sessionKey, operation] of replyRunState.activeRunsByKey) {
-      markDiagnosticRunProgress({
-        sessionKey,
-        sessionId: operation.sessionId,
-        reason: "reply_operation:registry_reset",
-      });
-      operation.complete();
-    }
-    replyRunState.activeRunsByKey.clear();
-    replyRunState.activeKeysBySessionId.clear();
-    replyRunState.waitKeysBySessionId.clear();
-    replyRunState.sourceTurnByKey.clear();
-    for (const waiters of replyRunState.waitersByKey.values()) {
-      for (const waiter of waiters) {
-        waiter(false);
-      }
-    }
-    replyRunState.waitersByKey.clear();
-    replyRunState.followupAdmissionBarriersByKey.clear();
-    replyRunState.successorAdmissionBarriersByKey.clear();
+    getTestApi().resetReplyRunRegistry();
   },
 };

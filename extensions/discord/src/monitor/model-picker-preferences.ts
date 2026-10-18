@@ -1,10 +1,16 @@
 import { normalizeAccountId as normalizeSharedAccountId } from "openclaw/plugin-sdk/account-id";
+import {
+  MAX_DATE_TIMESTAMP_MS,
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import {
   buildPreferenceModelKey,
   normalizeModelRef,
   preferenceTimestampMs,
+  sanitizeRecentModels,
 } from "./model-picker-preference-primitives.js";
 
 const DEFAULT_RECENT_LIMIT = 5;
@@ -100,14 +106,30 @@ function comparePreferenceEntries(
   );
 }
 
-function nextPreferenceTimestamp(): {
+function nextPreferenceTimestamp(existingEntries: ModelPickerPreferencesEntry[]): {
   updatedAt: string;
   updatedOrder: number;
 } {
-  lastPreferenceTimestampMs = Math.max(Date.now(), lastPreferenceTimestampMs + 1);
+  const existingMaxTimestampMs = existingEntries.reduce(
+    (max, entry) => Math.max(max, preferenceTimestampMs(entry.updatedAt)),
+    0,
+  );
+  lastPreferenceTimestampMs = Math.min(
+    Math.max(
+      resolveDateTimestampMs(Date.now(), 0),
+      lastPreferenceTimestampMs + 1,
+      existingMaxTimestampMs + 1,
+    ),
+    MAX_DATE_TIMESTAMP_MS,
+  );
+  const existingMaxOrder = existingEntries.reduce(
+    (max, entry) => Math.max(max, timestampOrder(entry.updatedOrder)),
+    0,
+  );
+  lastPreferenceOrder = Math.max(lastPreferenceOrder + 1, existingMaxOrder + 1);
   return {
-    updatedAt: new Date(lastPreferenceTimestampMs).toISOString(),
-    updatedOrder: ++lastPreferenceOrder,
+    updatedAt: resolveTimestampMsToIsoString(lastPreferenceTimestampMs),
+    updatedOrder: lastPreferenceOrder,
   };
 }
 
@@ -131,9 +153,8 @@ export async function readDiscordModelPickerRecentModels(params: {
       !params.allowedModelRefs || params.allowedModelRefs.size === 0
         ? recent
         : recent.filter((modelRef) => params.allowedModelRefs?.has(modelRef));
-    return [...new Set(visible)].slice(0, limit);
+    return sanitizeRecentModels(visible, limit);
   } catch {
-    // Preferences are optional; unavailable history must not fail the model picker.
     return [];
   }
 }
@@ -152,21 +173,19 @@ export async function recordDiscordModelPickerRecentModel(params: {
 
   try {
     const store = openPreferenceStore(params.env);
-    const existingEntries = scopedPreferenceEntries(await store.entries(), key);
-    const timestamp = nextPreferenceTimestamp();
-    const modelKey = buildPreferenceModelKey(key, normalizedModelRef);
-    await store.register(modelKey, {
+    const existingEntries = scopedPreferenceEntries(await store.entries(), key).map(
+      (entry) => entry.value,
+    );
+    const timestamp = nextPreferenceTimestamp(existingEntries);
+    await store.register(buildPreferenceModelKey(key, normalizedModelRef), {
       scopeKey: key,
       modelRef: normalizedModelRef,
       ...timestamp,
     });
     const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
-    const expired = existingEntries
-      .filter((entry) => entry.key !== modelKey)
-      .toSorted(comparePreferenceEntries)
-      .slice(limit - 1);
-    await Promise.all(expired.map((entry) => store.delete(entry.key)));
-  } catch {
-    // Preferences are optional; a failed save must not fail the model command.
-  }
+    const scopedEntries = scopedPreferenceEntries(await store.entries(), key).toSorted(
+      comparePreferenceEntries,
+    );
+    await Promise.all(scopedEntries.slice(limit).map((entry) => store.delete(entry.key)));
+  } catch {}
 }

@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { setImmediate } from "node:timers/promises";
 import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   isOpenClawAgentDatabasePathCurrent,
@@ -189,7 +188,7 @@ export async function prunePublishedSessionArchivesByRetention(params: {
   return withSqliteSessionPageReclamation(
     toDatabaseOptions(params.scope),
     async (_reclaim, assertCurrent, _options, archives) => {
-      const candidates = await archives.readRetentionCandidates();
+      const candidates = await archives.withWriter(archives.readRetentionCandidates);
       assertCurrent();
       const now = params.nowMs ?? Date.now();
       const archiveDirectory = resolveSqliteTranscriptArchiveDirectory(params.scope);
@@ -205,21 +204,13 @@ export async function prunePublishedSessionArchivesByRetention(params: {
           !fs.existsSync(archivePath)
         );
       });
-      let removed = 0;
-      // Small reference sets use narrowed rechecks; each batch returns FIFO custody.
-      for (let offset = 0; offset < removable.length; offset += 16) {
-        if (offset > 0) {
-          await setImmediate();
-        }
-        removed += await archives.withWriter(() => {
-          assertCurrent();
-          return archives.pruneRetention({
-            candidates: removable.slice(offset, offset + 16),
-            archiveDirectory,
-          });
-        });
+      if (removable.length === 0) {
+        return 0;
       }
-      return removed;
+      return archives.withWriter(() => {
+        assertCurrent();
+        return archives.pruneRetention({ candidates: removable, archiveDirectory });
+      });
     },
   );
 }

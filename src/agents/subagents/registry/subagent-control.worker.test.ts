@@ -475,12 +475,7 @@ it.each([
             runId,
             stream: "lifecycle",
             data: earlierSuccess
-              ? {
-                  phase: "end",
-                  status: "ok",
-                  endedAt: completedAtBeforeStop,
-                  terminalReply: { disposition: "visible", text: "Completed before Stop" },
-                }
+              ? { phase: "end", status: "ok", endedAt: completedAtBeforeStop }
               : { phase: "end", status: "error", aborted: true, endedAt: Date.now() },
           });
           runnerSettlement = fixture.settle().finally(() => admission?.release());

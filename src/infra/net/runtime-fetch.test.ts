@@ -19,6 +19,28 @@ class RuntimeFormData {
       ...(typeof filename === "string" ? { filename } : {}),
     });
   }
+
+  *entries(): IterableIterator<[string, unknown]> {
+    for (const record of this.records) {
+      yield [record.name, record.value];
+    }
+  }
+
+  get [Symbol.toStringTag](): string {
+    return "FormData";
+  }
+}
+
+class MockAgent {
+  readonly __testStub = true;
+}
+
+class MockEnvHttpProxyAgent {
+  readonly __testStub = true;
+}
+
+class MockProxyAgent {
+  readonly __testStub = true;
 }
 
 function requireFetchInit(mock: ReturnType<typeof vi.fn>): RequestInit {
@@ -45,10 +67,10 @@ describe("fetchWithRuntimeDispatcher", () => {
     });
 
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: vi.fn(),
-      EnvHttpProxyAgent: vi.fn(),
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
       FormData: RuntimeFormData,
-      ProxyAgent: vi.fn(),
+      ProxyAgent: MockProxyAgent,
       fetch: runtimeFetch,
     };
 
@@ -86,10 +108,10 @@ describe("fetchWithRuntimeDispatcher", () => {
     });
 
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-      Agent: vi.fn(),
-      EnvHttpProxyAgent: vi.fn(),
+      Agent: MockAgent,
+      EnvHttpProxyAgent: MockEnvHttpProxyAgent,
       FormData: RuntimeFormData,
-      ProxyAgent: vi.fn(),
+      ProxyAgent: MockProxyAgent,
       fetch: runtimeFetch,
     };
 

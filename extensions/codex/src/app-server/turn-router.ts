@@ -5,12 +5,8 @@ import type { CodexAppServerClient } from "./client.js";
 import { redactCodexEventKind } from "./event-projector-diagnostics.js";
 import { CodexMcpRequestRoutes, type CodexMcpToolCallOptions } from "./mcp-request-route.js";
 import { readCodexNotificationScope } from "./notification-correlation.js";
-import { prepareCodexServerNotification } from "./protocol-validators.js";
-import type {
-  CodexPreparedServerNotification,
-  CodexServerNotification,
-  JsonValue,
-} from "./protocol.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
+import type { CodexServerNotification, JsonValue } from "./protocol.js";
 import { abortReason, waitForPromiseOrAbort } from "./timeout.js";
 import type {
   CodexAppServerServerRequest,
@@ -24,11 +20,11 @@ export const CODEX_APP_SERVER_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
 
 export type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.types.js";
 type CodexThreadNotificationHandler = (
-  notification: CodexPreparedServerNotification,
+  notification: CodexServerNotification,
   scope: CodexThreadRouteScope,
 ) => Promise<void> | void;
 type CodexThreadNotificationReceivedHandler = (
-  notification: CodexPreparedServerNotification,
+  notification: CodexServerNotification,
   scope: CodexThreadRouteScope,
   receivedAtMs: number,
 ) => void;
@@ -74,7 +70,7 @@ type CodexNativeTurnCompletionWatch = {
 
 type Deferred = ReturnType<typeof createDeferred<void>>;
 type PendingNotification = {
-  notification: CodexPreparedServerNotification;
+  notification: CodexServerNotification;
   receivedAtMs: number;
   scope: CodexThreadRouteScope;
   receiptObserved?: true;
@@ -127,7 +123,7 @@ export function getCodexAppServerTurnRouter(
 class ClientTurnRouter {
   private readonly routes = new Map<string, Route>();
   private readonly mcpRequests = new CodexMcpRequestRoutes();
-  private readonly globalWarnings: CodexPreparedServerNotification[] = [];
+  private readonly globalWarnings: CodexServerNotification[] = [];
   private readonly nativeTurnCompletionWatchers = new Map<
     string,
     Set<NativeTurnCompletionWatcher>
@@ -399,16 +395,15 @@ class ClientTurnRouter {
 
   // Returns the route's serialized tail so awaiting the client's notification
   // fan-out observes queued processing, not just enqueueing.
-  private routeNotification(rawNotification: CodexServerNotification): Promise<void> | undefined {
+  private routeNotification(notification: CodexServerNotification): Promise<void> | undefined {
     if (this.closeError) {
       return undefined;
     }
-    const scope = readCodexNotificationScope(rawNotification.params);
+    const scope = readCodexNotificationScope(notification.params);
     if (
       !scope.threadId &&
-      (rawNotification.method === "configWarning" || rawNotification.method === "warning")
+      (notification.method === "configWarning" || notification.method === "warning")
     ) {
-      const notification = prepareCodexServerNotification(rawNotification, scope);
       if (this.globalWarnings.length === DEFAULT_GLOBAL_WARNING_LIMIT) {
         this.globalWarnings.shift();
       }
@@ -430,8 +425,9 @@ class ClientTurnRouter {
     if (!watchers && !route) {
       return undefined;
     }
-    const notification = prepareCodexServerNotification(rawNotification, scope);
-    const completedTurn = notification.completedTurn !== undefined;
+    const completedTurn =
+      notification.method === "turn/completed" &&
+      readCodexTurnCompletedNotification(notification.params) !== undefined;
     if (scope.turnId && watchers) {
       for (const watcher of watchers) {
         if (watcher.turnId === scope.turnId && completedTurn) {
@@ -614,7 +610,7 @@ class ClientTurnRouter {
 
   private warnDroppedStaleTurnNotification(
     route: Route,
-    notification: CodexPreparedServerNotification,
+    notification: CodexServerNotification,
     scope: CodexThreadRouteScope,
   ): void {
     if (notification.method === "turn/completed" || !scope.turnId || !route.turnId) {
@@ -639,7 +635,7 @@ class ClientTurnRouter {
 
   private bufferNotification(
     route: Route,
-    notification: CodexPreparedServerNotification,
+    notification: CodexServerNotification,
     scope: CodexThreadRouteScope,
     receivedAtMs: number,
   ): void {
@@ -661,7 +657,7 @@ class ClientTurnRouter {
   private enqueueNotification(
     route: Route,
     handler: CodexThreadNotificationHandler,
-    notification: CodexPreparedServerNotification,
+    notification: CodexServerNotification,
     scope: CodexThreadRouteScope,
   ): void {
     if (route.released && !this.canDrainClosedTurn(route, route.turnId)) {

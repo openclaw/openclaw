@@ -80,8 +80,9 @@ internal class WearProxyBridge(
   private val handleRequest: suspend (String, WearMessage.Request) -> WearMessage.Response,
 ) {
   private val peerLock = Any()
-  private val peers = LinkedHashSet<String>()
+  private val peers = LinkedHashMap<String, Long>()
   private val missingPeers = LinkedHashSet<String>()
+  private var peerGeneration = 0L
   private var nextSequence = 0L
   private val eventStreamId = UUID.randomUUID().toString()
   private val overflowLock = Any()
@@ -128,7 +129,7 @@ internal class WearProxyBridge(
       is WearBridgeOperation.Request -> {
         try {
           val response =
-            handleRequest(operation.sourcePeer, operation.message).copy(
+            handleRequest(operation.sourcePeer.nodeId, operation.message).copy(
               eventStreamId = eventStreamId,
               eventSequence = lastDeliveredSequence,
             )
@@ -271,7 +272,7 @@ internal class WearProxyBridge(
 
   private sealed interface WearBridgeOperation {
     data class Request(
-      val sourcePeer: String,
+      val sourcePeer: PeerRegistration,
       val message: WearMessage.Request,
       val completion: CompletableDeferred<Boolean>,
     ) : WearBridgeOperation
@@ -296,12 +297,12 @@ internal class WearProxyBridge(
     val initialPeers = peerSnapshot()
     if (initialPeers.isEmpty()) return
     val delivered = sendToPeers(initialPeers, encoded)
-    if (initialPeers.all { it in delivered }) return
+    if (initialPeers.all { it.nodeId in delivered }) return
 
     // Refresh after any stale peer, but do not redeliver the sequence to watches
     // that already accepted it. Newly reachable and recovered peers get one retry.
     discoverPeers(forceRefresh = true)
-    val retryPeers = peerSnapshot().filterNot { it in delivered }
+    val retryPeers = peerSnapshot().filterNot { it.nodeId in delivered }
     sendToPeers(retryPeers, encoded)
   }
 
@@ -322,27 +323,27 @@ internal class WearProxyBridge(
   }
 
   private suspend fun sendToPeers(
-    peers: List<String>,
+    peers: List<PeerRegistration>,
     data: ByteArray,
   ): Set<String> {
     val delivered = linkedSetOf<String>()
     for (peer in peers) {
       if (sendToPeer(peer, WearProtocol.EVENT_PATH, data)) {
-        delivered += peer
+        delivered += peer.nodeId
       }
     }
     return delivered
   }
 
   private suspend fun sendResponseToPeer(
-    peer: String,
+    peer: PeerRegistration,
     data: ByteArray,
   ): Boolean {
     if (sendToPeer(peer, WearProtocol.RESPONSE_PATH, data)) return true
     // The request proves this exact node was reachable moments ago. Retry one
     // transport failure directly; a successful retry restores it to the peer set.
     if (!sendToPeer(peer, WearProtocol.RESPONSE_PATH, data)) return false
-    rememberPeer(peer)
+    rememberPeer(peer.nodeId)
     return true
   }
 
@@ -380,12 +381,12 @@ internal class WearProxyBridge(
   }
 
   private suspend fun sendToPeer(
-    peer: String,
+    peer: PeerRegistration,
     path: String,
     data: ByteArray,
   ): Boolean {
     try {
-      sender.send(peer, path, data)
+      sender.send(peer.nodeId, path, data)
       return true
     } catch (err: Throwable) {
       // Custom senders may use cancellation for transport failure. Keep the actor
@@ -410,21 +411,26 @@ internal class WearProxyBridge(
         )
       }
 
-  private fun rememberPeer(nodeId: String): String =
+  private fun rememberPeer(nodeId: String): PeerRegistration =
     synchronized(peerLock) {
+      peerGeneration += 1
       missingPeers.remove(nodeId)
       peers.remove(nodeId)
-      peers.add(nodeId)
+      peers[nodeId] = peerGeneration
       while (peers.size > MAX_PEERS) {
-        peers.remove(peers.first())
+        peers.remove(peers.keys.first())
       }
-      nodeId
+      PeerRegistration(nodeId = nodeId, generation = peerGeneration)
     }
 
-  private fun markPeerFailed(peer: String) {
+  private fun markPeerFailed(peer: PeerRegistration) {
     synchronized(peerLock) {
-      peers.remove(peer)
-      missingPeers.add(peer)
+      // A stale send may fail after a newer request refreshed the same watch.
+      // Remove only the registration that actually owned this transport attempt.
+      if (peers[peer.nodeId] == peer.generation) {
+        peers.remove(peer.nodeId)
+        missingPeers.add(peer.nodeId)
+      }
     }
   }
 
@@ -432,7 +438,10 @@ internal class WearProxyBridge(
 
   private fun needsPeerRefresh(): Boolean = synchronized(peerLock) { missingPeers.isNotEmpty() }
 
-  private fun peerSnapshot(): List<String> = synchronized(peerLock) { peers.toList() }
+  private fun peerSnapshot(): List<PeerRegistration> =
+    synchronized(peerLock) {
+      peers.map { (nodeId, generation) -> PeerRegistration(nodeId = nodeId, generation = generation) }
+    }
 
   internal fun peerCountForTests(): Int = synchronized(peerLock) { peers.size }
 
@@ -458,6 +467,11 @@ internal fun wearConnectionFailure(
 
     else -> WearConnectionFailure.GatewayOffline
   }
+
+private data class PeerRegistration(
+  val nodeId: String,
+  val generation: Long,
+)
 
 internal class WearChatStreamProjector {
   private data class StreamKey(

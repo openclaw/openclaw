@@ -1,15 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { CodexNativeSubagentDeliveryReceipts } from "./native-subagent-delivery-receipts.js";
-import {
-  readCodexNativeSubagentNotification,
-  type CodexNativeSubagentNotification,
-} from "./native-subagent-notification.js";
+import type { CodexServerNotification } from "./protocol.js";
 
-function completedWaitReceipt(
-  message: string,
-  id = "wait",
-): CodexNativeSubagentNotification["receipts"] {
-  return readCodexNativeSubagentNotification({
+function completedWaitReceipt(message: string, id = "wait"): CodexServerNotification {
+  return {
     method: "item/completed",
     params: {
       threadId: "parent-thread",
@@ -24,7 +18,7 @@ function completedWaitReceipt(
         agentsStates: { "child-thread": { status: "completed", message } },
       },
     },
-  }).receipts;
+  };
 }
 
 describe("native subagent delivery receipts", () => {

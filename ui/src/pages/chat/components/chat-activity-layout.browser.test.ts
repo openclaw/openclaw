@@ -1,22 +1,17 @@
-import { createComponent, createSignal } from "solid-js";
+import { nothing, render } from "lit";
 import { afterEach, describe, expect, it } from "vitest";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ActivityGroup, MessageGroup as NativeMessageGroup } from "./chat-message-group-view.tsx";
-import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
+import { renderActivityGroup, renderMessageGroup } from "./chat-message-group.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
 
 let container: HTMLDivElement | undefined;
-let root: { unmount(): void } | undefined;
 afterEach(() => {
   if (container) {
-    root?.unmount();
+    render(nothing, container);
     container.remove();
     container = undefined;
-    root = undefined;
   }
 });
 
@@ -99,39 +94,26 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
           draw();
         },
       };
-      let refresh: () => void;
       const draw = () => {
-        refresh();
-        flush();
-      };
-      root = mountSolid(
-        () => {
-          const [revision, setRevision] = createSignal(0);
-          refresh = () => setRevision((value) => value + 1);
-          const options = () => {
-            revision();
-            return { ...opts };
-          };
-          const activity = createComponent(ActivityGroup, {
-            groups: [group],
-            get options() {
-              return options();
-            },
-            presentation: presentation === "inline" ? "continuation" : "standalone",
-          });
-          return presentation === "inline"
-            ? createComponent(NativeMessageGroup, {
-                group: messageGroup("frame", "assistant", [
-                  { role: "assistant", content: "Finished." },
-                ]),
-                get options() {
-                  return { ...options(), frameContent: [activity] };
+        const activity = renderActivityGroup(
+          [group],
+          opts,
+          presentation === "inline" ? "continuation" : "standalone",
+        );
+        render(
+          presentation === "inline"
+            ? renderMessageGroup(
+                messageGroup("frame", "assistant", [{ role: "assistant", content: "Finished." }]),
+                {
+                  ...opts,
+                  frameContent: [activity],
                 },
-              })
-            : activity;
-        },
-        { container },
-      );
+              )
+            : activity,
+          container!,
+        );
+      };
+      draw();
       await settleToolBridges(container);
       const body = container.querySelector<HTMLElement>(".chat-activity-group__body")!;
       const compactHeight = body.getBoundingClientRect().height;
@@ -214,17 +196,18 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       })),
     ]);
     const expanded = new Set<string>();
-    const activity = createActivityGroupHarness(container);
-    root = activity;
     const draw = () =>
-      activity.render([group], {
-        showReasoning: false,
-        isToolExpanded: (id: string) => expanded.has(id),
-        onToggleToolExpanded: (id: string) => {
-          expanded.add(id);
-          draw();
-        },
-      });
+      render(
+        renderActivityGroup([group], {
+          showReasoning: false,
+          isToolExpanded: (id: string) => expanded.has(id),
+          onToggleToolExpanded: (id: string) => {
+            expanded.add(id);
+            draw();
+          },
+        }),
+        container!,
+      );
     draw();
     await settleToolBridges(container);
     expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
@@ -250,12 +233,13 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
   it("preserves non-tool text beside a card moved under its parent", async () => {
     container = document.body.appendChild(document.createElement("div"));
     const note = "Keep this explanation visible.";
-    const activity = createActivityGroupHarness(container);
-    root = activity;
-    activity.render([activityFixture(note)], {
-      showReasoning: false,
-      isToolMessageExpanded: () => true,
-    });
+    render(
+      renderActivityGroup([activityFixture(note)], {
+        showReasoning: false,
+        isToolMessageExpanded: () => true,
+      }),
+      container,
+    );
     await settleToolBridges(container);
     expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(4);
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(5);

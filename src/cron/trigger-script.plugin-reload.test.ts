@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { jsonResult } from "../agents/tools/common.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -41,28 +42,100 @@ function preparePluginRuntime(generation: number, execute = () => jsonResult({ g
 const request = { jobId: "reload", script: "return { state: await probe({}) };", state: null };
 
 describe("automation plugin reload recovery", () => {
-  it("refreshes a retired cached runtime on the next invocation", async () => {
+  it.each(["between checks", "during admission"] as const)(
+    "uses current tools when the plugin retires %s without changing config",
+    async (when) => {
+      let generation = 0;
+      const disposed: number[] = [];
+      const prepareRuntime = vi.fn(async () => {
+        const current = ++generation;
+        return {
+          ...preparePluginRuntime(current).prepared,
+          [Symbol.dispose]: () => disposed.push(current),
+        };
+      });
+      const admissions: AdmittedRunContext[] = [];
+      const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+      if (when === "between checks") {
+        const result = await runtime.executePayload(request);
+        expect(result, JSON.stringify(result)).toMatchObject({
+          kind: "completed",
+          state: { generation: 1 },
+        });
+        markPluginRegistryRetired(registries[0]);
+      }
+      await expect(
+        runtime.executePayload({
+          ...request,
+          executionIdentity: {
+            ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+            onPostAdmission: (admitted) => {
+              admissions.push(admitted);
+              if (when === "during admission") {
+                markPluginRegistryRetired(registries[0]);
+              }
+            },
+          },
+        }),
+      ).resolves.toMatchObject({ kind: "completed", state: { generation: 2 } });
+      expect(prepareRuntime).toHaveBeenCalledTimes(2);
+      expect(admissions).toHaveLength(1);
+      expect(disposed).toEqual([1]);
+    },
+  );
+
+  it.each([false, true])("bounds setup recovery when repeated retirement=%s", async (repeat) => {
     let generation = 0;
-    const disposed: number[] = [];
     const prepareRuntime = vi.fn(async () => {
-      const current = ++generation;
+      const { prepared, instance } = preparePluginRuntime(++generation);
       return {
-        ...preparePluginRuntime(current).prepared,
-        [Symbol.dispose]: () => disposed.push(current),
+        ...prepared,
+        createTools: async (...args: Parameters<PreparedRuntime["createTools"]>) => {
+          if (repeat || generation === 1) {
+            instance.quiesce();
+          }
+          return prepared.createTools(...args);
+        },
       };
     });
     const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 1 },
-    });
-    markPluginRegistryRetired(registries[0]);
-    await expect(runtime.executePayload(request)).resolves.toMatchObject({
-      kind: "completed",
-      state: { generation: 2 },
-    });
+    await expect(
+      runtime.executePayload({
+        ...request,
+        executionIdentity: {
+          ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+        },
+      }),
+    ).resolves.toMatchObject(
+      repeat
+        ? { kind: "error", code: "plugin_reload_failed" }
+        : { kind: "completed", state: { generation: 2 } },
+    );
     expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(disposed).toEqual([1]);
+  });
+
+  it("reports failed automatic recovery when a cached runtime refresh hits another retirement", async () => {
+    let generation = 0;
+    const prepareRuntime = vi.fn(async () => {
+      generation += 1;
+      const current = preparePluginRuntime(generation);
+      if (generation > 1) {
+        current.instance.quiesce();
+      }
+      return current.prepared;
+    });
+    const runtime = createCronScriptRuntime({ config: {}, prepareRuntime });
+    await expect(runtime.executePayload(request)).resolves.toMatchObject({ kind: "completed" });
+    markPluginRegistryRetired(registries[0]);
+    await expect(
+      runtime.executePayload({
+        ...request,
+        executionIdentity: {
+          ingress: { kind: "schedule", boundary: "cron.script", state: "present" },
+        },
+      }),
+    ).resolves.toMatchObject({ kind: "error", code: "plugin_reload_failed" });
+    expect(prepareRuntime).toHaveBeenCalledTimes(2);
   });
 
   it("never replays a script that fails after a tool effect and plugin retirement", async () => {

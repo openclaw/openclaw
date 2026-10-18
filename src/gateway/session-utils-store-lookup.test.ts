@@ -307,7 +307,6 @@ describe("global session lookup ownership", () => {
           }),
           undefined,
           expect.any(Function),
-          expect.any(Function),
         );
       }
     });

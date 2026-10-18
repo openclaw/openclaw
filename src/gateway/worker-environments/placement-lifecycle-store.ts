@@ -13,7 +13,9 @@ import {
   normalizeIdentity,
   normalizeWorkerPlacementExecutionMode,
   required,
+  type WorkerPlacementExecutionMode,
   type WorkerSessionPlacementDispatchIdentity,
+  type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementRetirement } from "./placement-retirement.js";
@@ -31,6 +33,85 @@ type Operations = Omit<
   "workerPlacements.clearLocalTurnClaims"
 >;
 type Guard = { assertCurrent?: WorkerPlacementAuthorization };
+
+type RequestedPlacement = Extract<WorkerSessionPlacementRecord, { state: "requested" }>;
+
+function readDispatchTurnClaim(value: unknown): RequestedPlacement["turnClaim"] {
+  if (value === null) {
+    return null;
+  }
+  if (
+    !isRecord(value) ||
+    value.owner !== "local" ||
+    typeof value.claimId !== "string" ||
+    !value.claimId ||
+    typeof value.runId !== "string" ||
+    !value.runId ||
+    typeof value.generation !== "number" ||
+    !Number.isSafeInteger(value.generation) ||
+    value.generation < 0 ||
+    value.ownerEpoch !== null
+  ) {
+    throw new Error("Worker placement dispatch commit has an invalid predecessor claim");
+  }
+  return {
+    owner: "local",
+    claimId: value.claimId,
+    runId: value.runId,
+    generation: value.generation,
+    ownerEpoch: null,
+  };
+}
+
+function readDispatchReceipt(
+  value: unknown,
+  identity: WorkerSessionPlacementIdentity,
+  executionMode: WorkerPlacementExecutionMode,
+): RequestedPlacement {
+  if (
+    !isRecord(value) ||
+    value.state !== "requested" ||
+    value.sessionId !== identity.sessionId ||
+    value.agentId !== identity.agentId ||
+    value.sessionKey !== identity.sessionKey ||
+    value.executionMode !== executionMode
+  ) {
+    throw new Error("Worker placement dispatch receipt has a different identity");
+  }
+  const metadata = {
+    environmentId: null,
+    activeOwnerEpoch: null,
+    workspaceBaseManifestRef: null,
+    remoteWorkspaceDir: null,
+    workerBundleHash: null,
+    lastTranscriptAckCursor: null,
+    lastLiveEventAckCursor: null,
+    recoveryError: null,
+    terminalReason: null,
+    terminalAtMs: null,
+  };
+  if (Object.keys(metadata).some((key) => value[key] !== null)) {
+    throw new Error("Worker placement dispatch receipt retains worker metadata");
+  }
+  const number = (key: string): number => {
+    const field = value[key];
+    if (typeof field !== "number" || !Number.isSafeInteger(field) || field < 0) {
+      throw new Error(`Worker placement dispatch receipt has an invalid ${key}`);
+    }
+    return field;
+  };
+  return {
+    ...normalizeIdentity(identity),
+    ...metadata,
+    state: "requested",
+    executionMode,
+    generation: number("generation"),
+    createdAtMs: number("createdAtMs"),
+    updatedAtMs: number("updatedAtMs"),
+    stateChangedAtMs: number("stateChangedAtMs"),
+    turnClaim: readDispatchTurnClaim(value.turnClaim),
+  };
+}
 
 function isReceipt(value: unknown): value is PlacementLifecycleReceipt {
   return (
@@ -66,7 +147,16 @@ export function createPlacementLifecycleWorkerOps(runtime: {
       if (!isReceipt(facts) || facts.sessionId !== captured.input.sessionId) {
         return undefined;
       }
-      return facts;
+      return captured.type === "workerPlacements.startDispatch"
+        ? {
+            ...facts,
+            placement: readDispatchReceipt(
+              facts.placement,
+              captured.input,
+              captured.input.executionMode,
+            ),
+          }
+        : facts;
     };
     const dispatch = captured.type === "workerPlacements.startDispatch";
     let newSource: WorkerSessionPlacementRecord | undefined;

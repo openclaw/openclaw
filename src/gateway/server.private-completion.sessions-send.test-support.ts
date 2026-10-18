@@ -116,11 +116,7 @@ export function registerSessionsSendPrivateCompletionTests(
       const completion = SessionFollowupCompletion.bind(followup);
       const close = vi.spyOn(completion, "close");
       completion.markAccepted(childRunId);
-      await completion.settle(childRunId, {
-        status: "ok",
-        terminalReply: { disposition: "visible", text: childReply },
-        replyText: childReply,
-      });
+      await completion.settle(childRunId, { status: "ok", replyText: childReply });
       completion.finishExecution(childRunId);
       agentCommandMock.mockImplementation(async (input) => {
         const command = input as AgentCommandOpts;
@@ -133,7 +129,7 @@ export function registerSessionsSendPrivateCompletionTests(
           throw new Error("synthetic retained parent failure");
         }
         await inputRecorder.persistApproved();
-        return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
+        return { payloads: [], meta: { durationMs: 1 } };
       });
       await startSessionsSendReplyFlow({
         runId: childRunId,

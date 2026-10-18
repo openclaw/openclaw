@@ -32,6 +32,7 @@ import type {
   SessionMutationTarget,
   resolveTalkSessionTargetInput,
 } from "./session-sharing-target-input.js";
+import { assertTalkSessionStorageTarget } from "./talk/session-target.js";
 import type { PreparedTalkSessionTarget } from "./talk/session-target.types.js";
 
 /** Hold the existing reader only until the prepared writer operation settles. */
@@ -317,7 +318,7 @@ export function captureSessionSharingTalkAuthority({
       if (input.kind === "relay" && !input.isCurrent()) {
         throw sessionMutationTargetChanged(request.method, target.sessionKey);
       }
-      target.assertCurrent(cfg);
+      assertTalkSessionStorageTarget(cfg, target);
     } catch {
       throw sessionMutationTargetChanged(request.method, target.sessionKey);
     }

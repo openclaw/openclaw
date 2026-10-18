@@ -21,14 +21,13 @@ import {
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext, createGateway, createPage } from "./sessions-page.test-support.ts";
 
-async function setup(childCount: number, active = false) {
+async function setup(childCount: number) {
   const root: GatewaySessionRow = {
     key: "agent:main:tree-outcome",
     sessionId: "captured-root-session",
     kind: "direct",
     label: "Tree outcome",
     sharingRole: "owner",
-    hasActiveRun: active,
   };
   const children: GatewaySessionRow[] = Array.from({ length: childCount }, (_, index) => ({
     key: "agent:main:tree-child-" + index,
@@ -95,15 +94,6 @@ async function setup(childCount: number, active = false) {
       }
       return result;
     }
-    if (method === "sessions.patch") {
-      serverRows[0]!.archived = true;
-      return {
-        ok: true,
-        key: root.key,
-        path: "",
-        entry: { sessionId: root.sessionId, archivedAt: 1 },
-      };
-    }
     throw new Error("Unexpected request: " + method);
   });
   const client = { request } as unknown as GatewayBrowserClient;
@@ -122,7 +112,6 @@ async function setup(childCount: number, active = false) {
     dispatched,
     restored,
     batches,
-    request,
     batchResult,
     client,
     gateway,
@@ -150,46 +139,15 @@ async function revealUndoAfterPartialError(fixture: Awaited<ReturnType<typeof se
 }
 
 describe("Sessions page confirmed tree archive outcomes", () => {
-  it("archives only the running parent without a second confirmation", async () => {
-    const modal = createModalDialogTestFixture();
-    const fixture = await setup(1, true);
-    try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
-      const actions = await waitForConfirmDialogActions();
-      expect(document.body.textContent).toContain("This selection contains active work.");
-      answerConfirmDialog(actions, "confirm");
-      await waitForSolid(() =>
-        expect(
-          fixture.request.mock.calls.filter(([method]) => method === "sessions.patch"),
-        ).toHaveLength(1),
-      );
-      await operation;
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(fixture.batches).toEqual([]);
-      expect(
-        fixture.request.mock.calls.find(([method]) => method === "sessions.patch")?.[1],
-      ).toMatchObject({
-        key: fixture.root.key,
-        expectedSessionId: fixture.root.sessionId,
-        archived: true,
-      });
-    } finally {
-      fixture.page.remove();
-      await modal.cleanup();
-      fixture.sessions.dispose();
-      fixture.toast.remove();
-    }
-  });
-
   it("finishes remaining chunks after navigation and exposes partial errors plus successful-only Undo", async () => {
     const modal = createModalDialogTestFixture();
     // One more than the protocol batch maximum exercises a second confirmed chunk.
     const fixture = await setup(100);
     try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
+      const operation = modal.track(fixture.page.archiveActions.archiveTree(fixture.root));
       const actions = await waitForConfirmDialogActions();
       expect(fixture.batches).toHaveLength(0);
-      answerConfirmDialog(actions, "alternative");
+      answerConfirmDialog(actions, "confirm");
       const first = await fixture.dispatched.promise;
       expect(first.targets).toHaveLength(100);
       fixture.page.remove();
@@ -228,8 +186,8 @@ describe("Sessions page confirmed tree archive outcomes", () => {
     const modal = createModalDialogTestFixture();
     const fixture = await setup(2);
     try {
-      const operation = modal.track(fixture.page.archiveActions.archive(fixture.root, true));
-      answerConfirmDialog(await waitForConfirmDialogActions(), "alternative");
+      const operation = modal.track(fixture.page.archiveActions.archiveTree(fixture.root));
+      answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
       const first = await fixture.dispatched.promise;
       fixture.page.remove();
       fixture.pending.resolve(fixture.batchResult(first));

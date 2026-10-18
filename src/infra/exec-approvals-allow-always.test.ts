@@ -312,18 +312,12 @@ describe("allow-always pattern persistence", () => {
     expect(new Set(persisted)).toEqual(new Set([whoami, ls]));
   });
 
-  it.each([
-    { executable: "sudo", args: ["/bin/zsh", "-lc", "whoami"] },
-    { executable: "busybox", args: ["sed", "-n", "1p"] },
-  ])("does not persist unsupported $executable dispatch", ({ executable, args }) => {
-    if (executable === "busybox" && process.platform === "win32") {
-      return;
-    }
+  it("fails closed for unresolved dispatch wrappers", () => {
     const { dir, env } = createCommandFixture();
-    const tool = makeExecutable(dir, executable);
+    makeExecutable(dir, "sudo");
     const context = { cwd: dir, env, platform: process.platform };
     const analysis = analyzeArgvCommand({
-      argv: [executable === "busybox" ? tool : executable, ...args],
+      argv: ["sudo", "/bin/zsh", "-lc", "whoami"],
       ...context,
     });
     expect(analysis.ok).toBe(true);
@@ -344,14 +338,27 @@ describe("allow-always pattern persistence", () => {
     expect(result.allowlistSatisfied).toBe(true);
   });
 
-  it.each([" ", "="])("rejects shell startup options with %j separators", async (separator) => {
+  it("rejects shell rc and init-file options as persisted or allowlisted script paths", async () => {
     if (process.platform === "win32") {
       return;
     }
     for (const command of [
-      `bash --rcfile${separator}scripts/evilrc scripts/save_crystal.sh`,
-      `bash --init-file${separator}scripts/evilrc scripts/save_crystal.sh`,
-      `bash --startup-file${separator}scripts/evilrc scripts/save_crystal.sh`,
+      "bash --rcfile scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file scripts/evilrc scripts/save_crystal.sh",
+    ]) {
+      await expectShellScriptFallbackRejected(command);
+    }
+  });
+
+  it("rejects shell rc and init-file equals options as persisted or allowlisted script paths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    for (const command of [
+      "bash --rcfile=scripts/evilrc scripts/save_crystal.sh",
+      "bash --init-file=scripts/evilrc scripts/save_crystal.sh",
+      "bash --startup-file=scripts/evilrc scripts/save_crystal.sh",
     ]) {
       await expectShellScriptFallbackRejected(command);
     }
@@ -382,14 +389,14 @@ describe("allow-always pattern persistence", () => {
     }
   });
 
-  it.each([
-    { command: `sh -c 'exec -- "$0" "$1"' touch {marker}`, expectAllowlisted: true },
-    { command: `sh -c "exec\n$0 \\"$1\\"" touch {marker}`, expectAllowlisted: false },
-  ])("does not persist partial positional argv carriers: $command", async (params) => {
+  it("rejects exec positional argv carriers", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await expectPositionalArgvCarrierResult(params);
+    await expectPositionalArgvCarrierResult({
+      command: `sh -c 'exec -- "$0" "$1"' touch {marker}`,
+      expectAllowlisted: true,
+    });
   });
 
   it("keeps generated positional carrier patterns bound to the carried argv", () => {
@@ -447,34 +454,68 @@ describe("allow-always pattern persistence", () => {
     );
   });
 
-  it.each(["-c 'scripts/save_crystal.sh'", "-s scripts/save_crystal.sh"])(
-    "does not treat bash %s as a persisted script path",
-    async (args) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { dir, script, env } = createShellScriptFixture();
-      await expectAllowAlwaysBypassBlocked({
-        dir,
-        firstCommand: "bash scripts/save_crystal.sh",
-        secondCommand: `bash ${args}`,
-        env,
-        persistedPattern: script,
-      });
-    },
-  );
+  it("rejects positional argv carriers when exec is separated from $0 by a newline", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await expectPositionalArgvCarrierResult({
+      command: `sh -c "exec
+$0 \\"$1\\"" touch {marker}`,
+    });
+  });
 
-  it.each([
-    { shellName: "csh", args: "-c 'id > marker'" },
-    { shellName: "nu", args: "--execute='id > marker'" },
-  ])("prevents $shellName $args from reusing broad grants", async ({ shellName, args }) => {
+  it("does not treat inline shell commands as persisted script paths", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env } = createShellScriptFixture();
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -c 'scripts/save_crystal.sh'",
+      env,
+      persistedPattern: script,
+    });
+  });
+
+  it("does not treat stdin shell mode as a persisted script path", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, script, env } = createShellScriptFixture();
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "bash scripts/save_crystal.sh",
+      secondCommand: "bash -s scripts/save_crystal.sh",
+      env,
+      persistedPattern: script,
+    });
+  });
+
+  it("fails closed for unsupported busybox applets", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, env } = createCommandFixture();
+    const busybox = makeExecutable(dir, "busybox");
+    const context = { cwd: dir, env, platform: process.platform };
+    const analysis = analyzeArgvCommand({ argv: [busybox, "sed", "-n", "1p"], ...context });
+    expect(analysis.ok).toBe(true);
+    expect(
+      resolveAllowAlwaysPatternEntries({ segments: analysis.segments, ...context }),
+    ).toStrictEqual([]);
+  });
+
+  it("prevents opaque startup shells from reusing broad grants", async () => {
     if (process.platform === "win32") {
       return;
     }
     const { dir, evaluate } = createCommandFixture();
-    const shell = makeExecutable(dir, shellName);
+    const shell = makeExecutable(dir, "csh");
     makeExecutable(dir, "id");
-    const result = await evaluate(`${shell} ${args}`, [{ pattern: shell, source: "allow-always" }]);
+    const result = await evaluate(`${shell} -c 'id > marker'`, [
+      { pattern: shell, source: "allow-always" },
+    ]);
     expect(result.allowlistSatisfied).toBe(false);
     expectApprovalRequired(result);
   });
@@ -495,56 +536,23 @@ describe("allow-always pattern persistence", () => {
     expectApprovalRequired(result);
   });
 
-  it.each([
-    {
-      name: "busybox shell",
-      wrapper: "busybox",
-      approved: "echo",
-      first: "{wrapper} sh -c 'echo warmup-ok'",
-      second: "{wrapper} sh -c 'id > marker'",
-      persists: false,
-      inheritPath: true,
-    },
-    {
-      name: "command carrier",
-      wrapper: "command",
-      approved: "echo",
-      first: "command echo warmup-ok",
-      second: "command id > marker",
-      persists: true,
-      inheritPath: false,
-    },
-    {
-      name: "comment-tailed payload",
-      wrapper: "payload",
-      approved: "benign",
-      first: "{approved} warmup # && payload",
-      second: "payload",
-      persists: true,
-      inheritPath: false,
-    },
-  ])(
-    "prevents persisted grants from authorizing a $name bypass",
-    async ({ wrapper, approved, first, second, persists, inheritPath }) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { dir, env } = createCommandFixture(inheritPath);
-      const wrapperPath = makeExecutable(dir, wrapper);
-      const approvedPath = makeExecutable(dir, approved);
-      makeExecutable(dir, "id");
-      const command = (value: string) =>
-        value.replace("{wrapper}", wrapperPath).replace("{approved}", approvedPath);
-      await expectAllowAlwaysBypassBlocked({
-        dir,
-        firstCommand: command(first),
-        secondCommand: command(second),
-        env,
-        persistedPattern: persists ? approvedPath : null,
-        allowlistPattern: approvedPath,
-      });
-    },
-  );
+  it("prevents allow-always bypass for busybox shell applets", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, env } = createCommandFixture(true);
+    const busybox = makeExecutable(dir, "busybox");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: `${busybox} sh -c 'echo warmup-ok'`,
+      secondCommand: `${busybox} sh -c 'id > marker'`,
+      env,
+      persistedPattern: null,
+      allowlistPattern: echo,
+    });
+  });
 
   it("prevents Windows fallback from allowlisting opaque shell inline payloads", () => {
     const { dir, env } = createCommandFixture();
@@ -580,6 +588,20 @@ describe("allow-always pattern persistence", () => {
         allowlistSatisfied: result.allowlistSatisfied,
       }),
     ).toBe(true);
+  });
+
+  it("prevents allowlist bypass for attached nu inline payloads", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, evaluate } = createCommandFixture();
+    const shell = makeExecutable(dir, "nu");
+    makeExecutable(dir, "id");
+    const result = await evaluate(`${shell} --execute='id > marker'`, [
+      { pattern: shell, source: "allow-always" },
+    ]);
+    expect(result.allowlistSatisfied).toBe(false);
+    expectApprovalRequired(result);
   });
 
   it.each([
@@ -804,6 +826,23 @@ describe("allow-always pattern persistence", () => {
     }
   });
 
+  it("prevents allow-always bypass for command argv carrier chains", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, env } = createCommandFixture();
+    makeExecutable(dir, "command");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: "command echo warmup-ok",
+      secondCommand: "command id > marker",
+      env,
+      persistedPattern: echo,
+    });
+  });
+
   it("requires approval for command carriers that use default PATH lookup", async () => {
     if (process.platform === "win32") {
       return;
@@ -907,27 +946,52 @@ describe("allow-always pattern persistence", () => {
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it.each([
-    {
-      executable: "env",
-      first: "env echo SAFE",
-      second: "env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'",
-    },
-    { executable: "bash", first: "bash -c 'echo safe'", second: "bash -c 'id > /tmp/pwned'" },
-  ])(
-    "rejects positional carriers of $executable wrappers",
-    async ({ executable, first, second }) => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { dir, evaluate, persist } = createCommandFixture();
-      const wrapperPath = makeExecutable(dir, executable);
+  it("does not persist comment-tailed payload paths that never execute", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, env } = createCommandFixture();
+    const benign = makeExecutable(dir, "benign");
+    makeExecutable(dir, "payload");
+    await expectAllowAlwaysBypassBlocked({
+      dir,
+      firstCommand: `${benign} warmup # && payload`,
+      secondCommand: "payload",
+      env,
+      persistedPattern: benign,
+    });
+  });
 
-      const { persisted } = await persist(`sh -c '$0 "$@"' ${first}`);
-      expect(persisted).toStrictEqual([]);
+  it("rejects positional carrier when carried executable is a dispatch wrapper", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, evaluate, persist } = createCommandFixture();
+    const envPath = makeExecutable(dir, "env");
 
-      const result = await evaluate(`sh -c '$0 "$@"' ${second}`, [{ pattern: wrapperPath }]);
-      expect(result.allowlistSatisfied).toBe(false);
-    },
-  );
+    const { persisted } = await persist(`sh -c '$0 "$@"' env echo SAFE`);
+    expect(persisted).toStrictEqual([]);
+
+    const second = await evaluate(
+      `sh -c '$0 "$@"' env BASH_ENV=/tmp/payload.sh bash -c 'id > /tmp/pwned'`,
+      [{ pattern: envPath }],
+    );
+    expect(second.allowlistSatisfied).toBe(false);
+  });
+
+  it("rejects positional carrier when carried executable is a shell wrapper", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const { dir, evaluate, persist } = createCommandFixture();
+    const bashPath = makeExecutable(dir, "bash");
+
+    const { persisted } = await persist(`sh -c '$0 "$@"' bash -c 'echo safe'`);
+    expect(persisted).toStrictEqual([]);
+
+    const second = await evaluate(`sh -c '$0 "$@"' bash -c 'id > /tmp/pwned'`, [
+      { pattern: bashPath },
+    ]);
+    expect(second.allowlistSatisfied).toBe(false);
+  });
 });

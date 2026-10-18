@@ -23,7 +23,6 @@ export type OpenClawPluginToolOptions = Pick<
   | "currentMessagingTarget"
   | "currentChannelId"
   | "agentThreadId"
-  | "approvalReviewerDeviceIds"
   | "nativeChannelId"
   | "messageActionTurnCapability"
   | "agentDir"
@@ -46,7 +45,7 @@ export type OpenClawPluginToolOptions = Pick<
   | "sandboxed"
   | "allowGatewaySubagentBinding"
   | "toolBindings"
-> & { activeProjectKeys?: readonly string[]; approvalReviewerDeviceId?: string };
+> & { activeProjectKeys?: readonly string[] };
 
 export function resolveOpenClawPluginToolInputs(params: {
   options?: OpenClawPluginToolOptions;
@@ -100,11 +99,6 @@ export function resolveOpenClawPluginToolInputs(params: {
       agentId: sessionAgentId,
       sessionKey,
       sessionId: options?.sessionId,
-      approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds
-        ? [...options.approvalReviewerDeviceIds]
-        : options?.approvalReviewerDeviceId
-          ? [options.approvalReviewerDeviceId]
-          : undefined,
       toolBindings: options?.toolBindings,
       activeProjectKeys: options?.activeProjectKeys,
       conversationRecall: options?.conversationRecall,

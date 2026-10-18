@@ -2,7 +2,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import {
   listThreadBindingsBySessionKey,
   listThreadBindingsBySessionKeyAsync,
@@ -58,15 +57,10 @@ function shouldResolveDiscordDeliveryTarget(event: DiscordSubagentDeliveryTarget
   );
 }
 
-/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
+/** @deprecated Use handleDiscordSubagentDeliveryTargetAsync; removed in the next Plugin SDK major. */
 export function handleDiscordSubagentDeliveryTarget(
   event: DiscordSubagentDeliveryTargetEvent,
 ): DiscordSubagentDeliveryTargetResult {
-  warnPluginSdkDeprecation({
-    family: "conversation-bindings",
-    method: "handleDiscordSubagentDeliveryTarget",
-    replacement: "handleDiscordSubagentDeliveryTargetAsync",
-  });
   if (!shouldResolveDiscordDeliveryTarget(event)) {
     return undefined;
   }

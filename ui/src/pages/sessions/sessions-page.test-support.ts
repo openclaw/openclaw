@@ -1,8 +1,13 @@
+import { ContextProvider } from "@lit/context";
 import { createComponent, flush } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationGatewaySnapshot,
+} from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type {
   SessionCapability,
@@ -15,10 +20,7 @@ import type {
   SessionRowObservation,
 } from "../../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
-import {
-  createApplicationContextProvider,
-  createNavigationPreferencesFixture,
-} from "../../test-helpers/application-context.ts";
+import { createNavigationPreferencesFixture } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -65,7 +67,7 @@ export type TestSessionsPage = HTMLElement & {
     scope?: unknown,
     expectedSessionId?: string,
   ) => Promise<unknown>;
-  archiveActions: Pick<SessionsPageArchive, "archive">;
+  archiveActions: Pick<SessionsPageArchive, "archive" | "archiveTree">;
   forkSession: (key: string, fromLastCompleted?: boolean) => Promise<void>;
   runPluginAction: (id: string, session: GatewaySessionRow) => Promise<void>;
 };
@@ -76,11 +78,15 @@ export async function createPage(
   context: ApplicationContext,
   routeData?: SessionsRouteData,
 ): Promise<TestSessionsPage> {
-  const host = createApplicationContextProvider(context);
+  const host = document.createElement("div");
   const controller = new SessionsPageController();
   controller.routeData = routeData;
   let currentContext = context;
   let dispose: (() => void) | undefined;
+  const provider = new ContextProvider(host, {
+    context: applicationContext,
+    initialValue: context,
+  });
   const unmount = () => {
     dispose?.();
     dispose = undefined;
@@ -124,7 +130,7 @@ export async function createPage(
     set(target, property, value) {
       if (property === "context") {
         currentContext = value;
-        host.setContext(value);
+        provider.setValue(value);
         controller.setContext(value);
         return true;
       }

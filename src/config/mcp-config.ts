@@ -1,4 +1,5 @@
 import { expectDefined, stableStringify } from "@openclaw/normalization-core";
+import { markClawMcpServerIndependentlyOwned } from "../state/claw-mcp-adoption.js";
 import { isRecord } from "../utils.js";
 import {
   readSourceConfigSnapshot,
@@ -135,6 +136,7 @@ async function commitConfiguredMcpServers(params: {
   servers: ConfigMcpServers;
   errorLabel: string;
   success?: { removed?: boolean; updated?: boolean };
+  independentlyOwnedName?: string;
   assertCurrent?: () => void;
   assertCurrentAsync?: () => Promise<void>;
   mutation?: { name: string; onCommitted?: McpConfigMutationHook };
@@ -182,6 +184,9 @@ async function commitConfiguredMcpServers(params: {
       ...(previous ? { previous } : {}),
       ...(nextServer ? { next: nextServer } : {}),
     });
+  }
+  if (params.independentlyOwnedName) {
+    await markClawMcpServerIndependentlyOwned(params.independentlyOwnedName);
   }
   return {
     ok: true,
@@ -283,6 +288,8 @@ async function mutateConfiguredMcpServer(
     servers,
     errorLabel: params.kind === "update" ? params.errorLabel : params.kind,
     success: params.kind === "set" ? undefined : { [successKey]: true },
+    independentlyOwnedName:
+      params.kind === "unset" || params.recordIndependentOwner === false ? undefined : name,
     assertCurrent: params.kind === "update" ? undefined : params.assertCurrent,
     assertCurrentAsync: params.kind === "unset" ? params.assertCurrentAsync : undefined,
     mutation: { name, onCommitted },
@@ -293,7 +300,7 @@ async function updateConfiguredMcpServerConfig(params: {
   name: string;
   update: (server: Record<string, unknown>) => Record<string, unknown>;
   errorLabel: string;
-  skipLifecycleLease?: boolean;
+  recordIndependentOwner?: boolean;
   onCommitted?: McpConfigMutationHook;
 }): Promise<ConfigMcpWriteResult> {
   return mutateConfiguredMcpServer({ ...params, kind: "update" }, params.onCommitted);
@@ -303,13 +310,13 @@ async function updateConfiguredMcpServerTools(
   params: {
     name: string;
     tools: McpServerToolFilterConfig | null;
-    skipLifecycleLease?: boolean;
+    recordIndependentOwner?: boolean;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
-    skipLifecycleLease: params.skipLifecycleLease,
+    recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "tool selection update",
     onCommitted,
     update: (server) => {
@@ -337,13 +344,13 @@ async function updateConfiguredMcpServer(
   params: {
     name: string;
     update: (server: Record<string, unknown>) => Record<string, unknown>;
-    skipLifecycleLease?: boolean;
+    recordIndependentOwner?: boolean;
   },
   onCommitted?: McpConfigMutationHook,
 ): Promise<ConfigMcpWriteResult> {
   return updateConfiguredMcpServerConfig({
     name: params.name,
-    skipLifecycleLease: params.skipLifecycleLease,
+    recordIndependentOwner: params.recordIndependentOwner,
     errorLabel: "configure",
     onCommitted,
     update: (server) => canonicalizeConfiguredMcpServer(params.update(server)),
@@ -355,7 +362,7 @@ async function setConfiguredMcpServer(
     name: string;
     server: unknown;
     createOnly?: boolean;
-    skipLifecycleLease?: boolean;
+    recordIndependentOwner?: boolean;
     expectedServer?: Record<string, unknown>;
     assertCurrent?: () => void;
   },

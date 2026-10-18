@@ -54,7 +54,6 @@ const SESSION_SUBSCRIPTION_EVENTS = new Set([
   // session subscribers; omitting it here would hand scoped clients the
   // exact payload the registry gate suppresses on the `agent` event.
   "session.tool",
-  "socket.drain",
 ]);
 
 type EncodedMessagePayload = { prefix: string; message: Buffer; suffix: string };
@@ -262,12 +261,6 @@ export function createGatewayBroadcaster(params: {
     // The bounded signal has no caller-provided serialization or model/config data.
     const metadataInvalidation =
       event === "chat.metadata.changed" ? modelMetadataInvalidationFragment(payload) : undefined;
-    // Older Control UI builds cannot render an unknown status phase.
-    const modelWaitStatus =
-      event === "chat" &&
-      isPlainEventPayload(payload) &&
-      payload.state === "status" &&
-      payload.phase === "waiting_for_model";
     let sessionReadContext: boolean | undefined;
     const hasSessionReadContext = () =>
       (sessionReadContext ??=
@@ -279,7 +272,6 @@ export function createGatewayBroadcaster(params: {
         isSessionReadInvalidation(event, payload, isTargeted));
     let projectPresence: ((client: GatewayWsClient) => SystemPresence[]) | undefined;
     let presenceFragments: Map<SystemPresence[], Buffer> | undefined;
-    let sessionFragments: Map<unknown, string | EncodedMessagePayload> | undefined;
     let projectSession:
       | ((client: GatewayWsClient) => SessionEventProjection | undefined)
       | undefined;
@@ -327,8 +319,6 @@ export function createGatewayBroadcaster(params: {
         (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
-        (modelWaitStatus &&
-          !hasGatewayClientCap(c.connect.caps, GATEWAY_CLIENT_CAPS.MODEL_WAIT_STATUS)) ||
         (opts?.excludeClientCapability &&
           hasGatewayClientCap(c.connect.caps, opts.excludeClientCapability))
       ) {
@@ -609,23 +599,19 @@ export function createGatewayBroadcaster(params: {
           if (projected === undefined) {
             continue;
           }
-          payloadFragment =
-            (projected.serializeSession && sessionFragments?.get(projected.payload)) ||
-            serializeFrameField(
-              "payload",
-              projected.payload,
-              projected.serializeSession,
-              projected.serializeMessage,
-            );
-          if (projected.serializeSession) {
-            (sessionFragments ??= new Map()).set(projected.payload, payloadFragment);
-          }
+          payloadFragment = serializeFrameField(
+            "payload",
+            projected.payload,
+            projected.serializeSession,
+            projected.serializeMessage,
+          );
           delivered = projected.delivered;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =
           (c.connect.role ?? "operator") === "operator" ? c.preparedRecipientProfileId : undefined;
         if (
+          !projectSession &&
           lastFrame !== undefined &&
           lastFrameSequence === nextSeq &&
           lastFrameRecipientProfileId === recipientProfileId &&
@@ -634,10 +620,12 @@ export function createGatewayBroadcaster(params: {
           frame = lastFrame;
         } else {
           frame = frameWithSequence(base, nextSeq, payloadFragment, recipientProfileId);
-          lastFrameSequence = nextSeq;
-          lastFrameRecipientProfileId = recipientProfileId;
-          lastPayloadFragment = payloadFragment;
-          lastFrame = frame;
+          if (!projectSession) {
+            lastFrameSequence = nextSeq;
+            lastFrameRecipientProfileId = recipientProfileId;
+            lastPayloadFragment = payloadFragment;
+            lastFrame = frame;
+          }
         }
       } catch (err) {
         log.error(`broadcast serialization failed for event ${event}: ${formatErrorMessage(err)}`);
@@ -674,7 +662,6 @@ export function createGatewayBroadcaster(params: {
       try {
         // Publish the baseline before send can reenter; failures retire this transport.
         delivered?.();
-        state.socket.batchWrites?.();
         if (typeof frame === "string") {
           state.socket.send(frame, sent);
         } else {

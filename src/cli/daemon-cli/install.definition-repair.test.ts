@@ -25,7 +25,6 @@ import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
 } from "../../daemon/systemd-unit.js";
-import { migrateDaemonRuntimePins } from "../../infra/state-migrations.daemon-runtime-pins.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as exec from "../../process/exec.js";
@@ -220,7 +219,6 @@ async function fixture(
   }
   process.argv = [process.execPath, initialCli];
   await fs.writeFile(process.env.OPENCLAW_CONFIG_PATH!, JSON.stringify(native.config));
-  await migrateDaemonRuntimePins(process.env);
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   mockSystemAccountHome();
   const control = path.join(home, "control");

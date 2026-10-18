@@ -392,7 +392,10 @@ function normalizeBaseUrl(baseUrl?: string): string | undefined {
   }
 }
 
-function normalizeTtlMs(ttlSeconds: number): number {
+function normalizeTtlMs(ttlSeconds?: number): number | undefined {
+  if (!Number.isFinite(ttlSeconds) || ttlSeconds === undefined) {
+    return undefined;
+  }
   return Math.floor(Math.min(Math.max(ttlSeconds, 1), MAX_DIFF_ARTIFACT_TTL_SECONDS) * 1000);
 }
 

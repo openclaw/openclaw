@@ -72,8 +72,7 @@ const { webSearchProviders } = vi.hoisted(() => {
   };
 });
 
-vi.mock("../plugins/plugin-registry.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/plugin-registry.js")>()),
+vi.mock("../secrets/runtime-web-tools-manifest.runtime.js", () => ({
   resolveManifestContractPluginIds: ({ contract }: { contract: string }) =>
     contract === "webSearchProviders" ? ["google"] : [],
   resolveManifestContractOwnerPluginId: ({ value }: { value: string }) =>
@@ -85,8 +84,7 @@ vi.mock("../plugins/web-provider-public-artifacts.explicit.js", () => ({
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: () => [],
 }));
 
-vi.mock("../plugins/web-provider-public-artifacts.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/web-provider-public-artifacts.js")>()),
+vi.mock("../secrets/runtime-web-tools-public-artifacts.runtime.js", () => ({
   resolveBundledWebSearchProvidersFromPublicArtifacts: () => webSearchProviders,
   resolveBundledWebFetchProvidersFromPublicArtifacts: () => [],
 }));

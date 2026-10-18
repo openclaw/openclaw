@@ -5,9 +5,10 @@ import {
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly-open.js";
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
-import type {
-  SessionBranchSummaryReadRequest,
-  SessionBranchSummaryReadResult,
+import {
+  cloneSessionBranchSummaries,
+  type SessionBranchSummaryReadRequest,
+  type SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
@@ -50,7 +51,7 @@ export function readSessionBranchSnapshot(
             : undefined,
         ...watermark,
         appendSafe: summaries.appendSafe,
-        branches: summaries.branches,
+        branches: cloneSessionBranchSummaries(summaries.branches),
       };
     },
     { operationLabel: "session branch summaries read" },

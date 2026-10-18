@@ -1,5 +1,4 @@
 import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
-import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
   adjustTextareaHeight,
@@ -75,19 +74,16 @@ export function isCurrentSessionSubmittedProgress(
   );
 }
 
-// Shared by the thread, composer, pane activity, and header presentation.
+// Single source for "the selected session is visibly working": drives both
+// the thread's working spark and the composer's sr-only announcement.
 export function isChatRunWorking(
-  props: Pick<
-    ChatComposerProps,
-    "runActive" | "runStatus" | "queue" | "sessionKey" | "startupStatus"
-  >,
+  props: Pick<ChatComposerProps, "runActive" | "runStatus" | "queue" | "sessionKey">,
 ): boolean {
-  return isSessionRunVisuallyActive(
+  return (
     (props.runActive === true && !hasTerminalRunStatus(props.runStatus)) ||
-      props.queue.some((item) =>
-        isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
-      ),
-    props.startupStatus?.phase,
+    props.queue.some((item) =>
+      isCurrentSessionSubmittedProgress(item, props.sessionKey, props.runStatus),
+    )
   );
 }
 
