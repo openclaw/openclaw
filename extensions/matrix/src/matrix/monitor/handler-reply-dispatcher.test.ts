@@ -18,7 +18,8 @@ vi.mock("./replies.js", async (importOriginal) => ({
   deliverMatrixReplies: deliveryMocks.deliver,
 }));
 
-vi.mock("../send.js", () => ({
+vi.mock("../send.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../send.js")>()),
   editMessageMatrix: deliveryMocks.edit,
   prepareMatrixSingleText: (text: string) => ({
     trimmedText: text.trim(),
