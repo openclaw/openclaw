@@ -5,6 +5,7 @@ import { listSessionEntriesReadOnly } from "../../../config/sessions/session-acc
 import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.sqlite-entry.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
 import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
@@ -85,6 +86,16 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
           cfg,
         );
         const mainScope = { agentId: "main", storePath, sessionKey: controllerSessionKey };
+        const updateChild = (sessionKey: string, update: (entry: SessionEntry) => SessionEntry) =>
+          applySessionEntryExactReplacements({
+            agentId: "main",
+            storePath,
+            sessionKeys: [sessionKey],
+            update: ([row]) => ({
+              result: undefined,
+              replacements: [{ sessionKey, entry: update(row!.entry) }],
+            }),
+          });
         const now = Date.now();
         const metadataPayload = "m".repeat(4_096);
         const savedPrompt = "p".repeat(8_192);
@@ -104,10 +115,6 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
                   updatedAt: now - index,
                   label: `Fixture session ${index} ${metadataPayload}`,
                   skillsSnapshot: { prompt: savedPrompt, skills: [] },
-                  model: "fixture-model",
-                  modelProvider: "fixture",
-                  totalTokens: index + 1,
-                  status: "done",
                 },
               );
             }
@@ -193,18 +200,14 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
             const run = createSubagentRunRecord({
               runId: `benchmark-run-${iteration}`,
               childSessionKey,
-              requesterSessionKey: controllerSessionKey,
               requesterAgentId: "main",
               controllerSessionKey,
               requesterStorePath: storePath,
               controllerStorePath: storePath,
-              requesterDisplayKey: "main",
               task: `Inspect fixture ${iteration}`,
               taskName: `fixture_${iteration}`,
-              cleanup: "keep",
               createdAt: now + iteration,
               execution: { status: "running", startedAt: now + iteration },
-              completion: { required: false },
               delivery: { status: "not_required" },
             });
             const childScope = { ...mainScope, sessionKey: childSessionKey };
@@ -213,23 +216,12 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               updatedAt: now + iteration,
               abortedLastRun: true,
               model: "saved-fixture-model",
-              totalTokens: 1_000,
             };
             // Worker status publication invalidates snapshots retained on the host connection.
             replaceSessionEntrySync(childScope, { ...entry, status: "done" });
             subagentRuns.set(run.runId, run);
             persistRegistryFixture(subagentRuns, [run.runId]);
-            await applySessionEntryExactReplacements({
-              agentId: "main",
-              storePath,
-              sessionKeys: [childSessionKey],
-              update: () => ({
-                result: undefined,
-                replacements: [
-                  { sessionKey: childSessionKey, entry: { ...entry, status: undefined } },
-                ],
-              }),
-            });
+            await updateChild(childSessionKey, () => ({ ...entry, status: undefined }));
 
             const prompt = await measure("turn-prompt", iteration, () =>
               buildActiveSubagentRuntimeContext({ cfg, controllerSessionKey }),
@@ -257,20 +249,10 @@ it.runIf(process.env.OPENCLAW_ENTRY_RELOAD_BENCH === "1")(
               cfg,
             );
             // Give the user-facing metadata read its own committed invalidation after the prompt.
-            await applySessionEntryExactReplacements({
-              agentId: "main",
-              storePath,
-              sessionKeys: [childSessionKey],
-              update: ([row]) => ({
-                result: undefined,
-                replacements: [
-                  {
-                    sessionKey: childSessionKey,
-                    entry: { ...row!.entry, label: `Changed child ${iteration}` },
-                  },
-                ],
-              }),
-            });
+            await updateChild(childSessionKey, (row) => ({
+              ...row,
+              label: `Changed child ${iteration}`,
+            }));
             const metadata = await measure("subagent-list-selected", iteration, () =>
               readSubagentListSessionEntries(cfg, context.list),
             );

@@ -1,5 +1,3 @@
-// Subagent list tests cover active/recent formatting, usage summaries, and
-// stale-run filtering for the user-visible subagent status command.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
@@ -39,9 +37,7 @@ beforeEach(async () => {
   setRuntimeConfigSnapshot({});
 });
 
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+afterEach(clearRuntimeConfigSnapshot);
 
 describe("buildSubagentList", () => {
   it("enriches unbound mixed children from memory and recorded durable owners", async () => {
@@ -98,8 +94,6 @@ describe("buildSubagentList", () => {
                 childSessionKey,
                 childAgentId: owner.agentId,
                 model: "openai/fallback",
-                createdAt: now,
-                execution: { status: "running", startedAt: now },
               }),
             );
           }
@@ -111,12 +105,9 @@ describe("buildSubagentList", () => {
           childSessionKey: "agent:missing:subagent:incognito-list",
           model: "openai/fallback",
         });
-        const list = await buildSubagentList({
-          cfg: {},
-          runs,
-          recentMinutes: 30,
-          readSnapshot: new Map(),
-        });
+        const readUnbound = () =>
+          buildSubagentList({ cfg: {}, runs, recentMinutes: 30, readSnapshot: new Map() });
+        const list = await readUnbound();
         expect(new Map(list.active.map((entry) => [entry.runId, entry.model]))).toEqual(
           new Map([
             ["main-durable", "openai/main-durable"],
@@ -127,12 +118,7 @@ describe("buildSubagentList", () => {
           ]),
         );
         owners[0]!.closeSession("agent:main:subagent:incognito-list");
-        const closed = await buildSubagentList({
-          cfg: {},
-          runs,
-          recentMinutes: 30,
-          readSnapshot: new Map(),
-        });
+        const closed = await readUnbound();
         expect(closed.active.find((entry) => entry.runId === "main-private")?.model).toBe(
           "openai/fallback",
         );
@@ -183,15 +169,13 @@ describe("buildSubagentList", () => {
       }
       const list = () =>
         buildSubagentList({ cfg, runs, recentMinutes: 30, readSnapshot: new Map() });
-      expect((await list()).active.map(({ sessionKey, model }) => ({ sessionKey, model }))).toEqual(
-        [
-          { sessionKey: runs[0]!.childSessionKey, model: "openai/saved-active" },
-          { sessionKey: runs[2]!.childSessionKey, model: "openai/saved-other-store" },
-          { sessionKey: runs[3]!.childSessionKey, model: "openai/run-fallback" },
-          { sessionKey: "global", model: "openai/saved-main-global" },
-          { sessionKey: "global", model: "openai/saved-research-global" },
-        ],
-      );
+      expect((await list()).active.map(({ sessionKey, model }) => [sessionKey, model])).toEqual([
+        [runs[0]!.childSessionKey, "openai/saved-active"],
+        [runs[2]!.childSessionKey, "openai/saved-other-store"],
+        [runs[3]!.childSessionKey, "openai/run-fallback"],
+        ["global", "openai/saved-main-global"],
+        ["global", "openai/saved-research-global"],
+      ]);
       expect((await list()).recent).toMatchObject([{ model: "openai/saved-recent" }]);
       await replaceSessionEntry(
         { sessionKey: runs[0]!.childSessionKey },
@@ -204,7 +188,6 @@ describe("buildSubagentList", () => {
   it("keeps a yielded child visible with its real wait and independent delivery state", async () => {
     const now = Date.now();
     const parent = makeRun("yielded-parent", {
-      task: "Wait for remote evidence",
       createdAt: now - 3_600_000,
       pauseReason: "sessions_yield",
       execution: { status: "terminal", endedAt: now - 3_500_000, outcome: { status: "ok" } },
@@ -281,7 +264,6 @@ describe("buildSubagentList", () => {
         );
         const run = makeRun("run-metadata-target", {
           childSessionKey,
-          task: "inspect metadata reads",
           taskName: "review_subagents",
           label: "Review worker",
           execution: { status: "queued" },
@@ -294,7 +276,6 @@ describe("buildSubagentList", () => {
             cfg,
             runs: [run],
             recentMinutes: 30,
-            taskMaxChars: 110,
           });
           expect(list.active).toHaveLength(1);
           expect(list.active[0]).toMatchObject({
@@ -325,7 +306,6 @@ describe("buildSubagentList", () => {
   it("shows finished ancestors as done while suspended child results remain available", async () => {
     const now = Date.now();
     const parent = makeRun("finished-parent", {
-      task: "orchestrate child workers",
       createdAt: now - 120_000,
       execution: { status: "terminal", endedAt: now - 60_000, outcome: { status: "ok" } },
     });
@@ -368,7 +348,6 @@ describe("buildSubagentList", () => {
     const now = Date.now();
     const expectedStatus = "timeout (waiting on 2 children)";
     const parentRun = makeRun("timed-out-parent", {
-      task: "orchestrate child workers",
       createdAt: now - 120_000,
       execution: {
         status: "terminal",

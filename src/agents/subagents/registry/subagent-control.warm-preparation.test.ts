@@ -13,19 +13,17 @@ import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gat
 import { runOutsideAsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as writerQueue from "../../../shared/store-writer-queue.js";
-import type {
-  AgentDatabaseExecutionScope,
-  OpenClawAgentDatabaseExecution,
-} from "../../../state/openclaw-agent-execution-contract.js";
+import type { OpenClawAgentDatabaseExecution } from "../../../state/openclaw-agent-execution-contract.js";
 import * as executionOwner from "../../../state/openclaw-agent-execution.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../../state/openclaw-agent-write-admission-state.js";
 import {
   prepareSubagentKillSession,
   type SubagentKillSession,
 } from "./subagent-control-session.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 
 const fixture = useSubagentControlFixture();
+const { writeSession } = createControlRunFixture(() => fixture.stateDir);
 
 it.for(["unrelated", "same session"] as const)(
   "prepares warm cancellation with a %s write while retaining publication ordering",
@@ -65,22 +63,14 @@ it.for(["unrelated", "same session"] as const)(
         "main",
         identity,
       );
-    const writeSession = (
-      sessionKey: string,
-      defaultSessionId: string,
-      lifecycleRevision?: string,
-    ) =>
-      writeSubagentSessionEntry({
-        stateDir: fixture.stateDir,
-        agentId: "main",
-        sessionKey,
-        defaultSessionId,
-        lifecycleRevision,
-      });
+    const expectPublication = (sessionKey: string, sessionId: string) =>
+      expect(
+        loadExactSessionEntryReadOnly({ storePath: initial!.storePath, sessionKey })?.entry,
+      ).toMatchObject({ sessionId, label: "held write published" });
 
     try {
-      const storePath = await writeSession(childKey, childId, revision);
-      await writeSession(peerKey, peerId);
+      const storePath = await writeSession("warm-preparation", revision);
+      await writeSession("unrelated-publication");
       const writerKey = writerTarget === "unrelated" ? peerKey : childKey;
       const writerSessionId = writerTarget === "unrelated" ? peerId : childId;
       initial = await prepare(() => {});
@@ -138,8 +128,8 @@ it.for(["unrelated", "same session"] as const)(
         const runExisting: typeof borrowed.runExisting = (source, operation, options) =>
           borrowed.runExisting(
             source,
-            (scope) => {
-              const wrapped: AgentDatabaseExecutionScope = {
+            (scope) =>
+              operation({
                 async execute(command, commandOptions) {
                   const value = await scope.execute(command, commandOptions);
                   if (command.type === "session.entries.replace" && !nativeReplyPending) {
@@ -150,9 +140,7 @@ it.for(["unrelated", "same session"] as const)(
                   }
                   return value;
                 },
-              };
-              return operation(wrapped);
-            },
+              }),
             options,
           );
         return new Proxy(borrowed, {
@@ -227,12 +215,7 @@ it.for(["unrelated", "same session"] as const)(
         await producer;
         prepared.assertCurrent();
         expect(prepared.entry).toMatchObject(identity);
-        expect(
-          loadExactSessionEntryReadOnly({ storePath, sessionKey: childKey })?.entry,
-        ).toMatchObject({
-          sessionId: childId,
-          label: "held write published",
-        });
+        expectPublication(childKey, childId);
         return;
       }
       const preparationOutcome = await withinTest(
@@ -265,12 +248,7 @@ it.for(["unrelated", "same session"] as const)(
       expect(published).toBe(true);
       nativeClaim.assertCurrent();
       generationFacts!.assertCurrent();
-      expect(
-        loadExactSessionEntryReadOnly({ storePath, sessionKey: peerKey })?.entry,
-      ).toMatchObject({
-        sessionId: peerId,
-        label: "held write published",
-      });
+      expectPublication(peerKey, peerId);
     } finally {
       release();
       await Promise.allSettled([producer, preparation, publication]);

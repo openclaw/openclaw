@@ -36,6 +36,7 @@ import {
   reserveSwarmRun,
 } from "../swarm/swarm-scheduler.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
+import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { buildSubagentListForTests as buildSubagentList } from "./subagent-list.test-support.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
@@ -50,18 +51,14 @@ import {
 } from "./subagent-registry-read.js";
 import { preserveSubagentRunForRestart } from "./subagent-registry-run-pause.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import {
-  countActiveRunsForSession,
-  markSubagentRunTerminated,
-  registerSubagentRun,
-} from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { countActiveRunsForSession, markSubagentRunTerminated } from "./subagent-registry.js";
 import { addSubagentRunForTests, testing } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+const controlRuns = createControlRunFixture(() => fixture.stateDir);
 const parent = "agent:main:liveness-parent";
 const start = Date.parse("2026-09-13T12:00:00Z");
 const olderThanCutoff = start + 2 * 60 * 60 * 1000 + 1;
@@ -86,8 +83,26 @@ const claimContext = (entry: SubagentRunRecord, ownsContext = true) =>
     { sessionKey: entry.childSessionKey },
     { trackOwner: true, ownsContext },
   );
-const prepareAdmission = (entry: SubagentRunRecord, label: string) =>
-  prepareSystemAgentRunAdmission(getRuntimeConfig(), entry.runId, "main", label);
+function admittedTask(
+  entry: SubagentRunRecord,
+  lane: string,
+  run: (context: Parameters<typeof getAdmittedRunDelegatedAuthority>[0]) => Promise<void>,
+) {
+  const admission = prepareSystemAgentRunAdmission(
+    getRuntimeConfig(),
+    entry.runId,
+    "main",
+    `liveness-${lane}`,
+  );
+  return enqueueCommandInLane(`test:liveness-${lane}`, async () => {
+    const context = await admission.admit("embedded");
+    try {
+      await run(context);
+    } finally {
+      admission.close();
+    }
+  });
+}
 const spawnAdmission = (maxChildrenPerAgent: number) =>
   withPreparedSessionCapabilityRead(() =>
     resolveSpawnAdmission({
@@ -111,30 +126,25 @@ function expectIndexCounts(
 }
 
 async function register(id: string, collect = false, expectsCompletionMessage = false) {
-  const childSessionKey = `agent:main:subagent:${id}`;
-  await writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
-    sessionKey: childSessionKey,
-    defaultSessionId: `${id}-session`,
-    lifecycleRevision: `${id}-revision`,
-  });
-  await registerSubagentRun({
-    runId: id,
-    childSessionKey,
-    childAgentId: "main",
-    sessionEntry: { sessionId: `${id}-session`, lifecycleRevision: `${id}-revision` },
-    requesterSessionKey: parent,
-    requesterAgentId: "main",
-    requesterDisplayKey: parent,
-    task: "quiet owner proof",
-    cleanup: "keep",
-    runTimeoutSeconds: 0,
-    expectsCompletionMessage,
-    ...(collect
-      ? { collect: true, queued: true, swarmRequesterSessionKey: parent, groupId: "liveness-group" }
-      : {}),
-  });
+  await controlRuns.seed(
+    id,
+    {
+      requesterSessionKey: parent,
+      requesterDisplayKey: parent,
+      task: "quiet owner proof",
+      runTimeoutSeconds: 0,
+      expectsCompletionMessage,
+      ...(collect
+        ? {
+            collect: true,
+            queued: true,
+            swarmRequesterSessionKey: parent,
+            groupId: "liveness-group",
+          }
+        : {}),
+    },
+    `${id}-revision`,
+  );
   return subagentRuns.get(id)!;
 }
 
@@ -189,19 +199,13 @@ it("retains quiet admitted execution in listing, admission count, and requester 
   const entry = await register("quiet-owned");
   const entered = createDeferred();
   const finish = createDeferred();
-  const admission = prepareAdmission(entry, "liveness-owner-proof");
-  const task = enqueueCommandInLane("test:liveness-quiet", async () => {
-    const context = await admission.admit("embedded");
+  const task = admittedTask(entry, "quiet", async (context) => {
     const authority = getAdmittedRunDelegatedAuthority(context)!;
     expect(
       getAgentRunContextOwnerStatus(entry.runId, authority.claimId, authority.lifecycleGeneration),
     ).toBe("active");
     entered.resolve();
-    try {
-      await finish.promise;
-    } finally {
-      admission.close();
-    }
+    await finish.promise;
   });
   try {
     await entered.promise;
@@ -371,36 +375,48 @@ it("retains an exact queued collector reservation without calling it executor-li
   }
 });
 
-it("does not retain an old run after its last claim releases preserved routing metadata", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("preserved-unowned");
-  // Admission/event routing can publish metadata before a tracked execution
-  // adopts it. A non-owning claim must preserve that metadata when it exits.
-  registerAgentRunContext(entry.runId, { sessionKey: entry.childSessionKey });
-  const routingContext = getAgentRunContext(entry.runId)!;
-  const claim = claimContext(entry, false);
-  expect(claim).toBeDefined();
-  try {
-    now.mockReturnValue(olderThanCutoff);
-    expect(hasLiveAgentRunContext(entry.runId)).toBe(true);
-    expect(isSubagentRunLive(entry)).toBe(true);
-    expect(countActiveRunsForSession(parent)).toBe(1);
-    releaseAgentRunContext(entry.runId, claim);
-    expect(getAgentRunContext(entry.runId)).toBe(routingContext);
-    expect(hasLiveAgentRunContext(entry.runId)).toBe(false);
-    expect.soft(isSubagentRunLive(entry)).toBe(false);
-    expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-    expect.soft(countActiveRunsForSession(parent)).toBe(0);
-    expect.soft(await countPendingDescendantRuns(parent, () => {})).toBe(0);
-    expect
-      .soft(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent))
-      .toBe(false);
-    expect.soft(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(0);
-  } finally {
-    releaseAgentRunContext(entry.runId, claim);
-    clearAgentRunContext(entry.runId);
-  }
-});
+it.each(["last claim", "Gateway retirement"] as const)(
+  "drops old execution liveness after %s",
+  async (reason) => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(start);
+    const entry = await register("released-context");
+    const preserveRouting = reason === "last claim";
+    if (preserveRouting) {
+      registerAgentRunContext(entry.runId, { sessionKey: entry.childSessionKey });
+    }
+    const routingContext = getAgentRunContext(entry.runId);
+    const claim = claimContext(entry, !preserveRouting);
+    expect(claim).toBeDefined();
+    try {
+      now.mockReturnValue(olderThanCutoff);
+      expect(hasLiveAgentRunContext(entry.runId)).toBe(true);
+      expect(isSubagentRunLive(entry)).toBe(true);
+      expect(countActiveRunsForSession(parent)).toBe(1);
+      if (preserveRouting) {
+        releaseAgentRunContext(entry.runId, claim);
+        expect(getAgentRunContext(entry.runId)).toBe(routingContext);
+      } else {
+        rotateAgentRunRegistryLifecycleGeneration();
+      }
+      expect(hasLiveAgentRunContext(entry.runId)).toBe(false);
+      expect(isSubagentRunLive(entry)).toBe(false);
+      expect(countActiveRunsForSession(parent)).toBe(0);
+      if (preserveRouting) {
+        expect.soft(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
+        expect.soft(await countPendingDescendantRuns(parent, () => {})).toBe(0);
+        expect
+          .soft(buildSubagentSessionListReadIndex().hasDescendantRunAwaitingSettle(parent))
+          .toBe(false);
+        expect.soft(buildSubagentSessionListReadIndex().countActiveDescendantRuns(parent)).toBe(0);
+      }
+    } finally {
+      releaseAgentRunContext(entry.runId, claim);
+      if (preserveRouting) {
+        clearAgentRunContext(entry.runId);
+      }
+    }
+  },
+);
 
 it("does not borrow a same-run-ID successor's live claim through a prepared observation", async () => {
   vi.spyOn(Date, "now").mockReturnValue(start);
@@ -514,34 +530,11 @@ it("preserves queued retention across row values while rejecting replaced reserv
   }
 });
 
-it("rejects an owned context once its Gateway lifecycle retires", async () => {
-  const now = vi.spyOn(Date, "now").mockReturnValue(start);
-  const entry = await register("retired-context");
-  const claim = claimContext(entry);
-  try {
-    now.mockReturnValue(olderThanCutoff);
-    expect(isSubagentRunLive(entry)).toBe(true);
-    expect(countActiveRunsForSession(parent)).toBe(1);
-    rotateAgentRunRegistryLifecycleGeneration();
-    expect(hasLiveAgentRunContext(entry.runId)).toBe(false);
-    expect(isSubagentRunLive(entry)).toBe(false);
-    expect(countActiveRunsForSession(parent)).toBe(0);
-  } finally {
-    releaseAgentRunContext(entry.runId, claim);
-  }
-});
-
 it("does not keep a recent orphan executor-live after its admitted owner closes", async () => {
   vi.spyOn(Date, "now").mockReturnValue(start);
   const entry = await register("recent-unowned");
-  const admission = prepareAdmission(entry, "recent-owner-loss-proof");
-  await enqueueCommandInLane("test:liveness-owner-loss", async () => {
-    await admission.admit("embedded");
-    try {
-      expect(isSubagentRunLive(entry)).toBe(true);
-    } finally {
-      admission.close();
-    }
+  await admittedTask(entry, "owner-loss", async () => {
+    expect(isSubagentRunLive(entry)).toBe(true);
   });
   // The executor closed before the registry observed a terminal lifecycle event.
   expect(entry.execution.endedAt).toBeUndefined();
@@ -628,20 +621,14 @@ it("keeps a restart-preserved native record distinct from an executor", async ()
 
 it("makes an admitted child inactive when termination is recorded", async () => {
   const entry = await register("terminated-owner");
-  const admission = prepareAdmission(entry, "termination-owner-control");
-  await enqueueCommandInLane("test:liveness-termination", async () => {
-    await admission.admit("embedded");
-    try {
-      expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(true);
-      expect(
-        await markSubagentRunTerminated({
-          childSessionKey: entry.childSessionKey,
-          reason: "manual kill",
-        }),
-      ).toBe(1);
-      expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
-    } finally {
-      admission.close();
-    }
+  await admittedTask(entry, "termination", async () => {
+    expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(true);
+    expect(
+      await markSubagentRunTerminated({
+        childSessionKey: entry.childSessionKey,
+        reason: "manual kill",
+      }),
+    ).toBe(1);
+    expect(isSubagentSessionRunActive(entry.childSessionKey)).toBe(false);
   });
 });
