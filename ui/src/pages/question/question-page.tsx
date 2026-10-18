@@ -1,7 +1,7 @@
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onCleanup, For, Show, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
@@ -28,9 +28,13 @@ type QuestionPageRequestError = "connection" | "load" | "unavailable" | null;
 
 type QuestionPageProps = { questionId: string };
 
-function createQuestionPage(context: ApplicationContext, props: QuestionPageProps) {
-  // External callbacks and completion checks read the live ID; effect admission receives its ID.
-  const questionId = () => untrack(() => props.questionId);
+function createQuestionPage(
+  context: ApplicationContext,
+  props: QuestionPageProps,
+  host: SolidBridgeElement<QuestionPageProps>,
+) {
+  // The bridge owns this live value; callbacks must see changes before the next render.
+  const questionId = () => host.questionId;
   const [loading, setLoading] = createSignal(true, { ownedWrite: true });
   const [requestError, setRequestError] = createSignal<QuestionPageRequestError>(null, {
     ownedWrite: true,
@@ -279,9 +283,12 @@ function QuestionSummary(props: { prompt: QuestionPrompt }) {
   );
 }
 
-function QuestionPageContent(props: QuestionPageProps) {
+function QuestionPageContent(
+  props: QuestionPageProps,
+  host: SolidBridgeElement<QuestionPageProps>,
+) {
   const context = useApplication();
-  const page = createQuestionPage(context, props);
+  const page = createQuestionPage(context, props, host);
   const panelProps = () => {
     const prompt = page.prompt();
     return prompt
@@ -356,7 +363,7 @@ function QuestionPageContent(props: QuestionPageProps) {
 
 defineSolidBridge<QuestionPageProps>(
   "openclaw-question-page",
-  (props) => <QuestionPageContent questionId={props.questionId} />,
+  (props, host) => QuestionPageContent(props, host),
   { properties: { questionId: { default: "", attribute: "question-id" } } },
 );
 
