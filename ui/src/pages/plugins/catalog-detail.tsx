@@ -8,7 +8,7 @@ import type { PluginDiscoveryDetailResult, PluginInstallRequest } from "../../li
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import "../../styles/sidebar-markdown.css";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
@@ -21,6 +21,8 @@ import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-mess
 import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 
 export type PluginCatalogDetailProps = {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   onAskPlugin?: () => void;
   busy?: boolean;
@@ -74,6 +76,7 @@ function CatalogDetailContent(props: {
     detail().author?.imageUrl ? props.state.iconUrls[detail().author!.imageUrl!] : undefined;
   return (
     <PluginDetailShell
+      registerRemovalHeading={props.state.registerRemovalHeading}
       id="plugin-catalog-detail"
       name={plugin().catalog.name}
       summary={plugin().catalog.summary}
@@ -99,6 +102,7 @@ function CatalogDetailContent(props: {
           {plugin().local.action === "install" || installing() ? (
             <ReasonedDisabledControl reason={props.state.installBlockedReason}>
               <PluginInstallAction
+                registerInstallAction={props.state.registerInstallAction}
                 buttonClass="btn oc-action plugin-catalog-detail__install"
                 primary
                 disabled={!props.state.canInstall}

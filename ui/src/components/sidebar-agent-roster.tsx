@@ -100,7 +100,7 @@ export function SidebarAgentRoster(props: RosterProps) {
   const agentLinks = new Map<string, HTMLAnchorElement>();
   const createAgentLinkRef = (card: () => { id: string }) => {
     // The keyed row keeps this identity until its branch is removed.
-    const id = untrack(() => card().id);
+    const id = card().id;
     let link: HTMLAnchorElement | undefined;
     onCleanup(() => {
       if (agentLinks.get(id) === link) {
@@ -258,7 +258,7 @@ export function SidebarAgentRoster(props: RosterProps) {
   return (
     <openclaw-sidebar-agent-roster>
       {renderSessionListFrame(
-        untrack(host),
+        host,
         <div class="sidebar-agent-roster">
           <Show when={error()}>
             <button class="sidebar-agent-roster__link" onClick={() => void store().refresh()}>
@@ -334,12 +334,7 @@ export function SidebarAgentRoster(props: RosterProps) {
                 </For>
               </section>
               <For each={pinnedCards()} keyed={(card) => card.id}>
-                {(card) =>
-                  renderPendingSessionCreateRow(
-                    host,
-                    untrack(() => card().id),
-                  )
-                }
+                {(card) => renderPendingSessionCreateRow(host, card().id)}
               </For>
             </>
           </Show>

@@ -28,6 +28,7 @@ export function AppearanceBackground(props: AppearanceBackgroundProps) {
         }}
         context={context()}
         surface="preview"
+        presented={state.previewPresented()}
         preferenceOverride={state.previewPreference()}
       />
       <AppearanceBackgroundView

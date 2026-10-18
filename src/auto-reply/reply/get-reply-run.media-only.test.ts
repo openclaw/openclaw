@@ -53,10 +53,7 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../plugin-sdk/message-tool-delivery-hints.js";
-import {
-  createReplyOperation,
-  listActiveReplyRunSessionKeys,
-} from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
   beginSessionEffect,
   captureSessionTarget,
@@ -66,6 +63,7 @@ import {
   retireSessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
 import * as sessionNativeRuntime from "../../sessions/session-controller.native-runtime.js";
+import { listActiveReplyRunSessionKeys } from "../../sessions/session-controller.queries.js";
 import * as sessionQueries from "../../sessions/session-controller.queries.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";

@@ -1,4 +1,6 @@
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { PROCESS_NODE_VERSION_CHECK } from "../../node-version.mjs";
 import {
   assertSupportedRuntime,
   isSupportedBunVersion,
@@ -50,6 +52,12 @@ vi.mock("../logging/json-console-line.js", async (importOriginal) => {
 vi.mock("../worker/worker-deploy-runtime.js", () => ({}));
 vi.mock("../worker/worker-deploy-browser-runtime.js", () => ({ default: {} }));
 vi.mock("../worker/worker-process.js", () => ({ runWorkerProcess: state.run }));
+// mock-isolation: keep the worker's process-local agent/exec state out of admission tests.
+vi.mock("../worker/worker.runtime.js", () => ({
+  createWorkerRuntimeEnvironment: vi.fn(),
+  loadWorkerTurnRuntime: vi.fn(),
+  runWorkerDescriptor: vi.fn(),
+}));
 
 function createExitingRuntime() {
   return {
@@ -251,6 +259,15 @@ describe("runtime-guard", () => {
     ["25.9.0", false],
     ["26.0.0", false],
     ["26.1.0", true],
+    ["27.0.0", true],
+    ["v27.0.0-head", true],
+    ["27.0.0-nightly20261018f88a1d25e9", true],
+    ["27.0.0-rc.1+vendor.1", true],
+    ["24.16.0-rc.1", false],
+    ["26.1.0-rc.1", false],
+    ["27.0.0-01", false],
+    ["27.0.0-nightly..1", false],
+    ["27.0.0-", false],
     ["24.16.0+local.1", true],
     ["24.15.0-rc.1", false],
     ["25.9.1-nightly.20260714", false],
@@ -260,6 +277,9 @@ describe("runtime-guard", () => {
     [null, false],
   ] as const)("classifies supported Node version %s", (version, expected) => {
     expect(isSupportedNodeVersion(version)).toBe(expected);
+    expect(
+      runInNewContext(PROCESS_NODE_VERSION_CHECK, { process: { versions: { node: version } } }),
+    ).toBe(expected);
   });
 
   it.each([

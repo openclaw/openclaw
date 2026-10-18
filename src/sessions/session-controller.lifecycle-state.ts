@@ -41,7 +41,7 @@ export function bindTarget(target: SessionTarget): SessionControllerEntry {
   retainTarget(entry, target);
   return entry;
 }
-export function retainTarget(entry: SessionControllerEntry, target: SessionTarget) {
+function retainTarget(entry: SessionControllerEntry, target: SessionTarget) {
   const targets = lifecycle(entry).targets;
   targets.set(target, (targets.get(target) ?? 0) + 1);
   refreshSessionControllerEntryAliases(entry);

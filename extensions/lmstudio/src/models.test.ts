@@ -4,7 +4,10 @@ import {
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { cancelTrackedTextResponse } from "../../test-support/streaming-error-response.js";
+import {
+  cancelTrackedTextResponse,
+  createStreamingResponse,
+} from "../../test-support/streaming-error-response.js";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import {
   discoverLmstudioModels,
@@ -18,14 +21,11 @@ import {
   resolveLmstudioReasoningCompat,
 } from "./models.js";
 
-const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
+const guardedFetch = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
-  };
+  return { ...actual, fetchWithSsrFGuard: (...args: unknown[]) => guardedFetch(...args) };
 });
 
 afterAll(() => {
@@ -33,19 +33,37 @@ afterAll(() => {
   vi.resetModules();
 });
 
-// Check configured catalog projection through the registered provider
-// (index.test.ts) and discovered metadata at the fetch boundary. Keep direct
-// public helper tests only where those boundaries hide a contract, such as
-// `undefined` versus empty compat metadata.
+// Direct helpers retain undefined-vs-empty compat semantics hidden by discovery.
 describe("lmstudio-models", () => {
   const asFetch = (mock: unknown) => mock as typeof fetch;
-  const parseJsonRequestBody = (init: RequestInit | undefined): unknown => {
+  const baseUrl = "http://localhost:1234/v1";
+  const modelKey = "qwen3-8b-instruct";
+  const loadModel = (options: Partial<Parameters<typeof ensureLmstudioModelLoaded>[0]> = {}) =>
+    ensureLmstudioModelLoaded({ baseUrl, modelKey, ...options });
+  const discover = (
+    fetchMock: unknown,
+    options: Partial<Parameters<typeof discoverLmstudioModels>[0]> = {},
+  ) =>
+    discoverLmstudioModels({
+      baseUrl,
+      apiKey: "lm-token",
+      quiet: true,
+      fetchImpl: asFetch(fetchMock),
+      ...options,
+    });
+  const fetchModels = (
+    fetchMock: unknown,
+    options: Partial<Parameters<typeof fetchLmstudioModels>[0]> = {},
+  ) => fetchLmstudioModels({ baseUrl, fetchImpl: asFetch(fetchMock), ...options });
+  const catalog = (models: unknown[]) =>
+    vi.fn(async (_url: string | URL, _init?: RequestInit) => Response.json({ models }));
+  const parseBody = (init: RequestInit | undefined): unknown => {
     if (typeof init?.body !== "string") {
       throw new Error("Expected request body to be a JSON string");
     }
     return JSON.parse(init.body) as unknown;
   };
-  const createModelLoadFetchMock = (params?: {
+  const mockLoad = (params?: {
     key?: string;
     variants?: unknown;
     selectedVariant?: unknown;
@@ -79,22 +97,13 @@ describe("lmstudio-models", () => {
       }
       throw new Error(`Unexpected fetch URL: ${String(url)}`);
     });
-  const findModelLoadCall = (fetchMock: ReturnType<typeof createModelLoadFetchMock>) =>
+  const loadCall = (fetchMock: ReturnType<typeof mockLoad>) =>
     fetchMock.mock.calls.find((call) => String(call[0]).endsWith("/models/load"));
-  const expectLoadContextLength = (
-    fetchMock: ReturnType<typeof createModelLoadFetchMock>,
-    contextLength: number,
-  ) => {
-    const loadCall = findModelLoadCall(fetchMock);
-    if (!loadCall) {
-      throw new Error("expected LM Studio model load request");
-    }
-    const loadInit = loadCall[1] as RequestInit;
-    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
-    expect(loadBody.context_length).toBe(contextLength);
+  const expectLoadContext = (fetchMock: ReturnType<typeof mockLoad>, contextLength: number) => {
+    expect(parseBody(loadCall(fetchMock)?.[1])).toMatchObject({ context_length: contextLength });
   };
   afterEach(() => {
-    fetchWithSsrFGuardMock.mockReset();
+    guardedFetch.mockReset();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -114,18 +123,12 @@ describe("lmstudio-models", () => {
     expect(
       normalizeLmstudioProviderConfig({
         baseUrl: "http://gpu-box.local:1234/v1",
-        request: {
-          allowPrivateNetwork: false,
-          headers: { "X-Proxy-Auth": "token" },
-        },
+        request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
         models: [],
       }),
     ).toEqual({
       baseUrl: "http://gpu-box.local:1234/v1",
-      request: {
-        allowPrivateNetwork: false,
-        headers: { "X-Proxy-Auth": "token" },
-      },
+      request: { allowPrivateNetwork: false, headers: { "X-Proxy-Auth": "token" } },
       models: [],
     });
   });
@@ -148,10 +151,7 @@ describe("lmstudio-models", () => {
           unapprovedCompatField: true,
         },
       }),
-    ).toMatchObject({
-      id: "qwen/qwen3-1.7b",
-      compat: undefined,
-    });
+    ).toMatchObject({ id: "qwen/qwen3-1.7b", compat: undefined });
   });
 
   it("uses the loaded context as the effective runtime budget", () => {
@@ -174,82 +174,50 @@ describe("lmstudio-models", () => {
   it("omits reasoning compatibility when only off is supported", () => {
     expect(
       resolveLmstudioReasoningCompat({
-        capabilities: {
-          reasoning: {
-            allowed_options: ["off"],
-            default: "off",
-          },
-        },
+        capabilities: { reasoning: { allowed_options: ["off"], default: "off" } },
       }),
     ).toBeUndefined();
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
-      Response.json({
-        models: [
-          {
-            type: "llm",
-            key: "qwen3-8b-instruct",
-            display_name: "Qwen3 8B",
-            max_context_length: 262144,
-            format: "mlx",
-            capabilities: {
-              vision: true,
-              trained_for_tool_use: true,
-              reasoning: {
-                allowed_options: ["off", "on"],
-                default: "on",
-              },
-            },
-            loaded_instances: [{ id: "inst-1", config: { context_length: 98_304 } }],
-          },
-          {
-            type: "llm",
-            key: "deepseek-r1",
-          },
-          {
-            type: "llm",
-            key: "graded-reasoning",
-            capabilities: {
-              reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
-            },
-          },
-          {
-            type: "llm",
-            key: "off-only-reasoning",
-            capabilities: {
-              reasoning: { allowed_options: ["off"], default: "off" },
-            },
-          },
-          {
-            type: "embedding",
-            key: "text-embedding-nomic-embed-text-v1.5",
-          },
-          {
-            type: "llm",
-            key: "   ",
-          },
-        ],
-      }),
-    );
+    const fetchMock = catalog([
+      {
+        type: "llm",
+        key: "qwen3-8b-instruct",
+        display_name: "Qwen3 8B",
+        max_context_length: 262144,
+        format: "mlx",
+        capabilities: {
+          vision: true,
+          trained_for_tool_use: true,
+          reasoning: { allowed_options: ["off", "on"], default: "on" },
+        },
+        loaded_instances: [{ id: "inst-1", config: { context_length: 98_304 } }],
+      },
+      { type: "llm", key: "deepseek-r1" },
+      {
+        type: "llm",
+        key: "graded-reasoning",
+        capabilities: {
+          reasoning: { allowed_options: ["low", "medium", "high"], default: "low" },
+        },
+      },
+      {
+        type: "llm",
+        key: "off-only-reasoning",
+        capabilities: { reasoning: { allowed_options: ["off"], default: "off" } },
+      },
+      { type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" },
+      { type: "llm", key: "   " },
+    ]);
 
-    const models = await discoverLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "lm-token",
-      quiet: false,
-      fetchImpl: asFetch(fetchMock),
-    });
+    const models = await discover(fetchMock, { quiet: false });
 
     const modelsRequest = fetchMock.mock.calls.find(
       ([url]) => url === "http://localhost:1234/api/v1/models",
     );
-    const modelsRequestOptions = modelsRequest?.[1] as
-      | { headers?: Record<string, string>; signal?: unknown }
-      | undefined;
-    expect(modelsRequestOptions?.headers).toEqual({
-      Authorization: "Bearer lm-token",
-    });
+    const modelsRequestOptions = modelsRequest?.[1];
+    expect(modelsRequestOptions?.headers).toEqual({ Authorization: "Bearer lm-token" });
     expect(modelsRequestOptions?.signal).toBeInstanceOf(AbortSignal);
 
     expect(models).toHaveLength(4);
@@ -263,12 +231,7 @@ describe("lmstudio-models", () => {
         supportsUsageInStreaming: true,
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-        reasoningEffortMap: {
-          off: "none",
-          none: "none",
-          adaptive: "xhigh",
-          max: "xhigh",
-        },
+        reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
         supportsTools: true,
       },
       contextWindow: 262144,
@@ -304,23 +267,14 @@ describe("lmstudio-models", () => {
   ])(
     "discovers the highest graded effort from $allowedOptions",
     async ({ allowedOptions, expectedMax }) => {
-      const fetchMock = vi.fn(async () =>
-        Response.json({
-          models: [
-            {
-              type: "llm",
-              key: "synthetic-effort-ceiling",
-              capabilities: { reasoning: { allowed_options: allowedOptions } },
-            },
-          ],
-        }),
-      );
-      const models = await discoverLmstudioModels({
-        baseUrl: "http://localhost:1234/v1",
-        apiKey: "synthetic-no-account",
-        quiet: true,
-        fetchImpl: asFetch(fetchMock),
-      });
+      const fetchMock = catalog([
+        {
+          type: "llm",
+          key: "synthetic-effort-ceiling",
+          capabilities: { reasoning: { allowed_options: allowedOptions } },
+        },
+      ]);
+      const models = await discover(fetchMock, { apiKey: "synthetic-no-account" });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
@@ -336,36 +290,20 @@ describe("lmstudio-models", () => {
     },
   );
 
-  it.each([
-    {
-      name: "reports wrong-shaped model list payloads with owned errors",
-      responses: () =>
-        [[], { models: {} }, { models: [null] }].map((payload) => Response.json(payload)),
-    },
-  ])("$name", async ({ responses }) => {
-    for (const response of responses()) {
-      const result = await fetchLmstudioModels({
-        baseUrl: "http://localhost:1234/v1",
-        fetchImpl: asFetch(vi.fn(async () => response)),
+  it("reports wrong-shaped model lists with owned errors", async () => {
+    for (const payload of [[], { models: {} }, { models: [null] }]) {
+      const result = await fetchModels(vi.fn(async () => Response.json(payload)));
+      expect(result).toMatchObject({
+        reachable: false,
+        error: { message: "LM Studio model list: malformed JSON response" },
       });
-      expect(result.reachable).toBe(false);
-      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
     }
   });
 
   it("discovers valid local models from partially malformed catalogs", async () => {
-    const fetchMock = vi.fn(async () =>
-      Response.json({
-        models: [null, { type: "llm", key: "qwen3-8b-instruct" }, [], "invalid-model", 42],
-      }),
-    );
+    const fetchMock = catalog([null, { type: "llm", key: modelKey }, [], "invalid-model", 42]);
 
-    const models = await discoverLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: "lm-token",
-      quiet: true,
-      fetchImpl: asFetch(fetchMock),
-    });
+    const models = await discover(fetchMock);
 
     expect(models).toEqual([expect.objectContaining({ id: "qwen3-8b-instruct" })]);
   });
@@ -373,15 +311,9 @@ describe("lmstudio-models", () => {
   it("caps oversized direct fetch timeouts before discovering models", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) =>
-      Response.json({ models: [] }),
-    );
+    const fetchMock = catalog([]);
 
-    const result = await fetchLmstudioModels({
-      baseUrl: "http://localhost:1234/v1",
-      timeoutMs: Number.MAX_SAFE_INTEGER,
-      fetchImpl: asFetch(fetchMock),
-    });
+    const result = await fetchModels(fetchMock, { timeoutMs: Number.MAX_SAFE_INTEGER });
 
     expect(result.reachable).toBe(true);
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
@@ -389,7 +321,7 @@ describe("lmstudio-models", () => {
   });
 
   it("caps oversized guarded-fetch timeouts before discovering models", async () => {
-    fetchWithSsrFGuardMock.mockResolvedValue({
+    guardedFetch.mockResolvedValue({
       response: new Response(JSON.stringify({ models: [] }), { status: 200 }),
       release: vi.fn(async () => undefined),
     });
@@ -401,131 +333,81 @@ describe("lmstudio-models", () => {
     });
 
     expect(result.reachable).toBe(true);
-    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
-      timeoutMs: MAX_TIMER_TIMEOUT_MS,
-    });
+    expect(guardedFetch.mock.calls[0]?.[0]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS });
   });
 
-  it.each([
-    {
-      name: "reloads model when requested context length exceeds the loaded window",
-      loadedContextLength: 4096,
-      maxContextLength: 32768,
-      requestedContextLength: 8192,
-      expectedContextLength: 8192,
-    },
-    {
-      name: "reloads model to the clamped default target when already loaded below the default window",
-      loadedContextLength: 4096,
-      maxContextLength: 32768,
-      expectedContextLength: 32768,
-    },
-    {
-      name: "omits malformed context lengths before loading models",
-      loadedContextLength: 4096.5,
-      maxContextLength: 32768.5,
-      requestedContextLength: 8192.5,
-      expectedContextLength: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
-    },
+  it.each<[string, number, number, number | undefined, number]>([
+    ["reloads for a larger requested window", 4096, 32768, 8192, 8192],
+    ["reloads to the clamped default window", 4096, 32768, undefined, 32768],
+    [
+      "ignores malformed context lengths",
+      4096.5,
+      32768.5,
+      8192.5,
+      LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+    ],
   ])(
-    "$name",
-    async ({
+    "%s",
+    async (
+      _name,
       loadedContextLength,
       maxContextLength,
       requestedContextLength,
       expectedContextLength,
-    }) => {
-      const fetchMock = createModelLoadFetchMock({ loadedContextLength, maxContextLength });
+    ) => {
+      const fetchMock = mockLoad({ loadedContextLength, maxContextLength });
       vi.stubGlobal("fetch", asFetch(fetchMock));
       await expect(
-        ensureLmstudioModelLoaded({
-          baseUrl: "http://localhost:1234/v1",
-          modelKey: "qwen3-8b-instruct",
-          ...(requestedContextLength === undefined ? {} : { requestedContextLength }),
-        }),
+        loadModel(requestedContextLength === undefined ? {} : { requestedContextLength }),
       ).resolves.toBe("qwen3-8b-instruct");
       expect(fetchMock).toHaveBeenCalledTimes(2);
-      expectLoadContextLength(fetchMock, expectedContextLength);
+      expectLoadContext(fetchMock, expectedContextLength);
     },
   );
 
   it.each([
-    {
-      name: "loads the canonical model key when the requested key is an advertised variant",
-      canonicalKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
-      requestedKey: "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
-      advertisedVariant: "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+    ["canonical key", "gemma", "gemma@q4_k_m", "gemma@q4_k_m"],
+    ["suffixed key", "local/special@q4_k_m", "local/special@q4_k_m", "local/special@q8_0"],
+  ])(
+    "loads the %s for an advertised variant",
+    async (_name, canonicalKey, requestedKey, advertisedVariant) => {
+      const fetchMock = mockLoad({
+        key: canonicalKey,
+        variants: [null, 42, "", ` ${advertisedVariant} `, advertisedVariant],
+      });
+      vi.stubGlobal("fetch", asFetch(fetchMock));
+      await expect(loadModel({ modelKey: requestedKey })).resolves.toBe(canonicalKey);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+      const loadInit = loadCall(fetchMock)?.[1];
+      expect(loadInit).toEqual({
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: expect.any(AbortSignal),
+        body: expect.any(String),
+      });
+      expect(parseBody(loadInit)).toEqual({ model: canonicalKey, context_length: 64000 });
     },
-    {
-      name: "preserves a suffixed key when LM Studio advertises it as the model key",
-      canonicalKey: "local/special-model@q4_k_m",
-      requestedKey: "local/special-model@q4_k_m",
-      advertisedVariant: "local/special-model@q8_0",
-    },
-  ])("$name", async ({ canonicalKey, requestedKey, advertisedVariant }) => {
-    const fetchMock = createModelLoadFetchMock({
-      key: canonicalKey,
-      variants: [null, 42, "", ` ${advertisedVariant} `, advertisedVariant],
-    });
-    vi.stubGlobal("fetch", asFetch(fetchMock));
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: requestedKey,
-      }),
-    ).resolves.toBe(canonicalKey);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const loadInit = findModelLoadCall(fetchMock)?.[1];
-    expect(loadInit).toEqual({
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      signal: expect.any(AbortSignal),
-      body: expect.any(String),
-    });
-    expect(parseJsonRequestBody(loadInit)).toEqual({
-      model: canonicalKey,
-      context_length: 64000,
-    });
-  });
+  );
 
   it("bounds oversized model load success bodies", async () => {
-    // A misbehaving server may stream an unbounded success JSON body; the load
-    // path must stop reading at the byte cap instead of buffering it all.
-    let canceled = false;
-    let bytesEmitted = 0;
-    const chunk = new Uint8Array(64 * 1024).fill(0x61);
-    const oversizedStream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        // Far exceeds the 16 MiB provider JSON cap if read to completion.
-        if (bytesEmitted >= 32 * 1024 * 1024) {
-          controller.close();
-          return;
-        }
-        bytesEmitted += chunk.byteLength;
-        controller.enqueue(chunk);
-      },
-      cancel() {
-        canceled = true;
-      },
+    const chunkSize = 64 * 1024;
+    const tracked = createStreamingResponse({
+      chunkSize,
+      chunkCount: 512,
+      byte: 0x61,
+      headers: { "content-type": "application/json" },
     });
-    const fetchMock = createModelLoadFetchMock({
-      loadResponse: () =>
-        new Response(oversizedStream, {
-          status: 200,
-          headers: { "content-type": "application/json" },
-        }),
-    });
+    const fetchMock = mockLoad({ loadResponse: () => tracked.response });
     vi.stubGlobal("fetch", asFetch(fetchMock));
 
-    const error = await ensureLmstudioModelLoaded({
-      baseUrl: "http://localhost:1234/v1",
-      modelKey: "qwen3-8b-instruct",
-    }).catch((caught: unknown) => caught);
-
+    const error = await loadModel().catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toMatch(/JSON response exceeds \d+ bytes/);
-    expect(canceled).toBe(true);
-    expect(bytesEmitted).toBeLessThan(32 * 1024 * 1024);
+    expect(error).toHaveProperty(
+      "message",
+      expect.stringMatching(/JSON response exceeds \d+ bytes/),
+    );
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(tracked.getReadCount() * chunkSize).toBeLessThan(32 * 1024 * 1024);
   });
 
   it("suppresses truncated model load error bodies", async () => {
@@ -533,98 +415,63 @@ describe("lmstudio-models", () => {
     const body = `${"x".repeat(8 * 1024 - 2)}${credential}${"y".repeat(1000)}`;
     const tracked = cancelTrackedTextResponse(body, { status: 503 });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    const fetchMock = createModelLoadFetchMock({
-      loadResponse: () => tracked.response,
-    });
+    const fetchMock = mockLoad({ loadResponse: () => tracked.response });
     vi.stubGlobal("fetch", asFetch(fetchMock));
 
-    const error = await ensureLmstudioModelLoaded({
-      baseUrl: "http://localhost:1234/v1",
-      apiKey: credential,
-      modelKey: "qwen3-8b-instruct",
-    }).catch((caught: unknown) => caught);
+    const error = await loadModel({ apiKey: credential }).catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(Error);
-    expect((error as Error).message).toBe("LM Studio model load failed (503)");
-    expect((error as Error).message).not.toContain(credential);
+    expect(error).toHaveProperty("message", "LM Studio model load failed (503)");
     expect(tracked.wasCanceled()).toBe(true);
     expect(textSpy).not.toHaveBeenCalled();
   });
 
-  it.each<{
-    name: string;
-    params: Pick<Parameters<typeof ensureLmstudioModelLoaded>[0], "apiKey" | "headers">;
-    body: string;
-    expected: string;
-  }>([
-    {
-      name: "redacts overlapping credentials longest first",
-      params: { apiKey: "abc", headers: { "X-Proxy-Auth": "abcdef" } },
-      body: "proxy rejected abcdef and abc",
-      expected: "LM Studio model load failed (502): proxy rejected *** and ***",
-    },
-    {
-      name: "redacts only the authorization value actually sent",
-      params: { apiKey: "fresh", headers: { Authorization: "Bearer replaced-old" } },
-      body: "stale replaced-old; active fresh",
-      expected: "LM Studio model load failed (502): stale replaced-old; active ***",
-    },
-    {
-      name: "preserves synthetic markers and the generated content type",
-      params: { apiKey: "lmstudio-local" },
-      body: "lmstudio-local rejected application/json; GPU out of memory",
-      expected:
-        "LM Studio model load failed (502): lmstudio-local rejected application/json; GPU out of memory",
-    },
-    {
-      name: "redacts unrelated recognizable provider credentials",
-      params: {},
-      body: "upstream Authorization: Bearer sk-test",
-      expected: "LM Studio model load failed (502): upstream Authorization: Bearer ***",
-    },
-  ])("$name", async ({ params, body, expected }) => {
-    const fetchMock = createModelLoadFetchMock({
+  type LoadAuth = Pick<Parameters<typeof ensureLmstudioModelLoaded>[0], "apiKey" | "headers">;
+  it.each<[LoadAuth, string, string]>([
+    [
+      { apiKey: "abc", headers: { "X-Proxy-Auth": "abcdef" } },
+      "proxy rejected abcdef and abc",
+      "proxy rejected *** and ***",
+    ],
+    [
+      { apiKey: "fresh", headers: { Authorization: "Bearer replaced-old" } },
+      "stale replaced-old; active fresh",
+      "stale replaced-old; active ***",
+    ],
+    [
+      { apiKey: "lmstudio-local" },
+      "lmstudio-local application/json",
+      "lmstudio-local application/json",
+    ],
+    [{}, "upstream Authorization: Bearer sk-test", "upstream Authorization: Bearer ***"],
+  ])("redacts model load error for %j", async (params, body, expected) => {
+    const fetchMock = mockLoad({
       loadResponse: () => new Response(body, { status: 502 }),
     });
     vi.stubGlobal("fetch", asFetch(fetchMock));
 
-    const error = await ensureLmstudioModelLoaded({
-      baseUrl: "http://localhost:1234/v1",
-      modelKey: "qwen3-8b-instruct",
-      ...params,
-    }).catch((caught: unknown) => caught);
-
-    expect(error).toMatchObject({
-      message: expected,
-      resolvedModelKey: "qwen3-8b-instruct",
+    await expect(loadModel(params)).rejects.toMatchObject({
+      message: `LM Studio model load failed (502): ${expected}`,
+      resolvedModelKey: modelKey,
     });
   });
 
   it("loads model with clamped context length and merged headers", async () => {
-    const fetchMock = createModelLoadFetchMock({ maxContextLength: 32768 });
+    const fetchMock = mockLoad({ maxContextLength: 32768 });
     vi.stubGlobal("fetch", asFetch(fetchMock));
 
     await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
+      loadModel({
         apiKey: "lm-token",
-        headers: {
-          "X-Proxy-Auth": "required",
-          Authorization: "Bearer override",
-        },
+        headers: { "X-Proxy-Auth": "required", Authorization: "Bearer override" },
         modelKey: " qwen3-8b-instruct ",
       }),
     ).resolves.toBe("qwen3-8b-instruct");
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const loadCall = findModelLoadCall(fetchMock);
-    if (!loadCall) {
-      throw new Error("expected LM Studio model load request");
-    }
-    const loadInit = loadCall[1] as RequestInit;
-    const { signal, ...stableLoadInit } = loadInit;
-    expect(signal).toBeInstanceOf(AbortSignal);
-    expect(stableLoadInit).toEqual({
+    const loadInit = loadCall(fetchMock)?.[1];
+    expect(loadInit).toEqual({
       method: "POST",
+      signal: expect.any(AbortSignal),
       headers: {
         "X-Proxy-Auth": "required",
         Authorization: "Bearer lm-token",
@@ -632,27 +479,14 @@ describe("lmstudio-models", () => {
       },
       body: expect.any(String),
     });
-    const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
-    expect(loadBody).toEqual({
-      model: "qwen3-8b-instruct",
-      context_length: 32768,
-    });
-    expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
+    expect(parseBody(loadInit)).toEqual({ model: "qwen3-8b-instruct", context_length: 32768 });
   });
 
   it("throws when model discovery fails", async () => {
-    const fetchMock = vi.fn(async () => ({
-      ok: false,
-      status: 401,
-    }));
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 401 }));
     vi.stubGlobal("fetch", asFetch(fetchMock));
 
-    await expect(
-      ensureLmstudioModelLoaded({
-        baseUrl: "http://localhost:1234/v1",
-        modelKey: "qwen3-8b-instruct",
-      }),
-    ).rejects.toThrow("LM Studio model discovery failed (401)");
+    await expect(loadModel()).rejects.toThrow("LM Studio model discovery failed (401)");
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

@@ -13,10 +13,8 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
-import {
-  createReplyOperation,
-  waitForReplyRunSuccessorAdmission,
-} from "../../sessions/session-controller.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { WorkerNodeLostError } from "../../worker/worker-node-loss.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";

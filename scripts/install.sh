@@ -1533,7 +1533,7 @@ parse_node_version_components_for_binary() {
 
     # This standalone installer runs before OpenClaw exists on disk. Mirror the
     # release grammar in node-version.mjs; parity cases guard this boundary.
-    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
+    if [[ ! "$version" =~ ^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]]; then
         return 1
     fi
     major="${BASH_REMATCH[1]}"
@@ -1547,6 +1547,9 @@ parse_node_version_components_for_binary() {
             return 1
         fi
     done
+    if [[ -n "${BASH_REMATCH[4]}" ]] && ((major <= 26)); then
+        return 1
+    fi
     echo "${major} ${minor} ${patch}"
     return 0
 }

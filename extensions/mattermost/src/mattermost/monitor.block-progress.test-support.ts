@@ -1,5 +1,7 @@
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, it, vi, type Mock } from "vitest";
+import { createFinalDraft } from "./monitor.preview-delivery.test-support.js";
 import type { OpenClawConfig } from "./runtime-api.js";
 
 export function registerMattermostBlockProgressTests(harness: {
@@ -41,145 +43,76 @@ export function registerMattermostBlockProgressTests(harness: {
       },
     };
     const chunkMarkdownTextWithMode = vi.fn((text: string) => [text]);
-    const runtimeCore = createRuntimeCore(blockConfig, undefined, {
+    mockState.runtimeCore = createRuntimeCore(blockConfig, undefined, {
       chunkMarkdownTextWithMode,
       chunkMode: "newline",
       textChunkLimit: 1234,
     });
-    mockState.runtimeCore = runtimeCore;
     const draftUpdate = vi.fn();
     const forceNewMessage = vi.fn(async () => {});
-    let releaseToolBoundary: (() => void) | undefined;
-    let releaseAssistantBoundary: (() => void) | undefined;
-    let releaseFinalBoundary: (() => void) | undefined;
+    const toolBoundary = createDeferred<void>();
+    const assistantBoundaryGate = createDeferred<void>();
+    const finalBoundary = createDeferred<void>();
     let assistantBoundarySettled = false;
-    const toolBoundaryPending = new Promise<void>((resolve) => {
-      releaseToolBoundary = resolve;
-    });
-    const assistantBoundaryPending = new Promise<void>((resolve) => {
-      releaseAssistantBoundary = resolve;
-    });
-    const finalBoundaryPending = new Promise<void>((resolve) => {
-      releaseFinalBoundary = resolve;
-    });
     forceNewMessage.mockImplementation(async () => {
       const callNumber = forceNewMessage.mock.calls.length;
       if (callNumber === 1) {
-        await toolBoundaryPending;
+        await toolBoundary.promise;
         return;
       }
       if (callNumber === 2) {
-        await assistantBoundaryPending;
+        await assistantBoundaryGate.promise;
         assistantBoundarySettled = true;
         return;
       }
       if (callNumber === 5) {
-        await finalBoundaryPending;
+        await finalBoundary.promise;
       }
     });
-    mockState.createMattermostDraftStream.mockReturnValue({
-      update: draftUpdate,
-      updateAssistantText: draftUpdate,
-      forceNewMessage,
-      flush: vi.fn(async () => {}),
-      postId: vi.fn(() => undefined),
-      clear: vi.fn(async () => {}),
-      discardPending: vi.fn(async () => {}),
-      seal: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      settleBoundaries: vi.fn(async () => {}),
-      resolveFinalText: (text: string) => ({ kind: "full" as const, text, publishedParts: [] }),
-    });
+    mockState.createMattermostDraftStream.mockReturnValue(
+      createFinalDraft({
+        update: draftUpdate,
+        updateAssistantText: draftUpdate,
+        forceNewMessage,
+      }),
+    );
 
-    let sameToolUpdateBoundaryCount = -1;
-    let hiddenReasoningBoundaryCount = -1;
-    let consecutiveToolBoundaryCount = -1;
-    let reasoningStartBoundaryCount = -1;
-    let secondReasoningBoundaryCount = -1;
-    let reasoningTextBoundaryCount = -1;
-    let toolBeforeFinalBoundaryCount = -1;
-    let finalOnlyBoundaryCount = -1;
+    const boundaries: Record<string, number> = {};
     let interleavedToolDraft = "";
     let reasoningDraft = "";
     let finalToolDraft = "";
     let secondPartialArrivedBeforeBoundarySettled = false;
     let finalDeliveryWaitedForBoundary = false;
     mockState.dispatchInboundMessage.mockImplementation(async (params) => {
+      const toolEvent = (
+        toolCallId: string,
+        command: string,
+        phase: "start" | "update" = "start",
+      ) => {
+        const event = { toolCallId, name: "bash", phase, args: { command } };
+        const pending = params.replyOptions?.onItemEvent?.(projectAgentToolActivity(event));
+        void params.replyOptions?.onToolStart?.({ ...event, detailMode: "raw" });
+        return pending;
+      };
       await params.replyOptions?.onAssistantMessageStart?.();
       params.replyOptions?.onPartialReply?.({ text: "A much longer first block" });
-      const firstToolStart = params.replyOptions?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "bash-1",
-          name: "bash",
-          phase: "start",
-          args: { command: "ls" },
-        }),
-      );
-      void params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-1",
-        name: "bash",
-        phase: "start",
-        detailMode: "raw",
-        args: { command: "ls" },
-      });
-      const secondToolStart = params.replyOptions?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "bash-2",
-          name: "bash",
-          phase: "start",
-          args: { command: "pwd" },
-        }),
-      );
-      void params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-2",
-        name: "bash",
-        phase: "start",
-        detailMode: "raw",
-        args: { command: "pwd" },
-      });
-      const firstToolUpdate = params.replyOptions?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "bash-1",
-          name: "bash",
-          phase: "update",
-          args: { command: "ls -alh" },
-        }),
-      );
-      void params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-1",
-        name: "bash",
-        phase: "update",
-        detailMode: "raw",
-        args: { command: "ls -alh" },
-      });
-      sameToolUpdateBoundaryCount = forceNewMessage.mock.calls.length;
+      const firstToolStart = toolEvent("bash-1", "ls");
+      const secondToolStart = toolEvent("bash-2", "pwd");
+      const firstToolUpdate = toolEvent("bash-1", "ls -alh", "update");
+      boundaries.sameToolUpdate = forceNewMessage.mock.calls.length;
       params.replyOptions?.onAssistantMessageStart?.();
       await params.replyOptions?.onReasoningEnd?.();
-      hiddenReasoningBoundaryCount = forceNewMessage.mock.calls.length;
-      const consecutiveToolStart = params.replyOptions?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "bash-3",
-          name: "bash",
-          phase: "start",
-          args: { command: "whoami" },
-        }),
-      );
-      void params.replyOptions?.onToolStart?.({
-        toolCallId: "bash-3",
-        name: "bash",
-        phase: "start",
-        detailMode: "raw",
-        args: { command: "whoami" },
-      });
-      consecutiveToolBoundaryCount = forceNewMessage.mock.calls.length;
+      boundaries.hiddenReasoning = forceNewMessage.mock.calls.length;
+      const consecutiveToolStart = toolEvent("bash-3", "whoami");
+      boundaries.consecutiveTool = forceNewMessage.mock.calls.length;
       interleavedToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
 
       params.replyOptions?.onAssistantMessageStart?.();
       const assistantBoundary = params.replyOptions?.onPartialReply?.({ text: "Done." });
       secondPartialArrivedBeforeBoundarySettled =
         !assistantBoundarySettled && draftUpdate.mock.calls.at(-1)?.[0] === "Done.";
-      releaseToolBoundary?.();
-      releaseAssistantBoundary?.();
+      toolBoundary.resolve();
+      assistantBoundaryGate.resolve();
       await Promise.all([
         firstToolStart,
         secondToolStart,
@@ -189,32 +122,26 @@ export function registerMattermostBlockProgressTests(harness: {
       ]);
       params.replyOptions?.onAssistantMessageStart?.();
       await params.replyOptions?.onReasoningStream?.({ text: "Private chain of thought" });
-      reasoningStartBoundaryCount = forceNewMessage.mock.calls.length;
+      boundaries.reasoningStart = forceNewMessage.mock.calls.length;
       reasoningDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
       await params.replyOptions?.onReasoningEnd?.();
       params.replyOptions?.onAssistantMessageStart?.();
       await params.replyOptions?.onReasoningStream?.({ text: "Second reasoning item" });
-      secondReasoningBoundaryCount = forceNewMessage.mock.calls.length;
+      boundaries.secondReasoning = forceNewMessage.mock.calls.length;
       params.replyOptions?.onAssistantMessageStart?.();
       await params.replyOptions?.onPartialReply?.({ text: "Answer after reasoning" });
-      reasoningTextBoundaryCount = forceNewMessage.mock.calls.length;
+      boundaries.reasoningText = forceNewMessage.mock.calls.length;
       params.replyOptions?.onAssistantMessageStart?.();
-      await params.replyOptions?.onItemEvent?.(
-        projectAgentToolActivity({
-          toolCallId: "bash-final",
-          name: "bash",
-          phase: "start",
-          args: { command: "date" },
-        }),
-      );
-      await params.replyOptions?.onToolStart?.({
+      const finalEvent = {
         toolCallId: "bash-final",
         name: "bash",
-        phase: "start",
-        detailMode: "raw",
+        phase: "start" as const,
         args: { command: "date" },
-      });
-      toolBeforeFinalBoundaryCount = forceNewMessage.mock.calls.length;
+      };
+      // This boundary is sequential, unlike the interleaved starts above.
+      await params.replyOptions?.onItemEvent?.(projectAgentToolActivity(finalEvent));
+      await params.replyOptions?.onToolStart?.({ ...finalEvent, detailMode: "raw" });
+      boundaries.toolBeforeFinal = forceNewMessage.mock.calls.length;
       finalToolDraft = String(draftUpdate.mock.calls.at(-1)?.[0] ?? "");
       const dispatcherOptions =
         mockState.createReplyDispatcherWithTyping.mock.results.at(-1)?.value?.options;
@@ -222,12 +149,12 @@ export function registerMattermostBlockProgressTests(harness: {
         { text: "Final without a partial" },
         { kind: "final" },
       );
-      finalOnlyBoundaryCount = forceNewMessage.mock.calls.length;
+      boundaries.finalOnly = forceNewMessage.mock.calls.length;
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
       finalDeliveryWaitedForBoundary = mockState.sendMessageMattermost.mock.calls.length === 0;
-      releaseFinalBoundary?.();
+      finalBoundary.resolve();
       await finalDelivery;
       mockState.abortController?.abort();
     });
@@ -242,21 +169,25 @@ export function registerMattermostBlockProgressTests(harness: {
     expect(draftStreamOptions?.chunkText?.("first\n\nsecond")).toEqual(["first\n\nsecond"]);
     expect(chunkMarkdownTextWithMode).toHaveBeenCalledWith("first\n\nsecond", 1234, "newline");
     const replyOptions = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].replyOptions;
-    expect(replyOptions?.disableBlockStreaming).toBe(true);
-    expect(replyOptions?.preserveProgressCallbackStartOrder).toBe(true);
-    expect(sameToolUpdateBoundaryCount).toBe(1);
-    expect(hiddenReasoningBoundaryCount).toBe(1);
-    expect(consecutiveToolBoundaryCount).toBe(1);
-    expect(reasoningStartBoundaryCount).toBe(3);
-    expect(secondReasoningBoundaryCount).toBe(3);
-    expect(reasoningTextBoundaryCount).toBe(3);
-    expect(toolBeforeFinalBoundaryCount).toBe(4);
+    expect(replyOptions).toMatchObject({
+      disableBlockStreaming: true,
+      preserveProgressCallbackStartOrder: true,
+    });
+    expect(boundaries).toEqual({
+      sameToolUpdate: 1,
+      hiddenReasoning: 1,
+      consecutiveTool: 1,
+      reasoningStart: 3,
+      secondReasoning: 3,
+      reasoningText: 3,
+      toolBeforeFinal: 4,
+      finalOnly: 5,
+    });
     expect(interleavedToolDraft).toContain("pwd");
     expect(interleavedToolDraft).toContain("ls -alh");
     expect(interleavedToolDraft).toContain("whoami");
     expect(reasoningDraft).toBe("Thinking…");
     expect(finalToolDraft).toContain("date");
-    expect(finalOnlyBoundaryCount).toBe(5);
     expect(forceNewMessage).toHaveBeenCalledTimes(5);
     expect(finalDeliveryWaitedForBoundary).toBe(true);
     expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(

@@ -8,12 +8,12 @@ import {
   isValueToken,
 } from "../infra/cli-root-options.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
-import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
+import { SUB_CLI_COMMAND_METADATA } from "./program/subcli-command-metadata.js";
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const ROOT_VERSION_ALIAS_FLAGS = new Set(["-v"]);
 const VERSION_FLAGS = new Set(["-V", "--version", ...ROOT_VERSION_ALIAS_FLAGS]);
-const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_DESCRIPTORS];
+const ROOT_COMMAND_DESCRIPTORS = [...CORE_CLI_COMMAND_DESCRIPTORS, ...SUB_CLI_COMMAND_METADATA];
 const KNOWN_ROOT_COMMANDS: ReadonlySet<string> = new Set(
   ROOT_COMMAND_DESCRIPTORS.map((descriptor) => descriptor.name),
 );

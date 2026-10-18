@@ -1,6 +1,6 @@
 import "../../styles/logs.css";
 import type { LogsTailResult } from "@openclaw/gateway-protocol";
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createSignal, onCleanup, onSettled } from "solid-js";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import {
   beginPanelRefresh,
@@ -17,6 +17,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import {
   DEFAULT_LOG_LEVEL_FILTERS,
@@ -51,14 +52,11 @@ export function LogsPage() {
   const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle", {
     ownedWrite: true,
   });
-  const [forceFollow, setForceFollow] = createSignal(0);
   let cursor: number | null = null;
   let cursorBootId: string | undefined;
   let request: AbortController | null = null;
   let disposed = false;
-  let atBottom = true;
   let stream: HTMLElement | undefined;
-  let followFrame: number | undefined;
 
   const cancelRequest = () => {
     request?.abort();
@@ -75,7 +73,7 @@ export function LogsPage() {
       setFile(null);
       setEntries([]);
       setTruncated(false);
-      atBottom = true;
+      follow.reset();
     },
     invalidateRequests: cancelRequest,
     onSnapshot: () => {
@@ -91,7 +89,7 @@ export function LogsPage() {
       // file read and redaction pass per reconnect.
       void loadLogs({ reset: !quiet || cursor === null, quiet }).then((current) => {
         if (current && !quiet) {
-          setForceFollow((revision) => revision + 1);
+          follow.schedule(true);
         }
       });
     },
@@ -143,6 +141,7 @@ export function LogsPage() {
       setFile(payload.file);
       setTruncated(Boolean(payload.truncated));
       setStatus(completePanelRefresh());
+      follow.schedule();
       return true;
     } catch (error) {
       if (!isCurrent()) {
@@ -168,45 +167,14 @@ export function LogsPage() {
     }
   }
 
-  const scheduleFollow = (force = false) => {
-    if (followFrame !== undefined) {
-      cancelAnimationFrame(followFrame);
-      followFrame = undefined;
-    }
-    const scope = gateway.capture();
-    if (!scope || disposed) {
-      return;
-    }
-    followFrame = requestAnimationFrame(() => {
-      followFrame = undefined;
-      if (!stream || disposed || !gateway.isCurrent(scope)) {
-        return;
-      }
-      const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
-      if (!force && (!autoFollow() || (!atBottom && distance >= 120))) {
-        return;
-      }
-      stream.scrollTop = stream.scrollHeight;
-      atBottom = true;
-    });
-  };
-  // One DOM follow operation owns appends, operator opt-in, and explicit refreshes.
-  createEffect(
-    () => ({ entries: entries(), enabled: autoFollow(), revision: forceFollow() }),
-    ({ enabled, revision }, previous) => {
-      const force =
-        (revision > 0 && revision !== previous?.revision) || (enabled && !previous?.enabled);
-      if (force || (enabled && atBottom)) {
-        scheduleFollow(force);
-      }
-    },
-  );
+  const follow = useStreamAutoFollow({
+    container: () => stream,
+    enabled: autoFollow,
+    identity: () => gateway.epoch,
+  });
   onCleanup(() => {
     disposed = true;
     cancelRequest();
-    if (followFrame !== undefined) {
-      cancelAnimationFrame(followFrame);
-    }
   });
   onSettled(() => {
     const resetContentScroll = () => {
@@ -245,11 +213,16 @@ export function LogsPage() {
             onLevelToggle={(level, enabled) =>
               setLevelFilters((previous) => ({ ...previous, [level]: enabled }))
             }
-            onToggleAutoFollow={setAutoFollow}
+            onToggleAutoFollow={(enabled) => {
+              setAutoFollow(enabled);
+              if (enabled) {
+                follow.schedule(true);
+              }
+            }}
             onRefresh={() =>
               void loadLogs({ reset: true }).then((current) => {
                 if (current) {
-                  setForceFollow((revision) => revision + 1);
+                  follow.schedule(true);
                 }
               })
             }
@@ -257,10 +230,7 @@ export function LogsPage() {
               const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
               downloadTextFile(`openclaw-logs-${label}-${stamp}.log`, `${lines.join("\n")}\n`);
             }}
-            onScroll={(event) => {
-              const target = event.currentTarget;
-              atBottom = target.scrollHeight - target.scrollTop - target.clientHeight < 120;
-            }}
+            onScroll={follow.handleScroll}
           />
         </SettingsWorkspace>
       </ShellLayoutBoundary>
