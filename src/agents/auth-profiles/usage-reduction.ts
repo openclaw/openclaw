@@ -141,6 +141,7 @@ export function reconcileWhamBlock(
 
 export type AuthProfileFailureReduction = {
   expectedProfile: AuthProfileCredential;
+  observedAt: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
   retryAfterMs?: number;
@@ -191,6 +192,10 @@ export function reduceAuthProfileFailure(
         matchesWhamBlockGeneration(previousStats, blockGeneration)))
       ? whamResult
       : null;
+  // Successful use also advances lastProbeAt, including inherited profiles.
+  if (currentWhamResult && (previousStats?.lastProbeAt ?? 0) > input.observedAt) {
+    return undefined;
+  }
   // The probe can only release the credential and block generation it observed.
   if (reason === "no_error_details" && !currentWhamResult) {
     return undefined;

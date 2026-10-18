@@ -596,10 +596,12 @@ export async function markAuthProfileFailure(params: {
       ) => Promise<PersonalAuthProfileUsageResult | null | undefined>,
     ) => {
       const blockGeneration = structuredClone(observed?.usageStats);
+      const observedAt = Date.now();
       const whamResult = shouldProbeWham ? await probeWhamForCooldown(profile, profileId) : null;
       return persist({
         kind: "failure",
         expectedProfile: profile,
+        observedAt,
         reason,
         modelId,
         retryAfterMs: params.retryAfterMs,

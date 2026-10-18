@@ -872,6 +872,75 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     },
   );
 
+  it.each(["available", "exhausted"] as const)(
+    "rejects an old %s failure probe after its block generation changes",
+    async (result) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore({
+        "openai:default": {
+          blockedUntil: now + 3_600_000,
+          blockedReason: "subscription_limit",
+          blockedSource: "wham",
+          lastProbeAt: now - 60_000,
+          lastFailureAt: now - 60_000,
+        },
+      });
+      const newer = { ...store.usageStats!["openai:default"], lastFailureAt: now - 1 };
+      fetchMock.mockImplementationOnce(async () => {
+        // Keep lastProbeAt older than this observation: generation, not time, must reject it.
+        store.usageStats = { "openai:default": newer };
+        return Response.json({
+          rate_limit:
+            result === "available"
+              ? { limit_reached: false }
+              : {
+                  limit_reached: true,
+                  primary_window: { used_percent: 100, reset_after_seconds: 7_200 },
+                },
+        });
+      });
+
+      await markCodexFailureAt({ store, now, reason: "no_error_details" });
+
+      expect(store.usageStats?.["openai:default"]).toEqual(newer);
+    },
+  );
+
+  it.each([-1, 0, 1])(
+    "rejects an auth probe only for a strictly newer lastProbeAt (offset %s)",
+    async (offset) => {
+      const now = 1_700_000_000_000;
+      const before = { lastProbeAt: now + offset, errorCount: 0 };
+      const store = makeStore({ "openai:default": before });
+      mockWhamResponse(401);
+
+      await markCodexFailureAt({ store, now });
+
+      expect(store.usageStats?.["openai:default"]).toEqual(
+        offset > 0
+          ? before
+          : expect.objectContaining({
+              errorCount: 0,
+              cooldownClassification: "wham_token_expired",
+            }),
+      );
+    },
+  );
+
+  it("does not suppress an ordinary non-probe failure after a newer success", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({ "openai:default": { lastProbeAt: now + 1, errorCount: 0 } });
+
+    await markCodexFailureAt({ store, now, reason: "auth" });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(store.usageStats?.["openai:default"]).toMatchObject({
+      errorCount: 1,
+      cooldownReason: "auth",
+      lastProbeAt: now + 1,
+    });
+  });
+
   it("does not apply a stale WHAM result after the profile changes", async () => {
     const now = 1_700_000_000_000;
     const store = makeStore(undefined);
