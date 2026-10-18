@@ -1,6 +1,7 @@
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { AssistantMessageEvent, Message, Model } from "../llm/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { buildBtwQuestionPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import type { RunBtwSideQuestionParams } from "./btw-runtime.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
@@ -11,6 +12,8 @@ import { registerProviderStreamForModel } from "./provider-stream.js";
 import { getModelRegistryRuntime } from "./sessions/model-registry-runtime.js";
 import { sanitizeImageBlocks } from "./tool-images.js";
 import { normalizeUsage, type NormalizedUsage } from "./usage.js";
+
+const log = createSubsystemLogger("agents/btw");
 
 export async function runLightweightBtwStream(input: {
   params: RunBtwSideQuestionParams;
@@ -73,7 +76,7 @@ export async function runLightweightBtwStream(input: {
       : undefined;
   let emittedBlocks = 0;
   let blockEmitChain: Promise<void> = Promise.resolve();
-  let blockEmitFailure: { error: unknown } | undefined;
+  let blockEmitFailed = false;
   let answerText = "";
   let reasoningText = "";
   let assistantStarted = false;
@@ -81,23 +84,21 @@ export async function runLightweightBtwStream(input: {
   const flushAtTextEnd = params.resolvedBlockStreamingBreak === "text_end";
 
   const emitBlockChunk = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed || !params.opts?.onBlockReply) {
+    if (!text.trim() || !params.opts?.onBlockReply) {
       return;
     }
     emittedBlocks += 1;
-    blockEmitChain = blockEmitChain.then(async () => {
-      try {
-        await params.opts?.onBlockReply?.({
+    blockEmitChain = blockEmitChain
+      .then(() =>
+        params.opts?.onBlockReply?.({
           text,
           btw: { question: params.question },
-        });
-      } catch (error) {
-        // Keep later blocks ordered and attemptable; surface the first failure
-        // through the turn promise after all queued work has been joined.
-        blockEmitFailure ??= { error };
-      }
-    });
+        }),
+      )
+      .catch((error: unknown) => {
+        blockEmitFailed = true;
+        log.warn(`Block reply delivery failed: ${String(error)}`);
+      });
   };
 
   const { images } = await sanitizeImageBlocks(params.images ?? [], "btw:question", imageLimits);
@@ -187,10 +188,6 @@ export async function runLightweightBtwStream(input: {
     // already-started block callback is still using them.
     await blockEmitChain;
   }
-  if (blockEmitFailure) {
-    throw blockEmitFailure.error;
-  }
-
   if (finalEvent?.type === "error") {
     const message = collectTextContentBlocks(finalEvent.error.content).join("");
     throw new Error(message || finalEvent.error.errorMessage || "BTW failed.");
@@ -208,7 +205,8 @@ export async function runLightweightBtwStream(input: {
 
   recordBtwUsage(runtimeModel, normalizeUsage(finalMessage?.usage));
 
-  if (emittedBlocks > 0) {
+  // Preserve the complete answer when streaming could not deliver every block.
+  if (emittedBlocks > 0 && !blockEmitFailed) {
     return undefined;
   }
 

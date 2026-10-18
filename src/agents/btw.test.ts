@@ -126,7 +126,7 @@ describe("runBtwSideQuestion", () => {
     { name: "incremental drain", boundary: "text_end", maxChars: 5 },
     { name: "message-end drain", boundary: "message_end", maxChars: 5 },
   ] as const)(
-    "contains failed block delivery and continues the $name",
+    "contains failed block delivery, continues the $name, and preserves the final answer",
     async ({ boundary, maxChars }) => {
       const failure = new Error("Block delivery rejected");
       const onBlockReply = vi
@@ -148,16 +148,12 @@ describe("runBtwSideQuestion", () => {
           resolvedBlockStreamingBreak: boundary,
           opts: { onBlockReply },
         }),
-      ).rejects.toBe(failure);
+      ).resolves.toEqual({ text: "one\n\ntwo\n\nthree" });
       expect(onBlockReply.mock.calls.map(([payload]) => payload.text?.trim())).toEqual([
         "one",
         "two",
         "three",
       ]);
-      // Let detached rejections reach Vitest's process-level rejection observer.
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     },
   );
 
@@ -196,6 +192,7 @@ describe("runBtwSideQuestion", () => {
     );
     try {
       await started.promise;
+      // Let the failed stream settle without a timed delay or polling.
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -203,9 +200,6 @@ describe("runBtwSideQuestion", () => {
     } finally {
       finishBlock.resolve();
       expect(await outcome).toBe(streamError);
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
     }
   });
 
