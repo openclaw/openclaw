@@ -9,6 +9,7 @@ import { SIDEBAR_PANEL_SHORTCUTS } from "./chat-pane-panel-shortcuts.ts";
 import { getSessionWorkspace } from "./components/chat-session-workspace-state.ts";
 import { resolveSessionDiffSidebarContent } from "./components/chat-session-workspace.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
+import { sidebarMainPanel } from "./sidebar-layout-geometry.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 
 registerFilePreviewEnglish();
@@ -115,7 +116,14 @@ export function sidebarPanelDefinitions(
     },
     definePanel("portal", "globe"),
     definePanel("workspace", "fileText"),
-    definePanel("companion", "messageSquarePlus", true, { headerActionView: params }),
+    definePanel("companion", "messageSquarePlus", true, {
+      headerActionView:
+        params?.presentation === "desktop" &&
+        state &&
+        sidebarMainPanel(state.sidebarLayout)?.slot !== "companion"
+          ? undefined
+          : params,
+    }),
     definePanel("desktop", "monitor", Boolean(params?.desktopAvailable), {
       headerLink:
         params?.presentation === "desktop"

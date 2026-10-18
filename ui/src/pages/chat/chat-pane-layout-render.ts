@@ -324,6 +324,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     sessionWorkspace.onScrollPortRef = this.mobileScrollFades.register;
     const panelDefinitions = sidebarPanelDefinitions({
       onScrollPortRef: this.mobileScrollFades.register,
+      presentation: this.sessionPresentation,
       paneId: this.paneId,
       panePresentationId: this.presentationId,
       subagentsInputRegion: this.inputRegion,

@@ -766,4 +766,17 @@ describe("ChatSessionRailElement", () => {
     expect(skeleton?.getAttribute("data-panel-skeleton")).toBe("chat");
     expect(element.querySelector("openclaw-panel-empty-state")).toBeNull();
   });
+
+  it("opens with the native empty state and one composer without suggested questions", async () => {
+    const onSubmit = vi.fn();
+    const element = await mount({ onSubmit });
+    const empty = element.querySelector("openclaw-panel-empty-state");
+    await empty?.updateComplete;
+
+    expect(empty?.querySelector(".empty-state__title")?.textContent).toBe("Side chat");
+    expect(element.textContent).not.toMatch(/What changed\?|Why did it stop\?|What's left\?/);
+    expect(element.querySelectorAll("form")).toHaveLength(1);
+    expect(element.querySelectorAll('textarea[aria-label="Ask in side chat"]')).toHaveLength(1);
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });
