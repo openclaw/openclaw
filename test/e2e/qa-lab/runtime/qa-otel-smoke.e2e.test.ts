@@ -31,7 +31,7 @@ function makeCollectorFixture() {
       mkdirSync(collectorDir);
       return collectorDir;
     },
-    randomUUID: () => collectorId,
+    randomUUID: (): typeof collectorId => collectorId,
     reserveLocalPort: async () => ports.shift() ?? 49999,
     spawn: vi.fn(() => child) as never,
     stopDockerContainer,
