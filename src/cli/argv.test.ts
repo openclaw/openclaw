@@ -16,92 +16,56 @@ import {
   normalizeRootNoColorArgv,
 } from "./argv.js";
 
+const cli = (args: string) => ["node", "openclaw", ...args.split(" ")];
+
 describe("argv helpers", () => {
   it.each([
-    [
-      "known command group help command short help flag",
-      ["node", "openclaw", "--profile", "work", "backup", "help", "-h"],
-      ["node", "openclaw", "--profile", "work", "backup", "help"],
-    ],
-    [
-      "leaf positional help remains untouched",
-      ["node", "openclaw", "docs", "help", "--help"],
-      ["node", "openclaw", "docs", "help", "--help"],
-    ],
-
-    [
-      "known command group help target help flag",
-      ["node", "openclaw", "plugins", "help", "list", "--help"],
-      ["node", "openclaw", "plugins", "list", "--help"],
-    ],
-
-    [
-      "terminator help flag remains untouched",
-      ["node", "openclaw", "backup", "help", "--", "--help"],
-      ["node", "openclaw", "backup", "help", "--", "--help"],
-    ],
+    ["group short help", "--profile work backup help -h", "--profile work backup help"],
+    ["leaf positional help", "docs help --help", "docs help --help"],
+    ["group target help", "plugins help list --help", "plugins list --help"],
+    ["terminator", "backup help -- --help", "backup help -- --help"],
   ])("normalizes generated help commands: %s", (_name, argv, expected) => {
-    expect(normalizeGeneratedHelpCommandArgv(argv)).toEqual(expected);
+    expect(normalizeGeneratedHelpCommandArgv(cli(argv))).toEqual(cli(expected));
   });
 
   it.each([
-    [
-      "root help self-help remains untouched",
-      ["node", "openclaw", "help", "--help"],
-      ["node", "openclaw", "help", "--help"],
-    ],
-    [
-      "nested root help target with help flag",
-      ["node", "openclaw", "help", "plugins", "list", "--help"],
-      ["node", "openclaw", "plugins", "list", "--help"],
-    ],
+    ["self-help", "help --help", "help --help"],
+    ["nested target", "help plugins list --help", "plugins list --help"],
   ])("normalizes root help targets: %s", (_name, argv, expected) => {
-    expect(normalizeRootHelpTargetArgv(argv)).toEqual(expected);
+    expect(normalizeRootHelpTargetArgv(cli(argv))).toEqual(cli(expected));
   });
 
   it("allows final command metadata to lift no-color after boolean command flags", () => {
-    const argv = ["node", "openclaw", "doctor", "--lint", "--json", "--no-color"];
+    const argv = cli("doctor --lint --json --no-color");
 
     expect(
       normalizeRootNoColorArgv(argv, {
         shouldPreserveNoColor: ({ remainingArgs, noColorIndex }) =>
           remainingArgs[noColorIndex - 1] === "--message",
       }),
-    ).toEqual(["node", "openclaw", "--no-color", "doctor", "--lint", "--json"]);
+    ).toEqual(cli("--no-color doctor --lint --json"));
   });
 
   it.each([
+    ["equals", "doctor --log-level=trace --json", "--log-level=trace doctor --json"],
     [
-      "subcommand trailing log-level equals form",
-      ["node", "openclaw", "doctor", "--log-level=trace", "--json"],
-      ["node", "openclaw", "--log-level=trace", "doctor", "--json"],
+      "root options first",
+      "--profile work doctor --log-level debug",
+      "--profile work --log-level debug doctor",
     ],
     [
-      "keeps existing root options first",
-      ["node", "openclaw", "--profile", "work", "doctor", "--log-level", "debug"],
-      ["node", "openclaw", "--profile", "work", "--log-level", "debug", "doctor"],
+      "command option value",
+      "agent --message --log-level debug",
+      "agent --message --log-level debug",
     ],
-    [
-      "keeps log-level after possible command option value",
-      ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
-      ["node", "openclaw", "agent", "--message", "--log-level", "debug"],
-    ],
-    [
-      "flag terminator leaves log-level positional",
-      ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
-      ["node", "openclaw", "nodes", "run", "--", "--log-level", "debug"],
-    ],
-    [
-      "missing value remains command scoped",
-      ["node", "openclaw", "doctor", "--log-level", "--json"],
-      ["node", "openclaw", "doctor", "--log-level", "--json"],
-    ],
+    ["terminator", "nodes run -- --log-level debug", "nodes run -- --log-level debug"],
+    ["missing value", "doctor --log-level --json", "doctor --log-level --json"],
   ])("normalizes root --log-level before command parsing: %s", (_name, argv, expected) => {
-    expect(normalizeRootLogLevelArgv(argv)).toEqual(expected);
+    expect(normalizeRootLogLevelArgv(cli(argv))).toEqual(cli(expected));
   });
 
   it("preserves log-level when final command metadata owns the option", () => {
-    const argv = ["node", "openclaw", "plugin-cmd", "--log-level", "debug"];
+    const argv = cli("plugin-cmd --log-level debug");
 
     expect(
       normalizeRootLogLevelArgv(argv, {
@@ -112,96 +76,56 @@ describe("argv helpers", () => {
   });
 
   it.each([
-    ["unknown plugin command help", ["node", "openclaw", "external-plugin", "tools", "help"], true],
-
-    ["help as option value", ["node", "openclaw", "agent", "--message", "help"], false],
-    ["help after terminator", ["node", "openclaw", "nodes", "invoke", "--", "help"], false],
-    [
-      "implicit root help command after terminator",
-      ["node", "openclaw", "--", "help", "config"],
-      true,
-    ],
-    [
-      "implicit parent help command after terminator",
-      ["node", "openclaw", "config", "--", "help"],
-      true,
-    ],
-
-    ["root version flag", ["node", "openclaw", "--version"], true],
+    ["unknown plugin command help", cli("external-plugin tools help"), true],
+    ["help as option value", cli("agent --message help"), false],
+    ["help after terminator", cli("nodes invoke -- help"), false],
+    ["implicit root help command after terminator", cli("-- help config"), true],
+    ["implicit parent help command after terminator", cli("config -- help"), true],
+    ["root version flag", cli("--version"), true],
   ])("detects help/version invocations: %s", (_name, argv, expected) => {
     expect(isHelpOrVersionInvocation(argv)).toBe(expected);
   });
 
-  it.each([["root -v alias with profile", ["node", "openclaw", "--profile", "work", "-v"], true]])(
-    "detects root-only version invocations: %s",
-    (_name, argv, expected) => {
-      expect(isRootVersionInvocation(argv)).toBe(expected);
-    },
-  );
+  it("detects root-only version invocations with a profile", () => {
+    expect(isRootVersionInvocation(cli("--profile work -v"))).toBe(true);
+  });
 
   it("limits simple help fast paths to root options, a command, and help", () => {
     const commands = new Set(["setup"]);
-    expect(
-      isSimpleCommandHelpInvocation(
-        ["node", "openclaw", "--profile", "work", "setup", "--help"],
-        commands,
-      ),
-    ).toBe(true);
-    expect(
-      isSimpleCommandHelpInvocation(
-        ["node", "openclaw", "setup", "--workspace", "--help"],
-        commands,
-      ),
-    ).toBe(false);
-    expect(
-      isSimpleCommandHelpInvocation(
-        ["node", "openclaw", "setup", "--profile", "work", "--help"],
-        commands,
-      ),
-    ).toBe(false);
-    expect(isSimpleCommandHelpInvocation(["node", "openclaw", "--help", "setup"], commands)).toBe(
-      false,
-    );
+    expect(isSimpleCommandHelpInvocation(cli("--profile work setup --help"), commands)).toBe(true);
+    expect(isSimpleCommandHelpInvocation(cli("setup --workspace --help"), commands)).toBe(false);
+    expect(isSimpleCommandHelpInvocation(cli("setup --profile work --help"), commands)).toBe(false);
+    expect(isSimpleCommandHelpInvocation(cli("--help setup"), commands)).toBe(false);
   });
 
   it("returns null when routed command sees unknown options", () => {
     expect(
-      getCommandPositionalsWithRootOptions(
-        ["node", "openclaw", "config", "get", "--mystery", "value", "update.channel"],
-        {
-          commandPath: ["config", "get"],
-          booleanFlags: ["--json"],
-        },
-      ),
+      getCommandPositionalsWithRootOptions(cli("config get --mystery value update.channel"), {
+        commandPath: ["config", "get"],
+        booleanFlags: ["--json"],
+      }),
     ).toBeNull();
   });
 
-  it.each([
-    ["ignores flag after terminator", ["node", "openclaw", "--", "--json"], "--json", false],
-  ])("parses boolean flags: %s", (_name, argv, flag, expected) => {
-    expect(hasFlag(argv, flag)).toBe(expected);
+  it("ignores boolean flags after the terminator", () => {
+    expect(hasFlag(cli("-- --json"), "--json")).toBe(false);
   });
 
   it.each([
-    ["flag appears after terminator", ["node", "openclaw", "--", "--timeout=99"], undefined],
-    [
-      "repeated flag uses final value",
-      ["node", "openclaw", "status", "--timeout", "100", "--timeout=200"],
-      "200",
-    ],
+    ["flag appears after terminator", cli("-- --timeout=99"), undefined],
+    ["repeated flag uses final value", cli("status --timeout 100 --timeout=200"), "200"],
   ])("extracts flag values: %s", (_name, argv, expected) => {
     expect(getFlagValue(argv, "--timeout")).toBe(expected);
   });
 
   it("parses verbose flags", () => {
-    expect(getVerboseFlag(["node", "openclaw", "status", "--verbose"])).toBe(true);
-    expect(getVerboseFlag(["node", "openclaw", "status", "--debug"])).toBe(true);
+    expect(getVerboseFlag(cli("status --verbose"))).toBe(true);
+    expect(getVerboseFlag(cli("status --debug"))).toBe(true);
   });
 
   it.each([
-    ["missing value", ["node", "openclaw", "status", "--timeout"], null],
-
-    ["zero", ["node", "openclaw", "status", "--timeout", "0"], null],
+    ["missing value", cli("status --timeout"), null],
+    ["zero", cli("status --timeout 0"), null],
   ])("parses positive integer flag values: %s", (_name, argv, expected) => {
     expect(getPositiveIntFlagValue(argv, "--timeout")).toBe(expected);
   });
@@ -210,7 +134,7 @@ describe("argv helpers", () => {
     [
       "prefixes fallback when raw args start at program name",
       ["openclaw", "status"],
-      ["node", "openclaw", "status"],
+      cli("status"),
     ],
     [
       "keeps bun execution argv",

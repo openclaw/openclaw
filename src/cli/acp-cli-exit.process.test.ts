@@ -3,8 +3,15 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer } from "node:http";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { describe, expect, it } from "vitest";
-import { type RawData, WebSocketServer } from "ws";
+import { WebSocketServer } from "ws";
+import {
+  buildMinimalGatewayHelloOkPayload,
+  closeMinimalGatewayServer,
+  sendMinimalGatewayConnectChallenge,
+  sendMinimalGatewayResponse,
+} from "../gateway/minimal-gateway.test-helpers.js";
 import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -94,16 +101,6 @@ function waitForJsonLine(child: ChildProcessWithoutNullStreams, id: number) {
   });
 }
 
-function rawDataToText(data: RawData): string {
-  if (Array.isArray(data)) {
-    return Buffer.concat(data).toString("utf8");
-  }
-  if (data instanceof ArrayBuffer) {
-    return Buffer.from(new Uint8Array(data)).toString("utf8");
-  }
-  return Buffer.from(data).toString("utf8");
-}
-
 describe("ACP CLI process exit", () => {
   it("exits when the client disconnects after sending an initialize frame", async () => {
     const state = await createPreparedAcpProcessState();
@@ -128,42 +125,18 @@ describe("ACP CLI process exit", () => {
 
     try {
       wss.on("connection", (socket) => {
-        socket.send(
-          JSON.stringify({
-            type: "event",
-            event: "connect.challenge",
-            seq: 1,
-            payload: { nonce: "acp-process-test", ts: Date.now() },
-          }),
-        );
+        sendMinimalGatewayConnectChallenge(socket, "acp-process-test");
         socket.on("message", (data) => {
-          const frame = JSON.parse(rawDataToText(data)) as { id: string; method: string };
+          const frame = JSON.parse(rawDataToString(data)) as { id: string; method: string };
           if (frame.method !== "connect") {
             return;
           }
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: true,
-              payload: {
-                type: "hello-ok",
-                protocol: 4,
-                server: { version: "acp-process-test", connId: "acp-process-test" },
-                features: { methods: [], events: [] },
-                snapshot: {
-                  presence: [],
-                  health: {},
-                  stateVersion: { presence: 1, health: 1 },
-                  uptimeMs: 1,
-                },
-                auth: { role: "operator", scopes: ["operator.admin"] },
-                policy: {
-                  maxPayload: 512 * 1024,
-                  maxBufferedBytes: 1024 * 1024,
-                  tickIntervalMs: 1000,
-                },
-              },
+          sendMinimalGatewayResponse(
+            socket,
+            frame.id,
+            buildMinimalGatewayHelloOkPayload({
+              connId: "acp-process-test",
+              auth: { role: "operator", scopes: ["operator.admin"] },
             }),
           );
         });
@@ -204,12 +177,7 @@ describe("ACP CLI process exit", () => {
       expect(result).toMatchObject({ code: 0, signal: null });
       expect(withoutSqliteTransactionWarnings(result.stderr)).toBe("");
     } finally {
-      for (const socket of wss.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve) => {
-        wss.close(() => resolve());
-      });
+      await closeMinimalGatewayServer(wss);
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

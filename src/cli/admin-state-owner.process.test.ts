@@ -111,6 +111,22 @@ describe("administrative CLI state owner routing", () => {
   let missingApprovals: ReturnType<typeof readExecApprovalsSnapshot>;
   const methods: string[] = [];
   const failures: unknown[] = [];
+  const run = (args: readonly string[], input?: string) =>
+    runCliProcessChild({ nodeArgs: [...entrypoint, ...args], env, input });
+  const readObservation = async () =>
+    JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"));
+  const acquireOwner = () =>
+    acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+  const releaseOwner = async () => {
+    await closeOpenClawStateDatabaseAsync();
+    await owner?.release();
+    owner = null;
+  };
+  const applyEnv = () => {
+    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
+      vi.stubEnv(key, env[key]);
+    }
+  };
 
   beforeAll(async () => {
     root = roots.make("openclaw-admin-owner-");
@@ -143,10 +159,8 @@ describe("administrative CLI state owner routing", () => {
       models: { catalogRefresh: { url: `http://127.0.0.1:${claim.port + 1}/catalog` } },
     };
     await fs.writeFile(env.OPENCLAW_CONFIG_PATH!, JSON.stringify(cfg));
-    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
-      vi.stubEnv(key, env[key]);
-    }
-    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    applyEnv();
+    owner = await acquireOwner();
     expect(owner).not.toBeNull();
     missingApprovals = readExecApprovalsSnapshot();
     expect(missingApprovals.exists).toBe(false);
@@ -240,9 +254,7 @@ describe("administrative CLI state owner routing", () => {
   });
 
   beforeEach(() => {
-    for (const key of ["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "HOME", "USERPROFILE"]) {
-      vi.stubEnv(key, env[key]);
-    }
+    applyEnv();
     scenario = "live";
     missingCapability = undefined;
     methods.length = 0;
@@ -294,23 +306,18 @@ describe("administrative CLI state owner routing", () => {
       },
     });
     if (scenario === "offline") {
-      await closeOpenClawStateDatabaseAsync();
-      await owner?.release();
-      owner = null;
+      await releaseOwner();
     }
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, ...operation.args],
-      env,
+    const result = await run(
+      operation.args,
       // Default CLI saves have always normalized legacy string allowlist entries.
-      input: JSON.stringify({ version: 1, agents: { "*": { allowlist: [pattern] } } }),
-    });
+      JSON.stringify({ version: 1, agents: { "*": { allowlist: [pattern] } } }),
+    );
     if (!owner) {
-      owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+      owner = await acquireOwner();
       expect(owner).not.toBeNull();
     }
-    const observation = JSON.parse(
-      await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-    );
+    const observation = await readObservation();
     const succeeded = scenario === "live" || scenario === "offline";
     expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
     if (scenario === "offline") {
@@ -381,27 +388,17 @@ describe("administrative CLI state owner routing", () => {
         updatedBy: "fixture",
       });
       if (mode === "offline") {
-        await closeOpenClawStateDatabaseAsync();
-        await owner?.release();
-        owner = null;
+        await releaseOwner();
       }
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, "secrets", "store", "set", "OWNER_SECRET", "--value-file", "-"],
-        env,
-        input: "synthetic-rotated",
-      });
+      const result = await run(
+        ["secrets", "store", "set", "OWNER_SECRET", "--value-file", "-"],
+        "synthetic-rotated",
+      );
       if (!owner) {
-        owner = await acquireGatewayLock({
-          env,
-          port: claim.port,
-          allowInTests: true,
-          timeoutMs: 0,
-        });
+        owner = await acquireOwner();
       }
       expect(result.code, result.stderr).toBe(mode === "live" || mode === "offline" ? 0 : 1);
-      const observation = JSON.parse(
-        await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-      );
+      const observation = await readObservation();
       if (mode === "offline") {
         expect(observation.secretWrites).toBeGreaterThan(0);
         expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
@@ -425,32 +422,26 @@ describe("administrative CLI state owner routing", () => {
   );
 
   it("routes secret import, host policy, and removal through the live owner", async () => {
-    const run = async (args: string[], input?: string) => {
-      const result = await runCliProcessChild({
-        nodeArgs: [...entrypoint, "secrets", "store", ...args],
-        env,
-        input,
-      });
+    const runSecret = async (args: string[], input?: string) => {
+      const result = await run(["secrets", "store", ...args], input);
       expect(result.code, result.stderr).toBe(0);
-      const observed = JSON.parse(
-        await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-      );
+      const observed = await readObservation();
       expect(observed.secretWrites).toBe(0);
     };
-    await run(
+    await runSecret(
       ["import", "--from", "-", "--yes"],
       "BATCH_TOKEN=synthetic-imported\nBATCH_MODE=test\n",
     );
     expect(
       await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" }),
     ).toMatchObject({ ok: true, value: "synthetic-imported" });
-    await run(["set", "BATCH_TOKEN", "--allow-host", "API.EXAMPLE.COM"]);
+    await runSecret(["set", "BATCH_TOKEN", "--allow-host", "API.EXAMPLE.COM"]);
     expect(
       (await listSecretStoreEntries({ scope: { kind: "team" } })).find(
         (entry) => entry.name === "BATCH_TOKEN",
       ),
     ).toMatchObject({ kind: "secret", allowedHosts: ["api.example.com"] });
-    await run(["rm", "BATCH_TOKEN", "--yes"]);
+    await runSecret(["rm", "BATCH_TOKEN", "--yes"]);
     expect((await readSecretStoreValue({ scope: { kind: "team" }, name: "BATCH_TOKEN" })).ok).toBe(
       false,
     );
@@ -462,22 +453,17 @@ describe("administrative CLI state owner routing", () => {
   });
 
   it("refuses live catalog refresh and persists the same command offline", async () => {
-    const run = () => runCliProcessChild({ nodeArgs: [...entrypoint, "models", "refresh"], env });
-    const refused = await run();
+    const refused = await run(["models", "refresh"]);
     expect(refused.code, refused.stderr).toBe(1);
     expect(refused.stderr).toContain("exclusive offline state ownership");
     expect(methods).toEqual([]);
     expect(readRemoteModelCatalog()).toBeUndefined();
-    await closeOpenClawStateDatabaseAsync();
-    await owner?.release();
-    owner = null;
-    const result = await run();
-    owner = await acquireGatewayLock({ env, port: claim.port, allowInTests: true, timeoutMs: 0 });
+    await releaseOwner();
+    const result = await run(["models", "refresh"]);
+    owner = await acquireOwner();
     expect(result.code, result.stderr).toBe(0);
     expect(readRemoteModelCatalog()?.generated_at).toBe(1_753_500_000_000);
-    const observed = JSON.parse(
-      await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"),
-    );
+    const observed = await readObservation();
     expect(observed.catalogWrites).toBeGreaterThan(0);
     expect(observed).toMatchObject({ missingCustody: 0, ownerPids: [observed.pid] });
   });
@@ -485,17 +471,11 @@ describe("administrative CLI state owner routing", () => {
   it("keeps an unstored default policy absent when a live owner serves approvals get", async () => {
     const current = readExecApprovalsSnapshot();
     expect(await restoreExecApprovalsSnapshotLocked(missingApprovals, current.hash)).toBe(true);
-    const result = await runCliProcessChild({
-      nodeArgs: [...entrypoint, "approvals", "get", "--json"],
-      env,
-    });
+    const result = await run(["approvals", "get", "--json"]);
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ exists: false, hash: missingApprovals.hash });
     expect(readExecApprovalsSnapshot()).toMatchObject({ exists: false, raw: null });
     expect(methods).toEqual(["exec.approvals.get"]);
-    expect(
-      JSON.parse(await fs.readFile(path.join(root, "control", "sql-observation.json"), "utf8"))
-        .adminSql,
-    ).toBe(0);
+    expect((await readObservation()).adminSql).toBe(0);
   });
 });
