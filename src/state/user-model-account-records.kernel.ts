@@ -47,8 +47,19 @@ export function userModelAccountRecordValue(row: {
   return row.value;
 }
 
-function userModelAccountRecordsQuery(db: EngineConnection) {
-  return (
+function readUserModelAccountRecords(
+  db: EngineConnection,
+  selected: readonly { owner: string; name: UserModelAccountRecordName }[],
+) {
+  if (
+    selected.length === 0 ||
+    !tableExists(db, "user_profiles") ||
+    !tableExists(db, "secret_store_entries")
+  ) {
+    return [];
+  }
+  return executeSqliteQuerySync(
+    db,
     getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
       .selectFrom("user_profiles as source")
       .leftJoin("user_profiles as target", "target.id", "source.merged_into")
@@ -82,22 +93,21 @@ function userModelAccountRecordsQuery(db: EngineConnection) {
           ]),
         ]),
       )
-  );
+      .where((eb) =>
+        eb.or(
+          selected.map(({ owner, name }) =>
+            eb.and([eb("source.id", "=", owner), eb("name", "=", name)]),
+          ),
+        ),
+      ),
+  ).rows;
 }
 
 export function readUserModelAccountLinksRecord(
   db: EngineConnection,
   profileId: string,
 ): string | undefined {
-  if (!tableExists(db, "user_profiles") || !tableExists(db, "secret_store_entries")) {
-    return undefined;
-  }
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    userModelAccountRecordsQuery(db)
-      .where("source.id", "=", profileId)
-      .where("name", "=", "model-accounts"),
-  );
+  const row = readUserModelAccountRecords(db, [{ owner: profileId, name: "model-accounts" }])[0];
   return row ? userModelAccountRecordValue(row) : undefined;
 }
 
@@ -110,23 +120,10 @@ export function readSelectedUserModelAccountRecords(
     const locator = parseUserModelAuthProfileId(id);
     return locator ? [{ id, owner: locator.ownerProfileId }] : [];
   });
-  if (
-    selected.length === 0 ||
-    !tableExists(db, "user_profiles") ||
-    !tableExists(db, "secret_store_entries")
-  ) {
-    return [];
-  }
-  const rows = executeSqliteQuerySync(
+  const rows = readUserModelAccountRecords(
     db,
-    userModelAccountRecordsQuery(db).where((eb) =>
-      eb.or(
-        selected.map(({ id, owner }) =>
-          eb.and([eb("source.id", "=", owner), eb("name", "=", `model-account:${id}`)]),
-        ),
-      ),
-    ),
-  ).rows;
+    selected.map(({ id, owner }) => ({ owner, name: `model-account:${id}` })),
+  );
   const records = new Map(rows.map((row) => [row.name, row]));
   return selected.flatMap(({ id }) => {
     const row = records.get(`model-account:${id}`);
