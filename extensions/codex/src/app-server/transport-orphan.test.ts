@@ -136,7 +136,7 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
     parent: ChildProcess,
     mode: "fixture" | "native",
     directory = stateDir,
-    searchPath = process.platform === "linux" ? unavailablePs : process.env.PATH,
+    inspection: NodeJS.ProcessEnv = {},
   ) {
     const native =
       mode === "native"
@@ -157,7 +157,9 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
         TMPDIR: root,
         TMP: root,
         TEMP: root,
-        PATH: searchPath,
+        // Linux inspection reads procfs, so every start proves it never needs ps.
+        PATH: process.platform === "linux" ? unavailablePs : process.env.PATH,
+        ...inspection,
         OPENCLAW_STATE_DIR: directory,
         NODE_ENV: "test",
       },
@@ -236,8 +238,11 @@ describe.skipIf(process.platform === "win32")("Codex stdio crash recovery", () =
         expect(isAlive(tree.descendant)).toBe(true);
       }
 
-      if (process.platform !== "linux") {
-        await expect(start(survivor, "fixture", stateDir, unavailablePs)).rejects.toThrow(
+      if (process.platform === "darwin") {
+        // macOS inspection is native-only; proc-safe's documented off mode makes it unavailable.
+        await expect(
+          start(survivor, "fixture", stateDir, { PROC_SAFE_NATIVE: "off" }),
+        ).rejects.toThrow(
           "Cannot inspect Codex processes. Process identity is unavailable or invalid.",
         );
         for (const tree of orphans) {
