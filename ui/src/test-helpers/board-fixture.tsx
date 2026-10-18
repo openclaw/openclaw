@@ -3,7 +3,6 @@ import { createSignal } from "solid-js";
 import { BoardView } from "../components/board/board-view.tsx";
 import type { BoardOp, BoardSnapshot } from "../lib/board/types.ts";
 import type { BoardViewCallbacks } from "../lib/board/view-types.ts";
-// The standalone fixture loads the app stylesheet for its board surfaces and menus.
 import "../styles.css";
 
 type Widget = BoardSnapshot["widgets"][number];
@@ -55,8 +54,8 @@ const initialSnapshot: BoardSnapshot = {
   ],
 };
 
-function contentControlsDocument(): string {
-  return `<!doctype html><meta charset="utf-8"><style>
+const frameDocuments = {
+  "content-controls": `<!doctype html><meta charset="utf-8"><style>
     :root{color-scheme:dark;font-family:ui-sans-serif,system-ui,sans-serif}
     *{box-sizing:border-box}body{margin:0;color:#d9dce3;background:transparent}
     main{display:grid;gap:12px}h2{font-size:18px;margin:0}p{color:#8f98a6;font-size:12px;margin:0}
@@ -67,17 +66,14 @@ function contentControlsDocument(): string {
   <input aria-label="Release note" placeholder="Release note"></main><script>
     const report=()=>parent.postMessage({type:"openclaw:widget-size",height:document.body.scrollHeight},"*");
     addEventListener("load",report);addEventListener("resize",report);new ResizeObserver(report).observe(document.documentElement);
-  </script>`;
-}
-
-function clockDocument(): string {
-  return `<!doctype html><meta charset="utf-8"><style>
+  </script>`,
+  "local-time": `<!doctype html><meta charset="utf-8"><style>
     :root{color-scheme:dark;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
     body{align-items:center;background:transparent;color:#d9dce3;display:grid;height:100vh;margin:0;text-align:center}
     .time{font-size:clamp(54px,12vw,104px);font-weight:680;letter-spacing:-.08em;line-height:.9}
     .zone{color:#778291;font-size:11px;letter-spacing:.18em;margin-top:14px}
-  </style><main><div class="time">10:42</div><div class="zone">LOCAL / SAN FRANCISCO</div></main>`;
-}
+  </style><main><div class="time">10:42</div><div class="zone">LOCAL / SAN FRANCISCO</div></main>`,
+};
 
 const frameCopy: Record<string, { eyebrow: string; value: string; detail: string }> = {
   "service-pulse": { eyebrow: "UPTIME / 24H", value: "99.982%", detail: "All regions nominal" },
@@ -87,11 +83,8 @@ const frameCopy: Record<string, { eyebrow: string; value: string; detail: string
 };
 
 function frameUrl(name: string): string {
-  if (name === "content-controls") {
-    return `data:text/html;charset=utf-8,${encodeURIComponent(contentControlsDocument())}`;
-  }
-  if (name === "local-time") {
-    return `data:text/html;charset=utf-8,${encodeURIComponent(clockDocument())}`;
+  if (name === "content-controls" || name === "local-time") {
+    return `data:text/html;charset=utf-8,${encodeURIComponent(frameDocuments[name])}`;
   }
   const copy = frameCopy[name] ?? { eyebrow: "WIDGET", value: name, detail: "Mock fixture" };
   const document = `<!doctype html><meta charset="utf-8"><style>
@@ -113,17 +106,19 @@ function frameUrl(name: string): string {
   return `data:text/html;charset=utf-8,${encodeURIComponent(document)}`;
 }
 
+function sortedTabWidgets(widgets: readonly Widget[], tabId: string) {
+  const siblings = widgets.filter((widget) => widget.tabId === tabId);
+  return siblings.toSorted(
+    (left, right) => left.position - right.position || left.name.localeCompare(right.name),
+  );
+}
+
 function normalizePositions(snapshot: BoardSnapshot): BoardSnapshot {
   const widgets = snapshot.widgets.map((widget) => ({ ...widget }));
   for (const tab of snapshot.tabs) {
-    widgets
-      .filter((widget) => widget.tabId === tab.tabId)
-      .toSorted(
-        (left, right) => left.position - right.position || left.name.localeCompare(right.name),
-      )
-      .forEach((widget, position) => {
-        widget.position = position;
-      });
+    sortedTabWidgets(widgets, tab.tabId).forEach((widget, position) => {
+      widget.position = position;
+    });
   }
   return { ...snapshot, widgets };
 }
@@ -138,11 +133,7 @@ function moveFixtureWidget(
   }
   const tabId = op.tabId ?? moving.tabId;
   const remaining = snapshot.widgets.filter((widget) => widget.name !== op.name);
-  const destination = remaining
-    .filter((widget) => widget.tabId === tabId)
-    .toSorted(
-      (left, right) => left.position - right.position || left.name.localeCompare(right.name),
-    );
+  const destination = sortedTabWidgets(remaining, tabId);
   const afterIndex = op.after ? destination.findIndex((widget) => widget.name === op.after) : -1;
   const requestedPosition =
     afterIndex >= 0
@@ -168,23 +159,19 @@ export function applyBoardFixtureOps(
     if (op.kind === "widget_remove") {
       next.widgets = next.widgets.filter((widget) => widget.name !== op.name);
     } else if (op.kind === "widget_resize") {
-      next.widgets = next.widgets.map((widget) => {
-        if (widget.name !== op.name) {
-          return widget;
-        }
-        return {
-          ...widget,
-          sizeW: op.sizeW,
-          sizeH: op.sizeH,
-          ...(op.heightMode !== undefined ? { heightMode: op.heightMode } : {}),
-        };
-      });
+      const size = {
+        sizeW: op.sizeW,
+        sizeH: op.sizeH,
+        ...(op.heightMode !== undefined ? { heightMode: op.heightMode } : {}),
+      };
+      next.widgets = next.widgets.map((widget) =>
+        widget.name === op.name ? { ...widget, ...size } : widget,
+      );
     } else if (op.kind === "widget_move") {
       next = moveFixtureWidget(next, op);
     }
   }
-  next = normalizePositions(next);
-  return { ...next, revision: next.revision + 1 };
+  return { ...normalizePositions(next), revision: next.revision + 1 };
 }
 
 function BoardFixture() {

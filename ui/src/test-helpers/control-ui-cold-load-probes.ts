@@ -14,6 +14,22 @@ function installColdLoadProbes(
   createEventStream: typeof createColdLoadEventStream,
 ) {
   Reflect.set(Error, "stackTraceLimit", 40);
+  const isRecord = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null;
+  function matchesOwner(
+    host: unknown,
+    owner: unknown,
+    tag: string,
+    elementKey: string,
+  ): owner is Record<string, unknown> {
+    return (
+      host instanceof HTMLElement &&
+      host.localName === tag &&
+      isRecord(owner) &&
+      owner[elementKey] === host &&
+      typeof owner.isConnected === "boolean"
+    );
+  }
   const rpcs: Array<{
     method: string;
     requestBytes: number;
@@ -62,15 +78,7 @@ function installColdLoadProbes(
     installed: false,
     matches(host: unknown, owner: unknown): owner is ProbeInit.ChatProbeOwner {
       return (
-        host instanceof HTMLElement &&
-        host.localName === "openclaw-chat-pane" &&
-        typeof owner === "object" &&
-        owner !== null &&
-        "element" in owner &&
-        owner.element === host &&
-        "isConnected" in owner &&
-        typeof owner.isConnected === "boolean" &&
-        "render" in owner &&
+        matchesOwner(host, owner, "openclaw-chat-pane", "element") &&
         typeof owner.render === "function"
       );
     },
@@ -240,24 +248,11 @@ function installColdLoadProbes(
   const sidebarRegistration = {
     matches(host: unknown, owner: unknown): owner is ProbeInit.SolidSidebarProbeOwner {
       return (
-        host instanceof HTMLElement &&
-        host.localName === "openclaw-app-sidebar" &&
-        typeof owner === "object" &&
-        owner !== null &&
-        "hostElement" in owner &&
-        owner.hostElement === host &&
-        "isConnected" in owner &&
-        typeof owner.isConnected === "boolean" &&
-        "invalidate" in owner &&
+        matchesOwner(host, owner, "openclaw-app-sidebar", "hostElement") &&
         typeof owner.invalidate === "function" &&
-        "prepareRender" in owner &&
         typeof owner.prepareRender === "function" &&
-        "commitRender" in owner &&
         typeof owner.commitRender === "function" &&
-        "sessionData" in owner &&
-        typeof owner.sessionData === "object" &&
-        owner.sessionData !== null &&
-        "requestSessionDataUpdate" in owner.sessionData &&
+        isRecord(owner.sessionData) &&
         typeof owner.sessionData.requestSessionDataUpdate === "function"
       );
     },
@@ -306,6 +301,12 @@ function installColdLoadProbes(
   let liveRpcOffset = 0;
   let liveFinishedAt = 0;
   let liveKind = "idle";
+  const recordStack = (counts: Map<string, number>, stack: string | undefined) => {
+    const key = `${liveKind} :: ${stack?.split("\n").slice(2, 14).join(" <- ") ?? ""}`;
+    if (counts.has(key) || counts.size < 100) {
+      counts.set(key, (counts.get(key) ?? 0) + 1);
+    }
+  };
   const Original = window.WebSocket;
   window.WebSocket = new Proxy(Original, {
     construct(target, args) {
@@ -412,11 +413,7 @@ function installColdLoadProbes(
           owner[method] = function (this: ProbeInit.SolidSidebarProbeOwner) {
             const connected = this.isConnected;
             if (method === "invalidate" && connected) {
-              const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
-              const key = `${liveKind} :: ${stack}`;
-              if (sidebarOwnerStacks.has(key) || sidebarOwnerStacks.size < 100) {
-                sidebarOwnerStacks.set(key, (sidebarOwnerStacks.get(key) ?? 0) + 1);
-              }
+              recordStack(sidebarOwnerStacks, new Error().stack);
             }
             const started = performance.now();
             try {
@@ -442,11 +439,7 @@ function installColdLoadProbes(
       if (owner) {
         const original = owner.requestSessionDataUpdate;
         owner.requestSessionDataUpdate = function (...args: unknown[]) {
-          const stack = new Error().stack?.split("\n").slice(2, 14).join(" <- ") ?? "";
-          const key = `${liveKind} :: ${stack}`;
-          if (liveOrigins.has(key) || liveOrigins.size < 100) {
-            liveOrigins.set(key, (liveOrigins.get(key) ?? 0) + 1);
-          }
+          recordStack(liveOrigins, new Error().stack);
           return original.apply(this, args);
         };
         liveInvalidatorOwner = owner;

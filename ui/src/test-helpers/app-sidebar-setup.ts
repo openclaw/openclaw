@@ -23,13 +23,11 @@ export function setupSidebarTest() {
       "cancelAnimationFrame",
       "localStorage",
     ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]);
-    // JSDOM has no paint cycle. Settle ordinary frames in microtasks, but yield
-    // recursive frames so overlay positioning cannot starve the test runner.
+    // Settle jsdom frames in microtasks; yield recursive overlay frames to avoid starvation.
     if (!("__vitest_browser__" in globalThis)) {
-      // Fake clocks must leave this fixture's frame scheduler in place.
+      // Keep our frame scheduler; jsdom may retire a native timer after fake-clock installation.
       vi.setConfig({
         fakeTimers: {
-          // jsdom can retire its native frame timer after the fake clock is installed.
           shouldClearNativeTimers: true,
           toFake: [
             "setTimeout",
@@ -75,25 +73,23 @@ export function setupSidebarTest() {
       defineGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
     }
     for (const name of ["ResizeObserver", "IntersectionObserver"] as const) {
-      if (globalThis[name] !== undefined) {
-        continue;
+      if (globalThis[name] === undefined) {
+        defineGlobal(
+          name,
+          class {
+            observe() {}
+            unobserve() {}
+            disconnect() {}
+          },
+        );
       }
-      defineGlobal(
-        name,
-        class {
-          observe() {}
-          unobserve() {}
-          disconnect() {}
-        },
-      );
     }
 
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: createStorageMock(),
     });
-    // Coding defaults to compact; most cases assert expanded contents, so start
-    // expanded. Collapse tests override this value.
+    // Most cases assert expanded contents; collapse tests override this preference.
     localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
   });
 
@@ -103,9 +99,8 @@ export function setupSidebarTest() {
     vi.useRealTimers();
     vi.resetConfig();
     const sidebars = document.body.querySelectorAll<AppSidebarElement>("openclaw-app-sidebar");
-    // Open native menus keep scheduling frames while imports settle.
+    // Dismiss upgraded menus before settling imports; lazy shells may retain an unupgraded tag.
     for (const sidebar of sidebars) {
-      // Lazy shell fixtures can retain an unupgraded sidebar tag.
       if (sidebar.matches(":defined")) {
         sidebar.dismissTransientMenus();
       }
@@ -135,9 +130,7 @@ export function setupSidebarTest() {
   });
 }
 
-// jsdom does not reliably track :focus-visible across these synthetic events.
-// Model the keyboard intent requested by each fixture, only while its target
-// is actually focused. Real browser E2E owns pointer/keyboard modality proof.
+// Model jsdom's missing :focus-visible only while the keyboard-intent target is focused.
 export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   const matches = target.matches.bind(target);
   const keyboardFocus = vi
@@ -149,7 +142,6 @@ export function focusSidebarPersonWithKeyboard(target: HTMLElement): void {
   target.focus();
 }
 
-/** Select a view through its actual fixed rail control. */
 export async function selectSidebarView(
   sidebar: HTMLElement & Pick<AppSidebarElement, "updateComplete">,
   view: "pages" | "sessions" | "online",
@@ -175,10 +167,9 @@ export function seedSidebarEveryonePreference(gateway: ApplicationGateway): void
   }
 }
 
-export const manyAgents = (count: number) =>
-  ({
-    defaultId: "agent-1",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
-  }) as AgentsListResult;
+export const manyAgents = (count: number): AgentsListResult => ({
+  defaultId: "agent-1",
+  mainKey: "main",
+  scope: "per-sender",
+  agents: Array.from({ length: count }, (_, index) => ({ id: `agent-${index + 1}` })),
+});

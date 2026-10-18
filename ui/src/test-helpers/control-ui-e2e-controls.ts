@@ -115,18 +115,14 @@ export function createMockGatewayControls(
         return gateway.getSessionRow(sessionKey);
       }, key);
     },
-    async getSocketCount() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketCount() ?? 0;
-      });
-    },
-    async getSocketUrls() {
-      return await page.evaluate(() => {
-        const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
-        return gateway?.socketUrls() ?? [];
-      });
-    },
+    getSocketCount: () =>
+      page.evaluate(
+        () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketCount() ?? 0,
+      ),
+    getSocketUrls: () =>
+      page.evaluate(
+        () => (window as MockGatewayWindow).openclawControlUiE2eGateway?.socketUrls() ?? [],
+      ),
     rejectDeferred: (...args) => mutate("rejectDeferred", ...args),
     resolveDeferred: (...args) => mutate("resolveDeferred", ...args),
     suspendLatest: () => mutate("suspendLatest"),
@@ -143,9 +139,7 @@ export function createMockGatewayControls(
     setSessionSharingPolicy: (...args) => mutate("setSessionSharingPolicy", ...args),
     async waitForRequest(method, options) {
       const deadline = Date.now() + controlUiE2eWaitTimeoutMs;
-      const after = options?.after;
-      const match = options?.match;
-      const exactParams = options?.exactParams;
+      const { after, match, exactParams } = options ?? {};
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
           await page.waitForFunction(
@@ -153,7 +147,7 @@ export function createMockGatewayControls(
               const gateway = (window as MockGatewayWindow).openclawControlUiE2eGateway;
               const matching =
                 gateway?.findRequests(targetMethod, requestMatch, requestOptions) ?? [];
-              return matching.length > (priorCount ?? 0);
+              return matching.length > priorCount;
             },
             {
               targetMethod: method,
